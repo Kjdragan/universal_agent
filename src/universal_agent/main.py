@@ -83,7 +83,7 @@ if LOGFIRE_TOKEN:
         return None
 
     logfire.configure(
-        service_name="composio-standalone-test",
+        service_name="universal-agent",
         environment="development",
         console=False,
         token=LOGFIRE_TOKEN,
@@ -179,7 +179,7 @@ async def observe_and_save_search_results(
     # Check if this might contain SERP results (check content for JSON patterns)
     is_serp_tool = any(
         kw in tool_name.upper()
-        for kw in ["SEARCH_NEWS", "SEARCH_WEB", "COMPOSIO_SEARCH"]
+        for kw in ["SEARCH_NEWS", "SEARCH_WEB", "COMPOSIO_SEARCH", "MULTI_EXECUTE"]
     )
     has_serp_content = "news_results" in content or "organic_results" in content
 

@@ -1,25 +1,22 @@
 [project]
 name = "universal-agent"
 version = "0.1.0"
-description = "Universal Agent - Claude SDK with Composio Tool Router"
+description = "A universal agent built using Claude Agent SDK and the Composio Tool Router"
 readme = "README.md"
-requires-python = ">=3.12"
-dependencies = [
-    "anthropic>=0.40.0",
-    "claude-agent-sdk>=0.2.0",
-    "composio>=0.10.1",
-    "composio-anthropic>=0.1.0",
-    "logfire>=3.11.0",
-    "prompt-toolkit>=3.0.52",
-    "python-dotenv>=1.0.0",
+requires-python = ">=3.13"
+authors = [
+    { name = "Kevin Dragan", email = "kevin.dragan@outlook.com" }
 ]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[dependency-groups]
-dev = []
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/universal_agent"]
+dependencies = [
+    "anthropic>=0.75.0",
+    "claude-agent-sdk>=0.1.18",
+    "click>=8.3.1",
+    "composio>=0.10.1",
+    "composio-anthropic>=0.10.1",
+    "logfire[httpx]>=4.16.0",
+    "prompt-toolkit>=3.0.52",
+    "pydantic>=2.12.5",
+    "pydantic-settings>=2.12.0",
+    "python-dotenv>=1.2.1",
+    "rich>=14.2.0",
+]

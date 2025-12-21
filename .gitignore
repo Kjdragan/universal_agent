@@ -1,7 +1,15 @@
-# Environment variables
+# =============================================================================
+# Environment & Secrets
+# =============================================================================
 .env
+.env.local
+.env.*.local
+*.pem
+*.key
 
+# =============================================================================
 # Python
+# =============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -22,24 +30,83 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
-# Virtual environments
+# Type checking
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# =============================================================================
+# Virtual Environments
+# =============================================================================
 .venv/
 venv/
 ENV/
+env/
 
-# IDE
+# =============================================================================
+# IDE & Editors
+# =============================================================================
 .idea/
 .vscode/
 *.swp
 *.swo
+*.sublime-workspace
+*.sublime-project
+.spyderproject
+.spyproject
 
-# Agent runtime artifacts (session workspaces)
+# =============================================================================
+# Agent Runtime Artifacts
+# =============================================================================
+# Session workspaces (contain logs, traces, work products)
 AGENT_RUN_WORKSPACES/
 
-# OS
+# Runtime logs
+*.log
+logs/
+
+# Trace files (generated during runs)
+trace_*.json
+
+# =============================================================================
+# OS Generated
+# =============================================================================
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
-# uv
-uv.lock
+# =============================================================================
+# UV Package Manager
+# =============================================================================
+# .python-version is a local pyenv/uv preference
+.python-version
+
+# Note: uv.lock SHOULD be committed for reproducible builds
+# Do NOT add uv.lock here
+
+# =============================================================================
+# Jupyter Notebooks
+# =============================================================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# =============================================================================
+# Documentation Build
+# =============================================================================
+docs/_build/
+site/
