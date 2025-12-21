@@ -1,0 +1,5 @@
+Analyzed real remote content:
+ERROR: Real Remote Error
+INFO: Real Remote Info
+
+(Processed Locally)
