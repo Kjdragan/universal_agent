@@ -203,4 +203,44 @@ system_prompt=(
 
 ---
 
-*Last updated: 2025-12-21*
+### Lesson 10: Handling Large Data from Composio (Data Previews)
+**Date**: 2025-12-21
+
+**Discovery**: For large payloads (e.g., broad search results or large file reads), Composio SDK often returns a **truncated preview** to the LLM context to conserve tokens, while saving the full data to a file on the Remote Workbench.
+
+**Signs of Truncation**:
+1. The tool result contains a `data_preview` key instead of `data`.
+2. The stdout says "**Saved large response to /home/user/.composio/mex/pond.json**".
+3. The content is noticeably short or summarized.
+
+**Implication**: If the Agent attempts to write a report based solely on this tool result, it will be using low-fidelity data.
+
+**Solution**:
+1. **Explicit Download**: The Agent **MUST** use `workbench_download` to fetch the referenced remote file (e.g., `pond.json`) to the local environment to access the full dataset.
+2. **System Prompting**: Explicitly instruct the Agent that `data_preview` = "Incomplete" and compel it to download the source file for "Heavy Lifting" tasks.
+3. **Observer Updates**: Logic parsing tool results (like `observe_and_save_search_results`) must handle both `data` (full) and `data_preview` (partial) keys to avoid crashing or missing artifacts.
+
+**Pattern**: "Sync (Download Full Data) -> Think (Process Locally) -> Inject". Do not "Think" on the Preview.
+
+---
+
+### Lesson 11: Composio Planner Scope & Implicit Handoff
+**Date**: 2025-12-21
+
+**Discovery**: The Composio Planner (`COMPOSIO_SEARCH_TOOLS` / `COMPOSIO_MULTI_EXECUTE_TOOL`) effectively plans for *Composio-available* (Remote) tools but often omits valid local steps (like Sub-Agent delegation, File I/O, or Report Generation).
+
+**Observation**:
+- In a "Research -> Report -> Email" workflow, the Composio planner might only list:
+  1. `COMPOSIO_SEARCH_NEWS` (Remote)
+  2. `GMAIL_SEND_EMAIL` (Remote)
+- It may **skip** the "Generate Report" step if that capability isn't exposed as a remote tool.
+
+**Mechanism**:
+- This is acceptable functionality. The **Claude Agent SDK** maintains the full context ("Master Brain") and successfully identifies the missing logical step.
+- The Agent sees the remote tool finish ("Fetched News"), recognizes the original goal ("Write Report"), and autonomously selects a **Local Tool** (e.g., `Task` for sub-agent) to fill the gap.
+
+**Takeaway**: Do not expect the Remote Planner to be the comprehensive "Master Plan". Treat it as a "Sub-Planner" for remote actions. Trust the Agent to perform the "Implicit Handoff" back to local logic.
+
+---
+
+*Last updated: 2025-12-21 16:45 CST*

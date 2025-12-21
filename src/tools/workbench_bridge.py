@@ -13,40 +13,24 @@ class WorkbenchBridge:
         self.user_id = user_id
         self.sandbox_id = None
 
-    def _ensure_sandbox(self):
+    def _ensure_sandbox(self, session_id: Optional[str] = None) -> str:
         """
-        Ensures we have a valid sandbox ID.
-        If we don't have one, we run a trivial command to create one.
+        Ensures a sandbox is created/retrieved.
+        If session_id is provided, it uses that sessions's sandbox or joins that session?
+        Composio SDK `execute` with `session_id` handles the routing.
+        We just need to store the ID if we are persisting it.
         """
+        if session_id:
+            # If a session ID is provided, we use it directly in future calls?
+            # Or we assume the user passed it to the specific method.
+            # We don't necessarily overwrite self.sandbox_id unless we want to lock to it.
+            # But the 'sandbox_id' param in execute is legacy?
+            # If we pass 'session_id' to execute, we might not need 'sandbox_id'.
+            pass
+
         if self.sandbox_id:
             return self.sandbox_id
 
-        print("   ⏳ Initializing Sandbox...")
-        resp = self.client.tools.execute(
-            slug="CODEINTERPRETER_RUN_TERMINAL_CMD",
-            arguments={"command": "echo 'Sandbox Init'"},
-            user_id=self.user_id,
-            dangerously_skip_version_check=True,
-        )
-
-        # Extract sandbox_id from response
-        # It seems Composio returns the output directly if generic, or a detailed dict.
-        # Trace suggests it returns a Model object or dict.
-        if hasattr(resp, "model_dump"):
-            resp = resp.model_dump()
-
-        if isinstance(resp, dict):
-            # Try to find sandbox_id in common places
-            self.sandbox_id = resp.get("sandbox_id") or resp.get("data", {}).get(
-                "sandbox_id"
-            )
-            # If not found, maybe it's in the 'meta' or 'execution_details'?
-            # Actually, for CODEINTERPRETER, the first run creates it.
-            # We might need to parse it or just rely on the fact that we passed 'user_id'.
-            pass
-
-        if not self.sandbox_id:
-            # Fallback: Maybe it's not returned explicitly, but subsequent calls might work
             # if we don't pass it (SDK might manage it)?
             # But Schema said REQUIRED for file ops.
             # Let's hope the SDK cache it or the response has it.
@@ -58,25 +42,24 @@ class WorkbenchBridge:
 
         return self.sandbox_id
 
-    def download(self, remote_path: str, local_path: str) -> bool:
+    def download(self, remote_path: str, local_path: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Syncs a file from Remote Registry -> Local Agent.
+        Download a file from the remote Composio Workbench (CodeInterpreter) to the local file system.
+        
+        Args:
+            remote_path: Absolute path to the file on the remote workbench.
+            local_path: Path where the file should be saved locally.
+            session_id: Optional Composio session ID to target a specific sandbox.
         """
         print(f"🌉 [BRIDGE] Downloading: {remote_path} -> {local_path}")
-        sandbox_id = self._ensure_sandbox()
-
-        # Note: We can try running without sandbox_id if the user_id implies a session?
-        # But schema said required. Let's try passing it only if we have it.
-
-        args = {"file_path": remote_path}
-        if sandbox_id:
-            args["sandbox_id"] = sandbox_id
-
+        self._ensure_sandbox(session_id)
+        
         try:
             resp = self.client.tools.execute(
-                slug="CODEINTERPRETER_GET_FILE_CMD",
-                arguments=args,
-                user_id=self.user_id,
+                action="CODEINTERPRETER_GET_FILE_CMD",
+                params={"file_path": remote_path},
+                entity_id=self.user_id,
+                session_id=session_id,  # Use provided session_id
                 dangerously_skip_version_check=True,
             )
 
@@ -92,11 +75,10 @@ class WorkbenchBridge:
                 # Move/Copy it to destination
                 os.makedirs(os.path.dirname(local_path), exist_ok=True)
                 import shutil
-
                 shutil.copy2(downloaded_path, local_path)
                 size = os.path.getsize(local_path)
                 print(f"   ✅ Downloaded {size} bytes from {downloaded_path}.")
-                return True
+                return {"local_path": local_path, "size": size}
 
             # Fallback: Content in response
             content = None
@@ -110,43 +92,56 @@ class WorkbenchBridge:
                 with open(local_path, "w") as f:
                     f.write(content)
                 print(f"   ✅ Downloaded {len(content)} bytes (from content).")
-                return True
+                return {"local_path": local_path, "size": len(content)}
             else:
                 print(f"   ❌ Empty content or error: {resp}")
-                return False
+                return {"error": "Empty content or error in response", "response": resp}
 
         except Exception as e:
             print(f"   ❌ Download Failed: {e}")
-            return False
+            return {"error": f"Download Failed: {e}"}
 
-    def upload(self, local_path: str, remote_path: str) -> bool:
+    def upload(self, local_path: str, remote_path: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Syncs a file from Local Agent -> Remote Registry.
+        Upload a file from the local file system to the remote Composio Workbench.
+        
+        Args:
+            local_path: Path to the local file to upload.
+            remote_path: Absolute path where the file should be saved on the remote workbench.
+            session_id: Optional Composio session ID to target a specific sandbox.
         """
         print(f"🌉 [BRIDGE] Uploading: {local_path} -> {remote_path}")
-        sandbox_id = self._ensure_sandbox()
-
-        if not os.path.exists(local_path):
+        self._ensure_sandbox(session_id)
+        
+        # Read local file content
+        try:
+            with open(local_path, "r") as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            # Fallback for binary? CodeInterpreter 'create_file' expects content string usually.
+            # For POC we stick to text.
+            print(f"   ❌ Binary file upload not supported in this version for {local_path}")
+            return {"error": "Binary file upload not supported in this version"}
+        except FileNotFoundError:
             print(f"   ❌ Local file not found: {local_path}")
-            return False
-
-        args = {"file": local_path, "destination_path": remote_path, "overwrite": True}
-        if sandbox_id:
-            args["sandbox_id"] = sandbox_id
+            return {"error": f"Local file not found: {local_path}"}
 
         try:
-            resp = self.client.tools.execute(
-                slug="CODEINTERPRETER_UPLOAD_FILE_CMD",
-                arguments=args,
+            response = self.client.tools.execute(
+                slug="CODEINTERPRETER_CREATE_FILE_CMD",
+                arguments={
+                    "file_path": remote_path,
+                    "content": content
+                },
                 user_id=self.user_id,
-                dangerously_skip_version_check=True,
+                session_id=session_id, # Use provided session_id for the execute call
+                dangerously_skip_version_check=True
             )
 
-            if hasattr(resp, "model_dump"):
-                resp = resp.model_dump()
+            if hasattr(response, "model_dump"):
+                response = response.model_dump()
 
             # Check success
-            if isinstance(resp, dict) and (
                 resp.get("error") or resp.get("status") == "error"
             ):
                 print(f"   ❌ Upload Error: {resp}")
