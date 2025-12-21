@@ -208,13 +208,36 @@ async def observe_and_save_search_results(
                             raw_content = item.get("text", "")
                             break
                 except:
-                    pass
+                    # Fallback: Regex extraction if ast fails (e.g. specialized chars)
+                    # Extract content between 'text': ' and ' that looks like JSON
+                    match = re.search(r"'text':\s*'({\s*.*})'", content, re.DOTALL)
+                    # Note: This regex is simple; might struggle with nested quotes.
+                    # Better fallback: Just try to parse the whole string as JSON if AST failed?
+                    # No, the outer layer is a Python list string.
+
+                    # Alternative: Try to find the inner JSON purely by braces
+                    # The inner JSON starts with '{"' and ends with '}'
+                    json_start = content.find('{"')
+                    if json_start != -1:
+                        # Find the matching closing brace is hard due to nesting.
+                        # We will rely on the fact that the inner string endquote is usually just before the closing brace of the dict
+                        # [{'type': 'text', 'text': '{...}'}]
+                        # Last 3 chars are usually '}]'
+                        potential_end = content.rfind("}'")
+                        if potential_end == -1:
+                            potential_end = content.rfind('}"')
+
+                        if potential_end > json_start:
+                            raw_content = content[json_start : potential_end + 1]
+                            # Unescape if needed (e.g. \\" -> ")
+                            raw_content = raw_content.replace('\\"', '"').replace(
+                                "\\\\", "\\"
+                            )
 
             # Try to parse as JSON
             try:
                 data = json.loads(raw_content)
             except json.JSONDecodeError:
-                # Not JSON, skip
                 return
         else:
             data = content
