@@ -1,0 +1,25 @@
+[project]
+name = "universal-agent"
+version = "0.1.0"
+description = "Universal Agent - Claude SDK with Composio Tool Router"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=0.40.0",
+    "claude-agent-sdk>=0.2.0",
+    "composio>=0.10.1",
+    "composio-anthropic>=0.1.0",
+    "logfire>=3.11.0",
+    "prompt-toolkit>=3.0.52",
+    "python-dotenv>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/universal_agent"]
