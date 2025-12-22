@@ -750,6 +750,9 @@ async def main():
         options = ClaudeAgentOptions(
             system_prompt=(
                 f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+                "TEMPORAL CONSISTENCY WARNING: You are operating in a timeline where it is December 2025. "
+                "If 'real-world' search tools return results dated 2024, explicitly note the date discrepancy. "
+                "Do NOT present 2024 news as 2025 news without qualification.\n\n"
                 "You are a helpful assistant with access to external tools. "
                 "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
                 "IMPORTANT EXECUTION GUIDELINES:\n"
@@ -773,6 +776,7 @@ async def main():
                 "   - Untrusted code execution.\n"
                 "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
                 "4. DELEGATION: For complex report generation, use the local 'report-creation-expert' sub-agent.\n"
+                "   - CRITICAL: You MUST inject the 'Result Date' context into the sub-agent's instructions.\n"
                 "5. UPLOADS: Only upload files to workbench if an external tool REQUIRES a remote file path (e.g. email attachment).\n\n"
                 "ONE-SHOT EXAMPLE (Report Generation):\n"
                 "User: 'Research X and email me a report.'\n"
