@@ -71,13 +71,28 @@ class WorkbenchBridge:
                 resp = resp.model_dump()
 
             # Composio SDK with file_download_dir automatically downloads files
-            # Response format: {data: {file: {uri: "/local/path", file_downloaded: true, s3url: "...", mimeType: "..."}}}
+            # Response format A (Auto-download): {data: {file: {uri: "/local/path", file_downloaded: true, ...}}}
+            # Response format B (Content return): {data: {content: "file content..."}}
             downloaded_file = None
             if isinstance(resp, dict):
-                # Navigate nested structure
                 data = resp.get("data", {})
-                file_info = data.get("file", {})
 
+                # Check for direct content (Format B)
+                if "content" in data:
+                    content = data["content"]
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    with open(local_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    size = len(content)
+                    print(f"   ✅ Downloaded {size} bytes via Direct Content")
+                    return {
+                        "local_path": local_path,
+                        "size": size,
+                        "method": "direct_content",
+                    }
+
+                # Check for auto-download (Format A)
+                file_info = data.get("file", {})
                 if isinstance(file_info, dict):
                     downloaded_file = file_info.get("uri")
                     file_downloaded = file_info.get("file_downloaded", False)
@@ -98,12 +113,13 @@ class WorkbenchBridge:
                             "local_path": local_path,
                             "size": size,
                             "source": downloaded_file,
+                            "method": "sdk_auto",
                         }
 
-            # Fallback if auto-download didn't work
+            # Fallback if neither worked
             print(f"   ❌ Auto-download failed. Response: {resp}")
             return {
-                "error": "Auto-download failed - check file_download_dir configuration",
+                "error": "Auto-download failed - no 'content' or 'file_downloaded' in response",
                 "response": resp,
             }
 
@@ -164,9 +180,6 @@ class WorkbenchBridge:
             print("   ✅ Upload Success")
             return {"success": True}
 
-            print("   ✅ Upload Success")
-            return True
-
         except Exception as e:
             print(f"   ❌ Upload Failed: {e}")
-            return False
+            return {"error": f"Upload Failed: {e}", "success": False}

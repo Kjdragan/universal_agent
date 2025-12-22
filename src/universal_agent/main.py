@@ -169,109 +169,86 @@ import asyncio
 
 
 async def observe_and_save_search_results(
-    tool_name: str, content: str, workspace_dir: str
+    tool_name: str, content, workspace_dir: str
 ) -> None:
     """
     Observer: Parse SERP tool results and save cleaned artifacts.
-    Runs asynchronously to avoid blocking the agent loop.
-    Detects SERP data by tool name OR by content pattern (for MULTI_EXECUTE_TOOL).
+    Uses Claude SDK typed content (list of TextBlock objects).
     """
-    # Check if this might contain SERP results (check content for JSON patterns)
     is_serp_tool = any(
         kw in tool_name.upper()
         for kw in ["SEARCH_NEWS", "SEARCH_WEB", "COMPOSIO_SEARCH", "MULTI_EXECUTE"]
     )
-    has_serp_content = "news_results" in content or "organic_results" in content
 
-    # Debug logging (uncomment for debugging)
-    # print(f"\n🔍 [OBSERVER] tool={tool_name}, is_serp={is_serp_tool}, has_content={has_serp_content}")
-
-    if not (is_serp_tool or has_serp_content):
+    if not is_serp_tool:
         return
 
     try:
-        # Parse the content - may be in various formats
-        data = None
-        raw_content = content
+        # Extract JSON text from Claude SDK TextBlock objects
+        raw_json = None
 
-        # Handle string content
-        if isinstance(content, str):
-            # Check if it's a string representation of a list (MCP format)
-            if content.startswith("[{") and "'type': 'text'" in content:
-                # This is a repr of a list, need to extract JSON from 'text' field
-                try:
-                    import ast
+        if isinstance(content, list):
+            # Claude SDK: [TextBlock(type='text', text='<json>')]
+            for item in content:
+                if hasattr(item, "text"):
+                    raw_json = item.text
+                    break
+                elif isinstance(item, dict) and item.get("type") == "text":
+                    raw_json = item.get("text", "")
+                    break
+        elif isinstance(content, str):
+            raw_json = content
 
-                    parsed_list = ast.literal_eval(content)
-                    for item in parsed_list:
-                        if isinstance(item, dict) and item.get("type") == "text":
-                            raw_content = item.get("text", "")
-                            break
-                except:
-                    # Fallback: Regex extraction if ast fails (e.g. specialized chars)
-                    # Extract content between 'text': ' and ' that looks like JSON
-                    match = re.search(r"'text':\s*'({\s*.*})'", content, re.DOTALL)
-                    # Note: This regex is simple; might struggle with nested quotes.
-                    # Better fallback: Just try to parse the whole string as JSON if AST failed?
-                    # No, the outer layer is a Python list string.
+        if not raw_json:
+            return
 
-                    # Alternative: Try to find the inner JSON purely by braces
-                    # The inner JSON starts with '{"' and ends with '}'
-                    json_start = content.find('{"')
-                    if json_start != -1:
-                        # Find the matching closing brace is hard due to nesting.
-                        # We will rely on the fact that the inner string endquote is usually just before the closing brace of the dict
-                        # [{'type': 'text', 'text': '{...}'}]
-                        # Last 3 chars are usually '}]'
-                        potential_end = content.rfind("}'")
-                        if potential_end == -1:
-                            potential_end = content.rfind('}"')
+        # Parse JSON
+        try:
+            data = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return
 
-                        if potential_end > json_start:
-                            raw_content = content[json_start : potential_end + 1]
-                            # Unescape if needed (e.g. \\" -> ")
-                            raw_content = raw_content.replace('\\"', '"').replace(
-                                "\\\\", "\\"
-                            )
-
-            # Try to parse as JSON
-            try:
-                data = json.loads(raw_content)
-            except json.JSONDecodeError:
-                return
-        else:
-            data = content
+        if not isinstance(data, dict):
+            return
 
         # Prepare list of payloads to process
         payloads = []
 
-        # 1. Handle Nested "data" wrapper (Standard Composio)
-        # If top level has 'data', peel it.
+        # 1. Handle Nested "data" wrapper
         root = data
         if isinstance(root, dict) and "data" in root:
             root = root["data"]
 
         # 2. Check for MULTI_EXECUTE_TOOL structure
-        # Structure: { results: [ { tool_slug: "...", response: { data: ... } }, ... ] }
         if (
             isinstance(root, dict)
             and "results" in root
             and isinstance(root["results"], list)
         ):
-            # This is likely a multi-execute result
+            # Multi-execute result
             for item in root["results"]:
                 if isinstance(item, dict) and "response" in item:
-                    # Extract inner payload
                     inner_resp = item["response"]
-                    inner_data = inner_resp.get("data") or inner_resp.get(
-                        "data_preview"
-                    )
-                    inner_slug = item.get("tool_slug", tool_name)
 
-                    if inner_data:
-                        payloads.append((inner_slug, inner_data))
+                    # Handle string response
+                    if isinstance(inner_resp, str):
+                        try:
+                            inner_resp = json.loads(inner_resp)
+                        except json.JSONDecodeError:
+                            continue
+
+                    # Now safe to process dict
+                    if isinstance(inner_resp, dict):
+                        inner_data = inner_resp.get("data") or inner_resp.get(
+                            "data_preview"
+                        )
+                        inner_slug = item.get("tool_slug", tool_name)
+
+                        if inner_data:
+                            payloads.append((inner_slug, inner_data))
+
         else:
-            # Treat as single tool result
+            # Single tool result
             payloads.append((tool_name, root))
 
         # 3. Process each payload
@@ -281,15 +258,24 @@ async def observe_and_save_search_results(
                 continue
 
             # Helper to unwrap 'results' key if it hides the actual SERP data
-            # SERP often returns { results: { news_results: [...] } }
             search_data = payload
             if "results" in payload and isinstance(payload["results"], dict):
                 search_data = payload["results"]
+
+            # Robust extraction helper
+            def safe_get_list(data, key):
+                val = data.get(key, [])
+                if isinstance(val, dict):
+                    return list(val.values())
+                if isinstance(val, list):
+                    return val
+                return []
 
             cleaned = None
 
             # CASE A: News Results
             if "news_results" in search_data:
+                raw_list = safe_get_list(search_data, "news_results")
                 cleaned = {
                     "type": "news",
                     "timestamp": datetime.now().isoformat(),
@@ -301,16 +287,22 @@ async def observe_and_save_search_results(
                             "url": a.get("link"),
                             "source": a.get("source", {}).get("name")
                             if isinstance(a.get("source"), dict)
-                            else a.get("source"),
+                            else (
+                                a.get("source")
+                                if isinstance(a.get("source"), str)
+                                else None
+                            ),
                             "date": parse_relative_date(a.get("date", "")),
                             "snippet": a.get("snippet"),
                         }
-                        for a in search_data["news_results"]
+                        for a in raw_list
+                        if isinstance(a, dict)
                     ],
                 }
 
             # CASE B: Organic Web Results
             elif "organic_results" in search_data:
+                raw_list = safe_get_list(search_data, "organic_results")
                 cleaned = {
                     "type": "web",
                     "timestamp": datetime.now().isoformat(),
@@ -434,71 +426,17 @@ async def observe_and_save_workbench_activity(
 
 # =============================================================================
 
+# Session and options will be created in main() after Composio initialization
 user_id = "user_123"
-session = composio.create(user_id=user_id)
+session = None
 
-options = ClaudeAgentOptions(
-    system_prompt=(
-        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
-        "You are a helpful assistant with access to external tools. "
-        "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
-        "IMPORTANT EXECUTION GUIDELINES:\n"
-        "- When the user requests an action (send email, upload file, execute code), proceed immediately without asking for confirmation.\n"
-        "- The user has already authorized these actions by making the request.\n"
-        "- Do not ask 'Should I proceed?' or 'Do you want me to send this?'\n"
-        "- Complete the full task end-to-end in a single workflow.\n"
-        "- If authentication is required, guide the user through it, then continue automatically.\n\n"
-        "REMOTE vs LOCAL WORKFLOW:\n"
-        "- The 'COMPOSIO' tools act as your Hands (Search, Email, Remote Execution).\n"
-        "- The 'LOCAL_TOOLKIT' and your own capabilities act as your Brain (Analysis, Writing, Reasoning).\n"
-        "GUIDELINES:\n"
-        "1. HEAVY LIFTING: For complex writing, report generation, or code analysis, ALWAYS bring data LOCAL via 'workbench_download'.\n"
-        "   Do NOT try to write complex reports purely via remote bash/python scripts.\n"
-        "2. DATA COMPLETENESS: If a tool returns 'data_preview' or says 'Saved large response to <FILE>', it means the data was TRUNCATED.\n"
-        "   - You MUST use 'workbench_download' to fetch the full file locally to ensure you have the complete dataset.\n"
-        "   - Do NOT rely on the preview/summary for high-fidelity tasks.\n"
-        "3. DELEGATION: For complex report generation, you have TWO options:\n"
-        "   a) Use the local 'report-creation-expert' sub-agent via the 'Task' tool (recommended for final deliverables).\n"
-        "   b) Use `invoke_llm` on the Remote Workbench for quick drafts or intermediate analysis.\n"
-        "   - If using the sub-agent, ensure it includes the signature: '🕵️‍♂️ Report Generated by the Specialized Sub-Agent'.\n"
-        "4. INVOKE_LLM BEST PRACTICE: When using invoke_llm() in remote workbench for HTML generation:\n"
-        "   - CRITICAL: Instruct the LLM to output ONLY the HTML document\n"
-        "   - Prompt should say: 'Output ONLY the HTML. No reasoning, no explanations, no code blocks.'\n"
-        "   - This avoids needing regex cleanup and saves 30+ seconds of processing time\n"
-        "5. EMAIL ATTACHMENTS: Prefer HTML attachments for reports when possible for better rendering.\n"
-        "6. THE BRIDGE: Use 'workbench_download' and 'workbench_upload' to seamlessly move state between your Hands (Remote) and Brain (Local)."
-    ),
-    mcp_servers={
-        "composio": {
-            "type": "http",
-            "url": session.mcp.url,
-            "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
-        },
-        "local_toolkit": {
-            "type": "stdio",
-            "command": sys.executable,
-            "args": ["src/mcp_server.py"],
-        },
-    },
-    permission_mode="bypassPermissions",
-)
 
-# Detailed tracing
-trace = {
-    "session_info": {
-        "url": session.mcp.url,
-        "user_id": user_id,
-        "timestamp": datetime.now().isoformat(),
-    },
-    "query": None,
-    "start_time": None,
-    "end_time": None,
-    "total_duration_seconds": None,
-    "tool_calls": [],
-    "tool_results": [],
-    "iterations": [],
-    "logfire_enabled": bool(LOGFIRE_TOKEN),
-}
+# Options will be created in main() after session is initialized
+options = None
+
+
+# Trace will be created in main() after session is initialized
+trace = None
 
 
 async def run_conversation(client, query: str, start_ts: float, iteration: int = 1):
@@ -627,7 +565,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         tool_use_id = getattr(block, "tool_use_id", None)
                         is_error = getattr(block, "is_error", False)
 
-                        # Extract content
+                        # Extract content - keep as typed object
                         block_content = getattr(block, "content", "")
                         content_str = str(block_content)
 
@@ -672,10 +610,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 tool_input = tc.get("input", {})
                                 break
                         if tool_name and OBSERVER_WORKSPACE_DIR:
-                            # Search results observer
+                            # Search results observer - pass typed content
                             asyncio.create_task(
                                 observe_and_save_search_results(
-                                    tool_name, content_str, OBSERVER_WORKSPACE_DIR
+                                    tool_name, block_content, OBSERVER_WORKSPACE_DIR
                                 )
                             )
                             # Workbench activity observer
@@ -802,6 +740,80 @@ async def main():
         composio = Composio(
             api_key=os.environ["COMPOSIO_API_KEY"], file_download_dir=downloads_dir
         )
+
+        # Create Composio session now that client is initialized
+        global session
+        session = composio.create(user_id=user_id)
+
+        # Create ClaudeAgentOptions now that session is available
+        global options
+        options = ClaudeAgentOptions(
+            system_prompt=(
+                f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+                "You are a helpful assistant with access to external tools. "
+                "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
+                "IMPORTANT EXECUTION GUIDELINES:\n"
+                "- When the user requests an action (send email, upload file, execute code), proceed immediately without asking for confirmation.\n"
+                "- The user has already authorized these actions by making the request.\n"
+                "- Do not ask 'Should I proceed?' or 'Do you want me to send this?'\n"
+                "- Complete the full task end-to-end in a single workflow.\n"
+                "- If authentication is required, guide the user through it, then continue automatically.\n\n"
+                "REMOTE vs LOCAL WORKFLOW:\n"
+                "- The 'COMPOSIO' tools act as your Hands (Search, Email, Remote Execution).\n"
+                "- The 'LOCAL_TOOLKIT' and your own capabilities act as your Brain (Analysis, Writing, Reasoning).\n"
+                "GUIDELINES:\n"
+                "1. DATA FLOW POLICY (LOCAL-FIRST): Prefer receiving data DIRECTLY into your context.\n"
+                "   - Do NOT set `sync_response_to_workbench=True` unless you expect massive data (>5MB).\n"
+                "   - Default behavior (`sync=False`) is faster and avoids unnecessary download steps.\n"
+                "2. DATA COMPLETENESS: If a tool returns 'data_preview' or says 'Saved large response to <FILE>', it means the data was TRUNCATED.\n"
+                "   - In these cases (and ONLY these cases), use 'workbench_download' to fetch the full file.\n"
+                "3. WORKBENCH USAGE: Use the Remote Workbench ONLY for:\n"
+                "   - External Action execution (APIs, Browsing).\n"
+                "   - 'Heavy' operations that require specific Linux binaries (ffmpeg, etc).\n"
+                "   - Untrusted code execution.\n"
+                "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
+                "4. DELEGATION: For complex report generation, use the local 'report-creation-expert' sub-agent.\n"
+                "5. UPLOADS: Only upload files to workbench if an external tool REQUIRES a remote file path (e.g. email attachment).\n\n"
+                "ONE-SHOT EXAMPLE (Report Generation):\n"
+                "User: 'Research X and email me a report.'\n"
+                "You: \n"
+                "  1. [Local] Search and gather data.\n"
+                "  2. [Local] Generate 'report.html' using `write_local_file`.\n"
+                "  3. [Bridge] Upload 'report.html' to remote using `workbench_upload`.\n"
+                "  4. [Remote] Send email using `GMAIL_SEND_EMAIL` attached with the remote file path."
+            ),
+            mcp_servers={
+                "composio": {
+                    "type": "http",
+                    "url": session.mcp.url,
+                    "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
+                },
+                "local_toolkit": {
+                    "type": "stdio",
+                    "command": sys.executable,
+                    "args": ["src/mcp_server.py"],
+                },
+            },
+            permission_mode="bypassPermissions",
+        )
+
+        # Initialize trace dict now that session is available
+        global trace
+        trace = {
+            "session_info": {
+                "url": session.mcp.url,
+                "user_id": user_id,
+                "timestamp": datetime.now().isoformat(),
+            },
+            "query": None,
+            "start_time": None,
+            "end_time": None,
+            "total_duration_seconds": None,
+            "tool_calls": [],
+            "tool_results": [],
+            "iterations": [],
+            "logfire_enabled": bool(LOGFIRE_TOKEN),
+        }
 
         # Configure observer to save artifacts to this workspace
         global OBSERVER_WORKSPACE_DIR
