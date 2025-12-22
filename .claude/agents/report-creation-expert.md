@@ -1,6 +1,26 @@
 ---
 name: report-creation-expert
-description: Expert research analyst and report writer. Use for synthesizing search results, analyzing data, extracting full article content from URLs, and writing comprehensive reports. Invoke this agent when the user asks for a report, analysis, or comprehensive research output.
+description: |
+  🚨 MANDATORY DELEGATION TARGET for ALL report generation tasks.
+  
+  **WHEN TO DELEGATE (REQUIRED - NOT OPTIONAL):**
+  - User asks for a "report" of any kind
+  - User asks for "comprehensive", "detailed", "in-depth", or "deep dive" research
+  - User asks for "analysis" or "summary" of search results
+  - User asks for research output to be written to a file
+  
+  **PRIMARY AGENT MUST NOT:**
+  - Generate reports directly using write_local_file
+  - Synthesize search results into a document without delegating
+  - Skip this sub-agent when report/analysis is requested
+  
+  **THIS SUB-AGENT PROVIDES:**
+  - Full article content extraction via webReader (parallel execution)
+  - Expanded research corpus creation (not just search snippets)
+  - Professional report synthesis with citations
+  - Proper file saving to work_products/ directory
+  
+  The primary agent should PASS the search results and delegate immediately.
 tools: mcp__web_reader__webReader, mcp__local_toolkit__write_local_file, mcp__local_toolkit__workbench_download, mcp__local_toolkit__workbench_upload
 model: inherit
 ---

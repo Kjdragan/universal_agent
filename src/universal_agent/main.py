@@ -321,6 +321,7 @@ async def observe_and_save_search_results(
 
             # Save if we found cleanable data
             if cleaned and workspace_dir:
+                filename = "unknown"  # Initialize before try block
                 try:
                     search_dir = os.path.join(workspace_dir, "search_results")
                     os.makedirs(search_dir, exist_ok=True)
@@ -393,8 +394,10 @@ async def observe_and_save_workbench_activity(
                         result_json = json.loads(item.get("text", "{}"))
                         result_data = result_json.get("data", {})
                         break
-        except:
-            result_data = {"raw": tool_result[:500]}
+        except (json.JSONDecodeError, ValueError, SyntaxError):
+            result_data = {
+                "raw": tool_result[:500] if isinstance(tool_result, str) else ""
+            }
 
         activity_log = {
             "timestamp": datetime.now().isoformat(),
@@ -426,25 +429,55 @@ async def observe_and_save_workbench_activity(
 
 
 async def observe_and_enrich_corpus(
-    tool_name: str, tool_input: dict, tool_result: str, workspace_dir: str
+    tool_name: str, tool_input: dict, tool_content, workspace_dir: str
 ) -> None:
     """
     Observer: Capture webReader article extraction results.
-    Saves extracted content to extracted_articles/ and enriches corpus.
+    Uses typed SDK content (same pattern as search observer).
+    Handles Z.AI schema: response.reader_result.{content,title,...}
     """
     if "webreader" not in tool_name.lower():
         return
 
     try:
-        # Parse the webReader result
-        content_data = {}
+        # Extract JSON from typed TextBlock objects (same as search observer)
+        raw_json = None
+        if isinstance(tool_content, list):
+            for item in tool_content:
+                if hasattr(item, "text"):
+                    raw_json = item.text
+                    break
+                elif isinstance(item, dict) and item.get("type") == "text":
+                    raw_json = item.get("text", "")
+                    break
+        elif isinstance(tool_content, str):
+            raw_json = tool_content
+
+        if not raw_json:
+            return
+
+        # Skip MCP error responses
+        if "MCP error" in raw_json:
+            logfire.debug("webreader_mcp_error", error=raw_json[:200])
+            return
+
+        # Parse JSON
         try:
-            if isinstance(tool_result, str):
-                # webReader returns JSON string with title, content, url
-                result_parsed = json.loads(tool_result)
-                content_data = result_parsed
-        except json.JSONDecodeError:
-            content_data = {"raw": tool_result[:2000]}
+            data = json.loads(raw_json)
+        except json.JSONDecodeError as e:
+            logfire.debug("webreader_json_error", error=str(e), preview=raw_json[:200])
+            return
+
+        # Handle Z.AI nested schema: data.reader_result.{content,title,...}
+        # The webReader response wraps content in reader_result
+        reader_result = data.get("reader_result", data)
+
+        content_data = {
+            "title": reader_result.get("title", ""),
+            "description": reader_result.get("description", ""),
+            "content": reader_result.get("content", ""),
+            "url": reader_result.get("url", tool_input.get("url", "")),
+        }
 
         # Save extracted article
         articles_dir = os.path.join(workspace_dir, "extracted_articles")
@@ -527,7 +560,8 @@ options = None
 
 
 # Trace will be created in main() after session is initialized
-trace = None
+# Type hint: Dict[str, Any] - initialized in main()
+trace: dict = {}
 
 
 async def run_conversation(client, query: str, start_ts: float, iteration: int = 1):
@@ -721,12 +755,12 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     OBSERVER_WORKSPACE_DIR,
                                 )
                             )
-                            # WebReader corpus enrichment observer
+                            # WebReader corpus enrichment observer - use typed content!
                             asyncio.create_task(
                                 observe_and_enrich_corpus(
                                     tool_name,
                                     tool_input or {},
-                                    content_str,
+                                    block_content,  # Pass typed content, not stringified
                                     OBSERVER_WORKSPACE_DIR,
                                 )
                             )
@@ -880,15 +914,22 @@ async def main():
                 "   - 'Heavy' operations that require specific Linux binaries (ffmpeg, etc).\n"
                 "   - Untrusted code execution.\n"
                 "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
-                "4. DELEGATION: For complex report generation, use the local 'report-creation-expert' sub-agent.\n"
-                "   - CRITICAL: You MUST inject the 'Result Date' context into the sub-agent's instructions.\n"
+                "4. 🚨 MANDATORY DELEGATION FOR REPORTS:\n"
+                "   - When user requests ANY 'report', 'comprehensive', 'detailed', 'in-depth', or 'analysis':\n"
+                "   - You MUST delegate to the 'report-creation-expert' sub-agent.\n"
+                "   - Do NOT generate reports yourself using write_local_file.\n"
+                "   - Do NOT synthesize search results into a document without delegating.\n"
+                "   - The sub-agent has webReader access for full article extraction.\n"
+                "   - CRITICAL: Inject the 'Result Date' context and search results into the sub-agent's task.\n"
                 "5. UPLOADS: Only upload files to workbench if an external tool REQUIRES a remote file path (e.g. email attachment).\n\n"
-                "ONE-SHOT EXAMPLE (Report Generation):\n"
-                "User: 'Research X and email me a report.'\n"
+                "ONE-SHOT EXAMPLE (Report Generation - CORRECT FLOW):\n"
+                "User: 'Research X and email me a comprehensive report.'\n"
                 "You: \n"
-                "  1. [Local] Search and gather data.\n"
-                "  2. [Local] Generate 'report.html' using `write_local_file`.\n"
-                "  3. [Bridge] Upload 'report.html' to remote using `workbench_upload`.\n"
+                "  1. [Search] Use COMPOSIO tools to gather search results.\n"
+                "  2. [DELEGATE] Call 'report-creation-expert' sub-agent with search results.\n"
+                "     - Sub-agent extracts full article content via webReader.\n"
+                "     - Sub-agent generates 'report.html' in work_products/.\n"
+                "  3. [Bridge] Upload the report to remote using `workbench_upload`.\n"
                 "  4. [Remote] Send email using `GMAIL_SEND_EMAIL` attached with the remote file path."
             ),
             mcp_servers={
@@ -914,9 +955,11 @@ async def main():
             agents={
                 "report-creation-expert": AgentDefinition(
                     description=(
-                        "Expert research analyst and report writer. Use for synthesizing search results, "
-                        "analyzing data, extracting full article content from URLs, and writing comprehensive reports. "
-                        "Invoke this agent when the user asks for a report, analysis, or comprehensive research output."
+                        "🚨 MANDATORY DELEGATION TARGET for ALL report generation tasks. "
+                        "WHEN TO DELEGATE (REQUIRED): User asks for 'report', 'comprehensive', 'detailed', "
+                        "'in-depth', 'analysis', or 'summary' of search results. "
+                        "PRIMARY AGENT MUST NOT: Generate reports directly, synthesize search results without delegating. "
+                        "THIS SUB-AGENT PROVIDES: Full article content extraction via webReader, expanded research corpus, professional report synthesis."
                     ),
                     prompt=(
                         f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
@@ -989,9 +1032,16 @@ async def main():
 
         # Inject Workspace Path into System Prompt for Sub-Agents
         abs_workspace_path = os.path.abspath(workspace_dir)
-        options.system_prompt += (
-            f"\n\nContext:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
-        )
+        # Safely append to system_prompt (ensure it's a string)
+        if options.system_prompt and isinstance(options.system_prompt, str):
+            options.system_prompt += (
+                f"\n\nContext:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
+            )
+        else:
+            # Create new context if no system prompt set
+            options.system_prompt = (
+                f"Context:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
+            )
         print(f"✅ Injected Session Workspace: {abs_workspace_path}")
 
         # Extract Trace ID (Lazy import to ensure OTel is ready)
