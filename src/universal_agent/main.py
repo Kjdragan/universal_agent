@@ -548,6 +548,52 @@ async def observe_and_enrich_corpus(
         logfire.warning("webreader_observer_error", tool=tool_name, error=str(e))
 
 
+def verify_subagent_compliance(
+    tool_name: str, tool_content: str, workspace_dir: str
+) -> str | None:
+    """
+    Verify that report-creation-expert sub-agent saved required artifacts.
+    Returns an error message to inject if compliance failed, None if OK.
+    """
+    # Only check for Task (sub-agent) tool results
+    if "task" not in tool_name.lower():
+        return None
+
+    # Check if this looks like a report sub-agent completion
+    content_lower = tool_content.lower() if isinstance(tool_content, str) else ""
+    is_report_task = any(
+        keyword in content_lower
+        for keyword in ["report", "comprehensive", "html", "work_products"]
+    )
+
+    if not is_report_task:
+        return None
+
+    # Check if expanded_corpus.json was saved
+    corpus_path = os.path.join(workspace_dir, "expanded_corpus.json")
+    if not os.path.exists(corpus_path):
+        logfire.warning(
+            "subagent_compliance_failed",
+            missing_file="expanded_corpus.json",
+            workspace=workspace_dir,
+        )
+        return (
+            "\n\n❌ **COMPLIANCE ERROR**: The report-creation-expert did not save "
+            "`expanded_corpus.json` before writing the report. This is a MANDATORY "
+            "step per the agent's instructions. The extraction data was not preserved "
+            "for audit purposes.\n\n"
+            "**For the user**: The report was generated, but the raw extraction data "
+            "was not saved separately. Future runs should save the corpus first."
+        )
+
+    logfire.info(
+        "subagent_compliance_verified",
+        corpus_exists=True,
+        workspace=workspace_dir,
+    )
+    return None
+
+
 # =============================================================================
 
 # Session and options will be created in main() after Composio initialization
@@ -765,6 +811,18 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 )
                             )
 
+                            # Post-subagent compliance verification (for Task results)
+                            compliance_error = verify_subagent_compliance(
+                                tool_name, content_str, OBSERVER_WORKSPACE_DIR
+                            )
+                            if compliance_error:
+                                # Log the compliance failure prominently
+                                print(compliance_error)
+                                logfire.warning(
+                                    "subagent_compliance_message_injected",
+                                    error=compliance_error[:200],
+                                )
+
         iter_record = {
             "iteration": iteration,
             "query": query[:200],
@@ -921,7 +979,13 @@ async def main():
                 "   - Do NOT synthesize search results into a document without delegating.\n"
                 "   - The sub-agent has webReader access for full article extraction.\n"
                 "   - CRITICAL: Inject the 'Result Date' context and search results into the sub-agent's task.\n"
-                "5. UPLOADS: Only upload files to workbench if an external tool REQUIRES a remote file path (e.g. email attachment).\n\n"
+                "5. UPLOADS: Only upload files to workbench if an external tool REQUIRES a remote file path (e.g. email attachment).\n"
+                "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
+                "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by local_toolkit tools.\n"
+                "   - REMOTE paths: `/home/user/...` - only accessible inside COMPOSIO_REMOTE_WORKBENCH sandbox.\n"
+                "   - `workbench_upload` COPIES local→remote (creates file in sandbox).\n"
+                "   - After `workbench_upload`, use the REMOTE path in workbench code, NOT the local path.\n"
+                "   - For email attachments: upload to S3 via workbench's `upload_local_file('/home/user/...')` helper.\n\n"
                 "ONE-SHOT EXAMPLE (Report Generation - CORRECT FLOW):\n"
                 "User: 'Research X and email me a comprehensive report.'\n"
                 "You: \n"
@@ -965,27 +1029,45 @@ async def main():
                         f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
                         f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
                         "You are a **Report Creation Expert**.\n\n"
-                        "### CONDITIONAL PROCESS\n"
-                        "Check the user's request for keywords like 'comprehensive', 'detailed', 'in-depth', or 'deep dive'.\n\n"
-                        "**IF 'comprehensive' (or similar) IS REQUESTED:**\n"
-                        "  1. **Build Expanded Research Corpus (PARALLEL)**: Call `mcp__web_reader__webReader(url=<url>)` for ALL URLs in a SINGLE response turn.\n"
-                        "     - Issue all webReader tool calls at once (parallel execution) rather than one at a time.\n"
-                        "     - After all extractions complete, save the combined results to `expanded_corpus.json`.\n"
-                        "  2. **Synthesize Report**: Using the expanded corpus.\n\n"
-                        "**IF NOT 'comprehensive':**\n"
-                        "  1. **Skip URL extraction**. Use the original search snippets/corpus provided by the parent agent directly.\n"
-                        "  2. **Synthesize Report**: Using the original corpus.\n\n"
-                        "### SYNTHESIS GUIDELINES\n"
-                        "  - **Don't Summarize, Synthesize**: Weave facts thematically.\n"
-                        "  - **Direct Evidence**: Back claims with specific quotes, stats, dates.\n"
-                        "  - **Citation**: Use inline `(Source Name)` for all claims.\n\n"
-                        "### FORMAT & SAVE\n"
-                        "  - Structure: Executive Summary → Key Findings → Data Table → Conclusion.\n"
-                        "  - Save as BOTH `.md` and `.html` to `{CURRENT_SESSION_WORKSPACE}/work_products/`.\n"
-                        "  - Use `mcp__local_toolkit__write_local_file` for saving.\n\n"
+                        "---\n\n"
+                        "## 🛑 HARD CONSTRAINTS (SYSTEM ENFORCED)\n\n"
+                        "The orchestration layer monitors compliance. Violations trigger task rejection.\n\n"
+                        "| Constraint | Limit | Consequence |\n"
+                        "|------------|-------|-------------|\n"
+                        "| Total articles | MAX 10 | Excess extractions ignored |\n"
+                        "| Parallel webReader | MAX 5 per batch | Rate limiting errors |\n"
+                        "| Corpus save | REQUIRED before synthesis | Report rejected if missing |\n\n"
+                        "---\n\n"
+                        "## WORKFLOW (Follow Exactly)\n\n"
+                        "### Step 1: Check Request Type\n"
+                        "- If keywords 'comprehensive', 'detailed', 'in-depth', or 'deep dive' → Go to Step 2\n"
+                        "- Otherwise → Skip to Step 4 (use search snippets directly)\n\n"
+                        "### Step 2: Extract Articles (BATCHED)\n"
+                        "```\n"
+                        "BATCH 1: Call webReader for URLs 1-5 (MAX 5 PARALLEL)\n"
+                        "WAIT for all results\n"
+                        "BATCH 2: Call webReader for URLs 6-10 (if needed)\n"
+                        "WAIT for all results\n"
+                        "STOP - Do not extract more than 10 articles total\n"
+                        "```\n\n"
+                        "### Step 3: 🔴 CHECKPOINT - Save Corpus (MANDATORY)\n\n"
+                        "**STOP. Before writing ANY report, you MUST:**\n\n"
+                        "1. Create `expanded_corpus.json` with structure:\n"
+                        '   `{"extraction_timestamp": "...", "total_articles": N, "articles": [{"url": "...", "title": "...", "status": "success|failed", "content": "FULL MARKDOWN"}]}`\n\n'
+                        "**⚠️ CRITICAL: Save RAW content, NOT summaries**\n"
+                        "- The `content` field MUST contain FULL markdown from webReader\n"
+                        "- Do NOT create `key_points` arrays or summarize\n"
+                        "- Copy webReader response content VERBATIM\n\n"
+                        f"2. Save to: `{workspace_dir}/expanded_corpus.json`\n"
+                        "3. Use: `mcp__local_toolkit__write_local_file`\n\n"
+                        "⛔ DO NOT PROCEED TO STEP 4 UNTIL CORPUS IS SAVED\n\n"
+                        "### Step 4: Synthesize Report\n"
+                        "- Structure: Executive Summary → Key Findings → Data Table → Conclusion\n"
+                        "- Citations: Inline `(Source Name)` for all claims\n"
+                        f"- Save as: `.html` to `{workspace_dir}/work_products/`\n\n"
                         "### Temporal Consistency\n"
-                        "  - Use {CURRENT_DATE} as 'Today'.\n"
-                        "  - Note source date discrepancies explicitly.\n\n"
+                        "- Use today's date as 'Today'\n"
+                        "- Note source date discrepancies explicitly\n\n"
                         "Return the full report as your final answer."
                     ),
                     tools=[

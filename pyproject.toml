@@ -13,6 +13,7 @@ dependencies = [
     "click>=8.3.1",
     "composio>=0.10.1",
     "composio-anthropic>=0.10.1",
+    "composio-client>=1.21.0",
     "logfire[httpx]>=4.16.0",
     "prompt-toolkit>=3.0.52",
     "pydantic>=2.12.5",
