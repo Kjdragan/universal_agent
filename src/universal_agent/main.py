@@ -112,6 +112,7 @@ else:
 from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import (
     ClaudeAgentOptions,
+    AgentDefinition,
     AssistantMessage,
     TextBlock,
     ToolUseBlock,
@@ -424,6 +425,96 @@ async def observe_and_save_workbench_activity(
         logfire.warning("workbench_observer_error", tool=tool_name, error=str(e))
 
 
+async def observe_and_enrich_corpus(
+    tool_name: str, tool_input: dict, tool_result: str, workspace_dir: str
+) -> None:
+    """
+    Observer: Capture webReader article extraction results.
+    Saves extracted content to extracted_articles/ and enriches corpus.
+    """
+    if "webreader" not in tool_name.lower():
+        return
+
+    try:
+        # Parse the webReader result
+        content_data = {}
+        try:
+            if isinstance(tool_result, str):
+                # webReader returns JSON string with title, content, url
+                result_parsed = json.loads(tool_result)
+                content_data = result_parsed
+        except json.JSONDecodeError:
+            content_data = {"raw": tool_result[:2000]}
+
+        # Save extracted article
+        articles_dir = os.path.join(workspace_dir, "extracted_articles")
+        os.makedirs(articles_dir, exist_ok=True)
+
+        timestamp_str = datetime.now().strftime("%H%M%S")
+        url = tool_input.get("url", "unknown")
+        # Create safe filename from URL
+        safe_name = (
+            url.replace("https://", "").replace("http://", "").replace("/", "_")[:50]
+        )
+        filename = os.path.join(articles_dir, f"{safe_name}_{timestamp_str}.json")
+
+        article_record = {
+            "timestamp": datetime.now().isoformat(),
+            "source_url": url,
+            "title": content_data.get("title", ""),
+            "description": content_data.get("description", ""),
+            "content": content_data.get("content", "")[:10000],  # Truncate for storage
+            "extraction_success": bool(content_data.get("content")),
+        }
+
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(article_record, f, indent=2, ensure_ascii=False)
+
+        print(f"\n📰 [OBSERVER] Saved extracted article: {filename}")
+        logfire.info(
+            "article_extracted",
+            url=url,
+            title=content_data.get("title", "")[:100],
+            content_length=len(content_data.get("content", "")),
+            path=filename,
+        )
+
+        # Enrich existing corpus - find matching search result and add content
+        search_dir = os.path.join(workspace_dir, "search_results")
+        if os.path.exists(search_dir):
+            for sr_file in os.listdir(search_dir):
+                if sr_file.endswith(".json"):
+                    sr_path = os.path.join(search_dir, sr_file)
+                    try:
+                        with open(sr_path, "r") as f:
+                            sr_data = json.load(f)
+
+                        # Check if this search result contains the URL
+                        results_list = sr_data.get("results", [])
+                        enriched = False
+                        for result in results_list:
+                            if result.get("url") == url or result.get("link") == url:
+                                result["content"] = content_data.get("content", "")
+                                result["extraction_timestamp"] = (
+                                    datetime.now().isoformat()
+                                )
+                                enriched = True
+                                break
+
+                        if enriched:
+                            with open(sr_path, "w") as f:
+                                json.dump(sr_data, f, indent=2)
+                            print(f"   ✅ Enriched corpus: {sr_file}")
+                            logfire.info("corpus_enriched", file=sr_file, url=url)
+                    except Exception as enrich_err:
+                        logfire.debug(
+                            "corpus_enrich_skip", file=sr_file, error=str(enrich_err)
+                        )
+
+    except Exception as e:
+        logfire.warning("webreader_observer_error", tool=tool_name, error=str(e))
+
+
 # =============================================================================
 
 # Session and options will be created in main() after Composio initialization
@@ -486,12 +577,17 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 else input_json
                             )
 
+                        # Check for sub-agent context (parent_tool_use_id indicates this call is from within a sub-agent)
+                        parent_tool_id = getattr(msg, "parent_tool_use_id", None)
+
                         logfire.info(
                             "tool_call",
                             tool_name=block.name,
                             tool_id=block.id,
                             input_size=tool_record["input_size_bytes"],
                             input_preview=input_preview,
+                            parent_tool_use_id=parent_tool_id,  # Sub-agent context
+                            is_subagent_call=bool(parent_tool_id),
                         )
 
                         # Check for WORKBENCH or code execution tools
@@ -619,6 +715,15 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             # Workbench activity observer
                             asyncio.create_task(
                                 observe_and_save_workbench_activity(
+                                    tool_name,
+                                    tool_input or {},
+                                    content_str,
+                                    OBSERVER_WORKSPACE_DIR,
+                                )
+                            )
+                            # WebReader corpus enrichment observer
+                            asyncio.create_task(
+                                observe_and_enrich_corpus(
                                     tool_name,
                                     tool_input or {},
                                     content_str,
@@ -797,6 +902,57 @@ async def main():
                     "command": sys.executable,
                     "args": ["src/mcp_server.py"],
                 },
+                "web_reader": {
+                    "type": "http",
+                    "url": "https://api.z.ai/api/mcp/web_reader/mcp",
+                    "headers": {
+                        "Authorization": f"Bearer {os.environ.get('ZAI_API_KEY', '')}"
+                    },
+                },
+            },
+            allowed_tools=["Task"],  # Required for sub-agent delegation
+            agents={
+                "report-creation-expert": AgentDefinition(
+                    description=(
+                        "Expert research analyst and report writer. Use for synthesizing search results, "
+                        "analyzing data, extracting full article content from URLs, and writing comprehensive reports. "
+                        "Invoke this agent when the user asks for a report, analysis, or comprehensive research output."
+                    ),
+                    prompt=(
+                        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+                        f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
+                        "You are a **Report Creation Expert**.\n\n"
+                        "### CONDITIONAL PROCESS\n"
+                        "Check the user's request for keywords like 'comprehensive', 'detailed', 'in-depth', or 'deep dive'.\n\n"
+                        "**IF 'comprehensive' (or similar) IS REQUESTED:**\n"
+                        "  1. **Build Expanded Research Corpus (PARALLEL)**: Call `mcp__web_reader__webReader(url=<url>)` for ALL URLs in a SINGLE response turn.\n"
+                        "     - Issue all webReader tool calls at once (parallel execution) rather than one at a time.\n"
+                        "     - After all extractions complete, save the combined results to `expanded_corpus.json`.\n"
+                        "  2. **Synthesize Report**: Using the expanded corpus.\n\n"
+                        "**IF NOT 'comprehensive':**\n"
+                        "  1. **Skip URL extraction**. Use the original search snippets/corpus provided by the parent agent directly.\n"
+                        "  2. **Synthesize Report**: Using the original corpus.\n\n"
+                        "### SYNTHESIS GUIDELINES\n"
+                        "  - **Don't Summarize, Synthesize**: Weave facts thematically.\n"
+                        "  - **Direct Evidence**: Back claims with specific quotes, stats, dates.\n"
+                        "  - **Citation**: Use inline `(Source Name)` for all claims.\n\n"
+                        "### FORMAT & SAVE\n"
+                        "  - Structure: Executive Summary → Key Findings → Data Table → Conclusion.\n"
+                        "  - Save as BOTH `.md` and `.html` to `{CURRENT_SESSION_WORKSPACE}/work_products/`.\n"
+                        "  - Use `mcp__local_toolkit__write_local_file` for saving.\n\n"
+                        "### Temporal Consistency\n"
+                        "  - Use {CURRENT_DATE} as 'Today'.\n"
+                        "  - Note source date discrepancies explicitly.\n\n"
+                        "Return the full report as your final answer."
+                    ),
+                    tools=[
+                        "mcp__web_reader__webReader",
+                        "mcp__local_toolkit__write_local_file",
+                        "mcp__local_toolkit__workbench_download",
+                        "mcp__local_toolkit__workbench_upload",
+                    ],
+                    model="inherit",
+                ),
             },
             permission_mode="bypassPermissions",
         )
