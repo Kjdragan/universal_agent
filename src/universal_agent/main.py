@@ -121,8 +121,8 @@ from claude_agent_sdk.types import (
 )
 from composio import Composio
 
-# Initialize Composio
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
+# Composio client - will be initialized in main() with file_download_dir
+composio = None
 
 # =============================================================================
 # OBSERVER SETUP - For processing tool results asynchronously
@@ -242,97 +242,194 @@ async def observe_and_save_search_results(
         else:
             data = content
 
-        # Handle nested structure from Composio response
-        # MULTI_EXECUTE: {data: {results: [{response: {data: {results: {news_results: [...]}}}}]}}
-        if isinstance(data, dict):
-            # First level: extract 'data' if present
-            if "data" in data and isinstance(data["data"], dict):
-                inner = data["data"]
+        # Prepare list of payloads to process
+        payloads = []
 
-                # Check for MULTI_EXECUTE_TOOL structure (results is a list)
-                if "results" in inner and isinstance(inner["results"], list):
-                    for result_item in inner["results"]:
-                        if isinstance(result_item, dict) and "response" in result_item:
-                            resp = result_item["response"]
-                            if isinstance(resp, dict):
-                                resp_data = resp.get("data") or resp.get("data_preview")
-                                if isinstance(resp_data, dict) and (
-                                    "results" in resp_data
-                                    or "news_results" in resp_data
-                                ):
-                                    if "results" in resp_data:
-                                        data = resp_data["results"]
-                                    else:
-                                        data = resp_data
-                                    break
-                # Check if results is a dict (direct SERP response)
-                elif "results" in inner and isinstance(inner["results"], dict):
-                    data = inner["results"]
-                elif "news_results" in inner:
-                    data = inner
-                else:
-                    data = inner
-            elif "results" in data:
-                data = data["results"]
+        # 1. Handle Nested "data" wrapper (Standard Composio)
+        # If top level has 'data', peel it.
+        root = data
+        if isinstance(root, dict) and "data" in root:
+            root = root["data"]
 
-        # Proceed with cleaning if we have news_results or organic_results
+        # 2. Check for MULTI_EXECUTE_TOOL structure
+        # Structure: { results: [ { tool_slug: "...", response: { data: ... } }, ... ] }
+        if (
+            isinstance(root, dict)
+            and "results" in root
+            and isinstance(root["results"], list)
+        ):
+            # This is likely a multi-execute result
+            for item in root["results"]:
+                if isinstance(item, dict) and "response" in item:
+                    # Extract inner payload
+                    inner_resp = item["response"]
+                    inner_data = inner_resp.get("data") or inner_resp.get(
+                        "data_preview"
+                    )
+                    inner_slug = item.get("tool_slug", tool_name)
 
-        cleaned = None
+                    if inner_data:
+                        payloads.append((inner_slug, inner_data))
+        else:
+            # Treat as single tool result
+            payloads.append((tool_name, root))
 
-        # Process news results
-        if isinstance(data, dict) and "news_results" in data:
-            cleaned = {
-                "type": "news",
-                "timestamp": datetime.now().isoformat(),
-                "tool": tool_name,
-                "articles": [
-                    {
-                        "position": a.get("position"),
-                        "title": a.get("title"),
-                        "url": a.get("link"),
-                        "source": a.get("source", {}).get("name")
-                        if isinstance(a.get("source"), dict)
-                        else a.get("source"),
-                        "date": parse_relative_date(a.get("date", "")),
-                        "snippet": a.get("snippet"),
-                    }
-                    for a in data["news_results"]
-                ],
-            }
+        # 3. Process each payload
+        saved_count = 0
+        for slug, payload in payloads:
+            if not isinstance(payload, dict):
+                continue
 
-        # Process web results
-        elif isinstance(data, dict) and "organic_results" in data:
-            cleaned = {
-                "type": "web",
-                "timestamp": datetime.now().isoformat(),
-                "tool": tool_name,
-                "results": [
-                    {
-                        "position": r.get("position"),
-                        "title": r.get("title"),
-                        "url": r.get("link"),
-                        "snippet": r.get("snippet"),
-                    }
-                    for r in data["organic_results"]
-                ],
-            }
+            # Helper to unwrap 'results' key if it hides the actual SERP data
+            # SERP often returns { results: { news_results: [...] } }
+            search_data = payload
+            if "results" in payload and isinstance(payload["results"], dict):
+                search_data = payload["results"]
 
-        # Save artifact
-        if cleaned and workspace_dir:
-            search_dir = os.path.join(workspace_dir, "search_results")
-            os.makedirs(search_dir, exist_ok=True)
-            filename = os.path.join(
-                search_dir, f"{tool_name}_{datetime.now().strftime('%H%M%S')}.json"
-            )
-            with open(filename, "w") as f:
-                json.dump(cleaned, f, indent=2)
-            print(f"\n📁 [OBSERVER] Saved: {filename}")
-            logfire.info(
-                "observer_artifact_saved", path=filename, type=cleaned.get("type")
-            )
+            cleaned = None
+
+            # CASE A: News Results
+            if "news_results" in search_data:
+                cleaned = {
+                    "type": "news",
+                    "timestamp": datetime.now().isoformat(),
+                    "tool": slug,
+                    "articles": [
+                        {
+                            "position": a.get("position"),
+                            "title": a.get("title"),
+                            "url": a.get("link"),
+                            "source": a.get("source", {}).get("name")
+                            if isinstance(a.get("source"), dict)
+                            else a.get("source"),
+                            "date": parse_relative_date(a.get("date", "")),
+                            "snippet": a.get("snippet"),
+                        }
+                        for a in search_data["news_results"]
+                    ],
+                }
+
+            # CASE B: Organic Web Results
+            elif "organic_results" in search_data:
+                cleaned = {
+                    "type": "web",
+                    "timestamp": datetime.now().isoformat(),
+                    "tool": slug,
+                    "results": [
+                        {
+                            "position": r.get("position"),
+                            "title": r.get("title"),
+                            "url": r.get("link"),
+                            "snippet": r.get("snippet"),
+                        }
+                        for r in search_data["organic_results"]
+                    ],
+                }
+
+            # Save if we found cleanable data
+            if cleaned and workspace_dir:
+                try:
+                    search_dir = os.path.join(workspace_dir, "search_results")
+                    os.makedirs(search_dir, exist_ok=True)
+
+                    # Make filename unique
+                    timestamp_str = datetime.now().strftime("%H%M%S")
+                    suffix = f"_{saved_count}" if len(payloads) > 1 else ""
+                    filename = os.path.join(
+                        search_dir, f"{slug}{suffix}_{timestamp_str}.json"
+                    )
+
+                    # Write file with explicit error handling
+                    with open(filename, "w") as f:
+                        json.dump(cleaned, f, indent=2)
+
+                    # Verify file was actually created
+                    if os.path.exists(filename):
+                        file_size = os.path.getsize(filename)
+                        print(f"\n📁 [OBSERVER] Saved: {filename} ({file_size} bytes)")
+                        logfire.info(
+                            "observer_artifact_saved",
+                            path=filename,
+                            type=cleaned.get("type"),
+                            size=file_size,
+                        )
+                        saved_count += 1
+                    else:
+                        print(f"\n❌ [OBSERVER] File not created: {filename}")
+                        logfire.error("observer_file_not_created", path=filename)
+
+                except Exception as file_error:
+                    print(f"\n❌ [OBSERVER] File I/O error: {file_error}")
+                    logfire.error(
+                        "observer_file_io_error",
+                        error=str(file_error),
+                        path=filename if "filename" in locals() else "unknown",
+                    )
 
     except Exception as e:
+        print(f"\n❌ [OBSERVER] Parse error: {e}")
         logfire.warning("observer_error", tool=tool_name, error=str(e))
+
+
+async def observe_and_save_workbench_activity(
+    tool_name: str, tool_input: dict, tool_result: str, workspace_dir: str
+) -> None:
+    """
+    Observer: Capture COMPOSIO_REMOTE_WORKBENCH activity (inputs/outputs).
+    Saves code execution details to workbench_activity/ directory.
+    """
+    if "REMOTE_WORKBENCH" not in tool_name.upper():
+        return
+
+    try:
+        workbench_dir = os.path.join(workspace_dir, "workbench_activity")
+        os.makedirs(workbench_dir, exist_ok=True)
+
+        timestamp_str = datetime.now().strftime("%H%M%S")
+        filename = os.path.join(workbench_dir, f"workbench_{timestamp_str}.json")
+
+        # Parse result for metadata
+        result_data = {}
+        try:
+            if isinstance(tool_result, str):
+                import ast
+
+                parsed_list = ast.literal_eval(tool_result)
+                for item in parsed_list:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        result_json = json.loads(item.get("text", "{}"))
+                        result_data = result_json.get("data", {})
+                        break
+        except:
+            result_data = {"raw": tool_result[:500]}
+
+        activity_log = {
+            "timestamp": datetime.now().isoformat(),
+            "tool": tool_name,
+            "input": {
+                "code": tool_input.get("code_to_execute", "")[
+                    :1000
+                ],  # Truncate for readability
+                "session_id": tool_input.get("session_id"),
+                "current_step": tool_input.get("current_step"),
+                "thought": tool_input.get("thought"),
+            },
+            "output": {
+                "stdout": result_data.get("stdout", ""),
+                "stderr": result_data.get("stderr", ""),
+                "results": result_data.get("results", ""),
+                "successful": result_data.get("successful"),
+            },
+        }
+
+        with open(filename, "w") as f:
+            json.dump(activity_log, f, indent=2)
+
+        print(f"\n📁 [OBSERVER] Saved workbench activity: {filename}")
+        logfire.info("workbench_activity_saved", path=filename)
+
+    except Exception as e:
+        logfire.warning("workbench_observer_error", tool=tool_name, error=str(e))
 
 
 # =============================================================================
@@ -342,6 +439,7 @@ session = composio.create(user_id=user_id)
 
 options = ClaudeAgentOptions(
     system_prompt=(
+        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
         "You are a helpful assistant with access to external tools. "
         "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
         "IMPORTANT EXECUTION GUIDELINES:\n"
@@ -359,12 +457,16 @@ options = ClaudeAgentOptions(
         "2. DATA COMPLETENESS: If a tool returns 'data_preview' or says 'Saved large response to <FILE>', it means the data was TRUNCATED.\n"
         "   - You MUST use 'workbench_download' to fetch the full file locally to ensure you have the complete dataset.\n"
         "   - Do NOT rely on the preview/summary for high-fidelity tasks.\n"
-        "3. DELEGATION: For the actual writing of the report, DO NOT write it yourself. Delegate it to a sub-agent using the 'Task' tool.\n"
-        "   - Instruct the sub-agent to be a 'Report Expert'.\n"
-        "   - REQUIRE the sub-agent to include the signature: '🕵️‍♂️ Report Generated by the Specialized Sub-Agent' in the footer.\n"
-        "   - This proves the hand-off occurred.\n"
-        "4. EXECUTION: For sending emails, running servers, or scraping, use REMOTE tools.\n"
-        "5. THE BRIDGE: Use 'workbench_download' and 'workbench_upload' to seamlessly move state between your Hands (Remote) and Brain (Local)."
+        "3. DELEGATION: For complex report generation, you have TWO options:\n"
+        "   a) Use the local 'report-creation-expert' sub-agent via the 'Task' tool (recommended for final deliverables).\n"
+        "   b) Use `invoke_llm` on the Remote Workbench for quick drafts or intermediate analysis.\n"
+        "   - If using the sub-agent, ensure it includes the signature: '🕵️‍♂️ Report Generated by the Specialized Sub-Agent'.\n"
+        "4. INVOKE_LLM BEST PRACTICE: When using invoke_llm() in remote workbench for HTML generation:\n"
+        "   - CRITICAL: Instruct the LLM to output ONLY the HTML document\n"
+        "   - Prompt should say: 'Output ONLY the HTML. No reasoning, no explanations, no code blocks.'\n"
+        "   - This avoids needing regex cleanup and saves 30+ seconds of processing time\n"
+        "5. EMAIL ATTACHMENTS: Prefer HTML attachments for reports when possible for better rendering.\n"
+        "6. THE BRIDGE: Use 'workbench_download' and 'workbench_upload' to seamlessly move state between your Hands (Remote) and Brain (Local)."
     ),
     mcp_servers={
         "composio": {
@@ -563,14 +665,26 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         # Observer Pattern: Fire-and-forget async save for SERP results
                         # Look up tool name from tool_use_id
                         tool_name = None
+                        tool_input = None
                         for tc in tool_calls_this_iter:
                             if tc.get("id") == tool_use_id:
                                 tool_name = tc.get("name")
+                                tool_input = tc.get("input", {})
                                 break
                         if tool_name and OBSERVER_WORKSPACE_DIR:
+                            # Search results observer
                             asyncio.create_task(
                                 observe_and_save_search_results(
                                     tool_name, content_str, OBSERVER_WORKSPACE_DIR
+                                )
+                            )
+                            # Workbench activity observer
+                            asyncio.create_task(
+                                observe_and_save_workbench_activity(
+                                    tool_name,
+                                    tool_input or {},
+                                    content_str,
+                                    OBSERVER_WORKSPACE_DIR,
                                 )
                             )
 
@@ -681,6 +795,14 @@ async def main():
         workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", f"session_{timestamp}")
         os.makedirs(workspace_dir, exist_ok=True)
 
+        # Initialize Composio with automatic file downloads to this workspace
+        global composio
+        downloads_dir = os.path.join(workspace_dir, "downloads")
+        os.makedirs(downloads_dir, exist_ok=True)
+        composio = Composio(
+            api_key=os.environ["COMPOSIO_API_KEY"], file_download_dir=downloads_dir
+        )
+
         # Configure observer to save artifacts to this workspace
         global OBSERVER_WORKSPACE_DIR
         OBSERVER_WORKSPACE_DIR = workspace_dir
@@ -692,6 +814,13 @@ async def main():
         sys.stderr = DualWriter(log_file, sys.stderr)
 
         # Log session info now that logging is set up
+
+        # Inject Workspace Path into System Prompt for Sub-Agents
+        abs_workspace_path = os.path.abspath(workspace_dir)
+        options.system_prompt += (
+            f"\n\nContext:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
+        )
+        print(f"✅ Injected Session Workspace: {abs_workspace_path}")
 
         # Extract Trace ID (Lazy import to ensure OTel is ready)
         # Extract Trace ID (Lazy import to ensure OTel is ready)

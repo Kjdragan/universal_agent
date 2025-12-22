@@ -1,5 +1,6 @@
 import os
 import time
+from typing import Optional, Dict, Any
 
 
 class WorkbenchBridge:
@@ -42,10 +43,12 @@ class WorkbenchBridge:
 
         return self.sandbox_id
 
-    def download(self, remote_path: str, local_path: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def download(
+        self, remote_path: str, local_path: str, session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Download a file from the remote Composio Workbench (CodeInterpreter) to the local file system.
-        
+
         Args:
             remote_path: Absolute path to the file on the remote workbench.
             local_path: Path where the file should be saved locally.
@@ -53,58 +56,67 @@ class WorkbenchBridge:
         """
         print(f"🌉 [BRIDGE] Downloading: {remote_path} -> {local_path}")
         self._ensure_sandbox(session_id)
-        
+
         try:
+            # Session context is maintained by the Composio client automatically
+            # session_id is NOT a valid parameter for tools.execute()
             resp = self.client.tools.execute(
-                action="CODEINTERPRETER_GET_FILE_CMD",
-                params={"file_path": remote_path},
-                entity_id=self.user_id,
-                session_id=session_id,  # Use provided session_id
+                slug="CODEINTERPRETER_GET_FILE_CMD",
+                arguments={"file_path": remote_path},
+                user_id=self.user_id,
                 dangerously_skip_version_check=True,
             )
 
             if hasattr(resp, "model_dump"):
                 resp = resp.model_dump()
 
-            # Check if response points to a local file (Composio SDK behavior)
-            downloaded_path = None
+            # Composio SDK with file_download_dir automatically downloads files
+            # Response format: {data: {file: {uri: "/local/path", file_downloaded: true, s3url: "...", mimeType: "..."}}}
+            downloaded_file = None
             if isinstance(resp, dict):
-                downloaded_path = resp.get("data", {}).get("file")
+                # Navigate nested structure
+                data = resp.get("data", {})
+                file_info = data.get("file", {})
 
-            if downloaded_path and os.path.exists(downloaded_path):
-                # Move/Copy it to destination
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                import shutil
-                shutil.copy2(downloaded_path, local_path)
-                size = os.path.getsize(local_path)
-                print(f"   ✅ Downloaded {size} bytes from {downloaded_path}.")
-                return {"local_path": local_path, "size": size}
+                if isinstance(file_info, dict):
+                    downloaded_file = file_info.get("uri")
+                    file_downloaded = file_info.get("file_downloaded", False)
 
-            # Fallback: Content in response
-            content = None
-            if isinstance(resp, dict):
-                content = resp.get("content") or resp.get("data", {}).get("content")
-            if isinstance(resp, str):
-                content = resp
+                    if (
+                        downloaded_file
+                        and file_downloaded
+                        and os.path.exists(downloaded_file)
+                    ):
+                        # Copy to target location
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        import shutil
 
-            if content:
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                with open(local_path, "w") as f:
-                    f.write(content)
-                print(f"   ✅ Downloaded {len(content)} bytes (from content).")
-                return {"local_path": local_path, "size": len(content)}
-            else:
-                print(f"   ❌ Empty content or error: {resp}")
-                return {"error": "Empty content or error in response", "response": resp}
+                        shutil.copy2(downloaded_file, local_path)
+                        size = os.path.getsize(local_path)
+                        print(f"   ✅ Downloaded {size} bytes via SDK auto-download")
+                        return {
+                            "local_path": local_path,
+                            "size": size,
+                            "source": downloaded_file,
+                        }
+
+            # Fallback if auto-download didn't work
+            print(f"   ❌ Auto-download failed. Response: {resp}")
+            return {
+                "error": "Auto-download failed - check file_download_dir configuration",
+                "response": resp,
+            }
 
         except Exception as e:
             print(f"   ❌ Download Failed: {e}")
             return {"error": f"Download Failed: {e}"}
 
-    def upload(self, local_path: str, remote_path: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    def upload(
+        self, local_path: str, remote_path: str, session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
         """
         Upload a file from the local file system to the remote Composio Workbench.
-        
+
         Args:
             local_path: Path to the local file to upload.
             remote_path: Absolute path where the file should be saved on the remote workbench.
@@ -112,7 +124,7 @@ class WorkbenchBridge:
         """
         print(f"🌉 [BRIDGE] Uploading: {local_path} -> {remote_path}")
         self._ensure_sandbox(session_id)
-        
+
         # Read local file content
         try:
             with open(local_path, "r") as f:
@@ -120,32 +132,37 @@ class WorkbenchBridge:
         except UnicodeDecodeError:
             # Fallback for binary? CodeInterpreter 'create_file' expects content string usually.
             # For POC we stick to text.
-            print(f"   ❌ Binary file upload not supported in this version for {local_path}")
+            print(
+                f"   ❌ Binary file upload not supported in this version for {local_path}"
+            )
             return {"error": "Binary file upload not supported in this version"}
         except FileNotFoundError:
             print(f"   ❌ Local file not found: {local_path}")
             return {"error": f"Local file not found: {local_path}"}
 
         try:
+            # Session context is maintained by the Composio client automatically
+            # session_id is NOT a valid parameter for tools.execute()
             response = self.client.tools.execute(
                 slug="CODEINTERPRETER_CREATE_FILE_CMD",
-                arguments={
-                    "file_path": remote_path,
-                    "content": content
-                },
+                arguments={"file_path": remote_path, "content": content},
                 user_id=self.user_id,
-                session_id=session_id, # Use provided session_id for the execute call
-                dangerously_skip_version_check=True
+                dangerously_skip_version_check=True,
             )
 
             if hasattr(response, "model_dump"):
                 response = response.model_dump()
 
             # Check success
+            resp = response  # Use response from above
+            if isinstance(resp, dict) and (
                 resp.get("error") or resp.get("status") == "error"
             ):
                 print(f"   ❌ Upload Error: {resp}")
-                return False
+                return {"error": resp}
+
+            print("   ✅ Upload Success")
+            return {"success": True}
 
             print("   ✅ Upload Success")
             return True

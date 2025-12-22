@@ -243,4 +243,28 @@ system_prompt=(
 
 ---
 
+### Lesson 12: Tool Documentation & Examples Are Critical
+**Date**: 2025-12-21
+
+**Discovery**: LLM agents (including Claude) can misuse tools if the API isn't clearly documented with **concrete examples**. During testing, `workbench_download` failed because the implementation used outdated Composio SDK parameters (`action`, `params`, `entity_id`) instead of the current API (`slug`, `arguments`, `user_id`).
+
+**Problem**: The tool's docstring only described **what** parameters to pass, not **how** to structure the call or which SDK version to use.
+
+**Solution**:
+1. **Add Working Examples**: Every MCP tool docstring should include a concrete, copy-paste example showing:
+   - Exact parameter names
+   - Realistic values (including placeholders like `{CURRENT_SESSION_WORKSPACE}`)
+   - Expected context (e.g., "After COMPOSIO_MULTI_EXECUTE_TOOL saves results...")
+2. **Document Best Practices**: Include guidance on path conventions, session_id reuse, and when to use the tool
+3. **Version-Specific Guidance**: If the SDK API changes, update examples immediately to avoid runtime errors
+
+**Impact**: With enhanced docstrings, the agent can:
+- **Self-correct**: Understand proper syntax from examples
+- **Avoid errors**: Match working patterns instead of guessing
+- **Maintain workflows**: Session IDs and paths flow correctly through multi-step processes
+
+**Pattern**: "Show, Don't Just Tell" – A working example is worth a thousand words of API documentation.
+
+---
+
 *Last updated: 2025-12-21 16:45 CST*
