@@ -25,3 +25,9 @@ dependencies = [
     "websockets>=14.0",
 ]
 
+[tool.ruff]
+# Ignore common warnings that are intentional in this codebase:
+# E402: Module level import not at top of file (intentional - after Logfire setup)
+# F401: Imported but unused (sometimes kept for re-export or conditional use)
+# F811: Redefinition of unused name (sometimes intentional for conditional imports)
+lint.ignore = ["E402", "F401", "F811"]

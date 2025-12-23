@@ -557,7 +557,7 @@ class UniversalAgent:
                     },
                 },
             },
-            allowed_tools=["Task"],
+            # Note: No allowed_tools restriction - main agent can use any tool for flexibility
             agents={
                 "report-creation-expert": AgentDefinition(
                     description=(
