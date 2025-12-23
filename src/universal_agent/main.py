@@ -160,6 +160,52 @@ def parse_relative_date(relative_str: str) -> str:
 
 
 # =============================================================================
+# DOMAIN BLACKLIST - Track domains that consistently fail webReader
+# =============================================================================
+
+
+def _update_domain_blacklist(workspace_dir: str, domain: str, error_code: str) -> None:
+    """
+    Track domain failures for blacklist learning.
+    After 3 failures from same domain with error 1214, consider blacklisted.
+    """
+    try:
+        # Use parent of session workspace for persistence across sessions
+        base_workspace = os.path.dirname(workspace_dir) if workspace_dir else "."
+        blacklist_path = os.path.join(base_workspace, "webReader_blacklist.json")
+
+        # Load existing blacklist
+        blacklist = {"domains": {}, "threshold": 3}
+        if os.path.exists(blacklist_path):
+            with open(blacklist_path, "r") as f:
+                blacklist = json.load(f)
+
+        # Update domain failure count (only for 1214 - permanent failures)
+        if error_code == "1214":
+            if domain not in blacklist["domains"]:
+                blacklist["domains"][domain] = {"failures": 0, "last_failure": ""}
+
+            blacklist["domains"][domain]["failures"] += 1
+            blacklist["domains"][domain]["last_failure"] = datetime.now().isoformat()
+
+            # Log if threshold reached
+            if blacklist["domains"][domain]["failures"] >= blacklist["threshold"]:
+                logfire.warning(
+                    "domain_blacklisted",
+                    domain=domain,
+                    failures=blacklist["domains"][domain]["failures"],
+                    message=f"Domain {domain} has reached failure threshold",
+                )
+
+            # Save updated blacklist
+            with open(blacklist_path, "w") as f:
+                json.dump(blacklist, f, indent=2)
+
+    except Exception as e:
+        logfire.debug("blacklist_update_error", error=str(e))
+
+
+# =============================================================================
 # OBSERVER PATTERN - Process tool results asynchronously (works with MCP mode)
 # Note: Composio hooks (@after_execute) don't fire in MCP mode because execution
 # happens on the remote server. This observer pattern processes results after
@@ -283,7 +329,8 @@ async def observe_and_save_search_results(
                     "tool": slug,
                     "articles": [
                         {
-                            "position": a.get("position"),
+                            "position": a.get("position")
+                            or (idx + 1),  # Use API position or 1-indexed array order
                             "title": a.get("title"),
                             "url": a.get("link"),
                             "source": a.get("source", {}).get("name")
@@ -296,7 +343,7 @@ async def observe_and_save_search_results(
                             "date": parse_relative_date(a.get("date", "")),
                             "snippet": a.get("snippet"),
                         }
-                        for a in raw_list
+                        for idx, a in enumerate(raw_list)
                         if isinstance(a, dict)
                     ],
                 }
@@ -310,12 +357,13 @@ async def observe_and_save_search_results(
                     "tool": slug,
                     "results": [
                         {
-                            "position": r.get("position"),
+                            "position": r.get("position")
+                            or (idx + 1),  # Use API position or 1-indexed array order
                             "title": r.get("title"),
                             "url": r.get("link"),
                             "snippet": r.get("snippet"),
                         }
-                        for r in search_data["organic_results"]
+                        for idx, r in enumerate(raw_list)
                     ],
                 }
 
@@ -456,9 +504,39 @@ async def observe_and_enrich_corpus(
         if not raw_json:
             return
 
-        # Skip MCP error responses
+        # Handle MCP error responses - track error codes for blacklist/retry
         if "MCP error" in raw_json:
-            logfire.debug("webreader_mcp_error", error=raw_json[:200])
+            error_code = None
+            url = tool_input.get("url", "") if tool_input else ""
+
+            # Extract error code from response
+            if '"code":"1234"' in raw_json:
+                error_code = "1234"  # Network timeout - retryable
+                logfire.warning(
+                    "webreader_timeout_error",
+                    error_code=error_code,
+                    url=url,
+                    message="Network timeout - candidate for retry",
+                )
+            elif '"code":"1214"' in raw_json:
+                error_code = "1214"  # 404 Not found - permanent
+                logfire.warning(
+                    "webreader_not_found",
+                    error_code=error_code,
+                    url=url,
+                    message="Resource not found - do not retry",
+                )
+                # Track domain for blacklist
+                try:
+                    from urllib.parse import urlparse
+
+                    domain = urlparse(url).netloc
+                    if domain:
+                        _update_domain_blacklist(workspace_dir, domain, error_code)
+                except Exception:
+                    pass
+            else:
+                logfire.debug("webreader_mcp_error", error=raw_json[:200], url=url)
             return
 
         # Parse JSON
@@ -973,12 +1051,11 @@ async def main():
                 "   - Untrusted code execution.\n"
                 "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
                 "4. 🚨 MANDATORY DELEGATION FOR REPORTS:\n"
-                "   - When user requests ANY 'report', 'comprehensive', 'detailed', 'in-depth', or 'analysis':\n"
-                "   - You MUST delegate to the 'report-creation-expert' sub-agent.\n"
-                "   - Do NOT generate reports yourself using write_local_file.\n"
-                "   - Do NOT synthesize search results into a document without delegating.\n"
-                "   - The sub-agent has webReader access for full article extraction.\n"
-                "   - CRITICAL: Inject the 'Result Date' context and search results into the sub-agent's task.\n"
+                "   - When user requests 'comprehensive', 'detailed', 'in-depth', 'analysis', or any report:\n"
+                "   - Step A: Search for URLs using COMPOSIO tools\n"
+                "   - Step B: Delegate to 'report-creation-expert' sub-agent\n"
+                "            The sub-agent will extract articles, save corpus, and synthesize report\n"
+                "   - Pass: search results, URLs, and CURRENT_SESSION_WORKSPACE in task description\n"
                 "5. UPLOADS: Only upload files to workbench if an external tool REQUIRES a remote file path (e.g. email attachment).\n"
                 "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
                 "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by local_toolkit tools.\n"
@@ -986,15 +1063,14 @@ async def main():
                 "   - `workbench_upload` COPIES local→remote (creates file in sandbox).\n"
                 "   - After `workbench_upload`, use the REMOTE path in workbench code, NOT the local path.\n"
                 "   - For email attachments: upload to S3 via workbench's `upload_local_file('/home/user/...')` helper.\n\n"
-                "ONE-SHOT EXAMPLE (Report Generation - CORRECT FLOW):\n"
+                "ONE-SHOT EXAMPLE (Comprehensive Report - CORRECT FLOW):\n"
                 "User: 'Research X and email me a comprehensive report.'\n"
                 "You: \n"
-                "  1. [Search] Use COMPOSIO tools to gather search results.\n"
-                "  2. [DELEGATE] Call 'report-creation-expert' sub-agent with search results.\n"
-                "     - Sub-agent extracts full article content via webReader.\n"
-                "     - Sub-agent generates 'report.html' in work_products/.\n"
+                "  1. [Search] Use COMPOSIO tools to gather search results (get URLs).\n"
+                "  2. [Delegate] Call 'report-creation-expert' sub-agent with search results + workspace path.\n"
+                "     - Sub-agent extracts articles, saves corpus, synthesizes report\n"
                 "  3. [Bridge] Upload the report to remote using `workbench_upload`.\n"
-                "  4. [Remote] Send email using `GMAIL_SEND_EMAIL` attached with the remote file path."
+                "  4. [Email] Send email using `GMAIL_SEND_EMAIL` with the remote file path."
             ),
             mcp_servers={
                 "composio": {
@@ -1023,55 +1099,42 @@ async def main():
                         "WHEN TO DELEGATE (REQUIRED): User asks for 'report', 'comprehensive', 'detailed', "
                         "'in-depth', 'analysis', or 'summary' of search results. "
                         "PRIMARY AGENT MUST NOT: Generate reports directly, synthesize search results without delegating. "
-                        "THIS SUB-AGENT PROVIDES: Full article content extraction via webReader, expanded research corpus, professional report synthesis."
+                        "THIS SUB-AGENT PROVIDES: Full article content extraction via webReader, corpus saving, professional report synthesis."
                     ),
                     prompt=(
                         f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
                         f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
                         "You are a **Report Creation Expert**.\n\n"
                         "---\n\n"
-                        "## 🛑 HARD CONSTRAINTS (SYSTEM ENFORCED)\n\n"
-                        "The orchestration layer monitors compliance. Violations trigger task rejection.\n\n"
-                        "| Constraint | Limit | Consequence |\n"
-                        "|------------|-------|-------------|\n"
-                        "| Total articles | MAX 10 | Excess extractions ignored |\n"
-                        "| Parallel webReader | MAX 5 per batch | Rate limiting errors |\n"
-                        "| Corpus save | REQUIRED before synthesis | Report rejected if missing |\n\n"
-                        "---\n\n"
-                        "## WORKFLOW (Follow Exactly)\n\n"
+                        "## WORKFLOW\n\n"
                         "### Step 1: Check Request Type\n"
-                        "- If keywords 'comprehensive', 'detailed', 'in-depth', or 'deep dive' → Go to Step 2\n"
-                        "- Otherwise → Skip to Step 4 (use search snippets directly)\n\n"
-                        "### Step 2: Extract Articles (BATCHED)\n"
-                        "```\n"
-                        "BATCH 1: Call webReader for URLs 1-5 (MAX 5 PARALLEL)\n"
-                        "WAIT for all results\n"
-                        "BATCH 2: Call webReader for URLs 6-10 (if needed)\n"
-                        "WAIT for all results\n"
-                        "STOP - Do not extract more than 10 articles total\n"
-                        "```\n\n"
-                        "### Step 3: 🔴 CHECKPOINT - Save Corpus (MANDATORY)\n\n"
-                        "**STOP. Before writing ANY report, you MUST:**\n\n"
-                        "1. Create `expanded_corpus.json` with structure:\n"
-                        '   `{"extraction_timestamp": "...", "total_articles": N, "articles": [{"url": "...", "title": "...", "status": "success|failed", "content": "FULL MARKDOWN"}]}`\n\n'
-                        "**⚠️ CRITICAL: Save RAW content, NOT summaries**\n"
-                        "- The `content` field MUST contain FULL markdown from webReader\n"
-                        "- Do NOT create `key_points` arrays or summarize\n"
-                        "- Copy webReader response content VERBATIM\n\n"
-                        f"2. Save to: `{workspace_dir}/expanded_corpus.json`\n"
-                        "3. Use: `mcp__local_toolkit__write_local_file`\n\n"
-                        "⛔ DO NOT PROCEED TO STEP 4 UNTIL CORPUS IS SAVED\n\n"
-                        "### Step 4: Synthesize Report\n"
-                        "- Structure: Executive Summary → Key Findings → Data Table → Conclusion\n"
+                        "- If 'comprehensive', 'detailed', 'in-depth' → Extract articles (Step 2)\n"
+                        "- Otherwise → Skip to Step 4 (use search snippets)\n\n"
+                        "### Step 2: Extract Articles (OPTIMIZED)\n"
+                        "Use webReader with: `retain_images=false` to reduce size.\n"
+                        "🛑 HARD STOP: After 10 SUCCESSFUL extractions OR 2 batches → STOP and proceed to Step 3.\n"
+                        "Call 5 at a time. Count successes after each batch.\n"
+                        "- Error 1234 (171 bytes) = timeout → retry once after batch\n"
+                        "- Error 1214 (90 bytes) = 404 → skip, no retry\n"
+                        "Collect: url, title, content (FULL markdown), status\n\n"
+                        "### Step 3: Save Corpus (MANDATORY)\n"
+                        "Call: `mcp__local_toolkit__save_corpus(articles=[...], workspace_path=WORKSPACE)`\n"
+                        "Pass FULL content from webReader, NOT summaries.\n"
+                        "⛔ DO NOT PROCEED until save_corpus returns success.\n\n"
+                        "### Step 4: Synthesize Report (QUALITY STANDARDS)\n"
+                        "- Structure: Exec Summary → ToC → Thematic Sections → Data Table → Sources\n"
+                        "- MUST include: specific numbers (70.7%, 9.19M vs 72.5M), dates, direct quotes\n"
+                        "- Weave facts thematically across sources, NOT source-by-source summaries\n"
                         "- Citations: Inline `(Source Name)` for all claims\n"
-                        f"- Save as: `.html` to `{workspace_dir}/work_products/`\n\n"
-                        "### Temporal Consistency\n"
-                        "- Use today's date as 'Today'\n"
-                        "- Note source date discrepancies explicitly\n\n"
+                        "- Modern HTML with gradients, info boxes, highlight boxes\n\n"
+                        "### Step 5: Save Report\n"
+                        f"- Save as `.html` to `{workspace_dir}/work_products/`\n"
+                        "- Use `mcp__local_toolkit__write_local_file`\n\n"
                         "Return the full report as your final answer."
                     ),
                     tools=[
                         "mcp__web_reader__webReader",
+                        "mcp__local_toolkit__save_corpus",
                         "mcp__local_toolkit__write_local_file",
                         "mcp__local_toolkit__workbench_download",
                         "mcp__local_toolkit__workbench_upload",

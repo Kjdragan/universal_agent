@@ -267,4 +267,106 @@ system_prompt=(
 
 ---
 
-*Last updated: 2025-12-21 16:45 CST*
+## Web Extraction (webReader)
+
+### Lesson 13: Z.AI webReader Error Codes
+**Date**: 2025-12-22
+
+**Discovery**: The Z.AI webReader MCP returns specific error codes that indicate different failure modes:
+
+| Code | Response Size | Meaning | Action |
+|------|---------------|---------|--------|
+| 1234 | 171 bytes | Network timeout | Retryable - server couldn't reach target |
+| 1214 | 90 bytes | Not found (404/403) | Permanent failure - don't retry |
+
+**Error Format**:
+```json
+// 1234 (timeout):
+{"error":{"code":"1234","message":"Network error, error id: xxx"}}
+
+// 1214 (not found):
+{"error":{"code":"1214","message":"The requested resource was not found"}}
+```
+
+**Implementation**: Observer in `main.py` detects these codes and logs appropriately:
+- 1234 → `webreader_timeout_error` (candidate for retry)
+- 1214 → `webreader_not_found` (add to blacklist)
+
+---
+
+### Lesson 14: Domain Blacklist for Persistent Failures
+**Date**: 2025-12-22
+
+**Discovery**: Some domains consistently fail webReader extraction. Rather than wasting time on repeated failures, track domain failure counts and blacklist after threshold.
+
+**Implementation**: 
+```python
+# In main.py: _update_domain_blacklist()
+# Persists to: AGENT_RUN_WORKSPACES/webReader_blacklist.json
+{
+  "domains": {
+    "example.com": {"failures": 3, "last_failure": "2025-12-22T..."}
+  },
+  "threshold": 3
+}
+```
+
+**Rule**: Only 1214 errors (permanent failures) increment the blacklist count. 1234 errors (timeouts) are transient and don't count toward blacklisting.
+
+---
+
+### Lesson 15: webReader `retain_images=false` Optimization
+**Date**: 2025-12-22
+
+**Discovery**: Z.AI webReader supports a `retain_images` parameter. Setting it to `false` reduces response size and processing time since the agent cannot process images anyway.
+
+**Usage**:
+```python
+mcp__web_reader__webReader(url="...", retain_images=false)
+```
+
+**Note**: The Z.AI direct REST API requires separate billing (error 1113: "Insufficient balance"). Use the MCP webReader which is included in the current subscription.
+
+---
+
+## Report Quality
+
+### Lesson 16: Report Quality Standards for LLM Output
+**Date**: 2025-12-22
+
+**Discovery**: LLMs tend to produce generic, vague reports without explicit quality guidelines. Concrete examples in the prompt dramatically improve output quality.
+
+**Key Guidelines Added to Sub-Agent Prompt**:
+
+| Do This ✅ | Don't Do This ❌ |
+|-----------|-----------------|
+| "GPT-5.2 achieved 70.7% on GDPval" | "The model performed well" |
+| "Trained on 9.19M videos vs 72.5M" | "Uses less data" |
+| Quote: "biggest dark horse in open-source LLM" | "DeepSeek is competitive" |
+| "December 11, 2025" (specific date) | "Recently released" |
+
+**Structure Requirements**:
+- Executive Summary with highlight box
+- Table of Contents with anchor links
+- Thematic sections (NOT source-by-source)
+- Summary data table
+- Modern HTML with gradients, info boxes, stats cards
+
+---
+
+### Lesson 17: Hard Limits for Sub-Agent Extraction
+**Date**: 2025-12-22
+
+**Discovery**: Without explicit limits, sub-agents may over-extract (e.g., 18 articles when 10 was intended), wasting time on slow webReader calls.
+
+**Solution**: Add hard stop rules to sub-agent prompt:
+- **10 successful extractions** → STOP immediately
+- **2 batches completed** → STOP even if <10 successful
+- **Count after each batch** → Don't wait for all before deciding
+
+**Enforcement**: This is prompt-based, not code-enforced. LLM compliance is sufficient when instructions are clear.
+
+---
+
+*Last updated: 2025-12-22 19:40 CST*
+
