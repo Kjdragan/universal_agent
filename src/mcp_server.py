@@ -51,6 +51,23 @@ def workbench_upload(local_path: str, remote_path: str, session_id: str = None) 
 
 
 @mcp.tool()
+def read_local_file(path: str) -> str:
+    """
+    Read content from a file in the Local Workspace.
+    """
+    try:
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path):
+            return f"Error: File not found at {path}"
+
+        with open(abs_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return content
+    except Exception as e:
+        return f"Error reading file: {str(e)}"
+
+
+@mcp.tool()
 def write_local_file(path: str, content: str) -> str:
     """
     Write content to a file in the Local Workspace.
@@ -134,6 +151,112 @@ def save_corpus(articles: list, workspace_path: str) -> str:
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
 
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)})
 
-if __name__ == "__main__":
-    mcp.run()
+
+# =============================================================================
+# CRAWL4AI TOOL
+# =============================================================================
+
+
+@mcp.tool()
+async def crawl_parallel(urls: list[str], session_dir: str) -> str:
+    """
+    High-speed parallel web scraping using crawl4ai.
+    Scrapes multiple URLs concurrently, extracts clean markdown (removing ads/nav),
+    and saves results to 'search_results' directory in the session workspace.
+
+    Args:
+        urls: List of URLs to scrape (recommended batch size: 10)
+        session_dir: Absolute path to the current session workspace (e.g. AGENT_RUN_WORKSPACES/session_...)
+
+    Returns:
+        JSON summary of results (success/fail counts, saved file paths).
+    """
+    try:
+        from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
+        from crawl4ai.content_filter_strategy import PruningContentFilter
+        from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+    except ImportError:
+        return json.dumps(
+            {
+                "error": "crawl4ai not installed. Run: uv pip install crawl4ai && crawl4ai-setup"
+            }
+        )
+
+    import hashlib
+
+    # 1. Configure Browser (Speed & Evasion)
+    browser_config = BrowserConfig(
+        headless=True,
+        enable_stealth=True,
+        browser_type="chromium",
+    )
+
+    # 2. Configure Extraction (Noise Reduction)
+    # Pruning filter removes low-content density areas (ads, footers)
+    prune_filter = PruningContentFilter(
+        threshold=0.5, threshold_type="fixed", min_word_threshold=10
+    )
+    md_generator = DefaultMarkdownGenerator(content_filter=prune_filter)
+
+    run_config = CrawlerRunConfig(
+        markdown_generator=md_generator,
+        excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
+        excluded_selector=".references, .footnotes, .citation, .bibliography, .ref-list, .endnotes, .field-name-field-footnotes, .field-name-field-reference, .cookie-banner, #cookie-consent, .eu-cookie-compliance, .donation, .donate, .subscription, .subscribe, .newsletter, .signup, .promo",
+        cache_mode=CacheMode.BYPASS,  # Ensure fresh content
+    )
+
+    results_summary = {
+        "total": len(urls),
+        "successful": 0,
+        "failed": 0,
+        "saved_files": [],
+        "errors": [],
+    }
+
+    search_results_dir = os.path.join(session_dir, "search_results")
+    os.makedirs(search_results_dir, exist_ok=True)
+
+    # 3. Execute Parallel Crawl
+    try:
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            # arun_many uses a browser context pool for efficient parallelism
+            results = await crawler.arun_many(urls=urls, config=run_config)
+
+            for res in results:
+                original_url = res.url
+                if res.success:
+                    # Generate filename from hash of URL to avoid length/char issues
+                    url_hash = hashlib.md5(original_url.encode()).hexdigest()[:12]
+                    filename = f"crawl_{url_hash}.md"
+                    filepath = os.path.join(search_results_dir, filename)
+
+                    # Prefer "fit_markdown" (filtered) over raw
+                    content = res.markdown.fit_markdown or res.markdown.raw_markdown
+
+                    # Add metadata header
+                    final_content = f"# Source: {original_url}\n# Date: {datetime.utcnow().isoformat()}\n\n{content}"
+
+                    with open(filepath, "w", encoding="utf-8") as f:
+                        f.write(final_content)
+
+                    results_summary["successful"] += 1
+                    results_summary["saved_files"].append(
+                        {
+                            "url": original_url,
+                            "file": filename,  # Relative name for brevity
+                            "path": filepath,
+                        }
+                    )
+                else:
+                    results_summary["failed"] += 1
+                    results_summary["errors"].append(
+                        {"url": original_url, "error": res.error_message}
+                    )
+
+    except Exception as e:
+        return json.dumps({"error": f"Crawl execution failed: {str(e)}"})
+
+    return json.dumps(results_summary, indent=2)

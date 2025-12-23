@@ -9,7 +9,7 @@ description: |
   - User asks for "analysis" or "summary" of research data
   
   **THIS SUB-AGENT:**
-  - Extracts full article content using webReader (if comprehensive)
+  - If 'comprehensive' research requested, extracts full article content using webReader
   - Saves extraction to expanded_corpus.json via save_corpus tool
   - Synthesizes professional report with citations
   - Saves report to work_products/ directory

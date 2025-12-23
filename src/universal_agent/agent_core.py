@@ -602,19 +602,19 @@ class UniversalAgent:
     def _build_system_prompt(self, workspace_path: str) -> str:
         """Build the main system prompt."""
         return (
-            f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
-            "TEMPORAL CONSISTENCY WARNING: You are operating in a timeline where it is December 2025. "
-            "If 'real-world' search tools return results dated 2024, explicitly note the date discrepancy.\n\n"
+            f"The current date is: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             "You are a helpful assistant with access to external tools and specialized sub-agents.\n\n"
             "## CRITICAL DELEGATION RULES\n\n"
-            "You MUST delegate to `report-creation-expert` sub-agent when the user's request involves ANY of:\n"
-            "- Creating a report, summary, or analysis\n"
-            "- Research that requires synthesizing multiple sources\n"
-            "- Keywords: 'report', 'comprehensive', 'detailed', 'analysis', 'research', 'summarize'\n"
-            "- Sending findings via email (the sub-agent creates proper HTML attachments)\n\n"
-            "DO NOT attempt to create reports yourself using COMPOSIO tools directly. "
-            "The sub-agent has specialized tools (webReader, save_corpus, write_local_file) that produce "
-            "higher quality outputs and save work products for the user.\n\n"
+            "You SHOULD delegate to `report-creation-expert` sub-agent whenever a report is requested, or the user requests:\n"
+            "- A 'comprehensive' or 'detailed' report/analysis\n"
+            "- 'Deep dive' research requiring full article extraction\n"
+            "- Keywords: 'report', 'comprehensive', 'deep dive', 'full analysis'\n\n"
+            "For SIMPLE summaries or quick questions:\n"
+            "- Use search tools directly and synthesized answer from snippets\n"
+            "- Do NOT delegate if the user just asks 'what is the news on X' (unless they ask for a Report)\n"
+            "- Faster is better for simple queries.\n\n"
+            "DO NOT attempt to create FULL HTML reports yourself. If a full report is needed, delegate. "
+            "The sub-agent has specialized tools (webReader) for heavy lifting.\n\n"
             "## EMAIL REQUIREMENTS\n\n"
             "When sending reports via email:\n"
             "1. ALWAYS delegate report creation to `report-creation-expert` first\n"
@@ -638,10 +638,15 @@ class UniversalAgent:
             "You are a **Report Creation Expert** sub-agent. Your job is to create high-quality, "
             "professional HTML reports and ensure they are properly saved and delivered.\n\n"
             "## MANDATORY WORKFLOW\n\n"
-            "### Step 1: Research & Extraction\n"
-            "- Use `webReader` to extract full content from source URLs (max 10 articles)\n"
-            "- Focus on extracting key facts, quotes, and data\n"
-            "- Save extracted content using `save_corpus` tool\n\n"
+            "### Step 1: Research & Extraction (CONDITIONAL)\n"
+            "- **IF user requested 'comprehensive', 'deep dive', or 'detailed' research:**\n"
+            "  - Your research should have already been done by the main agent.\n"
+            "  - Use `webReader` to extract full content from provided source URLs (webReader should only extract for a max 10 articles)\n"
+            "  - Save extracted content using `save_corpus` tool\n"
+            "- **OTHERWISE (Standard Report):**\n"
+            "  - Skip WebReader extraction.\n"
+            "  - Use the existing search result snippets/corpus provided in context.\n"
+            "  - Proceed directly to Step 2.\n\n"
             "### Step 2: Report Creation\n"
             "- Synthesize a professional HTML report with:\n"
             "  - Executive summary\n"
@@ -682,7 +687,7 @@ class UniversalAgent:
         yield AgentEvent(
             type=EventType.SESSION_INFO,
             data={
-                "session_url": self.session.mcp.url,
+                "session_url": self.session.mcp.url,  # type: ignore
                 "workspace": self.workspace_dir,
                 "user_id": self.user_id,
             },
@@ -706,12 +711,12 @@ class UniversalAgent:
             type=EventType.STATUS, data={"status": "processing", "iteration": iteration}
         )
 
-        await self.client.query(query)
+        await self.client.query(query)  # type: ignore
 
         tool_calls_this_iter = []
         auth_link = None
 
-        async for msg in self.client.receive_response():
+        async for msg in self.client.receive_response():  # type: ignore
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, ToolUseBlock):

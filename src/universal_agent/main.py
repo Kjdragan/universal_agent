@@ -865,9 +865,11 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         print(
                             f"\n📦 Tool Result ({result_record['content_size_bytes']} bytes) +{result_record['time_offset_seconds']}s"
                         )
-                        if result_record["content_size_bytes"] < 5000:
+                        # Always show a preview of the result content
+                        preview = result_record.get("content_preview", "")[:500]
+                        if preview:
                             print(
-                                f"   Content: {result_record['content_preview'][:1000]}"
+                                f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 500 else ''}"
                             )
 
                         # Observer Pattern: Fire-and-forget async save for SERP results
@@ -1118,7 +1120,11 @@ async def main():
                     },
                 },
             },
-            allowed_tools=["Task"],  # Required for sub-agent delegation
+            allowed_tools=[
+                "Task",
+                "mcp__local_toolkit__crawl_parallel",
+                "mcp__local_toolkit__read_local_file",
+            ],  # Required for sub-agent delegation
             agents={
                 "report-creation-expert": AgentDefinition(
                     description=(
@@ -1137,17 +1143,15 @@ async def main():
                         "### Step 1: Check Request Type\n"
                         "- If 'comprehensive', 'detailed', 'in-depth' → Extract articles (Step 2)\n"
                         "- Otherwise → Skip to Step 4 (use search snippets)\n\n"
-                        "### Step 2: Extract Articles (OPTIMIZED)\n"
-                        "Use webReader with: `retain_images=false` to reduce size.\n"
-                        "🛑 HARD STOP: After 10 SUCCESSFUL extractions OR 2 batches → STOP and proceed to Step 3.\n"
-                        "Call 5 at a time. Count successes after each batch.\n"
-                        "- Error 1234 (171 bytes) = timeout → retry once after batch\n"
-                        "- Error 1214 (90 bytes) = 404 → skip, no retry\n"
-                        "Collect: url, title, content (FULL markdown), status\n\n"
-                        "### Step 3: Save Corpus (MANDATORY)\n"
-                        "Call: `mcp__local_toolkit__save_corpus(articles=[...], workspace_path=WORKSPACE)`\n"
-                        "Pass FULL content from webReader, NOT summaries.\n"
-                        "⛔ DO NOT PROCEED until save_corpus returns success.\n\n"
+                        "### Step 2: Extract Articles (FAST)\n"
+                        "Use `mcp__local_toolkit__crawl_parallel` to scrape ALL URLs in a single call.\n"
+                        "- Pass list of URLs and CURRENT_SESSION_WORKSPACE.\n"
+                        "- This tool automatically saves clean markdown files to `search_results/`.\n"
+                        "- Returns a summary with paths to saved files.\n\n"
+                        "### Step 3: Read & Synthesize (MANDATORY)\n"
+                        "1. Use `mcp__local_toolkit__read_local_file` to read the content of the saved markdown files.\n"
+                        "2. Note: You do NOT need to call save_corpus manually as crawl_parallel handles file preservation.\n"
+                        "3. Proceed to Generate Report.\n\n"
                         "### Step 4: Synthesize Report (QUALITY STANDARDS)\n"
                         "- Structure: Exec Summary → ToC → Thematic Sections → Data Table → Sources\n"
                         "- MUST include: specific numbers (70.7%, 9.19M vs 72.5M), dates, direct quotes\n"
@@ -1161,6 +1165,12 @@ async def main():
                     ),
                     tools=[
                         "mcp__web_reader__webReader",
+                        "mcp__local_toolkit__save_corpus",
+                        "mcp__local_toolkit__write_local_file",
+                        "mcp__local_toolkit__workbench_download",
+                        "mcp__web_reader__webReader",
+                        "mcp__local_toolkit__crawl_parallel",
+                        "mcp__local_toolkit__read_local_file",
                         "mcp__local_toolkit__save_corpus",
                         "mcp__local_toolkit__write_local_file",
                         "mcp__local_toolkit__workbench_download",
