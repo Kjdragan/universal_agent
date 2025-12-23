@@ -441,6 +441,16 @@ AgentDefinition(
 
 ---
 
+### Lesson 28: The Scout/Expert Hand-Off Protocol (Solving Context Bottlenecks)
+**Problem:** A highly capable LLM (Main Agent) will often try to "do it all" if it has access to tools. If it searches and finds snippets, it may try to write the final report itself based on shallow data, bypassing the specialized Sub-Agent (Scraper).
+**Root Cause:** "Mandatory Auto-Save" instructions inadvertently coerced the agent into generating low-quality reports just to have something to "save".
+**Solution:**
+1.  **Scout Role:** Explicitly define Main Agent as "Scout" who finds the *location* of data (`search_results/`) but is forbidden from processing it. "Don't dig the mine, just point to it."
+2.  **Auto-Save Exception:** Explicitly FORBID the Main Agent from auto-saving "Reports". This removes the incentive to write them prematurely.
+3.  **Location-Based Hand-Off:** Main Agent passes the directory path (`search_results/`) to the Sub-Agent, allowing the Sub-Agent to use `list_directory` + `read_local_file` to discover an unlimited number of URLs (bulk scraping), rather than relying on the Main Agent to cherry-pick a list.
+
+---
+
 ### Lesson 22: FastMCP Server REQUIRES mcp.run() to Start
 **Date**: 2025-12-23
 

@@ -957,13 +957,15 @@ async def main():
                 "   - 'Heavy' operations that require specific Linux binaries (ffmpeg, etc).\n"
                 "   - Untrusted code execution.\n"
                 "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
-                "4. 🚨 MANDATORY DELEGATION FOR REPORTS:\n"
-                "   - When user requests 'comprehensive', 'detailed', 'in-depth', 'analysis', or any report:\n"
-                "   - Step A: Search for URLs using COMPOSIO tools\n"
-                "   - Step B: Delegate to 'report-creation-expert' sub-agent using `Task` tool\n"
-                "            The sub-agent will extract articles (using crawl_parallel) and synthesize report\n"
-                "   - CRITICAL: You MUST include the LIST OF URLS in the 'prompt' field so the sub-agent can crawl them.\n"
-                "   - Pass: search results, URLs, and CURRENT_SESSION_WORKSPACE.\n"
+                "4. 🚨 MANDATORY DELEGATION FOR REPORTS (HAND-OFF PROTOCOL):\n"
+                "   - Role: You are the SCOUT. You find the information sources.\n"
+                "   - Sub-Agent Role: The EXPERT. They process and synthesize the sources.\n"
+                "   - PROCEDURE:\n"
+                "     1. COMPOSIO Search -> Saves JSON files to `search_results/`.\n"
+                "     2. DO NOT read these files or extract URLs yourself. You are not the Expert.\n"
+                "     3. DELEGATE immediately to 'report-creation-expert' using `Task`.\n"
+                "     4. HAND-OFF PROMPT (Use EXACTLY this string, do not add URLs):\n"
+                "        'I have located search data in the `search_results/` directory. Please scan these files using list_directory, scrape ALL URLs, and generate the report.'\n"
                 "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject a system message with next steps.\n"
                 "     Wait for this message before proceeding with upload/email.\n"
                 "5. UPLOADS: Only upload files to workbench if an external tool REQUIRES a remote file path (e.g. email attachment).\n"
@@ -985,7 +987,8 @@ async def main():
                 "  5. [Email] Send email using `GMAIL_SEND_EMAIL` with the remote file path.\n\n"
                 "7. 📁 WORK PRODUCTS - MANDATORY AUTO-SAVE:\n"
                 "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
-                "   - TRIGGERS: Tables, summaries, analyses, code generated for user, reports, extracted data.\n"
+                "   - TRIGGERS: Tables, summaries, analyses, code generated for user, extracted data.\n"
+                "   - EXCEPTION: Do NOT use this for 'Reports'. Delegate Reports to the 'Report Creation Expert' (Rule 4).\n"
                 "   - HOW: Call `write_local_file` with:\n"
                 "     - `file_path`: CURRENT_SESSION_WORKSPACE + '/work_products/' + descriptive_name\n"
                 "     - `content`: The full output you're about to show the user\n"
@@ -1011,13 +1014,19 @@ async def main():
                 "Task",
                 "mcp__local_toolkit__crawl_parallel",
                 "mcp__local_toolkit__read_local_file",
+                "mcp__local_toolkit__write_local_file",
+                "mcp__local_toolkit__list_directory",
             ],  # Required for sub-agent delegation
             agents={
                 "report-creation-expert": AgentDefinition(
                     description=(
                         "🚨 MANDATORY DELEGATION TARGET for ALL report generation tasks. "
                         "WHEN TO DELEGATE (REQUIRED): User asks for 'report', 'comprehensive', 'detailed', "
-                        "'in-depth', 'analysis', or 'summary' of search results. "
+                        "'in-depth', 'analysis', or 'summary'.\n"
+                        "🛑 STOP! DO NOT WRITE REPORTS YOURSELF. YOU WILL FAIL.\n"
+                        "You lack the ability to process full context. You MUST delegate to the 'Report Creation Expert'.\n"
+                        "REQUIRED DELEGATION PROMPT: 'Scan all JSON files in search_results/ directory using list_directory and generate report.'\n"
+                        "DO NOT pass URLs manually. Pass the directory instruction only."
                         "PRIMARY AGENT MUST NOT: Generate reports directly. "
                         "REQUIRED INPUT: Tell the sub-agent to 'Scan all JSON files in search_results/ directory'. DO NOT list individual URLs. "
                         "THIS SUB-AGENT PROVIDES: Full article content extraction via crawl_parallel, professional report synthesis."
