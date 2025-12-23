@@ -84,6 +84,22 @@ def write_local_file(path: str, content: str) -> str:
         return f"Error writing file: {str(e)}"
 
 
+@mcp.tool()
+def list_directory(path: str) -> str:
+    """
+    List contents of a directory in the Local Workspace.
+    """
+    try:
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path):
+            return f"Error: Directory not found at {path}"
+        
+        items = os.listdir(abs_path)
+        return json.dumps(items, indent=2)
+    except Exception as e:
+        return f"Error listing directory: {str(e)}"
+
+
 
 
 
@@ -100,7 +116,7 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
     and saves results to 'search_results' directory in the session workspace.
 
     Args:
-        urls: List of URLs to scrape (recommended batch size: 10)
+        urls: List of URLs to scrape (no limit - crawl4ai handles parallel batches automatically)
         session_dir: Absolute path to the current session workspace (e.g. AGENT_RUN_WORKSPACES/session_...)
 
     Returns:

@@ -308,17 +308,26 @@ system_prompt=(
 
 ---
 
-### Lesson 17: Hard Limits for Sub-Agent Extraction
-**Date**: 2025-12-22
+### Lesson 17: UNLIMITED Parallel Extraction with crawl4ai
+**Date**: 2025-12-23
 
-**Discovery**: Without explicit limits, sub-agents may over-extract (e.g., 18 articles when 10 was intended), wasting time on slow webReader calls.
+**Update**: We have moved from `webReader` (slow) to `crawl_parallel` (fast/async).
+**Old Rule**: "Limit to 10 URLs, use batches."
+**New Rule**: **NO LIMITS. SCRAPE EVERYTHING.**
 
-**Solution**: Add hard stop rules to sub-agent prompt:
-- **10 successful extractions** → STOP immediately
-- **2 batches completed** → STOP even if <10 successful
-- **Count after each batch** → Don't wait for all before deciding
+**Discovery**: The local MCP `crawl_parallel` tool uses `AsyncWebCrawler` which handles concurrency efficiently. It can process 20-30+ URLs in seconds.
 
-**Enforcement**: This is prompt-based, not code-enforced. LLM compliance is sufficient when instructions are clear.
+**Policy**:
+- **Always Scrape**: Never rely on snippets. If you have URLs, call `crawl_parallel` immediately.
+- **No Batches**: Pass the full list of 20-50 URLs in a single call.
+- **Full Context**: Accessing full markdown allows for significantly higher quality reports.
+
+**Implementation**:
+```python
+# Sub-agent prompt
+"Call `mcp__local_toolkit__crawl_parallel` DIRECTLY with ALL URLs found (no batch limit)."
+"Our parallel scraper is instant - DO NOT skip this step. Scrape everything."
+```
 
 ---
 
