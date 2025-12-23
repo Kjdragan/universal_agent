@@ -482,6 +482,153 @@
             grid-row: 2;
         }
 
+        /* View Toggle between Chat and Output */
+        .view-toggle {
+            display: flex;
+            gap: 8px;
+            margin-left: auto;
+        }
+
+        .view-toggle-btn {
+            padding: 6px 14px;
+            border-radius: 8px;
+            border: 1px solid rgba(0, 245, 212, 0.3);
+            background: transparent;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .view-toggle-btn:hover {
+            border-color: var(--accent-cyan);
+            color: var(--text-primary);
+        }
+
+        .view-toggle-btn.active {
+            background: rgba(0, 245, 212, 0.15);
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+        }
+
+        /* Output Panel */
+        .output-panel {
+            display: none;
+            height: 100%;
+            flex-direction: column;
+        }
+
+        .output-panel.active {
+            display: flex;
+        }
+
+        .output-frame {
+            flex: 1;
+            width: 100%;
+            border: none;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.98);
+        }
+
+        .output-placeholder {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 16px;
+            color: var(--text-muted);
+        }
+
+        .output-placeholder svg {
+            opacity: 0.3;
+        }
+
+        .chat-view {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .chat-view.hidden {
+            display: none;
+        }
+
+        /* Progress Indicator for Context Panel */
+        .context-progress {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            padding: 40px 20px;
+            color: var(--text-muted);
+        }
+
+        .context-progress.hidden {
+            display: none;
+        }
+
+        .progress-bars {
+            display: flex;
+            gap: 4px;
+            align-items: flex-end;
+            height: 30px;
+        }
+
+        .progress-bar {
+            width: 4px;
+            background: var(--accent-cyan);
+            border-radius: 2px;
+            animation: progressPulse 1.2s ease-in-out infinite;
+        }
+
+        .progress-bar:nth-child(1) {
+            animation-delay: 0s;
+            height: 10px;
+        }
+
+        .progress-bar:nth-child(2) {
+            animation-delay: 0.1s;
+            height: 20px;
+        }
+
+        .progress-bar:nth-child(3) {
+            animation-delay: 0.2s;
+            height: 30px;
+        }
+
+        .progress-bar:nth-child(4) {
+            animation-delay: 0.3s;
+            height: 20px;
+        }
+
+        .progress-bar:nth-child(5) {
+            animation-delay: 0.4s;
+            height: 10px;
+        }
+
+        @keyframes progressPulse {
+
+            0%,
+            100% {
+                opacity: 0.3;
+                transform: scaleY(0.5);
+            }
+
+            50% {
+                opacity: 1;
+                transform: scaleY(1);
+            }
+        }
+
+        .progress-text {
+            font-size: 11px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+
         .chat-columns {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -922,9 +1069,7 @@
                 <div>Model: <span style="color: var(--accent-magenta)">Sonnet 4.5</span></div>
                 <div class="session-dropdown">
                     <select class="session-select" id="sessionSelect">
-                        <option value="session_20251222_143208">📊 Research AI automation • Complex • 14:32</option>
-                        <option value="session_20251222_111500">📝 Marketing copy • Simple • 11:15</option>
-                        <option value="session_20251222_091200">🔍 Competitor analysis • Complex • 09:12</option>
+                        <option value="">New Session</option>
                     </select>
                     <button class="new-session-btn-header">+</button>
                 </div>
@@ -934,50 +1079,15 @@
         <aside class="panel sidebar">
             <div class="panel-header">
                 <span class="panel-title">📁 Agent Workspace</span>
+                <button class="refresh-btn" onclick="refreshFileList()" title="Refresh">🔄</button>
             </div>
             <div class="panel-content">
                 <div class="file-browser">
-                    <div class="file-path">
-                        <span class="path-segment">AGENT_RUN_WORKSPACES</span>
-                        <span class="path-sep">/</span>
-                        <span class="path-segment active">session_20251222_143208</span>
+                    <div class="file-path" id="filePath">
+                        <span class="path-segment clickable" onclick="navigateToRoot()">workspace</span>
                     </div>
-                    <div class="file-list">
-                        <div class="file-item folder">
-                            <span class="file-icon">📂</span>
-                            <span class="file-name">work_products</span>
-                            <span class="file-count">3 files</span>
-                        </div>
-                        <div class="file-item folder">
-                            <span class="file-icon">📂</span>
-                            <span class="file-name">search_results</span>
-                            <span class="file-count">5 files</span>
-                        </div>
-                        <div class="file-item folder">
-                            <span class="file-icon">📂</span>
-                            <span class="file-name">extracted_articles</span>
-                            <span class="file-count">8 files</span>
-                        </div>
-                        <div class="file-item">
-                            <span class="file-icon">�</span>
-                            <span class="file-name">trace.json</span>
-                            <span class="file-size">2.9 KB</span>
-                        </div>
-                        <div class="file-item">
-                            <span class="file-icon">📄</span>
-                            <span class="file-name">run.log</span>
-                            <span class="file-size">5.1 KB</span>
-                        </div>
-                        <div class="file-item">
-                            <span class="file-icon">📄</span>
-                            <span class="file-name">expanded_corpus.json</span>
-                            <span class="file-size">48 KB</span>
-                        </div>
-                        <div class="file-item">
-                            <span class="file-icon">📄</span>
-                            <span class="file-name">summary.txt</span>
-                            <span class="file-size">512 B</span>
-                        </div>
+                    <div class="file-list" id="fileList">
+                        <div class="file-loading">Loading files...</div>
                     </div>
                 </div>
             </div>
@@ -986,87 +1096,76 @@
         <main class="panel chat-panel">
             <div class="panel-header">
                 <span class="panel-title">Neural Interface</span>
+                <div class="view-toggle">
+                    <button class="view-toggle-btn active" id="chatViewBtn" onclick="showChatView()">💬 Chat</button>
+                    <button class="view-toggle-btn" id="outputViewBtn" onclick="showOutputView()">📄 Output</button>
+                </div>
             </div>
             <div class="panel-content">
-                <div class="chat-columns">
-                    <!-- Left Column: Conversation -->
-                    <div class="chat-column">
-                        <div class="chat-column-header">💬 Conversation</div>
-                        <div class="chat-column-content">
-                            <div class="messages" id="messages">
-                                <div class="message agent">
-                                    <div class="message-avatar">
-                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00f5d4"
-                                            stroke-width="2">
-                                            <circle cx="12" cy="12" r="10" />
-                                            <path d="M12 8v8M8 12h8" />
-                                        </svg>
-                                    </div>
-                                    <div class="message-content">
-                                        <div class="message-bubble">Greetings. I'm Universal Agent, your autonomous AI
-                                            assistant equipped with 500+ tool integrations.</div>
-                                        <div class="message-meta">Universal Agent • 14:32:08</div>
-                                    </div>
-                                </div>
-                                <div class="message user">
-                                    <div class="message-avatar">
-                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff79c6"
-                                            stroke-width="2">
-                                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                                            <circle cx="12" cy="7" r="4" />
-                                        </svg>
-                                    </div>
-                                    <div class="message-content">
-                                        <div class="message-bubble">Research the latest trends in AI automation and
-                                            create a comprehensive report.</div>
-                                        <div class="message-meta">You • 14:32:45</div>
+
+                <div class="chat-view" id="chatView">
+                    <div class="chat-columns">
+                        <!-- Left Column: Conversation -->
+                        <div class="chat-column">
+                            <div class="chat-column-header">💬 Conversation</div>
+                            <div class="chat-column-content">
+                                <div class="messages" id="messages">
+                                    <div class="message agent">
+                                        <div class="message-avatar">
+                                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00f5d4"
+                                                stroke-width="2">
+                                                <circle cx="12" cy="12" r="10" />
+                                                <path d="M12 8v8M8 12h8" />
+                                            </svg>
+                                        </div>
+                                        <div class="message-content">
+                                            <div class="message-bubble">Hello Kevin! I'm Universal Agent, your
+                                                autonomous AI assistant. I'm equipped with 500+ tool integrations and
+                                                ready to help with research, reports, emails, and more. What would you
+                                                like me to work on?</div>
+                                            <div class="message-meta">Universal Agent • Ready</div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Right Column: Context / Tool Outputs -->
-                    <div class="chat-column">
-                        <div class="chat-column-header">🔧 Tool Outputs & Context</div>
-                        <div class="chat-column-content">
-                            <div class="context-items" id="contextItems">
-                                <div class="context-item">
-                                    <div class="context-item-header">
-                                        <span class="context-item-type">SEARCH RESULT</span>
-                                        <span style="font-size: 9px; color: var(--text-muted)">Just now</span>
-                                    </div>
-                                    <div class="context-item-content">
-                                        Found 12 relevant articles on AI automation trends from December 2025...
-                                    </div>
+                        <!-- Right Column: Context / Tool Outputs -->
+                        <div class="chat-column">
+                            <div class="chat-column-header">🔧 Tool Outputs & Context</div>
+                            <div class="chat-column-content">
+                                <div class="context-items" id="contextItems">
+                                    <!-- Dynamic context items appended here -->
                                 </div>
-                                <div class="context-item">
-                                    <div class="context-item-header">
-                                        <span class="context-item-type"
-                                            style="background: rgba(0, 245, 212, 0.2); color: var(--accent-cyan);">EXTRACTED</span>
-                                        <span style="font-size: 9px; color: var(--text-muted)">2s ago</span>
+                                <!-- Progress indicator at bottom where new items spawn -->
+                                <div class="context-progress hidden" id="contextProgress">
+                                    <div class="progress-bars">
+                                        <div class="progress-bar"></div>
+                                        <div class="progress-bar"></div>
+                                        <div class="progress-bar"></div>
+                                        <div class="progress-bar"></div>
+                                        <div class="progress-bar"></div>
                                     </div>
-                                    <div class="context-item-content">
-                                        <pre>Article: "The Rise of Agentic AI"
-Source: TechCrunch
-Tokens: 2,451</pre>
-                                    </div>
-                                </div>
-                                <div class="context-item">
-                                    <div class="context-item-header">
-                                        <span class="context-item-type"
-                                            style="background: rgba(80, 250, 123, 0.2); color: var(--accent-green);">FILE
-                                            SAVED</span>
-                                        <span style="font-size: 9px; color: var(--text-muted)">5s ago</span>
-                                    </div>
-                                    <div class="context-item-content">
-                                        work_products/ai_automation_report.html
-                                    </div>
+                                    <div class="progress-text">Processing...</div>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
+            </div> <!-- end chat-view -->
+
+            <!-- Output Panel (for HTML reports, videos, etc) -->
+            <div class="output-panel" id="outputPanel">
+                <div class="output-placeholder" id="outputPlaceholder">
+                    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <path d="M3 9h18" />
+                        <circle cx="7" cy="6" r="1" fill="currentColor" />
+                        <circle cx="10" cy="6" r="1" fill="currentColor" />
+                    </svg>
+                    <span>Work products will appear here</span>
+                </div>
+                <iframe class="output-frame" id="outputFrame" style="display: none;"></iframe>
             </div>
         </main>
 
@@ -1091,33 +1190,19 @@ Tokens: 2,451</pre>
             <canvas id="neuralCanvas" class="neural-viz"></canvas>
             <div class="metrics-grid">
                 <div class="metric-card">
-                    <div class="metric-value" id="toolCalls">3</div>
+                    <div class="metric-value" id="toolCalls">0</div>
                     <div class="metric-label">Tool Calls</div>
                 </div>
                 <div class="metric-card">
-                    <div class="metric-value">2.4K</div>
+                    <div class="metric-value" id="tokenCount">0</div>
                     <div class="metric-label">Tokens</div>
                 </div>
             </div>
             <div class="panel-content">
                 <div class="activity-stream">
-                    <div class="activity-section">
+                    <div class="activity-section" id="activitySection">
                         <div class="activity-section-title">Real-time Activity</div>
-                        <div class="activity-item tool">
-                            <div class="activity-header">
-                                <span class="activity-type">TOOL</span>
-                                <span style="font-size: 9px; color: var(--text-muted)">Just now</span>
-                            </div>
-                            <div class="activity-content">COMPOSIO_SEARCH_TOOLS: Finding relevant tools...</div>
-                        </div>
-                        <div class="activity-item thought">
-                            <div class="activity-header">
-                                <span class="activity-type">THOUGHT</span>
-                                <span style="font-size: 9px; color: var(--text-muted)">2s ago</span>
-                            </div>
-                            <div class="activity-content">Query classified as COMPLEX. Delegating to
-                                report-creation-expert.</div>
-                        </div>
+                        <!-- Activities will be added dynamically -->
                     </div>
                 </div>
             </div>
@@ -1170,7 +1255,525 @@ Tokens: 2,451</pre>
             requestAnimationFrame(animate);
         }
         animate();
+
+        // =============================================================================
+        // VIEW TOGGLE - Switch between Chat and Output panels
+        // =============================================================================
+
+        const chatView = document.getElementById('chatView');
+        const outputPanel = document.getElementById('outputPanel');
+        const outputFrame = document.getElementById('outputFrame');
+        const outputPlaceholder = document.getElementById('outputPlaceholder');
+        const chatViewBtn = document.getElementById('chatViewBtn');
+        const outputViewBtn = document.getElementById('outputViewBtn');
+
+        function showChatView() {
+            chatView.classList.remove('hidden');
+            outputPanel.classList.remove('active');
+            chatViewBtn.classList.add('active');
+            outputViewBtn.classList.remove('active');
+        }
+
+        function showOutputView() {
+            chatView.classList.add('hidden');
+            outputPanel.classList.add('active');
+            chatViewBtn.classList.remove('active');
+            outputViewBtn.classList.add('active');
+        }
+
+        // Simple markdown to HTML converter for chat messages
+        function renderMarkdown(text) {
+            if (!text) return '';
+            return text
+                // Escape HTML first
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                // Headers
+                .replace(/^### (.+)$/gm, '<h4 style="color: var(--accent-cyan); margin: 12px 0 6px;">$1</h4>')
+                .replace(/^## (.+)$/gm, '<h3 style="color: var(--accent-cyan); margin: 16px 0 8px;">$1</h3>')
+                .replace(/^# (.+)$/gm, '<h2 style="color: var(--accent-cyan); margin: 20px 0 10px;">$1</h2>')
+                // Bold
+                .replace(/\*\*(.+?)\*\*/g, '<strong style="color: var(--accent-magenta);">$1</strong>')
+                // Italic
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                // Checkmarks and bullets
+                .replace(/^- ✅ (.+)$/gm, '<div style="margin: 4px 0; padding-left: 8px;">✅ $1</div>')
+                .replace(/^- (.+)$/gm, '<div style="margin: 4px 0; padding-left: 8px;">• $1</div>')
+                // Inline code
+                .replace(/`([^`]+)`/g, '<code style="background: rgba(0,245,212,0.15); padding: 2px 6px; border-radius: 4px;">$1</code>')
+                // Line breaks
+                .replace(/\n\n/g, '<br><br>')
+                .replace(/\n/g, '<br>');
+        }
+
+        // Load HTML content into output frame
+        function loadOutputContent(htmlContent) {
+            outputPlaceholder.style.display = 'none';
+            outputFrame.style.display = 'block';
+            outputFrame.srcdoc = htmlContent;
+            // Auto-switch to output view when content loads
+            showOutputView();
+        }
+
+        // Load URL into output frame
+        function loadOutputUrl(url) {
+            outputPlaceholder.style.display = 'none';
+            outputFrame.style.display = 'block';
+            outputFrame.src = url;
+            showOutputView();
+        }
+
+        // =============================================================================
+        // FILE BROWSER - Browse workspace files and open in output panel
+        // =============================================================================
+
+        const fileListEl = document.getElementById('fileList');
+        const filePathEl = document.getElementById('filePath');
+        let currentFilePath = '';  // Current directory path
+
+        // Format file size
+        function formatSize(bytes) {
+            if (!bytes) return '';
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        // Get icon for file type
+        function getFileIcon(name, isDir) {
+            if (isDir) return '📂';
+            const ext = name.split('.').pop().toLowerCase();
+            const icons = {
+                'html': '🌐',
+                'json': '📋',
+                'log': '📜',
+                'txt': '📄',
+                'md': '📝',
+                'py': '🐍',
+                'js': '📜'
+            };
+            return icons[ext] || '📄';
+        }
+
+        // Render file path breadcrumb
+        function renderFilePath(path) {
+            const parts = path ? path.split('/').filter(p => p) : [];
+            let html = '<span class="path-segment clickable" onclick="navigateToRoot()">workspace</span>';
+
+            let accumulated = '';
+            for (const part of parts) {
+                accumulated += (accumulated ? '/' : '') + part;
+                const pathForClick = accumulated;
+                html += `<span class="path-sep">/</span>`;
+                html += `<span class="path-segment clickable" onclick="navigateTo('${pathForClick}')">${part}</span>`;
+            }
+
+            filePathEl.innerHTML = html;
+        }
+
+        // Render file list
+        function renderFileList(files) {
+            if (!files || files.length === 0) {
+                fileListEl.innerHTML = '<div class="file-empty">No files</div>';
+                return;
+            }
+
+            // Sort: folders first, then files alphabetically
+            files.sort((a, b) => {
+                if (a.is_dir && !b.is_dir) return -1;
+                if (!a.is_dir && b.is_dir) return 1;
+                return a.name.localeCompare(b.name);
+            });
+
+            let html = '';
+
+            // Add ".." to go up if not at root
+            if (currentFilePath) {
+                html += `<div class="file-item folder" onclick="navigateUp()">
+                    <span class="file-icon">📁</span>
+                    <span class="file-name">..</span>
+                    <span class="file-size"></span>
+                </div>`;
+            }
+
+            for (const file of files) {
+                const icon = getFileIcon(file.name, file.is_dir);
+                const size = file.is_dir ?
+                    (file.children !== null ? file.children + ' items' : '') :
+                    formatSize(file.size);
+                const classes = `file-item ${file.is_dir ? 'folder' : ''}`;
+                const onclick = file.is_dir ?
+                    `navigateTo('${file.path}')` :
+                    `openFile('${file.path}')`;
+
+                html += `<div class="${classes}" onclick="${onclick}">
+                    <span class="file-icon">${icon}</span>
+                    <span class="file-name">${file.name}</span>
+                    <span class="file-size">${size}</span>
+                </div>`;
+            }
+
+            fileListEl.innerHTML = html;
+        }
+
+        // Fetch and display files
+        async function fetchFiles(path = '') {
+            fileListEl.innerHTML = '<div class="file-loading">Loading...</div>';
+
+            try {
+                const url = '/api/files' + (path ? '?path=' + encodeURIComponent(path) : '');
+                const response = await fetch(url);
+                const data = await response.json();
+
+                if (data.error) {
+                    fileListEl.innerHTML = `<div class="file-error">${data.error}</div>`;
+                    return;
+                }
+
+                currentFilePath = path;
+                renderFilePath(path);
+                renderFileList(data.files);
+            } catch (err) {
+                fileListEl.innerHTML = `<div class="file-error">Failed to load files</div>`;
+                console.error('File fetch error:', err);
+            }
+        }
+
+        // Navigation functions
+        function navigateToRoot() {
+            fetchFiles('');
+        }
+
+        function navigateTo(path) {
+            fetchFiles(path);
+        }
+
+        function navigateUp() {
+            const parts = currentFilePath.split('/');
+            parts.pop();
+            fetchFiles(parts.join('/'));
+        }
+
+        function refreshFileList() {
+            fetchFiles(currentFilePath);
+        }
+
+        // Open file in output panel
+        async function openFile(path) {
+            const ext = path.split('.').pop().toLowerCase();
+
+            // Construct the API URL - path comes in as relative (e.g., work_products/report.html)
+            const apiUrl = '/api/file/' + path;
+
+            // For HTML files, load directly in iframe
+            if (ext === 'html') {
+                outputPlaceholder.style.display = 'none';
+                outputFrame.style.display = 'block';
+                outputFrame.src = apiUrl;
+                showOutputView();
+                return;
+            }
+
+            // For other files, fetch and display as text/JSON
+            try {
+                const response = await fetch(apiUrl);
+                const contentType = response.headers.get('content-type');
+
+                if (contentType && contentType.includes('application/json')) {
+                    const data = await response.json();
+                    const html = `<html><head><style>
+                        body { font-family: monospace; padding: 20px; background: #1a1b26; color: #a9b1d6; }
+                        pre { white-space: pre-wrap; word-wrap: break-word; }
+                    </style></head><body><pre>${JSON.stringify(data, null, 2)}</pre></body></html>`;
+                    loadOutputContent(html);
+                } else {
+                    const text = await response.text();
+                    const html = `<html><head><style>
+                        body { font-family: monospace; padding: 20px; background: #1a1b26; color: #a9b1d6; }
+                        pre { white-space: pre-wrap; word-wrap: break-word; }
+                    </style></head><body><pre>${text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre></body></html>`;
+                    loadOutputContent(html);
+                }
+            } catch (err) {
+                console.error('File open error:', err);
+            }
+        }
+
+        // Load files on page load (after WebSocket connects to get workspace)
+        setTimeout(() => fetchFiles(''), 1000);
+
+        // =============================================================================
+        // WEBSOCKET CLIENT - Connect to Universal Agent Backend
+        // =============================================================================
+
+        const WS_URL = 'ws://localhost:8000/ws';
+        let ws = null;
+        let toolCallCount = 0;
+
+        // DOM Elements
+        const statusIndicator = document.getElementById('statusIndicator');
+        const statusText = document.getElementById('statusText');
+        const messagesContainer = document.getElementById('messages');
+        const contextItems = document.getElementById('contextItems');
+        const chatInput = document.getElementById('chatInput');
+        const sendBtn = document.querySelector('.send-btn');
+        const toolCallsEl = document.getElementById('toolCalls');
+        const activityStream = document.querySelector('.activity-stream .activity-section');
+
+        // Helper: Create message element
+        function createMessage(text, isUser = false) {
+            const msg = document.createElement('div');
+            msg.className = `message ${isUser ? 'user' : 'agent'}`;
+            const now = new Date().toLocaleTimeString('en-US', { hour12: false });
+            const avatar = isUser ?
+                '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />' :
+                '<circle cx="12" cy="12" r="10" /><path d="M12 8v8M8 12h8" />';
+            const color = isUser ? '#ff79c6' : '#00f5d4';
+            msg.innerHTML = `
+                <div class="message-avatar">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2">${avatar}</svg>
+                </div>
+                <div class="message-content">
+                    <div class="message-bubble">${text}</div>
+                    <div class="message-meta">${isUser ? 'You' : 'Universal Agent'} • ${now}</div>
+                </div>
+            `;
+            return msg;
+        }
+
+        // Helper: Add activity item
+        function addActivity(type, content) {
+            const item = document.createElement('div');
+            item.className = `activity-item ${type === 'TOOL' ? 'tool' : 'thought'}`;
+            const now = 'Just now';
+            item.innerHTML = `
+                <div class="activity-header">
+                    <span class="activity-type">${type}</span>
+                    <span style="font-size: 9px; color: var(--text-muted)">${now}</span>
+                </div>
+                <div class="activity-content">${content}</div>
+            `;
+            if (activityStream) {
+                activityStream.insertBefore(item, activityStream.firstChild.nextSibling);
+            }
+        }
+
+        // Helper: Add context item (tool output)
+        const contextProgress = document.getElementById('contextProgress');
+
+        function addContextItem(type, content, color = 'amber') {
+            // Hide progress indicator when first content arrives
+            if (contextProgress) {
+                contextProgress.classList.add('hidden');
+            }
+
+            const item = document.createElement('div');
+            item.className = 'context-item';
+            const colorMap = {
+                'amber': 'rgba(255, 184, 108, 0.2)',
+                'cyan': 'rgba(0, 245, 212, 0.2)',
+                'green': 'rgba(80, 250, 123, 0.2)'
+            };
+            const textColorMap = {
+                'amber': 'var(--accent-amber)',
+                'cyan': 'var(--accent-cyan)',
+                'green': 'var(--accent-green)'
+            };
+            const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+            item.innerHTML = `
+                <div class="context-item-header">
+                    <span class="context-item-type" style="background: ${colorMap[color]}; color: ${textColorMap[color]}">${type}</span>
+                    <span style="font-size: 9px; color: var(--text-muted)">${timestamp}</span>
+                </div>
+                <div class="context-item-content">${content}</div>
+            `;
+            if (contextItems) {
+                contextItems.appendChild(item);
+                item.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            }
+        }
+
+        // Connect to WebSocket
+        function connect() {
+            ws = new WebSocket(WS_URL);
+
+            ws.onopen = () => {
+                statusIndicator.classList.remove('processing');
+                statusText.textContent = 'Connected';
+                console.log('WebSocket connected');
+            };
+
+            ws.onclose = () => {
+                statusText.textContent = 'Disconnected';
+                setTimeout(connect, 3000); // Reconnect after 3s
+            };
+
+            ws.onerror = (err) => {
+                console.error('WebSocket error:', err);
+                statusText.textContent = 'Connection Error';
+            };
+
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                handleServerMessage(msg);
+            };
+        }
+
+        // Handle messages from server
+        function handleServerMessage(msg) {
+            switch (msg.type) {
+                case 'session_info':
+                    console.log('Session:', msg.data);
+                    // Refresh file browser with new workspace
+                    if (msg.data.workspace) {
+                        setTimeout(() => fetchFiles(''), 100);
+                    }
+                    break;
+
+                case 'text':
+                    // Append to current agent message or create new one
+                    let lastAgent = messagesContainer.querySelector('.message.agent:last-of-type');
+                    if (!lastAgent || lastAgent.dataset.complete === 'true') {
+                        lastAgent = createMessage('');
+                        lastAgent.dataset.rawText = '';  // Store raw text for markdown
+                        messagesContainer.appendChild(lastAgent);
+                    }
+                    const bubble = lastAgent.querySelector('.message-bubble');
+                    // Accumulate raw text and re-render markdown each time
+                    lastAgent.dataset.rawText = (lastAgent.dataset.rawText || '') + msg.data.text;
+                    bubble.innerHTML = renderMarkdown(lastAgent.dataset.rawText);
+                    // Smooth scroll to keep new content visible
+                    lastAgent.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                    break;
+
+                case 'tool_call':
+                    toolCallCount++;
+                    if (toolCallsEl) toolCallsEl.textContent = toolCallCount;
+                    statusIndicator.classList.add('processing');
+
+                    // Get short tool name
+                    const fullName = msg.data.name || '';
+                    const shortName = fullName.replace('mcp__composio__', '').replace('mcp__local_toolkit__', '').replace('mcp__web_reader__', '');
+
+                    statusText.textContent = `Calling ${shortName}...`;
+
+                    // Show tool call with parameters in context panel
+                    let paramsStr = '';
+                    if (msg.data.input) {
+                        try {
+                            const params = typeof msg.data.input === 'string' ? JSON.parse(msg.data.input) : msg.data.input;
+                            const keys = Object.keys(params).slice(0, 5);
+                            paramsStr = keys.map(k => {
+                                let v = params[k];
+                                // Properly stringify objects and arrays
+                                if (typeof v === 'object' && v !== null) {
+                                    v = JSON.stringify(v);
+                                }
+                                // Truncate long values
+                                if (typeof v === 'string' && v.length > 100) v = v.substring(0, 100) + '...';
+                                return `<b>${k}:</b> ${v}`;
+                            }).join('<br>');
+                        } catch (e) {
+                            paramsStr = JSON.stringify(msg.data.input).substring(0, 200);
+                        }
+                    }
+
+                    addContextItem('🔧 ' + shortName, paramsStr || 'Executing...', 'amber');
+                    addActivity('TOOL', `${shortName}`);
+                    break;
+
+                case 'tool_result':
+                    statusIndicator.classList.remove('processing');
+                    statusText.textContent = 'Processing';
+                    const preview = msg.data.content_preview || 'Complete';
+                    const isError = msg.data.is_error;
+                    addContextItem(isError ? '❌ ERROR' : '✅ RESULT', preview, isError ? 'amber' : 'cyan');
+                    break;
+
+                case 'thinking':
+                    addActivity('THOUGHT', msg.data.thinking?.substring(0, 100) + '...');
+                    break;
+
+                case 'auth_required':
+                    const link = msg.data.auth_link;
+                    addContextItem('AUTH REQUIRED', `<a href="${link}" target="_blank" style="color: var(--accent-magenta)">Click to authenticate</a>`, 'amber');
+                    break;
+
+                case 'query_complete':
+                    statusIndicator.classList.remove('processing');
+                    statusText.textContent = 'Ready';
+                    // Hide progress indicator when query is done
+                    if (contextProgress) {
+                        contextProgress.classList.add('hidden');
+                    }
+                    // Mark last agent message as complete
+                    const lastAgentMsg = messagesContainer.querySelector('.message.agent:last-of-type');
+                    if (lastAgentMsg) lastAgentMsg.dataset.complete = 'true';
+                    break;
+
+                case 'error':
+                    addContextItem('ERROR', msg.data.message, 'amber');
+                    break;
+
+                case 'work_product':
+                    // HTML report or other rich content - load into output panel
+                    if (msg.data.content_type === 'text/html') {
+                        loadOutputContent(msg.data.content);
+                        addContextItem('REPORT READY', msg.data.filename || 'View in Output panel', 'green');
+                    } else if (msg.data.url) {
+                        loadOutputUrl(msg.data.url);
+                        addContextItem('FILE READY', msg.data.filename || 'View in Output panel', 'green');
+                    }
+                    break;
+            }
+        }
+
+        // Send query
+        function sendQuery() {
+            const text = chatInput.value.trim();
+            if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+            // Add user message to UI
+            const userMsg = createMessage(text, true);
+            messagesContainer.appendChild(userMsg);
+            userMsg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+
+            // Show progress indicator in context panel
+            if (contextProgress) {
+                contextProgress.classList.remove('hidden');
+            }
+
+            // Send to server
+            ws.send(JSON.stringify({ type: 'query', text: text }));
+
+            // Clear input
+            chatInput.value = '';
+
+            // Update status
+            statusIndicator.classList.add('processing');
+            statusText.textContent = 'Processing...';
+        }
+
+        // Event listeners
+        sendBtn.addEventListener('click', sendQuery);
+        chatInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendQuery();
+            }
+        });
+
+        // Auto-resize textarea
+        chatInput.addEventListener('input', () => {
+            chatInput.style.height = 'auto';
+            chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
+        });
+
+        // Connect on load
+        connect();
     </script>
+
 </body>
 
 </html>
