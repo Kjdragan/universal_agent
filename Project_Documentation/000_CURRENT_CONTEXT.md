@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2025-12-22 19:40 CST
+**Last Updated**: 2025-12-22 20:30 CST
 
 ---
 
@@ -85,30 +85,33 @@ User Query → Claude SDK → MCP Servers (Composio + Z.AI + Local)
 
 ---
 
-## 🚀 Next Steps: Capability Expansion Testing
+## 🚀 Capability Expansion Testing (Completed Dec 22, 2025)
 
-### The Goal
+### Test Results
 
-The research + report workflow is now mature. **Next focus**: Test other workflow types to identify gaps and build "belts and suspenders" (knowledge injection, specialized prompts) for non-research tasks.
+| # | Category | Query | Result | Tools Used |
+|---|----------|-------|--------|------------|
+| 1 | Code Gen | Password generator script | ✅ PASS | Bash, Read |
+| 2 | File Read | Dependency summary | ✅ PASS | Glob, Read, write_local_file |
+| 3 | Email | Gmail send test | ✅ PASS | GMAIL_SEND_EMAIL |
+| 4 | Data Analysis | CSV + revenue calc | ✅ PASS | write_local_file (x2) |
+| 5 | Multi-Step | Search → Extract → Summarize | ✅ PASS | COMPOSIO_SEARCH, webReader |
+| 6 | Slack | Post to #general | 🔐 AUTH | Correctly surfaced auth link |
 
-### Proposed Test Queries
+### Fix Applied: Work Products Auto-Save
 
-| Category | Example Query | What It Tests |
-|----------|---------------|---------------|
-| **Code Generation** | "Create a Python script that fetches weather data and saves to CSV" | Code gen, file I/O, API usage |
-| **File Operations** | "Read this file, summarize it, and create a new version with improvements" | Read/write files, text processing |
-| **Calendar/Email** | "Check my calendar for next week and email me a summary" | Google Calendar + Gmail integration |
-| **Data Analysis** | "Analyze this CSV and create charts showing trends" | Data processing, visualization |
-| **Multi-step Workflow** | "Research competitors, create comparison table, email to team" | Multi-tool orchestration |
-| **Slack Integration** | "Post a summary of today's news to #general channel" | Slack API integration |
+**Issue**: Agent generated outputs (tables, summaries) but didn't save them to `work_products/`.
 
-### Testing Approach
+**Fix**: Added mandatory save-first guidance to `main.py` system prompt (lines 1073-1083):
+- Agent now saves significant outputs BEFORE displaying
+- Uses `mcp__local_toolkit__write_local_file` to `work_products/`
 
-1. Run each query type
-2. Analyze Logfire traces for bottlenecks
-3. Identify where agent struggles or fails
-4. Add specialized sub-agents or prompt guidance as needed
-5. Document new lessons learned
+### Observations
+
+1. **Claude native tools preferred** for local operations (Glob, Read, Bash)
+2. **Composio tools used correctly** for external services (Gmail, Slack, SERP)
+3. **webReader integration works** in multi-step workflows
+4. **Auth handling is graceful** - surfaced Composio link when needed
 
 ---
 

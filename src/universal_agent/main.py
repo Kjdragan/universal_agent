@@ -1070,7 +1070,18 @@ async def main():
                 "  2. [Delegate] Call 'report-creation-expert' sub-agent with search results + workspace path.\n"
                 "     - Sub-agent extracts articles, saves corpus, synthesizes report\n"
                 "  3. [Bridge] Upload the report to remote using `workbench_upload`.\n"
-                "  4. [Email] Send email using `GMAIL_SEND_EMAIL` with the remote file path."
+                "  4. [Email] Send email using `GMAIL_SEND_EMAIL` with the remote file path.\n\n"
+                "7. 📁 WORK PRODUCTS - MANDATORY AUTO-SAVE:\n"
+                "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
+                "   - TRIGGERS: Tables, summaries, analyses, code generated for user, reports, extracted data.\n"
+                "   - HOW: Call `mcp__local_toolkit__write_local_file` with:\n"
+                "     - `file_path`: CURRENT_SESSION_WORKSPACE + '/work_products/' + descriptive_name\n"
+                "     - `content`: The full output you're about to show the user\n"
+                "   - NAMING: `dependency_summary.md`, `calendar_events.txt`, `generated_script.py`\n"
+                "   - SKIP ONLY IF: Response is < 100 chars OR is just a confirmation ('Done!', 'Email sent').\n\n"
+                "   CORRECT PATTERN:\n"
+                "   User: 'Summarize my dependencies'\n"
+                "   You: 1. Read pyproject.toml → 2. SAVE summary to work_products/ → 3. Show summary to user"
             ),
             mcp_servers={
                 "composio": {
