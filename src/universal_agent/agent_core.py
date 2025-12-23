@@ -436,11 +436,27 @@ async def observe_and_enrich_corpus(
             return
 
         reader_result = data.get("reader_result", data)
+        # Fix: Handle case where reader_result is a string instead of dict
+        if isinstance(reader_result, str):
+            try:
+                reader_result = json.loads(reader_result)
+            except json.JSONDecodeError:
+                logfire.warning(
+                    "webreader_observer_parse_error", raw=reader_result[:200]
+                )
+                return
+
+        # Ensure reader_result is a dict before calling .get()
+        if not isinstance(reader_result, dict):
+            return
+
         content_data = {
             "title": reader_result.get("title", ""),
             "description": reader_result.get("description", ""),
             "content": reader_result.get("content", ""),
-            "url": reader_result.get("url", tool_input.get("url", "")),
+            "url": reader_result.get(
+                "url", tool_input.get("url", "") if tool_input else ""
+            ),
         }
 
         articles_dir = os.path.join(workspace_dir, "extracted_articles")

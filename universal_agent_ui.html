@@ -966,6 +966,67 @@
             color: var(--text-secondary);
         }
 
+        /* Latest Activity Detail Panel */
+        .latest-activity-detail {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .latest-activity-placeholder {
+            color: var(--text-muted);
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .latest-activity-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .latest-activity-type {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            padding: 3px 10px;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+
+        .latest-activity-type.tool {
+            background: rgba(255, 184, 108, 0.2);
+            color: var(--accent-amber);
+        }
+
+        .latest-activity-type.result {
+            background: rgba(0, 245, 212, 0.2);
+            color: var(--accent-cyan);
+        }
+
+        .latest-activity-type.thought {
+            background: rgba(189, 147, 249, 0.2);
+            color: var(--accent-magenta);
+        }
+
+        .latest-activity-time {
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        .latest-activity-content {
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
         .processing-overlay {
             position: fixed;
             top: 0;
@@ -1199,10 +1260,12 @@
                 </div>
             </div>
             <div class="panel-content">
-                <div class="activity-stream">
-                    <div class="activity-section" id="activitySection">
-                        <div class="activity-section-title">Real-time Activity</div>
-                        <!-- Activities will be added dynamically -->
+                <div class="activity-section">
+                    <div class="activity-section-title">Latest Activity</div>
+                    <div id="latestActivityDetail" class="latest-activity-detail">
+                        <div class="latest-activity-placeholder">
+                            Waiting for activity...
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1542,21 +1605,22 @@
             return msg;
         }
 
-        // Helper: Add activity item
-        function addActivity(type, content) {
-            const item = document.createElement('div');
-            item.className = `activity-item ${type === 'TOOL' ? 'tool' : 'thought'}`;
-            const now = 'Just now';
-            item.innerHTML = `
-                <div class="activity-header">
-                    <span class="activity-type">${type}</span>
-                    <span style="font-size: 9px; color: var(--text-muted)">${now}</span>
+        // Helper: Add activity item - updates the Latest Activity detail panel
+        const latestActivityDetail = document.getElementById('latestActivityDetail');
+
+        function addActivity(type, content, fullContent = null) {
+            if (!latestActivityDetail) return;
+
+            const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+            const displayContent = fullContent || content;
+
+            latestActivityDetail.innerHTML = `
+                <div class="latest-activity-header">
+                    <span class="latest-activity-type ${type.toLowerCase()}">${type}</span>
+                    <span class="latest-activity-time">${timestamp}</span>
                 </div>
-                <div class="activity-content">${content}</div>
+                <div class="latest-activity-content">${displayContent}</div>
             `;
-            if (activityStream) {
-                activityStream.insertBefore(item, activityStream.firstChild.nextSibling);
-            }
         }
 
         // Helper: Add context item (tool output)
@@ -1592,6 +1656,10 @@
                 contextItems.appendChild(item);
                 item.scrollIntoView({ behavior: 'smooth', block: 'end' });
             }
+
+            // Update sidebar with full content (untruncated)
+            const activityType = type.includes('RESULT') ? 'RESULT' : 'TOOL';
+            addActivity(activityType, type, content);
         }
 
         // Connect to WebSocket
@@ -1633,6 +1701,29 @@
 
                 case 'text':
                     const newText = msg.data.text;
+
+                    // Filter out tool execution logs - redirect to context panel
+                    const toolLogPatterns = [
+                        /🌐\s*Z\.ai Built-in Tool:/,
+                        /Built-in Tool:\s*webReader/,
+                        /Executing on server\.\.\./,
+                        /^Input:\s*```/,
+                        /^Output:\s*webReader_result/
+                    ];
+
+                    const isToolLog = toolLogPatterns.some(pattern => pattern.test(newText));
+                    if (isToolLog) {
+                        // Extract tool name and show in context panel instead
+                        const toolMatch = newText.match(/Tool:\s*(\w+)/);
+                        if (toolMatch) {
+                            addContextItem('🔧 ' + toolMatch[1], 'Executing...', 'amber');
+                        }
+                        break;  // Don't add to chat
+                    }
+
+                    // Skip empty or whitespace-only text
+                    if (!newText.trim()) break;
+
                     let lastAgent = messagesContainer.querySelector('.message.agent:last-of-type');
 
                     // Check if we should start a new bubble:
