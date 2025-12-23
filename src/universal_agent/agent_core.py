@@ -34,6 +34,7 @@ from claude_agent_sdk.types import (
     UserMessage,
 )
 from composio import Composio
+from custom_tools import register_custom_tools
 
 
 # =============================================================================
@@ -409,10 +410,15 @@ class UniversalAgent:
         self.composio = Composio(
             api_key=os.environ["COMPOSIO_API_KEY"], file_download_dir=downloads_dir
         )
-        # Ban crawling toolkits so COMPOSIO_SEARCH_TOOLS recommendations use our local MCP tools
+        
+        # Register custom tools BEFORE session creation
+        register_custom_tools(self.composio)
+        
+        # Create session with custom tools exposed via MCP endpoint
         self.session = self.composio.create(
             user_id=self.user_id,
-            toolkits={"disable": ["firecrawl", "exa"]}
+            toolkits={"disable": ["firecrawl", "exa"]},
+            tools=["crawl_parallel", "write_local_file", "read_local_file"]
         )
 
         # Build system prompt
@@ -429,12 +435,7 @@ class UniversalAgent:
                     "url": self.session.mcp.url,
                     "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
                 },
-                "local_toolkit": {
-                    "type": "stdio",
-                    "command": sys.executable,
-                    "args": ["src/mcp_server.py"],
-                },
-
+                # Custom tools are registered via @composio.tools.custom_tool
             },
             # Note: No allowed_tools restriction - main agent can use any tool for flexibility
             agents={
@@ -446,13 +447,7 @@ class UniversalAgent:
                         "DO NOT handle reports yourself - delegate here."
                     ),
                     prompt=self._build_subagent_prompt(abs_workspace),
-                    tools=[
-                        "mcp__local_toolkit__crawl_parallel",
-                        "mcp__local_toolkit__save_corpus",
-                        "mcp__local_toolkit__write_local_file",
-                        "mcp__local_toolkit__workbench_download",
-                        "mcp__local_toolkit__workbench_upload",
-                    ],
+                    # Omit 'tools' so sub-agent inherits ALL tools including custom tools
                     model="inherit",
                 ),
             },

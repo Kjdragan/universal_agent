@@ -125,6 +125,7 @@ from claude_agent_sdk.types import (
     HookJSONOutput,
 )
 from composio import Composio
+from custom_tools import register_custom_tools
 
 # Composio client - will be initialized in main() with file_download_dir
 composio = None
@@ -914,13 +915,18 @@ async def main():
         composio = Composio(
             api_key=os.environ["COMPOSIO_API_KEY"], file_download_dir=downloads_dir
         )
+        
+        # Register custom tools BEFORE session creation
+        # Custom tools must be registered before composio.create() and passed via tools parameter
+        register_custom_tools(composio)
 
-        # Create Composio session now that client is initialized
+        # Create Composio session with custom tools exposed via MCP endpoint
         global session
-        # Ban crawling toolkits so COMPOSIO_SEARCH_TOOLS recommendations use our local MCP tools
         session = composio.create(
             user_id=user_id,
-            toolkits={"disable": ["firecrawl", "exa"]}
+            toolkits={"disable": ["firecrawl", "exa"]},
+            # Expose custom tools through Tool Router MCP endpoint
+            tools=["crawl_parallel", "write_local_file", "read_local_file"]
         )
 
         # Create ClaudeAgentOptions now that session is available
@@ -982,7 +988,7 @@ async def main():
                 "7. 📁 WORK PRODUCTS - MANDATORY AUTO-SAVE:\n"
                 "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
                 "   - TRIGGERS: Tables, summaries, analyses, code generated for user, reports, extracted data.\n"
-                "   - HOW: Call `mcp__local_toolkit__write_local_file` with:\n"
+                "   - HOW: Call `write_local_file` with:\n"
                 "     - `file_path`: CURRENT_SESSION_WORKSPACE + '/work_products/' + descriptive_name\n"
                 "     - `content`: The full output you're about to show the user\n"
                 "   - NAMING: `dependency_summary.md`, `calendar_events.txt`, `generated_script.py`\n"
@@ -997,17 +1003,13 @@ async def main():
                     "url": session.mcp.url,
                     "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
                 },
-                "local_toolkit": {
-                    "type": "stdio",
-                    "command": sys.executable,
-                    "args": ["src/mcp_server.py"],
-                },
-
+                # Custom tools (crawl_parallel, write_local_file, read_local_file) are registered
+                # via @composio.tools.custom_tool and exposed through the Tool Router MCP endpoint.
             },
             allowed_tools=[
                 "Task",
-                "mcp__local_toolkit__crawl_parallel",
-                "mcp__local_toolkit__read_local_file",
+                "crawl_parallel",
+                "read_local_file",
             ],  # Required for sub-agent delegation
             agents={
                 "report-creation-expert": AgentDefinition(
@@ -1027,23 +1029,23 @@ async def main():
                         "1. DO NOT use COMPOSIO_SEARCH_TOOLS - you already have the tools you need.\n"
                         "2. DO NOT use Firecrawl or any Composio crawling tools.\n"
                         "3. USE ONLY these specific tools (call them DIRECTLY by name):\n"
-                        "   - `mcp__local_toolkit__crawl_parallel` - for extracting article content\n"
-                        "   - `mcp__local_toolkit__read_local_file` - for reading saved content\n"
-                        "   - `mcp__local_toolkit__write_local_file` - for saving the report\n\n"
+                        "   - `crawl_parallel` - for extracting article content\n"
+                        "   - `read_local_file` - for reading saved content\n"
+                        "   - `write_local_file` - for saving the report\n\n"
                         "---\n\n"
                         "## WORKFLOW\n\n"
                         "### Step 1: Extract Articles (IMMEDIATE ACTION)\n"
-                        "Call `mcp__local_toolkit__crawl_parallel` DIRECTLY with the URLs from your task.\n"
-                        "Parameters: urls=[list of URLs], output_dir=\"" + workspace_dir + "/search_results\"\n\n"
+                        "Call `crawl_parallel` DIRECTLY with the URLs from your task.\n"
+                        "Parameters: urls=[list of URLs], session_dir=\"" + workspace_dir + "\"\n\n"
                         "### Step 2: Read Extracted Content\n"
-                        "Use `mcp__local_toolkit__read_local_file` to read the markdown files.\n\n"
+                        "Use `read_local_file` to read the markdown files from search_results/.\n\n"
                         "### Step 3: Synthesize Report\n"
                         "- Exec Summary → ToC → Thematic Sections → Sources\n"
                         "- Include: numbers, dates, direct quotes\n"
                         "- Modern HTML with gradients\n\n"
                         "### Step 4: Save Report\n"
-                        f"Save as `.html` to `{workspace_dir}/work_products/` using `mcp__local_toolkit__write_local_file`.\n\n"
-                        "🚨 START IMMEDIATELY: Call mcp__local_toolkit__crawl_parallel NOW with the URLs."
+                        f"Save as `.html` to `{workspace_dir}/work_products/` using `write_local_file`.\n\n"
+                        "🚨 START IMMEDIATELY: Call crawl_parallel NOW with the URLs."
                     ),
                     # Omit 'tools' so sub-agent inherits ALL tools including MCP tools
                     model="inherit",
