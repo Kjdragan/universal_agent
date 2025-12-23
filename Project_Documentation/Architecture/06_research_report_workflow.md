@@ -17,15 +17,14 @@ Query Classification (SIMPLE vs COMPLEX)
     ↓
 [COMPLEX PATH] Search Phase (SERP via Composio)
     ↓
+    ↓
 Observer Pattern: Save search_results/*.json
     ↓
 Delegation: Main Agent → report-creation-expert Sub-Agent
     ↓
-Sub-Agent: Parallel Article Extraction (webReader, 5 at a time)
+Sub-Agent: crawl_parallel (Scrape 10+ URLs in ONE call)
     ↓
-Observer Pattern: Save extracted_articles/*.json, Enrich Corpus
-    ↓
-Sub-Agent: save_corpus → expanded_corpus.json (MANDATORY CHECKPOINT)
+Sub-Agent: Reads extracted markdown files from search_results/
     ↓
 Sub-Agent: Synthesize HTML Report (Quality Standards)
     ↓
@@ -50,7 +49,7 @@ sequenceDiagram
     participant ComposioMCP as Composio MCP<br/>(Remote Tools)
     participant Observer as Observer Pattern<br/>(Async Artifact Saver)
     participant SubAgent as report-creation-expert<br/>(Sub-Agent)
-    participant WebReaderMCP as webReader MCP<br/>(Z.AI)
+
     participant LocalToolkit as Local Toolkit MCP<br/>(File Operations)
     participant RemoteWorkbench as Remote Workbench<br/>(Execution Sandbox)
     participant GmailService as Gmail Service<br/>(Composio)
@@ -72,31 +71,15 @@ sequenceDiagram
     MainAgent->>SubAgent: Task(report-creation-expert)<br/>+ search results + workspace path
     Note right of MainAgent: Mandatory delegation<br/>for "comprehensive" reports
 
-    Note over User,GmailService: PHASE 4: EXTRACTION (Sub-Agent)
-    SubAgent->>WebReaderMCP: webReader(url1, retain_images=false)
-    SubAgent->>WebReaderMCP: webReader(url2, retain_images=false)
-    SubAgent->>WebReaderMCP: webReader(url3, retain_images=false)
-    SubAgent->>WebReaderMCP: webReader(url4, retain_images=false)
-    SubAgent->>WebReaderMCP: webReader(url5, retain_images=false)
-    Note right of SubAgent: BATCH 1: 5 parallel calls
+    Note over User,GmailService: PHASE 4: PARALLEL EXTRACTION
+    SubAgent->>LocalToolkit: crawl_parallel(urls=[url1..url10])
+    LocalToolkit->>FileSystem: Save 10 markdown files to search_results/
+    LocalToolkit-->>SubAgent: {success: true, saved_files: [...]}
 
-    WebReaderMCP-->>SubAgent: Articles 1-5 (markdown content)
-    SubAgent->>Observer: Trigger: observe_and_enrich_corpus()
-    Observer->>Observer: Save: extracted_articles/*.json
-    Observer->>Observer: Enrich: Add content to<br/>search_results/*.json
-
-    SubAgent->>SubAgent: Count successes<br/>(< 10? Continue)
-    SubAgent->>WebReaderMCP: webReader(url6-10) [if needed]
-    Note right of SubAgent: BATCH 2: Another 5 parallel<br/>HARD STOP at 10 successes<br/>or 2 batches
-
-    Note over User,GmailService: PHASE 5: CORPUS SAVE (MANDATORY)
-    SubAgent->>LocalToolkit: save_corpus(articles=[...], workspace_path)
-    LocalToolkit->>LocalToolkit: Validate FULL content<br/>(NOT summaries)
-    LocalToolkit->>LocalToolkit: Write: expanded_corpus.json
-    LocalToolkit-->>SubAgent: {success: true, corpus_path, articles_saved}
-    Note right of SubAgent: CHECKPOINT: Must verify<br/>before proceeding
-
-    Note over User,GmailService: PHASE 6: SYNTHESIS
+    Note over User,GmailService: PHASE 5: SYNTHESIS
+    SubAgent->>FileSystem: read_local_file(search_results/crawl_hash.md)
+    FileSystem-->>SubAgent: Markdown content
+    SubAgent->>SubAgent: Analyze & Synthesize HTML Report
     SubAgent->>SubAgent: Analyze corpus<br/>Thematic synthesis
     SubAgent->>SubAgent: Generate HTML report<br/>(Exec Summary, ToC, Data Table, Sources)
     SubAgent->>LocalToolkit: write_local_file(path, content=HTML)
@@ -202,147 +185,25 @@ sequenceDiagram
 
 ---
 
-## 3. Detailed Phase: Article Extraction & Corpus Enrichment
+## 3. Detailed Phase: Parallel Extraction
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    participant SubAgent as report-creation-expert<br/>(Sub-Agent)
-    participant WebReaderMCP as webReader MCP<br/>(Z.AI)
-    participant Observer as Observer<br/>(observe_and_enrich_corpus)
-    participant ArticlesDir as extracted_articles/<br/>File System
-    participant SearchResults as search_results/<br/>Existing SERP Files
-    participant CorpusFile as expanded_corpus.json<br/>(Final Corpus)
-    participant LocalToolkit as Local Toolkit MCP
-    participant Logfire as Logfire
+    participant SubAgent
+    participant CrawlTool
+    participant FS as FileSystem
 
-    Note over SubAgent,Logfire: BATCH 1: First 5 URLs (Parallel)
-    SubAgent->>SubAgent: Parse search results<br/>Extract URLs 1-5
-
-    par Parallel Extraction
-        SubAgent->>WebReaderMCP: webReader(url1, retain_images=false)
-    and
-        SubAgent->>WebReaderMCP: webReader(url2, retain_images=false)
-    and
-        SubAgent->>WebReaderMCP: webReader(url3, retain_images=false)
-    and
-        SubAgent->>WebReaderMCP: webReader(url4, retain_images=false)
-    and
-        SubAgent->>WebReaderMCP: webReader(url5, retain_images=false)
+    SubAgent->>CrawlTool: crawl_parallel(urls=[...])
+    CrawlTool->>CrawlTool: Initialize crawl4ai browser
+    CrawlTool->>CrawlTool: Parallel Fetch 10 URLs
+    CrawlTool->>CrawlTool: Extract Markdown
+    
+    loop For each URL
+        CrawlTool->>FS: write search_results/crawl_hash.md
     end
 
-    Note right of SubAgent: Optimization: retain_images=false<br/>reduces payload size
-
-    Note over SubAgent,Logfire: Response Processing (Per Article)
-    WebReaderMCP-->>SubAgent: TextBlock (Success or Error)
-    SubAgent->>Observer: Trigger: observe_and_enrich_corpus()<br/>for each result
-
-    Observer->>Observer: Extract raw_json from TextBlock
-    Observer->>Observer: Check for MCP error codes
-
-    alt Error Code 1234 (Network Timeout)
-        Observer->>Logfire: Warning: webreader_timeout_error<br/>{url, error_code}
-        Observer->>Observer: Queue for retry<br/>(after all batches)
-        Note right of Observer: Retryable error
-
-    alt Error Code 1214 (Not Found)
-        Observer->>Logfire: Warning: webreader_not_found<br/>{url, error_code}
-        Observer->>Observer: _update_domain_blacklist()<br/>Track 3+ failures
-        Observer->>Observer: Mark as failed, NO retry
-        Note right of Observer: Permanent failure
-
-    alt Success
-        Observer->>Observer: Parse JSON: data.reader_result
-        Observer->>Observer: Extract: {title, content,<br/>description, url}
-
-        Note over SubAgent,Logfire: Save Individual Article
-        Observer->>ArticlesDir: Create: extracted_articles/
-        Observer->>ArticlesDir: Write: {safe_name}_{timestamp}.json
-        Note right of ArticlesDir: {<br/>timestamp, source_url,<br/>title, description,<br/>content (markdown),<br/>extraction_success<br/>}
-
-        Observer->>Logfire: Info: article_extracted<br/>{url, title, content_length}
-
-        Note over SubAgent,Logfire: Enrich Existing Corpus
-        Observer->>SearchResults: Find matching SERP file<br/>by URL
-        Observer->>SearchResults: Add "content" field<br/>Add "extraction_timestamp"
-        Observer->>SearchResults: Update: search_results/*.json
-        Observer->>Logfire: Info: corpus_enriched<br/>{file, url}
-
-    end
-
-    Note over SubAgent,Logfire: BATCH 1 Complete
-    SubAgent->>SubAgent: Count successes
-    SubAgent->>SubAgent: if successes < 10: Continue to BATCH 2
-
-    Note over SubAgent,Logfire: BATCH 2: URLs 6-10 (if needed)
-    SubAgent->>WebReaderMCP: webReader(url6-10)
-    Note right of SubAgent: Same parallel pattern<br/>HARD STOP after this batch
-
-    Note over SubAgent,Logfire: Retry Failed 1234 Errors
-    SubAgent->>SubAgent: Identify queued 1234 errors
-    SubAgent->>WebReaderMCP: Retry 2 at a time<br/>(lower concurrency)
-    Note right of SubAgent: Max 1 retry per URL
-
-    Note over SubAgent,Logfire: CHECKPOINT: Save Corpus (MANDATORY)
-    SubAgent->>SubAgent: Compile articles list<br/>[{url, title, content, status}]
-    Note right of SubAgent: Must pass FULL content<br/>NOT summaries
-
-    SubAgent->>LocalToolkit: save_corpus(<br/>articles=[...],<br/>workspace_path="SESSION_WORKSPACE"<br/>)
-
-    LocalToolkit->>LocalToolkit: Count successes/failures
-    LocalToolkit->>LocalToolkit: Build corpus JSON:<br/>{<br/>extraction_timestamp,<br/>total_articles,<br/>successful, failed,<br/>articles[...]<br/>}
-
-    LocalToolkit->>CorpusFile: Write: expanded_corpus.json
-    CorpusFile-->>LocalToolkit: File written
-
-    LocalToolkit-->>SubAgent: {<br/>success: true,<br/>corpus_path, articles_saved,<br/>successful, failed,<br/>total_content_bytes<br/>}
-
-    SubAgent->>SubAgent: Verify success == true
-    Note right of SubAgent: DO NOT PROCEED without<br/>successful save_corpus
+    CrawlTool-->>SubAgent: Returns summary JSON
 ```
-
-### Hard Stop Rules
-
-| Rule | Condition | Action |
-|------|-----------|--------|
-| **10 successes** | `success_count >= 10` | STOP immediately, call save_corpus |
-| **2 batches** | `batch_count >= 2` | STOP even if < 10 successes |
-| **Error 1234** | Network timeout | Queue for retry (1 max) |
-| **Error 1214** | 404 Not found | Skip, no retry |
-
-### expanded_corpus.json Schema
-
-**File**: `AGENT_RUN_WORKSPACES/session_XXX/expanded_corpus.json`
-
-```json
-{
-  "extraction_timestamp": "2025-12-22T14:35:12.123456Z",
-  "total_articles": 12,
-  "successful": 10,
-  "failed": 2,
-  "articles": [
-    {
-      "url": "https://example.com/article1",
-      "title": "Article Title Here",
-      "content": "# Full Markdown Content\n\nThis is the complete article...",
-      "status": "success"
-    },
-    {
-      "url": "https://blocked.com/article2",
-      "title": "",
-      "content": "MCP error code 1214",
-      "status": "failed"
-    }
-  ]
-}
-```
-
-**Code References**:
-- Sub-agent instructions: `.claude/agents/report-creation-expert.md:26-38` (Hard stop rules)
-- Extraction workflow: `.claude/agents/report-creation-expert.md:48-76` (Batching strategy)
-- Corpus save: `mcp_server.py:69-135` (`save_corpus` tool)
-- Observer: `main.py:479-626` (`observe_and_enrich_corpus`)
-- Blacklist: `main.py:167-205` (`_update_domain_blacklist`)
 
 ---
 
@@ -576,7 +437,7 @@ Side Effect: Update domain blacklist (3 strikes = blacklisted)
 
 ### Blacklist Tracking
 
-**File**: `AGENT_RUN_WORKSPACES/webReader_blacklist.json` (persistent)
+
 
 ```json
 {
@@ -664,7 +525,7 @@ System Prompt Injection:
 | Variable | Purpose | Example |
 |----------|---------|---------|
 | `COMPOSIO_API_KEY` | Composio MCP authentication | `key_...` |
-| `ZAI_API_KEY` | webReader MCP authentication | `Bearer token` |
+
 | `LOGFIRE_TOKEN` | Tracing backend | `logfire_...` |
 | `LOGFIRE_PROJECT_SLUG` | Logfire project | `Kjdragan/composio-claudemultiagent` |
 
@@ -700,7 +561,7 @@ mcp_servers={
 
 | Phase | Concurrency | Rationale |
 |-------|-------------|-----------|
-| webReader extraction | 5 parallel | Balance speed vs. reliability |
+| Parallel Crawl | 10 urls | Fast async scrape |
 | Retry 1234 errors | 2 parallel | Lower concurrency for unstable URLs |
 | Observer saves | Async non-blocking | Don't block agent loop |
 
@@ -757,17 +618,16 @@ def verify_subagent_compliance(tool_name, tool_content, workspace_dir):
 
 ### Issue: No articles extracted
 
-**Symptoms**: `expanded_corpus.json` shows `successful: 0`
+**Symptoms**: `search_results/` is empty or lacks `.md` files after extraction phase.
 
 **Possible Causes**:
-1. All URLs returned error 1214 (404)
-2. Network timeout (1234) on all URLs
-3. webReader MCP unavailable
+1. `crawl4ai` extraction failed for all URLs
+2. Network connectivity issues
+3. URLs blocked or inaccessible
 
 **Debug Steps**:
-1. Check `extracted_articles/` for error patterns
-2. Check `webReader_blacklist.json` for blacklisted domains
-3. Review Logfire traces for `webreader_mcp_error` events
+1. Check `search_results/` content
+2. Review Logfire traces for `crawl_parallel` tool output
 
 ### Issue: Report not emailed
 
@@ -783,19 +643,7 @@ def verify_subagent_compliance(tool_name, tool_content, workspace_dir):
 2. Check for auth link in trace
 3. Verify remote path matches upload destination
 
-### Issue: Sub-agent didn't save corpus
 
-**Symptoms**: Compliance error injected, `expanded_corpus.json` missing
-
-**Possible Causes**:
-1. Sub-agent bypassed save_corpus step
-2. File write permission error
-3. Workspace path incorrect
-
-**Debug Steps**:
-1. Check sub-agent instructions in `.claude/agents/report-creation-expert.md`
-2. Verify `CURRENT_SESSION_WORKSPACE` was injected
-3. Check `run.log` for save_corpus call
 
 ---
 
@@ -815,9 +663,6 @@ def verify_subagent_compliance(tool_name, tool_content, workspace_dir):
 | `classify_query()` | main.py:917-956 | SIMPLE vs COMPLEX routing |
 | `run_conversation()` | main.py:691-914 | Main agent loop |
 | `observe_and_save_search_results()` | main.py:218-413 | SERP artifact saver |
-| `observe_and_enrich_corpus()` | main.py:479-626 | Article extraction observer |
-| `verify_subagent_compliance()` | main.py:629-672 | Corpus checkpoint verification |
-| `save_corpus()` | mcp_server.py:69-135 | MCP tool for corpus save |
 | `workbench_upload()` | mcp_server.py:41-50 | MCP tool for remote upload |
 | `write_local_file()` | mcp_server.py:53-66 | MCP tool for local file write |
 
@@ -839,27 +684,20 @@ flowchart TD
     Delegate -->|No| Continue[Continue Main Agent]
 
     SubAgent --> CheckType{Comprehensive?}
-    CheckType -->|Yes| Extract[Batch Extraction<br/>webReader x5]
+    CheckType -->|Yes| Extract[Parallel Crawl]
     CheckType -->|No| Direct[Use Search Snippets]
 
-    Extract --> Observer2[Observer: Save Articles<br/>Enrich Corpus]
-    Observer2 --> Count{Count Successes}
+    Extract --> Synthesize[Synthesize Report]
+    Direct --> Synthesize
 
-    Count -->|< 10 & Batch < 2| Extract
-    Count -->|>= 10 OR Batch >= 2| SaveCorpus[save_corpus<br/>MANDATORY]
-
-    Direct --> Synthesize[Synthesize Report]
-    SaveCorpus --> Synthesize
 
     Synthesize --> WriteReport[write_local_file<br/>work_products/report.html]
     WriteReport --> ReturnReport[Return to Main Agent]
 
-    ReturnReport --> Verify{Corpus Exists?}
-    Verify -->|No| Error[Inject Compliance Error]
-    Verify -->|Yes| Upload[workbench_upload<br/>to Remote]
+    ReturnReport --> Upload[workbench_upload<br/>to Remote]
 
     Upload --> Email[GMAIL_SEND_EMAIL<br/>with attachment]
-    Error --> Email
+
     Email --> End([Report Delivered])
 
     FastPath --> End
@@ -886,32 +724,15 @@ flowchart TD
 
 ```json
 {
-  "name": "mcp__web_reader__webReader",
+  "name": "mcp__local_toolkit__crawl_parallel",
   "input": {
-    "url": "https://techcrunch.com/2025/12/11/openai-gpt52",
-    "retain_images": false
+    "urls": ["https://techcrunch.com/...", "https://example.com/..."],
+    "session_dir": "/path/to/workspace"
   }
 }
 ```
 
-### Example 3: Corpus Save
 
-```json
-{
-  "name": "mcp__local_toolkit__save_corpus",
-  "input": {
-    "articles": [
-      {
-        "url": "https://...",
-        "title": "...",
-        "content": "# Full markdown...",
-        "status": "success"
-      }
-    ],
-    "workspace_path": "/path/to/AGENT_RUN_WORKSPACES/session_XXX"
-  }
-}
-```
 
 ### Example 4: Email
 

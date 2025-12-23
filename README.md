@@ -28,8 +28,6 @@ uv run src/universal_agent/main.py
 
 Required:
 - `COMPOSIO_API_KEY` - Composio authentication
-- `ZAI_API_KEY` - ZAI endpoint (Anthropic API emulation)
-- `ZAI_BASE_URL` - `https://api.z.ai/api/anthropic`
 - `LOGFIRE_TOKEN` - Logfire tracing (optional)
 
 ## Documentation

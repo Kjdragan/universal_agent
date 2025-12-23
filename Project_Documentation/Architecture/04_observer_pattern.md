@@ -29,7 +29,7 @@ The Observer Pattern is a **client-side async artifact processing system** desig
 - **Typed content handling**: Processes Claude SDK `TextBlock` objects, not raw strings
 - **Zero agent loop disruption**: Observers run in background without affecting response flow
 - **Workspace-aware**: Saves artifacts to session-specific directories
-- **Comprehensive coverage**: Handles SERP results, webReader extractions, workbench activity, and subagent compliance
+- **Comprehensive coverage**: Handles SERP results, workbench activity, and subagent compliance
 
 ---
 
@@ -121,13 +121,10 @@ graph TB
 
     C -->|SERP| D[observe_and_save_search_results]
     C -->|Workbench| E[observe_and_save_workbench_activity]
-    C -->|webReader| F[observe_and_enrich_corpus]
     C -->|Subagent Task| G[verify_subagent_compliance]
 
     D --> H[search_results/*.json]
     E --> I[workbench_activity/*.json]
-    F --> J[extracted_articles/*.json]
-    F --> K[Corpus Enrichment]
     G --> L[Compliance Check]
     F --> M[Domain Blacklist Update]
 
@@ -150,7 +147,6 @@ flowchart LR
     C --> D{Tool Type?}
 
     D -->|SERP| E[Clean SERP Data]
-    D -->|webReader| F[Extract Article Content]
     D -->|Workbench| G[Log Execution Details]
 
     E --> H[Save to search_results/]
@@ -266,50 +262,7 @@ Captures remote code execution details for audit and debugging.
 
 ---
 
-### 3. webReader Corpus Enrichment Observer
 
-**Function**: `observe_and_enrich_corpus()`
-**Location**: `main.py:479-626`
-**Trigger**: Tool names containing `webreader`
-
-#### Purpose
-Extracts article content and **enriches existing search results** with full content.
-
-#### Dual Operation
-
-1. **Save extracted article** to `extracted_articles/*.json`
-2. **Enrich corpus** by finding matching search result and injecting content
-
-#### Z.AI Schema Handling
-
-```python
-# webReader response from Z.AI MCP server
-{
-    "reader_result": {
-        "title": "Article Title",
-        "description": "Meta description",
-        "content": "# Full Markdown Content\n...",
-        "url": "https://example.com/article"
-    }
-}
-```
-
-#### Corpus Enrichment Flow
-
-```python
-# main.py:593-623
-# Find search result with matching URL
-for sr_file in os.listdir(search_dir):
-    with open(sr_path, "r") as f:
-        sr_data = json.load(f)
-
-    for result in sr_data["results"]:
-        if result["url"] == url:
-            result["content"] = extracted_content
-            result["extraction_timestamp"] = datetime.now().isoformat()
-            enriched = True
-            break
-```
 
 ---
 
@@ -346,105 +299,7 @@ step per the agent's instructions.
 
 ## Error Code Handling
 
-### webReader Error Classification
 
-The observer parses MCP error responses and categorizes them for retry/blacklist decisions.
-
-#### Error Code 1234: Network Timeout (Retryable)
-
-```json
-{
-    "MCP error": "Request timeout",
-    "code": "1234"
-}
-```
-
-**Observer Action**: Log warning, candidate for retry
-
-```python
-# main.py:513-520
-if '"code":"1234"' in raw_json:
-    error_code = "1234"
-    logfire.warning(
-        "webreader_timeout_error",
-        error_code=error_code,
-        url=url,
-        message="Network timeout - candidate for retry"
-    )
-```
-
-#### Error Code 1214: Not Found 404 (Permanent)
-
-```json
-{
-    "MCP error": "Resource not found",
-    "code": "1214"
-}
-```
-
-**Observer Action**: Do not retry, track domain for blacklist
-
-```python
-# main.py:521-537
-elif '"code":"1214"' in raw_json:
-    error_code = "1214"
-    logfire.warning(
-        "webreader_not_found",
-        error_code=error_code,
-        url=url,
-        message="Resource not found - do not retry"
-    )
-
-    # Extract domain and update blacklist
-    domain = urlparse(url).netloc
-    _update_domain_blacklist(workspace_dir, domain, error_code)
-```
-
----
-
-### Domain Blacklist System
-
-**Function**: `_update_domain_blacklist()`
-**Location**: `main.py:167-206`
-
-#### Purpose
-Tracks domains that consistently fail with error 1214 (404). After 3 failures, domain is considered blacklisted.
-
-#### Blacklist Structure
-
-```json
-{
-    "domains": {
-        "example.com": {
-            "failures": 3,
-            "last_failure": "2025-12-22T14:30:45.123456"
-        }
-    },
-    "threshold": 3
-}
-```
-
-#### Storage Location
-
-```
-AGENT_RUN_WORKSPACES/
-├── session_20241222_143045/
-│   └── (session files)
-└── webReader_blacklist.json  ← Persists across sessions
-```
-
-#### Threshold Logic
-
-```python
-# main.py:191-198
-if blacklist["domains"][domain]["failures"] >= blacklist["threshold"]:
-    logfire.warning(
-        "domain_blacklisted",
-        domain=domain,
-        failures=blacklist["domains"][domain]["failures"],
-        message=f"Domain {domain} has reached failure threshold"
-    )
-```
 
 ---
 
@@ -522,83 +377,7 @@ sequenceDiagram
     Observer->>Observer: Log success with file size
 ```
 
-### 3. webReader Corpus Enrichment Flow
 
-```mermaid
-sequenceDiagram
-    participant Result as ToolResultBlock
-    participant Observer as observe_and_enrich_corpus
-    participant ArticleFS as extracted_articles/
-    participant SearchFS as search_results/
-    participant Logfire as Logfire
-
-    Result->>Observer: webReader result
-
-    Observer->>Observer: Extract reader_result from Z.AI schema
-    Note over Observer: data.reader_result.{content,title,url}
-
-    alt Error response
-        Observer->>Observer: Parse error code
-        alt Error 1234 (timeout)
-            Observer->>Logfire: warning (retryable)
-        else Error 1214 (404)
-            Observer->>Observer: Extract domain
-            Observer->>Observer: _update_domain_blacklist()
-            Observer->>Logfire: warning (permanent)
-        end
-        Observer--xResult: Return (no article saved)
-    end
-
-    Observer->>ArticleFS: Save extracted article JSON
-    ArticleFS-->>Observer: File saved
-
-    Observer->>SearchFS: List existing search results
-    SearchFS-->>Observer: [file1.json, file2.json, ...]
-
-    loop For each search result file
-        Observer->>Observer: Load and parse JSON
-        Observer->>Observer: Find result with matching URL
-        alt URL found
-            Observer->>Observer: Inject content into result
-            Observer->>Observer: Add extraction_timestamp
-            Observer->>SearchFS: Write enriched corpus
-            SearchFS-->>Observer: File updated
-            Observer->>Logfire: info("corpus_enriched")
-        end
-    end
-```
-
-### 4. Domain Blacklist Update Flow
-
-```mermaid
-sequenceDiagram
-    participant Observer as webReader Observer
-    participant Blacklist as _update_domain_blacklist
-    participant FS as Filesystem
-    participant Logfire as Logfire
-
-    Observer->>Observer: Detect error code 1214 (404)
-    Observer->>Observer: Extract domain from URL
-
-    Observer->>Blacklist: (domain, "1214")
-
-    Blacklist->>FS: Load webReader_blacklist.json
-    alt File exists
-        FS-->>Blacklist: Existing blacklist data
-    else File not found
-        Blacklist->>Blacklist: Initialize with default
-    end
-
-    Blacklist->>Blacklist: Increment domain failure count
-    Blacklist->>Blacklist: Update last_failure timestamp
-
-    alt Failure count >= threshold (3)
-        Blacklist->>Logfire: warning("domain_blacklisted")
-    end
-
-    Blacklist->>FS: Save updated blacklist
-    FS-->>Blacklist: Save complete
-```
 
 ---
 
@@ -683,26 +462,18 @@ AGENT_RUN_WORKSPACES/
 │   │   ├── composio_search_web_143105.json
 │   │   └── multi_execute_tool_0_143200.json
 │   │
-│   ├── extracted_articles/                # webReader extractions
-│   │   ├── example.com_article_1_143150.json
-│   │   └── news.site_story_143155.json
-│   │
-│   ├── workbench_activity/                # Code execution logs
-│   │   ├── workbench_143210.json
-│   │   └── workbench_143315.json
-│   │
+
 │   ├── work_products/                     # Subagent outputs
 │   │   └── report.html
 │   │
 │   ├── downloads/                         # Composio file downloads
 │   │
-│   ├── expanded_corpus.json               # Unified corpus (subagent)
-│   │
+
 │   ├── trace.json                         # Execution trace
 │   ├── run.log                            # Session log
 │   └── summary.txt                        # Session summary
 │
-└── webReader_blacklist.json               # Cross-session blacklist
+└── (session files)
 ```
 
 ### Naming Conventions
@@ -855,7 +626,7 @@ filename = f"{tool_slug}_{timestamp}_{index}.json"
 
 **Check**:
 1. `search_results/` directory exists with matching JSON files
-2. URL in webReader result exactly matches URL in search result
+2. URL in crawl result matches URL in search result
 3. File permissions allow read/write
 
 ### Issue: Domain Blacklist Not Updating
@@ -872,7 +643,7 @@ filename = f"{tool_slug}_{timestamp}_{index}.json"
 ### Potential Improvements
 
 1. **Configurable retry logic** for error 1234 (timeout)
-2. **Blacklist-aware webReader calls** (skip known bad domains)
+2. **Parallel execution** (non-blocking)
 3. **Observer metrics** (success rate, processing time)
 4. **Deduplication** (avoid saving duplicate articles)
 5. **Compression** for large artifacts

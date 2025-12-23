@@ -46,7 +46,6 @@ flowchart TB
     subgraph External["External Services"]
         ClaudeAPI["Claude API<br/>(Anthropic/Z.AI)"]
         ComposioAPI["Composio Tool Router<br/>(500+ tools)"]
-        WebReaderAPI["Z.AI webReader API"]
         LogfireAPI["Logfire Tracing<br/>(Observability)"]
     end
 
@@ -72,7 +71,6 @@ flowchart TB
         subgraph MCPLayer["MCP Server Layer"]
             LocalMCP["Local Toolkit MCP<br/>(stdio)"]
             ComposioMCP["Composio MCP<br/>(HTTP)"]
-            WebReaderMCP["webReader MCP<br/>(HTTP)"]
         end
 
         subgraph Bridges["Bridge Layer"]
@@ -106,11 +104,7 @@ flowchart TB
 
     Client -->|"API Calls"| ClaudeAPI
     ComposioMCP -->|"Tool Execution"| ComposioAPI
-    WebReaderMCP -->|"Content Extraction"| WebReaderAPI
-    Client -->|"Send Traces"| LogfireAPI
 
-    SearchObs -->|"Save Artifacts"| SearchResults
-    CorpusObs -->|"Save/Enrich"| ExtractedArticles
     ReportExpert -->|"Generate Reports"| WorkProducts
     Main -->|"Log Output"| RunLog
     Main -->|"Save Trace"| TraceJSON
@@ -133,7 +127,6 @@ This diagram illustrates the complete system boundaries and external dependencie
 2. **External Services**: The system depends on four key external APIs:
    - **Claude API**: For LLM inference (via Z.AI endpoint)
    - **Composio API**: For 500+ tool integrations (Gmail, SERP, Slack, etc.)
-   - **webReader API**: For web content extraction
    - **Logfire API**: For distributed tracing and observability
 
 3. **Core Components**: The main agent logic, SDK client, and configuration
@@ -141,7 +134,6 @@ This diagram illustrates the complete system boundaries and external dependencie
 4. **MCP Server Layer**: Three MCP servers provide different capabilities:
    - Local Toolkit (stdio): Custom local tools
    - Composio (HTTP): Remote tool router
-   - webReader (HTTP): Article extraction
 
 5. **Observer Pattern**: Async observers that save artifacts without blocking the agent loop
 
@@ -209,10 +201,6 @@ options = ClaudeAgentOptions(
             "command": sys.executable,
             "args": ["src/mcp_server.py"],
         },
-        "web_reader": {
-            "type": "http",
-            "url": "https://api.z.ai/api/mcp/web_reader/mcp",
-            "headers": {"Authorization": f"Bearer {os.environ['ZAI_API_KEY']}"},
         },
     },
     allowed_tools=["Task"],
@@ -221,7 +209,7 @@ options = ClaudeAgentOptions(
             description="...",
             prompt="...",
             tools=[
-                "mcp__web_reader__webReader",
+                "mcp__local_toolkit__crawl_parallel",
                 "mcp__local_toolkit__save_corpus",
                 "mcp__local_toolkit__write_local_file",
                 "mcp__local_toolkit__workbench_download",
@@ -334,7 +322,6 @@ flowchart TB
 
     subgraph Observers["Observer Pattern"]
         SearchObs["observe_and_save_search_results()"]
-        CorpusObs["observe_and_enrich_corpus()"]
         WorkbenchObs["observe_and_save_workbench_activity()"]
     end
 
@@ -355,7 +342,6 @@ flowchart TB
     Router -->|COMPLEX| Complex
 
     Complex -->|"On Tool Result"| SearchObs
-    Complex -->|"On Tool Result"| CorpusObs
     Complex -->|"On Tool Result"| WorkbenchObs
 
     Complex -->|"After Task Tool"| Verify
@@ -451,7 +437,7 @@ flowchart TB
 
     subgraph SubAgent["report-creation-expert Sub-Agent"]
         direction TB
-        Extract["webReader<br/>(Batches of 5)"]
+        Extract["crawl_parallel<br/>(Batch of 10)"]
         Count{"10 successful<br/>OR 2 batches?"}
         SaveCorpus["save_corpus()"]
         Synthesize["Synthesize Report<br/>(HTML)"]
@@ -468,9 +454,8 @@ flowchart TB
     Search --> Delegate["Delegate to<br/>sub-agent"]
 
     Delegate --> Extract
+    Delegate --> Extract
     Extract --> Count
-    Count -->|No| Extract
-    Count -->|Yes| SaveCorpus
 
     SaveCorpus --> Corpus
     Corpus --> Synthesize
@@ -506,16 +491,12 @@ flowchart TB
     - Otherwise → Skip to Step 4 (use search snippets)
 
     ### Step 2: Extract Articles (OPTIMIZED)
-    - Use webReader with: retain_images=false
-    - HARD STOP: After 10 successful OR 2 batches
-    - Call 5 at a time. Count successes after each batch
-    - Error 1234 = timeout → retry once
-    - Error 1214 = 404 → skip, no retry
+    - Use crawl_parallel
+    - Scrape 10 URLs in parallel
 
-    ### Step 3: Save Corpus (MANDATORY)
-    - Call save_corpus(articles, workspace_path)
-    - Pass FULL content from webReader
-    - DO NOT PROCEED until save_corpus returns success
+    ### Step 3: Synthesis
+    - Read markdown files from search_results/
+    - Synthesize content
 
     ### Step 4: Synthesize Report
     - Structure: Exec Summary → ToC → Thematic Sections → Sources
@@ -527,7 +508,7 @@ flowchart TB
     - Use write_local_file
     """,
     tools=[
-        "mcp__web_reader__webReader",
+        "mcp__local_toolkit__crawl_parallel",
         "mcp__local_toolkit__save_corpus",
         "mcp__local_toolkit__write_local_file",
         "mcp__local_toolkit__workbench_download",
@@ -560,22 +541,19 @@ flowchart TB
     subgraph Observers["Async Observers"]
         direction LR
         SearchObs["observe_and_save_<br/>search_results()"]
-        CorpusObs["observe_and_<br/>enrich_corpus()"]
         WorkbenchObs["observe_and_save_<br/>workbench_activity()"]
     end
 
     subgraph Processing["Observer Processing"]
         ExtractJSON["Extract JSON<br/>from TextBlock"]
-        ParseData["Parse SERP/<br/>webReader Schema"]
+        ParseData["Parse SERP Schema"]
         CleanData["Clean &<br/>Normalize"]
         SaveFile["Save to<br/>Workspace"]
     end
 
     subgraph Workspace["Workspace Artifacts"]
         SERP["search_results/*.json"]
-        Articles["extracted_articles/*.json"]
         Activity["workbench_activity/*.json"]
-        Enriched["Enriched SERP<br/>with content"]
     end
 
     ToolCall --> ToolExecute
@@ -593,12 +571,8 @@ flowchart TB
 
     SearchObs --> SaveFile
     SaveFile --> SERP
-    CorpusObs --> SaveFile
-    SaveFile --> Articles
     WorkbenchObs --> SaveFile
     SaveFile --> Activity
-
-    CorpusObs -->|"Enrich matching<br/>URLs"| Enriched
 
     style AgentLoop fill:#e1f5fe
     style Observers fill:#fff9c4
@@ -611,7 +585,7 @@ flowchart TB
 | Observer | Location | Triggers On | Saves To |
 |----------|----------|-------------|----------|
 | `observe_and_save_search_results()` | `main.py:218-413` | SERP tools | `search_results/*.json` |
-| `observe_and_enrich_corpus()` | `main.py:479-627` | webReader | `extracted_articles/*.json` + enriches SERP |
+
 | `observe_and_save_workbench_activity()` | `main.py:416-477` | Workbench tools | `workbench_activity/*.json` |
 | `verify_subagent_compliance()` | `main.py:629-673` | Task results | Injects error if non-compliant |
 
@@ -629,11 +603,6 @@ if tool_name and OBSERVER_WORKSPACE_DIR:
     asyncio.create_task(
         observe_and_save_workbench_activity(
             tool_name, tool_input or {}, content_str, OBSERVER_WORKSPACE_DIR
-        )
-    )
-    asyncio.create_task(
-        observe_and_enrich_corpus(
-            tool_name, tool_input or {}, block_content, OBSERVER_WORKSPACE_DIR
         )
     )
 ```
@@ -669,12 +638,7 @@ flowchart TB
             tools2["COMPOSIO_SEARCH_*<br/>GMAIL_SEND_EMAIL<br/>COMPOSIO_REMOTE_WORKBENCH"]
         end
 
-        subgraph WebReaderMCP["webReader MCP"]
-            type3["Type: http"]
-            url3["api.z.ai/api/mcp/web_reader/mcp"]
-            auth3["Bearer token"]
-            tools3["webReader"]
-        end
+
     end
 
     subgraph Naming["Tool Naming Convention"]
@@ -688,11 +652,9 @@ flowchart TB
     Options --> MCPConfig
     MCPConfig --> LocalMCP
     MCPConfig --> ComposioMCP
-    MCPConfig --> WebReaderMCP
 
     tools1 --> Naming
     tools2 --> Naming
-    tools3 --> Naming
 
     style SDKClient fill:#e1f5fe
     style MCPServers fill:#c8e6c9

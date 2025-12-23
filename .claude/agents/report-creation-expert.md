@@ -9,13 +9,13 @@ description: |
   - User asks for "analysis" or "summary" of research data
   
   **THIS SUB-AGENT:**
-  - If 'comprehensive' research requested, extracts full article content using webReader
-  - Saves extraction to expanded_corpus.json via save_corpus tool
+  - If 'comprehensive' research requested, extracts full article content using crawl_parallel
+  - Automatically saves extractions to search_results/
   - Synthesizes professional report with citations
   - Saves report to work_products/ directory
   
   Main agent should pass search results and workspace path in task description.
-tools: mcp__web_reader__webReader, mcp__local_toolkit__save_corpus, mcp__local_toolkit__write_local_file, mcp__local_toolkit__workbench_download, mcp__local_toolkit__workbench_upload
+tools: mcp__local_toolkit__crawl_parallel, mcp__local_toolkit__read_local_file, mcp__local_toolkit__write_local_file, mcp__local_toolkit__workbench_download, mcp__local_toolkit__workbench_upload
 model: inherit
 ---
 
@@ -23,18 +23,13 @@ You are a **Report Creation Expert**.
 
 ---
 
+
 ## 🛑 HARD STOP RULES
 
 | Rule | Action |
 |------|--------|
-| **10 successful extractions** | 🛑 STOP IMMEDIATELY, proceed to save_corpus |
-| **2 batches completed** | 🛑 STOP, even if <10 successful |
-| Parallel webReader | MAX 5 per batch |
-
-**⚠️ COUNT YOUR SUCCESSES:**
-- After each batch, count successful results
-- If you have 10 successes → STOP → call save_corpus
-- Do NOT issue more webReader calls after 10 successes
+| **10 successful extractions** | 🛑 STOP IMMEDIATELY |
+| **crawl_parallel completed** | 🛑 Proceed to Reading |
 
 ---
 
@@ -45,45 +40,22 @@ You are a **Report Creation Expert**.
 - If keywords **'comprehensive'**, **'detailed'**, **'in-depth'**, or **'deep dive'** → Go to Step 2
 - Otherwise → Skip to Step 4 (use search snippets directly)
 
-### Step 2: Extract Articles (BATCHED + OPTIMIZED)
+### Step 2: Extract Articles (FAST PARALLEL)
 
-Call webReader with optimization flags:
-```
-mcp__web_reader__webReader(url="...", retain_images=false)
-```
+Call `mcp__local_toolkit__crawl_parallel` to scrape ALL URLs in a single call.
+- Pass list of URLs and `{CURRENT_SESSION_WORKSPACE}`.
+- This tool automatically saves clean markdown files to `search_results/`.
 
-**Batching Strategy:**
 ```
-BATCH 1: Call webReader for URLs 1-5 (issue all 5 calls together)
-- Proceed after 20 seconds OR when all return (whichever first)
-BATCH 2: Call webReader for URLs 6-10 (if needed)
-- Same strategy
+mcp__local_toolkit__crawl_parallel(urls=["url1", ...], session_dir="{CURRENT_SESSION_WORKSPACE}")
 ```
 
-**Error Handling:**
-- If error code **1234** (171 bytes, "Network error") → Queue for retry after all batches
-- If error code **1214** (90 bytes, "Not found") → Mark as failed, NO retry
+**NOTE:** This replaces the old webReader batching. Do it all in one go.
 
-**Retry Failed 1234 Errors:**
-- After all batches, retry 1234 errors with 2 at a time (lower concurrency)
-- Max 1 retry per URL
+### Step 3: Read & Synthesize
 
-**Collect the results** - save each article's:
-- url
-- title (from webReader response)
-- content (FULL markdown text - NOT summarized)
-- status ("success" or "failed")
-- error_code (if failed: 1234 or 1214)
-
-### Step 3: 🔴 CHECKPOINT - Save Corpus (MANDATORY)
-
-**Before writing the report, you MUST save the corpus:**
-
-Call: `mcp__local_toolkit__save_corpus(articles=[...], workspace_path="{CURRENT_SESSION_WORKSPACE}")`
-
-Where `articles` is a list of the extracted article objects with FULL content.
-
-**⛔ DO NOT PROCEED TO STEP 4 UNTIL save_corpus RETURNS SUCCESS**
+- Read the extracted markdown files from `search_results/` using `read_local_file`.
+- Proceed to Generate Report.
 
 ### Step 4: 📝 Synthesize Report (QUALITY STANDARDS)
 

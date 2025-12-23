@@ -14,6 +14,7 @@ from composio import Composio
 load_dotenv()
 
 try:
+    sys.stderr.write("[Local Toolkit] Server starting components...\n")
     mcp = FastMCP("Local Intelligence Toolkit")
 except Exception:
     raise
@@ -83,76 +84,7 @@ def write_local_file(path: str, content: str) -> str:
         return f"Error writing file: {str(e)}"
 
 
-@mcp.tool()
-def save_corpus(articles: list, workspace_path: str) -> str:
-    """
-    Save extracted article data to expanded_corpus.json.
 
-    This is a simple file-saving tool. The agent should:
-    1. Call webReader for each URL (in parallel batches of 5)
-    2. Collect the results into a list of article objects
-    3. Call this tool to save the corpus
-
-    Args:
-        articles: List of article objects, each with:
-            - url: The source URL
-            - title: Article title
-            - content: FULL markdown content from webReader (NOT summarized)
-            - status: "success" or "failed"
-        workspace_path: Absolute path to session workspace
-
-    Returns:
-        JSON with corpus_path and summary
-
-    Example:
-        save_corpus(
-            articles=[
-                {"url": "https://...", "title": "My Article", "content": "Full markdown...", "status": "success"},
-                {"url": "https://...", "title": "", "content": "Error msg", "status": "failed"}
-            ],
-            workspace_path="/path/to/AGENT_RUN_WORKSPACES/session_xxx"
-        )
-    """
-    try:
-        success_count = sum(1 for a in articles if a.get("status") == "success")
-        failed_count = len(articles) - success_count
-
-        corpus = {
-            "extraction_timestamp": datetime.utcnow().isoformat() + "Z",
-            "total_articles": len(articles),
-            "successful": success_count,
-            "failed": failed_count,
-            "articles": articles,
-        }
-
-        corpus_path = os.path.join(workspace_path, "expanded_corpus.json")
-        os.makedirs(os.path.dirname(corpus_path), exist_ok=True)
-
-        with open(corpus_path, "w", encoding="utf-8") as f:
-            json.dump(corpus, f, indent=2, ensure_ascii=False)
-
-        # Calculate total content size
-        total_content_size = sum(
-            len(a.get("content", "")) for a in articles if a.get("status") == "success"
-        )
-
-        return json.dumps(
-            {
-                "success": True,
-                "corpus_path": corpus_path,
-                "articles_saved": len(articles),
-                "successful": success_count,
-                "failed": failed_count,
-                "total_content_bytes": total_content_size,
-            },
-            indent=2,
-        )
-
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
-
-    except Exception as e:
-        return json.dumps({"success": False, "error": str(e)})
 
 
 # =============================================================================

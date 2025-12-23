@@ -154,36 +154,7 @@ def parse_relative_date(relative_str: str) -> str:
     return now.strftime("%Y-%m-%d")
 
 
-def _update_domain_blacklist(workspace_dir: str, domain: str, error_code: str) -> None:
-    """Track domain failures for blacklist learning."""
-    try:
-        base_workspace = os.path.dirname(workspace_dir) if workspace_dir else "."
-        blacklist_path = os.path.join(base_workspace, "webReader_blacklist.json")
 
-        blacklist = {"domains": {}, "threshold": 3}
-        if os.path.exists(blacklist_path):
-            with open(blacklist_path, "r") as f:
-                blacklist = json.load(f)
-
-        if error_code == "1214":
-            if domain not in blacklist["domains"]:
-                blacklist["domains"][domain] = {"failures": 0, "last_failure": ""}
-
-            blacklist["domains"][domain]["failures"] += 1
-            blacklist["domains"][domain]["last_failure"] = datetime.now().isoformat()
-
-            if blacklist["domains"][domain]["failures"] >= blacklist["threshold"]:
-                logfire.warning(
-                    "domain_blacklisted",
-                    domain=domain,
-                    failures=blacklist["domains"][domain]["failures"],
-                )
-
-            with open(blacklist_path, "w") as f:
-                json.dump(blacklist, f, indent=2)
-
-    except Exception as e:
-        logfire.debug("blacklist_update_error", error=str(e))
 
 
 # =============================================================================
@@ -394,97 +365,7 @@ async def observe_and_save_workbench_activity(
         logfire.warning("workbench_observer_error", tool=tool_name, error=str(e))
 
 
-async def observe_and_enrich_corpus(
-    tool_name: str, tool_input: dict, tool_content, workspace_dir: str
-) -> None:
-    """Observer: Capture webReader article extraction results."""
-    if "webreader" not in tool_name.lower():
-        return
 
-    try:
-        raw_json = None
-        if isinstance(tool_content, list):
-            for item in tool_content:
-                if hasattr(item, "text"):
-                    raw_json = item.text
-                    break
-                elif isinstance(item, dict) and item.get("type") == "text":
-                    raw_json = item.get("text", "")
-                    break
-        elif isinstance(tool_content, str):
-            raw_json = tool_content
-
-        if not raw_json:
-            return
-
-        if "MCP error" in raw_json:
-            url = tool_input.get("url", "") if tool_input else ""
-            if '"code":"1214"' in raw_json:
-                try:
-                    from urllib.parse import urlparse
-
-                    domain = urlparse(url).netloc
-                    if domain:
-                        _update_domain_blacklist(workspace_dir, domain, "1214")
-                except Exception:
-                    pass
-            return
-
-        try:
-            data = json.loads(raw_json)
-        except json.JSONDecodeError:
-            return
-
-        reader_result = data.get("reader_result", data)
-        # Fix: Handle case where reader_result is a string instead of dict
-        if isinstance(reader_result, str):
-            try:
-                reader_result = json.loads(reader_result)
-            except json.JSONDecodeError:
-                logfire.warning(
-                    "webreader_observer_parse_error", raw=reader_result[:200]
-                )
-                return
-
-        # Ensure reader_result is a dict before calling .get()
-        if not isinstance(reader_result, dict):
-            return
-
-        content_data = {
-            "title": reader_result.get("title", ""),
-            "description": reader_result.get("description", ""),
-            "content": reader_result.get("content", ""),
-            "url": reader_result.get(
-                "url", tool_input.get("url", "") if tool_input else ""
-            ),
-        }
-
-        articles_dir = os.path.join(workspace_dir, "extracted_articles")
-        os.makedirs(articles_dir, exist_ok=True)
-
-        timestamp_str = datetime.now().strftime("%H%M%S")
-        url = tool_input.get("url", "unknown")
-        safe_name = (
-            url.replace("https://", "").replace("http://", "").replace("/", "_")[:50]
-        )
-        filename = os.path.join(articles_dir, f"{safe_name}_{timestamp_str}.json")
-
-        article_record = {
-            "timestamp": datetime.now().isoformat(),
-            "source_url": url,
-            "title": content_data.get("title", ""),
-            "description": content_data.get("description", ""),
-            "content": content_data.get("content", "")[:10000],
-            "extraction_success": bool(content_data.get("content")),
-        }
-
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(article_record, f, indent=2, ensure_ascii=False)
-
-        logfire.info("article_extracted", url=url, path=filename)
-
-    except Exception as e:
-        logfire.warning("webreader_observer_error", tool=tool_name, error=str(e))
 
 
 # =============================================================================
@@ -528,7 +409,11 @@ class UniversalAgent:
         self.composio = Composio(
             api_key=os.environ["COMPOSIO_API_KEY"], file_download_dir=downloads_dir
         )
-        self.session = self.composio.create(user_id=self.user_id)
+        # Ban crawling toolkits so COMPOSIO_SEARCH_TOOLS recommendations use our local MCP tools
+        self.session = self.composio.create(
+            user_id=self.user_id,
+            toolkits={"disable": ["firecrawl", "exa"]}
+        )
 
         # Build system prompt
         import sys
@@ -549,13 +434,7 @@ class UniversalAgent:
                     "command": sys.executable,
                     "args": ["src/mcp_server.py"],
                 },
-                "web_reader": {
-                    "type": "http",
-                    "url": "https://api.z.ai/api/mcp/web_reader/mcp",
-                    "headers": {
-                        "Authorization": f"Bearer {os.environ.get('ZAI_API_KEY', '')}"
-                    },
-                },
+
             },
             # Note: No allowed_tools restriction - main agent can use any tool for flexibility
             agents={
@@ -568,7 +447,7 @@ class UniversalAgent:
                     ),
                     prompt=self._build_subagent_prompt(abs_workspace),
                     tools=[
-                        "mcp__web_reader__webReader",
+                        "mcp__local_toolkit__crawl_parallel",
                         "mcp__local_toolkit__save_corpus",
                         "mcp__local_toolkit__write_local_file",
                         "mcp__local_toolkit__workbench_download",
@@ -614,7 +493,7 @@ class UniversalAgent:
             "- Do NOT delegate if the user just asks 'what is the news on X' (unless they ask for a Report)\n"
             "- Faster is better for simple queries.\n\n"
             "DO NOT attempt to create FULL HTML reports yourself. If a full report is needed, delegate. "
-            "The sub-agent has specialized tools (webReader) for heavy lifting.\n\n"
+            "The sub-agent has specialized tools (crawl_parallel) for heavy lifting.\n\n"
             "## EMAIL REQUIREMENTS\n\n"
             "When sending reports via email:\n"
             "1. ALWAYS delegate report creation to `report-creation-expert` first\n"
@@ -641,10 +520,11 @@ class UniversalAgent:
             "### Step 1: Research & Extraction (CONDITIONAL)\n"
             "- **IF user requested 'comprehensive', 'deep dive', or 'detailed' research:**\n"
             "  - Your research should have already been done by the main agent.\n"
-            "  - Use `webReader` to extract full content from provided source URLs (webReader should only extract for a max 10 articles)\n"
+            "  - Use `crawl_parallel` to extract full content from provided source URLs (pass the list of relevant URLs).\n"
+            "  - The `crawl_parallel` tool handles multiple URLs in parallel and is much faster than one-by-one.\n"
             "  - Save extracted content using `save_corpus` tool\n"
             "- **OTHERWISE (Standard Report):**\n"
-            "  - Skip WebReader extraction.\n"
+            "  - Skip extraction.\n"
             "  - Use the existing search result snippets/corpus provided in context.\n"
             "  - Proceed directly to Step 2.\n\n"
             "### Step 2: Report Creation\n"

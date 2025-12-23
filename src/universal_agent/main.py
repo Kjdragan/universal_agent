@@ -119,6 +119,10 @@ from claude_agent_sdk.types import (
     ToolResultBlock,
     ThinkingBlock,
     UserMessage,
+    # Hook types for SubagentStop pattern
+    HookMatcher,
+    HookContext,
+    HookJSONOutput,
 )
 from composio import Composio
 
@@ -160,49 +164,11 @@ def parse_relative_date(relative_str: str) -> str:
 
 
 # =============================================================================
-# DOMAIN BLACKLIST - Track domains that consistently fail webReader
+
 # =============================================================================
 
 
-def _update_domain_blacklist(workspace_dir: str, domain: str, error_code: str) -> None:
-    """
-    Track domain failures for blacklist learning.
-    After 3 failures from same domain with error 1214, consider blacklisted.
-    """
-    try:
-        # Use parent of session workspace for persistence across sessions
-        base_workspace = os.path.dirname(workspace_dir) if workspace_dir else "."
-        blacklist_path = os.path.join(base_workspace, "webReader_blacklist.json")
 
-        # Load existing blacklist
-        blacklist = {"domains": {}, "threshold": 3}
-        if os.path.exists(blacklist_path):
-            with open(blacklist_path, "r") as f:
-                blacklist = json.load(f)
-
-        # Update domain failure count (only for 1214 - permanent failures)
-        if error_code == "1214":
-            if domain not in blacklist["domains"]:
-                blacklist["domains"][domain] = {"failures": 0, "last_failure": ""}
-
-            blacklist["domains"][domain]["failures"] += 1
-            blacklist["domains"][domain]["last_failure"] = datetime.now().isoformat()
-
-            # Log if threshold reached
-            if blacklist["domains"][domain]["failures"] >= blacklist["threshold"]:
-                logfire.warning(
-                    "domain_blacklisted",
-                    domain=domain,
-                    failures=blacklist["domains"][domain]["failures"],
-                    message=f"Domain {domain} has reached failure threshold",
-                )
-
-            # Save updated blacklist
-            with open(blacklist_path, "w") as f:
-                json.dump(blacklist, f, indent=2)
-
-    except Exception as e:
-        logfire.debug("blacklist_update_error", error=str(e))
 
 
 # =============================================================================
@@ -476,170 +442,7 @@ async def observe_and_save_workbench_activity(
         logfire.warning("workbench_observer_error", tool=tool_name, error=str(e))
 
 
-async def observe_and_enrich_corpus(
-    tool_name: str, tool_input: dict, tool_content, workspace_dir: str
-) -> None:
-    """
-    Observer: Capture webReader article extraction results.
-    Uses typed SDK content (same pattern as search observer).
-    Handles Z.AI schema: response.reader_result.{content,title,...}
-    """
-    if "webreader" not in tool_name.lower():
-        return
 
-    try:
-        # Extract JSON from typed TextBlock objects (same as search observer)
-        raw_json = None
-        if isinstance(tool_content, list):
-            for item in tool_content:
-                if hasattr(item, "text"):
-                    raw_json = item.text
-                    break
-                elif isinstance(item, dict) and item.get("type") == "text":
-                    raw_json = item.get("text", "")
-                    break
-        elif isinstance(tool_content, str):
-            raw_json = tool_content
-
-        if not raw_json:
-            return
-
-        # Handle MCP error responses - track error codes for blacklist/retry
-        if "MCP error" in raw_json:
-            error_code = None
-            url = tool_input.get("url", "") if tool_input else ""
-
-            # Extract error code from response
-            if '"code":"1234"' in raw_json:
-                error_code = "1234"  # Network timeout - retryable
-                logfire.warning(
-                    "webreader_timeout_error",
-                    error_code=error_code,
-                    url=url,
-                    message="Network timeout - candidate for retry",
-                )
-            elif '"code":"1214"' in raw_json:
-                error_code = "1214"  # 404 Not found - permanent
-                logfire.warning(
-                    "webreader_not_found",
-                    error_code=error_code,
-                    url=url,
-                    message="Resource not found - do not retry",
-                )
-                # Track domain for blacklist
-                try:
-                    from urllib.parse import urlparse
-
-                    domain = urlparse(url).netloc
-                    if domain:
-                        _update_domain_blacklist(workspace_dir, domain, error_code)
-                except Exception:
-                    pass
-            else:
-                logfire.debug("webreader_mcp_error", error=raw_json[:200], url=url)
-            return
-
-        # Parse JSON
-        try:
-            data = json.loads(raw_json)
-        except json.JSONDecodeError as e:
-            logfire.debug("webreader_json_error", error=str(e), preview=raw_json[:200])
-            return
-
-        # Handle Z.AI nested schema: data.reader_result.{content,title,...}
-        # The webReader response wraps content in reader_result
-        reader_result = data.get("reader_result", data)
-
-        # Fix: Handle case where reader_result is a string instead of dict
-        if isinstance(reader_result, str):
-            try:
-                reader_result = json.loads(reader_result)
-            except json.JSONDecodeError:
-                logfire.debug(
-                    "webreader_observer_parse_skip", preview=reader_result[:200]
-                )
-                return
-
-        # Ensure reader_result is a dict before calling .get()
-        if not isinstance(reader_result, dict):
-            return
-
-        content_data = {
-            "title": reader_result.get("title", ""),
-            "description": reader_result.get("description", ""),
-            "content": reader_result.get("content", ""),
-            "url": reader_result.get(
-                "url", tool_input.get("url", "") if tool_input else ""
-            ),
-        }
-
-        # Save extracted article
-        articles_dir = os.path.join(workspace_dir, "extracted_articles")
-        os.makedirs(articles_dir, exist_ok=True)
-
-        timestamp_str = datetime.now().strftime("%H%M%S")
-        url = tool_input.get("url", "unknown")
-        # Create safe filename from URL
-        safe_name = (
-            url.replace("https://", "").replace("http://", "").replace("/", "_")[:50]
-        )
-        filename = os.path.join(articles_dir, f"{safe_name}_{timestamp_str}.json")
-
-        article_record = {
-            "timestamp": datetime.now().isoformat(),
-            "source_url": url,
-            "title": content_data.get("title", ""),
-            "description": content_data.get("description", ""),
-            "content": content_data.get("content", "")[:10000],  # Truncate for storage
-            "extraction_success": bool(content_data.get("content")),
-        }
-
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(article_record, f, indent=2, ensure_ascii=False)
-
-        print(f"\n📰 [OBSERVER] Saved extracted article: {filename}")
-        logfire.info(
-            "article_extracted",
-            url=url,
-            title=content_data.get("title", "")[:100],
-            content_length=len(content_data.get("content", "")),
-            path=filename,
-        )
-
-        # Enrich existing corpus - find matching search result and add content
-        search_dir = os.path.join(workspace_dir, "search_results")
-        if os.path.exists(search_dir):
-            for sr_file in os.listdir(search_dir):
-                if sr_file.endswith(".json"):
-                    sr_path = os.path.join(search_dir, sr_file)
-                    try:
-                        with open(sr_path, "r") as f:
-                            sr_data = json.load(f)
-
-                        # Check if this search result contains the URL
-                        results_list = sr_data.get("results", [])
-                        enriched = False
-                        for result in results_list:
-                            if result.get("url") == url or result.get("link") == url:
-                                result["content"] = content_data.get("content", "")
-                                result["extraction_timestamp"] = (
-                                    datetime.now().isoformat()
-                                )
-                                enriched = True
-                                break
-
-                        if enriched:
-                            with open(sr_path, "w") as f:
-                                json.dump(sr_data, f, indent=2)
-                            print(f"   ✅ Enriched corpus: {sr_file}")
-                            logfire.info("corpus_enriched", file=sr_file, url=url)
-                    except Exception as enrich_err:
-                        logfire.debug(
-                            "corpus_enrich_skip", file=sr_file, error=str(enrich_err)
-                        )
-
-    except Exception as e:
-        logfire.warning("webreader_observer_error", tool=tool_name, error=str(e))
 
 
 def verify_subagent_compliance(
@@ -663,29 +466,115 @@ def verify_subagent_compliance(
     if not is_report_task:
         return None
 
-    # Check if expanded_corpus.json was saved
-    corpus_path = os.path.join(workspace_dir, "expanded_corpus.json")
-    if not os.path.exists(corpus_path):
+    # Check for Evidence of Research Data (search_results/*.md)
+    search_results_dir = os.path.join(workspace_dir, "search_results")
+    
+    has_search_results = False
+    if os.path.exists(search_results_dir):
+        # Check if directory is not empty
+        if any(os.scandir(search_results_dir)):
+            has_search_results = True
+
+    if has_search_results:
+        return None  # Compliant: Data preserved
+
+    # Conditional Check: Did we promise a "Comprehensive" report?
+    # If the output claims "Comprehensive" or "Deep Dive", we EXPECT data to allow audit.
+    # If it's just a summary, allow skipping extraction.
+    is_claimed_comprehensive = any(
+        keyword in content_lower
+        for keyword in ["comprehensive", "deep dive", "full analysis", "detailed report"]
+    )
+
+    if is_claimed_comprehensive:
         logfire.warning(
             "subagent_compliance_failed",
-            missing_file="expanded_corpus.json",
+            reason="comprehensive_report_without_data",
             workspace=workspace_dir,
         )
         return (
-            "\n\n❌ **COMPLIANCE ERROR**: The report-creation-expert did not save "
-            "`expanded_corpus.json` before writing the report. This is a MANDATORY "
-            "step per the agent's instructions. The extraction data was not preserved "
-            "for audit purposes.\n\n"
-            "**For the user**: The report was generated, but the raw extraction data "
-            "was not saved separately. Future runs should save the corpus first."
+            "\n\n❌ **COMPLIANCE ERROR**: The report claimed to be 'Comprehensive' but no "
+            "raw research data (search_results) was saved. \n"
+            "**Rule**: For comprehensive reports, you MUST Use `crawl_parallel` to extract and preserve source data.\n"
+            "If this was a simple summary, do not label it as 'Comprehensive'."
         )
-
-    logfire.info(
-        "subagent_compliance_verified",
-        corpus_exists=True,
-        workspace=workspace_dir,
-    )
+    
     return None
+
+
+# =============================================================================
+# HOOK CALLBACKS - For sub-agent lifecycle events
+# =============================================================================
+
+async def on_subagent_stop(
+    input_data: dict, tool_use_id: str | None, context: HookContext
+) -> HookJSONOutput:
+    """
+    Hook: Fires when a sub-agent completes its work.
+    Verifies artifacts were created and injects guidance for next steps.
+    """
+    logfire.info("subagent_stop_hook_fired", input_preview=str(input_data)[:500])
+    
+    # Check if report was created in work_products/
+    global OBSERVER_WORKSPACE_DIR
+    if OBSERVER_WORKSPACE_DIR:
+        work_products = os.path.join(OBSERVER_WORKSPACE_DIR, "work_products")
+        search_results = os.path.join(OBSERVER_WORKSPACE_DIR, "search_results")
+        
+        # Check for HTML report
+        has_report = False
+        report_file = None
+        if os.path.exists(work_products):
+            html_files = [f for f in os.listdir(work_products) if f.endswith(".html")]
+            if html_files:
+                has_report = True
+                report_file = html_files[0]
+        
+        # Check for extracted content
+        has_extracted = False
+        if os.path.exists(search_results):
+            md_files = [f for f in os.listdir(search_results) if f.endswith(".md")]
+            has_extracted = len(md_files) > 0
+        
+        if has_report:
+            logfire.info(
+                "subagent_report_created",
+                report_file=report_file,
+                work_products_dir=work_products,
+            )
+            return {
+                "systemMessage": (
+                    f"✅ Sub-agent completed successfully! Report saved: {report_file}\n\n"
+                    "NEXT STEPS (REQUIRED):\n"
+                    "1. Update TodoWrite to mark 'Delegate report creation' as completed\n"
+                    f"2. Upload report using workbench_upload('{work_products}/{report_file}', '/home/user/{report_file}')\n"
+                    "3. Send email using GMAIL_SEND_EMAIL with the remote file path\n"
+                    "4. Mark all tasks complete in TodoWrite"
+                )
+            }
+        elif has_extracted:
+            logfire.warning(
+                "subagent_no_report_but_has_data",
+                extracted_count=len(md_files),
+                search_results_dir=search_results,
+            )
+            return {
+                "systemMessage": (
+                    f"⚠️ Sub-agent finished but no report found in work_products/. "
+                    f"However, {len(md_files)} markdown files were extracted to search_results/.\n"
+                    "The sub-agent may have failed during synthesis. Check the extracted content and retry."
+                )
+            }
+        else:
+            logfire.warning("subagent_no_artifacts", workspace=OBSERVER_WORKSPACE_DIR)
+            return {
+                "systemMessage": (
+                    "⚠️ Sub-agent finished but no artifacts found. "
+                    "Check if URLs were passed correctly and retry the task."
+                )
+            }
+    
+    return {}
 
 
 # =============================================================================
@@ -897,15 +786,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     OBSERVER_WORKSPACE_DIR,
                                 )
                             )
-                            # WebReader corpus enrichment observer - use typed content!
-                            asyncio.create_task(
-                                observe_and_enrich_corpus(
-                                    tool_name,
-                                    tool_input or {},
-                                    block_content,  # Pass typed content, not stringified
-                                    OBSERVER_WORKSPACE_DIR,
-                                )
-                            )
+
 
                             # Post-subagent compliance verification (for Task results)
                             compliance_error = verify_subagent_compliance(
@@ -1036,7 +917,11 @@ async def main():
 
         # Create Composio session now that client is initialized
         global session
-        session = composio.create(user_id=user_id)
+        # Ban crawling toolkits so COMPOSIO_SEARCH_TOOLS recommendations use our local MCP tools
+        session = composio.create(
+            user_id=user_id,
+            toolkits={"disable": ["firecrawl", "exa"]}
+        )
 
         # Create ClaudeAgentOptions now that session is available
         global options
@@ -1071,9 +956,12 @@ async def main():
                 "4. 🚨 MANDATORY DELEGATION FOR REPORTS:\n"
                 "   - When user requests 'comprehensive', 'detailed', 'in-depth', 'analysis', or any report:\n"
                 "   - Step A: Search for URLs using COMPOSIO tools\n"
-                "   - Step B: Delegate to 'report-creation-expert' sub-agent\n"
-                "            The sub-agent will extract articles, save corpus, and synthesize report\n"
-                "   - Pass: search results, URLs, and CURRENT_SESSION_WORKSPACE in task description\n"
+                "   - Step B: Delegate to 'report-creation-expert' sub-agent using `Task` tool\n"
+                "            The sub-agent will extract articles (using crawl_parallel) and synthesize report\n"
+                "   - CRITICAL: You MUST include the LIST OF URLS in the 'prompt' field so the sub-agent can crawl them.\n"
+                "   - Pass: search results, URLs, and CURRENT_SESSION_WORKSPACE.\n"
+                "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject a system message with next steps.\n"
+                "     Wait for this message before proceeding with upload/email.\n"
                 "5. UPLOADS: Only upload files to workbench if an external tool REQUIRES a remote file path (e.g. email attachment).\n"
                 "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
                 "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by local_toolkit tools.\n"
@@ -1085,10 +973,12 @@ async def main():
                 "User: 'Research X and email me a comprehensive report.'\n"
                 "You: \n"
                 "  1. [Search] Use COMPOSIO tools to gather search results (get URLs).\n"
-                "  2. [Delegate] Call 'report-creation-expert' sub-agent with search results + workspace path.\n"
-                "     - Sub-agent extracts articles, saves corpus, synthesizes report\n"
-                "  3. [Bridge] Upload the report to remote using `workbench_upload`.\n"
-                "  4. [Email] Send email using `GMAIL_SEND_EMAIL` with the remote file path.\n\n"
+                "  2. [Delegate] Call `Task` with 'report-creation-expert' sub-agent.\n"
+                "     - PROMPT MUST INCLUDE: The list of URLs found in search results\n"
+                "  3. [WAIT] The SubagentStop hook will inject a system message when sub-agent completes.\n"
+                "     - Follow the instructions in the system message (upload + email steps)\n"
+                "  4. [Bridge] Upload the report to remote using `workbench_upload`.\n"
+                "  5. [Email] Send email using `GMAIL_SEND_EMAIL` with the remote file path.\n\n"
                 "7. 📁 WORK PRODUCTS - MANDATORY AUTO-SAVE:\n"
                 "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
                 "   - TRIGGERS: Tables, summaries, analyses, code generated for user, reports, extracted data.\n"
@@ -1112,13 +1002,7 @@ async def main():
                     "command": sys.executable,
                     "args": ["src/mcp_server.py"],
                 },
-                "web_reader": {
-                    "type": "http",
-                    "url": "https://api.z.ai/api/mcp/web_reader/mcp",
-                    "headers": {
-                        "Authorization": f"Bearer {os.environ.get('ZAI_API_KEY', '')}"
-                    },
-                },
+
             },
             allowed_tools=[
                 "Task",
@@ -1131,53 +1015,44 @@ async def main():
                         "🚨 MANDATORY DELEGATION TARGET for ALL report generation tasks. "
                         "WHEN TO DELEGATE (REQUIRED): User asks for 'report', 'comprehensive', 'detailed', "
                         "'in-depth', 'analysis', or 'summary' of search results. "
-                        "PRIMARY AGENT MUST NOT: Generate reports directly, synthesize search results without delegating. "
-                        "THIS SUB-AGENT PROVIDES: Full article content extraction via webReader, corpus saving, professional report synthesis."
+                        "PRIMARY AGENT MUST NOT: Generate reports directly. "
+                        "REQUIRED INPUT: You MUST provide the list of URLs in the 'prompt' argument so this agent can run crawl_parallel. "
+                        "THIS SUB-AGENT PROVIDES: Full article content extraction via crawl_parallel, professional report synthesis."
                     ),
                     prompt=(
                         f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
                         f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
                         "You are a **Report Creation Expert**.\n\n"
+                        "🚨 CRITICAL TOOL INSTRUCTIONS:\n"
+                        "1. DO NOT use COMPOSIO_SEARCH_TOOLS - you already have the tools you need.\n"
+                        "2. DO NOT use Firecrawl or any Composio crawling tools.\n"
+                        "3. USE ONLY these specific tools (call them DIRECTLY by name):\n"
+                        "   - `mcp__local_toolkit__crawl_parallel` - for extracting article content\n"
+                        "   - `mcp__local_toolkit__read_local_file` - for reading saved content\n"
+                        "   - `mcp__local_toolkit__write_local_file` - for saving the report\n\n"
                         "---\n\n"
                         "## WORKFLOW\n\n"
-                        "### Step 1: Check Request Type\n"
-                        "- If 'comprehensive', 'detailed', 'in-depth' → Extract articles (Step 2)\n"
-                        "- Otherwise → Skip to Step 4 (use search snippets)\n\n"
-                        "### Step 2: Extract Articles (FAST)\n"
-                        "Use `mcp__local_toolkit__crawl_parallel` to scrape ALL URLs in a single call.\n"
-                        "- Pass list of URLs and CURRENT_SESSION_WORKSPACE.\n"
-                        "- This tool automatically saves clean markdown files to `search_results/`.\n"
-                        "- Returns a summary with paths to saved files.\n\n"
-                        "### Step 3: Read & Synthesize (MANDATORY)\n"
-                        "1. Use `mcp__local_toolkit__read_local_file` to read the content of the saved markdown files.\n"
-                        "2. Note: You do NOT need to call save_corpus manually as crawl_parallel handles file preservation.\n"
-                        "3. Proceed to Generate Report.\n\n"
-                        "### Step 4: Synthesize Report (QUALITY STANDARDS)\n"
-                        "- Structure: Exec Summary → ToC → Thematic Sections → Data Table → Sources\n"
-                        "- MUST include: specific numbers (70.7%, 9.19M vs 72.5M), dates, direct quotes\n"
-                        "- Weave facts thematically across sources, NOT source-by-source summaries\n"
-                        "- Citations: Inline `(Source Name)` for all claims\n"
-                        "- Modern HTML with gradients, info boxes, highlight boxes\n\n"
-                        "### Step 5: Save Report\n"
-                        f"- Save as `.html` to `{workspace_dir}/work_products/`\n"
-                        "- Use `mcp__local_toolkit__write_local_file`\n\n"
-                        "Return the full report as your final answer."
+                        "### Step 1: Extract Articles (IMMEDIATE ACTION)\n"
+                        "Call `mcp__local_toolkit__crawl_parallel` DIRECTLY with the URLs from your task.\n"
+                        "Parameters: urls=[list of URLs], output_dir=\"" + workspace_dir + "/search_results\"\n\n"
+                        "### Step 2: Read Extracted Content\n"
+                        "Use `mcp__local_toolkit__read_local_file` to read the markdown files.\n\n"
+                        "### Step 3: Synthesize Report\n"
+                        "- Exec Summary → ToC → Thematic Sections → Sources\n"
+                        "- Include: numbers, dates, direct quotes\n"
+                        "- Modern HTML with gradients\n\n"
+                        "### Step 4: Save Report\n"
+                        f"Save as `.html` to `{workspace_dir}/work_products/` using `mcp__local_toolkit__write_local_file`.\n\n"
+                        "🚨 START IMMEDIATELY: Call mcp__local_toolkit__crawl_parallel NOW with the URLs."
                     ),
-                    tools=[
-                        "mcp__web_reader__webReader",
-                        "mcp__local_toolkit__save_corpus",
-                        "mcp__local_toolkit__write_local_file",
-                        "mcp__local_toolkit__workbench_download",
-                        "mcp__web_reader__webReader",
-                        "mcp__local_toolkit__crawl_parallel",
-                        "mcp__local_toolkit__read_local_file",
-                        "mcp__local_toolkit__save_corpus",
-                        "mcp__local_toolkit__write_local_file",
-                        "mcp__local_toolkit__workbench_download",
-                        "mcp__local_toolkit__workbench_upload",
-                    ],
+                    # Omit 'tools' so sub-agent inherits ALL tools including MCP tools
                     model="inherit",
                 ),
+            },
+            hooks={
+                "SubagentStop": [
+                    HookMatcher(matcher=None, hooks=[on_subagent_stop]),
+                ],
             },
             permission_mode="bypassPermissions",
         )
@@ -1251,7 +1126,8 @@ async def main():
         start_ts = time.time()
 
         prompt_session = PromptSession()
-
+        
+        print("Initializing Agent and connecting to tools... (this may take a moment)")
         async with ClaudeSDKClient(options) as client:
             while True:
                 # 1. Get User Input

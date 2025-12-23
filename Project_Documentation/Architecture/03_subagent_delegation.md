@@ -80,7 +80,7 @@ options = ClaudeAgentOptions(
         "report-creation-expert": AgentDefinition(
             description="...",
             prompt="...",
-            tools=["mcp__web_reader__webReader", ...],
+            tools=["mcp__local_toolkit__crawl_parallel", ...],
             model="inherit",
         ),
     },
@@ -108,7 +108,7 @@ agents={
                "You are a **Report Creation Expert**.\n\n"
                # ... detailed workflow instructions ...
         tools=[
-            "mcp__web_reader__webReader",
+                "mcp__local_toolkit__crawl_parallel",
             "mcp__local_toolkit__save_corpus",
             "mcp__local_toolkit__write_local_file",
             "mcp__local_toolkit__workbench_download",
@@ -166,7 +166,7 @@ The `report-creation-expert` has access to a curated set of tools:
 
 | Tool | MCP Server | Purpose |
 |------|------------|---------|
-| `mcp__web_reader__webReader` | `web_reader` | Extract full article content from URLs |
+| `mcp__local_toolkit__crawl_parallel` | `local_toolkit` | Parallel web scraping using crawl4ai |
 | `mcp__local_toolkit__save_corpus` | `local_toolkit` | Save extraction data to `expanded_corpus.json` |
 | `mcp__local_toolkit__write_local_file` | `local_toolkit` | Write HTML report to filesystem |
 | `mcp__local_toolkit__workbench_download` | `local_toolkit` | Bridge: Remote to Local file transfer |
@@ -225,17 +225,17 @@ The `report-creation-expert` has mandatory limits to prevent runaway execution:
 
 | Rule | Condition | Action |
 |------|-----------|--------|
-| **10 successful extractions** | After 10 webReader successes | STOP immediately, proceed to save_corpus |
+| **10 successful extractions** | After 10 successes | STOP immediately, proceed to save_corpus |
 | **2 batches completed** | After 2 batches (5 calls each) | STOP, even if <10 successes |
-| **Parallel webReader** | Per batch | MAX 5 concurrent calls |
+| **Parallel crawl** | Per batch | MAX 5 concurrent calls |
 
 ### Batched Execution Pattern
 
 ```
-BATCH 1: Call webReader for URLs 1-5 (issue all 5 calls together)
+BATCH 1: Call for URLs 1-5 (issue all 5 calls together)
 - Proceed after 20 seconds OR when all return (whichever first)
 
-BATCH 2: Call webReader for URLs 6-10 (if needed)
+BATCH 2: Call for URLs 6-10 (if needed)
 - Same strategy
 
 COUNT SUCCESSES after each batch
@@ -320,7 +320,6 @@ sequenceDiagram
     participant MainAgent as Main Agent
     participant Task as Task Tool
     participant SubAgent as Report Creation Expert
-    participant WebReader as webReader MCP
     participant LocalToolkit as local_toolkit MCP
     participant FileSystem as Local FileSystem
 
@@ -339,14 +338,14 @@ sequenceDiagram
     SubAgent->>SubAgent: Check request type (comprehensive = extract)
 
     par Batch 1: Extract URLs 1-5
-        SubAgent->>WebReader: mcp__web_reader__webReader(url=1, retain_images=false)
-        SubAgent->>WebReader: mcp__web_reader__webReader(url=2, retain_images=false)
-        SubAgent->>WebReader: mcp__web_reader__webReader(url=3, retain_images=false)
-        SubAgent->>WebReader: mcp__web_reader__webReader(url=4, retain_images=false)
-        SubAgent->>WebReader: mcp__web_reader__webReader(url=5, retain_images=false)
+        SubAgent->>LocalToolkit: mcp__local_toolkit__crawl_parallel(url=1, retain_images=false)
+        SubAgent->>LocalToolkit: mcp__local_toolkit__crawl_parallel(url=2, retain_images=false)
+        SubAgent->>LocalToolkit: mcp__local_toolkit__crawl_parallel(url=3, retain_images=false)
+        SubAgent->>LocalToolkit: mcp__local_toolkit__crawl_parallel(url=4, retain_images=false)
+        SubAgent->>LocalToolkit: mcp__local_toolkit__crawl_parallel(url=5, retain_images=false)
     end
 
-    WebReader-->>SubAgent: Article contents
+    LocalToolkit-->>SubAgent: Article contents
     SubAgent->>SubAgent: Count successes (< 10, can continue)
 
     alt If more URLs needed
@@ -390,72 +389,21 @@ sequenceDiagram
     MainAgent-->>User: Present completed report
 ```
 
-### 2. Sub-Agent WebReader Extraction Workflow (Batched)
-
+### 2. Sub-Agent Parallel Crawl Workflow
 ```mermaid
 sequenceDiagram
     autonumber
     participant SubAgent as Report Creation Expert
-    participant WR1 as webReader (URL 1)
-    participant WR2 as webReader (URL 2)
-    participant WR3 as webReader (URL 3)
-    participant WR4 as webReader (URL 4)
-    participant WR5 as webReader (URL 5)
-    participant Counter as Success Counter
+    participant CrawlTool as crawl_parallel
+    participant FileSystem as Local FileSystem
 
-    Note over SubAgent: BATCH 1 START
-    SubAgent->>Counter: successes = 0
+    Note over SubAgent: Crawl 10 URLs in parallel
+    SubAgent->>CrawlTool: crawl_parallel(urls=[url1..url10])
+    
+    CrawlTool->>FileSystem: Save markdown files to search_results/
+    FileSystem-->>CrawlTool: 10 files saved
 
-    par Parallel calls (5 concurrent)
-        SubAgent->>WR1: webReader(url, retain_images=false)
-    and
-        SubAgent->>WR2: webReader(url, retain_images=false)
-    and
-        SubAgent->>WR3: webReader(url, retain_images=false)
-    and
-        SubAgent->>WR4: webReader(url, retain_images=false)
-    and
-        SubAgent->>WR5: webReader(url, retain_images=false)
-    end
-
-    Note over SubAgent: Wait 20 seconds OR all return
-
-    alt Success Response
-        WR1-->>SubAgent: {"reader_result": {"title": "...", "content": "..."}}
-        SubAgent->>Counter: successes++
-    end
-
-    alt Error 1234 (Network timeout)
-        WR2-->>SubAgent: {"error": {"code": "1234"}}
-        SubAgent->>SubAgent: Add to retry queue
-    end
-
-    alt Error 1214 (404 Not found)
-        WR3-->>SubAgent: {"error": {"code": "1214"}}
-        SubAgent->>SubAgent: Mark as failed, NO retry
-    end
-
-    alt Success Response
-        WR4-->>SubAgent: {"reader_result": {"title": "...", "content": "..."}}
-        SubAgent->>Counter: successes++
-    end
-
-    alt Success Response
-        WR5-->>SubAgent: {"reader_result": {"title": "...", "content": "..."}}
-        SubAgent->>Counter: successes++
-    end
-
-    Note over SubAgent: BATCH 1 COMPLETE
-    SubAgent->>Counter: Get count
-    Counter-->>SubAgent: successes = 3
-
-    alt successes < 10 AND batch_count < 2
-        Note over SubAgent: Proceed to BATCH 2
-        SubAgent->>SubAgent: Increment batch_count
-    else successes >= 10 OR batch_count >= 2
-        Note over SubAgent: HARD STOP reached
-        SubAgent->>SubAgent: Proceed to save_corpus
-    end
+    CrawlTool-->>SubAgent: "Successfully crawled 10/10 URLs..."
 ```
 
 ### 3. Sub-Agent Save Corpus and Report Synthesis

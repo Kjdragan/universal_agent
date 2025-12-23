@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2025-12-22 20:30 CST
+**Last Updated**: 2025-12-23 13:40 CST
 
 ---
 
@@ -80,7 +80,7 @@ User Query → Claude SDK → MCP Servers (Composio + Z.AI + Local)
 | 1 | `src/universal_agent/main.py` | Main agent, observers, AgentDefinition |
 | 2 | `src/mcp_server.py` | Custom MCP tools (save_corpus, write_local_file, etc.) |
 | 3 | `.claude/agents/report-creation-expert.md` | Sub-agent prompt with quality guidelines |
-| 4 | `docs/010_LESSONS_LEARNED.md` | 12 lessons on gotchas and patterns |
+| 4 | `docs/010_LESSONS_LEARNED.md` | 21 lessons on gotchas and patterns |
 | 5 | `docs/012_LOCAL_VS_WORKBENCH_ARCHITECTURE.md` | Local-first vs remote workbench |
 
 ---
@@ -112,6 +112,31 @@ User Query → Claude SDK → MCP Servers (Composio + Z.AI + Local)
 2. **Composio tools used correctly** for external services (Gmail, Slack, SERP)
 3. **webReader integration works** in multi-step workflows
 4. **Auth handling is graceful** - surfaced Composio link when needed
+
+---
+
+## 🔧 Recent Updates (December 23, 2025)
+
+### SubagentStop Hook Implementation
+- Replaced `TaskOutput` polling with event-driven `SubagentStop` hook
+- Sub-agent completion now automatically triggers next-step guidance
+- See Lesson 18 in `010_LESSONS_LEARNED.md`
+
+### Toolkit Banning via Session Configuration
+- Added `toolkits={"disable": ["firecrawl", "exa"]}` to `composio.create()`
+- Prevents `COMPOSIO_SEARCH_TOOLS` from recommending external crawlers
+- Forces use of local `mcp__local_toolkit__crawl_parallel`
+- See Lesson 19 in `010_LESSONS_LEARNED.md`
+
+### Sub-Agent Tool Inheritance
+- Removed explicit `tools` field from `AgentDefinition`
+- Sub-agents now inherit ALL parent tools including local MCP tools
+- See Lesson 21 in `010_LESSONS_LEARNED.md`
+
+### Composio SDK v0.10.2 Features Researched
+- `openWorldHint` tag filter: categorizes tools by open/closed world semantics
+- Not needed for our use case; toolkit disable is more targeted
+- See Lesson 20 in `010_LESSONS_LEARNED.md`
 
 ---
 

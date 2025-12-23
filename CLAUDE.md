@@ -30,9 +30,6 @@ python src/mcp_server.py
 | Variable | Purpose |
 |----------|---------|
 | `COMPOSIO_API_KEY` | Composio tool router authentication |
-| `ZAI_API_KEY` | Z.AI endpoint (Anthropic API emulation) |
-| `ZAI_BASE_URL` | `https://api.z.ai/v1/anthropic` |
-| `ANTHROPIC_BASE_URL` | `https://api.z.ai/api/anthropic` |
 | `ANTHROPIC_API_KEY` | Anthropic auth token |
 | `DEFAULT_USER_ID` | Composio user ID (format: `pg-test-xxx`) |
 | `LOGFIRE_TOKEN` | Logfire distributed tracing (optional) |
@@ -49,12 +46,11 @@ Query Classification (SIMPLE vs COMPLEX)
     ↓
 Claude Agent SDK (Main Brain)
     ├─→ Composio MCP Server (500+ tools: SERP, Gmail, Slack, etc.)
-    ├─→ Z.AI webReader MCP (web article extraction)
-    └─→ Local Toolkit MCP (save_corpus, write_local_file, workbench_upload/download)
+    ├─→ Local Toolkit MCP (crawl_parallel, write_local_file)
     ↓
 Observer Pattern (async fire-and-forget artifact processing)
     ↓
-AGENT_RUN_WORKSPACES/session_*/ (run.log, trace.json, search_results/, expanded_corpus.json, work_products/)
+AGENT_RUN_WORKSPACES/session_*/ (run.log, trace.json, search_results/, work_products/)
 ```
 
 ### Key Architectural Patterns
@@ -64,7 +60,6 @@ AGENT_RUN_WORKSPACES/session_*/ (run.log, trace.json, search_results/, expanded_
 **2. Observer Pattern**: Composio hooks (`@before_execute`, `@after_execute`) **do NOT work in MCP mode**. Instead, use async fire-and-forget observers:
 ```python
 asyncio.create_task(observe_and_save_search_results(...))
-asyncio.create_task(observe_and_enrich_corpus(...))
 ```
 
 **3. Sub-Agent Delegation**: Complex tasks (report generation) are delegated to specialized sub-agents defined in `.claude/agents/`. The main agent uses the `Task` tool for delegation.
@@ -76,7 +71,7 @@ asyncio.create_task(observe_and_enrich_corpus(...))
 | File | Purpose |
 |------|---------|
 | `src/universal_agent/main.py` | Main agent: ClaudeSDKClient, observers, AgentDefinition, query classification |
-| `src/mcp_server.py` | Custom MCP tools: save_corpus, write_local_file, workbench_upload/download |
+| `src/mcp_server.py` | Custom MCP tools: crawl_parallel, write_local_file |
 | `src/tools/workbench_bridge.py` | Local-Remote file transfer bridge using Composio SDK |
 | `.claude/agents/report-creation-expert.md` | Sub-agent for comprehensive research + report synthesis |
 | `Project_Documentation/000_CURRENT_CONTEXT.md` | **START HERE** - Current project state |
@@ -91,13 +86,9 @@ session_*/
 ├── summary.txt              # Brief summary
 ├── trace.json               # Tool call/result trace
 ├── search_results/          # Cleaned SERP artifacts (*.json)
-├── expanded_corpus.json     # Full article extraction data
-├── extracted_articles/      # Individual article JSON (optional)
 └── work_products/           # Final outputs (reports, etc.)
     └── *.html
 ```
-
-**Persistent Blacklist**: `AGENT_RUN_WORKSPACES/webReader_blacklist.json` tracks domains with persistent 404 failures.
 
 ## Critical Gotchas and Patterns
 
@@ -110,27 +101,39 @@ session_*/
 | MULTI_EXECUTE_TOOL deeply nested | Path: `data.data.results[0].response.data.results.news_results` |
 | Large data returns `data_preview` | Agent MUST `workbench_download` the full file; don't process preview directly |
 
-### webReader (Z.AI MCP)
-
-| Error Code | Size | Meaning | Action |
-|------------|------|---------|--------|
-| 1234 | 171 bytes | Network timeout | Retryable |
-| 1214 | 90 bytes | Not found (404) | Permanent failure, add to blacklist |
-
-**Optimization**: Always use `retain_images=false` to reduce response size.
+### crawl4ai (Local Web Scraping)
+Replaced webReader with `crawl_parallel` for faster, local-first extraction.
+Saves markdown directly to `search_results/`.
 
 ### Composio Planner Behavior
 
 The Composio Planner (`COMPOSIO_SEARCH_TOOLS` / `COMPOSIO_MULTI_EXECUTE_TOOL`) is a **sub-planner** for remote tools only. The Claude Agent SDK maintains full context as the "Master Brain" and will autonomously fill gaps (e.g., delegating to sub-agents for report generation after SERP completes).
 
+**Toolkit Bans**: Session is configured with `toolkits={"disable": ["firecrawl", "exa"]}` so `COMPOSIO_SEARCH_TOOLS` won't recommend external crawlers—use our `mcp__local_toolkit__crawl_parallel` instead.
+
 ## Sub-Agent Guidelines
 
-The `report-creation-expert` sub-agent has mandatory hard stops:
-- **10 successful extractions** → STOP immediately
-- **2 batches completed** → STOP even if <10 successful
-- **MAX 5 parallel webReader calls** per batch
+**✅ SubagentStop Hook Pattern**
 
-Before writing any report, sub-agent **MUST** call `save_corpus` to save `expanded_corpus.json`.
+When the main agent delegates to a sub-agent via `Task`, a `SubagentStop` hook automatically fires when the sub-agent completes:
+1. The hook verifies artifacts were created in `work_products/`
+2. Injects a system message with next steps (upload, email, update TodoWrite)
+3. Main agent receives the message and continues workflow
+
+This is event-driven—no polling required.
+
+**🔧 Tool Inheritance**
+
+Sub-agents inherit tools from the parent. Per SDK docs:
+- **Omit `tools` field** → inherits ALL tools including MCP tools
+- **Specify `tools`** → only those tools are available (use simple names like `"Read"`, `"Bash"`)
+
+Our `report-creation-expert` sub-agent omits `tools` to inherit `mcp__local_toolkit__*` tools.
+
+The `report-creation-expert` sub-agent:
+- **10 successful extractions** → STOP immediately
+- **Use `crawl_parallel`** for all URLs in a single call
+- **Report saved to** `work_products/*.html`
 
 ## Report Quality Standards
 

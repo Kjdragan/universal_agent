@@ -269,63 +269,17 @@ system_prompt=(
 
 ## Web Extraction (webReader)
 
-### Lesson 13: Z.AI webReader Error Codes
+### Lesson 13: [DEPRECATED] Z.AI webReader
 **Date**: 2025-12-22
+**Status**: REMOVED - Replaced by `crawl_parallel` (crawl4ai).
 
-**Discovery**: The Z.AI webReader MCP returns specific error codes that indicate different failure modes:
-
-| Code | Response Size | Meaning | Action |
-|------|---------------|---------|--------|
-| 1234 | 171 bytes | Network timeout | Retryable - server couldn't reach target |
-| 1214 | 90 bytes | Not found (404/403) | Permanent failure - don't retry |
-
-**Error Format**:
-```json
-// 1234 (timeout):
-{"error":{"code":"1234","message":"Network error, error id: xxx"}}
-
-// 1214 (not found):
-{"error":{"code":"1214","message":"The requested resource was not found"}}
-```
-
-**Implementation**: Observer in `main.py` detects these codes and logs appropriately:
-- 1234 → `webreader_timeout_error` (candidate for retry)
-- 1214 → `webreader_not_found` (add to blacklist)
-
----
-
-### Lesson 14: Domain Blacklist for Persistent Failures
+### Lesson 14: [DEPRECATED] Domain Blacklist
 **Date**: 2025-12-22
+**Status**: REMOVED - `crawl_parallel` handles failures internally.
 
-**Discovery**: Some domains consistently fail webReader extraction. Rather than wasting time on repeated failures, track domain failure counts and blacklist after threshold.
-
-**Implementation**: 
-```python
-# In main.py: _update_domain_blacklist()
-# Persists to: AGENT_RUN_WORKSPACES/webReader_blacklist.json
-{
-  "domains": {
-    "example.com": {"failures": 3, "last_failure": "2025-12-22T..."}
-  },
-  "threshold": 3
-}
-```
-
-**Rule**: Only 1214 errors (permanent failures) increment the blacklist count. 1234 errors (timeouts) are transient and don't count toward blacklisting.
-
----
-
-### Lesson 15: webReader `retain_images=false` Optimization
+### Lesson 15: [DEPRECATED] webReader `retain_images=false`
 **Date**: 2025-12-22
-
-**Discovery**: Z.AI webReader supports a `retain_images` parameter. Setting it to `false` reduces response size and processing time since the agent cannot process images anyway.
-
-**Usage**:
-```python
-mcp__web_reader__webReader(url="...", retain_images=false)
-```
-
-**Note**: The Z.AI direct REST API requires separate billing (error 1113: "Insufficient balance"). Use the MCP webReader which is included in the current subscription.
+**Status**: REMOVED.
 
 ---
 
@@ -368,5 +322,115 @@ mcp__web_reader__webReader(url="...", retain_images=false)
 
 ---
 
-*Last updated: 2025-12-22 19:40 CST*
+### Lesson 18: SubagentStop Hook for Sub-Agent Completion
+**Date**: 2025-12-23
+
+**Problem**: When the main agent calls `Task` to delegate work, the sub-agent appears to start but the main agent exits the loop prematurely. The `Task` tool is **non-blocking**—it returns immediately with the sub-agent's initial response.
+
+**Solution**: Use the `SubagentStop` hook to get notified when sub-agents complete:
+
+```python
+from claude_agent_sdk.types import HookMatcher, HookContext, HookJSONOutput
+
+async def on_subagent_stop(
+    input_data: dict, tool_use_id: str | None, context: HookContext
+) -> HookJSONOutput:
+    # Verify artifacts, return system message with next steps
+    return {"systemMessage": "✅ Sub-agent completed. Next: upload and email..."}
+
+options = ClaudeAgentOptions(
+    hooks={
+        "SubagentStop": [HookMatcher(matcher=None, hooks=[on_subagent_stop])],
+    },
+)
+```
+
+**Benefits over TaskOutput polling**:
+| TaskOutput Polling | SubagentStop Hook |
+|---|---|
+| LLM must remember to call | Automatic callback |
+| Error-prone | Guaranteed to fire |
+| Blocking wait | Event-driven |
+
+**Related**: See `on_subagent_stop()` in `main.py` for full implementation.
+
+---
+
+### Lesson 19: Toolkit Banning via Session Configuration
+**Date**: 2025-12-23
+
+**Problem**: The `COMPOSIO_SEARCH_TOOLS` planner was recommending Firecrawl and Exa toolkits for web scraping, even though we have local MCP tools (`mcp__local_toolkit__crawl_parallel`) that we want to use instead.
+
+**Solution**: Use `toolkits={"disable": [...]}` when creating the Composio session:
+
+```python
+session = composio.create(
+    user_id=user_id,
+    toolkits={"disable": ["firecrawl", "exa"]}  # Ban crawling toolkits
+)
+```
+
+**Configuration Options**:
+| Option | Usage |
+|--------|-------|
+| `toolkits=["github", "slack"]` | Whitelist only these toolkits |
+| `toolkits={"disable": ["firecrawl"]}` | Ban specific toolkits |
+| `toolkits={"enable": ["github"]}` | Explicit enable (same as list) |
+
+**Result**: `COMPOSIO_SEARCH_TOOLS` no longer recommends banned toolkits in its execution plans, forcing use of our local MCP tools.
+
+---
+
+### Lesson 20: MCP Tag Filters for Tool Categorization
+**Date**: 2025-12-23
+
+**Discovery**: Composio v0.10.2 supports MCP tag filters for categorizing tools by behavior:
+
+| Tag | Meaning |
+|-----|---------|
+| `readOnlyHint` | Tools that only read data |
+| `destructiveHint` | Tools that modify or delete data |
+| `idempotentHint` | Tools that can be safely retried |
+| `openWorldHint` | Tools interacting with external/open-world entities (e.g., web search) |
+
+**Usage**:
+```python
+session = composio.create(
+    user_id='user_123',
+    toolkits=['gmail', 'composio_search'],
+    tags=['readOnlyHint', 'openWorldHint']  # Global filter
+)
+```
+
+**Assessment**: For our use case, the explicit `toolkits={"disable": [...]}` approach is more targeted than tag filtering. Tags are useful for broader behavioral categorization.
+
+---
+
+### Lesson 21: Sub-Agent Tool Inheritance
+**Date**: 2025-12-23
+
+**Problem**: Sub-agents were not correctly discovering local MCP tools, instead defaulting to Composio tools or outputting XML tool representations.
+
+**Root Cause**: Explicit `tools` field in `AgentDefinition` was limiting available tools.
+
+**Solution**: Omit the `tools` field to enable inheritance:
+
+```python
+AgentDefinition(
+    name="report-creation-expert",
+    # tools=[...]  ← Remove this line to inherit ALL parent tools
+    model="claude-sonnet-4-20250514",
+    prompt="...",
+)
+```
+
+**Key Insight**: Per Claude Agent SDK docs:
+- **Omit `tools`** → Inherits ALL tools from parent (including MCP tools)
+- **Specify `tools`** → Only those tools available (use simple names like `"Read"`, `"Bash"`)
+
+**Complementary Fix**: Enhanced sub-agent prompt with explicit tool instructions to guide selection.
+
+---
+
+*Last updated: 2025-12-23 13:40 CST*
 

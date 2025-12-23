@@ -1704,11 +1704,8 @@
 
                     // Filter out tool execution logs - redirect to context panel
                     const toolLogPatterns = [
-                        /🌐\s*Z\.ai Built-in Tool:/,
-                        /Built-in Tool:\s*webReader/,
                         /Executing on server\.\.\./,
                         /^Input:\s*```/,
-                        /^Output:\s*webReader_result/
                     ];
 
                     const isToolLog = toolLogPatterns.some(pattern => pattern.test(newText));
@@ -1766,7 +1763,7 @@
 
                     // Get short tool name
                     const fullName = msg.data.name || '';
-                    const shortName = fullName.replace('mcp__composio__', '').replace('mcp__local_toolkit__', '').replace('mcp__web_reader__', '');
+                    const shortName = fullName.replace('mcp__composio__', '').replace('mcp__local_toolkit__', '');
 
                     statusText.textContent = `Calling ${shortName}...`;
 

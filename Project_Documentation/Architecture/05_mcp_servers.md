@@ -145,7 +145,7 @@ def save_corpus(
 | Field | Type | Description |
 |-------|------|-------------|
 | `url` | str | Source URL of the article |
-| `title` | str | Article title from webReader |
+| `title` | str | Article title |
 | `content` | str | FULL markdown content (NOT summarized) |
 | `status` | str | `"success"` or `"failed"` |
 
@@ -433,182 +433,7 @@ sequenceDiagram
 
 ---
 
-## 3. Z.AI webReader MCP Server
 
-### Connection Details
-
-| Property | Value |
-|----------|-------|
-| **Type** | HTTP |
-| **URL** | `https://api.z.ai/api/mcp/web_reader/mcp` |
-| **Headers** | `{"Authorization": "Bearer <ZAI_API_KEY>"}` |
-| **Server Name** | `web_reader` |
-| **Code Reference** | `src/universal_agent/main.py:1086-1092` |
-
-### Architecture
-
-```mermaid
-flowchart TB
-    subgraph Agent["Agent Layer"]
-        MainAgent["Main Agent"]
-        ReportExpert["report-creation-expert<br/>(Sub-Agent)"]
-    end
-
-    subgraph WebReaderMCP["Z.AI webReader MCP (HTTP)"]
-        MCPEndpoint["/api/mcp/web_reader/mcp"]
-        Auth["Authorization: Bearer ZAI_API_KEY"]
-    end
-
-    subgraph WebReaderAPI["Z.AI webReader API"]
-        Fetch["Fetch URL"]
-        Extract["Content Extraction"]
-        Transform["Markdown Conversion"]
-    end
-
-    subgraph Errors["Error Handling"]
-        Timeout["Error 1234<br/>Network Timeout"]
-        NotFound["Error 1214<br/>404 Not Found"]
-    end
-
-    MainAgent -.->|"Read-only"| ReportExpert
-    ReportExpert -->|"mcp__web_reader__webReader"| MCPEndpoint
-    MCPEndpoint --> Auth
-    Auth --> WebReaderAPI
-
-    WebReaderAPI --> Fetch
-    Fetch --> Extract
-    Extract --> Transform
-    Transform -->|"Return JSON"| ReportExpert
-
-    Fetch -.->|"Timeout"| Timeout
-    Fetch -.->|"404"| NotFound
-
-    style WebReaderMCP fill:#d1c4e9
-    style WebReaderAPI fill:#ce93d8
-    style Errors fill:#ef9a9a
-```
-
-### Tool Schema
-
-#### 3.1 webReader()
-
-**Tool Name:** `mcp__web_reader__webReader`
-
-**Purpose:** Extract article content from URLs as markdown, with options for image retention and format control.
-
-**Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `url` | str | **Required** | The URL to fetch and read |
-| `retain_images` | bool | `true` | Whether to retain images in output |
-| `timeout` | int | `20` | Request timeout in seconds |
-| `no_cache` | bool | `false` | Disable response caching |
-| `return_format` | str | `"markdown"` | Response format: `"markdown"` or `"text"` |
-| `no_gfm` | bool | `false` | Disable GitHub Flavored Markdown |
-| `keep_img_data_url` | bool | `false` | Keep image data URLs |
-| `with_images_summary` | bool | `false` | Include images summary |
-| `with_links_summary` | bool | `false` | Include links summary |
-
-**Response Schema (Success):**
-```json
-{
-  "data": {
-    "reader_result": {
-      "title": "Article Title",
-      "description": "Meta description",
-      "content": "# Full markdown content...",
-      "url": "https://example.com/article"
-    }
-  }
-}
-```
-
-**Error Codes:**
-
-| Code | Description | Retry Strategy |
-|------|-------------|----------------|
-| `1234` | Network timeout | Retry once after batch |
-| `1214` | 404 Not Found | Do NOT retry - permanent failure |
-
-**Error Response Format:**
-```json
-{
-  "error": "MCP error: ...",
-  "code": "1234"
-}
-```
-
----
-
-### Observer Pattern Integration
-
-The webReader results are captured by the observer pattern for corpus enrichment:
-
-**Location:** `src/universal_agent/main.py:479-627`
-
-```mermaid
-sequenceDiagram
-    participant Agent as Agent
-    participant WR as webReader
-    participant Obs as Observer
-    participant FS as File System
-
-    Agent->>WR: webReader(url, retain_images=false)
-    WR-->>Agent: {data: {reader_result: {...}}}
-
-    Agent->>Obs: observe_and_enrich_corpus(tool_name, content)
-    Obs->>Obs: Extract JSON from TextBlock
-    Obs->>Obs: Parse reader_result
-    Obs->>FS: Save extracted_articles/<timestamp>.json
-    Obs->>FS: Enrich search_results/*.json<br/>(Add content to matching URLs)
-```
-
-**Saved Article Schema:**
-```json
-{
-  "timestamp": "2025-12-22T12:34:56",
-  "source_url": "https://example.com/article",
-  "title": "Article Title",
-  "description": "Meta description",
-  "content": "Full markdown content...",
-  "extraction_success": true
-}
-```
-
----
-
-### Domain Blacklist Learning
-
-Failed extractions (Error 1214) trigger domain blacklist tracking:
-
-**Location:** `src/universal_agent/main.py:163-206`
-
-```python
-# After 3 failures from same domain with error 1214:
-# Domain is considered blacklisted
-
-webReader_blacklist.json:
-{
-  "domains": {
-    "paywall-site.com": {
-      "failures": 3,
-      "last_failure": "2025-12-22T12:00:00"
-    }
-  },
-  "threshold": 3
-}
-```
-
-**Logfire Integration:**
-```python
-logfire.warning(
-    "domain_blacklisted",
-    domain=domain,
-    failures=3,
-    message="Domain has reached failure threshold"
-)
-```
 
 ---
 
@@ -629,7 +454,7 @@ mcp__<server_name>__<tool_name>
 | `local_toolkit` | `mcp__local_toolkit__write_local_file` |
 | `composio` | `mcp__composio__COMPOSIO_SEARCH_NEWS` |
 | `composio` | `mcp__composio__GMAIL_SEND_EMAIL` |
-| `web_reader` | `mcp__web_reader__webReader` |
+
 
 ---
 
@@ -665,7 +490,7 @@ options = ClaudeAgentOptions(
     agents={
         "report-creation-expert": AgentDefinition(
             tools=[
-                "mcp__web_reader__webReader",
+
                 "mcp__local_toolkit__save_corpus",
                 "mcp__local_toolkit__write_local_file",
                 "mcp__local_toolkit__workbench_download",
@@ -724,30 +549,13 @@ https://logfire.pydantic.dev/Kjdragan/composio-claudemultiagent?q=trace_id='<tra
 | `mcp__composio__COMPOSIO_SEARCH_*` | **Yes** | Read-only | Search operations |
 | `mcp__composio__GMAIL_SEND_EMAIL` | **Yes** | No | Send emails |
 | `mcp__composio__COMPOSIO_REMOTE_WORKBENCH` | **Yes** | No | Remote code execution |
-| `mcp__web_reader__webReader` | Yes | **Yes** | Article extraction |
+| `mcp__local_toolkit__crawl_parallel` | Yes | **Yes** | Parallel web scraping |
 
 ---
 
 ## 6. Error Handling & Retry Logic
 
-### webReader Error Handling
 
-| Error | Code | Action |
-|-------|------|--------|
-| Network Timeout | `1234` | Retry once after batch completes |
-| Not Found (404) | `1214` | Skip URL, track domain blacklist |
-| Other MCP Error | Variable | Log and continue |
-
-**Implementation:** `src/universal_agent/main.py:507-540`
-
-```python
-if '"code":"1234"' in raw_json:
-    error_code = "1234"  # Network timeout - retryable
-    logfire.warning("webreader_timeout_error", ...)
-elif '"code":"1214"' in raw_json:
-    error_code = "1214"  # 404 Not found - permanent
-    _update_domain_blacklist(workspace_dir, domain, error_code)
-```
 
 ---
 
@@ -773,7 +581,7 @@ Composio tools return structured errors:
 | Key | Environment Variable | Used By |
 |-----|---------------------|---------|
 | Composio API Key | `COMPOSIO_API_KEY` | Composio MCP header |
-| Z.AI API Key | `ZAI_API_KEY` | webReader MCP header |
+
 
 **File:** `.env` (not committed to git)
 
@@ -828,7 +636,7 @@ Per the Local-First Architecture (`012_LOCAL_VS_WORKBENCH_ARCHITECTURE.md`):
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `COMPOSIO_API_KEY` | Yes | Composio authentication |
-| `ZAI_API_KEY` | Yes | Z.AI webReader authentication |
+
 | `LOGFIRE_TOKEN` | Optional | Distributed tracing |
 | `DEFAULT_USER_ID` | Yes | Composio user identifier |
 
