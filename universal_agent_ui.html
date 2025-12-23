@@ -1727,12 +1727,23 @@
                     let lastAgent = messagesContainer.querySelector('.message.agent:last-of-type');
 
                     // Check if we should start a new bubble:
-                    // - No existing bubble
-                    // - Last bubble marked complete
-                    // - Incoming text starts with double newline (new paragraph)
+                    // - No existing bubble or last is complete
+                    // - New paragraph starts (double newline)
+                    // - Markdown header starts (# ## ###)
+                    // - Key section markers
+                    const trimmedText = newText.trim();
+                    const isNewSection =
+                        trimmedText.startsWith('## ') ||
+                        trimmedText.startsWith('### ') ||
+                        trimmedText.startsWith('**Key') ||
+                        trimmedText.startsWith('**What') ||
+                        trimmedText.startsWith('**Report') ||
+                        trimmedText.startsWith('---');
+
                     const shouldNewBubble = !lastAgent ||
                         lastAgent.dataset.complete === 'true' ||
-                        (newText.startsWith('\n\n') && lastAgent.dataset.rawText?.length > 50);
+                        (newText.startsWith('\n\n') && lastAgent.dataset.rawText?.length > 50) ||
+                        (isNewSection && lastAgent.dataset.rawText?.length > 100);
 
                     if (shouldNewBubble) {
                         lastAgent = createMessage('');
@@ -1811,6 +1822,35 @@
                     // Mark last agent message as complete
                     const lastAgentMsg = messagesContainer.querySelector('.message.agent:last-of-type');
                     if (lastAgentMsg) lastAgentMsg.dataset.complete = 'true';
+
+                    // Save final summary as work product
+                    try {
+                        const allAgentMsgs = messagesContainer.querySelectorAll('.message.agent');
+                        if (allAgentMsgs.length > 0) {
+                            // Collect all agent message text from this session
+                            let fullSummary = '';
+                            allAgentMsgs.forEach((m, i) => {
+                                const rawText = m.dataset.rawText || m.querySelector('.message-bubble')?.textContent || '';
+                                if (rawText.trim()) {
+                                    fullSummary += rawText + '\n\n---\n\n';
+                                }
+                            });
+
+                            // Only save if summary is substantial
+                            if (fullSummary.length > 200) {
+                                fetch('/api/save_summary', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ summary: fullSummary.trim() })
+                                }).then(r => r.json()).then(data => {
+                                    if (data.path) {
+                                        addContextItem('📝 SUMMARY SAVED', data.path.split('/').pop(), 'green');
+                                        setTimeout(() => fetchFiles(''), 500);
+                                    }
+                                }).catch(err => console.log('Summary save:', err));
+                            }
+                        }
+                    } catch (e) { console.log('Summary save error:', e); }
                     break;
 
                 case 'error':

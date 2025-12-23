@@ -11,7 +11,7 @@ import mimetypes
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse, Response
 
 from .agent_core import UniversalAgent, AgentEvent, EventType, configure_logfire
@@ -151,6 +151,43 @@ async def read_file(file_path: str):
 
     # For other files, serve as download
     return FileResponse(target)
+
+
+@app.post("/api/save_summary")
+async def save_summary(request: Request):
+    """Save agent conversation summary as work product."""
+    workspace = get_latest_workspace()
+    if not workspace:
+        return {"error": "No workspace available"}
+
+    try:
+        data = await request.json()
+        summary = data.get("summary", "")
+        if not summary or len(summary) < 100:
+            return {"error": "Summary too short"}
+
+        # Create work_products directory if needed
+        work_products = Path(workspace) / "work_products"
+        work_products.mkdir(exist_ok=True)
+
+        # Generate filename with timestamp
+        from datetime import datetime
+
+        timestamp = datetime.now().strftime("%H%M%S")
+        filename = f"agent_summary_{timestamp}.md"
+        filepath = work_products / filename
+
+        # Write formatted summary
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("# Agent Session Summary\n\n")
+            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("---\n\n")
+            f.write(summary)
+
+        return {"path": str(filepath), "filename": filename}
+
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.websocket("/ws")
