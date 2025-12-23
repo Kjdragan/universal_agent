@@ -173,10 +173,40 @@ class WorkbenchBridge:
                 response = response.model_dump()
 
             # Check for execution errors in response structure
-            # Typically returns list of blocks. If we got here, SDK call succeeded.
-            # We assume script ran if no exception raised.
+            execution_data = {}
+            if hasattr(response, "data"): # Handle response object
+                execution_data = response.data
+            elif isinstance(response, dict):
+                execution_data = response.get("data", {})
 
-            print("   ✅ Upload Success (via Remote Python)")
+            # Check stdout for success message
+            stdout = execution_data.get("stdout", "")
+            stderr = execution_data.get("stderr", "")
+            
+            if "Successfully uploaded" not in stdout and not execution_data.get("success"):
+                 print(f"   ❌ Upload Script Failed. Stdout: {stdout}, Stderr: {stderr}")
+                 return {"success": False, "error": f"Upload Script Failed: {stderr or stdout}"}
+
+            # Double Check: Verify file exists
+            verify_script = f"import os; print('EXISTS' if os.path.exists('{remote_path}') else 'MISSING')"
+            verify_resp = self.client.tools.execute(
+                slug="COMPOSIO_REMOTE_WORKBENCH",
+                arguments={"code_to_execute": verify_script, "session_id": session_id} if session_id else {"code_to_execute": verify_script},
+                user_id=self.user_id,
+                dangerously_skip_version_check=True
+            )
+            
+            verify_stdout = ""
+            if hasattr(verify_resp, "data"):
+                 verify_stdout = verify_resp.data.get("stdout", "")
+            elif isinstance(verify_resp, dict):
+                 verify_stdout = verify_resp.get("data", {}).get("stdout", "")
+
+            if "EXISTS" not in verify_stdout:
+                print(f"   ❌ Verification Failed: File not found at {remote_path}")
+                return {"success": False, "error": f"Verification Failed: File not found at {remote_path}"}
+
+            print("   ✅ Upload Verified (Exists on Remote)")
             return {"success": True}
 
         except Exception as e:

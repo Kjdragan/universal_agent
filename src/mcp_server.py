@@ -101,7 +101,76 @@ def list_directory(path: str) -> str:
 
 
 
+@mcp.tool()
+def upload_to_composio(path: str, session_id: str = None) -> str:
+    """
+    "Teleport" a local file to Composio's Cloud environment (Remote Workbench + S3).
+    Use this to stage files for Email Attachments, Slack Uploads, etc.
+    
+    Returns JSON with:
+    - s3_key: ID for tool attachments (e.g. Gmail)
+    - s3_url: Direct download link
+    - remote_path: Path in the workbench container
+    - mimetype: Detected file type
+    """
+    try:
+        abs_path = os.path.abspath(path)
+        if not os.path.exists(abs_path):
+            return json.dumps({"error": f"File not found: {path}"})
+            
+        filename = os.path.basename(abs_path)
+        remote_path = f"/home/user/{filename}"
+        
+        # 1. Bridge: Upload Local -> Remote Workbench
+        bridge = get_bridge()
+        upload_res = bridge.upload(abs_path, remote_path, session_id=session_id)
+        
+        if not upload_res.get("success"):
+            return json.dumps({"error": f"Bridge Upload Failed: {upload_res.get('error')}"})
+            
+        # 2. S3 Staging: Execute 'upload_local_file' on Remote Workbench
+        # This helper function is pre-loaded in the workbench environment
+        script = (
+            f"res, err = upload_local_file('{remote_path}')\n"
+            "if err: print(f'S3_ERROR: {err}')\n"
+            "else: \n"
+            "    import json\n"
+            "    print(json.dumps(res))"
+        )
+        
+        client = bridge.client
+        s3_resp = client.tools.execute(
+            slug="COMPOSIO_REMOTE_WORKBENCH", 
+            arguments={"code_to_execute": script, "session_id": session_id} if session_id else {"code_to_execute": script},
+            user_id=bridge.user_id,
+            dangerously_skip_version_check=True
+        )
+        
+        # Parse S3 Result
+        stdout = ""
+        if hasattr(s3_resp, "data"):
+             stdout = s3_resp.data.get("stdout", "")
+        elif isinstance(s3_resp, dict):
+             stdout = s3_resp.get("data", {}).get("stdout", "")
+             
+        if "S3_ERROR" in stdout or not stdout.strip():
+            return json.dumps({"error": f"S3 Staging Failed: {stdout}"})
+            
+        # Extract JSON from stdout (might be mixed with other logs, find the last JSON object)
+        try:
+            # Simple heuristic: Split lines, find the one that looks like JSON
+            for line in stdout.splitlines():
+                if '"s3key":' in line:
+                    s3_data = json.loads(line)
+                    s3_data["remote_path"] = remote_path
+                    return json.dumps(s3_data, indent=2)
+        except Exception as e:
+            return json.dumps({"error": f"Failed to parse S3 response: {stdout}. Error: {e}"})
 
+        return json.dumps({"error": f"No valid JSON found in S3 response: {stdout}"})
+
+    except Exception as e:
+        return json.dumps({"error": str(e)})
 
 # =============================================================================
 # CRAWL4AI TOOL

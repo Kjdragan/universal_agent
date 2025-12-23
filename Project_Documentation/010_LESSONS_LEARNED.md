@@ -451,7 +451,13 @@ AgentDefinition(
 
 ---
 
-### Lesson 22: FastMCP Server REQUIRES mcp.run() to Start
+### Lesson 29: Implicit Tool Selection Bias
+**Date**: 2025-12-23
+**Observation**: When multiple toolkits overlap (e.g. `gmail` and `outlook` both active), the Agent will choose based on context clues (e.g. recipient `@outlook.com` -> uses `outlook` tool).
+**Impact**: Users might expect a specific tool (Gmail) but get another (Outlook) if the context is ambiguous.
+**Solution**: If strict tool usage is required, either disable the unwanted toolkit in `session.create()` or explicitly prompt the agent (e.g. "Send using Gmail").
+
+
 **Date**: 2025-12-23
 
 **Problem**: Local MCP server tools (e.g., `mcp__local_toolkit__crawl_parallel`) were not available. Agent said "I don't have access to that tool" and fell back to webReader.

@@ -115,7 +115,23 @@ User Query → Claude SDK → MCP Servers (Composio + Z.AI + Local)
 
 ---
 
-## 🔧 Recent Updates (December 23, 2025)
+### High-Volume Research Architecture (Scout/Expert Protocol)
+- **Problem**: Context window limits prevented processing comprehensive search results (30+ URLs).
+- **Solution**: "Scout/Expert" Protocol.
+    - **Scout (Main Agent)**: Finds *location* of data (`search_results/`) and delegates. Forbidden from processing URLs.
+    - **Expert (Sub-Agent)**: Uses `list_directory` to find all JSONs, extracts ALL URLs, and runs `crawl_parallel` (bulk scraping).
+- **Status**: Verified with 27 concurrent URLs.
+- **Documentation**: See `docs/014_SCOUT_EXPERT_PROTOCOL.md`.
+
+### Universal File Staging (Cloud Upload)
+- **Problem**: Cloud tools (Gmail, Slack, Code Interpreter) cannot access local files directly.
+- **Solution**: Use `upload_to_composio` to "teleport" files to the cloud environment.
+- **Workflow**:
+    1.  **Stage**: Call `upload_to_composio(path="/abs/path/to/file")`.
+        *   *Result*: Returns JSON with `s3_key` (for attachments) and `s3_url` (for links).
+    2.  **Act**: Pass the `s3_key` to the destination tool.
+        *   *Example (Gmail)*: `GMAIL_SEND_EMAIL(..., attachment={"s3key": "..."})`
+        *   *Example (Slack)*: `SLACK_SEND_MESSAGE(..., attachments=[{"s3_key": "..."}])`
 
 ### SubagentStop Hook Implementation
 - Replaced `TaskOutput` polling with event-driven `SubagentStop` hook
@@ -133,10 +149,6 @@ User Query → Claude SDK → MCP Servers (Composio + Z.AI + Local)
 - Sub-agents now inherit ALL parent tools including local MCP tools
 - See Lesson 21 in `010_LESSONS_LEARNED.md`
 
-### Composio SDK v0.10.2 Features Researched
-- `openWorldHint` tag filter: categorizes tools by open/closed world semantics
-- Not needed for our use case; toolkit disable is more targeted
-- See Lesson 20 in `010_LESSONS_LEARNED.md`
 
 ---
 
