@@ -1632,16 +1632,26 @@
                     break;
 
                 case 'text':
-                    // Append to current agent message or create new one
+                    const newText = msg.data.text;
                     let lastAgent = messagesContainer.querySelector('.message.agent:last-of-type');
-                    if (!lastAgent || lastAgent.dataset.complete === 'true') {
+
+                    // Check if we should start a new bubble:
+                    // - No existing bubble
+                    // - Last bubble marked complete
+                    // - Incoming text starts with double newline (new paragraph)
+                    const shouldNewBubble = !lastAgent ||
+                        lastAgent.dataset.complete === 'true' ||
+                        (newText.startsWith('\n\n') && lastAgent.dataset.rawText?.length > 50);
+
+                    if (shouldNewBubble) {
                         lastAgent = createMessage('');
-                        lastAgent.dataset.rawText = '';  // Store raw text for markdown
+                        lastAgent.dataset.rawText = '';
                         messagesContainer.appendChild(lastAgent);
                     }
+
                     const bubble = lastAgent.querySelector('.message-bubble');
-                    // Accumulate raw text and re-render markdown each time
-                    lastAgent.dataset.rawText = (lastAgent.dataset.rawText || '') + msg.data.text;
+                    // Accumulate raw text and re-render markdown
+                    lastAgent.dataset.rawText = (lastAgent.dataset.rawText || '') + newText;
                     bubble.innerHTML = renderMarkdown(lastAgent.dataset.rawText);
                     // Smooth scroll to keep new content visible
                     lastAgent.scrollIntoView({ behavior: 'smooth', block: 'end' });
