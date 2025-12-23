@@ -34,7 +34,7 @@ from claude_agent_sdk.types import (
     UserMessage,
 )
 from composio import Composio
-from custom_tools import register_custom_tools
+# Local MCP server provides: crawl_parallel, read_local_file, write_local_file
 
 
 # =============================================================================
@@ -411,14 +411,10 @@ class UniversalAgent:
             api_key=os.environ["COMPOSIO_API_KEY"], file_download_dir=downloads_dir
         )
         
-        # Register custom tools BEFORE session creation
-        register_custom_tools(self.composio)
-        
-        # Create session with custom tools exposed via MCP endpoint
+        # Create session (local tools exposed via local MCP server, not custom_tools)
         self.session = self.composio.create(
             user_id=self.user_id,
-            toolkits={"disable": ["firecrawl", "exa"]},
-            tools=["crawl_parallel", "write_local_file", "read_local_file"]
+            toolkits={"disable": ["firecrawl", "exa"]}
         )
 
         # Build system prompt
@@ -435,7 +431,11 @@ class UniversalAgent:
                     "url": self.session.mcp.url,
                     "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
                 },
-                # Custom tools are registered via @composio.tools.custom_tool
+                "local_toolkit": {
+                    "type": "stdio",
+                    "command": sys.executable,
+                    "args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")],
+                },
             },
             # Note: No allowed_tools restriction - main agent can use any tool for flexibility
             agents={

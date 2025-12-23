@@ -192,3 +192,12 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
         return json.dumps({"error": f"Crawl execution failed: {str(e)}"})
 
     return json.dumps(results_summary, indent=2)
+
+
+# =============================================================================
+# MAIN - Start stdio server when run as a script
+# =============================================================================
+
+if __name__ == "__main__":
+    # Run the MCP server using stdio transport
+    mcp.run(transport="stdio")

@@ -432,5 +432,177 @@ AgentDefinition(
 
 ---
 
-*Last updated: 2025-12-23 13:40 CST*
+### Lesson 22: FastMCP Server REQUIRES mcp.run() to Start
+**Date**: 2025-12-23
+
+**Problem**: Local MCP server tools (e.g., `mcp__local_toolkit__crawl_parallel`) were not available. Agent said "I don't have access to that tool" and fell back to webReader.
+
+**Root Cause**: The `mcp_server.py` file had `@mcp.tool()` decorators registering tools, but was **missing** the critical `mcp.run()` call at the end.
+
+**How FastMCP Works**:
+```python
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("My Server")
+
+@mcp.tool()
+def my_tool(...):  # ← This REGISTERS the tool
+    ...
+
+# ❌ WRONG: File ends here - server never starts!
+
+# ✅ CORRECT: Must start the stdio transport
+if __name__ == "__main__":
+    mcp.run(transport="stdio")  # ← REQUIRED!
+```
+
+**Why It Breaks**: Without `mcp.run()`, the Python process:
+1. Registers tools in memory
+2. Prints "Server starting..." 
+3. Exits immediately
+4. Claude SDK gets EOF on stdin → marks server as failed
+
+**Fix**: Always add the `if __name__ == "__main__": mcp.run(transport="stdio")` block.
+
+---
+
+### Lesson 23: Composio Custom Tools Are In-Memory Only
+**Date**: 2025-12-23
+
+**Discovery**: The `@composio.tools.custom_tool` decorator creates tools that are **stored in memory only** and are **NOT** exposed through MCP endpoints.
+
+**Per Official Documentation**:
+> "Custom tools are stored in memory and are not persisted. They need to be recreated when the application restarts."
+
+**What DOES Work**:
+| Method | Works? | Notes |
+|--------|--------|-------|
+| `composio.tools.execute('SLUG', ...)` | ✅ | Direct Python call |
+| `session.tools()` (framework adapters) | ✅ | Returns tool objects for LangChain/etc |
+| `session.mcp.url` (Tool Router MCP) | ❌ | Remote server doesn't know about local functions |
+| `composio.mcp.create()` with `allowed_tools` | ⚠️ | Only for Composio-registered tools, not local Python |
+
+**Implication**: You cannot register a Python function locally and have it appear in the Composio MCP HTTP endpoint. The MCP is a **remote service** that only knows about tools registered with Composio's cloud.
+
+**Solution**: Use a **local stdio MCP server** for custom Python tools.
+
+---
+
+### Lesson 24: Hybrid MCP Architecture (Composio + Local)
+**Date**: 2025-12-23
+
+**Pattern**: Use TWO MCP servers for full functionality:
+
+```python
+mcp_servers={
+    # 1. Composio Tool Router - cloud tools (Gmail, Slack, GitHub, Search)
+    "composio": {
+        "type": "http",
+        "url": session.mcp.url,
+        "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
+    },
+    # 2. Local MCP - custom Python tools (crawl_parallel, file ops)
+    "local_toolkit": {
+        "type": "stdio",
+        "command": sys.executable,
+        "args": ["/absolute/path/to/mcp_server.py"],
+    },
+}
+```
+
+**Tool Naming Convention**:
+| Server | Tool Prefix | Example |
+|--------|-------------|---------|
+| composio | `mcp__composio__` | `mcp__composio__COMPOSIO_SEARCH_TOOLS` |
+| local_toolkit | `mcp__local_toolkit__` | `mcp__local_toolkit__crawl_parallel` |
+
+**Use Cases**:
+- **Composio**: Cloud integrations, OAuth apps, remote workbench
+- **Local**: Custom Python functions, file I/O, web scraping with crawl4ai
+
+---
+
+### Lesson 25: MCP Server Path Must Be Absolute or Resolvable
+**Date**: 2025-12-23
+
+**Problem**: Relative paths like `"args": ["src/mcp_server.py"]` can fail when the working directory changes.
+
+**Solution**: Use absolute paths calculated from the module:
+
+```python
+# ✅ Correct: Calculate absolute path from __file__
+"args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")]
+
+# ❌ Risky: Relative path depends on cwd
+"args": ["src/mcp_server.py"]
+```
+
+**Debugging Tip**: If MCP tools aren't discovered:
+1. Check the path exists: `os.path.exists(path)`
+2. Run the server manually: `python /full/path/mcp_server.py`
+3. Verify it prints tool registration and waits (doesn't exit)
+
+---
+
+### Lesson 26: Composio MCP Config Dashboard (UI)
+**Date**: 2025-12-23
+
+**Discovery**: Composio provides a dashboard UI for creating MCP server configurations:
+- Navigate to: https://app.composio.dev → Your Workspace → **MCP Configs**
+- Can bundle multiple toolkits (Gmail, Slack, Google Photos, etc.)
+- Generates an HTTP endpoint URL with API key authentication
+
+**Limitations**:
+- **Cloud-only**: Cannot include locally-defined Python functions
+- **Composio toolkits only**: Must use their registered integrations
+
+**When to Use**:
+- Multi-tenant apps where each user gets subset of Composio toolkits
+- Simplified auth management via dashboard instead of code
+- Claude Desktop integration (external MCP config)
+
+**When NOT to Use**:
+- Custom Python functions (use local stdio MCP instead)
+- Fine-grained dynamic tool control (use `composio.create()` in code)
+
+---
+
+### Lesson 27: Tool Router vs MCP Create - Key Differences
+**Date**: 2025-12-23
+
+**Two APIs That Sound Similar But Differ**:
+
+| API | Purpose | Custom Tool Support |
+|-----|---------|---------------------|
+| `composio.create()` | Tool Router session | ❌ No (cloud-hosted) |
+| `composio.mcp.create()` | MCP server config | ⚠️ `allowed_tools` for Composio tools only |
+
+**`composio.create()` (Tool Router)**:
+```python
+session = composio.create(
+    user_id="user_123",
+    toolkits={"disable": ["firecrawl", "exa"]}
+)
+mcp_url = session.mcp.url  # HTTP endpoint
+```
+- Returns a `ToolRouterSession` with `.mcp.url`
+- Best for: Dynamic per-user sessions with Composio tools
+
+**`composio.mcp.create()` (MCP Config)**:
+```python
+server = composio.mcp.create(
+    'my-server',
+    toolkits=['gmail', 'slack'],
+    allowed_tools=['GMAIL_SEND_EMAIL']
+)
+mcp_instance = server.generate('user_123')
+```
+- Returns a server config, then `.generate()` for per-user instance
+- Best for: Pre-configured MCP servers with restricted tool sets
+
+**Neither** can expose locally-registered Python functions. Use local stdio MCP for that.
+
+---
+
+*Last updated: 2025-12-23 14:45 CST*
 
