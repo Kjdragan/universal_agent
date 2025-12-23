@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Agent — Neural Command Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #0a0b14;
+            --bg-panel: rgba(15, 18, 30, 0.85);
+            --accent-cyan: #00f5d4;
+            --accent-cyan-dim: rgba(0, 245, 212, 0.15);
+            --accent-amber: #ffb86c;
+            --accent-magenta: #ff79c6;
+            --accent-green: #50fa7b;
+            --text-primary: #f8f8f2;
+            --text-secondary: #a8b2d1;
+            --text-muted: #6272a4;
+            --border-glow: rgba(0, 245, 212, 0.4);
+            --glass-blur: blur(20px);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: var(--bg-deep);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .bg-grid {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image:
+                linear-gradient(rgba(0, 245, 212, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 245, 212, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            animation: gridPan 60s linear infinite;
+        }
+
+        @keyframes gridPan {
+            0% {
+                transform: translate(0, 0);
+            }
+
+            100% {
+                transform: translate(50px, 50px);
+            }
+        }
+
+        .bg-gradient-orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(100px);
+            opacity: 0.3;
+            animation: orbFloat 20s ease-in-out infinite;
+        }
+
+        .orb-1 {
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--accent-cyan-dim) 0%, transparent 70%);
+            top: -200px;
+            right: -200px;
+        }
+
+        .orb-2 {
+            width: 400px;
+            height: 400px;
+            background: radial-gradient(circle, rgba(255, 121, 198, 0.1) 0%, transparent 70%);
+            bottom: -100px;
+            left: -100px;
+            animation-delay: -10s;
+        }
+
+        @keyframes orbFloat {
+
+            0%,
+            100% {
+                transform: translate(0, 0) scale(1);
+            }
+
+            50% {
+                transform: translate(30px, -30px) scale(1.1);
+            }
+        }
+
+        .particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .particle {
+            position: absolute;
+            width: 3px;
+            height: 3px;
+            background: var(--accent-cyan);
+            border-radius: 50%;
+            opacity: 0;
+            animation: particleFloat 8s ease-in-out infinite;
+        }
+
+        @keyframes particleFloat {
+            0% {
+                opacity: 0;
+                transform: translateY(100vh) scale(0);
+            }
+
+            10% {
+                opacity: 0.8;
+            }
+
+            90% {
+                opacity: 0.8;
+            }
+
+            100% {
+                opacity: 0;
+                transform: translateY(-100px) scale(1);
+            }
+        }
+
+        .container {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: 320px 1fr 600px;
+            grid-template-rows: auto 1fr auto;
+            gap: 16px;
+            height: 100vh;
+            padding: 16px;
+        }
+
+        .panel {
+            background: var(--bg-panel);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid rgba(0, 245, 212, 0.2);
+            border-radius: 16px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .panel:hover {
+            border-color: var(--border-glow);
+            box-shadow: 0 0 30px rgba(0, 245, 212, 0.1);
+        }
+
+        .panel-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(0, 245, 212, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .panel-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--accent-cyan);
+        }
+
+        .panel-content {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .panel-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .panel-content::-webkit-scrollbar-thumb {
+            background: rgba(0, 245, 212, 0.3);
+            border-radius: 3px;
+        }
+
+        .header {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 24px;
+            background: var(--bg-panel);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid rgba(0, 245, 212, 0.2);
+            border-radius: 16px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .logo-text {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .logo-text .primary {
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: 6px;
+        }
+
+        .status-bar {
+            display: flex;
+            gap: 24px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-indicator.processing {
+            background: var(--accent-amber);
+            animation: pulseAmber 1s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+                box-shadow: 0 0 10px var(--accent-cyan);
+            }
+
+            50% {
+                opacity: 0.5;
+                box-shadow: 0 0 5px var(--accent-cyan);
+            }
+        }
+
+        @keyframes pulseAmber {
+
+            0%,
+            100% {
+                opacity: 1;
+                box-shadow: 0 0 15px var(--accent-amber);
+            }
+
+            50% {
+                opacity: 0.3;
+                box-shadow: 0 0 5px var(--accent-amber);
+            }
+        }
+
+        .sidebar {
+            grid-row: 2 / 4;
+        }
+
+        .session-list {
+            padding: 12px;
+        }
+
+        .session-item {
+            padding: 14px 16px;
+            margin-bottom: 8px;
+            border-radius: 12px;
+            cursor: pointer;
+            border: 1px solid transparent;
+        }
+
+        .session-item:hover {
+            background: rgba(0, 245, 212, 0.08);
+            border-color: rgba(0, 245, 212, 0.2);
+        }
+
+        .session-item.active {
+            background: rgba(0, 245, 212, 0.15);
+            border-color: var(--accent-cyan);
+        }
+
+        .session-title {
+            font-size: 14px;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .session-meta {
+            display: flex;
+            gap: 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        .session-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 9px;
+        }
+
+        .session-badge.complex {
+            background: rgba(255, 184, 108, 0.2);
+            color: var(--accent-amber);
+        }
+
+        .session-badge.simple {
+            background: rgba(80, 250, 123, 0.2);
+            color: var(--accent-green);
+        }
+
+        .new-session-btn {
+            margin: 12px;
+            padding: 14px;
+            border: 1px dashed rgba(0, 245, 212, 0.4);
+            border-radius: 12px;
+            background: transparent;
+            color: var(--accent-cyan);
+            font-family: 'JetBrains Mono', monospace;
+            cursor: pointer;
+        }
+
+        .sidebar-split {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .sidebar-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            border-bottom: 1px solid rgba(0, 245, 212, 0.15);
+        }
+
+        .sidebar-section:last-child {
+            border-bottom: none;
+        }
+
+        .sidebar-section-content {
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .file-browser {
+            padding: 12px;
+        }
+
+        .file-path {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+            padding: 8px 10px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+        }
+
+        .path-segment {
+            color: var(--text-secondary);
+        }
+
+        .path-segment.active {
+            color: var(--accent-cyan);
+        }
+
+        .path-sep {
+            color: var(--text-muted);
+            margin: 0 4px;
+        }
+
+        .file-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .file-item:hover {
+            background: rgba(0, 245, 212, 0.08);
+        }
+
+        .file-item.folder .file-name {
+            color: var(--accent-amber);
+        }
+
+        .file-icon {
+            font-size: 14px;
+        }
+
+        .file-name {
+            flex: 1;
+            font-size: 12px;
+            color: var(--text-primary);
+        }
+
+        .file-size,
+        .file-count {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-muted);
+        }
+
+        .session-dropdown {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .session-select {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(0, 245, 212, 0.3);
+            border-radius: 8px;
+            padding: 8px 12px;
+            color: var(--text-primary);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            cursor: pointer;
+            min-width: 280px;
+        }
+
+        .session-select:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+        }
+
+        .session-select option {
+            background: var(--bg-deep);
+            color: var(--text-primary);
+        }
+
+        .new-session-btn-header {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: 1px dashed rgba(0, 245, 212, 0.4);
+            background: transparent;
+            color: var(--accent-cyan);
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        .new-session-btn-header:hover {
+            background: rgba(0, 245, 212, 0.1);
+        }
+
+        .chat-panel {
+            grid-column: 2;
+            grid-row: 2;
+        }
+
+        .chat-columns {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            height: 100%;
+        }
+
+        .chat-column {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-column-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid rgba(0, 245, 212, 0.15);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-muted);
+        }
+
+        .chat-column-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .messages {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .context-items {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .context-item {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(0, 245, 212, 0.15);
+            border-radius: 10px;
+            padding: 14px;
+        }
+
+        .context-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .context-item-type {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: rgba(255, 184, 108, 0.2);
+            color: var(--accent-amber);
+        }
+
+        .context-item-content {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        .context-item-content pre {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 10px;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+        }
+
+        .message {
+            display: flex;
+            gap: 16px;
+            animation: messageSlide 0.3s ease-out;
+        }
+
+        @keyframes messageSlide {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .message.agent .message-avatar {
+            background: linear-gradient(135deg, var(--accent-cyan-dim), rgba(0, 245, 212, 0.3));
+            border: 1px solid var(--accent-cyan);
+        }
+
+        .message.user .message-avatar {
+            background: linear-gradient(135deg, rgba(255, 184, 108, 0.2), rgba(255, 121, 198, 0.2));
+            border: 1px solid var(--accent-magenta);
+        }
+
+        .message-content {
+            max-width: 70%;
+        }
+
+        .message-bubble {
+            padding: 16px 20px;
+            border-radius: 16px;
+            line-height: 1.6;
+        }
+
+        .message.agent .message-bubble {
+            background: rgba(0, 245, 212, 0.08);
+            border: 1px solid rgba(0, 245, 212, 0.2);
+            border-top-left-radius: 4px;
+        }
+
+        .message.user .message-bubble {
+            background: rgba(255, 121, 198, 0.1);
+            border: 1px solid rgba(255, 121, 198, 0.3);
+            border-top-right-radius: 4px;
+        }
+
+        .message-meta {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 6px;
+            padding: 16px 20px;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            animation: typingBounce 1.4s ease-in-out infinite;
+        }
+
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typingBounce {
+
+            0%,
+            60%,
+            100% {
+                transform: translateY(0);
+            }
+
+            30% {
+                transform: translateY(-8px);
+            }
+        }
+
+        .input-panel {
+            grid-column: 2;
+            grid-row: 3;
+            padding: 16px 24px 20px;
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+        }
+
+        .input-container {
+            flex: 1;
+            position: relative;
+        }
+
+        .chat-input {
+            width: 100%;
+            min-height: 56px;
+            padding: 16px 20px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(0, 245, 212, 0.3);
+            border-radius: 16px;
+            color: var(--text-primary);
+            font-family: 'Outfit', sans-serif;
+            font-size: 15px;
+            resize: none;
+        }
+
+        .chat-input:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 20px rgba(0, 245, 212, 0.15);
+        }
+
+        .send-btn {
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
+            background: linear-gradient(135deg, var(--accent-cyan), rgba(0, 245, 212, 0.7));
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--bg-deep);
+        }
+
+        .send-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 30px rgba(0, 245, 212, 0.4);
+        }
+
+        .neural-panel {
+            grid-column: 3;
+            grid-row: 2 / 4;
+        }
+
+        .neural-viz {
+            height: 200px;
+            position: relative;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            padding: 16px;
+        }
+
+        .metric-card {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--accent-cyan);
+        }
+
+        .metric-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .activity-stream {
+            padding: 16px;
+        }
+
+        .activity-section {
+            margin-bottom: 24px;
+        }
+
+        .activity-section-title {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 12px;
+        }
+
+        .activity-item {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            border-left: 2px solid;
+        }
+
+        .activity-item.tool {
+            border-color: var(--accent-amber);
+        }
+
+        .activity-item.thought {
+            border-color: var(--accent-cyan);
+        }
+
+        .activity-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+        }
+
+        .activity-type {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .activity-item.tool .activity-type {
+            background: rgba(255, 184, 108, 0.2);
+            color: var(--accent-amber);
+        }
+
+        .activity-item.thought .activity-type {
+            background: rgba(0, 245, 212, 0.2);
+            color: var(--accent-cyan);
+        }
+
+        .activity-content {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .processing-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(10, 11, 20, 0.8);
+            backdrop-filter: blur(10px);
+            z-index: 100;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            gap: 40px;
+        }
+
+        .processing-overlay.active {
+            display: flex;
+        }
+
+        .processing-ring {
+            width: 200px;
+            height: 200px;
+            position: relative;
+        }
+
+        @keyframes ringPulse {
+            0% {
+                stroke-dashoffset: 565;
+            }
+
+            50% {
+                stroke-dashoffset: 100;
+            }
+
+            100% {
+                stroke-dashoffset: 565;
+            }
+        }
+
+        @keyframes orbit {
+            from {
+                transform: translate(-50%, -50%) rotate(0deg);
+            }
+
+            to {
+                transform: translate(-50%, -50%) rotate(360deg);
+            }
+        }
+
+        .processing-text {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            color: var(--accent-cyan);
+            letter-spacing: 4px;
+            text-transform: uppercase;
+        }
+
+        @media (max-width: 1100px) {
+            .container {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto 1fr auto auto;
+            }
+
+            .sidebar {
+                grid-row: 4;
+            }
+
+            .neural-panel {
+                grid-row: 3;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="bg-grid"></div>
+    <div class="bg-gradient-orb orb-1"></div>
+    <div class="bg-gradient-orb orb-2"></div>
+    <div class="particles" id="particles"></div>
+
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <svg width="48" height="48" viewBox="0 0 48 48">
+                    <circle cx="24" cy="24" r="20" stroke="#00f5d4" stroke-width="2" fill="none" />
+                    <circle cx="24" cy="24" r="12" stroke="#00f5d4" stroke-width="2" fill="none"
+                        stroke-dasharray="4 4" />
+                    <circle cx="24" cy="24" r="4" fill="#ff79c6" />
+                </svg>
+                <div class="logo-text">
+                    <div class="primary">Universal Agent</div>
+                    <div style="font-size: 11px; letter-spacing: 4px;">Neural Command Center</div>
+                </div>
+            </div>
+            <div class="status-bar">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="status-indicator" id="statusIndicator"></span>
+                    <span id="statusText">Ready</span>
+                </div>
+                <div>Model: <span style="color: var(--accent-magenta)">Sonnet 4.5</span></div>
+                <div class="session-dropdown">
+                    <select class="session-select" id="sessionSelect">
+                        <option value="session_20251222_143208">📊 Research AI automation • Complex • 14:32</option>
+                        <option value="session_20251222_111500">📝 Marketing copy • Simple • 11:15</option>
+                        <option value="session_20251222_091200">🔍 Competitor analysis • Complex • 09:12</option>
+                    </select>
+                    <button class="new-session-btn-header">+</button>
+                </div>
+            </div>
+        </header>
+
+        <aside class="panel sidebar">
+            <div class="panel-header">
+                <span class="panel-title">📁 Agent Workspace</span>
+            </div>
+            <div class="panel-content">
+                <div class="file-browser">
+                    <div class="file-path">
+                        <span class="path-segment">AGENT_RUN_WORKSPACES</span>
+                        <span class="path-sep">/</span>
+                        <span class="path-segment active">session_20251222_143208</span>
+                    </div>
+                    <div class="file-list">
+                        <div class="file-item folder">
+                            <span class="file-icon">📂</span>
+                            <span class="file-name">work_products</span>
+                            <span class="file-count">3 files</span>
+                        </div>
+                        <div class="file-item folder">
+                            <span class="file-icon">📂</span>
+                            <span class="file-name">search_results</span>
+                            <span class="file-count">5 files</span>
+                        </div>
+                        <div class="file-item folder">
+                            <span class="file-icon">📂</span>
+                            <span class="file-name">extracted_articles</span>
+                            <span class="file-count">8 files</span>
+                        </div>
+                        <div class="file-item">
+                            <span class="file-icon">�</span>
+                            <span class="file-name">trace.json</span>
+                            <span class="file-size">2.9 KB</span>
+                        </div>
+                        <div class="file-item">
+                            <span class="file-icon">📄</span>
+                            <span class="file-name">run.log</span>
+                            <span class="file-size">5.1 KB</span>
+                        </div>
+                        <div class="file-item">
+                            <span class="file-icon">📄</span>
+                            <span class="file-name">expanded_corpus.json</span>
+                            <span class="file-size">48 KB</span>
+                        </div>
+                        <div class="file-item">
+                            <span class="file-icon">📄</span>
+                            <span class="file-name">summary.txt</span>
+                            <span class="file-size">512 B</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <main class="panel chat-panel">
+            <div class="panel-header">
+                <span class="panel-title">Neural Interface</span>
+            </div>
+            <div class="panel-content">
+                <div class="chat-columns">
+                    <!-- Left Column: Conversation -->
+                    <div class="chat-column">
+                        <div class="chat-column-header">💬 Conversation</div>
+                        <div class="chat-column-content">
+                            <div class="messages" id="messages">
+                                <div class="message agent">
+                                    <div class="message-avatar">
+                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#00f5d4"
+                                            stroke-width="2">
+                                            <circle cx="12" cy="12" r="10" />
+                                            <path d="M12 8v8M8 12h8" />
+                                        </svg>
+                                    </div>
+                                    <div class="message-content">
+                                        <div class="message-bubble">Greetings. I'm Universal Agent, your autonomous AI
+                                            assistant equipped with 500+ tool integrations.</div>
+                                        <div class="message-meta">Universal Agent • 14:32:08</div>
+                                    </div>
+                                </div>
+                                <div class="message user">
+                                    <div class="message-avatar">
+                                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ff79c6"
+                                            stroke-width="2">
+                                            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                                            <circle cx="12" cy="7" r="4" />
+                                        </svg>
+                                    </div>
+                                    <div class="message-content">
+                                        <div class="message-bubble">Research the latest trends in AI automation and
+                                            create a comprehensive report.</div>
+                                        <div class="message-meta">You • 14:32:45</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Context / Tool Outputs -->
+                    <div class="chat-column">
+                        <div class="chat-column-header">🔧 Tool Outputs & Context</div>
+                        <div class="chat-column-content">
+                            <div class="context-items" id="contextItems">
+                                <div class="context-item">
+                                    <div class="context-item-header">
+                                        <span class="context-item-type">SEARCH RESULT</span>
+                                        <span style="font-size: 9px; color: var(--text-muted)">Just now</span>
+                                    </div>
+                                    <div class="context-item-content">
+                                        Found 12 relevant articles on AI automation trends from December 2025...
+                                    </div>
+                                </div>
+                                <div class="context-item">
+                                    <div class="context-item-header">
+                                        <span class="context-item-type"
+                                            style="background: rgba(0, 245, 212, 0.2); color: var(--accent-cyan);">EXTRACTED</span>
+                                        <span style="font-size: 9px; color: var(--text-muted)">2s ago</span>
+                                    </div>
+                                    <div class="context-item-content">
+                                        <pre>Article: "The Rise of Agentic AI"
+Source: TechCrunch
+Tokens: 2,451</pre>
+                                    </div>
+                                </div>
+                                <div class="context-item">
+                                    <div class="context-item-header">
+                                        <span class="context-item-type"
+                                            style="background: rgba(80, 250, 123, 0.2); color: var(--accent-green);">FILE
+                                            SAVED</span>
+                                        <span style="font-size: 9px; color: var(--text-muted)">5s ago</span>
+                                    </div>
+                                    <div class="context-item-content">
+                                        work_products/ai_automation_report.html
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <div class="panel input-panel">
+            <div class="input-wrapper">
+                <textarea class="chat-input" id="chatInput" placeholder="Transmit your request to the agent..."
+                    rows="1"></textarea>
+                <button class="send-btn">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5">
+                        <line x1="22" y1="2" x2="11" y2="13" />
+                        <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <aside class="panel neural-panel">
+            <div class="panel-header">
+                <span class="panel-title">Neural Activity</span>
+            </div>
+            <canvas id="neuralCanvas" class="neural-viz"></canvas>
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-value" id="toolCalls">3</div>
+                    <div class="metric-label">Tool Calls</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-value">2.4K</div>
+                    <div class="metric-label">Tokens</div>
+                </div>
+            </div>
+            <div class="panel-content">
+                <div class="activity-stream">
+                    <div class="activity-section">
+                        <div class="activity-section-title">Real-time Activity</div>
+                        <div class="activity-item tool">
+                            <div class="activity-header">
+                                <span class="activity-type">TOOL</span>
+                                <span style="font-size: 9px; color: var(--text-muted)">Just now</span>
+                            </div>
+                            <div class="activity-content">COMPOSIO_SEARCH_TOOLS: Finding relevant tools...</div>
+                        </div>
+                        <div class="activity-item thought">
+                            <div class="activity-header">
+                                <span class="activity-type">THOUGHT</span>
+                                <span style="font-size: 9px; color: var(--text-muted)">2s ago</span>
+                            </div>
+                            <div class="activity-content">Query classified as COMPLEX. Delegating to
+                                report-creation-expert.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        const particlesContainer = document.getElementById('particles');
+        for (let i = 0; i < 30; i++) {
+            const p = document.createElement('div');
+            p.className = 'particle';
+            p.style.left = Math.random() * 100 + '%';
+            p.style.animationDelay = Math.random() * 8 + 's';
+            particlesContainer.appendChild(p);
+        }
+        const canvas = document.getElementById('neuralCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        const nodes = Array.from({ length: 20 }, () => ({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            vx: (Math.random() - 0.5) * 0.5,
+            vy: (Math.random() - 0.5) * 0.5
+        }));
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            nodes.forEach(node => {
+                node.x += node.vx;
+                node.y += node.vy;
+                if (node.x < 0 || node.x > canvas.width) node.vx *= -1;
+                if (node.y < 0 || node.y > canvas.height) node.vy *= -1;
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, 2, 0, Math.PI * 2);
+                ctx.fillStyle = '#00f5d4';
+                ctx.fill();
+            });
+            for (let i = 0; i < nodes.length; i++) {
+                for (let j = i + 1; j < nodes.length; j++) {
+                    const d = Math.hypot(nodes[i].x - nodes[j].x, nodes[i].y - nodes[j].y);
+                    if (d < 60) {
+                        ctx.beginPath();
+                        ctx.moveTo(nodes[i].x, nodes[i].y);
+                        ctx.lineTo(nodes[j].x, nodes[j].y);
+                        ctx.strokeStyle = 'rgba(0, 245, 212, 0.15)';
+                        ctx.stroke();
+                    }
+                }
+            }
+            requestAnimationFrame(animate);
+        }
+        animate();
+    </script>
+</body>
+
+</html>
