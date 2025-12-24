@@ -34,7 +34,7 @@ We decoupled the "Finding" from the "Processing" using a strict delegation proto
 
 ### Hybrid MCP Architecture
 *   **Cloud Tools (Composio)**: Used for `SEARCH_NEWS`, `SEARCH_WEB`, `GMAIL_SEND_EMAIL`.
-*   **Local Tools (Stdio Server)**: Used for `list_directory`, `read_local_file`, `crawl_parallel`.
+*   **Local Tools (Stdio Server)**: Used for `list_directory`, `read_local_file`, `crawl_parallel`, `upload_to_composio`.
 *   **Integration**: Both servers are mounted in `main.py`, giving the agent a unified toolset.
 
 ### Safety Mechanisms (Prompt Engineering)

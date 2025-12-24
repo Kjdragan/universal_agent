@@ -59,10 +59,11 @@ We use the Remote Workbench for processing ONLY when:
 To send an email with an attachment (e.g., HTML report), follow this robust pattern:
 
 1.  **Generate Locally**: Create the report file in the local workspace (`local_toolkit.write_local_file`).
-2.  **Upload to Workbench**: Use `local_toolkit.workbench_upload` to transfer the file to the remote environment (e.g., `/home/user/report.html`).
-3.  **Send Email**: Use `GMAIL_SEND_EMAIL`.
-    *   Check if the tool accepts a local file path in `attachments`.
-    *   If S3/URL is required: Execute a python script on `COMPOSIO_REMOTE_WORKBENCH` to upload the file to S3 and get a public URL, then pass that URL.
+2.  **Upload to Cloud**: Use `local_toolkit.upload_to_composio` to "teleport" the file to the cloud.
+    *   Input: Local absolute path.
+    *   Output: JSON with `s3_key`.
+3.  **Send Email**: Use `GMAIL_SEND_EMAIL` with the `s3_key`.
+    *   `attachments=[{"s3_key": "user/uploads/..."}]`
 
 ## 7. Summary
 We optimize for **simplicity and speed**. If the data *can* exist in the local context, it *should*. We do not simulate a remote workspace when we have a perfectly good one right here.

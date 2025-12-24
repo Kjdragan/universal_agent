@@ -15,6 +15,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import sys
+
+# Add 'src' to sys.path to allow imports from universal_agent package
+# This ensures functional imports regardless of invocation directory
+current_dir = os.path.dirname(os.path.abspath(__file__))
+src_dir = os.path.dirname(os.path.dirname(current_dir))  # Go up two levels to 'src'
+if os.path.join(src_dir, "src") in sys.path:
+     pass
+else:
+     sys.path.append(os.path.join(src_dir, "src"))
+
 import readline  # Enable better terminal input (backspace, arrow keys, history)
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -189,10 +199,30 @@ async def observe_and_save_search_results(
     Observer: Parse SERP tool results and save cleaned artifacts.
     Uses Claude SDK typed content (list of TextBlock objects).
     """
-    is_serp_tool = any(
-        kw in tool_name.upper()
-        for kw in ["SEARCH_NEWS", "SEARCH_WEB", "COMPOSIO_SEARCH", "MULTI_EXECUTE"]
-    )
+    # Match search tools but exclude tool discovery (SEARCH_TOOLS)
+    tool_upper = tool_name.upper()
+    
+    # Exclude tool discovery - COMPOSIO_SEARCH_TOOLS searches for tools, not web
+    if "SEARCH_TOOLS" in tool_upper:
+        return
+    
+    # Comprehensive allowlist for Composio search providers only
+    # Note: Native WebSearch excluded - we only want intentional Composio research
+    # MULTI_EXECUTE included because it may wrap search calls - inner parsing filters by tool_slug
+    search_keywords = [
+        # Composio native search (SEARCH_TOOLS excluded above)
+        "COMPOSIO_SEARCH",
+        # SerpAPI variants
+        "SERPAPI", "SERP_API",
+        # Future providers
+        "EXA_SEARCH", "EXA_",
+        "TAVILY", "TAVILI",  # Common misspelling
+        # Generic Composio patterns
+        "SEARCH_NEWS", "SEARCH_WEB", "SEARCH_GOOGLE", "SEARCH_BING",
+        # Wrapper that may contain search results - inner parsing filters by tool_slug
+        "MULTI_EXECUTE",
+    ]
+    is_serp_tool = any(kw in tool_upper for kw in search_keywords)
 
     if not is_serp_tool:
         return
@@ -216,11 +246,36 @@ async def observe_and_save_search_results(
         if not raw_json:
             return
 
-        # Parse JSON
-        try:
-            data = json.loads(raw_json)
-        except json.JSONDecodeError:
-            return
+        # Special handling for Claude's native WebSearch format:
+        # "Web search results for query: ...\n\nLinks: [{...}, {...}]"
+        if "WebSearch" in tool_name or raw_json.startswith("Web search results"):
+            import re
+            links_match = re.search(r'Links:\s*(\[.*\])', raw_json, re.DOTALL)
+            if links_match:
+                try:
+                    links_list = json.loads(links_match.group(1))
+                    # Convert to our standard format
+                    data = {
+                        "organic_results": [
+                            {
+                                "title": item.get("title"),
+                                "link": item.get("url"),
+                                "snippet": item.get("snippet", ""),
+                            }
+                            for item in links_list
+                            if isinstance(item, dict)
+                        ]
+                    }
+                except json.JSONDecodeError:
+                    return
+            else:
+                return
+        else:
+            # Parse JSON normally
+            try:
+                data = json.loads(raw_json)
+            except json.JSONDecodeError:
+                return
 
         if not isinstance(data, dict):
             return
@@ -333,6 +388,28 @@ async def observe_and_save_search_results(
                         for idx, r in enumerate(raw_list)
                     ],
                 }
+
+            # CASE C: SEARCH_WEB with 'answer' + 'citations' format
+            # COMPOSIO_SEARCH_WEB returns: {"answer": "...", "citations": [{id, source, snippet}, ...]}
+            elif "citations" in search_data or "answer" in search_data:
+                citations = safe_get_list(search_data, "citations")
+                cleaned = {
+                    "type": "web_answer",
+                    "timestamp": datetime.now().isoformat(),
+                    "tool": slug,
+                    "answer": search_data.get("answer", ""),
+                    "results": [
+                        {
+                            "position": idx + 1,
+                            "title": c.get("source", c.get("id", "")),
+                            "url": c.get("id", c.get("source", "")),  # 'id' often contains URL
+                            "snippet": c.get("snippet", ""),
+                        }
+                        for idx, c in enumerate(citations)
+                        if isinstance(c, dict)
+                    ],
+                }
+
 
             # Save if we found cleanable data
             if cleaned and workspace_dir:
@@ -615,6 +692,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         tool_calls_this_iter = []
         needs_user_input = False
         auth_link = None
+        final_text = ""  # Buffer to capture final agent response for printing after execution summary
 
         async for msg in client.receive_response():
             if isinstance(msg, AssistantMessage):
@@ -695,10 +773,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 auth_link = links[0]
                                 needs_user_input = True
 
-                        print(
-                            block.text[:3000]
-                            + ("..." if len(block.text) > 3000 else "")
-                        )
+                        # Buffer final text to print AFTER execution summary (not printed here)
+                        final_text = block.text[:3000] + ("..." if len(block.text) > 3000 else "")
 
                         # Log reasoning to Logfire
                         logfire.info("reasoning", text_preview=block.text[:1000])
@@ -814,7 +890,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         }
         trace["iterations"].append(iter_record)
 
-        return needs_user_input, auth_link
+        return needs_user_input, auth_link, final_text
 
 
 async def classify_query(client: ClaudeSDKClient, query: str) -> str:
@@ -905,7 +981,7 @@ async def main():
     global trace
 
     # Create main span for entire execution
-    with logfire.span("standalone_composio_test"):
+    with logfire.span("standalone_composio_test") as span:
         # Setup Session Workspace
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", f"session_{timestamp}")
@@ -934,19 +1010,19 @@ async def main():
     print("✅ Non-blocking input handler installed (Fix 1)")
 
     # =========================================================================
-    # 3. Initialize Composio with Strict Tool Scoping (Fix 3)
-    # =========================================================================
-    # Define authorized toolkits to prevent accidental usage of unconfigured tools
-    # like Outlook.
-    ALLOWED_APPS = ["gmail", "github", "codeinterpreter", "slack", "composio_search"]
+    # 3. Initialize Composio    # User Identity
+    # Using specific entity ID that holds the active integrations (GitHub, Linear, Notion, etc.)
+    # user_id = "user_123"  # Consolidated to the primary admin identity
+    user_id = "pg-test-86524ebc-9b1e-4f08-bd20-b77dd71c2df9"
     
-    print(f"✅ Enforcing Strict Tool Scoping: {ALLOWED_APPS}")
-    
+    from universal_agent.utils.composio_discovery import discover_connected_toolkits, get_local_tools
+
+    # Initialize Client
     composio = Composio(
         api_key=os.getenv("COMPOSIO_API_KEY"),
         file_download_dir=downloads_dir
     )
-    
+
     # Register custom tools BEFORE session creation
     # Custom tools should be auto-discovered when registered before composio.create()
     # Local MCP tools are exposed via stdio server defined in mcp_servers config
@@ -955,10 +1031,28 @@ async def main():
     # IMPORTANT: Per 000_CURRENT_CONTEXT.md, we disable external crawlers to force use of
     # local crawl_parallel tool. This prevents COMPOSIO_SEARCH_TOOLS from recommending
     # firecrawl or exa web scrapers.
+    # Create Composio session
+    # IMPORTANT: Per 000_CURRENT_CONTEXT.md, we disable external crawlers to force use of
+    # local crawl_parallel tool. This prevents COMPOSIO_SEARCH_TOOLS from recommending
+    # firecrawl or exa web scrapers.
     session = composio.create(
         user_id=user_id,
         toolkits={"disable": ["firecrawl", "exa"]}
     )
+
+    # 1. Dynamic Remote Discovery
+    # Using client.connected_accounts.list(user_ids=[user_id]) for reliable persistent connection check
+    ALLOWED_APPS = discover_connected_toolkits(composio, user_id)
+    if not ALLOWED_APPS:
+        # Fallback if discovery completely fails or no apps connected
+        ALLOWED_APPS = ["gmail", "github", "codeinterpreter", "slack", "composio_search"]
+        print(f"⚠️ Discovery returned 0 apps (or only codeinterpreter). Using defaults: {ALLOWED_APPS}")
+    else:
+        print(f"✅ Discovered Active Composio Apps: {ALLOWED_APPS}")
+
+    # 2. Local MCP Discovery
+    local_tools = get_local_tools()
+    print(f"✅ Active Local MCP Tools: {local_tools}")
 
     # Create ClaudeAgentOptions now that session is available
     global options
@@ -970,67 +1064,81 @@ async def main():
                 "Do NOT present 2024 news as 2025 news without qualification.\n\n"
                 "You are a helpful assistant with access to external tools. "
                 "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
-                "IMPORTANT EXECUTION GUIDELINES:\n"
-                "- When the user requests an action (send email, upload file, execute code), proceed immediately without asking for confirmation.\n"
-                "- The user has already authorized these actions by making the request.\n"
-                "- Do not ask 'Should I proceed?' or 'Do you want me to send this?'\n"
-                "- Complete the full task end-to-end in a single workflow.\n"
-                "- If authentication is required, guide the user through it, then continue automatically.\n\n"
-                "REMOTE vs LOCAL WORKFLOW:\n"
-                "- The 'COMPOSIO' tools act as your Hands (Search, Email, Remote Execution).\n"
-                "- The 'LOCAL_TOOLKIT' and your own capabilities act as your Brain (Analysis, Writing, Reasoning).\n"
-                "GUIDELINES:\n"
-                "1. DATA FLOW POLICY (LOCAL-FIRST): Prefer receiving data DIRECTLY into your context.\n"
-                "   - Do NOT set `sync_response_to_workbench=True` unless you expect massive data (>5MB).\n"
-                "   - Default behavior (`sync=False`) is faster and avoids unnecessary download steps.\n"
-                "2. DATA COMPLETENESS: If a tool returns 'data_preview' or says 'Saved large response to <FILE>', it means the data was TRUNCATED.\n"
-                "   - In these cases (and ONLY these cases), use 'workbench_download' to fetch the full file.\n"
-                "3. WORKBENCH USAGE: Use the Remote Workbench ONLY for:\n"
-                "   - External Action execution (APIs, Browsing).\n"
-                "   - 'Heavy' operations that require specific Linux binaries (ffmpeg, etc).\n"
-                "   - Untrusted code execution.\n"
-                "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
-                "   - 🚫 NEVER use REMOTE_WORKBENCH to save search results. The Observer already saves them automatically.\n"
-                "4. 🚨 MANDATORY DELEGATION FOR REPORTS (HAND-OFF PROTOCOL):\n"
-                "   - Role: You are the SCOUT. You find the information sources.\n"
-                "   - Sub-Agent Role: The EXPERT. They process and synthesize the sources.\n"
-                "   - PROCEDURE:\n"
-                "     1. COMPOSIO Search -> Results are **AUTO-SAVED** by Observer to `search_results/`. DO NOT save again.\n"
-                "     2. DO NOT read these files or extract URLs yourself. You are not the Expert.\n"
-                "     3. DELEGATE immediately to 'report-creation-expert' using `Task`.\n"
-                "     4. HAND-OFF PROMPT (Use EXACTLY this string, do not add URLs):\n"
-                "        'I have located search data in the `search_results/` directory. Please scan these files using list_directory, scrape ALL URLs, and generate the report.'\n"
-                "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject a system message with next steps.\n"
-                "     Wait for this message before proceeding with upload/email.\n"
-                "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
-                "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', session_id='xxx')`\n"
-                "   - This tool handles EVERYTHING: local→remote→S3 in ONE call.\n"
-                "   - It returns `s3_key` which you pass to GMAIL_SEND_EMAIL's `attachment.s3key` field.\n"
-                "   - DO NOT manually call workbench_upload + REMOTE_WORKBENCH. That's the old, broken way.\n"
-                "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
-                "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by local_toolkit tools.\n"
-                "   - REMOTE paths: `/home/user/...` - only accessible inside COMPOSIO_REMOTE_WORKBENCH sandbox.\n"
-                "ONE-SHOT EXAMPLE (Comprehensive Report - CORRECT FLOW):\n"
-                "User: 'Research X and email me a comprehensive report.'\n"
-                "You: \n"
-                "  1. [Search] Use COMPOSIO tools to gather search results (auto-saved by Observer).\n"
-                "  2. [Delegate] Call `Task` with 'report-creation-expert' sub-agent.\n"
-                "  3. [WAIT] The SubagentStop hook will inject a system message when sub-agent completes.\n"
-                "  4. [Upload] Call `upload_to_composio(path='work_products/report.md', session_id='xxx')` → get s3_key.\n"
-                "  5. [Email] Call `GMAIL_SEND_EMAIL` with attachment.s3key = the s3_key from step 4.\n\n"
-                "7. 📁 WORK PRODUCTS - MANDATORY AUTO-SAVE:\n"
-                "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
-                "   - TRIGGERS: Tables, summaries, analyses, code generated for user, extracted data.\n"
-                "   - EXCEPTION: Do NOT use this for 'Reports'. Delegate Reports to the 'Report Creation Expert' (Rule 4).\n"
-                "   - HOW: Call `write_local_file` with:\n"
-                "     - `file_path`: CURRENT_SESSION_WORKSPACE + '/work_products/' + descriptive_name\n"
-                "     - `content`: The full output you're about to show the user\n"
-                "   - NAMING: `dependency_summary.md`, `calendar_events.txt`, `generated_script.py`\n"
-                "   - SKIP ONLY IF: Response is < 100 chars OR is just a confirmation ('Done!', 'Email sent').\n\n"
-                "   CORRECT PATTERN:\n"
-                "   User: 'Summarize my dependencies'\n"
-                "   You: 1. Read pyproject.toml → 2. SAVE summary to work_products/ → 3. Show summary to user"
-            ),
+            "🔍 SEARCH TOOL PREFERENCE:\n"
+            "- For web/news research, ALWAYS use Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
+            "- Do NOT use native 'WebSearch' - it bypasses our artifact saving system.\n"
+            "- Composio search results are auto-saved by the Observer for sub-agent access.\n\n"
+            "IMPORTANT EXECUTION GUIDELINES:\n"
+            "- When the user requests an action (send email, upload file, execute code), proceed immediately without asking for confirmation.\n"
+            "- The user has already authorized these actions by making the request.\n"
+            "- Do not ask 'Should I proceed?' or 'Do you want me to send this?'\n"
+            "- Complete the full task end-to-end in a single workflow.\n"
+            "- If authentication is required, guide the user through it, then continue automatically.\n\n"
+            "REMOTE vs LOCAL WORKFLOW:\n"
+            "- The 'COMPOSIO' tools act as your Hands (Search, Email, Remote Execution).\n"
+            "- The 'LOCAL_TOOLKIT' and your own capabilities act as your Brain (Analysis, Writing, Reasoning).\n"
+            "GUIDELINES:\n"
+            "1. DATA FLOW POLICY (LOCAL-FIRST): Prefer receiving data DIRECTLY into your context.\n"
+            "   - Do NOT set `sync_response_to_workbench=True` unless you expect massive data (>5MB).\n"
+            "   - Default behavior (`sync=False`) is faster and avoids unnecessary download steps.\n"
+            "2. DATA COMPLETENESS: If a tool returns 'data_preview' or says 'Saved large response to <FILE>', it means the data was TRUNCATED.\n"
+            "   - In these cases (and ONLY these cases), use 'workbench_download' to fetch the full file.\n"
+            "3. WORKBENCH USAGE: Use the Remote Workbench ONLY for:\n"
+            "   - External Action execution (APIs, Browsing).\n"
+            "   - 'Heavy' operations that require specific Linux binaries (ffmpeg, etc).\n"
+            "   - Untrusted code execution.\n"
+            "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
+            "   - 🚫 NEVER use REMOTE_WORKBENCH to save search results. The Observer already saves them automatically.\n"
+            "4. 🚨 MANDATORY DELEGATION FOR REPORTS (HAND-OFF PROTOCOL):\n"
+            "   - Role: You are the SCOUT. You find the information sources.\n"
+            "   - Sub-Agent Role: The EXPERT. They process and synthesize the sources.\n"
+            "   - PROCEDURE:\n"
+            "     1. COMPOSIO Search -> Results are **AUTO-SAVED** by Observer to `search_results/`. DO NOT save again.\n"
+            "     2. DO NOT read these files or extract URLs yourself. You are not the Expert.\n"
+            "     3. DELEGATE immediately to 'report-creation-expert' using `Task`.\n"
+            "     4. HAND-OFF PROMPT (Use EXACTLY this string, do not add URLs):\n"
+            "        'Scan the search_results/ directory for JSON files and generate the report.'\n"
+            "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject a system message with next steps.\n"
+            "     Wait for this message before proceeding with upload/email.\n"
+            "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
+            "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', session_id='xxx')`\n"
+            "   - This tool handles EVERYTHING: local→remote→S3 in ONE call.\n"
+            "   - It returns `s3_key` which you pass to GMAIL_SEND_EMAIL's `attachment.s3key` field.\n"
+            "   - DO NOT manually call workbench_upload + REMOTE_WORKBENCH. That's the old, broken way.\n"
+            "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
+            "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by local_toolkit tools.\n"
+            "   - REMOTE paths: `/home/user/...` - only accessible inside COMPOSIO_REMOTE_WORKBENCH sandbox.\n"
+            "7. 📁 WORK PRODUCTS - MANDATORY AUTO-SAVE:\n"
+            "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
+            "   - TRIGGERS: Tables, summaries, analyses, code generated for user, extracted data.\n"
+            "   - EXCEPTION: Do NOT use this for 'Reports'. Delegate Reports to the 'Report Creation Expert' (Rule 4).\n"
+            "   - HOW: Call `write_local_file` with:\n"
+            "     - `file_path`: CURRENT_SESSION_WORKSPACE + '/work_products/' + descriptive_name\n"
+            "     - `content`: The full output you're about to show the user\n"
+            "   - NAMING: `dependency_summary.md`, `calendar_events.txt`, `generated_script.py`\n"
+            "   - `work_products` dir is auto-created. Just save there.\n"
+            "     Wait for 'File saved...' confirmation before proceeding.\n\n"
+            "8. ⚡ COMPOSIO_MULTI_EXECUTE_TOOL USAGE:\n"
+            "   - When using `COMPOSIO_MULTI_EXECUTE_TOOL`, you MUST provide `tool_slug` for EACH item in the `tools` list.\n"
+            "   - INCORRECT: `{'tools': [{'arguments': {...}}]}`\n"
+            "   - CORRECT: `{'tools': [{'tool_slug': 'googlecalendar', 'arguments': {...}}]}`\n"
+            "   - omitting `tool_slug` will cause the action to fail.\n\n"
+            "9. 🔗 MANDATORY REPORT DELEGATION (YOU MUST DELEGATE):\n"
+            "   🚨 TRIGGER KEYWORDS REQUIRING DELEGATION: 'report', 'comprehensive', 'detailed', 'in-depth', 'analysis', 'research'.\n"
+            "   IF the user query contains ANY of these keywords, you MUST delegate to 'report-creation-expert'.\n"
+            "   - After a Composio search, the Observer AUTO-SAVES results to `search_results/` directory.\n"
+            "   - You will see: '📁 [OBSERVER] Saved: search_results/xxx.json'.\n"
+            "   - DO NOT write the report yourself. DO NOT call `crawl_parallel` yourself.\n"
+            "   - IMMEDIATELY delegate to 'report-creation-expert' with: 'Scan search_results/ directory for JSON files and generate the report.'\n"
+            "   - WHY: The sub-agent will scrape ALL URLs for full article content. Your search only has snippets.\n"
+            "   - WITHOUT DELEGATION: Your report will be shallow (snippets only). WITH DELEGATION: Deep research (full articles).\n"
+            "   - Trust the Observer. Trust the sub-agent. Your job is to search and delegate.\n\n"
+            "10. 💡 PROACTIVE FOLLOW-UP SUGGESTIONS:\n"
+            "   - After completing a task, suggest 2-3 helpful follow-up actions based on what was just accomplished.\n"
+            "   - Examples: 'Would you like me to email this report?', 'Should I save this to a different format?',\n"
+            "     'I can schedule a calendar event for the mentioned deadline if you'd like.'\n"
+            "   - Keep suggestions relevant to the completed task and the user's apparent goals."
+        ),
             mcp_servers={
                 "composio": {
                     "type": "http",
@@ -1081,11 +1189,32 @@ async def main():
                         "3. Extract EVERY `url` from ALL files (consolidate into one list).\n"
                         "4. Call `mcp__local_toolkit__crawl_parallel` with the COMPLETE list (no batch limit).\n"
                         "   *Our scraper is instant. Do not cherry-pick. If you find 40 URLs, scrape 40 URLs.*\n\n"
-                        "### Step 2: Read Scraped Content\n"
-                        "Read the markdown files generated in `search_results/`.\n\n"
+                        "### Step 2: Read ALL Scraped Content (MANDATORY - DO NOT SKIP FILES)\n"
+                        "1. After crawl_parallel completes, call `list_directory` again to see all `crawl_*.md` files.\n"
+                        "2. You MUST read EVERY crawl_*.md file, up to a maximum of 30 files.\n"
+                        "3. If there are more than ~6 files, read them in batches (6 files per read operation).\n"
+                        "4. DO NOT generate the report until you have read ALL crawl_*.md files.\n"
+                        "5. Keep track: 'Read X of Y files' - if X < Y, continue reading.\n\n"
                         "### Step 3: Synthesize Report\n"
-                        "- Exec Summary → ToC → Thematic Sections → Sources\n"
-                        "- Modern HTML with gradients\n\n"
+                        "Evaluate your source material and design an appropriate structure for the content.\n\n"
+                        "**QUALITY PRINCIPLES:**\n"
+                        "- Use specific quotes, numbers, and named examples to support points\n"
+                        "- Avoid generic statements like 'experts say' or 'it's widely believed'\n"
+                        "- Include interesting findings even if they counter main themes - present what you found\n"
+                        "- Credit sources naturally inline (e.g., 'according to ISW...' or 'the BBC reports...')\n"
+                        "- List all sources at the end of the report\n"
+                        "- Professional HTML presentation appropriate to the content\n\n"
+                        "**DEPTH CALIBRATION:**\n"
+                        "- Match report depth to source richness\n"
+                        "- Brief sources (3-5 articles) → Focused, concise summary\n"
+                        "- Rich sources (10+ articles) → Comprehensive, multi-section analysis\n"
+                        "- Let the structure emerge from the material, not from a template\n\n"
+                        "**SYNTHESIS & COHERENCE:**\n"
+                        "- Where sources discuss related topics, group and synthesize them into cohesive sections\n"
+                        "- BUT: News often covers genuinely disjointed events - don't force artificial connections\n"
+                        "- Prioritize completeness over flow - include all interesting facts even if standalone\n"
+                        "- It's okay to have distinct sections for unrelated developments\n"
+                        "- Aim for thematic grouping where natural, standalone items where not\n\n"
                         "### Step 4: Save Report\n"
                         f"Save as `.html` to `{workspace_dir}/work_products/` using `mcp__local_toolkit__write_local_file`.\n\n"
                         "🚨 START IMMEDIATELY: List the directory to find your targets."
@@ -1175,12 +1304,17 @@ async def main():
 
     # Extract Trace ID (Lazy import to ensure OTel is ready)
     # Extract Trace ID (Lazy import to ensure OTel is ready)
-    import opentelemetry.trace
-
-    span = opentelemetry.trace.get_current_span()
-    trace_id = span.get_span_context().trace_id
-    trace_id_hex = format(trace_id, "032x")
-    trace["trace_id"] = trace_id_hex
+    if LOGFIRE_TOKEN:
+        try:
+            # Span was created above with 'as span'
+            trace_id = span.get_span_context().trace_id
+            trace_id_hex = format(trace_id, "032x")
+            trace["trace_id"] = trace_id_hex
+        except Exception as e:
+            print(f"⚠️ Failed to extract trace ID: {e}")
+            trace_id_hex = "0" * 32
+    else:
+        trace_id_hex = "N/A"
 
     print(f"\n=== Composio Session Info ===")
     print(f"Session URL: {session.mcp.url}")
@@ -1199,7 +1333,7 @@ async def main():
 
     prompt_session = PromptSession()
     
-    print("Initializing Agent and connecting to tools... (this may take a moment)")
+
     async with ClaudeSDKClient(options) as client:
             while True:
                 # 1. Get User Input
@@ -1232,14 +1366,17 @@ async def main():
                         is_simple = False  # Fallback to Complex Path
 
                 if not is_simple:
-                    # Complex Path (Tool Loop)
+                    # Complex Path (Tool Loop) - track per-request timing
+                    request_start_ts = time.time()
                     iteration = 1
                     current_query = user_input
 
+                    final_response_text = ""
                     while True:
-                        needs_input, auth_link = await run_conversation(
+                        needs_input, auth_link, final_text = await run_conversation(
                             client, current_query, start_ts, iteration
                         )
+                        final_response_text = final_text  # Capture for printing after summary
 
                         if needs_input and auth_link:
                             print(f"\n{'=' * 80}")
@@ -1258,6 +1395,40 @@ async def main():
                         else:
                             break
 
+                    # Per-request Execution Summary (shown before agent response)
+                    request_end_ts = time.time()
+                    request_duration = round(request_end_ts - request_start_ts, 3)
+                    
+                    # Collect tool calls for this request
+                    request_tool_calls = [tc for tc in trace["tool_calls"] if tc.get("time_offset_seconds", 0) >= (request_start_ts - start_ts)]
+                    
+                    print(f"\n{'=' * 80}")
+                    print("=== EXECUTION SUMMARY ===")
+                    print(f"{'=' * 80}")
+                    print(f"Execution Time: {request_duration} seconds")
+                    print(f"Tool Calls: {len(request_tool_calls)}")
+                    
+                    # Check for code execution
+                    code_exec_used = any(
+                        any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"])
+                        for tc in request_tool_calls
+                    )
+                    if code_exec_used:
+                        print("🏭 Code execution was used")
+                    
+                    # Tool breakdown
+                    if request_tool_calls:
+                        print("\n=== TOOL CALL BREAKDOWN ===")
+                        for tc in request_tool_calls:
+                            marker = "🏭" if any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]) else "  "
+                            print(f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}")
+                    
+                    print(f"{'=' * 80}")
+                    
+                    # Print agent's final response (with follow-up suggestions) AFTER execution summary
+                    if final_response_text:
+                        print(f"\n{final_response_text}")
+
             # End of Session Summary
             end_ts = time.time()
             trace["end_time"] = datetime.now().isoformat()
@@ -1273,49 +1444,10 @@ async def main():
                 )
 
             print(f"\n{'=' * 80}")
-            print("=== FINAL EXECUTION SUMMARY ===")
+            print("=== SESSION COMPLETE ===")
             print(f"{'=' * 80}")
-            print(f"Total Time: {trace['total_duration_seconds']} seconds")
-            print(f"Total Iterations: {len(trace['iterations'])}")
+            print(f"Total Session Time: {trace['total_duration_seconds']} seconds")
             print(f"Total Tool Calls: {len(trace['tool_calls'])}")
-            print(f"Total Tool Results: {len(trace['tool_results'])}")
-
-            # Check for code execution tools
-            code_exec_used = False
-            for tc in trace["tool_calls"]:
-                if any(
-                    x in tc["name"].upper()
-                    for x in [
-                        "WORKBENCH",
-                        "CODE",
-                        "EXECUTE",
-                        "PYTHON",
-                        "SANDBOX",
-                        "BASH",
-                    ]
-                ):
-                    code_exec_used = True
-                    break
-
-            if code_exec_used:
-                print("\n🏭 CODE EXECUTION WAS USED!")
-            else:
-                print("\n⚠️ NO CODE EXECUTION - Agent may have simulated results")
-
-            print("\n=== TOOL CALL BREAKDOWN ===")
-            for tc in trace["tool_calls"]:
-                marker = (
-                    "🏭"
-                    if any(
-                        x in tc["name"].upper()
-                        for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]
-                    )
-                    else "  "
-                )
-                print(
-                    f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}"
-                )
-
             print(f"{'=' * 80}")
 
             # Save trace
@@ -1325,11 +1457,43 @@ async def main():
                 json.dump(trace, f, indent=2, default=str)
             print(f"\n📊 Full trace saved to {trace_path}")
 
-            # Save summary text
-            with open(os.path.join(workspace_dir, "summary.txt"), "w") as f:
-                f.write(f"Total Time: {trace['total_duration_seconds']}s\n")
-                f.write(f"Iterations: {len(trace['iterations'])}\n")
-                f.write(f"Status: {trace.get('status', 'complete')}\n")
+            # Save comprehensive session summary
+            summary_path = os.path.join(workspace_dir, "session_summary.txt")
+            with open(summary_path, "w") as f:
+                f.write("=" * 60 + "\n")
+                f.write("SESSION SUMMARY\n")
+                f.write("=" * 60 + "\n\n")
+                f.write(f"Session Start: {trace.get('start_time', 'N/A')}\n")
+                f.write(f"Session End: {trace.get('end_time', 'N/A')}\n")
+                f.write(f"Execution Time: {trace['total_duration_seconds']}s\n")
+                f.write(f"Total Iterations: {len(trace['iterations'])}\n")
+                f.write(f"Total Tool Calls: {len(trace['tool_calls'])}\n")
+                f.write(f"Total Tool Results: {len(trace['tool_results'])}\n")
+                f.write(f"Status: {trace.get('status', 'complete')}\n\n")
+                
+                # Code execution check
+                code_exec_tools = ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"]
+                code_exec_used = any(
+                    any(x in tc["name"].upper() for x in code_exec_tools)
+                    for tc in trace["tool_calls"]
+                )
+                f.write(f"Code Execution Used: {'Yes' if code_exec_used else 'No'}\n\n")
+                
+                # Tool call breakdown
+                f.write("=" * 60 + "\n")
+                f.write("TOOL CALL BREAKDOWN\n")
+                f.write("=" * 60 + "\n")
+                for tc in trace["tool_calls"]:
+                    marker = "🏭 " if any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]) else "   "
+                    f.write(f"{marker}Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}\n")
+                
+                # Logfire trace link
+                if LOGFIRE_TOKEN and "trace_id" in trace:
+                    project_slug = os.getenv("LOGFIRE_PROJECT_SLUG", "Kjdragan/composio-claudemultiagent")
+                    logfire_url = f"https://logfire.pydantic.dev/{project_slug}?q=trace_id%3D%27{trace['trace_id']}%27"
+                    f.write(f"\nLogfire Trace: {logfire_url}\n")
+            
+            print(f"📋 Session summary saved to {summary_path}")
 
             if LOGFIRE_TOKEN and "trace_id" in trace:
                 project_slug = os.getenv(

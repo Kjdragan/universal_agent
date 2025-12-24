@@ -46,7 +46,7 @@ Query Classification (SIMPLE vs COMPLEX)
     ↓
 Claude Agent SDK (Main Brain)
     ├─→ Composio MCP Server (500+ tools: SERP, Gmail, Slack, etc.)
-    ├─→ Local Toolkit MCP (crawl_parallel, write_local_file)
+    ├─→ Local Toolkit MCP (crawl_parallel, write_local_file, upload_to_composio)
     ↓
 Observer Pattern (async fire-and-forget artifact processing)
     ↓
@@ -57,10 +57,8 @@ AGENT_RUN_WORKSPACES/session_*/ (run.log, trace.json, search_results/, work_prod
 
 **1. Query Classification**: The agent classifies queries as SIMPLE (direct answer) vs COMPLEX (requires tools). Complex queries enter a tool loop.
 
-**2. Observer Pattern**: Composio hooks (`@before_execute`, `@after_execute`) **do NOT work in MCP mode**. Instead, use async fire-and-forget observers:
-```python
-asyncio.create_task(observe_and_save_search_results(...))
-```
+**2. Observer Pattern**: Composio hooks (`@before_execute`, `@after_execute`) **do NOT work in Composio MCP mode**. Instead, use async fire-and-forget observers.
+   - *Feature*: Observer prevents redundant manual saves by warning agent if data is already persisted locally.
 
 **3. Sub-Agent Delegation**: Complex tasks (report generation) are delegated to specialized sub-agents defined in `.claude/agents/`. The main agent uses the `Task` tool for delegation.
 
@@ -71,7 +69,7 @@ asyncio.create_task(observe_and_save_search_results(...))
 | File | Purpose |
 |------|---------|
 | `src/universal_agent/main.py` | Main agent: ClaudeSDKClient, observers, AgentDefinition, query classification |
-| `src/mcp_server.py` | Custom MCP tools: crawl_parallel, write_local_file |
+| `src/mcp_server.py` | Custom MCP tools: crawl_parallel, write_local_file, upload_to_composio |
 | `src/tools/workbench_bridge.py` | Local-Remote file transfer bridge using Composio SDK |
 | `.claude/agents/report-creation-expert.md` | Sub-agent for comprehensive research + report synthesis |
 | `Project_Documentation/000_CURRENT_CONTEXT.md` | **START HERE** - Current project state |
@@ -100,6 +98,7 @@ session_*/
 | MCP content is string repr, not JSON | Use `ast.literal_eval()` to parse before JSON decoding |
 | MULTI_EXECUTE_TOOL deeply nested | Path: `data.data.results[0].response.data.results.news_results` |
 | Large data returns `data_preview` | Agent MUST `workbench_download` the full file; don't process preview directly |
+| **Email Attachments** | **NEVER** use `workbench_upload` manually. Use `upload_to_composio` (1-step) -> `GMAIL_SEND_EMAIL` |
 
 ### crawl4ai (Local Web Scraping)
 `crawl_parallel` provides fast, parallel web extraction using crawl4ai.

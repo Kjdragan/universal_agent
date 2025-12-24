@@ -269,15 +269,15 @@ system_prompt=(
 
 ## Web Extraction (webReader)
 
-### Lesson 13: [DEPRECATED] Z.AI webReader
+### Lesson 13: [OBSOLETE] Z.AI webReader
 **Date**: 2025-12-22
-**Status**: REMOVED - Replaced by `crawl_parallel` (crawl4ai).
+**Status**: REMOVED. Replaced by `mcp__local_toolkit__crawl_parallel`.
 
-### Lesson 14: [DEPRECATED] Domain Blacklist
+### Lesson 14: [OBSOLETE] Domain Blacklist
 **Date**: 2025-12-22
-**Status**: REMOVED - `crawl_parallel` handles failures internally.
+**Status**: REMOVED. `crawl_parallel` handles partial failures gracefully.
 
-### Lesson 15: [DEPRECATED] webReader `retain_images=false`
+### Lesson 15: [OBSOLETE] webReader `retain_images=false`
 **Date**: 2025-12-22
 **Status**: REMOVED.
 
@@ -653,3 +653,43 @@ mcp_instance = server.generate('user_123')
 
 *Last updated: 2025-12-23 17:15 CST*
 
+---
+
+### Lesson 31: Preventing Redundant Data Saves (Observer Feedback)
+**Date**: 2025-12-24
+
+**Problem**: The Agent was manually saving search results to the Remote Workbench (`sync_response_to_workbench=True` or manual upload) even though the Observer had already saved them locally. This doubled the latency and token cost.
+
+**Solution**:
+1.  **Observer Feedback**: When the Observer saves a file, it injects a warning into the context: `⚠️ Agent: DO NOT save search results again - already persisted locally.`
+2.  **System Prompt**: Explicit instruction to trust the Observer's auto-save.
+
+**Impact**: Saved ~100s per run.
+
+---
+
+### Lesson 32: One-Step Uploads with `upload_to_composio`
+**Date**: 2025-12-24
+
+**Problem**: The `write_local` -> `workbench_upload` -> `remote_script` -> `S3` pipeline for email attachments was brittle, prone to "file not found" errors, and took 3+ steps.
+
+**Solution**: Created `mcp__local_toolkit__upload_to_composio`.
+- **Single atomic call**.
+- Handles path resolution, upload, and S3 signing.
+- Returns the exact `s3_key` needed by Gmail/Slack tools.
+
+**Pattern**:
+```python
+# Old (3 steps)
+write_local(...)
+workbench_upload(...)
+script_to_s3(...)
+
+# New (1 step)
+upload_to_composio(path) -> returns {s3_key: "..."}
+GMAIL_SEND_EMAIL(..., attachments=[{"s3_key": "..."}])
+```
+
+---
+
+*Last updated: 2025-12-24*

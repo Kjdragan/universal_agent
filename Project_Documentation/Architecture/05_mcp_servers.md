@@ -11,7 +11,7 @@
 
 ## Overview
 
-The Universal Agent integrates **three MCP (Model Context Protocol) servers** to provide a comprehensive toolset for local operations, external actions, and web content extraction. Each server serves a distinct purpose in the "Local Brain, Remote Hands" architecture.
+The Universal Agent integrates **two MCP (Model Context Protocol) servers** to provide a comprehensive toolset for local operations, external actions, and web content extraction. Each server serves a distinct purpose in the "Local Brain, Remote Hands" architecture.
 
 ```mermaid
 flowchart TB
@@ -25,34 +25,28 @@ flowchart TB
         direction LR
         LocalMCP["Local Toolkit MCP<br/>(stdio)"]
         ComposioMCP["Composio MCP<br/>(HTTP)"]
-        WebReaderMCP["Z.AI webReader MCP<br/>(HTTP)"]
     end
 
     subgraph External["External Services"]
         direction TB
         LocalFS["Local File System"]
         ComposioAPI["Composio Tool Router<br/>(500+ tools)"]
-        WebReaderAPI["Z.AI webReader API"]
     end
 
     MainAgent -->|"mcp__local_toolkit__*"| LocalMCP
     MainAgent -->|"mcp__composio__*"| ComposioMCP
-    MainAgent -->|"mcp__web_reader__*"| WebReaderMCP
 
     SubAgent -->|"mcp__local_toolkit__*"| LocalMCP
-    SubAgent -->|"mcp__web_reader__*"| WebReaderMCP
     SubAgent -.->|"Read-only"| ComposioMCP
 
-    LocalMCP -->|"write_local_file<br/>save_corpus"| LocalFS
-    LocalMCP -->|"workbench_download<br/>workbench_upload"| ComposioAPI
+    LocalMCP -->|"write_local_file<br/>save_corpus<br/>crawl_parallel"| LocalFS
+    LocalMCP -->|"upload_to_composio"| ComposioAPI
     ComposioMCP -->|"Tool execution"| ComposioAPI
-    WebReaderMCP -->|"Article extraction"| WebReaderAPI
 
     style MainAgent fill:#e1f5fe
     style SubAgent fill:#fff3e0
     style LocalMCP fill:#c8e6c9
     style ComposioMCP fill:#ffccbc
-    style WebReaderMCP fill:#d1c4e9
 ```
 
 ---
@@ -263,6 +257,56 @@ Since Composio lacks a direct file upload tool, upload is implemented via remote
    with open(path, 'wb') as f:
        f.write(base64.b64decode('<encoded_content>'))
 4. Execute via COMPOSIO_REMOTE_WORKBENCH tool
+```
+
+---
+
+#### 1.5 upload_to_composio()
+
+**Purpose:** One-step solution to upload a file to Composio and get S3 keys for email attachments.
+
+**Location:** `src/mcp_server.py`
+
+**Schema:**
+```python
+def upload_to_composio(
+    path: str,          # Absolute local path to file
+    mime_type: str = None  # Optional MIME type
+) -> str:
+```
+
+**Response JSON:**
+```json
+{
+  "s3_key": "user/uploads/file.pdf",
+  "s3_url": "https://s3.amazonaws.com/...",
+  "local_path": "/local/path/file.pdf"
+}
+```
+
+**Usage:**
+Pass the `s3_key` directly to `GMAIL_SEND_EMAIL` attachments.
+
+---
+
+#### 1.6 crawl_parallel()
+
+**Purpose:** High-performance parallel web extraction using crawl4ai.
+
+**Location:** `src/mcp_server.py`
+
+**Features:**
+- Parallel browser contexts
+- Smart content cleaning (removes nav, ads)
+- Markdown conversion
+- Auto-saving to `search_results/`
+
+**Schema:**
+```python
+def crawl_parallel(
+    urls: list,         # List of URLs to scrape
+    session_dir: str    # Current session workspace path
+) -> str:
 ```
 
 ---
@@ -478,23 +522,20 @@ options = ClaudeAgentOptions(
             "command": sys.executable,
             "args": ["src/mcp_server.py"],
         },
-        "web_reader": {
-            "type": "http",
-            "url": "https://api.z.ai/api/mcp/web_reader/mcp",
-            "headers": {
-                "Authorization": f"Bearer {os.environ['ZAI_API_KEY']}"
-            },
+    "local_toolkit": {
+            "type": "stdio",
+            "command": sys.executable,
+            "args": ["src/mcp_server.py"],
         },
     },
     allowed_tools=["Task"],  # For sub-agent delegation
     agents={
         "report-creation-expert": AgentDefinition(
             tools=[
-
+                "mcp__local_toolkit__crawl_parallel",
                 "mcp__local_toolkit__save_corpus",
                 "mcp__local_toolkit__write_local_file",
-                "mcp__local_toolkit__workbench_download",
-                "mcp__local_toolkit__workbench_upload",
+                "mcp__local_toolkit__upload_to_composio",
             ],
             # ...
         ),
@@ -602,13 +643,13 @@ Composio tools return structured errors:
 
 ## 8. Performance Optimizations
 
-### webReader Batching
+### crawl_parallel Batching
 
-The `report-creation-expert` processes URLs in batches of 5:
+The `report-creation-expert` processes URLs in batches of 10:
 
 ```
-Batch 1: [URL1, URL2, URL3, URL4, URL5]
-  -> 5 parallel webReader calls
+Batch 1: [URL1..URL10]
+  -> Single crawl_parallel call
   -> Count successes
   -> If <10 total successes, proceed to Batch 2
   -> Else STOP (HARD STOP at 10 extractions)

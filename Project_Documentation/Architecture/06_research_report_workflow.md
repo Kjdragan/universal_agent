@@ -28,11 +28,11 @@ Sub-Agent: Reads extracted markdown files from search_results/
     ↓
 Sub-Agent: Synthesize HTML Report (Quality Standards)
     ↓
-Sub-Agent: write_local_file → work_products/report.html
+SubAgent: write_local_file → work_products/report.html
     ↓
-Main Agent: Receives Report, workbench_upload to Remote
+Main Agent: Receives Report, upload_to_composio → S3 Key
     ↓
-Main Agent: GMAIL_SEND_EMAIL with Remote Attachment
+Main Agent: GMAIL_SEND_EMAIL with S3 Key Attachment
     ↓
 Final: Report Delivered to User
 ```
@@ -88,11 +88,11 @@ sequenceDiagram
     SubAgent-->>MainAgent: Report complete
 
     Note over User,GmailService: PHASE 7: DELIVERY
-    MainAgent->>LocalToolkit: workbench_upload(local_path, remote_path)
-    LocalToolkit->>RemoteWorkbench: Upload file via WorkbenchBridge
-    RemoteWorkbench-->>LocalToolkit: Upload success
-    LocalToolkit-->>MainAgent: "Successfully uploaded to remote"
-    MainAgent->>GmailService: GMAIL_SEND_EMAIL(to, subject, body, attachments=[remote_path])
+    MainAgent->>LocalToolkit: upload_to_composio(local_path)
+    LocalToolkit->>ComposioMCP: Upload file and get S3 key
+    ComposioMCP-->>LocalToolkit: {s3_key: "...", s3_url: "..."}
+    LocalToolkit-->>MainAgent: Upload success
+    MainAgent->>GmailService: GMAIL_SEND_EMAIL(to, subject, body, attachments=[{"s3_key": "..."}])
     GmailService-->>MainAgent: Email sent successfully
     MainAgent-->>User: "Report emailed to [address]"
 ```
@@ -252,18 +252,15 @@ sequenceDiagram
     MainAgent->>MainAgent: Verify sub-agent compliance<br/>check: expanded_corpus.json exists
     Note right of MainAgent: verify_subagent_compliance()<br/>Inject error if missing
 
-    Note over SubAgent,User: STEP 5: Upload to Remote Workbench
-    MainAgent->>LocalToolkit: workbench_upload(<br/>local_path="SESSION_WORKSPACE/<br/>work_products/report.html",<br/>remote_path="/home/user/<br/>uploads/report.html"<br/>)
+    Note over SubAgent,User: STEP 5: Upload for Attachment
+    MainAgent->>LocalToolkit: upload_to_composio(<br/>path="SESSION_WORKSPACE/<br/>work_products/report.html"<br/>)
 
-    LocalToolkit->>WorkbenchBridge: bridge.upload(<br/>local_path, remote_path)
-    WorkbenchBridge->>WorkbenchBridge: Read local file
-    WorkbenchBridge->>RemoteWorkbench: Upload to remote<br/>via Composio SDK
-    RemoteWorkbench-->>WorkbenchBridge: Upload success
-    WorkbenchBridge-->>LocalToolkit: {local_path, remote_path}
+    LocalToolkit->>ComposioMCP: Upload to Composio S3
+    ComposioMCP-->>LocalToolkit: {<br/>"s3_key": "uploads/report.html",<br/>"s3_url": "..."<br/>}
     LocalToolkit-->>MainAgent: "Successfully uploaded"
 
     Note over SubAgent,User: STEP 6: Email Delivery
-    MainAgent->>GmailService: GMAIL_SEND_EMAIL(<br/>to="user@example.com",<br/>subject="Comprehensive Report: AI Developments",<br/>body="Please find attached...",<br/>attachments=["/home/user/uploads/report.html"]<br/>)
+    MainAgent->>GmailService: GMAIL_SEND_EMAIL(<br/>to="user@example.com",<br/>subject="Comprehensive Report: AI Developments",<br/>body="Please find attached...",<br/>attachments=[{"s3_key": "uploads/report.html"}]<br/>)
 
     GmailService->>GmailService: Send via Gmail API<br/>with attachment
     GmailService-->>MainAgent: "Email sent successfully"
@@ -694,9 +691,9 @@ flowchart TD
     Synthesize --> WriteReport[write_local_file<br/>work_products/report.html]
     WriteReport --> ReturnReport[Return to Main Agent]
 
-    ReturnReport --> Upload[workbench_upload<br/>to Remote]
+    ReturnReport --> Upload[upload_to_composio<br/>Get S3 Key]
 
-    Upload --> Email[GMAIL_SEND_EMAIL<br/>with attachment]
+    Upload --> Email[GMAIL_SEND_EMAIL<br/>with attachment s3_key]
 
     Email --> End([Report Delivered])
 
@@ -743,7 +740,7 @@ flowchart TD
     "to": "user@example.com",
     "subject": "Comprehensive Report: AI Developments",
     "body": "Please find attached the comprehensive report...",
-    "attachments": ["/home/user/uploads/report.html"]
+    "attachments": [{"s3_key": "user/uploads/report.html"}]
   }
 }
 ```

@@ -41,21 +41,34 @@
 | **Domain Blacklist** | ✅ Working | Tracks failing domains for future optimization |
 | **Logfire Tracing** | ✅ Working | Full observability with deep links |
 
-### Recent Optimizations (Dec 22, 2025)
+### Recent Optimizations (Dec 24, 2025)
 
-1. **crawl_parallel Performance**:
+1. **Eliminated Redundant Data Saving**:
+   - Fixed issue where agent was manually saving search results to Remote Workbench
+   - Now relies on Observer Pattern's auto-save to local `search_results/`
+   - **Saved ~100s** per run by avoiding unnecessary remote operations
+
+2. **Streamlined File Uploads (One-Step)**:
+   - Switched from complex multi-step upload (workbench_upload + script) to single-step `upload_to_composio` tool
+   - Handles local -> remote -> S3 attachment staging in one call
+   - **Saved ~200s** per run by avoiding "file not found" retry loops
+
+3. **crawl_parallel Performance**:
    - Parallel extraction of all URLs in a single call
    - Clean markdown output with noise removal
    - Saves directly to session `search_results/`
 
-2. **Report Quality Guidelines**:
-   - Must include specific numbers, dates, direct quotes
-   - Thematic synthesis (not source-by-source)
-   - Modern HTML with gradients, info boxes, stats cards
+### Next Steps (Performance Engineering)
 
-3. **Extraction Limits**:
-   - Hard stop after 10 successful extractions OR 2 batches
-   - Prevents excessive extraction time
+1. **Pre-warm MCP Connections**:
+   - Investigate lazy initialization delays (~60s startup)
+   - Explore "pre-priming" connections during agent boot
+
+2. **Parallel Crawl Initialization**:
+   - Investigate crawl4ai browser context startup time
+   - Optimizing readiness for the first crawl batch
+
+### Architecture
 
 ### Architecture
 

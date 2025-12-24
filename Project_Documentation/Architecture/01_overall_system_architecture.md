@@ -92,7 +92,6 @@ flowchart TB
     Client --> Options
     Options --> LocalMCP
     Options --> ComposioMCP
-    Options --> WebReaderMCP
 
     Client -->|"Delegate Task"| ReportExpert
 
@@ -131,7 +130,7 @@ This diagram illustrates the complete system boundaries and external dependencie
 
 3. **Core Components**: The main agent logic, SDK client, and configuration
 
-4. **MCP Server Layer**: Three MCP servers provide different capabilities:
+4. **MCP Server Layer**: Two MCP servers provide different capabilities:
    - Local Toolkit (stdio): Custom local tools
    - Composio (HTTP): Remote tool router
 
@@ -646,7 +645,6 @@ flowchart TB
 
         Ex1["mcp__local_toolkit__save_corpus"]
         Ex2["mcp__composio__GMAIL_SEND_EMAIL"]
-        Ex3["mcp__web_reader__webReader"]
     end
 
     Options --> MCPConfig
@@ -660,7 +658,6 @@ flowchart TB
     style MCPServers fill:#c8e6c9
     style LocalMCP fill:#a5d6a7
     style ComposioMCP fill:#ffccbc
-    style WebReaderMCP fill:#d1c4e9
 ```
 
 ---

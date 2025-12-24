@@ -266,7 +266,7 @@ Captures remote code execution details for audit and debugging.
 
 ---
 
-### 4. Subagent Compliance Verifier
+### 3. Subagent Compliance Verifier
 
 **Function**: `verify_subagent_compliance()`
 **Location**: `main.py:629-672`
@@ -294,6 +294,27 @@ When compliance fails, the observer injects an error message into the conversati
 `expanded_corpus.json` before writing the report. This is a MANDATORY
 step per the agent's instructions.
 ```
+
+---
+
+### 4. Observer Feedback Loop (Anti-Redundancy)
+
+**Function**: `observe_and_save_search_results`
+**Trigger**: Redundant manual saves detected
+
+#### Purpose
+Prevents the agent from wasting time/tokens by manually saving artifacts that the observer has already auto-saved.
+
+#### Mechanism
+If the observer successfully saves a file (e.g., `search_results/news_123.json`), it prints a warning to the agent's context:
+
+```
+⚠️ Agent: DO NOT save search results again - already persisted locally to search_results/...
+```
+
+**Benefits**:
+- **Efficiency**: Saves ~100s per run by avoiding redundant `workbench_upload` calls.
+- **Training**: Reinforces the "fire-and-forget" usage pattern.
 
 ---
 
