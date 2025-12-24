@@ -25,6 +25,18 @@ def get_bridge():
     return WorkbenchBridge(composio_client=client, user_id="user_123")
 
 
+def fix_path_typos(path: str) -> str:
+    """
+    Fix common model typos in workspace paths.
+    Models sometimes truncate 'AGENT_RUN_WORKSPACES' to 'AGENT_RUNSPACES'.
+    """
+    # Fix: AGENT_RUNSPACES -> AGENT_RUN_WORKSPACES
+    if "AGENT_RUNSPACES" in path and "AGENT_RUN_WORKSPACES" not in path:
+        path = path.replace("AGENT_RUNSPACES", "AGENT_RUN_WORKSPACES")
+        sys.stderr.write(f"[Local Toolkit] Path auto-corrected: AGENT_RUNSPACES → AGENT_RUN_WORKSPACES\n")
+    return path
+
+
 @mcp.tool()
 def workbench_download(
     remote_path: str, local_path: str, session_id: str = None
@@ -57,6 +69,7 @@ def read_local_file(path: str) -> str:
     Read content from a file in the Local Workspace.
     """
     try:
+        path = fix_path_typos(path)  # Auto-correct common model typos
         abs_path = os.path.abspath(path)
         if not os.path.exists(abs_path):
             return f"Error: File not found at {path}"
@@ -90,6 +103,7 @@ def list_directory(path: str) -> str:
     List contents of a directory in the Local Workspace.
     """
     try:
+        path = fix_path_typos(path)  # Auto-correct common model typos
         abs_path = os.path.abspath(path)
         if not os.path.exists(abs_path):
             return f"Error: Directory not found at {path}"

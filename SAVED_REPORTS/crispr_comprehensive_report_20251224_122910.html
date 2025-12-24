@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comprehensive CRISPR Development Report 2025</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.7;
+            color: #2c3e50;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        .hero {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 60px 40px;
+            text-align: center;
+        }
+        
+        .hero h1 {
+            font-size: 2.8em;
+            margin-bottom: 15px;
+            font-weight: 700;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .hero p {
+            font-size: 1.3em;
+            opacity: 0.95;
+            font-weight: 300;
+        }
+        
+        .hero .date {
+            margin-top: 20px;
+            padding: 10px 25px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 30px;
+            display: inline-block;
+            font-weight: 500;
+        }
+        
+        .content {
+            padding: 40px;
+        }
+        
+        .section {
+            margin-bottom: 50px;
+        }
+        
+        .section-title {
+            font-size: 1.8em;
+            color: #667eea;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #667eea;
+            display: flex;
+            align-items: center;
+        }
+        
+        .section-title::before {
+            content: '';
+            width: 12px;
+            height: 12px;
+            background: #764ba2;
+            border-radius: 50%;
+            margin-right: 15px;
+        }
+        
+        .subsection {
+            margin: 30px 0;
+            padding-left: 25px;
+        }
+        
+        .subsection-title {
+            font-size: 1.4em;
+            color: #764ba2;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+        
+        .card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 12px;
+            padding: 25px;
+            margin: 20px 0;
+            border-left: 5px solid #667eea;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.2);
+        }
+        
+        .card-title {
+            font-size: 1.3em;
+            color: #2c3e50;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+        
+        .highlight-box {
+            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+            border-radius: 12px;
+            padding: 20px 25px;
+            margin: 20px 0;
+            border-left: 5px solid #ff6b6b;
+        }
+        
+        .highlight-box strong {
+            color: #c0392b;
+        }
+        
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin: 25px 0;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        
+        .stat-label {
+            font-size: 0.95em;
+            opacity: 0.9;
+        }
+        
+        ul {
+            list-style: none;
+            padding-left: 0;
+        }
+        
+        ul li {
+            padding: 12px 0;
+            padding-left: 30px;
+            position: relative;
+            border-bottom: 1px solid #eee;
+        }
+        
+        ul li:last-child {
+            border-bottom: none;
+        }
+        
+        ul li::before {
+            content: '▸';
+            position: absolute;
+            left: 0;
+            color: #667eea;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+        
+        .timeline {
+            position: relative;
+            padding-left: 40px;
+            margin: 25px 0;
+        }
+        
+        .timeline::before {
+            content: '';
+            position: absolute;
+            left: 15px;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .timeline-item {
+            position: relative;
+            padding: 20px;
+            margin-bottom: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -33px;
+            top: 25px;
+            width: 12px;
+            height: 12px;
+            background: #667eea;
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: 0 0 0 3px #667eea;
+        }
+        
+        .sources {
+            background: #f8f9fa;
+            padding: 30px;
+            border-radius: 12px;
+            margin-top: 40px;
+        }
+        
+        .sources h3 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+        
+        .sources ul li {
+            padding: 8px 0;
+            padding-left: 25px;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 0.95em;
+        }
+        
+        .sources ul li::before {
+            content: '📄';
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 18px;
+            text-align: left;
+            font-weight: 600;
+        }
+        
+        td {
+            padding: 15px 18px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-right: 8px;
+        }
+        
+        .badge-fda {
+            background: #ff6b6b;
+            color: white;
+        }
+        
+        .badge-phase {
+            background: #4ecdc4;
+            color: white;
+        }
+        
+        .badge-breakthrough {
+            background: #ffe66d;
+            color: #333;
+        }
+        
+        .badge-ai {
+            background: #95e1d3;
+            color: #333;
+        }
+        
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2em;
+            }
+            
+            .content {
+                padding: 25px;
+            }
+            
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="hero">
+            <h1>CRISPR 基因编辑综合报告</h1>
+            <p>Comprehensive Report on CRISPR Gene Editing Developments</p>
+            <div class="date">December 2025</div>
+        </div>
+        
+        <div class="content">
+            <!-- Executive Summary -->
+            <div class="section">
+                <h2 class="section-title">执行摘要 | Executive Summary</h2>
+                
+                <div class="highlight-box">
+                    <p><strong>Key Milestone:</strong> 2024 marked a historic turning point with <strong>Casgevy</strong> becoming the first FDA-approved CRISPR therapy, validating the entire field after just 12 years from discovery. However, the industry faces significant challenges including clinical holds, financial pressures, and complex regulatory landscapes.</p>
+                </div>
+                
+                <div class="stat-grid">
+                    <div class="stat-card">
+                        <div class="stat-value">$4.77B</div>
+                        <div class="stat-label">2025 Market Size</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">239</div>
+                        <div class="stat-label">Clinical Trials (Monitored)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">14.87%</div>
+                        <div class="stat-label">CAGR (2025-2034)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">$2.2M</div>
+                        <div class="stat-label">Casgevy Cost/Patient</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 1: Clinical Trial Updates -->
+            <div class="section">
+                <h2 class="section-title">1. 临床试验最新进展 | Clinical Trial Updates</h2>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Phase 3 Trials & Late-Stage Developments</h3>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-phase">Phase 3</span> NTLA-2001 (Intellia Therapeutics) - ATTR Amyloidosis</div>
+                        <p><strong>Trial Name:</strong> MAGNITUDE</p>
+                        <p><strong>Indications:</strong> Transthyretin (ATTR) amyloidosis with cardiomyopathy (ATTR-CM) and polyneuropathy (ATTR-PN)</p>
+                        <p><strong>Status:</strong> Phase 3 trial actively recruiting and ongoing</p>
+                        <p><strong>Technology:</strong> In vivo CRISPR-Cas9 editing delivered via lipid nanoparticles (LNPs) targeting the <em>TTR</em> gene</p>
+                        <p><strong>Significance:</strong> Represents one of the most advanced in vivo CRISPR programs, potentially establishing a new paradigm for treating protein-misfolding disorders with a single dose</p>
+                    </div>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-phase">Phase 1/2</span> VERVE-101 (Verve Therapeutics) - Familial Hypercholesterolemia</div>
+                        <p><strong>Target:</strong> PCSK9 gene in the liver</p>
+                        <p><strong>Technology:</strong> Base editing (Adenine Base Editor - ABE)</p>
+                        <p><strong>Results:</strong> Phase 1 data showed <strong>47-84% reduction in PCSK9 protein levels</strong> at higher doses</p>
+                        <p><strong>Significance:</strong> First-in-human base editing trial demonstrating durable lipid lowering with potential for permanent cardiovascular risk reduction after a single treatment</p>
+                    </div>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-phase">Phase 1/2</span> PM359 (Prime Medicine) - Chronic Granulomatous Disease</div>
+                        <p><strong>Milestone:</strong> <strong>First prime editing therapy to enter clinical trials</strong></p>
+                        <p><strong>Indication:</strong> Chronic granulomatous disease (CGD), a rare genetic immune disorder</p>
+                        <p><strong>Technology:</strong> Prime editing system for precise genome modifications without double-strand breaks</p>
+                        <p><strong>Significance:</strong> Represents the clinical translation of David Liu's prime editing platform, potentially treating thousands of diseases with point mutations</p>
+                    </div>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-phase">Phase 1</span> BEAM-302 (Beam Therapeutics) - Alpha-1 Antitrypsin Deficiency</div>
+                        <p><strong>Indication:</strong> Alpha-1 antitrypsin deficiency (AATD), a genetic disorder causing lung and liver disease</p>
+                        <p><strong>Technology:</strong> Base editing delivered via LNPs</p>
+                        <p><strong>Status:</strong> Phase 1 trial ongoing</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">CAR-T Cell Therapy Trials</h3>
+                    <p>Multiple CRISPR-edited CAR-T programs are advancing through clinical development:</p>
+                    <ul>
+                        <li><strong>CTX110</strong> (CRISPR Therapeutics): CD19-directed CAR-T for B-cell malignancies</li>
+                        <li><strong>CTX130</strong> (CRISPR Therapeutics): CD70-directed CAR-T for renal cell carcinoma and T-cell malignancies</li>
+                        <li><strong>ALLO-501/501A</strong> (Allogeneic CAR-T programs using CRISPR for host-versus-graft prevention)</li>
+                    </ul>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Clinical Hold Update</h3>
+                    <div class="highlight-box">
+                        <p><strong>NTLA-2002 (Intellia) - Hereditary Angioedema (HAE):</strong></p>
+                        <p>The FDA placed a clinical hold on the Phase 1/2 trial of NTLA-2002 following reports of liver complications in a patient receiving a different therapy (NTLA-2001 for ATTR amyloidosis). This underscores the regulatory scrutiny on in vivo CRISPR therapies and the importance of demonstrating liver safety across LNP-delivered programs.</p>
+                        <p><em>Note:</em> This hold illustrates the interconnected nature of safety assessments across CRISPR programs using similar delivery platforms.</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Global Trial Landscape</h3>
+                    <p>According to CRISPR Medicine News monitoring, <strong>239 clinical trials</strong> involving CRISPR technologies are being tracked globally, with Phase 3 trials leading in:</p>
+                    <ul>
+                        <li>Sickle Cell Disease (SCD) and Transfusion-Dependent Beta-Thalassemia (TDT)</li>
+                        <li>Transthyretin (ATTR) Amyloidosis</li>
+                        <li>Hereditary Angioedema (HAE)</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Section 2: FDA Approvals & Regulatory Changes -->
+            <div class="section">
+                <h2 class="section-title">2. FDA批准与监管变化 | FDA Approvals & Regulatory Changes</h2>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Historic FDA Approval: Casgevy</h3>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-fda">FDA Approved</span> Casgevy (exagamglogene autotemcel)</div>
+                        <table>
+                            <tr>
+                                <th>Attribute</th>
+                                <th>Details</th>
+                            </tr>
+                            <tr>
+                                <td><strong>Approval Date</strong></td>
+                                <td>January 2024</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Manufacturer</strong></td>
+                                <td>Vertex Pharmaceuticals & CRISPR Therapeutics</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Indications</strong></td>
+                                <td>Sickle Cell Disease (SCD) and Transfusion-Dependent Beta-Thalassemia (TDT)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Technology</strong></td>
+                                <td>Ex vivo CRISPR-Cas9 editing of CD34+ hematopoietic stem cells to reactivate fetal hemoglobin (HbF) by disrupting the BCL11A erythroid enhancer</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Pricing</strong></td>
+                                <td><strong>$2.2 million per patient</strong> (initial pricing)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Significance</strong></td>
+                                <td><strong>First FDA-approved CRISPR therapy</strong> - validates CRISPR as a clinically viable therapeutic modality just 12 years after its discovery</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Additional Gene Therapy Approvals</h3>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-fda">FDA Approved</span> Lyfgenia (lovotibeglogene autotemcel)</div>
+                        <p><strong>Manufacturer:</strong> Bluebird bio</p>
+                        <p><strong>Technology:</strong> Lentiviral gene therapy (not CRISPR-based)</p>
+                        <p><strong>Indication:</strong> Sickle Cell Disease (SCD)</p>
+                        <p><strong>Context:</strong> Approved alongside Casgevy, providing patients with two gene therapy options and establishing reimbursement precedents for cell-based gene therapies</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Regulatory & Patent Developments</h3>
+                    
+                    <div class="timeline">
+                        <div class="timeline-item">
+                            <p><strong>UC Berkeley vs. Broad Institute Patent Battle:</strong></p>
+                            <p>The U.S. Court of Appeals for the Federal Circuit (CAFC) <strong>vacated the Patent Trial and Appeal Board (PTAB) ruling</strong> on the conception of CRISPR-Cas9. This development reintroduces uncertainty around the foundational CRISPR-Cas9 patent landscape and could impact licensing dynamics for years to come.</p>
+                        </div>
+                        
+                        <div class="timeline-item">
+                            <p><strong>FDA Clinical Hold on NTLA-2002:</strong></p>
+                            <p>The FDA placed a clinical hold on Intellia's NTLA-2002 trial for hereditary angioedema following liver safety observations. This regulatory action highlights the heightened scrutiny on in vivo CRISPR therapies, particularly those using lipid nanoparticle delivery to the liver.</p>
+                        </div>
+                        
+                        <div class="timeline-item">
+                            <p><strong>EU Regulations on Gene-Edited Crops:</strong></p>
+                            <p>The European Union continues to develop regulatory frameworks for gene-edited agricultural products, with ongoing debates about distinguishing CRISPR edits from traditional GMO classifications.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 3: AI + CRISPR Developments -->
+            <div class="section">
+                <h2 class="section-title">3. AI与CRISPR结合进展 | AI + CRISPR Integration</h2>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">CRISPR-GPT: Stanford Medicine Innovation</h3>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-ai">AI Tool</span> CRISPR-GPT</div>
+                        <p><strong>Developer:</strong> Stanford Medicine</p>
+                        <p><strong>Technology:</strong> Large language model (LLM) specifically trained on CRISPR literature and experimental data</p>
+                        <p><strong>Capabilities:</strong></p>
+                        <ul>
+                            <li>Accelerates guide RNA design and optimization</li>
+                            <li>Predicts off-target effects with improved accuracy</li>
+                            <li>Suggests experimental protocols based on target gene and cell type</li>
+                            <li>Analyzes sequencing data to detect editing outcomes</li>
+                        </ul>
+                        <p><strong>Impact:</strong> Democratizes CRISPR experimentation by enabling researchers without deep bioinformatics expertise to design sophisticated gene editing experiments</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Industry Partnerships</h3>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-ai">Partnership</span> ElevateBio + Amazon Web Services</div>
+                        <p><strong>Collaboration:</strong> ElevateBio partnered with Amazon Web Services to integrate artificial intelligence and machine learning into their gene therapy discovery platform</p>
+                        <p><strong>Goals:</strong></p>
+                        <ul>
+                            <li>Accelerate identification of optimal gene editing targets</li>
+                            <li>Enhance cell therapy engineering through AI-driven design</li>
+                            <li>Streamline manufacturing process optimization</li>
+                        </ul>
+                        <p><strong>Significance:</strong> Represents growing trend of integrating cloud computing and AI with CRISPR platforms to reduce drug discovery timelines</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">AI Applications in CRISPR Workflow</h3>
+                    <div class="highlight-box">
+                        <p><strong>Key AI Integration Areas:</strong></p>
+                        <ul>
+                            <li><strong>Guide RNA Design:</strong> Machine learning models predict on-target efficiency and off-target risk across diverse genomic contexts</li>
+                            <li><strong>Delivery Optimization:</strong> AI models predict optimal LNP compositions for specific tissue targeting</li>
+                            <li><strong>Outcome Prediction:</strong> Deep learning analyzes sequencing data to quantify editing efficiency and byproduct formation</li>
+                            <li><strong>Patient Stratification:</strong> AI identifies patients most likely to benefit from CRISPR therapies based on genetic background</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 4: Market Trends -->
+            <div class="section">
+                <h2 class="section-title">4. 市场趋势 | Market Trends</h2>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Market Size & Growth Projections</h3>
+                    
+                    <div class="stat-grid">
+                        <div class="stat-card">
+                            <div class="stat-value">$4.77B</div>
+                            <div class="stat-label">2025 Market Size</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">$16.47B</div>
+                            <div class="stat-label">2034 Projected Size</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">14.87%</div>
+                            <div class="stat-label">CAGR (2026-2035)</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">64.05%</div>
+                            <div class="stat-label">Therapeutic Share</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Regional Analysis</h3>
+                    
+                    <table>
+                        <tr>
+                            <th>Region</th>
+                            <th>Market Share (2025)</th>
+                            <th>Growth Rate</th>
+                            <th>Key Characteristics</th>
+                        </tr>
+                        <tr>
+                            <td><strong>North America</strong></td>
+                            <td>41.15%</td>
+                            <td>Steady growth</td>
+                            <td>Dominant due to FDA approvals, strong research infrastructure, and presence of major players</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Asia Pacific</strong></td>
+                            <td>Fastest growing</td>
+                            <td>15.18% CAGR</td>
+                            <td>Rapidly expanding due to increasing R&D investments, growing biotech sector in China, Japan, South Korea</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Europe</strong></td>
+                            <td>Significant share</td>
+                            <td>Moderate growth</td>
+                            <td>Strong academic research base, evolving regulatory framework for gene therapies</td>
+                        </tr>
+                    </table>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Market Segmentation</h3>
+                    <p><strong>By Application:</strong></p>
+                    <ul>
+                        <li><strong>Therapeutic Applications:</strong> 64.05% market share - includes treatments for genetic disorders, cancers, and infectious diseases</li>
+                        <li><strong>Genetic Engineering:</strong> Agricultural biotechnology, livestock improvement</li>
+                        <li><strong>Drug Discovery:</strong> CRISPR-based screening and target validation</li>
+                        <li><strong>Research Tools:</strong> Gene knockout/knockin models for basic research</li>
+                    </ul>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Industry Challenges</h3>
+                    
+                    <div class="highlight-box">
+                        <p><strong>Financial Pressures Despite Clinical Success:</strong></p>
+                        <p>CRISPR Therapeutics announced layoffs of <strong>50 employees</strong> in 2024 despite the landmark FDA approval of Casgevy. This paradox reflects broader industry challenges:</p>
+                        <ul>
+                            <li>High manufacturing costs limiting patient access</li>
+                            <li>Complex reimbursement negotiations with payers</li>
+                            <li>Long timelines to profitability given small patient populations</li>
+                            <li>Need for continued investment in next-generation platforms</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Section 5: Scientific Breakthroughs -->
+            <div class="section">
+                <h2 class="section-title">5. 科学突破 | Scientific Breakthroughs</h2>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">World's First Personalized CRISPR Therapy</h3>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-breakthrough">Historic First</span> Personalized Therapy for Infant with CPS1 Mutation</div>
+                        <table>
+                            <tr>
+                                <th>Parameter</th>
+                                <th>Details</th>
+                            </tr>
+                            <tr>
+                                <td><strong>Patient</strong></td>
+                                <td>Baby KJ, infant with carbamoyl phosphate synthetase 1 (CPS1) deficiency</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Condition</strong></td>
+                                <td>Rare genetic disorder causing life-threatening ammonia buildup</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Timeline</strong></td>
+                                <td>Therapy designed in <strong>8 months</strong>; dosed February-March 2025</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Approach</strong></td>
+                                <td>Personalized CRISPR-Cas9 therapy targeting patient's specific mutation</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Outcome</strong></td>
+                                <td>Patient can now tolerate higher dietary protein levels; significant clinical improvement</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Significance</strong></td>
+                                <td><strong>World's first personalized CRISPR therapy</strong> - demonstrates feasibility of n=1 gene therapies for ultra-rare diseases</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">PERT System: Treating Nonsense Mutations</h3>
+                    
+                    <div class="card">
+                        <div class="card-title"><span class="badge badge-breakthrough">Technology Breakthrough</span> PERT System (Prime Editing-Mediated Readthrough)</div>
+                        <p><strong>Developer:</strong> Broad Institute (David Liu Lab)</p>
+                        <p><strong>Innovation:</strong> Prime editing system designed to treat <strong>premature termination codons (nonsense mutations)</strong></p>
+                        <p><strong>Mechanism:</strong> Uses prime editing to enable ribosomal readthrough of stop codons, restoring full-length protein production</p>
+                        <p><strong>Target Population:</strong> Could address approximately <strong>30% of rare genetic diseases</strong> caused by nonsense mutations</p>
+                        <p><strong>Significance:</strong> Expands the treatable landscape of CRISPR therapies beyond point mutations to include the most severe class of truncating mutations</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">LNP Delivery Advances</h3>
+                    
+                    <div class="card">
+                        <div class="card-title">Lipid Nanoparticle Delivery for CFTR Editing</div>
+                        <p><strong>Target:</strong> CFTR G542X mutation (cystic fibrosis)</p>
+                        <p><strong>Results from Science Advances Study:</strong></p>
+                        <ul>
+                            <li><strong>3.5% gene integration efficiency</strong> for precise correction</li>
+                            <li><strong>80% correction of CFTR function</strong> in bronchial epithelial cells</li>
+                            <li>Demonstrated delivery to lung cells via optimized LNP formulations</li>
+                        </ul>
+                        <p><strong>Significance:</strong> Advances LNP technology beyond liver targeting to enable treatment of pulmonary diseases</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">RIDE VLP Delivery System</h3>
+                    
+                    <div class="card">
+                        <div class="card-title">RIDE (Virus-Like Particle) System for Cell-Specific Delivery</div>
+                        <p><strong>Innovation:</strong> Virus-like particle (VLP) platform for delivering CRISPR ribonucleoproteins (RNPs)</p>
+                        <p><strong>Advantages:</strong></p>
+                        <ul>
+                            <li>Transient delivery - reduces off-target effects</li>
+                            <li>Cell-type specific targeting capabilities</li>
+                            <li>Non-viral and non-integrating approach</li>
+                            <li>Bypasses immune response associated with viral vectors</li>
+                        </ul>
+                        <p><strong>Applications:</strong> Particularly promising for ex vivo editing of therapeutic cell types including CAR-T cells and hematopoietic stem cells</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Large-Scale DNA Engineering</h3>
+                    
+                    <div class="highlight-box">
+                        <p><strong>Emerging Technologies for Large DNA Insertions:</strong></p>
+                        <ul>
+                            <li><strong>Bridge Recombinases:</strong> Enzymes that facilitate large DNA insertions without double-strand breaks, enabling safer integration of therapeutic cassettes</li>
+                            <li><strong>evoCAST Systems:</strong> Evolved CRISPR-associated transposases for programmable DNA integration</li>
+                            <li><strong>CAST Systems:</strong> CRISPR-associated transposases enabling large-scale DNA engineering with improved precision</li>
+                        </ul>
+                        <p><strong>Impact:</strong> These technologies address one of CRISPR's major limitations - the inability to efficiently insert large DNA sequences - opening doors to treating diseases requiring gene replacement rather than editing</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3 class="subsection-title">Base & Prime Editing Milestones</h3>
+                    <table>
+                        <tr>
+                            <th>Technology</th>
+                            <th>Status</th>
+                            <th>Key Application</th>
+                        </tr>
+                        <tr>
+                            <td><strong>Base Editing (CBE/ABE)</strong></td>
+                            <td>Multiple clinical trials (Phase 1/2)</td>
+                            <td>VERVE-101 (PCSK9), BEAM-302 (AATD)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Prime Editing</strong></td>
+                            <td>First clinical trial (Phase 1/2)</td>
+                            <td>PM359 for Chronic Granulomatous Disease</td>
+                        </tr>
+                        <tr>
+                            <td><strong>PERT (Prime Editing Readthrough)</strong></td>
+                            <td>Preclinical</td>
+                            <td>Nonsense mutations (30% of rare diseases)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Epigenetic Editing</strong></td>
+                            <td>Early clinical</td>
+                            <td>Transient gene modulation without DNA changes</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Sources Section -->
+            <div class="sources">
+                <h3> Sources | 来源</h3>
+                <ul>
+                    <li>Science Advances - Lipid Nanoparticle Delivery for CRISPR-Cas9-Mediated CFTR Correction</li>
+                    <li>STAT News - CRISPR Therapeutics Layoffs Despite Casgevy Approval</li>
+                    <li>New Scientist - World's First Personalized CRISPR Therapy for Infant</li>
+                    <li>Synthego Blog - CRISPR Clinical Trials to Watch in 2025</li>
+                    <li>Frontiers in Genome Editing - CRISPR-Cas9 Clinical Applications Review</li>
+                    <li>bioRxiv Preprint - LNP-Mediated CFTR Gene Editing</li>
+                    <li>Wiley Online Library - LNP Systems for Gene Editing</li>
+                    <li>Nature - CRISPR Large-Scale DNA Engineering</li>
+                    <li>Foley Hoag - UC-Broad Patent Battle Developments</li>
+                    <li>Stanford Medicine - CRISPR-GPT AI Tool</li>
+                    <li>MedCity News - Intellia Clinical Hold on NTLA-2002</li>
+                    <li>LabiTech EU - CRISPR Clinical Trial Updates</li>
+                    <li>Global News Wire - CRISPR Gene Editing Market Analysis</li>
+                    <li>Precedence Research - CRISPR Market Size Projections</li>
+                    <li>Nature - RIDE VLP System for CRISPR Delivery</li>
+                    <li>MedCity News - Bluebird Bio Skysona Approval</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

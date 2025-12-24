@@ -523,6 +523,67 @@ async def observe_and_save_workbench_activity(
         logfire.warning("workbench_observer_error", tool=tool_name, error=str(e))
 
 
+# Persistent reports directory (outside session workspaces)
+SAVED_REPORTS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "SAVED_REPORTS"
+)
+
+
+async def observe_and_save_work_products(
+    tool_name: str, tool_input: dict, tool_result: str, workspace_dir: str
+) -> None:
+    """
+    Observer: Copy work product reports to persistent SAVED_REPORTS directory.
+    This supplements the session workspace save - reports are saved to BOTH locations.
+    """
+    if "write_local_file" not in tool_name.lower():
+        return
+    
+    # Only process if this is a work_products file
+    file_path = tool_input.get("path", "")
+    if "work_products" not in file_path:
+        return
+    
+    try:
+        # Ensure persistent directory exists
+        os.makedirs(SAVED_REPORTS_DIR, exist_ok=True)
+        
+        # Extract original filename
+        original_filename = os.path.basename(file_path)
+        name_part, ext = os.path.splitext(original_filename)
+        
+        # Add timestamp for uniqueness
+        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        persistent_filename = f"{name_part}_{timestamp_str}{ext}"
+        persistent_path = os.path.join(SAVED_REPORTS_DIR, persistent_filename)
+        
+        # Get the full path of the source file
+        abs_workspace_dir = os.path.abspath(workspace_dir) if not os.path.isabs(workspace_dir) else workspace_dir
+        # Normalize the path - handle both relative and absolute paths
+        if os.path.isabs(file_path):
+            source_path = file_path
+        else:
+            # Find the session directory from the path
+            base_dir = os.path.dirname(os.path.dirname(abs_workspace_dir))  # Up to AGENT_RUN_WORKSPACES
+            source_path = os.path.join(base_dir, file_path)
+        
+        # Wait a moment for the file to be written
+        await asyncio.sleep(0.5)
+        
+        # Copy the file
+        if os.path.exists(source_path):
+            import shutil
+            shutil.copy2(source_path, persistent_path)
+            print(f"\n📁 [OBSERVER] Saved to persistent: {persistent_path}")
+            logfire.info("work_product_saved_persistent", source=file_path, dest=persistent_path)
+        else:
+            logfire.warning("work_product_source_not_found", path=source_path)
+            
+    except Exception as e:
+        logfire.warning("work_product_observer_error", tool=tool_name, error=str(e))
+
+
 
 
 
@@ -866,6 +927,15 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     OBSERVER_WORKSPACE_DIR,
                                 )
                             )
+                            # Work products observer - copy reports to persistent directory
+                            asyncio.create_task(
+                                observe_and_save_work_products(
+                                    tool_name,
+                                    tool_input or {},
+                                    content_str,
+                                    OBSERVER_WORKSPACE_DIR,
+                                )
+                            )
 
 
                             # Post-subagent compliance verification (for Task results)
@@ -1191,7 +1261,7 @@ async def main():
                         "   *Our scraper is instant. Do not cherry-pick. If you find 40 URLs, scrape 40 URLs.*\n\n"
                         "### Step 2: Read ALL Scraped Content (MANDATORY - DO NOT SKIP FILES)\n"
                         "1. After crawl_parallel completes, call `list_directory` again to see all `crawl_*.md` files.\n"
-                        "2. You MUST read EVERY crawl_*.md file, up to a maximum of 30 files.\n"
+                        "2. You MUST read EVERY crawl_*.md file. There is no limit.\n"
                         "3. If there are more than ~6 files, read them in batches (6 files per read operation).\n"
                         "4. DO NOT generate the report until you have read ALL crawl_*.md files.\n"
                         "5. Keep track: 'Read X of Y files' - if X < Y, continue reading.\n\n"
