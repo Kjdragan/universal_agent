@@ -15,7 +15,7 @@
 **Core Capabilities**:
 - Claude Agent SDK for agentic workflows
 - Composio Tool Router for 500+ tool integrations (Gmail, SERP, Slack, etc.)
-- Z.AI webReader MCP for web scraping
+- Crawl4AI parallel web extraction via local MCP server
 - Sub-agent delegation for specialized tasks (report generation)
 - Logfire tracing for observability
 - Automatic workspace and artifact management
@@ -34,7 +34,7 @@
 |---------|--------|-------|
 | **Research & Report Generation** | ✅ Production-ready | Full workflow tested and optimized |
 | **Sub-Agent Delegation** | ✅ Working | `report-creation-expert` handles extraction + synthesis |
-| **Web Extraction (webReader)** | ✅ Working | Uses Z.AI MCP with `retain_images=false` optimization |
+| **Web Extraction (crawl_parallel)** | ✅ Working | Fast parallel extraction via crawl4ai |
 | **Save Corpus** | ✅ Working | Custom MCP tool saves extracted articles to JSON |
 | **Email Delivery** | ✅ Working | Gmail integration with HTML attachment support |
 | **Error Code Tracking** | ✅ Working | 1234 (timeout), 1214 (not found) logged and handled |
@@ -43,10 +43,10 @@
 
 ### Recent Optimizations (Dec 22, 2025)
 
-1. **webReader Performance**:
-   - Added `retain_images=false` to reduce response size
-   - Error code detection: 1234 (timeout, retryable), 1214 (404, permanent)
-   - Domain blacklist tracking in `AGENT_RUN_WORKSPACES/webReader_blacklist.json`
+1. **crawl_parallel Performance**:
+   - Parallel extraction of all URLs in a single call
+   - Clean markdown output with noise removal
+   - Saves directly to session `search_results/`
 
 2. **Report Quality Guidelines**:
    - Must include specific numbers, dates, direct quotes
@@ -60,13 +60,13 @@
 ### Architecture
 
 ```
-User Query → Claude SDK → MCP Servers (Composio + Z.AI + Local)
+User Query → Claude SDK → MCP Servers (Composio + Local Toolkit)
                     ↓
             Query Classification (SIMPLE vs COMPLEX)
                     ↓
             [Complex] → Sub-Agent Delegation (report-creation-expert)
                     ↓
-            Sub-Agent: webReader → save_corpus → write_local_file
+            Sub-Agent: crawl_parallel → read_local_file → write_local_file
                     ↓
             Observer Pattern → Error tracking, artifact saving
                     ↓
@@ -95,7 +95,7 @@ User Query → Claude SDK → MCP Servers (Composio + Z.AI + Local)
 | 2 | File Read | Dependency summary | ✅ PASS | Glob, Read, write_local_file |
 | 3 | Email | Gmail send test | ✅ PASS | GMAIL_SEND_EMAIL |
 | 4 | Data Analysis | CSV + revenue calc | ✅ PASS | write_local_file (x2) |
-| 5 | Multi-Step | Search → Extract → Summarize | ✅ PASS | COMPOSIO_SEARCH, webReader |
+| 5 | Multi-Step | Search → Extract → Summarize | ✅ PASS | COMPOSIO_SEARCH, crawl_parallel |
 | 6 | Slack | Post to #general | 🔐 AUTH | Correctly surfaced auth link |
 
 ### Fix Applied: Work Products Auto-Save
@@ -110,7 +110,7 @@ User Query → Claude SDK → MCP Servers (Composio + Z.AI + Local)
 
 1. **Claude native tools preferred** for local operations (Glob, Read, Bash)
 2. **Composio tools used correctly** for external services (Gmail, Slack, SERP)
-3. **webReader integration works** in multi-step workflows
+3. **crawl_parallel integration works** in multi-step workflows
 4. **Auth handling is graceful** - surfaced Composio link when needed
 
 ---
@@ -207,11 +207,9 @@ AGENT_RUN_WORKSPACES/session_YYYYMMDD_HHMMSS/
     └── *.html
 ```
 
-### 5. Error Codes (webReader)
-| Code | Bytes | Meaning | Action |
-|------|-------|---------|--------|
-| 1234 | 171 | Network timeout | Retry once |
-| 1214 | 90 | Not found (404) | Skip, add to blacklist |
+### 5. Error Handling (crawl_parallel)
+crawl_parallel handles errors internally and continues with successful URLs.
+Failed URLs are logged but don't block the batch.
 
 ---
 
@@ -232,7 +230,6 @@ universal_agent/
 │   ├── 010_LESSONS_LEARNED.md   # 12 lessons on patterns and gotchas
 │   └── 012_LOCAL_VS_WORKBENCH_ARCHITECTURE.md
 ├── AGENT_RUN_WORKSPACES/        # Runtime session artifacts (gitignored)
-│   └── webReader_blacklist.json # Persistent domain blacklist
 ├── pyproject.toml               # Dependencies
 ├── .env                         # Environment variables (gitignored)
 ├── .env.example                 # Environment template
@@ -243,11 +240,10 @@ universal_agent/
 
 ## ⚠️ Known Issues & Gotchas
 
-1. **webReader slow for some domains** - ~60s timeout for network errors (code 1234)
+1. **Some domains may timeout** - crawl_parallel handles gracefully
 2. **Hooks don't fire in MCP mode** - Use Observer Pattern instead
 3. **MULTI_EXECUTE structure is deeply nested** - See Lesson 3 in lessons learned
 4. **MCP content is string repr, not JSON** - Use `ast.literal_eval` to parse
-5. **Direct Z.AI REST API requires separate billing** - Use MCP webReader instead
 
 ---
 

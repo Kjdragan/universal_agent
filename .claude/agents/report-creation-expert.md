@@ -50,7 +50,7 @@ Call `mcp__local_toolkit__crawl_parallel` to scrape ALL URLs in a single call.
 mcp__local_toolkit__crawl_parallel(urls=["url1", ...], session_dir="{CURRENT_SESSION_WORKSPACE}")
 ```
 
-**NOTE:** This replaces the old webReader batching. Do it all in one go.
+**NOTE:** Use `crawl_parallel` - it handles all URLs in parallel in one call.
 
 ### Step 3: Read & Synthesize
 

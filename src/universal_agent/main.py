@@ -949,10 +949,12 @@ async def main():
     # Local MCP tools are exposed via stdio server defined in mcp_servers config
 
     # Create Composio session
-    # Fix 3: Strict Scoping by passing allowed apps as toolkits list
+    # IMPORTANT: Per 000_CURRENT_CONTEXT.md, we disable external crawlers to force use of
+    # local crawl_parallel tool. This prevents COMPOSIO_SEARCH_TOOLS from recommending
+    # firecrawl or exa web scrapers.
     session = composio.create(
         user_id=user_id,
-        toolkits=ALLOWED_APPS
+        toolkits={"disable": ["firecrawl", "exa"]}
     )
 
     # Create ClaudeAgentOptions now that session is available
@@ -1038,13 +1040,10 @@ async def main():
                     "args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")],
                 },
             },
-            allowed_tools=[
-                "Task",
-                "mcp__local_toolkit__crawl_parallel",
-                "mcp__local_toolkit__read_local_file",
-                "mcp__local_toolkit__write_local_file",
-                "mcp__local_toolkit__list_directory",
-            ],  # Required for sub-agent delegation
+            # NOTE: Do NOT set allowed_tools here - that would restrict to ONLY those tools.
+            # The agent needs access to BOTH Composio tools (COMPOSIO_SEARCH_NEWS, etc.)
+            # AND local_toolkit tools (crawl_parallel, read_local_file, etc.)
+            # Sub-agents inherit all tools via model="inherit".
             agents={
                 "report-creation-expert": AgentDefinition(
                     description=(

@@ -102,7 +102,7 @@ session_*/
 | Large data returns `data_preview` | Agent MUST `workbench_download` the full file; don't process preview directly |
 
 ### crawl4ai (Local Web Scraping)
-Replaced webReader with `crawl_parallel` for faster, local-first extraction.
+`crawl_parallel` provides fast, parallel web extraction using crawl4ai.
 Saves markdown directly to `search_results/`.
 
 ### Composio Planner Behavior
