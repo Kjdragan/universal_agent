@@ -935,7 +935,7 @@ async def main():
     # =========================================================================
     # Define authorized toolkits to prevent accidental usage of unconfigured tools
     # like Outlook.
-    ALLOWED_APPS = ["gmail", "github", "tavily", "codeinterpreter"]
+    ALLOWED_APPS = ["gmail", "github", "tavily", "codeinterpreter", "slack"]
     
     print(f"✅ Enforcing Strict Tool Scoping: {ALLOWED_APPS}")
     
@@ -1089,6 +1089,33 @@ async def main():
                         "🚨 START IMMEDIATELY: List the directory to find your targets."
                     ),
                     # Omit 'tools' so sub-agent inherits ALL tools including MCP tools
+                    model="inherit",
+                ),
+                "slack-expert": AgentDefinition(
+                    description=(
+                        "Expert for Slack workspace interactions. "
+                        "DELEGATE when user mentions: 'slack', 'channel', '#channel-name', "
+                        "'post to slack', 'summarize messages', 'what was discussed in'."
+                    ),
+                    prompt=(
+                        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+                        f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
+                        "You are a **Slack Expert**.\n\n"
+                        "## AVAILABLE TOOLS\n"
+                        "- `SLACK_LIST_CHANNELS` - List available channels\n"
+                        "- `SLACK_FETCH_CONVERSATION_HISTORY` - Get messages from a channel\n"
+                        "- `SLACK_SEND_MESSAGE` - Post a message to a channel\n\n"
+                        "## WORKFLOW FOR SUMMARIZATION\n"
+                        "1. Use `SLACK_LIST_CHANNELS` to find the channel ID by name\n"
+                        "2. Use `SLACK_FETCH_CONVERSATION_HISTORY` with the channel ID and `limit` parameter\n"
+                        "3. Extract key information: topics discussed, decisions made, action items\n"
+                        "4. Write a brief summary to the workspace using `mcp__local_toolkit__write_local_file`\n\n"
+                        "## WORKFLOW FOR POSTING\n"
+                        "1. Use `SLACK_LIST_CHANNELS` to find the target channel ID\n"
+                        "2. Format your message clearly with sections if needed\n"
+                        "3. Use `SLACK_SEND_MESSAGE` with the channel ID and formatted message\n\n"
+                        "🚨 IMPORTANT: Always use channel IDs (not names) for API calls."
+                    ),
                     model="inherit",
                 ),
             },
