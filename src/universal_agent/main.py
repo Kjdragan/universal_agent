@@ -935,7 +935,7 @@ async def main():
     # =========================================================================
     # Define authorized toolkits to prevent accidental usage of unconfigured tools
     # like Outlook.
-    ALLOWED_APPS = ["gmail", "github", "tavily", "codeinterpreter", "slack"]
+    ALLOWED_APPS = ["gmail", "github", "codeinterpreter", "slack", "composio_search"]
     
     print(f"✅ Enforcing Strict Tool Scoping: {ALLOWED_APPS}")
     
