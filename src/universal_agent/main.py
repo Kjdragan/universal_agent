@@ -912,28 +912,56 @@ async def main():
         global composio
         downloads_dir = os.path.join(workspace_dir, "downloads")
         os.makedirs(downloads_dir, exist_ok=True)
-        composio = Composio(
-            api_key=os.environ["COMPOSIO_API_KEY"], file_download_dir=downloads_dir
-        )
+      # =========================================================================
+    # 2. NON-BLOCKING AUTH FIX
+    # Monkeypatch builtins.input to prevent EOFError during headless auth prompts
+    # =========================================================================
+    import builtins
+    
+    original_input = builtins.input
+    
+    def non_blocking_input(prompt=None):
+        if prompt:
+            print(prompt, end="")  # Print prompt to stdout/logs
+        # Return empty string instead of blocking/crashing
+        print("\n\n [System] Non-blocking input called. Skipping pause.", flush=True)
+        return ""
         
-        # Register custom tools BEFORE session creation
-        # Custom tools should be auto-discovered when registered before composio.create()
-        # Local MCP tools are exposed via stdio server defined in mcp_servers config
+    builtins.input = non_blocking_input
+    print("✅ Non-blocking input handler installed (Fix 1)")
 
-        # Create Composio session
-        global session
-        session = composio.create(
-            user_id=user_id,
-            toolkits={"disable": ["firecrawl", "exa"]}
-        )
+    # =========================================================================
+    # 3. Initialize Composio with Strict Tool Scoping (Fix 3)
+    # =========================================================================
+    # Define authorized toolkits to prevent accidental usage of unconfigured tools
+    # like Outlook.
+    ALLOWED_APPS = ["gmail", "github", "tavily", "codeinterpreter"]
+    
+    print(f"✅ Enforcing Strict Tool Scoping: {ALLOWED_APPS}")
+    
+    composio = Composio(
+        api_key=os.getenv("COMPOSIO_API_KEY"),
+        file_download_dir=downloads_dir
+    )
+    
+    # Register custom tools BEFORE session creation
+    # Custom tools should be auto-discovered when registered before composio.create()
+    # Local MCP tools are exposed via stdio server defined in mcp_servers config
 
-        # Create ClaudeAgentOptions now that session is available
-        global options
-        options = ClaudeAgentOptions(
-            system_prompt=(
-                f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
-                "TEMPORAL CONSISTENCY WARNING: You are operating in a timeline where it is December 2025. "
-                "If 'real-world' search tools return results dated 2024, explicitly note the date discrepancy. "
+    # Create Composio session
+    # Fix 3: Strict Scoping by passing allowed apps as toolkits list
+    session = composio.create(
+        user_id=user_id,
+        toolkits=ALLOWED_APPS
+    )
+
+    # Create ClaudeAgentOptions now that session is available
+    global options
+    options = ClaudeAgentOptions(
+        system_prompt=(
+            f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+            "TEMPORAL CONSISTENCY WARNING: You are operating in a timeline where it is December 2025. "
+            "If 'real-world' search tools return results dated 2024, explicitly note the date discrepancy. "
                 "Do NOT present 2024 news as 2025 news without qualification.\n\n"
                 "You are a helpful assistant with access to external tools. "
                 "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
@@ -1073,77 +1101,77 @@ async def main():
         )
 
         # Initialize trace dict now that session is available
-        global trace
-        trace = {
-            "session_info": {
-                "url": session.mcp.url,
-                "user_id": user_id,
-                "timestamp": datetime.now().isoformat(),
-            },
-            "query": None,
-            "start_time": None,
-            "end_time": None,
-            "total_duration_seconds": None,
-            "tool_calls": [],
-            "tool_results": [],
-            "iterations": [],
-            "logfire_enabled": bool(LOGFIRE_TOKEN),
-        }
+    global trace
+    trace = {
+        "session_info": {
+            "url": session.mcp.url,
+            "user_id": user_id,
+            "timestamp": datetime.now().isoformat(),
+        },
+        "query": None,
+        "start_time": None,
+        "end_time": None,
+        "total_duration_seconds": None,
+        "tool_calls": [],
+        "tool_results": [],
+        "iterations": [],
+        "logfire_enabled": bool(LOGFIRE_TOKEN),
+    }
 
-        # Configure observer to save artifacts to this workspace
-        global OBSERVER_WORKSPACE_DIR
-        OBSERVER_WORKSPACE_DIR = workspace_dir
+    # Configure observer to save artifacts to this workspace
+    global OBSERVER_WORKSPACE_DIR
+    OBSERVER_WORKSPACE_DIR = workspace_dir
 
-        # Setup Output Logging
-        run_log_path = os.path.join(workspace_dir, "run.log")
-        log_file = open(run_log_path, "a", encoding="utf-8")
-        sys.stdout = DualWriter(log_file, sys.stdout)
-        sys.stderr = DualWriter(log_file, sys.stderr)
+    # Setup Output Logging
+    run_log_path = os.path.join(workspace_dir, "run.log")
+    log_file = open(run_log_path, "a", encoding="utf-8")
+    sys.stdout = DualWriter(log_file, sys.stdout)
+    sys.stderr = DualWriter(log_file, sys.stderr)
 
-        # Log session info now that logging is set up
+    # Log session info now that logging is set up
 
-        # Inject Workspace Path into System Prompt for Sub-Agents
-        abs_workspace_path = os.path.abspath(workspace_dir)
-        # Safely append to system_prompt (ensure it's a string)
-        if options.system_prompt and isinstance(options.system_prompt, str):
-            options.system_prompt += (
-                f"\n\nContext:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
-            )
-        else:
-            # Create new context if no system prompt set
-            options.system_prompt = (
-                f"Context:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
-            )
-        print(f"✅ Injected Session Workspace: {abs_workspace_path}")
+    # Inject Workspace Path into System Prompt for Sub-Agents
+    abs_workspace_path = os.path.abspath(workspace_dir)
+    # Safely append to system_prompt (ensure it's a string)
+    if options.system_prompt and isinstance(options.system_prompt, str):
+        options.system_prompt += (
+            f"\n\nContext:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
+        )
+    else:
+        # Create new context if no system prompt set
+        options.system_prompt = (
+            f"Context:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
+        )
+    print(f"✅ Injected Session Workspace: {abs_workspace_path}")
 
-        # Extract Trace ID (Lazy import to ensure OTel is ready)
-        # Extract Trace ID (Lazy import to ensure OTel is ready)
-        import opentelemetry.trace
+    # Extract Trace ID (Lazy import to ensure OTel is ready)
+    # Extract Trace ID (Lazy import to ensure OTel is ready)
+    import opentelemetry.trace
 
-        span = opentelemetry.trace.get_current_span()
-        trace_id = span.get_span_context().trace_id
-        trace_id_hex = format(trace_id, "032x")
-        trace["trace_id"] = trace_id_hex
+    span = opentelemetry.trace.get_current_span()
+    trace_id = span.get_span_context().trace_id
+    trace_id_hex = format(trace_id, "032x")
+    trace["trace_id"] = trace_id_hex
 
-        print(f"\n=== Composio Session Info ===")
-        print(f"Session URL: {session.mcp.url}")
-        print(f"User ID: {user_id}")
-        print(f"Timestamp: {timestamp}")
-        print(f"Trace ID: {trace_id_hex}")
-        print(f"============================\n")
+    print(f"\n=== Composio Session Info ===")
+    print(f"Session URL: {session.mcp.url}")
+    print(f"User ID: {user_id}")
+    print(f"Timestamp: {timestamp}")
+    print(f"Trace ID: {trace_id_hex}")
+    print(f"============================\n")
 
-        print("=" * 80)
-        print("Composio Agent Ready")
-        print("=" * 80)
-        print()
+    print("=" * 80)
+    print("Composio Agent Ready")
+    print("=" * 80)
+    print()
 
-        trace["start_time"] = datetime.now().isoformat()
-        start_ts = time.time()
+    trace["start_time"] = datetime.now().isoformat()
+    start_ts = time.time()
 
-        prompt_session = PromptSession()
-        
-        print("Initializing Agent and connecting to tools... (this may take a moment)")
-        async with ClaudeSDKClient(options) as client:
+    prompt_session = PromptSession()
+    
+    print("Initializing Agent and connecting to tools... (this may take a moment)")
+    async with ClaudeSDKClient(options) as client:
             while True:
                 # 1. Get User Input
                 print("\n" + "=" * 80)

@@ -102,6 +102,49 @@ def list_directory(path: str) -> str:
 
 
 @mcp.tool()
+def compress_files(files: list[str], output_archive: str) -> str:
+    """
+    Compress a list of files into a zip archive.
+    Args:
+        files: List of absolute file paths to include.
+        output_archive: Absolute path for the output zip file.
+    """
+    import zipfile
+    try:
+        # Validate input paths
+        validated_files = []
+        for f in files:
+            abs_path = os.path.abspath(f)
+            if not os.path.exists(abs_path):
+                return json.dumps({"error": f"File not found: {f}"})
+            validated_files.append(abs_path)
+
+        output_path = os.path.abspath(output_archive)
+        
+        # Create parent directory if needed
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for file_path in validated_files:
+                # Arcname is the name inside the zip file (basename)
+                zf.write(file_path, arcname=os.path.basename(file_path))
+                
+        # Check if created
+        if os.path.exists(output_path):
+             size = os.path.getsize(output_path)
+             return json.dumps({
+                 "success": True, 
+                 "archive_path": output_path,
+                 "size_bytes": size,
+                 "files_included": len(validated_files)
+             })
+        return json.dumps({"error": "Failed to create archive file"})
+
+    except Exception as e:
+        return json.dumps({"error": f"Compression failed: {str(e)}"})
+
+
+@mcp.tool()
 def upload_to_composio(path: str, session_id: str = None) -> str:
     """
     "Teleport" a local file to Composio's Cloud environment (Remote Workbench + S3).
