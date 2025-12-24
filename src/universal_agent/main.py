@@ -363,6 +363,9 @@ async def observe_and_save_search_results(
                             size=file_size,
                         )
                         saved_count += 1
+                        # Return feedback that can be injected into agent context
+                        # This tells the agent NOT to save again
+                        print(f"   ⚠️  Agent: DO NOT save search results again - already persisted locally.")
                     else:
                         print(f"\n❌ [OBSERVER] File not created: {filename}")
                         logfire.error("observer_file_not_created", path=filename)
@@ -987,34 +990,34 @@ async def main():
                 "   - 'Heavy' operations that require specific Linux binaries (ffmpeg, etc).\n"
                 "   - Untrusted code execution.\n"
                 "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
+                "   - 🚫 NEVER use REMOTE_WORKBENCH to save search results. The Observer already saves them automatically.\n"
                 "4. 🚨 MANDATORY DELEGATION FOR REPORTS (HAND-OFF PROTOCOL):\n"
                 "   - Role: You are the SCOUT. You find the information sources.\n"
                 "   - Sub-Agent Role: The EXPERT. They process and synthesize the sources.\n"
                 "   - PROCEDURE:\n"
-                "     1. COMPOSIO Search -> Saves JSON files to `search_results/`.\n"
+                "     1. COMPOSIO Search -> Results are **AUTO-SAVED** by Observer to `search_results/`. DO NOT save again.\n"
                 "     2. DO NOT read these files or extract URLs yourself. You are not the Expert.\n"
                 "     3. DELEGATE immediately to 'report-creation-expert' using `Task`.\n"
                 "     4. HAND-OFF PROMPT (Use EXACTLY this string, do not add URLs):\n"
                 "        'I have located search data in the `search_results/` directory. Please scan these files using list_directory, scrape ALL URLs, and generate the report.'\n"
                 "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject a system message with next steps.\n"
                 "     Wait for this message before proceeding with upload/email.\n"
-                "5. UPLOADS: Only upload files to workbench if an external tool REQUIRES a remote file path (e.g. email attachment).\n"
+                "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
+                "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', session_id='xxx')`\n"
+                "   - This tool handles EVERYTHING: local→remote→S3 in ONE call.\n"
+                "   - It returns `s3_key` which you pass to GMAIL_SEND_EMAIL's `attachment.s3key` field.\n"
+                "   - DO NOT manually call workbench_upload + REMOTE_WORKBENCH. That's the old, broken way.\n"
                 "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
                 "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by local_toolkit tools.\n"
                 "   - REMOTE paths: `/home/user/...` - only accessible inside COMPOSIO_REMOTE_WORKBENCH sandbox.\n"
-                "   - `workbench_upload` COPIES local→remote (creates file in sandbox).\n"
-                "   - After `workbench_upload`, use the REMOTE path in workbench code, NOT the local path.\n"
-                "   - For email attachments: upload to S3 via workbench's `upload_local_file('/home/user/...')` helper.\n\n"
                 "ONE-SHOT EXAMPLE (Comprehensive Report - CORRECT FLOW):\n"
                 "User: 'Research X and email me a comprehensive report.'\n"
                 "You: \n"
-                "  1. [Search] Use COMPOSIO tools to gather search results (get URLs).\n"
+                "  1. [Search] Use COMPOSIO tools to gather search results (auto-saved by Observer).\n"
                 "  2. [Delegate] Call `Task` with 'report-creation-expert' sub-agent.\n"
-                "     - PROMPT MUST INCLUDE: The list of URLs found in search results\n"
                 "  3. [WAIT] The SubagentStop hook will inject a system message when sub-agent completes.\n"
-                "     - Follow the instructions in the system message (upload + email steps)\n"
-                "  4. [Bridge] Upload the report to remote using `workbench_upload`.\n"
-                "  5. [Email] Send email using `GMAIL_SEND_EMAIL` with the remote file path.\n\n"
+                "  4. [Upload] Call `upload_to_composio(path='work_products/report.md', session_id='xxx')` → get s3_key.\n"
+                "  5. [Email] Call `GMAIL_SEND_EMAIL` with attachment.s3key = the s3_key from step 4.\n\n"
                 "7. 📁 WORK PRODUCTS - MANDATORY AUTO-SAVE:\n"
                 "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
                 "   - TRIGGERS: Tables, summaries, analyses, code generated for user, extracted data.\n"
