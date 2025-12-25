@@ -165,11 +165,13 @@ def upload_to_composio(path: str, session_id: str = None) -> str:
     Use this to stage files for Email Attachments, Slack Uploads, etc.
     
     Returns JSON with:
-    - s3_key: ID for tool attachments (e.g. Gmail)
+    - s3key: ID for tool attachments (e.g. Gmail)
     - s3_url: Direct download link
     - remote_path: Path in the workbench container
     - mimetype: Detected file type
     """
+    import base64
+    
     try:
         abs_path = os.path.abspath(path)
         if not os.path.exists(abs_path):
@@ -178,55 +180,83 @@ def upload_to_composio(path: str, session_id: str = None) -> str:
         filename = os.path.basename(abs_path)
         remote_path = f"/home/user/{filename}"
         
-        # 1. Bridge: Upload Local -> Remote Workbench
-        bridge = get_bridge()
-        upload_res = bridge.upload(abs_path, remote_path, session_id=session_id)
+        # Read and encode file
+        with open(abs_path, "rb") as f:
+            content = f.read()
+        encoded = base64.b64encode(content).decode("utf-8")
         
-        if not upload_res.get("success"):
-            return json.dumps({"error": f"Bridge Upload Failed: {upload_res.get('error')}"})
+        # Get Composio client directly (bypass WorkbenchBridge to avoid sandbox issues)
+        client = Composio(api_key=os.environ.get("COMPOSIO_API_KEY"))
+        
+        # STEP 1: Write file to workbench using base64 decode
+        write_script = (
+            "import os, base64\n"
+            f"path = '{remote_path}'\n"
+            "os.makedirs(os.path.dirname(path), exist_ok=True)\n"
+            f"with open(path, 'wb') as f: f.write(base64.b64decode('{encoded}'))\n"
+            "print(f'WRITE_SUCCESS: {{path}}')"
+        )
+        
+        # No session_id = stays on same sandbox (proven to work in testing)
+        write_resp = client.tools.execute(
+            slug="COMPOSIO_REMOTE_WORKBENCH",
+            arguments={"code_to_execute": write_script},
+            dangerously_skip_version_check=True,
+        )
+        
+        if hasattr(write_resp, "model_dump"):
+            write_resp = write_resp.model_dump()
             
-        # 2. S3 Staging: Execute 'upload_local_file' on Remote Workbench
-        # This helper function is pre-loaded in the workbench environment
-        script = (
-            f"res, err = upload_local_file('{remote_path}')\n"
-            "if err: print(f'S3_ERROR: {err}')\n"
-            "else: \n"
+        write_stdout = write_resp.get("data", {}).get("stdout", "")
+        if "WRITE_SUCCESS" not in write_stdout:
+            return json.dumps({"error": f"File write failed: {write_stdout}"})
+        
+        sys.stderr.write(f"[upload_to_composio] Step 1 OK: File written to {remote_path}\n")
+        
+        # STEP 2: Upload to S3 using Composio helper function
+        s3_script = (
+            f"result, error = upload_local_file('{remote_path}')\n"
+            "if error:\n"
+            "    print(f'S3_ERROR: {{error}}')\n"
+            "else:\n"
             "    import json\n"
-            "    print(json.dumps(res))"
+            "    print('S3_SUCCESS')\n"
+            "    print(json.dumps(result))"
         )
         
-        client = bridge.client
         s3_resp = client.tools.execute(
-            slug="COMPOSIO_REMOTE_WORKBENCH", 
-            arguments={"code_to_execute": script, "session_id": session_id} if session_id else {"code_to_execute": script},
-            user_id=bridge.user_id,
-            dangerously_skip_version_check=True
+            slug="COMPOSIO_REMOTE_WORKBENCH",
+            arguments={"code_to_execute": s3_script},
+            dangerously_skip_version_check=True,
         )
         
-        # Parse S3 Result
-        stdout = ""
-        if hasattr(s3_resp, "data"):
-             stdout = s3_resp.data.get("stdout", "")
-        elif isinstance(s3_resp, dict):
-             stdout = s3_resp.get("data", {}).get("stdout", "")
-             
-        if "S3_ERROR" in stdout or not stdout.strip():
-            return json.dumps({"error": f"S3 Staging Failed: {stdout}"})
+        if hasattr(s3_resp, "model_dump"):
+            s3_resp = s3_resp.model_dump()
             
-        # Extract JSON from stdout (might be mixed with other logs, find the last JSON object)
-        try:
-            # Simple heuristic: Split lines, find the one that looks like JSON
-            for line in stdout.splitlines():
-                if '"s3key":' in line:
+        stdout = s3_resp.get("data", {}).get("stdout", "")
+        
+        if "S3_ERROR" in stdout:
+            return json.dumps({"error": f"S3 upload failed: {stdout}"})
+        
+        if "S3_SUCCESS" not in stdout:
+            return json.dumps({"error": f"S3 upload unclear: {stdout}"})
+        
+        # Parse S3 result JSON from stdout
+        for line in stdout.splitlines():
+            if '"s3key":' in line or '"s3_url":' in line:
+                try:
                     s3_data = json.loads(line)
                     s3_data["remote_path"] = remote_path
+                    sys.stderr.write(f"[upload_to_composio] Step 2 OK: S3 key = {s3_data.get('s3key', 'N/A')}\n")
                     return json.dumps(s3_data, indent=2)
-        except Exception as e:
-            return json.dumps({"error": f"Failed to parse S3 response: {stdout}. Error: {e}"})
-
-        return json.dumps({"error": f"No valid JSON found in S3 response: {stdout}"})
-
+                except json.JSONDecodeError:
+                    continue
+        
+        return json.dumps({"error": f"Could not parse S3 response: {stdout}"})
+        
     except Exception as e:
+        import traceback
+        sys.stderr.write(f"[upload_to_composio] ERROR: {traceback.format_exc()}\n")
         return json.dumps({"error": str(e)})
 
 # =============================================================================
