@@ -11,7 +11,16 @@
 
 ## Overview
 
-The Universal Agent integrates **two MCP (Model Context Protocol) servers** to provide a comprehensive toolset for local operations, external actions, and web content extraction. Each server serves a distinct purpose in the "Local Brain, Remote Hands" architecture.
+The Universal Agent integrates **multiple MCP (Model Context Protocol) servers** to provide a comprehensive toolset for local operations, external actions, web content extraction, and multimodal analysis. Each server serves a distinct purpose in the "Local Brain, Remote Hands" architecture.
+
+| Server | Type | Purpose |
+|--------|------|--------|
+| `local_toolkit` | stdio | Local file ops, web extraction (crawl4ai) |
+| `composio` | HTTP | 500+ SaaS integrations (Gmail, Slack, etc.) |
+| `edgartools` | stdio | SEC Edgar financial research |
+| `video_audio` | stdio | FFmpeg video/audio editing |
+| `youtube` | stdio | yt-dlp video downloads |
+| `zai_vision` | stdio | GLM-4.6V image/video analysis |
 
 ```mermaid
 flowchart TB
@@ -677,9 +686,10 @@ Per the Local-First Architecture (`012_LOCAL_VS_WORKBENCH_ARCHITECTURE.md`):
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `COMPOSIO_API_KEY` | Yes | Composio authentication |
-
 | `LOGFIRE_TOKEN` | Optional | Distributed tracing |
 | `DEFAULT_USER_ID` | Yes | Composio user identifier |
+| `Z_AI_API_KEY` | For Vision | Z.AI API key for Vision MCP |
+| `Z_AI_MODE` | For Vision | Service platform (`ZAI`) |
 
 ---
 
@@ -687,9 +697,9 @@ Per the Local-First Architecture (`012_LOCAL_VS_WORKBENCH_ARCHITECTURE.md`):
 
 - **Local MCP Server:** `src/mcp_server.py`
 - **WorkbenchBridge:** `src/tools/workbench_bridge.py`
-- **MCP Configuration:** `src/universal_agent/main.py:1075-1093`
+- **MCP Configuration:** `src/universal_agent/main.py:1288-1327`
+- **Vision MCP Integration:** `Project_Documentation/027_VISION_MCP_INTEGRATION.md`
 - **Local-First Architecture:** `Project_Documentation/012_LOCAL_VS_WORKBENCH_ARCHITECTURE.md`
-- **Agent-First Protocol:** `/home/kjdragan/lrepos/claudemultiagent/001_OFFICIAL_PROJECT_DOCUMENTATION/RUBE_AGENT_FIRST_PROTOCOL.md`
 
 ---
 

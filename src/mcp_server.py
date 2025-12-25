@@ -159,104 +159,60 @@ def compress_files(files: list[str], output_archive: str) -> str:
 
 
 @mcp.tool()
-def upload_to_composio(path: str, session_id: str = None) -> str:
+def upload_to_composio(
+    path: str, 
+    tool_slug: str = "GMAIL_SEND_EMAIL",
+    toolkit_slug: str = "gmail"
+) -> str:
     """
-    "Teleport" a local file to Composio's Cloud environment (Remote Workbench + S3).
-    Use this to stage files for Email Attachments, Slack Uploads, etc.
+    Upload a local file to Composio S3 for use as an email attachment or other tool input.
+    Uses native Composio SDK FileUploadable.from_path() - the correct, supported method.
+    
+    Args:
+        path: Absolute path to the local file to upload
+        tool_slug: The Composio tool that will consume this file (default: GMAIL_SEND_EMAIL)
+        toolkit_slug: The toolkit the tool belongs to (default: gmail)
     
     Returns JSON with:
-    - s3key: ID for tool attachments (e.g. Gmail)
-    - s3_url: Direct download link
-    - remote_path: Path in the workbench container
+    - s3key: ID for tool attachments (pass to Gmail/Slack)
     - mimetype: Detected file type
+    - name: Original filename
     """
-    import base64
-    
     try:
         abs_path = os.path.abspath(path)
         if not os.path.exists(abs_path):
             return json.dumps({"error": f"File not found: {path}"})
-            
-        filename = os.path.basename(abs_path)
-        remote_path = f"/home/user/{filename}"
         
-        # Read and encode file
-        with open(abs_path, "rb") as f:
-            content = f.read()
-        encoded = base64.b64encode(content).decode("utf-8")
+        # Import native Composio file helper
+        from composio.core.models._files import FileUploadable
         
-        # Get Composio client directly (bypass WorkbenchBridge to avoid sandbox issues)
+        # Get Composio client
         client = Composio(api_key=os.environ.get("COMPOSIO_API_KEY"))
         
-        # STEP 1: Write file to workbench using base64 decode
-        write_script = (
-            "import os, base64\n"
-            f"path = '{remote_path}'\n"
-            "os.makedirs(os.path.dirname(path), exist_ok=True)\n"
-            f"with open(path, 'wb') as f: f.write(base64.b64decode('{encoded}'))\n"
-            "print(f'WRITE_SUCCESS: {{path}}')"
+        # Use native SDK method - this is the correct approach per Composio docs
+        sys.stderr.write(f"[upload_to_composio] Uploading {abs_path} via native FileUploadable.from_path()\\n")
+        
+        result = FileUploadable.from_path(
+            client=client.client,
+            file=abs_path,
+            tool=tool_slug,
+            toolkit=toolkit_slug
         )
         
-        # No session_id = stays on same sandbox (proven to work in testing)
-        write_resp = client.tools.execute(
-            slug="COMPOSIO_REMOTE_WORKBENCH",
-            arguments={"code_to_execute": write_script},
-            dangerously_skip_version_check=True,
-        )
+        # Return the attachment-ready format
+        response = {
+            "s3key": result.s3key,
+            "mimetype": result.mimetype,
+            "name": result.name,
+            "local_path": abs_path
+        }
         
-        if hasattr(write_resp, "model_dump"):
-            write_resp = write_resp.model_dump()
-            
-        write_stdout = write_resp.get("data", {}).get("stdout", "")
-        if "WRITE_SUCCESS" not in write_stdout:
-            return json.dumps({"error": f"File write failed: {write_stdout}"})
-        
-        sys.stderr.write(f"[upload_to_composio] Step 1 OK: File written to {remote_path}\n")
-        
-        # STEP 2: Upload to S3 using Composio helper function
-        s3_script = (
-            f"result, error = upload_local_file('{remote_path}')\n"
-            "if error:\n"
-            "    print(f'S3_ERROR: {{error}}')\n"
-            "else:\n"
-            "    import json\n"
-            "    print('S3_SUCCESS')\n"
-            "    print(json.dumps(result))"
-        )
-        
-        s3_resp = client.tools.execute(
-            slug="COMPOSIO_REMOTE_WORKBENCH",
-            arguments={"code_to_execute": s3_script},
-            dangerously_skip_version_check=True,
-        )
-        
-        if hasattr(s3_resp, "model_dump"):
-            s3_resp = s3_resp.model_dump()
-            
-        stdout = s3_resp.get("data", {}).get("stdout", "")
-        
-        if "S3_ERROR" in stdout:
-            return json.dumps({"error": f"S3 upload failed: {stdout}"})
-        
-        if "S3_SUCCESS" not in stdout:
-            return json.dumps({"error": f"S3 upload unclear: {stdout}"})
-        
-        # Parse S3 result JSON from stdout
-        for line in stdout.splitlines():
-            if '"s3key":' in line or '"s3_url":' in line:
-                try:
-                    s3_data = json.loads(line)
-                    s3_data["remote_path"] = remote_path
-                    sys.stderr.write(f"[upload_to_composio] Step 2 OK: S3 key = {s3_data.get('s3key', 'N/A')}\n")
-                    return json.dumps(s3_data, indent=2)
-                except json.JSONDecodeError:
-                    continue
-        
-        return json.dumps({"error": f"Could not parse S3 response: {stdout}"})
+        sys.stderr.write(f"[upload_to_composio] SUCCESS: s3key={result.s3key}\\n")
+        return json.dumps(response, indent=2)
         
     except Exception as e:
         import traceback
-        sys.stderr.write(f"[upload_to_composio] ERROR: {traceback.format_exc()}\n")
+        sys.stderr.write(f"[upload_to_composio] ERROR: {traceback.format_exc()}\\n")
         return json.dumps({"error": str(e)})
 
 # =============================================================================

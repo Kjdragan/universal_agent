@@ -49,6 +49,17 @@ After extensive investigation, we've established a clear understanding of the th
 | **Native Download** | `CODEINTERPRETER_GET_FILE_CMD` |
 | **Best For** | **Nothing - we're eliminating it** |
 
+### 1.4 Downloads Directory (Media Workspace)
+
+| Aspect | Details |
+|--------|---------|
+| **Location** | `downloads/` (project root) |
+| **Persistence** | ✅ Permanent (like SAVED_REPORTS) |
+| **Access** | Via external MCPs (mcp-youtube, video-audio) |
+| **Structure** | `downloads/videos/`, `downloads/audio/`, `downloads/subtitles/`, `downloads/thumbnails/` |
+| **Best For** | YouTube downloads, video/audio processing |
+| **Note** | Created by mcp-youtube, added to .gitignore |
+
 ---
 
 ## Part 2: Use Case Decision Matrix

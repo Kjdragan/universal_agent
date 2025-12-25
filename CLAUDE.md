@@ -47,6 +47,8 @@ Query Classification (SIMPLE vs COMPLEX)
 Claude Agent SDK (Main Brain)
     ├─→ Composio MCP Server (500+ tools: SERP, Gmail, Slack, etc.)
     ├─→ Local Toolkit MCP (crawl_parallel, write_local_file, upload_to_composio)
+    ├─→ External MCPs (edgartools, video_audio, youtube, zai_vision)
+    └─→ Skills (.claude/skills/: pdf, pptx, xlsx, docx, mcp-builder, skill-creator)
     ↓
 Observer Pattern (async fire-and-forget artifact processing)
     ↓
@@ -72,8 +74,10 @@ AGENT_RUN_WORKSPACES/session_*/ (run.log, trace.json, search_results/, work_prod
 | `src/mcp_server.py` | Custom MCP tools: crawl_parallel, write_local_file, upload_to_composio |
 | `src/tools/workbench_bridge.py` | Local-Remote file transfer bridge using Composio SDK |
 | `.claude/agents/report-creation-expert.md` | Sub-agent for comprehensive research + report synthesis |
+| `.claude/skills/` | Claude Skills: pdf, docx, pptx, xlsx, skill-creator, mcp-builder, frontend-design, webapp-testing |
 | `Project_Documentation/000_CURRENT_CONTEXT.md` | **START HERE** - Current project state |
 | `Project_Documentation/010_LESSONS_LEARNED.md` | 17 lessons on patterns and gotchas |
+| `Project_Documentation/028_CLAUDE_SKILLS_INTEGRATION.md` | Skills integration guide |
 
 ## Session Workspace Structure
 

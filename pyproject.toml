@@ -14,16 +14,24 @@ dependencies = [
     "composio>=0.10.1",
     "composio-anthropic>=0.10.1",
     "composio-client>=1.21.0",
+    "edgartools>=5.6.0",
     "fastapi>=0.115.0",
+    "fastmcp>=2.14.1",
+    "ffmpeg-python>=0.2.0",
     "logfire[httpx]>=4.16.0",
+    "mcp-youtube>=0.2.0",
+    "pillow>=12.0.0",
     "prompt-toolkit>=3.0.52",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
     "python-dotenv>=1.2.1",
     "rich>=14.2.0",
+    "starlette>=0.50.0",
     "uvicorn[standard]>=0.34.0",
     "websockets>=14.0",
+    "yt-dlp>=2025.01.0",
 ]
+
 
 [tool.ruff]
 # Ignore common warnings that are intentional in this codebase:
@@ -31,3 +39,4 @@ dependencies = [
 # F401: Imported but unused (sometimes kept for re-export or conditional use)
 # F811: Redefinition of unused name (sometimes intentional for conditional imports)
 lint.ignore = ["E402", "F401", "F811"]
+

@@ -25,9 +25,12 @@ if os.path.join(src_dir, "src") in sys.path:
 else:
      sys.path.append(os.path.join(src_dir, "src"))
 
-import readline  # Enable better terminal input (backspace, arrow keys, history)
+# prompt_toolkit for better terminal input (arrow keys, history, multiline)
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+from prompt_toolkit.styles import Style
 
 
 class DualWriter:
@@ -584,6 +587,68 @@ async def observe_and_save_work_products(
         logfire.warning("work_product_observer_error", tool=tool_name, error=str(e))
 
 
+async def observe_and_save_video_outputs(
+    tool_name: str, tool_input: dict, tool_result: str, workspace_dir: str
+) -> None:
+    """
+    Observer: Copy video/audio outputs to session work_products directory.
+    Triggered when video_audio or youtube MCP tools produce output files.
+    """
+    # Only process video_audio and youtube MCP output tools
+    video_tools = [
+        "trim_video", "concatenate_videos", "extract_audio", "convert_video",
+        "add_text_overlay", "add_image_overlay", "reverse_video", "compress_video",
+        "rotate_video", "change_video_speed", "download_video", "download_audio"
+    ]
+    
+    if not any(tool in tool_name.lower() for tool in video_tools):
+        return
+    
+    try:
+        # Parse output path from tool result
+        import json
+        import shutil
+        
+        # Try to extract output path from result
+        output_path = None
+        
+        # Check for output_video_path in input
+        if "output_video_path" in tool_input:
+            output_path = tool_input["output_video_path"]
+        elif "output_audio_path" in tool_input:
+            output_path = tool_input["output_audio_path"]
+        elif "output_path" in tool_input:
+            output_path = tool_input["output_path"]
+        
+        # Also try to extract from result message
+        if not output_path and "successfully" in tool_result.lower():
+            # Try to find path in result (e.g., "Videos concatenated successfully to /path/to/file.mp4")
+            if " to " in tool_result:
+                potential_path = tool_result.split(" to ")[-1].strip().rstrip('"}')
+                if potential_path.endswith((".mp4", ".mp3", ".wav", ".webm", ".avi", ".mov")):
+                    output_path = potential_path
+        
+        if not output_path or not os.path.exists(output_path):
+            return
+        
+        # Check if this is a "final" output (not intermediate like last_15_seconds.mp4)
+        filename = os.path.basename(output_path)
+        intermediate_patterns = ["last_", "first_", "temp_", "tmp_", "_part"]
+        if any(pat in filename.lower() for pat in intermediate_patterns):
+            return  # Skip intermediate files
+        
+        # Create work_products/media directory in session workspace
+        media_dir = os.path.join(workspace_dir, "work_products", "media")
+        os.makedirs(media_dir, exist_ok=True)
+        
+        # Copy to session workspace
+        dest_path = os.path.join(media_dir, filename)
+        shutil.copy2(output_path, dest_path)
+        print(f"\n🎬 [OBSERVER] Saved media to session: {dest_path}")
+        logfire.info("video_output_saved_session", source=output_path, dest=dest_path)
+        
+    except Exception as e:
+        logfire.warning("video_observer_error", tool=tool_name, error=str(e))
 
 
 
@@ -642,6 +707,269 @@ def verify_subagent_compliance(
         )
     
     return None
+
+
+# =============================================================================
+# SKILL DISCOVERY - Parse SKILL.md files for progressive disclosure
+# =============================================================================
+
+def discover_skills(skills_dir: str = None) -> list[dict]:
+    """
+    Scan .claude/skills/ directory and parse SKILL.md frontmatter.
+    Returns list of {name, description, path} for each skill.
+    
+    Progressive disclosure: We only load name+description here.
+    Full SKILL.md content is loaded by the agent when needed via read_local_file.
+    """
+    import yaml
+    
+    if skills_dir is None:
+        # Default to project's .claude/skills
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        skills_dir = os.path.join(project_root, ".claude", "skills")
+    
+    skills = []
+    
+    if not os.path.exists(skills_dir):
+        return skills
+    
+    for skill_name in os.listdir(skills_dir):
+        skill_path = os.path.join(skills_dir, skill_name)
+        skill_md = os.path.join(skill_path, "SKILL.md")
+        
+        if os.path.isdir(skill_path) and os.path.exists(skill_md):
+            try:
+                with open(skill_md, "r", encoding="utf-8") as f:
+                    content = f.read()
+                
+                # Parse YAML frontmatter (between --- markers)
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        frontmatter = yaml.safe_load(parts[1])
+                        if frontmatter and isinstance(frontmatter, dict):
+                            skills.append({
+                                "name": frontmatter.get("name", skill_name),
+                                "description": frontmatter.get("description", "No description"),
+                                "path": skill_md,
+                            })
+            except Exception as e:
+                # Skip malformed SKILL.md files
+                logfire.warning("skill_parse_error", skill=skill_name, error=str(e))
+                continue
+    
+    return skills
+
+
+def generate_skills_xml(skills: list[dict]) -> str:
+    """
+    Generate <available_skills> XML block for system prompt injection.
+    This enables Claude to be aware of skills and read them when relevant.
+    """
+    if not skills:
+        return ""
+    
+    lines = ["<available_skills>"]
+    for skill in skills:
+        lines.append(f"""<skill>
+  <name>{skill['name']}</name>
+  <description>{skill['description']}</description>
+  <path>{skill['path']}</path>
+</skill>""")
+    lines.append("</available_skills>")
+    return "\n".join(lines)
+
+
+# Document skills that trigger PreToolUse hints
+DOCUMENT_SKILL_TRIGGERS = {
+    "pdf": ["pdf", "reportlab", "pypdf", "pdfplumber"],
+    "docx": ["docx", "python-docx", "word document"],
+    "pptx": ["pptx", "python-pptx", "powerpoint", "presentation"],
+    "xlsx": ["xlsx", "openpyxl", "excel", "spreadsheet"],
+}
+
+
+async def on_pre_bash_skill_hint(
+    input_data: dict, tool_use_id: str | None, context: HookContext
+) -> HookJSONOutput:
+    """
+    PreToolUse Hook: Before Bash execution, check if command involves document creation.
+    If so, inject a hint about the relevant skill to avoid reinventing the wheel.
+    This is a BACKUP hook - fires after agent has already decided to use Bash.
+    """
+    command = input_data.get("command", "").lower()
+    
+    for skill_name, triggers in DOCUMENT_SKILL_TRIGGERS.items():
+        if any(trigger in command for trigger in triggers):
+            skill_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                ".claude", "skills", skill_name, "SKILL.md"
+            )
+            if os.path.exists(skill_path):
+                logfire.info("skill_hint_backup_injected", skill=skill_name, command_preview=command[:100])
+                return HookJSONOutput(
+                    systemMessage=(
+                        f"⚠️ SKILL REMINDER: You're about to create {skill_name.upper()} content. "
+                        f"The `{skill_name}` skill at `{skill_path}` has proven patterns. "
+                        f"Consider reading it FIRST to avoid common issues."
+                    )
+                )
+    
+    return HookJSONOutput()
+
+
+# Prompt keywords that suggest skill-relevant tasks
+# These are auto-generated from skill descriptions + skill names
+# Override specific skills here if needed
+SKILL_PROMPT_TRIGGERS_OVERRIDE = {
+    # Format: "skill-name": ["keyword1", "keyword2", ...]
+    # Leave empty to use auto-generated triggers from description
+}
+
+
+def build_skill_prompt_triggers() -> dict[str, list[str]]:
+    """
+    Build skill prompt triggers automatically from skill descriptions.
+    This ensures new skills work immediately without code changes.
+    
+    Returns: {"skill-name": ["trigger1", "trigger2", ...]}
+    """
+    import yaml
+    import re
+    
+    triggers = {}
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    skills_dir = os.path.join(project_root, ".claude", "skills")
+    
+    if not os.path.exists(skills_dir):
+        return triggers
+    
+    for skill_name in os.listdir(skills_dir):
+        skill_path = os.path.join(skills_dir, skill_name)
+        skill_md = os.path.join(skill_path, "SKILL.md")
+        
+        if not os.path.isdir(skill_path) or not os.path.exists(skill_md):
+            continue
+        
+        # Check for override first
+        if skill_name in SKILL_PROMPT_TRIGGERS_OVERRIDE:
+            triggers[skill_name] = SKILL_PROMPT_TRIGGERS_OVERRIDE[skill_name]
+            continue
+        
+        try:
+            with open(skill_md, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    frontmatter = yaml.safe_load(parts[1])
+                    if frontmatter and isinstance(frontmatter, dict):
+                        description = frontmatter.get("description", "")
+                        
+                        # Auto-generate triggers from skill name and description
+                        trigger_set = set()
+                        
+                        # Always include skill name
+                        trigger_set.add(skill_name.lower())
+                        
+                        # Extract key terms from description (lowercase, min 4 chars)
+                        words = re.findall(r'\b[a-zA-Z]{4,}\b', description.lower())
+                        # Filter common words, keep domain-specific terms
+                        stop_words = {'this', 'that', 'with', 'from', 'have', 'when', 
+                                     'should', 'used', 'using', 'skill', 'create', 
+                                     'comprehensive', 'editing', 'creation'}
+                        for word in words:
+                            if word not in stop_words:
+                                trigger_set.add(word)
+                        
+                        triggers[skill_name] = list(trigger_set)
+        except Exception:
+            # Fallback: just use skill name
+            triggers[skill_name] = [skill_name.lower()]
+    
+    return triggers
+
+
+# Build triggers at module load (cached)
+SKILL_PROMPT_TRIGGERS = build_skill_prompt_triggers()
+
+
+
+async def on_user_prompt_skill_awareness(
+    input_data: dict, tool_use_id: str | None, context: HookContext
+) -> HookJSONOutput:
+    """
+    UserPromptSubmit Hook: EARLY skill awareness injection.
+    Fires when user submits their prompt, BEFORE agent starts planning.
+    This guides the agent to consider skills during initial approach.
+    
+    Note: Multiple skills may match a single prompt (e.g., "create PDF and Excel").
+    All matching skills are listed to give agent full awareness.
+    
+    UserPromptSubmit hooks return hookSpecificOutput with additionalContext,
+    NOT systemMessage like other hooks.
+    """
+    try:
+        import yaml
+        
+        # Safely extract prompt from input_data
+        if not input_data or not isinstance(input_data, dict):
+            return {}
+        
+        prompt = str(input_data.get("prompt", "") or "").lower()
+        if not prompt:
+            return {}
+        
+        matched_skills = []
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        
+        for skill_name, triggers in SKILL_PROMPT_TRIGGERS.items():
+            if any(trigger in prompt for trigger in triggers):
+                skill_path = os.path.join(project_root, ".claude", "skills", skill_name, "SKILL.md")
+                if os.path.exists(skill_path):
+                    # Read description from frontmatter for better context
+                    description = "Best practices for this task"
+                    try:
+                        with open(skill_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        if content.startswith("---"):
+                            parts = content.split("---", 2)
+                            if len(parts) >= 3:
+                                frontmatter = yaml.safe_load(parts[1])
+                                if frontmatter and isinstance(frontmatter, dict):
+                                    desc = frontmatter.get("description", "")
+                                    # Truncate long descriptions
+                                    description = desc[:100] + "..." if len(desc) > 100 else desc
+                    except Exception:
+                        pass
+                    matched_skills.append((skill_name, skill_path, description))
+        
+        if matched_skills:
+            skill_list = "\n".join([
+                f"  - {name}: {desc}\n    Path: {path}" 
+                for name, path, desc in matched_skills
+            ])
+            logfire.info("skill_awareness_early_injected", skills=[s[0] for s in matched_skills])
+            
+            # UserPromptSubmit hooks use hookSpecificOutput with additionalContext
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": (
+                        f"SKILL GUIDANCE: This task involves document creation. "
+                        f"BEFORE writing code, read the relevant skill(s) for proven patterns:\n"
+                        f"{skill_list}\n"
+                        f"Use read_local_file on the SKILL.md path to load full instructions."
+                    )
+                }
+            }
+        
+        return {}
+    except Exception as e:
+        # Log error but don't crash the hook
+        logfire.error("user_prompt_skill_hook_error", error=str(e))
+        return {}
 
 
 # =============================================================================
@@ -936,6 +1264,15 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     OBSERVER_WORKSPACE_DIR,
                                 )
                             )
+                            # Video/audio output observer - copy media to session workspace
+                            asyncio.create_task(
+                                observe_and_save_video_outputs(
+                                    tool_name,
+                                    tool_input or {},
+                                    content_str,
+                                    OBSERVER_WORKSPACE_DIR,
+                                )
+                            )
 
 
                             # Post-subagent compliance verification (for Task results)
@@ -1124,6 +1461,17 @@ async def main():
     local_tools = get_local_tools()
     print(f"✅ Active Local MCP Tools: {local_tools}")
 
+    # 3. External MCP Servers (registered in mcp_servers config)
+    external_mcps = ["edgartools", "video_audio", "youtube", "zai_vision"]  # List of external MCPs we've configured
+    print(f"✅ External MCP Servers: {external_mcps}")
+
+    # 4. Skill Discovery - Parse .claude/skills/ for progressive disclosure
+    discovered_skills = discover_skills()
+    skill_names = [s['name'] for s in discovered_skills]
+    print(f"✅ Discovered Skills: {skill_names}")
+    skills_xml = generate_skills_xml(discovered_skills)
+
+
     # Create ClaudeAgentOptions now that session is available
     global options
     options = ClaudeAgentOptions(
@@ -1155,10 +1503,11 @@ async def main():
             "   - In these cases (and ONLY these cases), use 'workbench_download' to fetch the full file.\n"
             "3. WORKBENCH USAGE: Use the Remote Workbench ONLY for:\n"
             "   - External Action execution (APIs, Browsing).\n"
-            "   - 'Heavy' operations that require specific Linux binaries (ffmpeg, etc).\n"
             "   - Untrusted code execution.\n"
+            "   - DO NOT use it for PDF creation, image processing, or document generation - do that LOCALLY with native Bash/Python.\n"
             "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
             "   - 🚫 NEVER use REMOTE_WORKBENCH to save search results. The Observer already saves them automatically.\n"
+            "   - 🚫 NEVER try to access local files from REMOTE_WORKBENCH - local paths don't exist there!\n"
             "4. 🚨 MANDATORY DELEGATION FOR REPORTS (HAND-OFF PROTOCOL):\n"
             "   - Role: You are the SCOUT. You find the information sources.\n"
             "   - Sub-Agent Role: The EXPERT. They process and synthesize the sources.\n"
@@ -1207,7 +1556,13 @@ async def main():
             "   - After completing a task, suggest 2-3 helpful follow-up actions based on what was just accomplished.\n"
             "   - Examples: 'Would you like me to email this report?', 'Should I save this to a different format?',\n"
             "     'I can schedule a calendar event for the mentioned deadline if you'd like.'\n"
-            "   - Keep suggestions relevant to the completed task and the user's apparent goals."
+            "   - Keep suggestions relevant to the completed task and the user's apparent goals.\n\n"
+            "11. 🎯 SKILLS - BEST PRACTICES KNOWLEDGE:\n"
+            "   - Skills are pre-defined workflows and patterns for complex tasks (PDF, PPTX, DOCX, XLSX creation).\n"
+            "   - Before building document creation scripts from scratch, CHECK if a skill exists.\n"
+            "   - To use a skill: `read_local_file` the SKILL.md path below, then follow its patterns.\n"
+            "   - Available skills (read SKILL.md for detailed instructions):\n"
+            f"{skills_xml}\n"
         ),
             mcp_servers={
                 "composio": {
@@ -1219,6 +1574,35 @@ async def main():
                     "type": "stdio",
                     "command": sys.executable,
                     "args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")],
+                },
+                # External MCP: SEC Edgar Tools for financial research
+                "edgartools": {
+                    "type": "stdio",
+                    "command": sys.executable,
+                    "args": ["-m", "edgar.ai"],
+                    "env": {"EDGAR_IDENTITY": os.environ.get("EDGAR_IDENTITY", "Agent agent@example.com")},
+                },
+                # External MCP: Video & Audio editing via FFmpeg
+                "video_audio": {
+                    "type": "stdio",
+                    "command": sys.executable,
+                    "args": [os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "external_mcps", "video-audio-mcp", "server.py")],
+                },
+                # External MCP: YouTube/video downloader via yt-dlp
+                "youtube": {
+                    "type": "stdio",
+                    "command": sys.executable,
+                    "args": ["-m", "mcp_youtube"],
+                },
+                # External MCP: Z.AI Vision (GLM-4.6V) for image/video analysis
+                "zai_vision": {
+                    "type": "stdio",
+                    "command": "npx",
+                    "args": ["-y", "@z_ai/mcp-server"],
+                    "env": {
+                        "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
+                        "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
+                    },
                 },
             },
             # NOTE: Do NOT set allowed_tools here - that would restrict to ONLY those tools.
@@ -1319,10 +1703,65 @@ async def main():
                     ),
                     model="inherit",
                 ),
+                "video-creation-expert": AgentDefinition(
+                    description=(
+                        "🎬 MANDATORY DELEGATION TARGET for ALL video and audio tasks. "
+                        "WHEN TO DELEGATE (REQUIRED): User asks to download, edit, or process video/audio, "
+                        "mentions YouTube, MP3, MP4, trimming, cutting, transitions, or effects.\n"
+                        "🛑 STOP! DO NOT PROCESS VIDEOS YOURSELF. YOU MUST DELEGATE.\n"
+                        "This sub-agent has FFmpeg expertise and YouTube download capabilities."
+                    ),
+                    prompt=(
+                        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+                        f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
+                        "You are a **Video Creation Expert** - a multimedia processing specialist.\n\n"
+                        "## 📁 WORKSPACE LOCATIONS\n"
+                        "| Location | Purpose |\n"
+                        "|----------|----------|\n"
+                        "| `downloads/videos/` | YouTube video downloads |\n"
+                        "| `downloads/audio/` | Audio extractions |\n"
+                        f"| `{workspace_dir}/work_products/media/` | Final outputs |\n\n"
+                        "## 🎬 AVAILABLE TOOLS\n\n"
+                        "**YouTube (mcp__youtube__):**\n"
+                        "- `download_video` - Download YouTube video as MP4\n"
+                        "- `download_audio` - Extract audio as MP3\n"
+                        "- `get_metadata` - Get duration, title, etc.\n"
+                        "- `download_subtitles` - Get captions\n\n"
+                        "**Video Processing (mcp__video_audio__):**\n"
+                        "- `trim_video` - Cut video to specific time range\n"
+                        "- `concatenate_videos` - Join multiple videos\n"
+                        "- `add_basic_transitions` - Add fade_in/fade_out effects\n"
+                        "- `add_text_overlay` - Add text to video\n"
+                        "- `extract_audio` - Extract audio track\n"
+                        "- `change_video_speed` - Speed up or slow down\n"
+                        "- `rotate_video` - Rotate 90/180/270 degrees\n"
+                        "- `compress_video` - Reduce file size\n"
+                        "- `reverse_video` - Play video backwards\n\n"
+                        "## WORKFLOW\n\n"
+                        "1. **Get metadata first** - Use `get_metadata` or `ffprobe` to get duration\n"
+                        "2. **Download if needed** - YouTube URLs → use youtube MCP\n"
+                        "3. **Process step by step** - Trim → Effects → Combine\n"
+                        "4. **Name final output clearly** - e.g., `christmas_remix_final.mp4`\n"
+                        "5. **Verify with ffprobe** - Check duration and file size\n\n"
+                        "## PRO TIPS\n"
+                        "- Intermediate files: use `temp_`, `part1_` etc (observer ignores these)\n"
+                        "- Final outputs: use descriptive names (auto-saved to session)\n"
+                        "- Run parallel trims when independent for speed\n"
+                        "- If xfade fails, use individual fade_in/fade_out\n\n"
+                        "🚨 START IMMEDIATELY: Check if files exist, then process."
+                    ),
+                    model="inherit",
+                ),
             },
             hooks={
                 "SubagentStop": [
                     HookMatcher(matcher=None, hooks=[on_subagent_stop]),
+                ],
+                "PreToolUse": [
+                    HookMatcher(matcher="Bash", hooks=[on_pre_bash_skill_hint]),
+                ],
+                "UserPromptSubmit": [
+                    HookMatcher(matcher=None, hooks=[on_user_prompt_skill_awareness]),
                 ],
             },
             permission_mode="bypassPermissions",
@@ -1401,8 +1840,18 @@ async def main():
     trace["start_time"] = datetime.now().isoformat()
     start_ts = time.time()
 
-    prompt_session = PromptSession()
-    
+    # Configure prompt with history (persists across sessions) and better editing
+    history_file = os.path.join(workspace_dir, ".prompt_history")
+    prompt_style = Style.from_dict({
+        'prompt': '#00aa00 bold',  # Green prompt
+    })
+    prompt_session = PromptSession(
+        history=FileHistory(history_file),
+        auto_suggest=AutoSuggestFromHistory(),
+        multiline=False,  # Single line, but with full editing support
+        style=prompt_style,
+        enable_history_search=True,  # Ctrl+R for history search
+    )
 
     async with ClaudeSDKClient(options) as client:
             while True:
