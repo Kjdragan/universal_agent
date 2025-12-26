@@ -43,3 +43,8 @@ dependencies = [
 # F811: Redefinition of unused name (sometimes intentional for conditional imports)
 lint.ignore = ["E402", "F401", "F811"]
 
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+

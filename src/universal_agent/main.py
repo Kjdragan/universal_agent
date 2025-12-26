@@ -2107,6 +2107,15 @@ async def main():
             
             print(f"📋 Session summary saved to {summary_path}")
 
+            # NEW: Generate Rich Transcript
+            from universal_agent import transcript_builder
+            transcript_path = os.path.join(workspace_dir, "transcript.md")
+            if transcript_builder.generate_transcript(trace, transcript_path):
+                print(f"🎬 Rich transcript saved to {transcript_path}")
+            else:
+                print(f"⚠️ Failed to generate transcript")
+
+
             if LOGFIRE_TOKEN and "trace_id" in trace:
                 project_slug = os.getenv(
                     "LOGFIRE_PROJECT_SLUG", "Kjdragan/composio-claudemultiagent"

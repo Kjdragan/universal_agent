@@ -720,3 +720,18 @@ GMAIL_SEND_EMAIL(..., attachments=[{"s3_key": "..."}])
 - No code changes required in `main.py`.
 
 ---
+
+### Lesson 35: Reconstructing Timelines from Tool Traces
+**Date**: 2025-12-26
+
+**Problem**: The raw `trace.json` separates `tool_calls` (requests) from `tool_results` (responses), making it hard to see the linear conversational flow in chronological order.
+
+**Solution**: Use `iterations` as the anchor.
+1. Iterate through `trace['iterations']` (1, 2, 3...)
+2. Filter `tool_calls` where `iteration == i`
+3. Match `tool_results` by ID (`tool_use_id == call_id`)
+4. Sort by `time_offset_seconds`
+
+**Result**: A perfectly reconstructed timeline ("Session Transcript") that shows exact cause-and-effect with timing. This is superior to simply listing calls or results separately.
+
+---

@@ -227,8 +227,9 @@ Each session creates:
 ```
 AGENT_RUN_WORKSPACES/session_YYYYMMDD_HHMMSS/
 ├── run.log              # Full console output
-├── summary.txt          # Brief summary
-├── trace.json           # Tool call/result trace
+├── session_summary.txt  # Brief summary
+├── trace.json           # Raw tool call/result trace
+├── transcript.md        # Human-readable session replay 🆕
 ├── search_results/      # Cleaned SERP artifacts
 ├── extracted_articles/  # Individual article JSON (optional)
 ├── expanded_corpus.json # Full corpus from extraction

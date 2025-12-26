@@ -1,4 +1,11 @@
+# [ARCHIVED/FAILED] Haiku Swarm Experiment - Post-Mortem Analysis
+
+> [!WARNING]
+> **STATUS: FAILED / DEPRECATED**
+> This document describes an experimental architecture ("Haiku Swarm") that was tested and determined to be unsuccessful. It is preserved here solely as a historical record and "Lesson Learned". **DO NOT IMPLEMENT.**
+
 # Haiku Swarm Experiment - Post-Mortem Analysis
+
 
 **Date:** December 26, 2025  
 **Status:** Experiment Concluded - Not Adopted  
