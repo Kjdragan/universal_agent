@@ -130,6 +130,7 @@ from claude_agent_sdk.types import (
     TextBlock,
     ToolUseBlock,
     ToolResultBlock,
+    ResultMessage,
     ThinkingBlock,
     UserMessage,
     # Hook types for SubagentStop pattern
@@ -1105,14 +1106,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
     # Initialize Logfire Context (Baggage) for Trace Organization
     if iteration == 1:
-        logfire.set_baggage("agent", "main")
-        logfire.set_baggage("is_subagent", "false")
-        logfire.set_baggage("step", "planning") # Initial state
-        logfire.set_baggage("loop", "1")
+        logfire.set_baggage(agent="main")
+        logfire.set_baggage(is_subagent="false")
+        logfire.set_baggage(step="planning") # Initial state
+        logfire.set_baggage(loop="1")
     else:
         # Update loop count for main agent
-        logfire.set_baggage("loop", str(iteration))
-        logfire.set_baggage("step", "execution") # Default for subsequent turns
+        logfire.set_baggage(loop=str(iteration))
+        logfire.set_baggage(step="execution") # Default for subsequent turns
 
     # Create Logfire span for this iteration
     with logfire.span(f"conversation_iteration_{iteration}", iteration=iteration):
@@ -1181,9 +1182,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     if hasattr(block, "input") and isinstance(block.input, dict):
                                         subagent_type = block.input.get("subagent_type", "unknown")
                                     
-                                    logfire.set_baggage("agent", subagent_type)
-                                    logfire.set_baggage("is_subagent", "true")
-                                    logfire.set_baggage("loop", "1") # Reset loop for the sub-agent
+                                    logfire.set_baggage(agent=subagent_type)
+                                    logfire.set_baggage(is_subagent="true")
+                                    logfire.set_baggage(loop="1") # Reset loop for the sub-agent
 
                                 # Check for WORKBENCH or code execution tools
                                 is_code_exec = any(
@@ -1306,8 +1307,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             
                             # Reset sub-agent tagging if Task returned (Back to Main)
                             if tool_name == "Task":
-                                logfire.set_baggage("agent", "main")
-                                logfire.set_baggage("is_subagent", "false")
+                                logfire.set_baggage(agent="main")
+                                logfire.set_baggage(is_subagent="false")
                                 
                             if tool_name and OBSERVER_WORKSPACE_DIR:
                                 # Search results observer - pass typed content
