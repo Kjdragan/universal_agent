@@ -13,6 +13,19 @@ from composio import Composio
 # Initialize Configuration
 load_dotenv()
 
+# Configure Logfire for MCP observability
+try:
+    import logfire
+    if os.getenv("LOGFIRE_TOKEN"):
+        logfire.configure(
+            service_name="local-toolkit",
+            send_to_logfire="if-token-present",
+        )
+        logfire.instrument_mcp()
+        sys.stderr.write("[Local Toolkit] Logfire instrumentation enabled\\n")
+except ImportError:
+    pass
+
 try:
     sys.stderr.write("[Local Toolkit] Server starting components...\n")
     mcp = FastMCP("Local Intelligence Toolkit")
