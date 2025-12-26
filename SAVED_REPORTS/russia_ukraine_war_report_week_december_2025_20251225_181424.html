@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Russia-Ukraine War: Weekly Situation Report - December 2025</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #2c3e50; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 40px 20px; text-align: center; border-radius: 10px; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; font-weight: 600; }
+        .header .subtitle { font-size: 1.2em; opacity: 0.9; }
+        .metadata { background: white; padding: 20px; border-radius: 8px; margin-bottom: 30px; display: flex; justify-content: space-around; flex-wrap: wrap; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .metadata-item { text-align: center; padding: 10px 20px; }
+        .metadata-item .label { font-size: 0.85em; color: #7f8c8d; text-transform: uppercase; letter-spacing: 1px; }
+        .metadata-item .value { font-size: 1.5em; font-weight: bold; color: #1e3c72; }
+        .section { background: white; padding: 30px; margin-bottom: 25px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .section h2 { color: #1e3c72; font-size: 1.8em; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 3px solid #3498db; }
+        .section h3 { color: #2980b9; font-size: 1.3em; margin: 20px 0 10px 0; }
+        .highlight-box { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 5px solid #f093fb; }
+        .warning-box { background: #fff3cd; border-left: 5px solid #ffc107; padding: 20px; margin: 20px 0; border-radius: 5px; }
+        .info-box { background: #d1ecf1; border-left: 5px solid #17a2b8; padding: 20px; margin: 20px 0; border-radius: 5px; }
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
+        .stat-card { background: #f8f9fa; padding: 20px; border-radius: 8px; text-align: center; border: 1px solid #dee2e6; }
+        .stat-card .number { font-size: 2em; font-weight: bold; color: #dc3545; }
+        .stat-card .description { font-size: 0.9em; color: #6c757d; margin-top: 5px; }
+        .timeline { position: relative; padding-left: 30px; }
+        .timeline::before { content: ''; position: absolute; left: 10px; top: 0; bottom: 0; width: 3px; background: #3498db; }
+        .timeline-item { position: relative; margin-bottom: 25px; padding-left: 20px; }
+        .timeline-item::before { content: ''; position: absolute; left: -26px; top: 5px; width: 12px; height: 12px; background: #3498db; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 0 3px #3498db; }
+        .timeline-date { font-weight: bold; color: #1e3c72; font-size: 0.95em; }
+        .timeline-content { margin-top: 5px; color: #555; }
+        ul { margin: 10px 0 10px 30px; }
+        li { margin: 8px 0; }
+        .source-note { font-size: 0.85em; color: #7f8c8d; font-style: italic; margin-top: 20px; padding-top: 15px; border-top: 1px solid #dee2e6; }
+        .key-point { background: #e8f4f8; padding: 15px; border-radius: 5px; margin: 10px 0; border-left: 4px solid #17a2b8; }
+        @media (max-width: 768px) {
+            .header h1 { font-size: 1.8em; }
+            .metadata { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Russia-Ukraine War</h1>
+            <p class="subtitle">Weekly Situation Report | December 19-25, 2025 | Day 1,400 of Conflict</p>
+        </div>
+
+        <div class="metadata">
+            <div class="metadata-item">
+                <div class="label">Report Date</div>
+                <div class="value">Dec 25, 2025</div>
+            </div>
+            <div class="metadata-item">
+                <div class="label">Conflict Day</div>
+                <div class="value">1,400</div>
+            </div>
+            <div class="metadata-item">
+                <div class="label">Territory Under Russian Control</div>
+                <div class="value">~19.2%</div>
+            </div>
+            <div class="metadata-item">
+                <div class="label">Russian Gains (2025)</div>
+                <div class="value">~4,984 km&sup2;</div>
+            </div>
+        </div>
+
+        <!-- Executive Summary -->
+        <div class="section">
+            <h2>1. Executive Summary</h2>
+            <div class="highlight-box">
+                <strong>Key Assessment:</strong> The Russia-Ukraine war reached a critical juncture in the week leading up to Christmas 2025, with intensified Russian attacks on Ukrainian infrastructure coinciding with complex US-led peace negotiations in Florida. While diplomatic efforts produced a 20-point framework agreement between the US and Ukraine, Moscow rejected European and Ukrainian amendments to the proposal and continued its military offensive.
+            </div>
+
+            <div class="key-point">
+                <strong>Primary Developments This Week:</strong>
+                <ul>
+                    <li>Russian forces launched 705 strikes on 25 settlements in Zaporizhzhia region (December 24-25), injuring civilians and damaging hundreds of buildings</li>
+                    <li>US and Ukrainian negotiators agreed on a 20-point peace plan that includes NATO-level security guarantees for Ukraine</li>
+                    <li>European Union approved a 90-billion-euro ($106 billion) loan to Ukraine for military and economic needs through 2027</li>
+                    <li>Russia claimed to have seized more than 5,100 square kilometers of Ukrainian territory in 2025, though independent analysts dispute these figures</li>
+                    <li>Ukrainian forces withdrew from Siversk in Donetsk region after heavy fighting</li>
+                </ul>
+            </div>
+
+            <p>According to the Russia Matters report card, Russian forces gained 51 square miles of Ukrainian territory in just six days (December 16-22). Since January 1, 2025, Russia has averaged 176 square miles of territorial gains per month. As of December 22, Russia controlled approximately 116,057 square kilometers (19.2% of Ukrainian territory), equivalent in size to the state of Ohio.</p>
+
+            <div class="warning-box">
+                <strong>Critical Concern:</strong> Vice President JD Vance stated he lacks "confidence" that a peaceful resolution will be reached, telling reporters: "I think there's a good chance we will, I think there's a good chance we won't." This represents one of the most pessimistic assessments from a high-ranking US official to date.
+            </div>
+        </div>
+
+        <!-- Recent Military Developments -->
+        <div class="section">
+            <h2>2. Recent Military Developments</h2>
+
+            <h3>Christmas Escalation (December 24-25)</h3>
+            <p>Widespread aerial attacks marked Christmas 2025, as Russian and Ukrainian forces exchanged drone and missile strikes on civilian and energy infrastructure in border regions. According to Newsweek, Ukrainian officials recorded at least 151 combat clashes along the front line on December 24 alone.</p>
+
+            <div class="stat-grid">
+                <div class="stat-card">
+                    <div class="number">705</div>
+                    <div class="description">Russian strikes on Zaporizhzhia region settlements</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">151</div>
+                    <div class="description">Combat clashes along front line (Dec 24)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">141</div>
+                    <div class="description">Ukrainian drones intercepted by Russia overnight</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">673</div>
+                    <div class="description">Aerial targets launched by Russia (Dec 23)</div>
+                </div>
+            </div>
+
+            <h3>Weekly Attack Statistics (December 18-24)</h3>
+            <div class="info-box">
+                <strong>According to Al Jazeera's reporting:</strong>
+                <ul>
+                    <li>Russia launched 1,227 drones and 41 missiles at Ukraine</li>
+                    <li>Ukraine intercepted 80% of drones and 83% of missiles</li>
+                    <li>Strikes on Saturday and Tuesday killed at least four civilians</li>
+                    <li>Zelenskyy reported Russia launched approximately 1,300 attack drones, nearly 1,200 guided aerial bombs, and nine missiles in one week alone</li>
+                </ul>
+            </div>
+
+            <h3>Ukrainian Counter-Operations</h3>
+            <p>Ukraine continued targeting Russian infrastructure and military assets:</p>
+            <ul>
+                <li>Ukraine's SBU struck two Russian Su-27 fighter jets at Belbek airbase near occupied Sevastopol in Crimea on December 20</li>
+                <li>Two days earlier, Ukraine weakened air defense systems at the same base and hit a MiG-31 interceptor aircraft</li>
+                <li>Ukrainian military intelligence assassinated Lieutenant General Fanil Sarvarov, chief of the Russian General Staff's operational training department, using a car bomb in Moscow on December 21</li>
+                <li>Ukraine struck a Russian oil rig in the Caspian Sea belonging to Lukoil, damaging a drilling platform</li>
+                <li>For the first time, Ukraine targeted a Russian tanker in the Mediterranean Sea using surface drones, hitting the Qendil</li>
+                <li>Ukrainian forces used UK-supplied Storm Shadow missiles to strike the Novoshakhtinsk oil refinery in Russia's Rostov region</li>
+            </ul>
+
+            <h3>Forced Deportations</h3>
+            <div class="warning-box">
+                <strong>Human Rights Violation:</strong> Ukrainian authorities accused Russian forces of forcibly removing approximately 50 Ukrainian civilians from the village of Hrabovske in the Sumy border region, transporting them to Russian territory. Ukraine's human rights ombudsman Dmytro Lubinets demanded their immediate return.
+            </div>
+        </div>
+
+        <!-- Territorial Changes -->
+        <div class="section">
+            <h2>3. Territorial Changes</h2>
+
+            <h3>Russian Claims vs. Independent Verification</h3>
+            <p>Russia made extensive claims about territorial gains in December 2025, but independent analysts have challenged many of these assertions:</p>
+
+            <div class="key-point">
+                <strong>Putin's Claims (December 19 Press Conference):</strong>
+                <ul>
+                    <li>Claimed seizure of territory in eastern Donetsk region and Vovchansk in northern Kharkiv</li>
+                    <li>Asserted Russian forces held at least half of Lyman and Kostiantynivka in Donetsk</li>
+                    <li>Claimed control of Hulyaipole in southern Zaporizhia region</li>
+                    <li>Claimed complete possession of Kupiansk in Kharkiv and Pokrovsk in Donetsk</li>
+                </ul>
+            </div>
+
+            <div class="info-box">
+                <strong>Institute for the Study of War (ISW) Assessment:</strong>
+                <ul>
+                    <li>ISW observed no evidence to confirm many of Putin's claimed seizures</li>
+                    <li>Evidence indicates only 7.3% Russian presence in Hulyaipole (not complete control)</li>
+                    <li>Only 2.9% Russian presence in Lyman (not 50% as claimed)</li>
+                    <li>Estimated no more than 5% Russian advances in Kostiantynivka</li>
+                    <li>Russia possesses no more than 7.2% of Kharkiv region</li>
+                    <li>Ukrainian commander reported pushing Russia out of 16 square kilometers of Pokrovsk</li>
+                </ul>
+            </div>
+
+            <h3>Verified Territorial Changes</h3>
+            <p>Despite disputes over exaggerated claims, Russia has made documented territorial gains in 2025:</p>
+
+            <div class="stat-grid">
+                <div class="stat-card">
+                    <div class="number">51</div>
+                    <div class="description">Square miles gained by Russia (Dec 16-22)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">138</div>
+                    <div class="description">Square miles gained by Russia (Nov 25 - Dec 22)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">176</div>
+                    <div class="description">Average monthly gains (square miles) in 2025</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">~4,984</div>
+                    <div class="description">Total square kilometers gained by Russia in 2025 (ISW estimate)</div>
+                </div>
+            </div>
+
+            <h3>Key Territorial Developments</h3>
+            <ul>
+                <li><strong>Siversk:</strong> Ukrainian forces withdrew from the Donetsk region's Siversk area after heavy fighting. The Ukrainian General Staff noted that Moscow had a "significant advantage" in the area. Putin did truthfully claim the seizure of this eastern town.</li>
+                <li><strong>Kupiansk:</strong> While Russia claimed full capture in November, Ukrainian President Zelenskyy visited the frontline town in December, and the ISW reported mounting evidence that Ukrainian forces have retaken parts of the town.</li>
+                <li><strong>Hrabovske:</strong> Fighting is ongoing in this village in the Sumy region, marking a renewed Russian advance in an area previously largely spared from intense ground fighting since Ukraine regained land there in a 2022 counter-offensive.</li>
+            </ul>
+
+            <div class="warning-box">
+                <strong>Current Status:</strong> As of December 22, 2025, Russian forces occupied approximately 116,057 square kilometers of Ukrainian land (19.2% of Ukrainian territory), including Crimea and parts of Donbas seized prior to the full-scale invasion.
+            </div>
+        </div>
+
+        <!-- Peace Negotiations -->
+        <div class="section">
+            <h2>4. Peace Negotiations</h2>
+
+            <h3>The US-Ukrainian 20-Point Peace Framework</h3>
+            <p>On December 20, after marathon talks in Florida, US and Ukrainian negotiators agreed on a comprehensive 20-point peace plan. Ukrainian President Volodymyr Zelenskyy revealed key details of the framework:</p>
+
+            <div class="key-point">
+                <strong>Key Elements of the Agreement:</strong>
+                <ul>
+                    <li><strong>NATO-Level Security Guarantees:</strong> The US agreed to mutual defense clauses that would bring NATO into a war on Ukraine's side if Russia attacks again - a major shift from earlier US proposals</li>
+                    <li><strong>Military Strength:</strong> Ukraine can maintain its military at full strength (up to 800,000 soldiers during peacetime)</li>
+                    <li><strong>No Recognition of Occupied Territories:</strong> Ukraine is not required to recognize occupied territory as de facto Russian</li>
+                    <li><strong>NATO Bid Preserved:</strong> Ukraine no longer has to give up its NATO aspirations</li>
+                    <li><strong>Reconstruction Fund:</strong> The plan pledges to mobilize $800 billion for Ukraine's reconstruction</li>
+                </ul>
+            </div>
+
+            <h3>Zelenskyy's Territorial Compromise Proposal</h3>
+            <p>Zelenskyy floated a potential compromise for the eastern Donetsk region - one of the main sticking points in negotiations:</p>
+
+            <div class="info-box">
+                <strong>The Donetsk Proposal:</strong>
+                <ul>
+                    <li>Demilitarize or create a "free economic zone" in the portion of Donetsk that Ukraine still holds</li>
+                    <li>Ukrainian military would withdraw from this territory</li>
+                    <li>A referendum would determine whether Ukrainians accept this path</li>
+                    <li>Zelenskyy's dramatic language: "Either this or war"</li>
+                    <li>Conditions include: 60 days to prepare referendum, Ukrainian police would remain, only Ukrainians living in Ukrainian territory could vote (excluding those under occupation), and international forces must be present on the ground</li>
+                </ul>
+            </div>
+
+            <h3>Zaporizhzhia Nuclear Power Plant Dispute</h3>
+            <div class="warning-box">
+                <strong>Major Contention:</strong> The US plan calls for the US to manage the Zaporizhzhia nuclear power plant (Europe's largest) and split power between the US, Ukraine, and Russia. Zelenskyy rejected this proposal, stating: "Clearly, for Ukraine, this sounds very inappropriate and not entirely realistic. How can there be joint commercial activity with the Russians after everything that has happened? We are enemies."
+
+                <p style="margin-top: 10px;"><strong>Ukraine's Counterproposal:</strong> Russia withdraws from the plant, and Ukraine and the US split it 50/50, even if the US chooses to send some of their half to Russia.</p>
+            </div>
+
+            <h3>Russian Rejection of European Amendments</h3>
+            <p>While US and Ukrainian negotiators were finalizing their framework, European and Ukrainian negotiators met with Trump's envoys to add proposals to the US draft. However, Russian officials immediately rejected these changes:</p>
+
+            <ul>
+                <li>Kremlin foreign policy aide Yuri Ushakov said European and Ukrainian changes "definitely do not improve the document and do not improve the possibility of achieving long-term peace"</li>
+                <li>Ushakov added: "This is not a forecast" and that he had not seen the exact proposals on paper yet</li>
+                <li>Russia says European leaders are intent on scuttling the talks by introducing conditions unacceptable to Moscow</li>
+                <li>Dmitriev, Witkoff, and Kushner held meetings in Florida on December 20-21</li>
+            </ul>
+
+            <h3>Key Obstacles to Agreement</h3>
+
+            <div class="key-point">
+                <strong>Territorial Demands:</strong>
+                <ul>
+                    <li><strong>Russia's Position:</strong> Demands Ukraine cede the regions of Donetsk, Luhansk, Zaporizhia, and Kherson in full, in addition to Crimea. Also demands Ukraine relinquish the remaining territory it still holds in the Donbas.</li>
+                    <li><strong>Ukraine's Position:</strong> Refuses to cede sovereign territory. Europe has suggested leaving territorial discussion for after a full ceasefire.</li>
+                    <li><strong>US Assessment:</strong> Vice President Vance noted that the Ukrainian military would likely "lose" the remaining Donbas territory regardless if fighting persists, calling it a "terrible territorial concession."</li>
+                </ul>
+            </div>
+
+            <div class="key-point">
+                <strong>Other Contentious Issues:</strong>
+                <ul>
+                    <li>Control of Zaporizhzhia nuclear plant</li>
+                    <li>Fate of ethnic Russians in Ukraine and ethnic Ukrainians in Russian-controlled areas</li>
+                    <li>How reconstruction would be carried out throughout Ukraine</li>
+                    <li>Security guarantees and whether Western troops can be stationed in Ukraine</li>
+                </ul>
+            </div>
+
+            <h3>European Financial Support</h3>
+            <div class="highlight-box">
+                <strong>EU 90-Billion-Euro Loan:</strong> On December 19, the European Council of government leaders approved a 90-billion-euro ($106 billion) loan to Ukraine over two years. Ukraine will receive at least 45 billion euros ($53 billion) annually for the next two years.
+
+                <p style="margin-top: 10px;"><strong>Note:</strong> The EU rejected using frozen Russian assets as collateral after Italy, Bulgaria, Malta, and Belgium vetoed the plan. Zelenskyy told European leaders: "No one will ever be able to explain to European voters why Europe should give 200 billion back to Putin - after everything he's destroyed."</p>
+            </div>
+
+            <h3>Diplomatic Assessment</h3>
+            <ul>
+                <li><strong>Zelenskyy:</strong> "We sense that America wants to reach a final agreement, and from our side, there is full cooperation"</li>
+                <li><strong>Trump:</strong> "We're closer now than we have been, ever"</li>
+                <li><strong>Vance:</strong> "I wouldn't say with confidence that we're going to get to a peaceful resolution. I think there's a good chance we will, I think there's a good chance we won't."</li>
+                <li><strong>Russian Foreign Ministry:</strong> Talks are making "slow but steady" progress</li>
+                <li><strong>Pope Leo XIV:</strong> Called for "direct, sincere and respectful dialogue" and urged "the clamor of weapons" to cease</li>
+            </ul>
+        </div>
+
+        <!-- Infrastructure Attacks -->
+        <div class="section">
+            <h2>5. Infrastructure Attacks</h2>
+
+            <h3>Energy Infrastructure Targeting</h3>
+            <p>Russia continued its campaign targeting Ukrainian energy and critical infrastructure, particularly in border regions:</p>
+
+            <div class="warning-box">
+                <strong>Chernihiv and Zaporizhzhia Regions:</strong> Russian forces carried out 705 strikes on 25 settlements in the Zaporizhzhia region and particularly targeted critical infrastructure in Chernihiv Oblast, injuring five people and damaging hundreds of buildings and vehicles.
+            </div>
+
+            <ul>
+                <li><strong>Odesa:</strong> Russian strikes killed at least one person and caused fires at port and industrial infrastructure, with emergency power outages imposed to prevent overloads of damaged equipment</li>
+                <li><strong>Rivne, Ternopil, and Odesa:</strong> Work to restore energy facilities following Russian strikes is ongoing</li>
+                <li><strong>Kherson and Sumy:</strong> Russian attacks wounded at least eight people, including a 17-year-old girl and a 20-year-old man</li>
+                <li><strong>Chernobyl:</strong> The director of Ukraine's Chornobyl nuclear power station warned that a Russian strike could collapse the internal radiation shelter at the defunct facility</li>
+            </ul>
+
+            <h3>Environmental Damage</h3>
+            <div class="warning-box">
+                <strong>Odesa Oil Spill:</strong> A sunflower oil spill caused by Russian aerial bombardments contaminated the shoreline around Odesa, killing wildlife and triggering conservation warnings. Governor Oleh Kiper reported damage to sunflower oil tanks during attacks on port infrastructure, temporarily closing the Pivdenny port.
+            </div>
+
+            <h3>Ukrainian Strikes on Russian Energy Infrastructure</h3>
+            <p>Ukraine continued targeting Russian energy infrastructure to disrupt Moscow's revenues and military fuel supply:</p>
+
+            <ul>
+                <li>Struck the Novoshakhtinsk oil products plant in Russia's Rostov region with Storm Shadow missiles</li>
+                <li>Hit the Yefremov synthetic rubber plant in Russia's Tula region</li>
+                <li>Struck a storage facility for marine drones in Russian-occupied Crimea</li>
+                <li>Previous Ukrainian drone strikes forced nearly 40% of Russia's oil refining capacity offline</li>
+                <li>Kazakhstan's CPC Blend oil exports reached their lowest in 14 months due to damage to Russian loading infrastructure from Ukrainian drone strikes</li>
+            </ul>
+
+            <h3>Energy Infrastructure Damage Assessment</h3>
+            <div class="info-box">
+                <strong>Ukraine's Energy Crisis (according to Russia Matters):</strong>
+                <ul>
+                    <li>64% of Ukraine's electricity generating capacity has been destroyed or occupied as of 2024</li>
+                    <li>Ukraine had lost 80-90% of its thermal capacity due to Russian attacks as of September 2024</li>
+                    <li>50% of Ukraine's thermal power generation was destroyed as of May 2025</li>
+                    <li>30-40% of all hydropower installations were damaged and destroyed as of May 2025</li>
+                    <li>Ukraine's energy infrastructure was operating at only about 50% of pre-invasion capacity as of Fall 2025</li>
+                    <li>Russia destroyed 30% of Ukraine's gas production ahead of winter 2025-2026</li>
+                    <li>Kyiv residents face up to 16 hours a day without power</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Key Events Timeline -->
+        <div class="section">
+            <h2>6. Key Events Timeline (December 19-25, 2025)</h2>
+
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="timeline-date">December 19 (Friday)</div>
+                    <div class="timeline-content">
+                        <strong>Putin's Annual Press Conference:</strong> Russian President Vladimir Putin held his 4.5-hour year-end news conference, signaling no compromise on Ukraine and claiming Russia was "advancing across the whole of the front line." He said the EU's plan to funnel frozen Russian assets to Ukraine was "robbery."
+                        <br><br>
+                        <strong>EU Financial Package:</strong> European Union leaders announced a 90-billion-euro ($105 billion) loan to Ukraine for its economy and military through 2027, funded by borrowing rather than tapping frozen Russian assets.
+                        <br><br>
+                        <strong>Russian Airstrikes:</strong> Fresh wave of Russian airstrikes overnight injured two civilians in Odesa, leaving thousands without electricity, water, and heat for nine days.
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-date">December 20 (Saturday)</div>
+                    <div class="timeline-content">
+                        <strong>Peace Talks Begin:</strong> US envoy Steve Witkoff, Trump's son-in-law Jared Kushner, and Russian special envoy Kirill Dmitriev met in Florida. Witkoff called the meetings "productive and constructive."
+                        <br><br>
+                        <strong>US-Ukraine Agreement:</strong> After marathon talks, US and Ukrainian negotiators agreed on a 20-point peace framework, including NATO-level security guarantees.
+                        <br><br>
+                        <strong>Ukrainian Strike:</strong> Ukraine's SBU struck two Russian Su-27 fighter jets at Belbek airbase near occupied Sevastopol in Crimea.
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-date">December 21 (Sunday)</div>
+                    <div class="timeline-content">
+                        <strong>Talks Continue:</strong> Witkoff reported talks focused on four key points: development of the 20-point plan, multilateral security guarantees, US security guarantees for Ukraine, and economic reconstruction.
+                        <br><br>
+                        <strong>Kremlin Response:</strong> Putin aide Yuri Ushakov said European and Ukrainian changes to the US proposals "definitely do not improve the document and do not improve the possibility of achieving long-term peace."
+                        <br><br>
+                        <strong>US Drone Strike:</strong> Trump announced a "powerful and deadly" strike against IS in Nigeria.
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-date">December 22 (Monday)</div>
+                    <div class="timeline-content">
+                        <strong>Vance's Pessimistic Assessment:</strong> Vice President JD Vance said he doesn't have "confidence" there will be a peaceful solution, stating: "I think there's a good chance we will, I think there's a good chance we won't."
+                        <br><br>
+                        <strong>Peace Plan Review:</strong> The 20-point document agreed by Washington and Kyiv was being reviewed by Moscow.
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-date">December 23 (Tuesday)</div>
+                    <div class="timeline-content">
+                        <strong>Massive Russian Barrage:</strong> Russia launched 673 aerial targets against Ukraine, including drones and missiles. Ukraine's air defense destroyed or suppressed 621 of them.
+                        <br><br>
+                        <strong>Civilian Casualties:</strong> At least three people, including a four-year-old child, were killed and dozens wounded in Russian attacks.
+                        <br><br>
+                        <strong>Siversk Withdrawal:</strong> Ukraine's General Staff announced its forces withdrew from the Donetsk region's Siversk area after heavy fighting.
+                        <br><br>
+                        <strong>General Assassinated:</strong> Ukrainian military intelligence used a car bomb to assassinate Lieutenant General Fanil Sarvarov, chief of the Russian General Staff's operational training department, in Moscow.
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-date">December 24 (Wednesday - Christmas Eve)</div>
+                    <div class="timeline-content">
+                        <strong>Christmas Attacks:</strong> Ukrainian officials recorded at least 151 combat clashes along the front line. Russian forces launched 705 strikes on 25 settlements in Zaporizhzhia region, injuring five people and damaging hundreds of buildings.
+                        <br><br>
+                        <strong>Odesa Strike:</strong> At least one person was killed after Russian forces struck port and industrial infrastructure in Odesa Oblast. Fires broke out at several sites and emergency power outages were imposed.
+                        <br><br>
+                        <strong>Kherson and Sumy Attacks:</strong> Russian attacks wounded at least eight people, including a 17-year-old girl and a 20-year-old man.
+                        <br><br>
+                        <strong>Russian Drone Intercept:</strong> Russia's Defense Ministry said its air defenses shot down 141 Ukrainian drones overnight, with 65 intercepted over Bryansk Oblast and others over Moscow, Tula, and Krasnodar.
+                        <br><br>
+                        <strong>Tanker Strike:</strong> Ukrainian aerial drones struck the Russian tanker Qendil in the Mediterranean Sea - the first time Ukraine has ranged its tanker strikes that far from its shores.
+                    </div>
+                </div>
+
+                <div class="timeline-item">
+                    <div class="timeline-date">December 25 (Thursday - Christmas Day)</div>
+                    <div class="timeline-content">
+                        <strong>Moscow Explosion:</strong> An explosion in Moscow killed three people, including two police officers. Ukraine's military intelligence (GUR) told AP it was part of a Ukrainian operation and the officers were targeted for taking part in Russia's war in Ukraine.
+                        <br><br>
+                        <strong>Moscow Drone Attack:</strong> Russian air defense units downed 16 Ukrainian drones en route to Moscow throughout Wednesday. Two of four major airports servicing Moscow were forced to limit operations.
+                        <br><br>
+                        <strong>More Russian Claims:</strong> Russia's Ministry of Defence said its aerial defence units destroyed 172 Ukrainian drones overnight, nearly half over regions bordering Ukraine.
+                        <br><br>
+                        <strong>Zelenskyy's Christmas Address:</strong> "Ukrainians are together tonight," Zelenskyy said. "It hardly matters what dishes are on the table - what matters is who is at the table."
+                        <br><br>
+                        <strong>Russian Opinion Poll:</strong> A Russian state pollster VTsIOM reported that a majority of Russians expect the war to end in 2026, with 70% of 1,600 respondents seeing 2026 as more "successful" than 2025, and for 55% that hope was linked to a possible end to the war.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sources -->
+        <div class="section">
+            <h2>Sources</h2>
+            <p style="font-size: 0.9em;">This report synthesizes information from the following sources:</p>
+            <ul style="font-size: 0.85em;">
+                <li>Al Jazeera - News coverage and live blogs (December 21-25, 2025)</li>
+                <li>Newsweek - "Russia-Ukraine War Update: Multiple Strikes Launched Christmas" (December 25, 2025)</li>
+                <li>PBS NewsHour - Peace talks coverage and analysis (December 21-24, 2025)</li>
+                <li>Politico - "No 'confidence' Ukraine and Russia will reach peace deal, Vance says" (December 22, 2025)</li>
+                <li>CNBC - "Kremlin says peace prospects not improved by Europe, Ukraine changes" (December 21, 2025)</li>
+                <li>Deutsche Welle (DW) - Live blog coverage (December 25, 2025)</li>
+                <li>CNN - Putin year-end press conference coverage (December 19, 2025)</li>
+                <li>Russia Matters (Harvard) - "Russia-Ukraine War Report Card, Dec. 23, 2025"</li>
+                <li>Institute for the Study of War (ISW) - Analysis cited by multiple sources</li>
+            </ul>
+
+            <div class="source-note">
+                <strong>Note:</strong> This report covers developments from approximately December 19-25, 2025, marking Day 1,400 of the Russia-Ukraine war. Some information sources had limited access (ISW and NYTimes pages behind security verifications). All territorial claims made by Russian officials have been cross-referenced with independent analysis where possible.
+            </div>
+        </div>
+    </div>
+</body>
+</html>

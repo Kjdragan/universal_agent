@@ -897,7 +897,7 @@ SKILL_PROMPT_TRIGGERS = build_skill_prompt_triggers()
 
 
 async def on_user_prompt_skill_awareness(
-    input_data: dict, tool_use_id: str | None, context: HookContext
+    input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
     """
     UserPromptSubmit Hook: EARLY skill awareness injection.

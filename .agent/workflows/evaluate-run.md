@@ -14,6 +14,8 @@ description: Evaluate the latest run traces using LogFire MCP and agent workspac
 
 3.  **Analyze Logfire Traces**
     *   Use the `mcp_logfire_arbitrary_query` tool to analyze the `Trace ID`.
+    *   > [!IMPORTANT]
+    *   > **MCP Subprocess Traces**: Local MCP tools (like `local-toolkit`, `video-audio-mcp`) execute in subprocesses and currently have **different Trace IDs** than the main agent due to missing context propagation. To find detailed internal traces for these tools (e.g. `crawl_parallel` steps), you must query `SELECT * FROM records WHERE service_name='local-toolkit' ...` and filter by the session timestamp window. Do not rely solely on the main `Trace ID` to find these child spans.
     *   **Query 1 (Errors)**: `SELECT * FROM records WHERE trace_id='<TRACE_ID>' AND level >= 'warning'`
     *   **Query 2 (Performance)**: `SELECT span_name, duration_ms, start_timestamp FROM records WHERE trace_id='<TRACE_ID>' AND span_name IN ('conversation_iteration', 'tool_call', 'tool_result') ORDER BY start_timestamp`
     *   **Query 3 (Tool Usage)**: Sequence of tools called.
