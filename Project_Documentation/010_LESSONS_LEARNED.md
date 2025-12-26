@@ -693,3 +693,30 @@ GMAIL_SEND_EMAIL(..., attachments=[{"s3_key": "..."}])
 ---
 
 *Last updated: 2025-12-24*
+
+---
+
+### Lesson 33: Knowledge Base Injection vs Code Changes
+**Date**: 2025-12-26
+
+**Problem**: The `GMAIL_SEND_EMAIL` tool schema was confusing the agent (input `recipient` vs `recipient_email`).
+**Observation**: We could have edited the Python code to wrap the tool, but that's brittle.
+**Solution**: Updated `.claude/knowledge/composio.md`. The `load_knowledge()` system injected this guidance into the system prompt.
+**Result**: Agent self-corrected instantly (0 retries).
+**Lesson**: Fix "Brain" problems in the Knowledge Base (Markdown), not the Python code. Keep the codebase generic and the knowledge specific.
+
+---
+
+### Lesson 34: Smart Tool Routing via Skill Definition
+**Date**: 2025-12-26
+
+**Problem**: Ambiguity in "Create PDF" requests led to conflicts (e.g., trying to use Chrome to print Markdown).
+**Solution**: Implemented **Conditional Logic** in `.claude/skills/pdf/SKILL.md`:
+- IF input is `.html` -> MUST use Chrome.
+- IF input is `.md` -> MUST use Pandoc.
+**Benefit**:
+- Decouples "Content Creation" (HTML vs MD) from "Conversion Tool".
+- Prevents "Russian Roulette" errors.
+- No code changes required in `main.py`.
+
+---

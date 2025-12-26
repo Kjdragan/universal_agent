@@ -58,15 +58,25 @@
    - Clean markdown output with noise removal
    - Saves directly to session `search_results/`
 
+4. **Environment Hardening (Dec 26, 2025)**:
+   - **Gmail Stability**: Fixed `recipient` vs `recipient_email` schema error via Knowledge Base injection.
+   - **Smart PDF Routing**: Implemented logic in `SKILL.md` to route HTML -> Chrome and Markdown -> Pandoc.
+   - **Dependency Standardization**: Enforced `uv` and `weasyprint` as the project standard for PDF generation.
+
 ### Next Steps (Performance Engineering)
 
 1. **Pre-warm MCP Connections**:
    - Investigate lazy initialization delays (~60s startup)
    - Explore "pre-priming" connections during agent boot
 
-2. **Parallel Crawl Initialization**:
-   - Investigate crawl4ai browser context startup time
-   - Optimizing readiness for the first crawl batch
+3. **Session Transcript Artifact (High Priority)**:
+   - **Goal**: Create a rich, human-readable `transcript.md` that acts as a "Replay Studio" for the agent run.
+   - **Requirements**:
+     - **Full Reconstruction**: Parse `trace.json` to rebuild the exact linear timeline of events.
+     - **Rich Formatting**: Use Markdown headers, blockquotes, and emojis to visually distinguish actors (User vs Agent vs System).
+     - **Thought Process**: Explicitly render `ThinkingBlock` content to expose the agent's internal reasoning.
+     - **Tool Interactions**: Show Tool Calls (Inputs) and Tool Results (Outputs) in formatted code blocks for easy debugging.
+   - **Architecture**: New `transcript_builder.py` module called automatically at session cleanup.
 
 ### Architecture
 
