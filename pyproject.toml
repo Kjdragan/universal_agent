@@ -30,6 +30,7 @@ dependencies = [
     "rich>=14.2.0",
     "starlette>=0.50.0",
     "uvicorn[standard]>=0.34.0",
+    "weasyprint>=67.0",
     "websockets>=14.0",
     "yt-dlp>=2025.01.0",
 ]

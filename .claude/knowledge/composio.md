@@ -2,6 +2,10 @@
 
 ## GMAIL_SEND_EMAIL
 
+**Argument Names (CRITICAL)**:
+- Use `recipient_email` (or `to`), NOT `recipient`.
+- `recipient` is NOT a valid parameter and will cause a schema validation error.
+
 **Attachment format (CRITICAL)**:
 - `attachment` must be a **DICT**, not a list
 - Format: `{"name": str, "mimetype": str, "s3key": str}`
@@ -10,7 +14,7 @@
 **Correct Example:**
 ```json
 {
-  "recipient": "user@example.com",
+  "recipient_email": "user@example.com",  // ✅ Correct (or "to")
   "subject": "Report",
   "body": "See attached.",
   "attachment": {
@@ -21,9 +25,10 @@
 }
 ```
 
-**Common Mistake (WRONG):**
+**Common Mistakes (WRONG):**
 ```json
 {
+  "recipient": "user@example.com",              // ❌ Wrong parameter name!
   "attachment": [{"name": "report.pdf", ...}]  // ❌ List format fails!
 }
 ```

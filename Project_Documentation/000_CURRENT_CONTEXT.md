@@ -192,6 +192,7 @@ Create `.env` from `.env.example`:
 - `logfire` - Observability
 - `prompt-toolkit` - Better terminal input
 - `httpx` - HTTP client for MCP tools
+- `weasyprint` - PDF engine for Pandoc (Project Standard)
 
 ---
 

@@ -16,3 +16,9 @@
     - You cannot install them via `uv` or `pip`.
     - If a system binary is missing, **FAIL GRACEFULLY** and try a pure-Python alternative (e.g., use `reportlab`, `weasyprint`, or `pythonhtml` conversion instead of `pandoc`).
     - The "Happy Path" for this agent is **Python-native tools** whenever possible.
+
+4. **Python Execution Rule**:
+    - When running Python scripts via `Bash`, **ALWAYS use `python`** (which points to the active venv) or `sys.executable`.
+    - **NEVER** use `python3` explicitly, as it may point to the system Python (missing our dependencies).
+    - Correct: `python script.py` or `python -c "..."`
+    - Incorrect: `python3 script.py`
