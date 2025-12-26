@@ -790,8 +790,8 @@ DOCUMENT_SKILL_TRIGGERS = {
 
 
 async def on_pre_bash_skill_hint(
-    input_data: dict, tool_use_id: str | None, context: HookContext
-) -> HookJSONOutput:
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
     """
     PreToolUse Hook: Before Bash execution, check if command involves document creation.
     If so, inject a hint about the relevant skill to avoid reinventing the wheel.
@@ -807,15 +807,15 @@ async def on_pre_bash_skill_hint(
             )
             if os.path.exists(skill_path):
                 logfire.info("skill_hint_backup_injected", skill=skill_name, command_preview=command[:100])
-                return HookJSONOutput(
-                    systemMessage=(
+                return {
+                    "systemMessage": (
                         f"⚠️ SKILL REMINDER: You're about to create {skill_name.upper()} content. "
                         f"The `{skill_name}` skill at `{skill_path}` has proven patterns. "
                         f"Consider reading it FIRST to avoid common issues."
                     )
-                )
+                }
     
-    return HookJSONOutput()
+    return {}
 
 
 # Prompt keywords that suggest skill-relevant tasks
@@ -977,8 +977,8 @@ async def on_user_prompt_skill_awareness(
 # =============================================================================
 
 async def on_subagent_stop(
-    input_data: dict, tool_use_id: str | None, context: HookContext
-) -> HookJSONOutput:
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
     """
     Hook: Fires when a sub-agent completes its work.
     Verifies artifacts were created and injects guidance for next steps.
