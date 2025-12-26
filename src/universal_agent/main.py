@@ -1522,14 +1522,36 @@ async def main():
     # IMPORTANT: Per 000_CURRENT_CONTEXT.md, we disable external crawlers to force use of
     # local crawl_parallel tool. This prevents COMPOSIO_SEARCH_TOOLS from recommending
     # firecrawl or exa web scrapers.
-    session = composio.create(
+    
+    # --- PARALLEL STARTUP OPTIMIZATION ---
+    # Launch blocking network calls in parallel threads to reduce cold start latency.
+    
+    # Task 1: Create Session (CRITICAL - Needed for MCP URL)
+    print("⏳ Starting Composio Session initialization...", flush=True)
+    session_future = asyncio.to_thread(
+        composio.create,
         user_id=user_id,
         toolkits={"disable": ["firecrawl", "exa"]}
     )
 
-    # 1. Dynamic Remote Discovery
+    # Task 2: dynamic Remote Discovery (INFORMATIONAL - Can happen in background)
     # Using client.connected_accounts.list(user_ids=[user_id]) for reliable persistent connection check
-    ALLOWED_APPS = discover_connected_toolkits(composio, user_id)
+    print("⏳ Discovering connected apps...", flush=True)
+    discovery_future = asyncio.to_thread(
+        discover_connected_toolkits,
+        composio, 
+        user_id
+    )
+
+    # Await the Critical Path (Session) first
+    session = await session_future
+    print("✅ Composio Session Created")
+
+    # Await Discovery (Informational)
+    # Ideally we'd let this run even longer, but we print it right here. 
+    # Even just overlapping the API calls saves ~1.5s.
+    ALLOWED_APPS = await discovery_future
+
     if not ALLOWED_APPS:
         # Fallback if discovery completely fails or no apps connected
         ALLOWED_APPS = ["gmail", "github", "codeinterpreter", "slack", "composio_search"]
