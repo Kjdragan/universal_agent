@@ -181,6 +181,11 @@ Create `.env` from `.env.example`:
 - `ANTHROPIC_BASE_URL` - `https://api.z.ai/api/anthropic`
 - `LOGFIRE_TOKEN` - Logfire tracing (optional)
 
+### Environment & Dependencies
+- **Package Manager**: `uv` (strict Mode).
+- **Rule**: Agents MUST NOT use `pip install`. Dependencies are managed in `pyproject.toml`.
+- **System Binaries**: Tools like `pandoc` or `ffmpeg` are system-level. Agents should prefer Python-native alternatives (e.g., `reportlab` instead of `pandoc`, `pydub` instead of `ffmpeg` where possible) or fail gracefully if binary is missing.
+
 ### Key Dependencies
 - `claude-agent-sdk` - Claude agentic framework
 - `composio` - Tool router SDK

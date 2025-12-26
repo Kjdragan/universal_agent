@@ -138,6 +138,7 @@ from claude_agent_sdk.types import (
     HookContext,
     HookJSONOutput,
 )
+from typing import Any
 from composio import Composio
 # Local MCP server provides: crawl_parallel, read_local_file, write_local_file
 
