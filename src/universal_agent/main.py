@@ -196,271 +196,272 @@ import asyncio
 
 
 async def observe_and_save_search_results(
-    tool_name: str, content, workspace_dir: str
+    tool_name: str, content: Any, workspace_dir: str
 ) -> None:
     """
     Observer: Parse SERP tool results and save cleaned artifacts.
     Uses Claude SDK typed content (list of TextBlock objects).
     """
-    # Match search tools but exclude tool discovery (SEARCH_TOOLS)
-    tool_upper = tool_name.upper()
-    
-    # Exclude tool discovery - COMPOSIO_SEARCH_TOOLS searches for tools, not web
-    if "SEARCH_TOOLS" in tool_upper:
-        return
-    
-    # Comprehensive allowlist for Composio search providers only
-    # Note: Native WebSearch excluded - we only want intentional Composio research
-    # MULTI_EXECUTE included because it may wrap search calls - inner parsing filters by tool_slug
-    search_keywords = [
-        # Composio native search (SEARCH_TOOLS excluded above)
-        "COMPOSIO_SEARCH",
-        # SerpAPI variants
-        "SERPAPI", "SERP_API",
-        # Future providers
-        "EXA_SEARCH", "EXA_",
-        "TAVILY", "TAVILI",  # Common misspelling
-        # Generic Composio patterns
-        "SEARCH_NEWS", "SEARCH_WEB", "SEARCH_GOOGLE", "SEARCH_BING",
-        # Wrapper that may contain search results - inner parsing filters by tool_slug
-        "MULTI_EXECUTE",
-    ]
-    is_serp_tool = any(kw in tool_upper for kw in search_keywords)
+    with logfire.span("observer_search_results", tool=tool_name):
+        # Match search tools but exclude tool discovery (SEARCH_TOOLS)
+        tool_upper = tool_name.upper()
+        
+        # Exclude tool discovery - COMPOSIO_SEARCH_TOOLS searches for tools, not web
+        if "SEARCH_TOOLS" in tool_upper:
+            return
+        
+        # Comprehensive allowlist for Composio search providers only
+        # Note: Native WebSearch excluded - we only want intentional Composio research
+        # MULTI_EXECUTE included because it may wrap search calls - inner parsing filters by tool_slug
+        search_keywords = [
+            # Composio native search (SEARCH_TOOLS excluded above)
+            "COMPOSIO_SEARCH",
+            # SerpAPI variants
+            "SERPAPI", "SERP_API",
+            # Future providers
+            "EXA_SEARCH", "EXA_",
+            "TAVILY", "TAVILI",  # Common misspelling
+            # Generic Composio patterns
+            "SEARCH_NEWS", "SEARCH_WEB", "SEARCH_GOOGLE", "SEARCH_BING",
+            # Wrapper that may contain search results - inner parsing filters by tool_slug
+            "MULTI_EXECUTE",
+        ]
+        is_serp_tool = any(kw in tool_upper for kw in search_keywords)
 
-    if not is_serp_tool:
-        return
-
-    try:
-        # Extract JSON text from Claude SDK TextBlock objects
-        raw_json = None
-
-        if isinstance(content, list):
-            # Claude SDK: [TextBlock(type='text', text='<json>')]
-            for item in content:
-                if hasattr(item, "text"):
-                    raw_json = item.text
-                    break
-                elif isinstance(item, dict) and item.get("type") == "text":
-                    raw_json = item.get("text", "")
-                    break
-        elif isinstance(content, str):
-            raw_json = content
-
-        if not raw_json:
+        if not is_serp_tool:
             return
 
-        # Special handling for Claude's native WebSearch format:
-        # "Web search results for query: ...\n\nLinks: [{...}, {...}]"
-        if "WebSearch" in tool_name or raw_json.startswith("Web search results"):
-            import re
-            links_match = re.search(r'Links:\s*(\[.*\])', raw_json, re.DOTALL)
-            if links_match:
-                try:
-                    links_list = json.loads(links_match.group(1))
-                    # Convert to our standard format
-                    data = {
-                        "organic_results": [
-                            {
-                                "title": item.get("title"),
-                                "link": item.get("url"),
-                                "snippet": item.get("snippet", ""),
-                            }
-                            for item in links_list
-                            if isinstance(item, dict)
-                        ]
-                    }
-                except json.JSONDecodeError:
+        try:
+            # Extract JSON text from Claude SDK TextBlock objects
+            raw_json = None
+
+            if isinstance(content, list):
+                # Claude SDK: [TextBlock(type='text', text='<json>')]
+                for item in content:
+                    if hasattr(item, "text"):
+                        raw_json = item.text
+                        break
+                    elif isinstance(item, dict) and item.get("type") == "text":
+                        raw_json = item.get("text", "")
+                        break
+            elif isinstance(content, str):
+                raw_json = content
+
+            if not raw_json:
+                return
+
+            # Special handling for Claude's native WebSearch format:
+            # "Web search results for query: ...\n\nLinks: [{...}, {...}]"
+            if "WebSearch" in tool_name or raw_json.startswith("Web search results"):
+                import re
+                links_match = re.search(r'Links:\s*(\[.*\])', raw_json, re.DOTALL)
+                if links_match:
+                    try:
+                        links_list = json.loads(links_match.group(1))
+                        # Convert to our standard format
+                        data = {
+                            "organic_results": [
+                                {
+                                    "title": item.get("title"),
+                                    "link": item.get("url"),
+                                    "snippet": item.get("snippet", ""),
+                                }
+                                for item in links_list
+                                if isinstance(item, dict)
+                            ]
+                        }
+                    except json.JSONDecodeError:
+                        return
+                else:
                     return
             else:
-                return
-        else:
-            # Parse JSON normally
-            try:
-                data = json.loads(raw_json)
-            except json.JSONDecodeError:
-                return
-
-        if not isinstance(data, dict):
-            return
-
-        # Prepare list of payloads to process
-        payloads = []
-
-        # 1. Handle Nested "data" wrapper
-        root = data
-        if isinstance(root, dict) and "data" in root:
-            root = root["data"]
-
-        # 2. Check for MULTI_EXECUTE_TOOL structure
-        if (
-            isinstance(root, dict)
-            and "results" in root
-            and isinstance(root["results"], list)
-        ):
-            # Multi-execute result
-            for item in root["results"]:
-                if isinstance(item, dict) and "response" in item:
-                    inner_resp = item["response"]
-
-                    # Handle string response
-                    if isinstance(inner_resp, str):
-                        try:
-                            inner_resp = json.loads(inner_resp)
-                        except json.JSONDecodeError:
-                            continue
-
-                    # Now safe to process dict
-                    if isinstance(inner_resp, dict):
-                        inner_data = inner_resp.get("data") or inner_resp.get(
-                            "data_preview"
-                        )
-                        inner_slug = item.get("tool_slug", tool_name)
-
-                        if inner_data:
-                            payloads.append((inner_slug, inner_data))
-
-        else:
-            # Single tool result
-            payloads.append((tool_name, root))
-
-        # 3. Process each payload
-        saved_count = 0
-        for slug, payload in payloads:
-            if not isinstance(payload, dict):
-                continue
-
-            # Helper to unwrap 'results' key if it hides the actual SERP data
-            search_data = payload
-            if "results" in payload and isinstance(payload["results"], dict):
-                search_data = payload["results"]
-
-            # Robust extraction helper
-            def safe_get_list(data, key):
-                val = data.get(key, [])
-                if isinstance(val, dict):
-                    return list(val.values())
-                if isinstance(val, list):
-                    return val
-                return []
-
-            cleaned = None
-
-            # CASE A: News Results
-            if "news_results" in search_data:
-                raw_list = safe_get_list(search_data, "news_results")
-                cleaned = {
-                    "type": "news",
-                    "timestamp": datetime.now().isoformat(),
-                    "tool": slug,
-                    "articles": [
-                        {
-                            "position": a.get("position")
-                            or (idx + 1),  # Use API position or 1-indexed array order
-                            "title": a.get("title"),
-                            "url": a.get("link"),
-                            "source": a.get("source", {}).get("name")
-                            if isinstance(a.get("source"), dict)
-                            else (
-                                a.get("source")
-                                if isinstance(a.get("source"), str)
-                                else None
-                            ),
-                            "date": parse_relative_date(a.get("date", "")),
-                            "snippet": a.get("snippet"),
-                        }
-                        for idx, a in enumerate(raw_list)
-                        if isinstance(a, dict)
-                    ],
-                }
-
-            # CASE B: Organic Web Results
-            elif "organic_results" in search_data:
-                raw_list = safe_get_list(search_data, "organic_results")
-                cleaned = {
-                    "type": "web",
-                    "timestamp": datetime.now().isoformat(),
-                    "tool": slug,
-                    "results": [
-                        {
-                            "position": r.get("position")
-                            or (idx + 1),  # Use API position or 1-indexed array order
-                            "title": r.get("title"),
-                            "url": r.get("link"),
-                            "snippet": r.get("snippet"),
-                        }
-                        for idx, r in enumerate(raw_list)
-                    ],
-                }
-
-            # CASE C: SEARCH_WEB with 'answer' + 'citations' format
-            # COMPOSIO_SEARCH_WEB returns: {"answer": "...", "citations": [{id, source, snippet}, ...]}
-            elif "citations" in search_data or "answer" in search_data:
-                citations = safe_get_list(search_data, "citations")
-                cleaned = {
-                    "type": "web_answer",
-                    "timestamp": datetime.now().isoformat(),
-                    "tool": slug,
-                    "answer": search_data.get("answer", ""),
-                    "results": [
-                        {
-                            "position": idx + 1,
-                            "title": c.get("source", c.get("id", "")),
-                            "url": c.get("id", c.get("source", "")),  # 'id' often contains URL
-                            "snippet": c.get("snippet", ""),
-                        }
-                        for idx, c in enumerate(citations)
-                        if isinstance(c, dict)
-                    ],
-                }
-
-
-            # Save if we found cleanable data
-            if cleaned and workspace_dir:
-                filename = "unknown"  # Initialize before try block
+                # Parse JSON normally
                 try:
-                    search_dir = os.path.join(workspace_dir, "search_results")
-                    os.makedirs(search_dir, exist_ok=True)
+                    data = json.loads(raw_json)
+                except json.JSONDecodeError:
+                    return
 
-                    # Make filename unique
-                    timestamp_str = datetime.now().strftime("%H%M%S")
-                    suffix = f"_{saved_count}" if len(payloads) > 1 else ""
-                    filename = os.path.join(
-                        search_dir, f"{slug}{suffix}_{timestamp_str}.json"
-                    )
+            if not isinstance(data, dict):
+                return
 
-                    # Write file with explicit error handling
-                    with open(filename, "w") as f:
-                        json.dump(cleaned, f, indent=2)
+            # Prepare list of payloads to process
+            payloads = []
 
-                    # Verify file was actually created
-                    if os.path.exists(filename):
-                        file_size = os.path.getsize(filename)
-                        print(f"\n📁 [OBSERVER] Saved: {filename} ({file_size} bytes)")
-                        logfire.info(
-                            "observer_artifact_saved",
-                            path=filename,
-                            type=cleaned.get("type"),
-                            size=file_size,
+            # 1. Handle Nested "data" wrapper
+            root = data
+            if isinstance(root, dict) and "data" in root:
+                root = root["data"]
+
+            # 2. Check for MULTI_EXECUTE_TOOL structure
+            if (
+                isinstance(root, dict)
+                and "results" in root
+                and isinstance(root["results"], list)
+            ):
+                # Multi-execute result
+                for item in root["results"]:
+                    if isinstance(item, dict) and "response" in item:
+                        inner_resp = item["response"]
+
+                        # Handle string response
+                        if isinstance(inner_resp, str):
+                            try:
+                                inner_resp = json.loads(inner_resp)
+                            except json.JSONDecodeError:
+                                continue
+
+                        # Now safe to process dict
+                        if isinstance(inner_resp, dict):
+                            inner_data = inner_resp.get("data") or inner_resp.get(
+                                "data_preview"
+                            )
+                            inner_slug = item.get("tool_slug", tool_name)
+
+                            if inner_data:
+                                payloads.append((inner_slug, inner_data))
+
+            else:
+                # Single tool result
+                payloads.append((tool_name, root))
+
+            # 3. Process each payload
+            saved_count = 0
+            for slug, payload in payloads:
+                if not isinstance(payload, dict):
+                    continue
+
+                # Helper to unwrap 'results' key if it hides the actual SERP data
+                search_data = payload
+                if "results" in payload and isinstance(payload["results"], dict):
+                    search_data = payload["results"]
+
+                # Robust extraction helper
+                def safe_get_list(data, key):
+                    val = data.get(key, [])
+                    if isinstance(val, dict):
+                        return list(val.values())
+                    if isinstance(val, list):
+                        return val
+                    return []
+
+                cleaned = None
+
+                # CASE A: News Results
+                if "news_results" in search_data:
+                    raw_list = safe_get_list(search_data, "news_results")
+                    cleaned = {
+                        "type": "news",
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": slug,
+                        "articles": [
+                            {
+                                "position": a.get("position")
+                                or (idx + 1),  # Use API position or 1-indexed array order
+                                "title": a.get("title"),
+                                "url": a.get("link"),
+                                "source": a.get("source", {}).get("name")
+                                if isinstance(a.get("source"), dict)
+                                else (
+                                    a.get("source")
+                                    if isinstance(a.get("source"), str)
+                                    else None
+                                ),
+                                "date": parse_relative_date(a.get("date", "")),
+                                "snippet": a.get("snippet"),
+                            }
+                            for idx, a in enumerate(raw_list)
+                            if isinstance(a, dict)
+                        ],
+                    }
+
+                # CASE B: Organic Web Results
+                elif "organic_results" in search_data:
+                    raw_list = safe_get_list(search_data, "organic_results")
+                    cleaned = {
+                        "type": "web",
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": slug,
+                        "results": [
+                            {
+                                "position": r.get("position")
+                                or (idx + 1),  # Use API position or 1-indexed array order
+                                "title": r.get("title"),
+                                "url": r.get("link"),
+                                "snippet": r.get("snippet"),
+                            }
+                            for idx, r in enumerate(raw_list)
+                        ],
+                    }
+
+                # CASE C: SEARCH_WEB with 'answer' + 'citations' format
+                # COMPOSIO_SEARCH_WEB returns: {"answer": "...", "citations": [{id, source, snippet}, ...]}
+                elif "citations" in search_data or "answer" in search_data:
+                    citations = safe_get_list(search_data, "citations")
+                    cleaned = {
+                        "type": "web_answer",
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": slug,
+                        "answer": search_data.get("answer", ""),
+                        "results": [
+                            {
+                                "position": idx + 1,
+                                "title": c.get("source", c.get("id", "")),
+                                "url": c.get("id", c.get("source", "")),  # 'id' often contains URL
+                                "snippet": c.get("snippet", ""),
+                            }
+                            for idx, c in enumerate(citations)
+                            if isinstance(c, dict)
+                        ],
+                    }
+
+
+                # Save if we found cleanable data
+                if cleaned and workspace_dir:
+                    filename = "unknown"  # Initialize before try block
+                    try:
+                        search_dir = os.path.join(workspace_dir, "search_results")
+                        os.makedirs(search_dir, exist_ok=True)
+
+                        # Make filename unique
+                        timestamp_str = datetime.now().strftime("%H%M%S")
+                        suffix = f"_{saved_count}" if len(payloads) > 1 else ""
+                        filename = os.path.join(
+                            search_dir, f"{slug}{suffix}_{timestamp_str}.json"
                         )
-                        saved_count += 1
-                        # Return feedback that can be injected into agent context
-                        # This tells the agent NOT to save again
-                        print(f"   ⚠️  Agent: DO NOT save search results again - already persisted locally.")
-                    else:
-                        print(f"\n❌ [OBSERVER] File not created: {filename}")
-                        logfire.error("observer_file_not_created", path=filename)
 
-                except Exception as file_error:
-                    print(f"\n❌ [OBSERVER] File I/O error: {file_error}")
-                    logfire.error(
-                        "observer_file_io_error",
-                        error=str(file_error),
-                        path=filename if "filename" in locals() else "unknown",
-                    )
+                        # Write file with explicit error handling
+                        with open(filename, "w") as f:
+                            json.dump(cleaned, f, indent=2)
 
-    except Exception as e:
-        print(f"\n❌ [OBSERVER] Parse error: {e}")
-        logfire.warning("observer_error", tool=tool_name, error=str(e))
+                        # Verify file was actually created
+                        if os.path.exists(filename):
+                            file_size = os.path.getsize(filename)
+                            print(f"\n📁 [OBSERVER] Saved: {filename} ({file_size} bytes)")
+                            logfire.info(
+                                "observer_artifact_saved",
+                                path=filename,
+                                type=cleaned.get("type"),
+                                size=file_size,
+                            )
+                            saved_count += 1
+                            # Return feedback that can be injected into agent context
+                            # This tells the agent NOT to save again
+                            print(f"   ⚠️  Agent: DO NOT save search results again - already persisted locally.")
+                        else:
+                            print(f"\n❌ [OBSERVER] File not created: {filename}")
+                            logfire.error("observer_file_not_created", path=filename)
+
+                    except Exception as file_error:
+                        print(f"\n❌ [OBSERVER] File I/O error: {file_error}")
+                        logfire.error(
+                            "observer_file_io_error",
+                            error=str(file_error),
+                            path=filename if "filename" in locals() else "unknown",
+                        )
+
+        except Exception as e:
+            print(f"\n❌ [OBSERVER] Parse error: {e}")
+            logfire.warning("observer_error", tool=tool_name, error=str(e))
 
 
 async def observe_and_save_workbench_activity(
@@ -470,60 +471,61 @@ async def observe_and_save_workbench_activity(
     Observer: Capture COMPOSIO_REMOTE_WORKBENCH activity (inputs/outputs).
     Saves code execution details to workbench_activity/ directory.
     """
-    if "REMOTE_WORKBENCH" not in tool_name.upper():
-        return
+    with logfire.span("observer_workbench_activity", tool=tool_name):
+        if "REMOTE_WORKBENCH" not in tool_name.upper():
+            return
 
-    try:
-        workbench_dir = os.path.join(workspace_dir, "workbench_activity")
-        os.makedirs(workbench_dir, exist_ok=True)
-
-        timestamp_str = datetime.now().strftime("%H%M%S")
-        filename = os.path.join(workbench_dir, f"workbench_{timestamp_str}.json")
-
-        # Parse result for metadata
-        result_data = {}
         try:
-            if isinstance(tool_result, str):
-                import ast
+            workbench_dir = os.path.join(workspace_dir, "workbench_activity")
+            os.makedirs(workbench_dir, exist_ok=True)
 
-                parsed_list = ast.literal_eval(tool_result)
-                for item in parsed_list:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        result_json = json.loads(item.get("text", "{}"))
-                        result_data = result_json.get("data", {})
-                        break
-        except (json.JSONDecodeError, ValueError, SyntaxError):
-            result_data = {
-                "raw": tool_result[:500] if isinstance(tool_result, str) else ""
+            timestamp_str = datetime.now().strftime("%H%M%S")
+            filename = os.path.join(workbench_dir, f"workbench_{timestamp_str}.json")
+
+            # Parse result for metadata
+            result_data = {}
+            try:
+                if isinstance(tool_result, str):
+                    import ast
+
+                    parsed_list = ast.literal_eval(tool_result)
+                    for item in parsed_list:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            result_json = json.loads(item.get("text", "{}"))
+                            result_data = result_json.get("data", {})
+                            break
+            except (json.JSONDecodeError, ValueError, SyntaxError):
+                result_data = {
+                    "raw": tool_result[:500] if isinstance(tool_result, str) else ""
+                }
+
+            activity_log = {
+                "timestamp": datetime.now().isoformat(),
+                "tool": tool_name,
+                "input": {
+                    "code": tool_input.get("code_to_execute", "")[
+                        :1000
+                    ],  # Truncate for readability
+                    "session_id": tool_input.get("session_id"),
+                    "current_step": tool_input.get("current_step"),
+                    "thought": tool_input.get("thought"),
+                },
+                "output": {
+                    "stdout": result_data.get("stdout", ""),
+                    "stderr": result_data.get("stderr", ""),
+                    "results": result_data.get("results", ""),
+                    "successful": result_data.get("successful"),
+                },
             }
 
-        activity_log = {
-            "timestamp": datetime.now().isoformat(),
-            "tool": tool_name,
-            "input": {
-                "code": tool_input.get("code_to_execute", "")[
-                    :1000
-                ],  # Truncate for readability
-                "session_id": tool_input.get("session_id"),
-                "current_step": tool_input.get("current_step"),
-                "thought": tool_input.get("thought"),
-            },
-            "output": {
-                "stdout": result_data.get("stdout", ""),
-                "stderr": result_data.get("stderr", ""),
-                "results": result_data.get("results", ""),
-                "successful": result_data.get("successful"),
-            },
-        }
+            with open(filename, "w") as f:
+                json.dump(activity_log, f, indent=2)
 
-        with open(filename, "w") as f:
-            json.dump(activity_log, f, indent=2)
+            print(f"\n📁 [OBSERVER] Saved workbench activity: {filename}")
+            logfire.info("workbench_activity_saved", path=filename)
 
-        print(f"\n📁 [OBSERVER] Saved workbench activity: {filename}")
-        logfire.info("workbench_activity_saved", path=filename)
-
-    except Exception as e:
-        logfire.warning("workbench_observer_error", tool=tool_name, error=str(e))
+        except Exception as e:
+            logfire.warning("workbench_observer_error", tool=tool_name, error=str(e))
 
 
 # Persistent reports directory (outside session workspaces)
@@ -540,51 +542,52 @@ async def observe_and_save_work_products(
     Observer: Copy work product reports to persistent SAVED_REPORTS directory.
     This supplements the session workspace save - reports are saved to BOTH locations.
     """
-    if "write_local_file" not in tool_name.lower():
-        return
-    
-    # Only process if this is a work_products file
-    file_path = tool_input.get("path", "")
-    if "work_products" not in file_path:
-        return
-    
-    try:
-        # Ensure persistent directory exists
-        os.makedirs(SAVED_REPORTS_DIR, exist_ok=True)
+    with logfire.span("observer_work_products", tool=tool_name):
+        if "write_local_file" not in tool_name.lower():
+            return
         
-        # Extract original filename
-        original_filename = os.path.basename(file_path)
-        name_part, ext = os.path.splitext(original_filename)
+        # Only process if this is a work_products file
+        file_path = tool_input.get("path", "")
+        if "work_products" not in file_path:
+            return
         
-        # Add timestamp for uniqueness
-        timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        persistent_filename = f"{name_part}_{timestamp_str}{ext}"
-        persistent_path = os.path.join(SAVED_REPORTS_DIR, persistent_filename)
-        
-        # Get the full path of the source file
-        abs_workspace_dir = os.path.abspath(workspace_dir) if not os.path.isabs(workspace_dir) else workspace_dir
-        # Normalize the path - handle both relative and absolute paths
-        if os.path.isabs(file_path):
-            source_path = file_path
-        else:
-            # Find the session directory from the path
-            base_dir = os.path.dirname(os.path.dirname(abs_workspace_dir))  # Up to AGENT_RUN_WORKSPACES
-            source_path = os.path.join(base_dir, file_path)
-        
-        # Wait a moment for the file to be written
-        await asyncio.sleep(0.5)
-        
-        # Copy the file
-        if os.path.exists(source_path):
-            import shutil
-            shutil.copy2(source_path, persistent_path)
-            print(f"\n📁 [OBSERVER] Saved to persistent: {persistent_path}")
-            logfire.info("work_product_saved_persistent", source=file_path, dest=persistent_path)
-        else:
-            logfire.warning("work_product_source_not_found", path=source_path)
+        try:
+            # Ensure persistent directory exists
+            os.makedirs(SAVED_REPORTS_DIR, exist_ok=True)
             
-    except Exception as e:
-        logfire.warning("work_product_observer_error", tool=tool_name, error=str(e))
+            # Extract original filename
+            original_filename = os.path.basename(file_path)
+            name_part, ext = os.path.splitext(original_filename)
+            
+            # Add timestamp for uniqueness
+            timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            persistent_filename = f"{name_part}_{timestamp_str}{ext}"
+            persistent_path = os.path.join(SAVED_REPORTS_DIR, persistent_filename)
+            
+            # Get the full path of the source file
+            abs_workspace_dir = os.path.abspath(workspace_dir) if not os.path.isabs(workspace_dir) else workspace_dir
+            # Normalize the path - handle both relative and absolute paths
+            if os.path.isabs(file_path):
+                source_path = file_path
+            else:
+                # Find the session directory from the path
+                base_dir = os.path.dirname(os.path.dirname(abs_workspace_dir))  # Up to AGENT_RUN_WORKSPACES
+                source_path = os.path.join(base_dir, file_path)
+            
+            # Wait a moment for the file to be written
+            await asyncio.sleep(0.5)
+            
+            # Copy the file
+            if os.path.exists(source_path):
+                import shutil
+                shutil.copy2(source_path, persistent_path)
+                print(f"\n📁 [OBSERVER] Saved to persistent: {persistent_path}")
+                logfire.info("work_product_saved_persistent", source=file_path, dest=persistent_path)
+            else:
+                logfire.warning("work_product_source_not_found", path=source_path)
+                
+        except Exception as e:
+            logfire.warning("work_product_observer_error", tool=tool_name, error=str(e))
 
 
 async def observe_and_save_video_outputs(
@@ -594,61 +597,62 @@ async def observe_and_save_video_outputs(
     Observer: Copy video/audio outputs to session work_products directory.
     Triggered when video_audio or youtube MCP tools produce output files.
     """
-    # Only process video_audio and youtube MCP output tools
-    video_tools = [
-        "trim_video", "concatenate_videos", "extract_audio", "convert_video",
-        "add_text_overlay", "add_image_overlay", "reverse_video", "compress_video",
-        "rotate_video", "change_video_speed", "download_video", "download_audio"
-    ]
-    
-    if not any(tool in tool_name.lower() for tool in video_tools):
-        return
-    
-    try:
-        # Parse output path from tool result
-        import json
-        import shutil
+    with logfire.span("observer_video_outputs", tool=tool_name):
+        # Only process video_audio and youtube MCP output tools
+        video_tools = [
+            "trim_video", "concatenate_videos", "extract_audio", "convert_video",
+            "add_text_overlay", "add_image_overlay", "reverse_video", "compress_video",
+            "rotate_video", "change_video_speed", "download_video", "download_audio"
+        ]
         
-        # Try to extract output path from result
-        output_path = None
-        
-        # Check for output_video_path in input
-        if "output_video_path" in tool_input:
-            output_path = tool_input["output_video_path"]
-        elif "output_audio_path" in tool_input:
-            output_path = tool_input["output_audio_path"]
-        elif "output_path" in tool_input:
-            output_path = tool_input["output_path"]
-        
-        # Also try to extract from result message
-        if not output_path and "successfully" in tool_result.lower():
-            # Try to find path in result (e.g., "Videos concatenated successfully to /path/to/file.mp4")
-            if " to " in tool_result:
-                potential_path = tool_result.split(" to ")[-1].strip().rstrip('"}')
-                if potential_path.endswith((".mp4", ".mp3", ".wav", ".webm", ".avi", ".mov")):
-                    output_path = potential_path
-        
-        if not output_path or not os.path.exists(output_path):
+        if not any(tool in tool_name.lower() for tool in video_tools):
             return
         
-        # Check if this is a "final" output (not intermediate like last_15_seconds.mp4)
-        filename = os.path.basename(output_path)
-        intermediate_patterns = ["last_", "first_", "temp_", "tmp_", "_part"]
-        if any(pat in filename.lower() for pat in intermediate_patterns):
-            return  # Skip intermediate files
-        
-        # Create work_products/media directory in session workspace
-        media_dir = os.path.join(workspace_dir, "work_products", "media")
-        os.makedirs(media_dir, exist_ok=True)
-        
-        # Copy to session workspace
-        dest_path = os.path.join(media_dir, filename)
-        shutil.copy2(output_path, dest_path)
-        print(f"\n🎬 [OBSERVER] Saved media to session: {dest_path}")
-        logfire.info("video_output_saved_session", source=output_path, dest=dest_path)
-        
-    except Exception as e:
-        logfire.warning("video_observer_error", tool=tool_name, error=str(e))
+        try:
+            # Parse output path from tool result
+            import json
+            import shutil
+            
+            # Try to extract output path from result
+            output_path = None
+            
+            # Check for output_video_path in input
+            if "output_video_path" in tool_input:
+                output_path = tool_input["output_video_path"]
+            elif "output_audio_path" in tool_input:
+                output_path = tool_input["output_audio_path"]
+            elif "output_path" in tool_input:
+                output_path = tool_input["output_path"]
+            
+            # Also try to extract from result message
+            if not output_path and "successfully" in tool_result.lower():
+                # Try to find path in result (e.g., "Videos concatenated successfully to /path/to/file.mp4")
+                if " to " in tool_result:
+                    potential_path = tool_result.split(" to ")[-1].strip().rstrip('"}')
+                    if potential_path.endswith((".mp4", ".mp3", ".wav", ".webm", ".avi", ".mov")):
+                        output_path = potential_path
+            
+            if not output_path or not os.path.exists(output_path):
+                return
+            
+            # Check if this is a "final" output (not intermediate like last_15_seconds.mp4)
+            filename = os.path.basename(output_path)
+            intermediate_patterns = ["last_", "first_", "temp_", "tmp_", "_part"]
+            if any(pat in filename.lower() for pat in intermediate_patterns):
+                return  # Skip intermediate files
+            
+            # Create work_products/media directory in session workspace
+            media_dir = os.path.join(workspace_dir, "work_products", "media")
+            os.makedirs(media_dir, exist_ok=True)
+            
+            # Copy to session workspace
+            dest_path = os.path.join(media_dir, filename)
+            shutil.copy2(output_path, dest_path)
+            print(f"\n🎬 [OBSERVER] Saved media to session: {dest_path}")
+            logfire.info("video_output_saved_session", source=output_path, dest=dest_path)
+            
+        except Exception as e:
+            logfire.warning("video_observer_error", tool=tool_name, error=str(e))
 
 
 
@@ -710,8 +714,40 @@ def verify_subagent_compliance(
 
 
 # =============================================================================
+# KNOWLEDGE BASE - Static tool guidance loaded at startup
+# =============================================================================
+
+def load_knowledge() -> str:
+    """
+    Load all knowledge files from .claude/knowledge/ directory.
+    These contain critical tool usage patterns (e.g., Gmail attachment format)
+    that are appended to the system prompt at startup.
+    
+    Returns: Combined knowledge content as a single string.
+    """
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    knowledge_dir = os.path.join(project_root, ".claude", "knowledge")
+    
+    if not os.path.exists(knowledge_dir):
+        return ""
+    
+    knowledge_parts = []
+    for filename in sorted(os.listdir(knowledge_dir)):
+        if filename.endswith('.md'):
+            filepath = os.path.join(knowledge_dir, filename)
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    knowledge_parts.append(f.read())
+            except Exception:
+                pass  # Skip files that can't be read
+    
+    return "\n\n---\n\n".join(knowledge_parts) if knowledge_parts else ""
+
+
+# =============================================================================
 # SKILL DISCOVERY - Parse SKILL.md files for progressive disclosure
 # =============================================================================
+
 
 def discover_skills(skills_dir: str = None) -> list[dict]:
     """
@@ -1067,6 +1103,17 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
     """Run a single conversation turn with full tracing."""
     global trace
 
+    # Initialize Logfire Context (Baggage) for Trace Organization
+    if iteration == 1:
+        logfire.set_baggage("agent", "main")
+        logfire.set_baggage("is_subagent", "false")
+        logfire.set_baggage("step", "planning") # Initial state
+        logfire.set_baggage("loop", "1")
+    else:
+        # Update loop count for main agent
+        logfire.set_baggage("loop", str(iteration))
+        logfire.set_baggage("step", "execution") # Default for subsequent turns
+
     # Create Logfire span for this iteration
     with logfire.span(f"conversation_iteration_{iteration}", iteration=iteration):
         print(f"\n{'=' * 80}")
@@ -1085,99 +1132,114 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
         async for msg in client.receive_response():
             if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, ToolUseBlock):
-                        tool_record = {
-                            "iteration": iteration,
-                            "name": block.name,
-                            "id": block.id,
-                            "time_offset_seconds": round(time.time() - start_ts, 3),
-                            "input": block.input if hasattr(block, "input") else None,
-                            "input_size_bytes": len(json.dumps(block.input))
-                            if hasattr(block, "input") and block.input
-                            else 0,
-                        }
-                        trace["tool_calls"].append(tool_record)
-                        tool_calls_this_iter.append(tool_record)
+                # Wrapped in span for full visibility of assistant's turn
+                with logfire.span("assistant_message", model=msg.model):
+                    for block in msg.content:
+                        if isinstance(block, ToolUseBlock):
+                            # Nested tool_use span
+                            with logfire.span("tool_use", tool_name=block.name, tool_id=block.id):
+                                tool_record = {
+                                    "iteration": iteration,
+                                    "name": block.name,
+                                    "id": block.id,
+                                    "time_offset_seconds": round(time.time() - start_ts, 3),
+                                    "input": block.input if hasattr(block, "input") else None,
+                                    "input_size_bytes": len(json.dumps(block.input))
+                                    if hasattr(block, "input") and block.input
+                                    else 0,
+                                }
+                                trace["tool_calls"].append(tool_record)
+                                tool_calls_this_iter.append(tool_record)
 
-                        # Log to Logfire with PAYLOAD preview
-                        input_preview = None
-                        if tool_record["input"]:
-                            input_json = json.dumps(tool_record["input"])
-                            # Capture up to 2KB of input for debugging code generation
-                            input_preview = (
-                                input_json[:2000]
-                                if len(input_json) > 2000
-                                else input_json
+                                # Log to Logfire with PAYLOAD preview
+                                input_preview = None
+                                if tool_record["input"]:
+                                    input_json = json.dumps(tool_record["input"])
+                                    # Capture up to 2KB of input for debugging code generation
+                                    input_preview = (
+                                        input_json[:2000]
+                                        if len(input_json) > 2000
+                                        else input_json
+                                    )
+
+                                # Check for sub-agent context (parent_tool_use_id indicates this call is from within a sub-agent)
+                                parent_tool_id = getattr(msg, "parent_tool_use_id", None)
+
+                                logfire.info(
+                                    "tool_input",
+                                    tool_name=block.name,
+                                    tool_id=block.id,
+                                    input_size=tool_record["input_size_bytes"],
+                                    input_preview=input_preview,
+                                    parent_tool_use_id=parent_tool_id,  # Sub-agent context
+                                    is_subagent_call=bool(parent_tool_id),
+                                )
+                                
+                                # Sub-agent tagging logic: Entering sub-agent
+                                if block.name == "Task":
+                                    subagent_type = "unknown"
+                                    if hasattr(block, "input") and isinstance(block.input, dict):
+                                        subagent_type = block.input.get("subagent_type", "unknown")
+                                    
+                                    logfire.set_baggage("agent", subagent_type)
+                                    logfire.set_baggage("is_subagent", "true")
+                                    logfire.set_baggage("loop", "1") # Reset loop for the sub-agent
+
+                                # Check for WORKBENCH or code execution tools
+                                is_code_exec = any(
+                                    x in block.name.upper()
+                                    for x in [
+                                        "WORKBENCH",
+                                        "CODE",
+                                        "EXECUTE",
+                                        "PYTHON",
+                                        "SANDBOX",
+                                        "BASH",
+                                    ]
+                                )
+                                marker = "🏭 CODE EXECUTION" if is_code_exec else "🔧"
+
+                                print(
+                                    f"\n{marker} [{block.name}] +{tool_record['time_offset_seconds']}s"
+                                )
+                                print(f"   Input size: {tool_record['input_size_bytes']} bytes")
+
+                                if tool_record["input"]:
+                                    input_preview = json.dumps(tool_record["input"], indent=2)
+                                    max_len = 3000 if is_code_exec else 500
+                                    if len(input_preview) > max_len:
+                                        input_preview = input_preview[:max_len] + "..."
+                                    print(f"   Input: {input_preview}")
+
+                        elif isinstance(block, TextBlock):
+                            if "connect.composio.dev/link" in block.text:
+                                import re
+
+                                links = re.findall(
+                                    r"https://connect\.composio\.dev/link/[^\s\)]+",
+                                    block.text,
+                                )
+                                if links:
+                                    auth_link = links[0]
+                                    needs_user_input = True
+
+                            # Buffer final text to print AFTER execution summary (not printed here)
+                            final_text = block.text[:3000] + ("..." if len(block.text) > 3000 else "")
+
+                            # Log text block
+                            logfire.info("text_block", length=len(block.text), text_preview=block.text[:500])
+
+                        elif isinstance(block, ThinkingBlock):
+                            # Log extended thinking
+                            print(
+                                f"\n🧠 Thinking (+{round(time.time() - start_ts, 1)}s)..."
                             )
-
-                        # Check for sub-agent context (parent_tool_use_id indicates this call is from within a sub-agent)
-                        parent_tool_id = getattr(msg, "parent_tool_use_id", None)
-
-                        logfire.info(
-                            "tool_call",
-                            tool_name=block.name,
-                            tool_id=block.id,
-                            input_size=tool_record["input_size_bytes"],
-                            input_preview=input_preview,
-                            parent_tool_use_id=parent_tool_id,  # Sub-agent context
-                            is_subagent_call=bool(parent_tool_id),
-                        )
-
-                        # Check for WORKBENCH or code execution tools
-                        is_code_exec = any(
-                            x in block.name.upper()
-                            for x in [
-                                "WORKBENCH",
-                                "CODE",
-                                "EXECUTE",
-                                "PYTHON",
-                                "SANDBOX",
-                                "BASH",
-                            ]
-                        )
-                        marker = "🏭 CODE EXECUTION" if is_code_exec else "🔧"
-
-                        print(
-                            f"\n{marker} [{block.name}] +{tool_record['time_offset_seconds']}s"
-                        )
-                        print(f"   Input size: {tool_record['input_size_bytes']} bytes")
-
-                        if tool_record["input"]:
-                            input_preview = json.dumps(tool_record["input"], indent=2)
-                            max_len = 3000 if is_code_exec else 500
-                            if len(input_preview) > max_len:
-                                input_preview = input_preview[:max_len] + "..."
-                            print(f"   Input: {input_preview}")
-
-                    elif isinstance(block, TextBlock):
-                        if "connect.composio.dev/link" in block.text:
-                            import re
-
-                            links = re.findall(
-                                r"https://connect\.composio\.dev/link/[^\s\)]+",
-                                block.text,
+                            logfire.info(
+                                "thinking",
+                                thinking_length=len(block.thinking),
+                                thinking_preview=block.thinking[:1000],
+                                signature=block.signature,
                             )
-                            if links:
-                                auth_link = links[0]
-                                needs_user_input = True
-
-                        # Buffer final text to print AFTER execution summary (not printed here)
-                        final_text = block.text[:3000] + ("..." if len(block.text) > 3000 else "")
-
-                        # Log reasoning to Logfire
-                        logfire.info("reasoning", text_preview=block.text[:1000])
-
-                    elif isinstance(block, ThinkingBlock):
-                        # Log extended thinking
-                        print(
-                            f"\n🧠 Thinking (+{round(time.time() - start_ts, 1)}s)..."
-                        )
-                        logfire.info(
-                            "thinking",
-                            thinking_preview=block.thinking[:1000],
-                            signature=block.signature,
-                        )
 
             elif isinstance(msg, (UserMessage, ToolResultBlock)):
                 # Handle both UserMessage (legacy) and ToolResultBlock (new SDK)
@@ -1191,101 +1253,117 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                     if is_result:
                         tool_use_id = getattr(block, "tool_use_id", None)
-                        is_error = getattr(block, "is_error", False)
+                        
+                        # Nested tool_result span requires finding tool info first (if possible) or just ID
+                        with logfire.span("tool_result", tool_use_id=tool_use_id):
+                            is_error = getattr(block, "is_error", False)
 
-                        # Extract content - keep as typed object
-                        block_content = getattr(block, "content", "")
-                        content_str = str(block_content)
+                            # Extract content - keep as typed object
+                            block_content = getattr(block, "content", "")
+                            content_str = str(block_content)
 
-                        result_record = {
-                            "tool_use_id": tool_use_id,
-                            "time_offset_seconds": round(time.time() - start_ts, 3),
-                            "is_error": is_error,
-                            "content_size_bytes": len(content_str),
-                            "content_preview": content_str[:1000]
-                            if len(content_str) > 1000
-                            else content_str,
-                        }
-                        trace["tool_results"].append(result_record)
+                            result_record = {
+                                "tool_use_id": tool_use_id,
+                                "time_offset_seconds": round(time.time() - start_ts, 3),
+                                "is_error": is_error,
+                                "content_size_bytes": len(content_str),
+                                "content_preview": content_str[:1000]
+                                if len(content_str) > 1000
+                                else content_str,
+                            }
+                            trace["tool_results"].append(result_record)
 
-                        # Log to Logfire with CONTENT preview
-                        # Capture full content if it's reasonable size (up to 2KB)
-                        full_content = content_str[:2000]
+                            # Log to Logfire with CONTENT preview
+                            full_content = content_str[:2000]
 
-                        logfire.info(
-                            "tool_result",
-                            tool_use_id=result_record["tool_use_id"],
-                            content_size=result_record["content_size_bytes"],
-                            is_error=result_record["is_error"],
-                            content_preview=full_content,
-                        )
+                            logfire.info(
+                                "tool_output",
+                                tool_use_id=result_record["tool_use_id"],
+                                content_size=result_record["content_size_bytes"],
+                                is_error=result_record["is_error"],
+                                content_preview=full_content,
+                            )
 
-                        print(
-                            f"\n📦 Tool Result ({result_record['content_size_bytes']} bytes) +{result_record['time_offset_seconds']}s"
-                        )
-                        # Always show a preview of the result content
-                        preview = result_record.get("content_preview", "")[:500]
-                        if preview:
                             print(
-                                f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 500 else ''}"
+                                f"\n📦 Tool Result ({result_record['content_size_bytes']} bytes) +{result_record['time_offset_seconds']}s"
                             )
+                            # Always show a preview of the result content
+                            preview = result_record.get("content_preview", "")[:500]
+                            if preview:
+                                print(
+                                    f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 500 else ''}"
+                                )
 
-                        # Observer Pattern: Fire-and-forget async save for SERP results
-                        # Look up tool name from tool_use_id
-                        tool_name = None
-                        tool_input = None
-                        for tc in tool_calls_this_iter:
-                            if tc.get("id") == tool_use_id:
-                                tool_name = tc.get("name")
-                                tool_input = tc.get("input", {})
-                                break
-                        if tool_name and OBSERVER_WORKSPACE_DIR:
-                            # Search results observer - pass typed content
-                            asyncio.create_task(
-                                observe_and_save_search_results(
-                                    tool_name, block_content, OBSERVER_WORKSPACE_DIR
+                            # Observer Pattern: Fire-and-forget async save for SERP results
+                            # Look up tool name from tool_use_id
+                            tool_name = None
+                            tool_input = None
+                            for tc in tool_calls_this_iter:
+                                if tc.get("id") == tool_use_id:
+                                    tool_name = tc.get("name")
+                                    tool_input = tc.get("input", {})
+                                    break
+                            
+                            # Reset sub-agent tagging if Task returned (Back to Main)
+                            if tool_name == "Task":
+                                logfire.set_baggage("agent", "main")
+                                logfire.set_baggage("is_subagent", "false")
+                                
+                            if tool_name and OBSERVER_WORKSPACE_DIR:
+                                # Search results observer - pass typed content
+                                asyncio.create_task(
+                                    observe_and_save_search_results(
+                                        tool_name, block_content, OBSERVER_WORKSPACE_DIR
+                                    )
                                 )
-                            )
-                            # Workbench activity observer
-                            asyncio.create_task(
-                                observe_and_save_workbench_activity(
-                                    tool_name,
-                                    tool_input or {},
-                                    content_str,
-                                    OBSERVER_WORKSPACE_DIR,
+                                # Workbench activity observer
+                                asyncio.create_task(
+                                    observe_and_save_workbench_activity(
+                                        tool_name,
+                                        tool_input or {},
+                                        content_str,
+                                        OBSERVER_WORKSPACE_DIR,
+                                    )
                                 )
-                            )
-                            # Work products observer - copy reports to persistent directory
-                            asyncio.create_task(
-                                observe_and_save_work_products(
-                                    tool_name,
-                                    tool_input or {},
-                                    content_str,
-                                    OBSERVER_WORKSPACE_DIR,
+                                # Work products observer - copy reports to persistent directory
+                                asyncio.create_task(
+                                    observe_and_save_work_products(
+                                        tool_name,
+                                        tool_input or {},
+                                        content_str,
+                                        OBSERVER_WORKSPACE_DIR,
+                                    )
                                 )
-                            )
-                            # Video/audio output observer - copy media to session workspace
-                            asyncio.create_task(
-                                observe_and_save_video_outputs(
-                                    tool_name,
-                                    tool_input or {},
-                                    content_str,
-                                    OBSERVER_WORKSPACE_DIR,
+                                # Video/audio output observer - copy media to session workspace
+                                asyncio.create_task(
+                                    observe_and_save_video_outputs(
+                                        tool_name,
+                                        tool_input or {},
+                                        content_str,
+                                        OBSERVER_WORKSPACE_DIR,
+                                    )
                                 )
-                            )
 
 
-                            # Post-subagent compliance verification (for Task results)
-                            compliance_error = verify_subagent_compliance(
-                                tool_name, content_str, OBSERVER_WORKSPACE_DIR
-                            )
-                            if compliance_error:
-                                # Log the compliance failure prominently
-                                print(compliance_error)
-                                logfire.warning(
-                                    "subagent_compliance_message_injected",
-                                    error=compliance_error[:200],
+                                # Post-subagent compliance verification (for Task results)
+                                compliance_error = verify_subagent_compliance(
+                                    tool_name, content_str, OBSERVER_WORKSPACE_DIR
                                 )
+                                if compliance_error:
+                                    # Log the compliance failure prominently
+                                    print(compliance_error)
+                                    logfire.warning(
+                                        "subagent_compliance_message_injected",
+                                        error=compliance_error[:200],
+                                    )
+                                    
+            elif isinstance(msg, ResultMessage):
+                logfire.info("result_message",
+                    duration_ms=msg.duration_ms,
+                    total_cost_usd=msg.total_cost_usd,
+                    num_turns=msg.num_turns,
+                    is_error=msg.is_error
+                )
 
         iter_record = {
             "iteration": iteration,
@@ -1814,6 +1892,15 @@ async def main():
             f"Context:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
         )
     print(f"✅ Injected Session Workspace: {abs_workspace_path}")
+
+    # Inject Knowledge Base (Static Tool Guidance)
+    knowledge_content = load_knowledge()
+    if knowledge_content:
+        if options.system_prompt and isinstance(options.system_prompt, str):
+            options.system_prompt += f"\n\n## Tool Knowledge\n{knowledge_content}"
+        else:
+             options.system_prompt = f"## Tool Knowledge\n{knowledge_content}"
+        print(f"✅ Injected Knowledge Base ({len(knowledge_content)} chars)")
 
     # Extract Trace ID (Lazy import to ensure OTel is ready)
     # Extract Trace ID (Lazy import to ensure OTel is ready)

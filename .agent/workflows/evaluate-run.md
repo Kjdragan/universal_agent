@@ -19,6 +19,12 @@ description: Evaluate the latest run traces using LogFire MCP and agent workspac
     *   **Query 1 (Errors)**: `SELECT * FROM records WHERE trace_id='<TRACE_ID>' AND level >= 'warning'`
     *   **Query 2 (Performance)**: `SELECT span_name, duration_ms, start_timestamp FROM records WHERE trace_id='<TRACE_ID>' AND span_name IN ('conversation_iteration', 'tool_call', 'tool_result') ORDER BY start_timestamp`
     *   **Query 3 (Tool Usage)**: Sequence of tools called.
+    *   **Query 4 (Context & Phases)**:
+        *   **Filter by Agent**: `SELECT * FROM records WHERE trace_id='<TRACE_ID>' AND (attributes->>'agent') = 'main'`
+        *   **Filter by Step**: `SELECT * FROM records WHERE trace_id='<TRACE_ID>' AND (attributes->>'step') = 'execution'`
+        *   **Sub-agent Activity**: `SELECT * FROM records WHERE trace_id='<TRACE_ID>' AND (attributes->>'is_subagent') = 'true'`
+    *   **Query 5 (Observer Audit)**:
+        *   **Artifacts & Compliance**: `SELECT span_name, attributes->>'tool' as tool, attributes->>'path' as path FROM records WHERE trace_id='<TRACE_ID>' AND span_name LIKE 'observer_%'`
 
 4.  **Evaluate Workspaces**
     *   Check `TARGET_SESSION/search_results/` for saved artifacts vs. those mentioned in logs.
