@@ -293,15 +293,34 @@ with open("encrypted.pdf", "wb") as output:
 - If you need to fill out a PDF form, follow the instructions in forms.md
 - For troubleshooting guides, see reference.md
 
-## Environment & Fallbacks
+## 🧠 Smart Routing: Choosing the Right Tool
 
-If Python libraries like `reportlab` or `pypdf` are not available and cannot be installed (e.g., in restricted environments), check for system tools:
+To ensure high-quality output, choose your tool based on your source file format:
 
-### Google Chrome / Chromium (Headless)
-If `google-chrome` or `chromium` is installed, use it to convert HTML to PDF. This is often more robust for complex layouts.
+### Scenario A: Source is HTML (`.html`)
+**Use Google Chrome (Headless)**.
+*   **Why**: Best for preserving complex layouts, CSS, grids, and "dashboard" styles.
+*   **Do NOT use Pandoc**: It will strip styling and break the layout.
+*   **Command**:
+    ```bash
+    google-chrome --headless --disable-gpu --print-to-pdf=output.pdf --no-margins input.html
+    ```
 
+### Scenario B: Source is Markdown (`.md`) or Text (`.txt`)
+**Use Pandoc**.
+*   **Why**: Best for clean, structured, "academic" or formal documents. Handles typography beautifully.
+*   **Do NOT use Chrome**: It will print raw markdown syntax without rendering it.
+*   **Command**:
+    ```bash
+    pandoc input.md -o output.pdf --pdf-engine=weasyprint
+    ```
+    *(Note: Ensure `weasyprint` is installed via `uv add weasyprint`)*
+
+### Check Availability
+Before running, verify the tool exists:
 ```bash
-google-chrome --headless --disable-gpu --print-to-pdf=output.pdf --no-margins input.html
+which google-chrome || echo "Chrome missing"
+which pandoc || echo "Pandoc missing"
 ```
 
 ### Check Availability First
