@@ -1768,6 +1768,15 @@ crypto = [
 ]
 
 [[package]]
+name = "pypdf"
+version = "6.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4d/9b/db1056a54eda8cd44f9e5128e87e1142cb328295dad92bbec0d39f251641/pypdf-6.5.0.tar.gz", hash = "sha256:9e78950906380ae4f2ce1d9039e9008098ba6366a4d9c7423c4bdbd6e6683404", size = 5277655, upload-time = "2025-12-21T11:07:19.876Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/de/db/f2e7703791a1f32532618b82789ddddb7173b9e22d97e34cc11950d8e330/pypdf-6.5.0-py3-none-any.whl", hash = "sha256:9cef8002aaedeecf648dfd9ff1ce38f20ae8d88e2534fced6630038906440b25", size = 329560, upload-time = "2025-12-21T11:07:18.173Z" },
+]
+
+[[package]]
 name = "pyperclip"
 version = "1.11.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1985,6 +1994,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/2f/db/98b5c277be99dd18bfd91dd04e1b759cad18d1a338188c936e92f921c7e2/referencing-0.36.2.tar.gz", hash = "sha256:df2e89862cd09deabbdba16944cc3f10feb6b3e6f18e902f7cc25609a34775aa", size = 74744, upload-time = "2025-01-25T08:48:16.138Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/b1/3baf80dc6d2b7bc27a95a67752d0208e410351e3feb4eb78de5f77454d8d/referencing-0.36.2-py3-none-any.whl", hash = "sha256:e8699adbbf8b5c7de96d8ffa0eb5c158b3beafce084968e2ea8bb08c6794dcd0", size = 26775, upload-time = "2025-01-25T08:48:14.241Z" },
+]
+
+[[package]]
+name = "reportlab"
+version = "4.4.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "charset-normalizer" },
+    { name = "pillow" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f8/a7/4600cb1cfc975a06552e8927844ddcb8fd90217e9a6068f5c7aa76c3f221/reportlab-4.4.7.tar.gz", hash = "sha256:41e8287af965e5996764933f3e75e7f363c3b6f252ba172f9429e81658d7b170", size = 3714000, upload-time = "2025-12-21T11:50:11.336Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/bf/a29507386366ab17306b187ad247dd78e4599be9032cb5f44c940f547fc0/reportlab-4.4.7-py3-none-any.whl", hash = "sha256:8fa05cbf468e0e76745caf2029a4770276edb3c8e86a0b71e0398926baf50673", size = 1954263, upload-time = "2025-12-21T11:50:08.93Z" },
 ]
 
 [[package]]
@@ -2303,7 +2325,9 @@ dependencies = [
     { name = "prompt-toolkit" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pypdf" },
     { name = "python-dotenv" },
+    { name = "reportlab" },
     { name = "rich" },
     { name = "starlette" },
     { name = "uvicorn", extra = ["standard"] },
@@ -2329,7 +2353,9 @@ requires-dist = [
     { name = "prompt-toolkit", specifier = ">=3.0.52" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
+    { name = "pypdf", specifier = ">=6.5.0" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "reportlab", specifier = ">=4.4.7" },
     { name = "rich", specifier = ">=14.2.0" },
     { name = "starlette", specifier = ">=0.50.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },

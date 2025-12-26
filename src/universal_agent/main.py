@@ -898,7 +898,7 @@ SKILL_PROMPT_TRIGGERS = build_skill_prompt_triggers()
 
 async def on_user_prompt_skill_awareness(
     input_data: dict, tool_use_id: str | None, context: HookContext
-) -> HookJSONOutput:
+) -> dict:
     """
     UserPromptSubmit Hook: EARLY skill awareness injection.
     Fires when user submits their prompt, BEFORE agent starts planning.
@@ -1760,6 +1760,9 @@ async def main():
                 "PreToolUse": [
                     HookMatcher(matcher="Bash", hooks=[on_pre_bash_skill_hint]),
                 ],
+                # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
+                # "error: 'types.UnionType' object is not callable"
+                # This is a CLI-side issue, not our code. PreToolUse still provides skill guidance.
                 "UserPromptSubmit": [
                     HookMatcher(matcher=None, hooks=[on_user_prompt_skill_awareness]),
                 ],

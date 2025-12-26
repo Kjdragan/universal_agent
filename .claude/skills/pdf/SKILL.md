@@ -292,3 +292,20 @@ with open("encrypted.pdf", "wb") as output:
 - For JavaScript libraries (pdf-lib), see reference.md
 - If you need to fill out a PDF form, follow the instructions in forms.md
 - For troubleshooting guides, see reference.md
+
+## Environment & Fallbacks
+
+If Python libraries like `reportlab` or `pypdf` are not available and cannot be installed (e.g., in restricted environments), check for system tools:
+
+### Google Chrome / Chromium (Headless)
+If `google-chrome` or `chromium` is installed, use it to convert HTML to PDF. This is often more robust for complex layouts.
+
+```bash
+google-chrome --headless --disable-gpu --print-to-pdf=output.pdf --no-margins input.html
+```
+
+### Check Availability First
+Before attempting import/install, you can check for tools:
+```bash
+which google-chrome || which chromium-browser || echo "Chrome not found"
+```
