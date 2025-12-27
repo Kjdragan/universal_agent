@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+logfire[system]
+pydantic
+python-dotenv
