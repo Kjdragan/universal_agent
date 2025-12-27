@@ -74,6 +74,28 @@ Example `COMPOSIO_SEARCH_TOOLS` response:
 }
 ```
 
+> [!IMPORTANT]
+> **COMPOSIO_SEARCH_TOOLS Scope Limitation**
+> 
+> This planner only knows about **remote Composio tools** (COMPOSIO_SEARCH_*, GMAIL_*, SLACK_*, etc.).
+> It **does NOT know about**:
+> - Local MCP tools (`mcp__local_toolkit__*`, `mcp__zai_vision__*`)
+> - Skills and subagent capabilities
+> - Custom tools in your prompt
+> 
+> **Use COMPOSIO_SEARCH_TOOLS for**:
+> - Discovery of remote Composio capabilities you're unfamiliar with
+> - External APIs (search, email, calendar, data sources)
+> - Workflows involving multiple remote services
+> 
+> **DON'T use for local tools** - rely on your prompt guidance instead:
+> - `generate_image`, `describe_image`, `preview_image` (local MCP)
+> - `crawl_parallel`, `write_local_file` (local toolkit)
+> - Skills, subagents, and other local capabilities
+> 
+> **Example**: Need stock market data? → Use `COMPOSIO_SEARCH_TOOLS` to find the right API.
+>              Need to generate an image? → Use `generate_image` directly (documented in your prompt).
+
 #### Which Agent Can Use What
 
 | Agent | Can Dynamically Use |
@@ -308,11 +330,13 @@ Add to `agents={}` dict (around line 1756):
         "- `mcp__zai_vision__analyze_image` - Detailed image analysis (free)\n\n"
         "**Dynamic Composio Access & Planning:**\n"
         "You inherit ALL Composio tools. For complex or unfamiliar tasks:\n"
-        "- Call `COMPOSIO_SEARCH_TOOLS` to get recommended steps and pitfall guidance\n"
+        "- Call `COMPOSIO_SEARCH_TOOLS` ONLY for **remote Composio tools** (external APIs, data sources)\n"
+        "- It does NOT know about local tools (generate_image, crawl_parallel, etc.)\n"
         "- Use the returned `recommended_plan_steps` to structure your TodoWrite list\n"
         "- Use `COMPOSIO_SEARCH_*` tools to find reference images, data, or material\n"
-        "- Use workbench tools for code execution if needed\n"
-        "- You are NOT limited to pre-planned steps\n\n"
+        "- Use workbench tools for code execution if needed\n\n"
+        "**Example**: Need reference photos? Use COMPOSIO_SEARCH_TOOLS to find image search APIs.\n"
+        "             Need to generate an image? Use generate_image (already in your tools).\n\n"
         "## WORKFLOW\n"
         "1. **Understand Request**: What style, content, purpose?\n"
         "2. **Generate/Edit**: Call generate_image with detailed prompt\n"
