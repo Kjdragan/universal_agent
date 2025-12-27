@@ -77,6 +77,26 @@ class MemoryManager:
         
         return "\n".join(prompt_lines)
 
+    # --- Programmatic Accessors ---
+    
+    def get_memory_block(self, label: str) -> Optional[MemoryBlock]:
+        """Direct access to memory block by label."""
+        return next((b for b in self.agent_state.core_memory if b.label == label), None)
+
+    def update_memory_block(self, label: str, new_value: str) -> None:
+        """Direct update of memory block."""
+        block = self.get_memory_block(label)
+        if block:
+            block.value = new_value
+            block.last_updated = datetime.now()
+            self.storage.save_block(block)
+        else:
+            # Create if not exists (Auto-create behavior for new system blocks)
+            # This is useful for AGENT_COLLEGE_NOTES if initialized late
+            new_block = MemoryBlock(label=label, value=new_value, description="Auto-created block")
+            self.agent_state.core_memory.append(new_block)
+            self.storage.save_block(new_block)
+
     # --- Tool Implementations (Bound to this Manager) ---
 
     def core_memory_replace(self, label: str, new_value: str) -> str:

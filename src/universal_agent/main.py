@@ -1604,12 +1604,18 @@ async def main():
     memory_context_str = ""
     try:
         from Memory_System.manager import MemoryManager
+        from src.universal_agent.agent_college.integration import setup_agent_college
+        
         # Initialize strictly for reading context (shared storage) - Use src_dir (Repo Root)
         mem_mgr = MemoryManager(storage_dir=os.path.join(src_dir, "Memory_System_Data"))
+        
+        # Initialize Agent College (Sandbox)
+        setup_agent_college(mem_mgr)
+        
         memory_context_str = mem_mgr.get_system_prompt_addition()
         print(f"🧠 Injected Core Memory Context ({len(memory_context_str)} chars)")
     except Exception as e:
-        print(f"⚠️ Failed to load Memory Context: {e}")
+        print(f"⚠️ Failed to load Memory Context/Agent College: {e}")
 
     options = ClaudeAgentOptions(
         system_prompt=(
