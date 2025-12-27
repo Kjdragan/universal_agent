@@ -19,11 +19,15 @@ import sys
 # Add 'src' to sys.path to allow imports from universal_agent package
 # This ensures functional imports regardless of invocation directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(os.path.dirname(current_dir))  # Go up two levels to 'src'
-if os.path.join(src_dir, "src") in sys.path:
-     pass
-else:
-     sys.path.append(os.path.join(src_dir, "src"))
+src_dir = os.path.dirname(os.path.dirname(current_dir))  # Repo Root
+
+# Add 'src' for package imports
+if os.path.join(src_dir, "src") not in sys.path:
+    sys.path.append(os.path.join(src_dir, "src"))
+
+# Add Repo Root for 'Memory_System' imports
+if src_dir not in sys.path:
+    sys.path.append(src_dir)
 
 # prompt_toolkit for better terminal input (arrow keys, history, multiline)
 from prompt_toolkit import PromptSession
@@ -144,6 +148,24 @@ from composio import Composio
 
 # Composio client - will be initialized in main() with file_download_dir
 composio = None
+
+# =============================================================================
+# MEMORY SYSTEM INTEGRATION
+# =============================================================================
+from Memory_System.manager import MemoryManager
+from Memory_System.tools import get_memory_tool_map
+
+# Global Memory Manager is not needed here as it is used locally for prompt injection
+# MEMORY_MANAGER = None
+
+# =============================================================================
+# MEMORY SYSTEM INTEGRATION
+# =============================================================================
+from Memory_System.manager import MemoryManager
+from Memory_System.tools import get_memory_tool_map
+
+# Global Memory Manager Instance
+MEMORY_MANAGER = None
 
 # =============================================================================
 # OBSERVER SETUP - For processing tool results asynchronously
@@ -1575,10 +1597,24 @@ async def main():
 
 
     # Create ClaudeAgentOptions now that session is available
+    # Create ClaudeAgentOptions now that session is available
     global options
+
+    # --- MEMORY SYSTEM CONTEXT INJECTION ---
+    memory_context_str = ""
+    try:
+        from Memory_System.manager import MemoryManager
+        # Initialize strictly for reading context (shared storage) - Use src_dir (Repo Root)
+        mem_mgr = MemoryManager(storage_dir=os.path.join(src_dir, "Memory_System_Data"))
+        memory_context_str = mem_mgr.get_system_prompt_addition()
+        print(f"🧠 Injected Core Memory Context ({len(memory_context_str)} chars)")
+    except Exception as e:
+        print(f"⚠️ Failed to load Memory Context: {e}")
+
     options = ClaudeAgentOptions(
         system_prompt=(
             f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+            f"{memory_context_str}\n" # <--- INJECTED HERE
             "TEMPORAL CONSISTENCY WARNING: You are operating in a timeline where it is December 2025. "
             "If 'real-world' search tools return results dated 2024, explicitly note the date discrepancy. "
                 "Do NOT present 2024 news as 2025 news without qualification.\n\n"

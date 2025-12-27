@@ -7,8 +7,21 @@ from datetime import datetime
 
 # Ensure src path for imports
 sys.path.append(os.path.abspath("src"))
+# Ensure project root for Memory_System
+sys.path.append(os.path.dirname(os.path.abspath(__file__))) # src/
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Repo Root
+from tools.workbench_bridge import WorkbenchBridge
 from tools.workbench_bridge import WorkbenchBridge
 from composio import Composio
+
+# Memory System Integration
+try:
+    from Memory_System.manager import MemoryManager
+    MEMORY_MANAGER = MemoryManager(storage_dir=os.path.join(os.path.dirname(__file__), "..", "Memory_System_Data"))
+    sys.stderr.write("[Local Toolkit] Memory System initialized.\n")
+except Exception as e:
+    sys.stderr.write(f"[Local Toolkit] Memory System init failed: {e}\n")
+    MEMORY_MANAGER = None
 
 # Initialize Configuration
 load_dotenv()
@@ -227,6 +240,65 @@ def upload_to_composio(
         import traceback
         sys.stderr.write(f"[upload_to_composio] ERROR: {traceback.format_exc()}\\n")
         return json.dumps({"error": str(e)})
+
+# =============================================================================
+# MEMORY SYSTEM TOOLS
+# =============================================================================
+
+@mcp.tool()
+def core_memory_replace(label: str, new_value: str) -> str:
+    """
+    Overwrite a Core Memory block (e.g. 'human', 'persona').
+    Use this to update persistent facts about the user or yourself.
+    """
+    if not MEMORY_MANAGER:
+        return "Error: Memory System not initialized."
+    return MEMORY_MANAGER.core_memory_replace(label, new_value)
+
+@mcp.tool()
+def core_memory_append(label: str, text_to_append: str) -> str:
+    """
+    Append text to a Core Memory block.
+    Useful for adding a new preference without deleting old ones.
+    """
+    if not MEMORY_MANAGER:
+         return "Error: Memory System not initialized."
+    return MEMORY_MANAGER.core_memory_append(label, text_to_append)
+
+@mcp.tool()
+def archival_memory_insert(content: str, tags: str = "") -> str:
+    """
+    Save a fact, document, or event to long-term archival memory.
+    Use for things that don't need to be in active context.
+    """
+    if not MEMORY_MANAGER:
+         return "Error: Memory System not initialized."
+    return MEMORY_MANAGER.archival_memory_insert(content, tags)
+
+@mcp.tool()
+def archival_memory_search(query: str, limit: int = 5) -> str:
+    """
+    Search long-term archival memory using semantic search.
+    """
+    if not MEMORY_MANAGER:
+         return "Error: Memory System not initialized."
+    return MEMORY_MANAGER.archival_memory_search(query, limit)
+
+@mcp.tool()
+def get_core_memory_blocks() -> str:
+    """
+    Read all current Core Memory blocks.
+    Useful to verify what you currently 'know' in your core memory.
+    """
+    if not MEMORY_MANAGER:
+         return "Error: Memory System not initialized."
+    
+    blocks = MEMORY_MANAGER.agent_state.core_memory
+    output = []
+    for b in blocks:
+        output.append(f"[{b.label}]\n{b.value}\n")
+    return "\n".join(output)
+
 
 # =============================================================================
 # CRAWL4AI TOOL

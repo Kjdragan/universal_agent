@@ -9,6 +9,7 @@ authors = [
 ]
 dependencies = [
     "anthropic>=0.75.0",
+    "chromadb>=1.4.0",
     "claude-agent-sdk>=0.1.18",
     "click>=8.3.1",
     "composio>=0.10.1",
@@ -28,6 +29,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "reportlab>=4.4.7",
     "rich>=14.2.0",
+    "sentence-transformers>=5.2.0",
     "starlette>=0.50.0",
     "uvicorn[standard]>=0.34.0",
     "weasyprint>=67.0",
