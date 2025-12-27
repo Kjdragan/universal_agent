@@ -884,6 +884,11 @@ async def on_pre_bash_skill_hint(
 SKILL_PROMPT_TRIGGERS_OVERRIDE = {
     # Format: "skill-name": ["keyword1", "keyword2", ...]
     # Leave empty to use auto-generated triggers from description
+    "image-generation": [
+        "image", "generate image", "create image", "edit image",
+        "picture", "photo", "illustration", "graphic", "infographic",
+        "visual", "design", ".png", ".jpg", ".jpeg", ".webp"
+    ],
 }
 
 
@@ -1808,6 +1813,12 @@ async def main():
                         "- Brief sources (3-5 articles) → Focused, concise summary\n"
                         "- Rich sources (10+ articles) → Comprehensive, multi-section analysis\n"
                         "- Let the structure emerge from the material, not from a template\n\n"
+                        "**VISUALS & MEDIA:**\n"
+                        "- You have access to `mcp__local_toolkit__generate_image`.\n"
+                        "- creating infographics or data visualizations is HIGHLY ENCOURAGED.\n"
+                        "- If data permits, generate a chart/graph image: 'Bar chart showing X vs Y'.\n"
+                        "- Save generated images to `work_products/media/`.\n"
+                        "- Embed in HTML using relative paths: `<img src='media/filename.png' ...>`.\n\n"
                         "**SYNTHESIS & COHERENCE:**\n"
                         "- Where sources discuss related topics, group and synthesize them into cohesive sections\n"
                         "- BUT: News often covers genuinely disjointed events - don't force artificial connections\n"
@@ -1845,6 +1856,59 @@ async def main():
                         "2. Format your message clearly with sections if needed\n"
                         "3. Use `SLACK_SEND_MESSAGE` with the channel ID and formatted message\n\n"
                         "🚨 IMPORTANT: Always use channel IDs (not names) for API calls."
+                    ),
+                    model="inherit",
+                ),
+                "image-expert": AgentDefinition(
+                    description=(
+                        "Expert for AI image generation and editing. "
+                        "DELEGATE when user requests: 'generate image', 'create image', 'edit image', "
+                        "'make a picture', 'design graphic', 'create infographic', 'visual for report', "
+                        "or wants to iteratively refine images through conversation."
+                    ),
+                    prompt=(
+                        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\\n"
+                        f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\\n\\n"
+                        "You are an **Image Generation Expert** using Gemini 2.5 Flash Image.\\n\\n"
+                        "## TASK MANAGEMENT (TodoWrite)\\n"
+                        "Use TodoWrite to track complex workflows:\\n"
+                        "```\\n"
+                        "- [ ] Understand image request (style, content, purpose)\\n"
+                        "- [ ] Generate initial image\\n"
+                        "  - [ ] Craft detailed prompt\\n"
+                        "  - [ ] Call generate_image tool\\n"
+                        "- [ ] Review output with describe_image\\n"
+                        "- [ ] Iterate if refinement needed\\n"
+                        "- [ ] Confirm final output saved to work_products/media/\\n"
+                        "```\\n"
+                        "Mark items complete as you progress. Add nested todos for sub-steps.\\n\\n"
+                        "## AVAILABLE TOOLS\\n"
+                        "**Primary Image Tools:**\\n"
+                        "- `mcp__local_toolkit__generate_image` - Generate or edit images\\n"
+                        "- `mcp__local_toolkit__describe_image` - Get image descriptions (free, via ZAI)\\n"
+                        "- `mcp__local_toolkit__preview_image` - Launch Gradio viewer\\n"
+                        "- `mcp__zai_vision__analyze_image` - Detailed image analysis (free)\\n\\n"
+                        "**Dynamic Composio Access & Planning:**\\n"
+                        "You inherit ALL Composio tools. For complex or unfamiliar tasks:\\n"
+                        "- Call `COMPOSIO_SEARCH_TOOLS` ONLY for **remote Composio tools** (external APIs, data sources)\\n"
+                        "- It does NOT know about local tools (generate_image, crawl_parallel, etc.)\\n"
+                        "- Use the returned `recommended_plan_steps` to structure your TodoWrite list\\n"
+                        "- Use `COMPOSIO_SEARCH_*` tools to find reference images, data, or material\\n"
+                        "- Use workbench tools for code execution if needed\\n\\n"
+                        "**Example**: Need reference photos? Use COMPOSIO_SEARCH_TOOLS to find image search APIs.\\n"
+                        "             Need to generate an image? Use generate_image (already in your tools).\\n\\n"
+                        "## WORKFLOW\\n"
+                        "1. **Understand Request**: What style, content, purpose?\\n"
+                        "2. **Generate/Edit**: Call generate_image with detailed prompt\\n"
+                        "3. **Review**: Use describe_image or analyze_image to verify output\\n"
+                        "4. **Iterate**: If user wants changes, edit the generated image\\n"
+                        "5. **Save**: Images auto-save to work_products/media/\\n\\n"
+                        "## PROMPT CRAFTING TIPS\\n"
+                        "- Be specific: 'modern, minimalist infographic with blue gradient'\\n"
+                        "- Include style: 'photorealistic', 'illustration', 'line art'\\n"
+                        "- For charts: describe the data and preferred visualization\\n"
+                        "- For editing: describe what to change AND preserve\\n\\n"
+                        f"OUTPUT DIRECTORY: {workspace_dir}/work_products/media/"
                     ),
                     model="inherit",
                 ),

@@ -44,6 +44,29 @@ You need raw XML access for: comments, speaker notes, slide layouts, animations,
 2. **Sample slide content**: Examine `ppt/slides/slide1.xml` for actual font usage (`<a:rPr>`) and colors
 3. **Search for patterns**: Use grep to find color (`<a:solidFill>`, `<a:srgbClr>`) and font references across all XML files
 
+## Integration with Image Generation
+When users request presentations with custom visuals, you should leverage the `image-generation` skill (using `mcp__local_toolkit__generate_image`):
+
+1. **Plan visual content**: Identify slides that need custom imagery (backgrounds, infographics, diagrams).
+2. **Generate images first**:
+   ```python
+   # Generate custom slide background
+   generate_image(
+       prompt="Modern business presentation background, navy blue geometric pattern, high resolution",
+       output_dir="work_products/media",
+       output_filename="slide_bg_navy.png"
+   )
+   ```
+3. **Embed in PowerPoint**:
+   - **For html2pptx**: Use `<img>` tags referencing the generated files:
+     ```html
+     <img src="../work_products/media/slide_bg_navy.png" class="bg-image">
+     ```
+   - **For PptxGenJS**: Use the `addImage` method:
+     ```javascript
+     slide.addImage({ path: "../work_products/media/slide_bg_navy.png", x: 0, y: 0, w: "100%", h: "100%" });
+     ```
+
 ## Creating a new PowerPoint presentation **without a template**
 
 When creating a new PowerPoint presentation from scratch, use the **html2pptx** workflow to convert HTML slides to PowerPoint with accurate positioning.
