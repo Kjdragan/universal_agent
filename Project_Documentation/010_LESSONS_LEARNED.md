@@ -735,3 +735,80 @@ GMAIL_SEND_EMAIL(..., attachments=[{"s3_key": "..."}])
 **Result**: A perfectly reconstructed timeline ("Session Transcript") that shows exact cause-and-effect with timing. This is superior to simply listing calls or results separately.
 
 ---
+
+### Lesson 36: MemoryManager Storage Path Consistency
+**Date**: 2025-12-27
+
+**Problem**: `LogfireFetch` service and `main.py` were writing to different SQLite databases because `MemoryManager()` was called with different (or default) `storage_dir` paths.
+
+**Discovery**:
+| Component | Path Used | Result |
+|-----------|-----------|--------|
+| `main.py` | `Memory_System_Data/` | ✅ |
+| `LogfireFetch` | `Memory_System/data/` (default) | ❌ Split brain |
+
+**Solution**: Always pass explicit `storage_dir` when instantiating `MemoryManager` from external services:
+```python
+storage_path = os.path.join(repo_root, "Memory_System_Data")
+memory_manager = MemoryManager(storage_dir=storage_path)
+```
+
+**Lesson**: When multiple processes share a database, centralize the path as a constant or environment variable.
+
+---
+
+### Lesson 37: LogfireQueryClient API
+**Date**: 2025-12-27
+
+**Problem**: Initial implementation used `client.query(sql, as_pandas=True)` but `LogfireQueryClient` has no `.query()` method.
+
+**Discovery**: The correct method is `query_json_rows(sql)` which returns `{'columns': [...], 'rows': [...]}`.
+
+**Available Methods**:
+| Method | Returns |
+|--------|---------|
+| `query_json_rows(sql)` | Dict with `rows` list of dicts |
+| `query_json(sql)` | Column-oriented JSON |
+| `query_arrow(sql)` | PyArrow Table |
+| `query_csv(sql)` | CSV string |
+
+**Import Path**: `from logfire.query_client import LogfireQueryClient` (re-exports from `logfire.experimental.query_client`)
+
+---
+
+### Lesson 38: Pydantic Settings Extra Fields
+**Date**: 2025-12-27
+
+**Problem**: FastAPI service failed on startup with `ValidationError` because `.env` file contained variables not defined in the Pydantic `Settings` class.
+
+**Solution**: Add `extra = "ignore"` to the Settings Config:
+```python
+class Settings(BaseSettings):
+    logfire_read_token: str
+    
+    class Config:
+        env_file = ".env"
+        extra = "ignore"  # ← Required
+```
+
+---
+
+### Lesson 39: Relative Imports in Runnable Scripts
+**Date**: 2025-12-27
+
+**Problem**: `main.py` used `from .agent_college.integration import ...` but failed with "attempted relative import with no known parent package" when run directly.
+
+**Cause**: Running `python src/universal_agent/main.py` treats it as a script, not a module.
+
+**Solution**: Use absolute imports when the file is the entry point:
+```python
+# ❌ Fails when run as script
+from .agent_college.integration import setup_agent_college
+
+# ✅ Works always
+from src.universal_agent.agent_college.integration import setup_agent_college
+```
+
+---
+
+*Last updated: 2025-12-27*

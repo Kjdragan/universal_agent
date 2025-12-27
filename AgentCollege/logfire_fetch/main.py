@@ -37,16 +37,11 @@ def startup_event():
         
         # Initialize Memory & Critic if available
         if MemoryManager and CriticAgent:
-            # MemoryManager usually needs storage_dir, defaults to repo_root/Memory_System_Data
-            # We must match the main agent's storage path.
-            # Assuming MemoryManager defaults logic is robust or we explicitly pass it.
-            # Passing None to let it resolve default relative to its own file or repo root logic.
-            # Wait, MemoryManager.__init__ expects valid path.
-            # Let's check MemoryManager init signature from previous steps.
-            # It defaults to None and calculates based on __file__.
-            memory_manager = MemoryManager() 
+            # Use the SAME storage path as main.py to share the database
+            storage_path = os.path.join(repo_root, "Memory_System_Data")
+            memory_manager = MemoryManager(storage_dir=storage_path)
             critic = CriticAgent(memory_manager)
-            print("Suggesting Critic initialized via Shared Memory.")
+            print(f"Critic initialized via Shared Memory at: {storage_path}")
             
     except Exception as e:
         print(f"Failed to initialize components: {e}")

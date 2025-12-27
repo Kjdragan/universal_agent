@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2025-12-23 13:40 CST
+**Last Updated**: 2025-12-27 08:25 CST
 
 ---
 
@@ -18,6 +18,8 @@
 - Crawl4AI parallel web extraction via local MCP server
 - Sub-agent delegation for specialized tasks (report generation)
 - Logfire tracing for observability
+- **Letta-style Memory System** with Core Memory blocks (persona, human, system_rules)
+- **Agent College** self-improvement subsystem (NEW)
 - Automatic workspace and artifact management
 - Observer pattern for async result processing and error tracking
 
@@ -26,265 +28,204 @@
 
 ---
 
-## 📍 Current State (December 22, 2025)
+## 📍 Current State (December 27, 2025)
 
 ### ✅ What's Working Well
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | **Research & Report Generation** | ✅ Production-ready | Full workflow tested and optimized |
-| **Sub-Agent Delegation** | ✅ Working | `report-creation-expert` handles extraction + synthesis |
-| **Web Extraction (crawl_parallel)** | ✅ Working | Fast parallel extraction via crawl4ai |
-| **Save Corpus** | ✅ Working | Custom MCP tool saves extracted articles to JSON |
-| **Email Delivery** | ✅ Working | Gmail integration with HTML attachment support |
-| **Error Code Tracking** | ✅ Working | 1234 (timeout), 1214 (not found) logged and handled |
-| **Domain Blacklist** | ✅ Working | Tracks failing domains for future optimization |
-| **Logfire Tracing** | ✅ Working | Full observability with deep links |
+| **PDF/PPTX Creation** | ✅ Working | Skills-based, conditional routing |
+| **Email Delivery (Gmail)** | ✅ Working | Attachments via `upload_to_composio` |
+| **Memory System** | ✅ Working | Core blocks, archival search |
+| **Agent College (Basic)** | ✅ Working | LogfireFetch + Critic + Sandbox |
+| **Logfire Tracing** | ✅ Working | Full observability |
 
-### Recent Optimizations (Dec 24, 2025)
+### 🆕 Recent Additions (This Session)
 
-1. **Eliminated Redundant Data Saving**:
-   - Fixed issue where agent was manually saving search results to Remote Workbench
-   - Now relies on Observer Pattern's auto-save to local `search_results/`
-   - **Saved ~100s** per run by avoiding unnecessary remote operations
+1. **Agent College Implementation**:
+   - `AgentCollege/logfire_fetch/` — FastAPI service for trace querying and webhooks
+   - `src/universal_agent/agent_college/` — Professor, Critic, Scribe modules
+   - `[AGENT_COLLEGE_NOTES]` — Sandbox memory block for unverified learnings
+   - Integration with existing Memory System (shared SQLite database)
 
-2. **Streamlined File Uploads (One-Step)**:
-   - Switched from complex multi-step upload (workbench_upload + script) to single-step `upload_to_composio` tool
-   - Handles local -> remote -> S3 attachment staging in one call
-   - **Saved ~200s** per run by avoiding "file not found" retry loops
+2. **LogfireFetch Service**:
+   - `GET /traces/recent` — Query recent traces
+   - `GET /failures` — Query error traces
+   - `POST /webhook/alert` — Receive alerts → Critic → Sandbox
 
-3. **crawl_parallel Performance**:
-   - Parallel extraction of all URLs in a single call
-   - Clean markdown output with noise removal
-   - Saves directly to session `search_results/`
+3. **Database Fix**:
+   - Fixed split-brain issue where LogfireFetch wrote to wrong database
+   - Now both `main.py` and `LogfireFetch` use `Memory_System_Data/agent_core.db`
 
-4. **Environment Hardening (Dec 26, 2025)**:
-   - **Gmail Stability**: Fixed `recipient` vs `recipient_email` schema error via Knowledge Base injection.
-   - **Smart PDF Routing**: Implemented logic in `SKILL.md` to route HTML -> Chrome and Markdown -> Pandoc.
-   - **Dependency Standardization**: Enforced `uv` and `weasyprint` as the project standard for PDF generation.
+### Architectural Inspiration: LangSmith-Fetch
 
-### Next Steps (Performance Engineering)
+The Agent College design is inspired by [LangSmith-Fetch](https://github.com/langchain-ai/langsmith-fetch), which provides API access to LangSmith traces. We're adapting this pattern for Logfire:
 
-1. **Pre-warm MCP Connections**:
-   - Investigate lazy initialization delays (~60s startup)
-   - Explore "pre-priming" connections during agent boot
+| LangSmith-Fetch | Our LogfireFetch |
+|-----------------|------------------|
+| REST API to LangSmith | SQL queries via `LogfireQueryClient` |
+| Push-based webhooks | Polling (TBD) or FastAPI endpoints |
+| Trace analysis | Critic/Professor agents |
 
-3. **Session Transcript Artifact (High Priority)**:
-   - **Goal**: Create a rich, human-readable `transcript.md` that acts as a "Replay Studio" for the agent run.
-   - **Requirements**:
-     - **Full Reconstruction**: Parse `trace.json` to rebuild the exact linear timeline of events.
-     - **Rich Formatting**: Use Markdown headers, blockquotes, and emojis to visually distinguish actors (User vs Agent vs System).
-     - **Thought Process**: Explicitly render `ThinkingBlock` content to expose the agent's internal reasoning.
-     - **Tool Interactions**: Show Tool Calls (Inputs) and Tool Results (Outputs) in formatted code blocks for easy debugging.
-   - **Architecture**: New `transcript_builder.py` module called automatically at session cleanup.
+**Open Question**: Should we build a more complete FastAPI layer that mirrors LangSmith-Fetch's endpoints, or is polling sufficient?
 
-### Architecture
+---
 
-### Architecture
+## 🚧 Where We're Going Next
+
+### Immediate Priority: Agent College Refinement
+
+A comprehensive exploration of Agent College design decisions is needed. See [036_AGENT_COLLEGE_OPEN_QUESTIONS.md](./036_AGENT_COLLEGE_OPEN_QUESTIONS.md) for the full agenda.
+
+**Key Questions to Explore**:
+
+| Topic | Question |
+|-------|----------|
+| **Polling vs Webhooks** | Implement background polling for automatic error capture |
+| **Critic Thresholds** | What severity level triggers notes? |
+| **HITL Triggers** | `/review-notes` command? Startup check? |
+| **Staleness Detection** | How to mark issues as resolved? |
+| **Scribe Filtering** | How to identify "noteworthy" successes? |
+| **Professor Workflow** | When/how to graduate skills? |
+| **Deployment** | Docker/always-on architecture? |
+
+**Next Dialogue Goals**:
+1. Implement polling-based error capture in LogfireFetch
+2. Design filtering thresholds for Critic
+3. Create `/review-notes` workflow
+4. Explore Docker packaging for always-on operation
+
+---
+
+## 🧠 Agent College Architecture
 
 ```
-User Query → Claude SDK → MCP Servers (Composio + Local Toolkit)
-                    ↓
-            Query Classification (SIMPLE vs COMPLEX)
-                    ↓
-            [Complex] → Sub-Agent Delegation (report-creation-expert)
-                    ↓
-            Sub-Agent: crawl_parallel → read_local_file → write_local_file
-                    ↓
-            Observer Pattern → Error tracking, artifact saving
-                    ↓
-            Final Response → Optional Email Delivery
+Agent Runtime                    LogfireFetch Service
+     │                                  │
+     │ (errors/successes)               │
+     ▼                                  ▼
+  Logfire  ─────── polling ──────►  LogfireFetch
+     │                                  │
+     │                                  ▼
+     │                            Critic/Scribe
+     │                                  │
+     │                                  ▼
+     │                         [AGENT_COLLEGE_NOTES]
+     │                           (Sandbox Memory)
+     │                                  │
+     │◄──────────────── read ───────────┘
+     │
+     ▼
+  Professor (HITL Review)
+     │
+     ▼
+  Graduation (New Skill / Rule)
 ```
 
-### Key Files to Review
-
-| Priority | File | Purpose |
-|----------|------|---------|
-| 1 | `src/universal_agent/main.py` | Main agent, observers, AgentDefinition |
-| 2 | `src/mcp_server.py` | Custom MCP tools (save_corpus, write_local_file, etc.) |
-| 3 | `.claude/agents/report-creation-expert.md` | Sub-agent prompt with quality guidelines |
-| 4 | `docs/010_LESSONS_LEARNED.md` | 21 lessons on gotchas and patterns |
-| 5 | `docs/012_LOCAL_VS_WORKBENCH_ARCHITECTURE.md` | Local-first vs remote workbench |
-
----
-
-## 🚀 Capability Expansion Testing (Completed Dec 22, 2025)
-
-### Test Results
-
-| # | Category | Query | Result | Tools Used |
-|---|----------|-------|--------|------------|
-| 1 | Code Gen | Password generator script | ✅ PASS | Bash, Read |
-| 2 | File Read | Dependency summary | ✅ PASS | Glob, Read, write_local_file |
-| 3 | Email | Gmail send test | ✅ PASS | GMAIL_SEND_EMAIL |
-| 4 | Data Analysis | CSV + revenue calc | ✅ PASS | write_local_file (x2) |
-| 5 | Multi-Step | Search → Extract → Summarize | ✅ PASS | COMPOSIO_SEARCH, crawl_parallel |
-| 6 | Slack | Post to #general | 🔐 AUTH | Correctly surfaced auth link |
-
-### Fix Applied: Work Products Auto-Save
-
-**Issue**: Agent generated outputs (tables, summaries) but didn't save them to `work_products/`.
-
-**Fix**: Added mandatory save-first guidance to `main.py` system prompt (lines 1073-1083):
-- Agent now saves significant outputs BEFORE displaying
-- Uses `mcp__local_toolkit__write_local_file` to `work_products/`
-
-### Observations
-
-1. **Claude native tools preferred** for local operations (Glob, Read, Bash)
-2. **Composio tools used correctly** for external services (Gmail, Slack, SERP)
-3. **crawl_parallel integration works** in multi-step workflows
-4. **Auth handling is graceful** - surfaced Composio link when needed
+**Key Files**:
+| File | Purpose |
+|------|---------|
+| `AgentCollege/logfire_fetch/main.py` | FastAPI service |
+| `src/universal_agent/agent_college/critic.py` | Error analysis → Sandbox |
+| `src/universal_agent/agent_college/professor.py` | Skill graduation |
+| `src/universal_agent/agent_college/integration.py` | Boot-time hook |
+| `Memory_System/manager.py` | Core memory management |
 
 ---
 
-### High-Volume Research Architecture (Scout/Expert Protocol)
-- **Problem**: Context window limits prevented processing comprehensive search results (30+ URLs).
-- **Solution**: "Scout/Expert" Protocol.
-    - **Scout (Main Agent)**: Finds *location* of data (`search_results/`) and delegates. Forbidden from processing URLs.
-    - **Expert (Sub-Agent)**: Uses `list_directory` to find all JSONs, extracts ALL URLs, and runs `crawl_parallel` (bulk scraping).
-- **Status**: Verified with 27 concurrent URLs.
-- **Documentation**: See `docs/014_SCOUT_EXPERT_PROTOCOL.md`.
+## 🔧 Running the System
 
-### Universal File Staging (Cloud Upload)
-- **Problem**: Cloud tools (Gmail, Slack, Code Interpreter) cannot access local files directly.
-- **Solution**: Use `upload_to_composio` to "teleport" files to the cloud environment.
-- **Workflow**:
-    1.  **Stage**: Call `upload_to_composio(path="/abs/path/to/file")`.
-        *   *Result*: Returns JSON with `s3_key` (for attachments) and `s3_url` (for links).
-    2.  **Act**: Pass the `s3_key` to the destination tool.
-        *   *Example (Gmail)*: `GMAIL_SEND_EMAIL(..., attachment={"s3key": "..."})`
-        *   *Example (Slack)*: `SLACK_SEND_MESSAGE(..., attachments=[{"s3_key": "..."}])`
-
-### SubagentStop Hook Implementation
-- Replaced `TaskOutput` polling with event-driven `SubagentStop` hook
-- Sub-agent completion now automatically triggers next-step guidance
-- See Lesson 18 in `010_LESSONS_LEARNED.md`
-
-### Toolkit Banning via Session Configuration
-- Added `toolkits={"disable": ["firecrawl", "exa"]}` to `composio.create()`
-- Prevents `COMPOSIO_SEARCH_TOOLS` from recommending external crawlers
-- Forces use of local `mcp__local_toolkit__crawl_parallel`
-- See Lesson 19 in `010_LESSONS_LEARNED.md`
-
-### Sub-Agent Tool Inheritance
-- Removed explicit `tools` field from `AgentDefinition`
-- Sub-agents now inherit ALL parent tools including local MCP tools
-- See Lesson 21 in `010_LESSONS_LEARNED.md`
-
-
----
-
-## 🔧 Development Environment
-
-### Running the Agent
+### Main Agent
 ```bash
 cd /home/kjdragan/lrepos/universal_agent
-uv sync
 uv run src/universal_agent/main.py
 ```
 
-### Required Environment Variables
-Create `.env` from `.env.example`:
-- `COMPOSIO_API_KEY` - Composio authentication
-- `ZAI_API_KEY` - Z.AI endpoint (Anthropic API emulation)
-- `ANTHROPIC_BASE_URL` - `https://api.z.ai/api/anthropic`
-- `LOGFIRE_TOKEN` - Logfire tracing (optional)
+### LogfireFetch Service (Agent College)
+```bash
+uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8000
+```
 
-### Environment & Dependencies
-- **Package Manager**: `uv` (strict Mode).
-- **Rule**: Agents MUST NOT use `pip install`. Dependencies are managed in `pyproject.toml`.
-- **System Binaries**: Tools like `pandoc` or `ffmpeg` are system-level. Agents should prefer Python-native alternatives (e.g., `reportlab` instead of `pandoc`, `pydub` instead of `ffmpeg` where possible) or fail gracefully if binary is missing.
+### Test Webhook
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"trace_id": "test", "error": "example failure"}' \
+  http://localhost:8000/webhook/alert
+```
 
-### Key Dependencies
-- `claude-agent-sdk` - Claude agentic framework
-- `composio` - Tool router SDK
-- `logfire` - Observability
-- `prompt-toolkit` - Better terminal input
-- `httpx` - HTTP client for MCP tools
-- `weasyprint` - PDF engine for Pandoc (Project Standard)
+### Check Sandbox Contents
+```bash
+sqlite3 Memory_System_Data/agent_core.db \
+  "SELECT value FROM core_blocks WHERE label='AGENT_COLLEGE_NOTES';"
+```
 
 ---
 
-## 🧠 Key Concepts
+## 📚 Key Documentation
 
-### 1. MCP Mode
-We use Composio's MCP server for tool routing. Tools execute on Composio's cloud, not locally.
-
-### 2. Observer Pattern
-Since Composio hooks don't work in MCP mode, we observe tool results after they return:
-```python
-asyncio.create_task(observe_and_save_search_results(...))
-asyncio.create_task(observe_and_enrich_corpus(...))
-```
-
-### 3. Sub-Agent Delegation
-Complex tasks are delegated to specialized sub-agents:
-- `report-creation-expert` - Full article extraction, corpus saving, report synthesis
-
-### 4. Workspace Structure
-Each session creates:
-```
-AGENT_RUN_WORKSPACES/session_YYYYMMDD_HHMMSS/
-├── run.log              # Full console output
-├── session_summary.txt  # Brief summary
-├── trace.json           # Raw tool call/result trace
-├── transcript.md        # Human-readable session replay 🆕
-├── search_results/      # Cleaned SERP artifacts
-├── extracted_articles/  # Individual article JSON (optional)
-├── expanded_corpus.json # Full corpus from extraction
-└── work_products/       # Reports, outputs
-    └── *.html
-```
-
-### 5. Error Handling (crawl_parallel)
-crawl_parallel handles errors internally and continues with successful URLs.
-Failed URLs are logged but don't block the batch.
+| Priority | Document | Purpose |
+|----------|----------|---------|
+| 1 | `036_AGENT_COLLEGE_OPEN_QUESTIONS.md` | **READ FIRST** — Exploration agenda |
+| 2 | `035_AGENT_COLLEGE_ARCHITECTURE.md` | Agent College overview |
+| 3 | `034_LETTA_MEMORY_SYSTEM_MANUAL.md` | Memory System design |
+| 4 | `010_LESSONS_LEARNED.md` | 39 lessons on patterns and gotchas |
+| 5 | `.claude/skills/` | Skill definitions (pdf, pptx, etc.) |
 
 ---
 
-## 📁 Project Structure
+## 🏗️ Project Structure
 
 ```
 universal_agent/
 ├── src/
 │   ├── universal_agent/
-│   │   ├── __init__.py
-│   │   └── main.py              # Main agent implementation
-│   └── mcp_server.py            # Custom MCP tools (save_corpus, etc.)
-├── .claude/agents/
-│   └── report-creation-expert.md  # Sub-agent prompt
-├── docs/
-│   ├── 000_CURRENT_CONTEXT.md   # This file (READ FIRST)
-│   ├── 004_HOOKS_ARCHITECTURE.md
-│   ├── 010_LESSONS_LEARNED.md   # 12 lessons on patterns and gotchas
-│   └── 012_LOCAL_VS_WORKBENCH_ARCHITECTURE.md
-├── AGENT_RUN_WORKSPACES/        # Runtime session artifacts (gitignored)
-├── pyproject.toml               # Dependencies
-├── .env                         # Environment variables (gitignored)
-├── .env.example                 # Environment template
-└── README.md
+│   │   ├── main.py                 # Main agent
+│   │   └── agent_college/          # Professor, Critic, Scribe 🆕
+│   │       ├── integration.py
+│   │       ├── professor.py
+│   │       ├── critic.py
+│   │       └── scribe.py
+│   └── mcp_server.py               # Local MCP tools
+├── AgentCollege/                    # 🆕
+│   └── logfire_fetch/              # FastAPI service
+│       ├── main.py
+│       ├── logfire_reader.py
+│       └── models.py
+├── Memory_System/                   # Letta-style memory
+│   ├── manager.py
+│   └── storage.py
+├── Memory_System_Data/              # Databases (gitignored)
+│   └── agent_core.db
+├── .claude/
+│   ├── skills/                     # Skill definitions
+│   └── knowledge/                  # Knowledge base
+├── Project_Documentation/
+│   ├── 000_CURRENT_CONTEXT.md      # This file
+│   ├── 035_AGENT_COLLEGE_ARCHITECTURE.md
+│   └── 036_AGENT_COLLEGE_OPEN_QUESTIONS.md 🆕
+└── AGENT_RUN_WORKSPACES/           # Session artifacts
 ```
 
 ---
 
-## ⚠️ Known Issues & Gotchas
+## ⚠️ Known Issues
 
-1. **Some domains may timeout** - crawl_parallel handles gracefully
-2. **Hooks don't fire in MCP mode** - Use Observer Pattern instead
-3. **MULTI_EXECUTE structure is deeply nested** - See Lesson 3 in lessons learned
-4. **MCP content is string repr, not JSON** - Use `ast.literal_eval` to parse
+1. **Agent College Notes not auto-surfaced** — User must manually query database or implement `/review-notes`
+2. **Logfire Webhooks not configured** — Currently using polling/curl, not push from Logfire cloud
+3. **Professor not triggered automatically** — Skill graduation requires manual invocation
 
 ---
 
-## 🎯 Success Metrics (Research Workflow)
+## 🎯 Success Metrics
 
-| Metric | Target | Actual |
+| Metric | Target | Status |
 |--------|--------|--------|
-| Report quality | Professional with citations | ✅ Excellent |
-| Extraction success rate | >70% | ~80% |
-| Total workflow time | <10 min | ~8-10 min |
-| Email delivery | 100% | ✅ Working |
+| Research workflow | <10 min | ✅ ~8 min |
+| PDF/PPTX generation | Working | ✅ |
+| Memory persistence | Across sessions | ✅ |
+| Agent College capture | Errors to sandbox | ✅ (manual) |
+| Skill graduation | HITL workflow | ⏳ Not yet |
 
 ---
 
