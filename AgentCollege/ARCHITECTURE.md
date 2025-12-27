@@ -10,37 +10,36 @@
 
 ## 2. Key Modules
 
-### A. The Registrar (Skill Manager)
-*   **Concept**: A local registry of available capabilities.
-*   **Implementation**: A `Skills/` directory where each sub-folder is a skill.
-*   **Discovery**: On startup, `main.py` scans `Skills/` and registers tools dynamically (similar to `Memory_System` integration).
-*   **Auto-Generation**: An agent can write a new script to `Skills/new_skill.py`, valid it, and it becomes available next run.
+### A. The Registrar (Professor Agent)
+*   **Concept**: Uses the `.claude/skills/` SDK standard via the **Skill Creator** logic.
+*   **Role**: The "Gatekeeper" of the system.
+*   **Input**: Reads `[AGENT_COLLEGE_NOTES]` (The variable Scratchpad).
+*   **Mechanism**:
+    1.  Reviews "Suggestions" from the scratchpad.
+    2.  **HITL Gateway**: Surfaces a "Graduation Proposal" to the User (e.g., "I suggest creating a specific skill for PDF handling").
+    3.  **Action**: *Only upon approval*, usage `init_skill.py` to create the skill.
 
 ### B. The Critic (Self-Correction Loop)
 *   **Mechanism**: **Push-based** via Logfire Webhooks.
-*   **Trigger**: Logfire Alert (SQL: `SELECT * FROM records WHERE exception IS NOT NULL`) -> Sends Webhook.
-*   **Action**: `LogfireFetch` receives `POST /webhook/alert`, extracts trace ID, and wakes the Critic Agent.
-*   **Output**: Prompt Patch or Rule Injection.
+*   **Action**: `LogfireFetch` receives `POST /webhook/alert`.
+*   **Output**: Writes a "Correction Hypothesis" to **[AGENT_COLLEGE_NOTES]** (e.g. "Suggestion: Avoid tool X for PDF").
+    *   *Safe*: Does NOT touch production `[SYSTEM_RULES]`.
+
 ### C. The Scribe (Auto-Memory)
-*   **Mechanism**: Queries **LogfireFetch Service** (`GET /traces/recent`).
-*   **Trigger**: End of Session (or periodic).
-*   **Action**: Scans the session transcript via the API.
-*   **Logic**: "Did the user state a fact? Did I learn a new CLI flag?"
-*   **Output**: Calls `archival_memory_insert()` autonomously.
+*   **Trigger**: End of Session.
+*   **Action**: Scans Logfire traces.
+*   **Output**: writes "Fact Candidates" to **[AGENT_COLLEGE_NOTES]** for review.
+
 
 ## 3. Implementation Roadmap
 
 1.  **Skill Architecture**:
     *   Standardize the `mcp_server.py` tool registration to dynamically load modules from a `Skills/` folder.
     
-2.  **DeepFetch-style "Skill" Structure**:
-    ```
-    Skills/
-      ├── video_processing/
-      │   ├── tool.py (The @mcp.tool code)
-      │   ├── instructions.md (How to use it)
-      │   └── requirements.txt
-    ```
+2.  **Use .claude/skills/**:
+    *   Leverage the existing `discover_skills()` in `main.py`.
+    *   Create `Skills/` integration test that writes a dummy `SKILL.md` and verifies the agent sees it.
 
-3.  **The "Professor" Agent**:
-    *   A specialized System Prompt for an agent whose *only* job is to read docs and write `Skills/*` code.
+3.  **Logfire Service Integration**:
+    *   Connect the "Critic" loop to the existing `main.py` hooks (`UserPromptSubmit` / `PreToolUse`).
+    *   If Logfire detects repeated failures, the Critic can update a `SKILL.md` to improve instructions.
