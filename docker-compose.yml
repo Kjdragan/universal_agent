@@ -1,22 +1,36 @@
 version: '3.8'
 
 services:
+  # Crawl4AI service - runs as a separate container
+  crawl4ai:
+    image: unclecode/crawl4ai:basic-amd64
+    container_name: crawl4ai_service
+    restart: unless-stopped
+    ports:
+      - "11235:11235"
+    shm_size: "2gb"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:11235/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Main Agent Bot service
   agent-bot:
     build: .
     container_name: universal_agent_bot
     restart: unless-stopped
+    user: "1000:1000"
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
-      - ALLOWED_USER_IDS=${ALLOWED_USER_IDS}
-      - WEBHOOK_URL=${WEBHOOK_URL}
-      - COMPOSIO_API_KEY=${COMPOSIO_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - LOGFIRE_TOKEN=${LOGFIRE_TOKEN}
       - PORT=8000
+      - CRAWL4AI_API_URL=http://crawl4ai:11235 # Internal Docker network URL
     volumes:
       - ./AGENT_RUN_WORKSPACES:/app/AGENT_RUN_WORKSPACES
-      # Mount src for development reloading (requires uvicorn --reload)
       - ./src:/app/src
+      - ./Memory_System:/app/Memory_System
+    depends_on:
+      - crawl4ai

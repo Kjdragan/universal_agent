@@ -3,7 +3,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import Application, CommandHandler
-import nest_asyncio
 import os
 
 from .config import TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, WEBHOOK_URL, PORT
@@ -11,8 +10,8 @@ from .task_manager import TaskManager
 from .agent_adapter import AgentAdapter
 from .telegram_handlers import start_command, help_command, status_command, agent_command
 
-# Apply nest_asyncio to allow nested event loops (useful for some envs)
-nest_asyncio.apply()
+# nest_asyncio removed to avoid conflict with uvicorn loop_factory in Python 3.13
+
 
 # Global Objects
 ptb_app = None

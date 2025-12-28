@@ -319,28 +319,107 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
     Returns:
         JSON summary of results (success/fail counts, saved file paths).
     """
+    import hashlib
+    import aiohttp
+    
+    search_results_dir = os.path.join(session_dir, "search_results")
+    os.makedirs(search_results_dir, exist_ok=True)
+    
+    results_summary = {
+        "total": len(urls),
+        "successful": 0,
+        "failed": 0,
+        "saved_files": [],
+        "errors": [],
+    }
+    
+    # Check if we should use Docker API (CRAWL4AI_API_URL env var set)
+    crawl4ai_api_url = os.environ.get("CRAWL4AI_API_URL")
+    
+    if crawl4ai_api_url:
+        # Docker mode: Use crawl4ai HTTP API
+        sys.stderr.write(f"[crawl_parallel] Using Docker API at {crawl4ai_api_url}\n")
+        
+        try:
+            async with aiohttp.ClientSession() as session:
+                for url in urls:
+                    try:
+                        # Call crawl4ai container API
+                        api_endpoint = f"{crawl4ai_api_url}/crawl"
+                        payload = {
+                            "urls": [url],
+                            "browser_config": {
+                                "headless": True,
+                                "stealth": True,  # Match local enable_stealth=True
+                                "browser_type": "chromium"
+                            },
+                            "crawler_config": {
+                                "cache_mode": "bypass",
+                                "word_count_threshold": 10,
+                                "excluded_tags": ["nav", "footer", "header", "aside", "script", "style"],
+                                "excluded_selector": ".references, .footnotes, .citation, .bibliography, .cookie-banner, #cookie-consent, .donation, .newsletter, .signup, .promo"
+                            }
+                        }
+                        
+                        async with session.post(api_endpoint, json=payload, timeout=60) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                # Extract markdown from response
+                                if data.get("results") and len(data["results"]) > 0:
+                                    result = data["results"][0]
+                                    content = result.get("markdown", "")
+                                    
+                                    # Save to file
+                                    url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+                                    filename = f"crawl_{url_hash}.md"
+                                    filepath = os.path.join(search_results_dir, filename)
+                                    
+                                    final_content = f"# Source: {url}\n# Date: {datetime.utcnow().isoformat()}\n\n{content}"
+                                    with open(filepath, "w", encoding="utf-8") as f:
+                                        f.write(final_content)
+                                    
+                                    results_summary["successful"] += 1
+                                    results_summary["saved_files"].append({
+                                        "url": url,
+                                        "file": filename,
+                                        "path": filepath,
+                                    })
+                                else:
+                                    results_summary["failed"] += 1
+                                    results_summary["errors"].append({"url": url, "error": "No results returned"})
+                            else:
+                                results_summary["failed"] += 1
+                                results_summary["errors"].append({"url": url, "error": f"HTTP {resp.status}"})
+                                
+                    except Exception as e:
+                        results_summary["failed"] += 1
+                        results_summary["errors"].append({"url": url, "error": str(e)})
+                        
+        except Exception as e:
+            return json.dumps({"error": f"Crawl4AI API error: {str(e)}"})
+            
+        return json.dumps(results_summary, indent=2)
+    
+    # Local mode: Use crawl4ai library directly
     try:
         from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
         from crawl4ai.content_filter_strategy import PruningContentFilter
         from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
     except ImportError:
-        return json.dumps(
-            {
-                "error": "crawl4ai not installed. Run: uv pip install crawl4ai && crawl4ai-setup"
-            }
-        )
+        return json.dumps({
+            "error": "crawl4ai not installed locally and CRAWL4AI_API_URL not set. "
+                     "For local: uv pip install crawl4ai && crawl4ai-setup. "
+                     "For Docker: set CRAWL4AI_API_URL=http://crawl4ai:11235"
+        })
 
-    import hashlib
-
-    # 1. Configure Browser (Speed & Evasion)
+    # Configure Browser (Speed & Evasion)
     browser_config = BrowserConfig(
         headless=True,
         enable_stealth=True,
         browser_type="chromium",
     )
 
-    # 2. Configure Extraction (Noise Reduction)
-    # Pruning filter removes low-content density areas (ads, footers)
+    # Configure Extraction (Noise Reduction)
     prune_filter = PruningContentFilter(
         threshold=0.5, threshold_type="fixed", min_word_threshold=10
     )
@@ -350,51 +429,32 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
         markdown_generator=md_generator,
         excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
         excluded_selector=".references, .footnotes, .citation, .bibliography, .ref-list, .endnotes, .field-name-field-footnotes, .field-name-field-reference, .cookie-banner, #cookie-consent, .eu-cookie-compliance, .donation, .donate, .subscription, .subscribe, .newsletter, .signup, .promo",
-        cache_mode=CacheMode.BYPASS,  # Ensure fresh content
+        cache_mode=CacheMode.BYPASS,
     )
 
-    results_summary = {
-        "total": len(urls),
-        "successful": 0,
-        "failed": 0,
-        "saved_files": [],
-        "errors": [],
-    }
-
-    search_results_dir = os.path.join(session_dir, "search_results")
-    os.makedirs(search_results_dir, exist_ok=True)
-
-    # 3. Execute Parallel Crawl
     try:
         async with AsyncWebCrawler(config=browser_config) as crawler:
-            # arun_many uses a browser context pool for efficient parallelism
             results = await crawler.arun_many(urls=urls, config=run_config)
 
             for res in results:
                 original_url = res.url
                 if res.success:
-                    # Generate filename from hash of URL to avoid length/char issues
                     url_hash = hashlib.md5(original_url.encode()).hexdigest()[:12]
                     filename = f"crawl_{url_hash}.md"
                     filepath = os.path.join(search_results_dir, filename)
 
-                    # Prefer "fit_markdown" (filtered) over raw
                     content = res.markdown.fit_markdown or res.markdown.raw_markdown
-
-                    # Add metadata header
                     final_content = f"# Source: {original_url}\n# Date: {datetime.utcnow().isoformat()}\n\n{content}"
 
                     with open(filepath, "w", encoding="utf-8") as f:
                         f.write(final_content)
 
                     results_summary["successful"] += 1
-                    results_summary["saved_files"].append(
-                        {
-                            "url": original_url,
-                            "file": filename,  # Relative name for brevity
-                            "path": filepath,
-                        }
-                    )
+                    results_summary["saved_files"].append({
+                        "url": original_url,
+                        "file": filename,
+                        "path": filepath,
+                    })
                 else:
                     results_summary["failed"] += 1
                     results_summary["errors"].append(

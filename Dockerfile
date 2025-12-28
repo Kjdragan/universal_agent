@@ -3,8 +3,6 @@ FROM python:3.13-slim
 WORKDIR /app
 
 # Install system dependencies
-# ffmpeg is needed for video expert
-# build-essential and git for installing python packages
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
@@ -12,23 +10,37 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install project dependencies
-COPY pyproject.toml .
-# Attempt to install dependencies. Assuming standard pip installable.
-# If using requirements.txt, copy that instead.
-RUN pip install --no-cache-dir .
+# Install uv (same package manager as local dev)
+RUN pip install uv
 
-RUN pip install uvicorn python-telegram-bot nest_asyncio
+# Copy project definition
+COPY pyproject.toml .
+COPY uv.lock .
+
+# Install dependencies using uv (matches local .venv)
+RUN uv sync --frozen
+
+# Install additional bot dependencies
+RUN uv pip install uvicorn python-telegram-bot nest_asyncio
 
 # Copy Source Code
 COPY src /app/src
-# Copy Documentation (optional, for knowledge base?)
+COPY Memory_System /app/Memory_System
 COPY Project_Documentation /app/Project_Documentation
 
 # Set Environment Variables
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app/src:/app
 ENV PORT=8000
 ENV PYTHONUNBUFFERED=1
+ENV VIRTUAL_ENV=/app/.venv
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Create a non-root user (Claude SDK refuses --dangerously-skip-permissions as root)
+RUN useradd -m -s /bin/bash agentuser && \
+    mkdir -p /app/AGENT_RUN_WORKSPACES && \
+    chown -R agentuser:agentuser /app
+
+USER agentuser
 
 # Run Command
 CMD ["python", "-m", "universal_agent.bot.main"]

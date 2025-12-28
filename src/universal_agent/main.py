@@ -1626,8 +1626,6 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
         print(f"⚠️ Failed to load Memory Context/Agent College: {e}")
 
     options = ClaudeAgentOptions(
-        name="Universal Agent",
-        description="A versatile agent with tool routing, web research, and coding capabilities.",
         model="claude-3-5-sonnet-20241022",
         system_prompt=(
             f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
@@ -2191,6 +2189,9 @@ async def main():
     else:
         trace_id_hex = "N/A"
 
+    # Extract timestamp from workspace_dir (e.g. "session_20251228_123456" -> "20251228_123456")
+    timestamp = os.path.basename(workspace_dir).replace("session_", "")
+    
     print(f"\n=== Composio Session Info ===")
     print(f"Session URL: {session.mcp.url}")
     print(f"User ID: {user_id}")
