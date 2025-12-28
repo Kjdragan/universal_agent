@@ -15,7 +15,7 @@ description: |
   - Saves report to work_products/ directory
   
   Main agent should pass search results and workspace path in task description.
-tools: mcp__local_toolkit__crawl_parallel, mcp__local_toolkit__read_local_file, mcp__local_toolkit__write_local_file, mcp__local_toolkit__workbench_download, mcp__local_toolkit__workbench_upload
+tools: mcp__local_toolkit__crawl_parallel, mcp__local_toolkit__read_local_file, mcp__local_toolkit__write_local_file, mcp__local_toolkit__workbench_download, mcp__local_toolkit__workbench_upload, mcp__local_toolkit__generate_image
 model: inherit
 ---
 
@@ -55,16 +55,24 @@ mcp__local_toolkit__crawl_parallel(urls=["url1", ...], session_dir="{CURRENT_SES
 ### Step 3: Read & Synthesize
 
 - Read the extracted markdown files from `search_results/` using `read_local_file`.
-- Proceed to Generate Report.
+- Proceed to Visual Planning.
 
-### Step 4: 📝 Synthesize Report (QUALITY STANDARDS)
+### Step 4: 🎨 Visuals (OPTIONAL but RECOMMENDED)
 
-Using the extracted content (or search snippets if non-comprehensive):
+If the report would benefit from visuals (charts, infographics, maps) OR if explicitly requested:
+1.  **Call `generate_image`** to create infographics or data visualizations.
+2.  **Save** them to `{CURRENT_SESSION_WORKSPACE}/work_products/media/`.
+3.  **Capture** the returned file path for embedding.
+
+### Step 5: 📝 Synthesize Report (QUALITY STANDARDS)
+
+Using the extracted content (or search snippets if non-comprehensive) AND generated images:
 
 **A. Structure (REQUIRED):**
 - Executive Summary with key stats/dates in highlight box
 - Table of Contents with anchor links
 - Thematic sections (NOT source-by-source)
+- **Visuals:** Embed generated images using standard HTML `<img src="..." style="max-width:100%; height:auto; border-radius:8px; margin:20px 0;">`
 - Summary data table with Development/Organization/Key Highlights columns
 - Sources section with clickable links
 
@@ -89,6 +97,7 @@ Using the extracted content (or search snippets if non-comprehensive):
 - Highlight boxes for executive summary points
 - Responsive design
 - Professional color scheme (purple/gradient suggested)
+- **Images:** Ensure all images are properly captioned and embedded.
 
 ### Step 5: Save Report
 

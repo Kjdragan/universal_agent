@@ -50,6 +50,8 @@ Primary tool for image generation and editing.
 - `output_dir` (optional): Output directory (defaults to `work_products/media/`)
 - `output_filename` (optional): Custom filename (auto-generated if not provided)
 - `preview` (optional): Launch Gradio viewer after generation
+- `model_name` (optional): Gemini model to use. Defaults to `gemini-3-pro-image-preview`.
+  - Options: `gemini-3-pro-image-preview`, `gemini-2.5-flash-image`.
 
 **Returns**: JSON with `output_path`, `description`, `size_bytes`, and optionally `viewer_url`
 

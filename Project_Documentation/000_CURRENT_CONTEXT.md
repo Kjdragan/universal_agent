@@ -91,10 +91,9 @@ A comprehensive exploration of Agent College design decisions is needed. See [03
 | **Deployment** | Docker/always-on architecture? |
 
 **Next Dialogue Goals**:
-1. Implement polling-based error capture in LogfireFetch
-2. Design filtering thresholds for Critic
-3. Create `/review-notes` workflow
-4. Explore Docker packaging for always-on operation
+1. **Telegram Integration**: Enable remote task management via phone
+2. **Docker Containerization**: Package application for "always-on" deployment
+3. **Agent College**: Continue refinement (Critic/Professor) in background
 
 ---
 

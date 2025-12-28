@@ -417,10 +417,11 @@ def generate_image(
     input_image_path: str = None,
     output_dir: str = None,
     output_filename: str = None,
-    preview: bool = False
+    preview: bool = False,
+    model_name: str = "gemini-3-pro-image-preview"
 ) -> str:
     """
-    Generate or edit an image using Gemini 2.5 Flash Image model.
+    Generate or edit an image using Gemini models.
     
     Args:
         prompt: Text description for generation, or edit instruction if input_image provided.
@@ -428,6 +429,7 @@ def generate_image(
         output_dir: Directory to save output. Defaults to workspace work_products/media/.
         output_filename: Optional filename. If None, auto-generates with timestamp.
         preview: If True, launches Gradio viewer with the generated image.
+        model_name: Gemini model to use. Defaults to "gemini-3-pro-image-preview".
         
     Returns:
         JSON with status, output_path, description, and viewer_url (if preview=True).
@@ -472,7 +474,7 @@ def generate_image(
         
         # Generate the image using streaming (more robust for mixed modalities)
         response_stream = client.models.generate_content_stream(
-            model="gemini-2.5-flash-image",
+            model=model_name,
             contents=[content_obj],
             config=GenerateContentConfig(
                 response_modalities=["IMAGE", "TEXT"],

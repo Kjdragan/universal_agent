@@ -249,6 +249,8 @@ async def observe_and_save_search_results(
             "SEARCH_NEWS", "SEARCH_WEB", "SEARCH_GOOGLE", "SEARCH_BING",
             # Wrapper that may contain search results - inner parsing filters by tool_slug
             "MULTI_EXECUTE",
+            # Fallback WebSearch
+            "WEBSEARCH", "WEB_SEARCH",
         ]
         is_serp_tool = any(kw in tool_upper for kw in search_keywords)
 
@@ -1815,10 +1817,12 @@ async def main():
                         "- Let the structure emerge from the material, not from a template\n\n"
                         "**VISUALS & MEDIA:**\n"
                         "- You have access to `mcp__local_toolkit__generate_image`.\n"
-                        "- creating infographics or data visualizations is HIGHLY ENCOURAGED.\n"
-                        "- If data permits, generate a chart/graph image: 'Bar chart showing X vs Y'.\n"
+                        "- **PRIORITIZE DATA**: Generate charts, graphs, and maps that clarify complex data. Avoid generic 'mood' images (e.g., 'robots thinking', 'abstract tech background').\n"
+                        "- **ASPECT RATIO**: Prefer landscape (16:9) for headers and charts.\n"
+                        "- **MANDATORY CSS**: When embedding images, YOU MUST use this exact style to prevent bleeding:\n"
+                        "  `<img src='media/filename.png' style='max-width: 100%; height: auto; display: block; margin: 20px auto;' alt='Description'>`\n"
                         "- Save generated images to `work_products/media/`.\n"
-                        "- Embed in HTML using relative paths: `<img src='media/filename.png' ...>`.\n\n"
+                        "- Embed in HTML using relative paths.\n\n"
                         "**SYNTHESIS & COHERENCE:**\n"
                         "- Where sources discuss related topics, group and synthesize them into cohesive sections\n"
                         "- BUT: News often covers genuinely disjointed events - don't force artificial connections\n"
@@ -2168,6 +2172,23 @@ async def main():
                     # Print agent's final response (with follow-up suggestions) AFTER execution summary
                     if final_response_text:
                         print(f"\n{final_response_text}")
+
+                    # NEW: Intermediate Transcript Save
+                    # Only save if we actually ran a conversation (not just simple path)
+                    try:
+                        from universal_agent import transcript_builder
+                        
+                        # Update stats for the snapshot
+                        current_ts = time.time()
+                        trace["end_time"] = datetime.now().isoformat()
+                        trace["total_duration_seconds"] = round(current_ts - start_ts, 3)
+                        
+                        transcript_path = os.path.join(workspace_dir, "transcript.md")
+                        if transcript_builder.generate_transcript(trace, transcript_path):
+                            print(f"\n🎬 Intermediate transcript saved to {transcript_path}")
+                    except Exception as e:
+                        # Don't let transcript failure crash the agent
+                        print(f"⚠️ Failed to save intermediate transcript: {e}")
 
             # End of Session Summary
             end_ts = time.time()

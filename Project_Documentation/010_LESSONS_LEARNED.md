@@ -812,3 +812,39 @@ from src.universal_agent.agent_college.integration import setup_agent_college
 ---
 
 *Last updated: 2025-12-27*
+
+### Lesson 40: Context Propagation in Subprocesses (Trace ID Mismatch)
+**Date**: 2025-12-27
+
+**Problem**: Logfire traces showed different Trace IDs for the Main Agent (e.g., `...328b`) and internal tool calls (e.g., `...d64b`).
+**Root Cause**: Local MCP tools run in subprocesses or separate threads without explicit OpenTelemetry context propagation. the `trace_id` generated in the main process doesn't automatically flow to the child components.
+**Implication**: You cannot query the full trace by a single ID. You must query by time window or tags.
+**Solution (Future)**: Passes `traceparent` headers or context objects explicitly to subprocesses.
+
+---
+
+### Lesson 41: "Mandatory" vs "Encouraged" in System Prompts
+**Date**: 2025-12-27
+
+**Discovery**: When the prompt said "Creating visuals is HIGHLY ENCOURAGED", the agent often ignored it, preferring text synthesis.
+**Fix**: Changed language to "**MANDATORY**: You MUST delegate to image-expert if visuals are requested."
+**Result**: Agent behavior became consistent.
+**Lesson**: LLMs optimize for the path of least resistance (text). To force tool usage (images, heavy compute), use "Must/Mandatory/Required" constraints, not "Should/Encouraged" suggestions.
+
+---
+
+### Lesson 42: Intermediate State Saving for UX
+**Date**: 2025-12-27
+
+**Problem**: The "Transcript" was only generated at the very end of the session. If the user ran a long task (10 mins) and wanted to check progress, they had to wait or quit only to find no file.
+**Solution**: Injected a save call *inside* the main Request/Response loop.
+**Pattern**:
+```python
+# Inside main loop
+result = ...
+transcript_builder.save(current_trace) # Snapshot
+print("Intermediate transcript saved.")
+```
+**Benefit**: User gets real-time artifacts without breaking the session state.
+
+---
