@@ -1,15 +1,21 @@
+import os
 import sys
 import asyncio
 from telegram import Bot
+from dotenv import load_dotenv
+
+load_dotenv()
 
 async def register():
-    if len(sys.argv) < 3:
-        print("Usage: python register_webhook.py <BOT_TOKEN> <WEBHOOK_URL> [SECRET]")
-        return
+    # Try args first, then env vars
+    token = sys.argv[1] if len(sys.argv) > 1 else os.getenv("TELEGRAM_BOT_TOKEN")
+    url = sys.argv[2] if len(sys.argv) > 2 else os.getenv("WEBHOOK_URL")
+    secret = sys.argv[3] if len(sys.argv) > 3 else os.getenv("WEBHOOK_SECRET")
 
-    token = sys.argv[1]
-    url = sys.argv[2]
-    secret = sys.argv[3] if len(sys.argv) > 3 else None
+    if not token or not url:
+        print("Usage: python register_webhook.py [BOT_TOKEN] [WEBHOOK_URL] [SECRET]")
+        print("OR set TELEGRAM_BOT_TOKEN and WEBHOOK_URL in .env")
+        return
     
     print(f"Connecting with token: {token[:5]}...")
     bot = Bot(token)
