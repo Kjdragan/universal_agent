@@ -9,6 +9,7 @@ import os
 import time
 import json
 from datetime import datetime
+from typing import Any
 from dotenv import load_dotenv
 
 # Load environment FIRST
@@ -1493,21 +1494,27 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> bool:
     return True
 
 
-async def main():
-    global trace
+
+async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
+    """
+    Initialize the agent session, tools, and options.
+    Returns: (options, session, user_id, workspace_dir, trace)
+    """
+    global trace, composio, user_id, session, options, OBSERVER_WORKSPACE_DIR
 
     # Create main span for entire execution
-    with logfire.span("standalone_composio_test") as span:
-        # Setup Session Workspace
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", f"session_{timestamp}")
-        os.makedirs(workspace_dir, exist_ok=True)
+    # with logfire.span("standalone_composio_test") as span: # Moved to caller
+    
+    # Setup Session Workspace
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", f"session_{timestamp}")
+    os.makedirs(workspace_dir, exist_ok=True)
 
-        # Initialize Composio with automatic file downloads to this workspace
-        global composio
-        downloads_dir = os.path.join(workspace_dir, "downloads")
-        os.makedirs(downloads_dir, exist_ok=True)
-      # =========================================================================
+    # Initialize Composio with automatic file downloads to this workspace
+    downloads_dir = os.path.join(workspace_dir, "downloads")
+    os.makedirs(downloads_dir, exist_ok=True)
+
+    # =========================================================================
     # 2. NON-BLOCKING AUTH FIX
     # Monkeypatch builtins.input to prevent EOFError during headless auth prompts
     # =========================================================================
@@ -1543,10 +1550,6 @@ async def main():
     # Custom tools should be auto-discovered when registered before composio.create()
     # Local MCP tools are exposed via stdio server defined in mcp_servers config
 
-    # Create Composio session
-    # IMPORTANT: Per 000_CURRENT_CONTEXT.md, we disable external crawlers to force use of
-    # local crawl_parallel tool. This prevents COMPOSIO_SEARCH_TOOLS from recommending
-    # firecrawl or exa web scrapers.
     # Create Composio session
     # IMPORTANT: Per 000_CURRENT_CONTEXT.md, we disable external crawlers to force use of
     # local crawl_parallel tool. This prevents COMPOSIO_SEARCH_TOOLS from recommending
@@ -1602,8 +1605,6 @@ async def main():
     print(f"✅ Discovered Skills: {skill_names}")
     skills_xml = generate_skills_xml(discovered_skills)
 
-
-    # Create ClaudeAgentOptions now that session is available
     # Create ClaudeAgentOptions now that session is available
     global options
 
@@ -1625,6 +1626,9 @@ async def main():
         print(f"⚠️ Failed to load Memory Context/Agent College: {e}")
 
     options = ClaudeAgentOptions(
+        name="Universal Agent",
+        description="A versatile agent with tool routing, web research, and coding capabilities.",
+        model="claude-3-5-sonnet-20241022",
         system_prompt=(
             f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             f"{memory_context_str}\n" # <--- INJECTED HERE
@@ -1715,276 +1719,275 @@ async def main():
             "   - Available skills (read SKILL.md for detailed instructions):\n"
             f"{skills_xml}\n"
         ),
-            mcp_servers={
-                "composio": {
-                    "type": "http",
-                    "url": session.mcp.url,
-                    "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
-                },
-                "local_toolkit": {
-                    "type": "stdio",
-                    "command": sys.executable,
-                    "args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")],
-                },
-                # External MCP: SEC Edgar Tools for financial research
-                "edgartools": {
-                    "type": "stdio",
-                    "command": sys.executable,
-                    "args": ["-m", "edgar.ai"],
-                    "env": {"EDGAR_IDENTITY": os.environ.get("EDGAR_IDENTITY", "Agent agent@example.com")},
-                },
-                # External MCP: Video & Audio editing via FFmpeg
-                "video_audio": {
-                    "type": "stdio",
-                    "command": sys.executable,
-                    "args": [os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "external_mcps", "video-audio-mcp", "server.py")],
-                },
-                # External MCP: YouTube/video downloader via yt-dlp
-                "youtube": {
-                    "type": "stdio",
-                    "command": sys.executable,
-                    "args": ["-m", "mcp_youtube"],
-                },
-                # External MCP: Z.AI Vision (GLM-4.6V) for image/video analysis
-                "zai_vision": {
-                    "type": "stdio",
-                    "command": "npx",
-                    "args": ["-y", "@z_ai/mcp-server"],
-                    "env": {
-                        "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
-                        "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
-                    },
+        mcp_servers={
+            "composio": {
+                "type": "http",
+                "url": session.mcp.url,
+                "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
+            },
+            "local_toolkit": {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")],
+            },
+            # External MCP: SEC Edgar Tools for financial research
+            "edgartools": {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": ["-m", "edgar.ai"],
+                "env": {"EDGAR_IDENTITY": os.environ.get("EDGAR_IDENTITY", "Agent agent@example.com")},
+            },
+            # External MCP: Video & Audio editing via FFmpeg
+            "video_audio": {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "external_mcps", "video-audio-mcp", "server.py")],
+            },
+            # External MCP: YouTube/video downloader via yt-dlp
+            "youtube": {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": ["-m", "mcp_youtube"],
+            },
+            # External MCP: Z.AI Vision (GLM-4.6V) for image/video analysis
+            "zai_vision": {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@z_ai/mcp-server"],
+                "env": {
+                    "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
+                    "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
                 },
             },
-            # NOTE: Do NOT set allowed_tools here - that would restrict to ONLY those tools.
-            # The agent needs access to BOTH Composio tools (COMPOSIO_SEARCH_NEWS, etc.)
-            # AND local_toolkit tools (crawl_parallel, read_local_file, etc.)
-            # Sub-agents inherit all tools via model="inherit".
-            agents={
-                "report-creation-expert": AgentDefinition(
-                    description=(
-                        "🚨 MANDATORY DELEGATION TARGET for ALL report generation tasks. "
-                        "WHEN TO DELEGATE (REQUIRED): User asks for 'report', 'comprehensive', 'detailed', "
-                        "'in-depth', 'analysis', or 'summary'.\n"
-                        "🛑 STOP! DO NOT WRITE REPORTS YOURSELF. YOU WILL FAIL.\n"
-                        "You lack the ability to process full context. You MUST delegate to the 'Report Creation Expert'.\n"
-                        "REQUIRED DELEGATION PROMPT: 'Scan all JSON files in search_results/ directory using list_directory and generate report.'\n"
-                        "DO NOT pass URLs manually. Pass the directory instruction only."
-                        "PRIMARY AGENT MUST NOT: Generate reports directly. "
-                        "REQUIRED INPUT: Tell the sub-agent to 'Scan all JSON files in search_results/ directory'. DO NOT list individual URLs. "
-                        "THIS SUB-AGENT PROVIDES: Full article content extraction via crawl_parallel, professional report synthesis."
-                    ),
-                    prompt=(
-                        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
-                        f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
-                        "You are a **Report Creation Expert**.\n\n"
-                        "🚨 CRITICAL TOOL INSTRUCTIONS:\n"
-                        "1. DO NOT use COMPOSIO_SEARCH_TOOLS - you already have the tools you need.\n"
-                        "2. DO NOT use Firecrawl or any Composio crawling tools.\n"
-                        "3. USE ONLY these specific tools:\n"
-                        "   - `mcp__local_toolkit__list_directory` - to find search result files\n"
-                        "   - `mcp__local_toolkit__read_local_file` - to get URLs from JSONs\n"
-                        "   - `mcp__local_toolkit__crawl_parallel` - to extract content\n"
-                        "   - `mcp__local_toolkit__write_local_file` - to save report\n\n"
-                        "---\n\n"
-                        "## WORKFLOW\n\n"
-                        "### Step 1: Discover & Scrape (MANDATORY)\n"
-                        "1. Call `mcp__local_toolkit__list_directory` on filenames in `{workspace_dir}/search_results/`.\n"
-                        "2. Read EVERY `.json` file found using `read_local_file`.\n"
-                        "3. Extract EVERY `url` from ALL files (consolidate into one list). Merge lists from multiple files.\n"
-                        "4. Call `mcp__local_toolkit__crawl_parallel` with the COMPLETE, MERGED list (no batch limit).\n"
-                        "   *Our scraper is instant. Do not cherry-pick. If you find 40 URLs across 5 files, scrape 40 URLs.*\n"
-                        "   *CRITICAL: Do not stop after the first file. Scrape everything.*\n\n"
-                        "### Step 2: Read ALL Scraped Content (MANDATORY - DO NOT SKIP FILES)\n"
-                        "1. After crawl_parallel completes, call `list_directory` again to see all `crawl_*.md` files.\n"
-                        "2. You MUST read EVERY crawl_*.md file. There is no limit.\n"
-                        "3. If there are more than ~6 files, read them in batches (6 files per read operation).\n"
-                        "4. DO NOT generate the report until you have read ALL crawl_*.md files.\n"
-                        "5. Keep track: 'Read X of Y files' - if X < Y, continue reading.\n\n"
-                        "### Step 3: Synthesize Report\n"
-                        "Evaluate your source material and design an appropriate structure for the content.\n\n"
-                        "**QUALITY PRINCIPLES:**\n"
-                        "- Use specific quotes, numbers, and named examples to support points\n"
-                        "- Avoid generic statements like 'experts say' or 'it's widely believed'\n"
-                        "- Include interesting findings even if they counter main themes - present what you found\n"
-                        "- Credit sources naturally inline (e.g., 'according to ISW...' or 'the BBC reports...')\n"
-                        "- List all sources at the end of the report\n"
-                        "- Professional HTML presentation appropriate to the content\n\n"
-                        "**DEPTH CALIBRATION:**\n"
-                        "- Match report depth to source richness\n"
-                        "- Brief sources (3-5 articles) → Focused, concise summary\n"
-                        "- Rich sources (10+ articles) → Comprehensive, multi-section analysis\n"
-                        "- Let the structure emerge from the material, not from a template\n\n"
-                        "**VISUALS & MEDIA:**\n"
-                        "- You have access to `mcp__local_toolkit__generate_image`.\n"
-                        "- **PRIORITIZE DATA**: Generate charts, graphs, and maps that clarify complex data. Avoid generic 'mood' images (e.g., 'robots thinking', 'abstract tech background').\n"
-                        "- **ASPECT RATIO**: Prefer landscape (16:9) for headers and charts.\n"
-                        "- **MANDATORY CSS**: When embedding images, YOU MUST use this exact style to prevent bleeding:\n"
-                        "  `<img src='media/filename.png' style='max-width: 100%; height: auto; display: block; margin: 20px auto;' alt='Description'>`\n"
-                        "- Save generated images to `work_products/media/`.\n"
-                        "- Embed in HTML using relative paths.\n\n"
-                        "**SYNTHESIS & COHERENCE:**\n"
-                        "- Where sources discuss related topics, group and synthesize them into cohesive sections\n"
-                        "- BUT: News often covers genuinely disjointed events - don't force artificial connections\n"
-                        "- Prioritize completeness over flow - include all interesting facts even if standalone\n"
-                        "- It's okay to have distinct sections for unrelated developments\n"
-                        "- Aim for thematic grouping where natural, standalone items where not\n\n"
-                        "### Step 4: Save Report\n"
-                        f"Save as `.html` to `{workspace_dir}/work_products/` using `mcp__local_toolkit__write_local_file`.\n\n"
-                        "🚨 START IMMEDIATELY: List the directory to find your targets."
-                    ),
-                    # Omit 'tools' so sub-agent inherits ALL tools including MCP tools
-                    model="inherit",
+        },
+        # NOTE: Do NOT set allowed_tools here - that would restrict to ONLY those tools.
+        # The agent needs access to BOTH Composio tools (COMPOSIO_SEARCH_NEWS, etc.)
+        # AND local_toolkit tools (crawl_parallel, read_local_file, etc.)
+        # Sub-agents inherit all tools via model="inherit".
+        agents={
+            "report-creation-expert": AgentDefinition(
+                description=(
+                    "🚨 MANDATORY DELEGATION TARGET for ALL report generation tasks. "
+                    "WHEN TO DELEGATE (REQUIRED): User asks for 'report', 'comprehensive', 'detailed', "
+                    "'in-depth', 'analysis', or 'summary'.\n"
+                    "🛑 STOP! DO NOT WRITE REPORTS YOURSELF. YOU WILL FAIL.\n"
+                    "You lack the ability to process full context. You MUST delegate to the 'Report Creation Expert'.\n"
+                    "REQUIRED DELEGATION PROMPT: 'Scan all JSON files in search_results/ directory using list_directory and generate report.'\n"
+                    "DO NOT pass URLs manually. Pass the directory instruction only."
+                    "PRIMARY AGENT MUST NOT: Generate reports directly. "
+                    "REQUIRED INPUT: Tell the sub-agent to 'Scan all JSON files in search_results/ directory'. DO NOT list individual URLs. "
+                    "THIS SUB-AGENT PROVIDES: Full article content extraction via crawl_parallel, professional report synthesis."
                 ),
-                "slack-expert": AgentDefinition(
-                    description=(
-                        "Expert for Slack workspace interactions. "
-                        "DELEGATE when user mentions: 'slack', 'channel', '#channel-name', "
-                        "'post to slack', 'summarize messages', 'what was discussed in'."
-                    ),
-                    prompt=(
-                        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
-                        f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
-                        "You are a **Slack Expert**.\n\n"
-                        "## AVAILABLE TOOLS\n"
-                        "- `SLACK_LIST_CHANNELS` - List available channels\n"
-                        "- `SLACK_FETCH_CONVERSATION_HISTORY` - Get messages from a channel\n"
-                        "- `SLACK_SEND_MESSAGE` - Post a message to a channel\n\n"
-                        "## WORKFLOW FOR SUMMARIZATION\n"
-                        "1. Use `SLACK_LIST_CHANNELS` to find the channel ID by name\n"
-                        "2. Use `SLACK_FETCH_CONVERSATION_HISTORY` with the channel ID and `limit` parameter\n"
-                        "3. Extract key information: topics discussed, decisions made, action items\n"
-                        "4. Write a brief summary to the workspace using `mcp__local_toolkit__write_local_file`\n\n"
-                        "## WORKFLOW FOR POSTING\n"
-                        "1. Use `SLACK_LIST_CHANNELS` to find the target channel ID\n"
-                        "2. Format your message clearly with sections if needed\n"
-                        "3. Use `SLACK_SEND_MESSAGE` with the channel ID and formatted message\n\n"
-                        "🚨 IMPORTANT: Always use channel IDs (not names) for API calls."
-                    ),
-                    model="inherit",
+                prompt=(
+                    f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+                    f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
+                    "You are a **Report Creation Expert**.\n\n"
+                    "🚨 CRITICAL TOOL INSTRUCTIONS:\n"
+                    "1. DO NOT use COMPOSIO_SEARCH_TOOLS - you already have the tools you need.\n"
+                    "2. DO NOT use Firecrawl or any Composio crawling tools.\n"
+                    "3. USE ONLY these specific tools:\n"
+                    "   - `mcp__local_toolkit__list_directory` - to find search result files\n"
+                    "   - `mcp__local_toolkit__read_local_file` - to get URLs from JSONs\n"
+                    "   - `mcp__local_toolkit__crawl_parallel` - to extract content\n"
+                    "   - `mcp__local_toolkit__write_local_file` - to save report\n\n"
+                    "---\n\n"
+                    "## WORKFLOW\n\n"
+                    "### Step 1: Discover & Scrape (MANDATORY)\n"
+                    "1. Call `mcp__local_toolkit__list_directory` on filenames in `{workspace_dir}/search_results/`.\n"
+                    "2. Read EVERY `.json` file found using `read_local_file`.\n"
+                    "3. Extract EVERY `url` from ALL files (consolidate into one list). Merge lists from multiple files.\n"
+                    "4. Call `mcp__local_toolkit__crawl_parallel` with the COMPLETE, MERGED list (no batch limit).\n"
+                    "   *Our scraper is instant. Do not cherry-pick. If you find 40 URLs across 5 files, scrape 40 URLs.*\n"
+                    "   *CRITICAL: Do not stop at the first file. Scrape everything.*\n\n"
+                    "### Step 2: Read ALL Scraped Content (MANDATORY - DO NOT SKIP FILES)\n"
+                    "1. After crawl_parallel completes, call `list_directory` again to see all `crawl_*.md` files.\n"
+                    "2. You MUST read EVERY crawl_*.md file. There is no limit.\n"
+                    "3. If there are more than ~6 files, read them in batches (6 files per read operation).\n"
+                    "4. DO NOT generate the report until you have read ALL crawl_*.md files.\n"
+                    "5. Keep track: 'Read X of Y files' - if X < Y, continue reading.\n\n"
+                    "### Step 3: Synthesize Report\n"
+                    "Evaluate your source material and design an appropriate structure for the content.\n\n"
+                    "**QUALITY PRINCIPLES:**\n"
+                    "- Use specific quotes, numbers, and named examples to support points\n"
+                    "- Avoid generic statements like 'experts say' or 'it's widely believed'\n"
+                    "- Include interesting findings even if they counter main themes - present what you found\n"
+                    "- Credit sources naturally inline (e.g., 'according to ISW...' or 'the BBC reports...')\n"
+                    "- List all sources at the end of the report\n"
+                    "- Professional HTML presentation appropriate to the content\n\n"
+                    "**DEPTH CALIBRATION:**\n"
+                    "- Match report depth to source richness\n"
+                    "- Brief sources (3-5 articles) → Focused, concise summary\n"
+                    "- Rich sources (10+ articles) → Comprehensive, multi-section analysis\n"
+                    "- Let the structure emerge from the material, not from a template\n\n"
+                    "**VISUALS & MEDIA:**\n"
+                    "- You have access to `mcp__local_toolkit__generate_image`.\n"
+                    "- **PRIORITIZE DATA**: Generate charts, graphs, and maps that clarify complex data. Avoid generic 'mood' images (e.g., 'robots thinking', 'abstract tech background').\n"
+                    "- **ASPECT RATIO**: Prefer landscape (16:9) for headers and charts.\n"
+                    "- **MANDATORY CSS**: When embedding images, YOU MUST use this exact style to prevent bleeding:\n"
+                    "  `<img src='media/filename.png' style='max-width: 100%; height: auto; display: block; margin: 20px auto;' alt='Description'>`\n"
+                    "- Save generated images to `work_products/media/`.\n"
+                    "- Embed in HTML using relative paths.\n\n"
+                    "**SYNTHESIS & COHERENCE:**\n"
+                    "- Where sources discuss related topics, group and synthesize them into cohesive sections\n"
+                    "- BUT: News often covers genuinely disjointed events - don't force artificial connections\n"
+                    "- Prioritize completeness over flow - include all interesting facts even if standalone\n"
+                    "- It's okay to have distinct sections for unrelated developments\n"
+                    "- Aim for thematic grouping where natural, standalone items where not\n\n"
+                    "### Step 4: Save Report\n"
+                    f"Save as `.html` to `{workspace_dir}/work_products/` using `mcp__local_toolkit__write_local_file`.\n\n"
+                    "🚨 START IMMEDIATELY: List the directory to find your targets."
                 ),
-                "image-expert": AgentDefinition(
-                    description=(
-                        "Expert for AI image generation and editing. "
-                        "DELEGATE when user requests: 'generate image', 'create image', 'edit image', "
-                        "'make a picture', 'design graphic', 'create infographic', 'visual for report', "
-                        "or wants to iteratively refine images through conversation."
-                    ),
-                    prompt=(
-                        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\\n"
-                        f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\\n\\n"
-                        "You are an **Image Generation Expert** using Gemini 2.5 Flash Image.\\n\\n"
-                        "## TASK MANAGEMENT (TodoWrite)\\n"
-                        "Use TodoWrite to track complex workflows:\\n"
-                        "```\\n"
-                        "- [ ] Understand image request (style, content, purpose)\\n"
-                        "- [ ] Generate initial image\\n"
-                        "  - [ ] Craft detailed prompt\\n"
-                        "  - [ ] Call generate_image tool\\n"
-                        "- [ ] Review output with describe_image\\n"
-                        "- [ ] Iterate if refinement needed\\n"
-                        "- [ ] Confirm final output saved to work_products/media/\\n"
-                        "```\\n"
-                        "Mark items complete as you progress. Add nested todos for sub-steps.\\n\\n"
-                        "## AVAILABLE TOOLS\\n"
-                        "**Primary Image Tools:**\\n"
-                        "- `mcp__local_toolkit__generate_image` - Generate or edit images\\n"
-                        "- `mcp__local_toolkit__describe_image` - Get image descriptions (free, via ZAI)\\n"
-                        "- `mcp__local_toolkit__preview_image` - Launch Gradio viewer\\n"
-                        "- `mcp__zai_vision__analyze_image` - Detailed image analysis (free)\\n\\n"
-                        "**Dynamic Composio Access & Planning:**\\n"
-                        "You inherit ALL Composio tools. For complex or unfamiliar tasks:\\n"
-                        "- Call `COMPOSIO_SEARCH_TOOLS` ONLY for **remote Composio tools** (external APIs, data sources)\\n"
-                        "- It does NOT know about local tools (generate_image, crawl_parallel, etc.)\\n"
-                        "- Use the returned `recommended_plan_steps` to structure your TodoWrite list\\n"
-                        "- Use `COMPOSIO_SEARCH_*` tools to find reference images, data, or material\\n"
-                        "- Use workbench tools for code execution if needed\\n\\n"
-                        "**Example**: Need reference photos? Use COMPOSIO_SEARCH_TOOLS to find image search APIs.\\n"
-                        "             Need to generate an image? Use generate_image (already in your tools).\\n\\n"
-                        "## WORKFLOW\\n"
-                        "1. **Understand Request**: What style, content, purpose?\\n"
-                        "2. **Generate/Edit**: Call generate_image with detailed prompt\\n"
-                        "3. **Review**: Use describe_image or analyze_image to verify output\\n"
-                        "4. **Iterate**: If user wants changes, edit the generated image\\n"
-                        "5. **Save**: Images auto-save to work_products/media/\\n\\n"
-                        "## PROMPT CRAFTING TIPS\\n"
-                        "- Be specific: 'modern, minimalist infographic with blue gradient'\\n"
-                        "- Include style: 'photorealistic', 'illustration', 'line art'\\n"
-                        "- For charts: describe the data and preferred visualization\\n"
-                        "- For editing: describe what to change AND preserve\\n\\n"
-                        f"OUTPUT DIRECTORY: {workspace_dir}/work_products/media/"
-                    ),
-                    model="inherit",
+                # Omit 'tools' so sub-agent inherits ALL tools including MCP tools
+                model="inherit",
+            ),
+            "slack-expert": AgentDefinition(
+                description=(
+                    "Expert for Slack workspace interactions. "
+                    "DELEGATE when user mentions: 'slack', 'channel', '#channel-name', "
+                    "'post to slack', 'summarize messages', 'what was discussed in'."
                 ),
-                "video-creation-expert": AgentDefinition(
-                    description=(
-                        "🎬 MANDATORY DELEGATION TARGET for ALL video and audio tasks. "
-                        "WHEN TO DELEGATE (REQUIRED): User asks to download, edit, or process video/audio, "
-                        "mentions YouTube, MP3, MP4, trimming, cutting, transitions, or effects.\n"
-                        "🛑 STOP! DO NOT PROCESS VIDEOS YOURSELF. YOU MUST DELEGATE.\n"
-                        "This sub-agent has FFmpeg expertise and YouTube download capabilities."
-                    ),
-                    prompt=(
-                        f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
-                        f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
-                        "You are a **Video Creation Expert** - a multimedia processing specialist.\n\n"
-                        "## 📁 WORKSPACE LOCATIONS\n"
-                        "| Location | Purpose |\n"
-                        "|----------|----------|\n"
-                        "| `downloads/videos/` | YouTube video downloads |\n"
-                        "| `downloads/audio/` | Audio extractions |\n"
-                        f"| `{workspace_dir}/work_products/media/` | Final outputs |\n\n"
-                        "## 🎬 AVAILABLE TOOLS\n\n"
-                        "**YouTube (mcp__youtube__):**\n"
-                        "- `download_video` - Download YouTube video as MP4\n"
-                        "- `download_audio` - Extract audio as MP3\n"
-                        "- `get_metadata` - Get duration, title, etc.\n"
-                        "- `download_subtitles` - Get captions\n\n"
-                        "**Video Processing (mcp__video_audio__):**\n"
-                        "- `trim_video` - Cut video to specific time range\n"
-                        "- `concatenate_videos` - Join multiple videos\n"
-                        "- `add_basic_transitions` - Add fade_in/fade_out effects\n"
-                        "- `add_text_overlay` - Add text to video\n"
-                        "- `extract_audio` - Extract audio track\n"
-                        "- `change_video_speed` - Speed up or slow down\n"
-                        "- `rotate_video` - Rotate 90/180/270 degrees\n"
-                        "- `compress_video` - Reduce file size\n"
-                        "- `reverse_video` - Play video backwards\n\n"
-                        "## WORKFLOW\n\n"
-                        "1. **Get metadata first** - Use `get_metadata` or `ffprobe` to get duration\n"
-                        "2. **Download if needed** - YouTube URLs → use youtube MCP\n"
-                        "3. **Process step by step** - Trim → Effects → Combine\n"
-                        "4. **Name final output clearly** - e.g., `christmas_remix_final.mp4`\n"
-                        "5. **Verify with ffprobe** - Check duration and file size\n\n"
-                        "## PRO TIPS\n"
-                        "- Intermediate files: use `temp_`, `part1_` etc (observer ignores these)\n"
-                        "- Final outputs: use descriptive names (auto-saved to session)\n"
-                        "- Run parallel trims when independent for speed\n"
-                        "- If xfade fails, use individual fade_in/fade_out\n\n"
-                        "🚨 START IMMEDIATELY: Check if files exist, then process."
-                    ),
-                    model="inherit",
+                prompt=(
+                    f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+                    f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
+                    "You are a **Slack Expert**.\n\n"
+                    "## AVAILABLE TOOLS\n"
+                    "- `SLACK_LIST_CHANNELS` - List available channels\n"
+                    "- `SLACK_FETCH_CONVERSATION_HISTORY` - Get messages from a channel\n"
+                    "- `SLACK_SEND_MESSAGE` - Post a message to a channel\n\n"
+                    "## WORKFLOW FOR SUMMARIZATION\n"
+                    "1. Use `SLACK_LIST_CHANNELS` to find the channel ID by name\n"
+                    "2. Use `SLACK_FETCH_CONVERSATION_HISTORY` with the channel ID and `limit` parameter\n"
+                    "3. Extract key information: topics discussed, decisions made, action items\n"
+                    "4. Write a brief summary to the workspace using `mcp__local_toolkit__write_local_file`\n\n"
+                    "## WORKFLOW FOR POSTING\n"
+                    "1. Use `SLACK_LIST_CHANNELS` to find the target channel ID\n"
+                    "2. Format your message clearly with sections if needed\n"
+                    "3. Use `SLACK_SEND_MESSAGE` with the channel ID and formatted message\n\n"
+                    "🚨 IMPORTANT: Always use channel IDs (not names) for API calls."
                 ),
-            },
-            hooks={
-                "SubagentStop": [
-                    HookMatcher(matcher=None, hooks=[on_subagent_stop]),
-                ],
-                "PreToolUse": [
-                    HookMatcher(matcher="Bash", hooks=[on_pre_bash_skill_hint]),
-                ],
-                # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
-                # "error: 'types.UnionType' object is not callable"
-                # This is a CLI-side issue, not our code. PreToolUse still provides skill guidance.
-                "UserPromptSubmit": [
-                    HookMatcher(matcher=None, hooks=[on_user_prompt_skill_awareness]),
-                ],
-            },
-            permission_mode="bypassPermissions",
-        )
+                model="inherit",
+            ),
+            "image-expert": AgentDefinition(
+                description=(
+                    "Expert for AI image generation and editing. "
+                    "DELEGATE when user requests: 'generate image', 'create image', 'edit image', "
+                    "'make a picture', 'design graphic', 'create infographic', 'visual for report', "
+                    "or wants to iteratively refine images through conversation."
+                ),
+                prompt=(
+                    f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\\n"
+                    f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\\n\\n"
+                    "You are an **Image Generation Expert** using Gemini 2.5 Flash Image.\\n\\n"
+                    "## TASK MANAGEMENT (TodoWrite)\\n"
+                    "Use TodoWrite to track complex workflows:\\n"
+                    "```\\n"
+                    "- [ ] Understand image request (style, content, purpose)\\n"
+                    "- [ ] Generate initial image\\n"
+                    "  - [ ] Craft detailed prompt\\n"
+                    "  - [ ] Call generate_image tool\\n"
+                    "- [ ] Review output with describe_image\\n"
+                    "- [ ] Iterate if refinement needed\\n"
+                    "- [ ] Confirm final output saved to work_products/media/\\n"
+                    "```\\n"
+                    "Mark items complete as you progress. Add nested todos for sub-steps.\\n\\n"
+                    "## AVAILABLE TOOLS\\n"
+                    "**Primary Image Tools:**\\n"
+                    "- `mcp__local_toolkit__generate_image` - Generate or edit images\\n"
+                    "- `mcp__local_toolkit__describe_image` - Get image descriptions (free, via ZAI)\\n"
+                    "- `mcp__local_toolkit__preview_image` - Launch Gradio viewer\\n"
+                    "- `mcp__zai_vision__analyze_image` - Detailed image analysis (free)\\n\\n"
+                    "**Dynamic Composio Access & Planning:**\\n"
+                    "You inherit ALL Composio tools. For complex or unfamiliar tasks:\\n"
+                    "- Call `COMPOSIO_SEARCH_TOOLS` ONLY for **remote Composio tools** (external APIs, data sources)\\n"
+                    "- It does NOT know about local tools (generate_image, crawl_parallel, etc.)\\n"
+                    "- Use the returned `recommended_plan_steps` to structure your TodoWrite list\\n"
+                    "- Use `COMPOSIO_SEARCH_*` tools to find reference images, data, or material\\n"
+                    "- Use workbench tools for code execution if needed\\n\\n"
+                    "**Example**: Need reference photos? Use COMPOSIO_SEARCH_TOOLS to find image search APIs.\\n"
+                    "             Need to generate an image? Use generate_image (already in your tools).\\n\\n"
+                    "## WORKFLOW\\n"
+                    "1. **Understand Request**: What style, content, purpose?\\n"
+                    "2. **Generate/Edit**: Call generate_image with detailed prompt\\n"
+                    "3. **Review**: Use describe_image or analyze_image to verify output\\n"
+                    "4. **Iterate**: If user wants changes, edit the generated image\\n"
+                    "5. **Save**: Images auto-save to work_products/media/\\n\\n"
+                    "## PROMPT CRAFTING TIPS\\n"
+                    "- Be specific: 'modern, minimalist infographic with blue gradient'\\n"
+                    "- Include style: 'photorealistic', 'illustration', 'line art'\\n"
+                    "- For charts: describe the data and preferred visualization\\n"
+                    "- For editing: describe what to change AND preserve\\n\\n"
+                    f"OUTPUT DIRECTORY: {workspace_dir}/work_products/media/"
+                ),
+                model="inherit",
+            ),
+            "video-creation-expert": AgentDefinition(
+                description=(
+                    "🎬 MANDATORY DELEGATION TARGET for ALL video and audio tasks. "
+                    "WHEN TO DELEGATE (REQUIRED): User asks to download, edit, or process video/audio, "
+                    "mentions YouTube, MP3, MP4, trimming, cutting, transitions, or effects.\n"
+                    "🛑 STOP! DO NOT PROCESS VIDEOS YOURSELF. YOU MUST DELEGATE.\n"
+                    "This sub-agent has FFmpeg expertise and YouTube download capabilities."
+                ),
+                prompt=(
+                    f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+                    f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
+                    "You are a **Video Creation Expert** - a multimedia processing specialist.\n\n"
+                    "## 📁 WORKSPACE LOCATIONS\n"
+                    "| Location | Purpose |\n"
+                    "|----------|----------|\n"
+                    "| `downloads/videos/` | YouTube video downloads |\n"
+                    "| `downloads/audio/` | Audio extractions |\n"
+                    f"| `{workspace_dir}/work_products/media/` | Final outputs |\n\n"
+                    "## 🎬 AVAILABLE TOOLS\n\n"
+                    "**YouTube (mcp__youtube__):**\n"
+                    "- `download_video` - Download YouTube video as MP4\n"
+                    "- `download_audio` - Extract audio as MP3\n"
+                    "- `get_metadata` - Get duration, title, etc.\n"
+                    "- `download_subtitles` - Get captions\n\n"
+                    "**Video Processing (mcp__video_audio__):**\n"
+                    "- `trim_video` - Cut video to specific time range\n"
+                    "- `concatenate_videos` - Join multiple videos\n"
+                    "- `add_basic_transitions` - Add fade_in/fade_out effects\n"
+                    "- `add_text_overlay` - Add text to video\n"
+                    "- `extract_audio` - Extract audio track\n"
+                    "- `change_video_speed` - Speed up or slow down\n"
+                    "- `rotate_video` - Rotate 90/180/270 degrees\n"
+                    "- `compress_video` - Reduce file size\n"
+                    "- `reverse_video` - Play video backwards\n\n"
+                    "## WORKFLOW\n\n"
+                    "1. **Get metadata first** - Use `get_metadata` or `ffprobe` to get duration\n"
+                    "2. **Download if needed** - YouTube URLs → use youtube MCP\n"
+                    "3. **Process step by step** - Trim → Effects → Combine\n"
+                    "4. **Name final output clearly** - e.g., `christmas_remix_final.mp4`\n"
+                    "5. **Verify with ffprobe** - Check duration and file size\n\n"
+                    "## PRO TIPS\n"
+                    "- Intermediate files: use `temp_`, `part1_` etc (observer ignores these)\n"
+                    "- Final outputs: use descriptive names (auto-saved to session)\n"
+                    "- Run parallel trims when independent for speed\n"
+                    "- If xfade fails, use individual fade_in/fade_out\n\n"
+                    "🚨 START IMMEDIATELY: Check if files exist, then process."
+                ),
+                model="inherit",
+            ),
+        },
+        hooks={
+            "SubagentStop": [
+                HookMatcher(matcher=None, hooks=[on_subagent_stop]),
+            ],
+            "PreToolUse": [
+                HookMatcher(matcher="Bash", hooks=[on_pre_bash_skill_hint]),
+            ],
+            # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
+            # "error: 'types.UnionType' object is not callable"
+            # This is a CLI-side issue, not our code. PreToolUse still provides skill guidance.
+            "UserPromptSubmit": [
+                HookMatcher(matcher=None, hooks=[on_user_prompt_skill_awareness]),
+            ],
+        },
+        permission_mode="bypassPermissions",
+    )
 
-        # Initialize trace dict now that session is available
-    global trace
+    # Initialize trace dict now that session is available (requires session.mcp.url)
     trace = {
         "session_info": {
             "url": session.mcp.url,
@@ -2002,7 +2005,6 @@ async def main():
     }
 
     # Configure observer to save artifacts to this workspace
-    global OBSERVER_WORKSPACE_DIR
     OBSERVER_WORKSPACE_DIR = workspace_dir
 
     # Setup Output Logging
@@ -2010,8 +2012,6 @@ async def main():
     log_file = open(run_log_path, "a", encoding="utf-8")
     sys.stdout = DualWriter(log_file, sys.stdout)
     sys.stderr = DualWriter(log_file, sys.stderr)
-
-    # Log session info now that logging is set up
 
     # Inject Workspace Path into System Prompt for Sub-Agents
     abs_workspace_path = os.path.abspath(workspace_dir)
@@ -2036,6 +2036,147 @@ async def main():
              options.system_prompt = f"## Tool Knowledge\n{knowledge_content}"
         print(f"✅ Injected Knowledge Base ({len(knowledge_content)} chars)")
 
+    print(f"\n=== Composio Session Info ===")
+    print(f"Session URL: {session.mcp.url}")
+    print(f"User ID: {user_id}")
+    print(f"Timestamp: {timestamp}")
+    print(f"============================\n")
+
+    print("=" * 80)
+    print("Composio Agent Ready")
+    print("=" * 80)
+    print()
+
+    return options, session, user_id, workspace_dir, trace
+
+
+
+async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: str):
+    """
+    Process a single user query.
+    Returns: (response_text, execution_summary)
+    """
+    global trace, start_ts 
+    
+    trace["query"] = user_input
+    trace["start_time"] = datetime.now().isoformat()
+    start_ts = time.time()
+
+    if LOGFIRE_TOKEN:
+        logfire.info("query_started", query=user_input)
+
+    # 2. Determine Complexity
+    complexity = await classify_query(client, user_input)
+
+    # 3. Route Query
+    is_simple = complexity == "SIMPLE"
+
+    final_response_text = ""
+
+    if is_simple:
+        # Try Fast Path
+        success = await handle_simple_query(client, user_input)
+        if not success:
+            is_simple = False  # Fallback to Complex Path
+        else:
+            final_response_text = "(See output above)"
+
+    if not is_simple:
+        # Complex Path (Tool Loop) - track per-request timing
+        request_start_ts = time.time()
+        iteration = 1
+        current_query = user_input
+
+        while True:
+            needs_input, auth_link, final_text = await run_conversation(
+                client, current_query, start_ts, iteration
+            )
+            final_response_text = final_text  # Capture for printing after summary
+
+            if needs_input and auth_link:
+                print(f"\n{'=' * 80}")
+                print("🔐 AUTHENTICATION REQUIRED")
+                print(f"{'=' * 80}")
+                print(f"\nPlease open this link in your browser:\n")
+                print(f"  {auth_link}\n")
+                print(
+                    "After completing authentication, press Enter to continue..."
+                )
+                input() # Non-blocking mock in headless, real input in CLI
+
+                current_query = "I have completed the authentication. Please continue with the task."
+                iteration += 1
+                continue
+            else:
+                break
+
+        # Per-request Execution Summary (shown before agent response)
+        request_end_ts = time.time()
+        request_duration = round(request_end_ts - request_start_ts, 3)
+        
+        # Collect tool calls for this request
+        request_tool_calls = [tc for tc in trace["tool_calls"] if tc.get("time_offset_seconds", 0) >= (request_start_ts - start_ts)]
+        
+        print(f"\n{'=' * 80}")
+        print("=== EXECUTION SUMMARY ===")
+        print(f"{'=' * 80}")
+        print(f"Execution Time: {request_duration} seconds")
+        print(f"Tool Calls: {len(request_tool_calls)}")
+        
+        # Check for code execution
+        code_exec_used = any(
+            any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"])
+            for tc in request_tool_calls
+        )
+        if code_exec_used:
+            print("🏭 Code execution was used")
+        
+        # Tool breakdown
+        if request_tool_calls:
+            print("\n=== TOOL CALL BREAKDOWN ===")
+            for tc in request_tool_calls:
+                marker = "🏭" if any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]) else "  "
+                print(f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}")
+        
+        print(f"{'=' * 80}")
+        
+        # Print agent's final response (with follow-up suggestions) AFTER execution summary
+        if final_response_text:
+            print(f"\n{final_response_text}")
+
+        # NEW: Intermediate Transcript Save
+        # Only save if we actually ran a conversation (not just simple path)
+        try:
+            from universal_agent import transcript_builder
+            
+            # Update stats for the snapshot
+            current_ts = time.time()
+            trace["end_time"] = datetime.now().isoformat()
+            trace["total_duration_seconds"] = round(current_ts - start_ts, 3)
+            
+            transcript_path = os.path.join(workspace_dir, "transcript.md")
+            if transcript_builder.generate_transcript(trace, transcript_path):
+                print(f"\n🎬 Intermediate transcript saved to {transcript_path}")
+        except Exception as e:
+            # Don't let transcript failure crash the agent
+            print(f"⚠️ Failed to save intermediate transcript: {e}")
+
+    # End of Turn Update
+    end_ts = time.time()
+    trace["end_time"] = datetime.now().isoformat()
+    trace["total_duration_seconds"] = round(end_ts - start_ts, 3)
+
+    return final_response_text
+
+
+async def main():
+    global trace
+
+    global trace, composio, user_id, session, options, OBSERVER_WORKSPACE_DIR
+
+    # Create main span for entire execution
+    with logfire.span("standalone_composio_test") as span:
+        options, session, user_id, workspace_dir, trace = await setup_session()
     # Extract Trace ID (Lazy import to ensure OTel is ready)
     # Extract Trace ID (Lazy import to ensure OTel is ready)
     if LOGFIRE_TOKEN:

@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  agent-bot:
+    build: .
+    container_name: universal_agent_bot
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      - ALLOWED_USER_IDS=${ALLOWED_USER_IDS}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - COMPOSIO_API_KEY=${COMPOSIO_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - LOGFIRE_TOKEN=${LOGFIRE_TOKEN}
+      - PORT=8000
+    volumes:
+      - ./AGENT_RUN_WORKSPACES:/app/AGENT_RUN_WORKSPACES
+      # Mount src for development reloading (requires uvicorn --reload)
+      - ./src:/app/src
