@@ -38,3 +38,26 @@
 - Returns the `s3key` needed for `GMAIL_SEND_EMAIL` attachments
 - Always call this BEFORE attempting to send email with attachments
 - The returned `s3key` is used directly in the attachment dict
+
+## COMPOSIO_MULTI_EXECUTE_TOOL
+
+**FORMAT IS CRITICAL**: Tool calls MUST use proper JSON with separate named parameters. **NEVER concatenate parameters into the tool name.**
+
+**Correct Example:**
+```json
+{
+  "tools": [
+    {"tool_slug": "COMPOSIO_SEARCH_WEB", "arguments": {"query": "best food processors 2025"}},
+    {"tool_slug": "COMPOSIO_SEARCH_WEB", "arguments": {"query": "Cuisinart vs Breville"}}
+  ],
+  "session_id": "my_session",
+  "current_step": "SEARCHING",
+  "next_step": "REPORT_GENERATION"
+}
+```
+
+**WRONG (causes tool_use_error):**
+```
+mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOLtools</arg_key><arg_value>[...]
+```
+This malformed XML-style concatenation will fail. Each parameter (`tools`, `session_id`, etc.) must be a separate JSON key.

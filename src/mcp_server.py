@@ -3,7 +3,12 @@ from dotenv import load_dotenv
 import os
 import sys
 import json
+import logging
 from datetime import datetime
+
+# Setup logger for MCP server
+logger = logging.getLogger("mcp_server")
+logging.basicConfig(level=logging.INFO)
 
 # Ensure src path for imports
 sys.path.append(os.path.abspath("src"))
@@ -105,6 +110,65 @@ def read_local_file(path: str) -> str:
         return content
     except Exception as e:
         return f"Error reading file: {str(e)}"
+
+
+@mcp.tool()
+def read_research_files(file_paths: list[str]) -> str:
+    """
+    Read multiple research files in a single batch call.
+    
+    Use this after reviewing research_overview.md to efficiently read 
+    the full content of selected source files for quotes and facts.
+    
+    Args:
+        file_paths: List of file paths to read (from research_overview.md listing)
+    
+    Returns:
+        Combined content of all files, separated by clear markers.
+        Each file section includes the filename and word count.
+    """
+    if not file_paths:
+        return "Error: No file paths provided"
+    
+    results = []
+    total_words = 0
+    success_count = 0
+    
+    for path in file_paths:
+        try:
+            path = fix_path_typos(path)
+            abs_path = os.path.abspath(path)
+            
+            if not os.path.exists(abs_path):
+                results.append(f"\n{'='*60}\n❌ FILE NOT FOUND: {path}\n{'='*60}\n")
+                continue
+            
+            with open(abs_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            word_count = len(content.split())
+            total_words += word_count
+            success_count += 1
+            
+            # Add clear section marker
+            filename = os.path.basename(path)
+            results.append(
+                f"\n{'='*60}\n"
+                f"📄 FILE: {filename} ({word_count:,} words)\n"
+                f"{'='*60}\n\n"
+                f"{content}"
+            )
+        except Exception as e:
+            results.append(f"\n{'='*60}\n❌ ERROR reading {path}: {str(e)}\n{'='*60}\n")
+    
+    # Add summary header
+    header = (
+        f"# Research Files Batch Read\n"
+        f"**Files read:** {success_count}/{len(file_paths)}\n"
+        f"**Total words:** {total_words:,}\n\n"
+    )
+    
+    return header + "\n".join(results)
 
 
 @mcp.tool()
@@ -333,70 +397,263 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
         "errors": [],
     }
     
-    # Check if we should use Docker API (CRAWL4AI_API_URL env var set)
-    crawl4ai_api_url = os.environ.get("CRAWL4AI_API_URL")
+    # Check if we should use Cloud API (CRAWL4AI_API_KEY env var set)
+    crawl4ai_api_key = os.environ.get("CRAWL4AI_API_KEY")
+    crawl4ai_api_url = os.environ.get("CRAWL4AI_API_URL")  # For Docker fallback
     
-    if crawl4ai_api_url:
-        # Docker mode: Use crawl4ai HTTP API
-        sys.stderr.write(f"[crawl_parallel] Using Docker API at {crawl4ai_api_url}\n")
+    if crawl4ai_api_key:
+        # Cloud API mode: Use crawl4ai-cloud.com synchronous /query endpoint
+        cloud_endpoint = "https://www.crawl4ai-cloud.com/query"
+        sys.stderr.write(f"[crawl_parallel] Using Cloud API for {len(urls)} URLs\n")
         
         try:
-            async with aiohttp.ClientSession() as session:
-                for url in urls:
-                    try:
-                        # Call crawl4ai container API
-                        api_endpoint = f"{crawl4ai_api_url}/crawl"
-                        payload = {
-                            "urls": [url],
-                            "browser_config": {
-                                "headless": True,
-                                "stealth": True,  # Match local enable_stealth=True
-                                "browser_type": "chromium"
-                            },
-                            "crawler_config": {
-                                "cache_mode": "bypass",
-                                "word_count_threshold": 10,
-                                "excluded_tags": ["nav", "footer", "header", "aside", "script", "style"],
-                                "excluded_selector": ".references, .footnotes, .citation, .bibliography, .cookie-banner, #cookie-consent, .donation, .newsletter, .signup, .promo"
-                            }
-                        }
+            import asyncio
+            
+            async def crawl_single_url(session, url):
+                """Crawl a single URL using Cloud API"""
+                payload = {
+                    "url": url,
+                    "apikey": crawl4ai_api_key,
+                    # Note: Don't use output_format:fit_markdown - returns empty for news sites
+                    "excluded_tags": ["nav", "footer", "header", "aside", "script", "style", "form"],
+                    "remove_overlay_elements": True,
+                    "word_count_threshold": 10,
+                    "cache_mode": "bypass",
+                    "magic": True,  # Anti-bot protection bypass
+                }
+                
+                try:
+                    async with session.post(cloud_endpoint, json=payload, timeout=60) as resp:
+                        if resp.status != 200:
+                            return {"url": url, "success": False, "error": f"HTTP {resp.status}"}
                         
-                        async with session.post(api_endpoint, json=payload, timeout=60) as resp:
-                            if resp.status == 200:
-                                data = await resp.json()
-                                # Extract markdown from response
-                                if data.get("results") and len(data["results"]) > 0:
-                                    result = data["results"][0]
-                                    content = result.get("markdown", "")
-                                    
-                                    # Save to file
-                                    url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
-                                    filename = f"crawl_{url_hash}.md"
-                                    filepath = os.path.join(search_results_dir, filename)
-                                    
-                                    final_content = f"# Source: {url}\n# Date: {datetime.utcnow().isoformat()}\n\n{content}"
-                                    with open(filepath, "w", encoding="utf-8") as f:
-                                        f.write(final_content)
-                                    
-                                    results_summary["successful"] += 1
-                                    results_summary["saved_files"].append({
-                                        "url": url,
-                                        "file": filename,
-                                        "path": filepath,
-                                    })
-                                else:
-                                    results_summary["failed"] += 1
-                                    results_summary["errors"].append({"url": url, "error": "No results returned"})
+                        data = await resp.json()
+                        
+                        # Cloud API returns content directly (no polling needed)
+                        if data.get("success") == False:
+                            return {"url": url, "success": False, "error": data.get("error", "Unknown error")}
+                        
+                        # Get content (Cloud API returns 'content' key)
+                        raw_content = data.get("content", "")
+                        content = raw_content
+                        
+                        # Post-process: Strip markdown links, keep just the text
+                        # [link text](url) -> link text
+                        import re
+                        content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
+                        # Also remove bare URLs that start lines
+                        content = re.sub(r'^https?://[^\s]+\s*$', '', content, flags=re.MULTILINE)
+                        # Remove image markdown ![alt](url)
+                        content = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', content)
+                        # Clean up excessive blank lines
+                        content = re.sub(r'\n{3,}', '\n\n', content)
+                        
+                        return {
+                            "url": url,
+                            "success": True,
+                            "content": content,
+                            "raw_content": raw_content,  # Keep for date extraction
+                            "metadata": data.get("metadata", {})
+                        }
+                except asyncio.TimeoutError:
+                    return {"url": url, "success": False, "error": "Timeout (60s)"}
+                except Exception as e:
+                    return {"url": url, "success": False, "error": str(e)}
+            
+            # Execute concurrent crawl (direct await since we're already async)
+            async with aiohttp.ClientSession() as session:
+                tasks = [crawl_single_url(session, url) for url in urls]
+                crawl_results = await asyncio.gather(*tasks, return_exceptions=True)
+            sys.stderr.write(f"[crawl_parallel] Cloud API returned {len(crawl_results)} results\n")
+            
+            # Process results
+            for result in crawl_results:
+                if isinstance(result, Exception):
+                    results_summary["failed"] += 1
+                    results_summary["errors"].append({"url": "unknown", "error": str(result)})
+                    continue
+                
+                url = result.get("url", "unknown")
+                
+                if result.get("success"):
+                    content = result.get("content", "")
+                    metadata = result.get("metadata", {})
+                    
+                    if content:
+                        # Detect Cloudflare/captcha blocks
+                        is_cloudflare_blocked = (
+                            len(content) < 2000 and 
+                            ("cloudflare" in content.lower() or 
+                             "verifying you are human" in content.lower() or
+                             "security of your connection" in content.lower())
+                        )
+                        if is_cloudflare_blocked:
+                            logger.warning(f"Cloudflare blocked: {url}")
+                            results_summary["failed"] += 1
+                            results_summary["errors"].append({"url": url, "error": "Cloudflare blocked"})
+                            continue
+                        
+                        # Save to file with YAML frontmatter metadata
+                        url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+                        filename = f"crawl_{url_hash}.md"
+                        filepath = os.path.join(search_results_dir, filename)
+                        
+                        # Build metadata header
+                        title = metadata.get("title") or metadata.get("og:title") or "Untitled"
+                        description = metadata.get("description") or metadata.get("og:description") or ""
+                        
+                        # Extract article date from URL pattern (e.g., /2025/12/28/)
+                        import re
+                        article_date = None
+                        
+                        # Try URL pattern first (most reliable)
+                        date_match = re.search(r'/(\d{4})/(\d{1,2})/(\d{1,2})/', url)
+                        if date_match:
+                            article_date = f"{date_match.group(1)}-{date_match.group(2).zfill(2)}-{date_match.group(3).zfill(2)}"
+                        else:
+                            date_match = re.search(r'/(\d{4})-(\d{1,2})-(\d{1,2})/', url)
+                            if date_match:
+                                article_date = f"{date_match.group(1)}-{date_match.group(2).zfill(2)}-{date_match.group(3).zfill(2)}"
+                        
+                        # Fallback: extract from raw content (before link stripping)
+                        if not article_date:
+                            raw_content = result.get("raw_content", content)
+                            # Search full content for date patterns (some sites have tons of nav bloat)
+                            # Pattern: "Month Day, Year" (e.g., December 28, 2025)
+                            months = 'January|February|March|April|May|June|July|August|September|October|November|December'
+                            match = re.search(rf'({months})\s+(\d{{1,2}}),?\s+(\d{{4}})', raw_content, re.I)
+                            if match:
+                                month_map = {'january':'01','february':'02','march':'03','april':'04','may':'05','june':'06',
+                                             'july':'07','august':'08','september':'09','october':'10','november':'11','december':'12'}
+                                article_date = f"{match.group(3)}-{month_map[match.group(1).lower()]}-{match.group(2).zfill(2)}"
                             else:
-                                results_summary["failed"] += 1
-                                results_summary["errors"].append({"url": url, "error": f"HTTP {resp.status}"})
-                                
-                    except Exception as e:
+                                # Pattern: "Day Mon Year" (e.g., 29 Dec 2025)
+                                match = re.search(r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})', raw_content, re.I)
+                                if match:
+                                    month_map = {'jan':'01','feb':'02','mar':'03','apr':'04','may':'05','jun':'06',
+                                                 'jul':'07','aug':'08','sep':'09','oct':'10','nov':'11','dec':'12'}
+                                    article_date = f"{match.group(3)}-{month_map[match.group(2).lower()]}-{match.group(1).zfill(2)}"
+                        
+                        # YAML frontmatter for rich metadata
+                        date_line = f"date: {article_date}" if article_date else "date: unknown"
+                        frontmatter = f"""---
+title: "{title.replace('"', "'")}"
+source: {url}
+{date_line}
+description: "{description[:200].replace('"', "'") if description else ''}"
+word_count: {len(content.split())}
+---
+
+"""
+                        final_content = frontmatter + content
+                        with open(filepath, "w", encoding="utf-8") as f:
+                            f.write(final_content)
+                        
+                        logger.info(f"Cloud API: Saved {len(content)} bytes for {url[:50]}")
+                        results_summary["successful"] += 1
+                        results_summary["saved_files"].append({
+                            "url": url,
+                            "file": filename,
+                            "path": filepath,
+                        })
+                    else:
                         results_summary["failed"] += 1
-                        results_summary["errors"].append({"url": url, "error": str(e)})
+                        results_summary["errors"].append({"url": url, "error": "Empty markdown"})
+                else:
+                    error_msg = result.get("error", "Crawl failed")
+                    results_summary["failed"] += 1
+                    results_summary["errors"].append({"url": url, "error": error_msg})
                         
         except Exception as e:
-            return json.dumps({"error": f"Crawl4AI API error: {str(e)}"})
+            return json.dumps({"error": f"Crawl4AI Cloud API error: {str(e)}"})
+        
+        # Generate research_overview.md - combined context-efficient file
+        if results_summary["saved_files"]:
+            try:
+                total_words = 0
+                overview_sections = []
+                
+                for i, file_info in enumerate(results_summary["saved_files"], 1):
+                    with open(file_info["path"], "r", encoding="utf-8") as f:
+                        full_content = f.read()
+                    
+                    # Parse frontmatter metadata
+                    import yaml
+                    if full_content.startswith("---"):
+                        fm_end = full_content.find("---", 4)
+                        if fm_end != -1:
+                            fm_text = full_content[4:fm_end].strip()
+                            try:
+                                metadata = yaml.safe_load(fm_text)
+                            except:
+                                metadata = {}
+                            body = full_content[fm_end + 4:].strip()
+                        else:
+                            metadata = {}
+                            body = full_content
+                    else:
+                        metadata = {}
+                        body = full_content
+                    
+                    # Count words in full file
+                    word_count = len(body.split())
+                    total_words += word_count
+                    
+                    # Create 1000-word excerpt
+                    words = body.split()
+                    excerpt = " ".join(words[:1000])
+                    if len(words) > 1000:
+                        excerpt += "..."
+                    
+                    # Build section
+                    title = metadata.get("title", "Untitled")
+                    date = metadata.get("date", "unknown")
+                    description = metadata.get("description", "")
+                    
+                    section = f"""## Source {i}
+**File:** {file_info['file']} ({word_count:,} words full)
+**Title:** {title}
+**Date:** {date}
+**URL:** {file_info['url']}
+
+### Excerpt (first 1000 words):
+{excerpt}
+
+---
+"""
+                    overview_sections.append(section)
+                
+                # Assemble overview file
+                overview_header = f"""# Research Sources Overview
+**Generated:** {datetime.utcnow().isoformat()}Z
+**Total Sources:** {len(results_summary['saved_files'])} articles
+**Total Words Available:** {total_words:,} words across all sources
+
+> **Usage Guide:** This overview contains metadata and 1000-word excerpts for each source.
+> For quotes, specific facts, and deeper analysis, read the full source files listed below.
+
+---
+
+"""
+                overview_content = overview_header + "\n".join(overview_sections)
+                overview_path = os.path.join(search_results_dir, "research_overview.md")
+                
+                with open(overview_path, "w", encoding="utf-8") as f:
+                    f.write(overview_content)
+                
+                results_summary["overview_file"] = overview_path
+                results_summary["total_words_available"] = total_words
+                logger.info(f"Created research_overview.md with {len(results_summary['saved_files'])} sources, {total_words:,} total words")
+                
+            except Exception as e:
+                logger.warning(f"Failed to create research overview: {e}")
+            
+        return json.dumps(results_summary, indent=2)
+    
+    elif crawl4ai_api_url:
+        # Docker API mode (legacy): Use crawl4ai Docker container
+        sys.stderr.write(f"[crawl_parallel] Using Docker API at {crawl4ai_api_url} for {len(urls)} URLs\n")
+        return json.dumps({"error": "Docker API mode deprecated. Set CRAWL4AI_API_KEY for Cloud API or remove CRAWL4AI_API_URL for local mode."})
             
         return json.dumps(results_summary, indent=2)
     

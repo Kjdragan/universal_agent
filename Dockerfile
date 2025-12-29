@@ -21,7 +21,7 @@ COPY uv.lock .
 RUN uv sync --frozen
 
 # Install additional bot dependencies
-RUN uv pip install uvicorn python-telegram-bot nest_asyncio
+RUN uv pip install uvicorn python-telegram-bot nest_asyncio aiohttp
 
 # Copy Source Code
 COPY src /app/src
@@ -37,8 +37,11 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 # Create a non-root user (Claude SDK refuses --dangerously-skip-permissions as root)
 RUN useradd -m -s /bin/bash agentuser && \
-    mkdir -p /app/AGENT_RUN_WORKSPACES && \
     chown -R agentuser:agentuser /app
+
+# Create workspace directory with correct ownership (AFTER chown)
+RUN mkdir -p /app/AGENT_RUN_WORKSPACES && \
+    chown agentuser:agentuser /app/AGENT_RUN_WORKSPACES
 
 USER agentuser
 

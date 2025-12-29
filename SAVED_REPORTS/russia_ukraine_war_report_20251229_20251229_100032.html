@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Russia-Ukraine War Report: December 2025</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #1a1a1a;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        header {
+            background: linear-gradient(135deg, #0055a5 0%, #003366 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+        
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        header .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        
+        header .date {
+            margin-top: 15px;
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 20px;
+            display: inline-block;
+            font-size: 0.95em;
+        }
+        
+        .content {
+            padding: 40px;
+        }
+        
+        .executive-summary {
+            background: #f8f9fa;
+            border-left: 5px solid #0055a5;
+            padding: 25px;
+            margin-bottom: 40px;
+            border-radius: 8px;
+        }
+        
+        .executive-summary h2 {
+            color: #0055a5;
+            margin-bottom: 15px;
+            font-size: 1.8em;
+        }
+        
+        .executive-summary p {
+            margin-bottom: 15px;
+            font-size: 1.05em;
+        }
+        
+        .key-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+        
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        .metric-card .number {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .metric-card .label {
+            font-size: 0.95em;
+            opacity: 0.9;
+        }
+        
+        .section {
+            margin-bottom: 50px;
+        }
+        
+        .section h2 {
+            color: #0055a5;
+            border-bottom: 3px solid #0055a5;
+            padding-bottom: 10px;
+            margin-bottom: 25px;
+            font-size: 2em;
+        }
+        
+        .subsection {
+            margin-bottom: 30px;
+        }
+        
+        .subsection h3 {
+            color: #333;
+            font-size: 1.5em;
+            margin-bottom: 15px;
+            padding-left: 15px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .highlight-box {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .highlight-box.warning {
+            background: #f8d7da;
+            border-color: #dc3545;
+        }
+        
+        .highlight-box.info {
+            background: #d1ecf1;
+            border-color: #17a2b8;
+        }
+        
+        .highlight-box h4 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+        
+        ul {
+            margin-left: 25px;
+            margin-bottom: 20px;
+        }
+        
+        li {
+            margin-bottom: 12px;
+            line-height: 1.7;
+        }
+        
+        .source-list {
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 8px;
+            margin-top: 30px;
+        }
+        
+        .source-list h3 {
+            color: #0055a5;
+            margin-bottom: 20px;
+        }
+        
+        .source-list ul {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+        }
+        
+        .source-list li {
+            padding: 10px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .source-list li:last-child {
+            border-bottom: none;
+        }
+        
+        .quote {
+            font-style: italic;
+            color: #555;
+            border-left: 4px solid #667eea;
+            padding-left: 20px;
+            margin: 20px 0;
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-radius: 5px;
+        }
+        
+        .timeline {
+            position: relative;
+            padding-left: 30px;
+            margin: 25px 0;
+        }
+        
+        .timeline::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 3px;
+            background: #0055a5;
+        }
+        
+        .timeline-item {
+            position: relative;
+            margin-bottom: 25px;
+            padding-left: 20px;
+        }
+        
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -36px;
+            top: 5px;
+            width: 12px;
+            height: 12px;
+            background: #667eea;
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: 0 0 0 3px #667eea;
+        }
+        
+        .timeline-date {
+            font-weight: bold;
+            color: #0055a5;
+            margin-bottom: 5px;
+        }
+        
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 1.8em;
+            }
+            
+            .content {
+                padding: 20px;
+            }
+            
+            .key-metrics {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Russia-Ukraine War: Latest Developments</h1>
+            <div class="subtitle">Comprehensive Analysis Report</div>
+            <div class="date">December 18-29, 2025</div>
+        </header>
+        
+        <div class="content">
+            <!-- Executive Summary -->
+            <div class="executive-summary">
+                <h2>Executive Summary</h2>
+                <p>As December 2025 draws to a close, the Russia-Ukraine war enters its fourth year with significant diplomatic developments alongside continued intense fighting. Peace negotiations led by the United States have progressed substantially, with a 20-point peace framework reportedly "90% complete" and discussions advancing on security guarantees for Ukraine. Meanwhile, Russian forces maintain steady territorial gains in eastern Ukraine, capturing approximately 6,460 square kilometers in 2025 alone. The humanitarian situation remains critical, particularly following massive Russian drone and missile attacks on Ukrainian energy infrastructure during the Christmas period.</p>
+                
+                <div class="key-metrics">
+                    <div class="metric-card">
+                        <div class="number">1,404</div>
+                        <div class="label">Days of War</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="number">6,460</div>
+                        <div class="label">sq km Captured by Russia in 2025</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="number">90%</div>
+                        <div class="label">Peace Framework Complete</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="number">15</div>
+                        <div class="label">Years of Security Guarantees Proposed</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Peace Negotiations Section -->
+            <div class="section">
+                <h2>Peace Negotiations: Major Progress but Unresolved Issues</h2>
+                
+                <div class="subsection">
+                    <h3>Trump-Zelenskyy Meeting Advances Peace Framework</h3>
+                    <p>On December 28, 2025, Ukrainian President Volodymyr Zelenskyy met with US President Donald Trump at his Mar-a-Lago resort in Florida, marking what both leaders described as significant progress toward ending the war. Trump stated that Ukraine and Russia were "closer than ever before" to a peace deal, though he acknowledged negotiations could still fall apart.</p>
+                    
+                    <div class="quote">
+                        "We're getting a lot closer, maybe very close" to a deal to end the war in Ukraine. - President Donald Trump
+                    </div>
+                    
+                    <p>According to Zelenskyy, the 20-point peace framework is now "90% ready," with progress reported on two of the most contentious issues: security guarantees for Ukraine and the division of eastern Ukraine's Donbas region that Russia has sought to capture.</p>
+                </div>
+                
+                <div class="subsection">
+                    <h3>Security Guarantees: A Cornerstone of Any Deal</h3>
+                    <p>A critical component of the emerging agreement is the provision of security guarantees for Ukraine. Key developments include:</p>
+                    <ul>
+                        <li><strong>15-Year Framework:</strong> The United States has offered Ukraine security guarantees for 15 years, which Zelenskyy says could be extended. Ukraine is seeking a longer commitment of 30, 40, or even 50 years to ensure effective deterrence against future Russian aggression.</li>
+                        <li><strong>NATO-like Protection:</strong> Zelenskyy has indicated Ukraine would be willing to drop its bid to join NATO if it received bilateral security guarantees with protections similar to NATO's Article 5, which considers an attack on one member as an attack against all.</li>
+                        <li><strong>International Troop Presence:</strong> Zelenskyy considers the presence of foreign troops in Ukraine to be a necessary part of security guarantees. This has drawn sharp warnings from Russian Foreign Minister Sergei Lavrov, who stated that any European troop contingents deployed to Ukraine would become "legitimate targets" for Russia's forces.</li>
+                        <li><strong>Coalition of the Willing:</strong> European leaders, including those from France, Germany, the UK, and eight other countries, have indicated readiness to lead a "multinational force" in Ukraine as part of the US proposal. French President Emmanuel Macron announced that a meeting would be held in Paris in early January to finalize concrete contributions.</li>
+                    </ul>
+                </div>
+                
+                <div class="subsection">
+                    <h3>The Donbas Question: Territory Remains the Main Obstacle</h3>
+                    <p>The future of eastern Ukraine's Donbas region remains the primary unresolved issue. According to reports:</p>
+                    <ul>
+                        <li>Zelenskyy has proposed that Ukraine would be willing to withdraw troops from the country's eastern industrial heartland if Moscow also pulls back and the area becomes a demilitarized zone monitored by international forces.</li>
+                        <li>A similar arrangement could be possible for the area around the Zaporizhzhia nuclear power plant, currently under Russian control.</li>
+                        <li>Russia's position remains that Ukraine must withdraw its forces from the eastern Donbas region that it still controls. The Kremlin insists on recognition of its annexation of four Ukrainian regions (Donetsk, Luhansk, Kherson, and Zaporizhzhia) and Crimea, illegally annexed in 2014.</li>
+                        <li>Russia's Kommersant newspaper reported that Putin told some Russian businessmen he might be open to swapping some territory controlled by Russian forces elsewhere in Ukraine, but in exchange wanted the whole of the Donbas.</li>
+                    </ul>
+                </div>
+                
+                <div class="highlight-box warning">
+                    <h4>Key Dispute: Territorial Integrity vs. Conquest</h4>
+                    <p>The fundamental disagreement remains: Ukraine insists on preserving its territorial integrity within its internationally recognized borders, while Russia seeks to retain control over approximately 18% of Ukrainian territory it has captured, including Crimea and parts of the four eastern and southern regions it claims to have annexed.</p>
+                </div>
+            </div>
+            
+            <!-- Military Situation Section -->
+            <div class="section">
+                <h2>Military Situation: Russia Makes Steady Advances</h2>
+                
+                <div class="subsection">
+                    <h3>Russian Territorial Gains in 2025</h3>
+                    <p>According to Russian Chief of the General Staff Valery Gerasimov, Russian forces have captured substantial territory in Ukraine during 2025:</p>
+                    <ul>
+                        <li><strong>6,460 square kilometers</strong> (2,494 square miles) of Ukrainian territory captured</li>
+                        <li><strong>334 villages</strong> taken under Russian control</li>
+                        <li>Russia's Defense Ministry claimed control of additional settlements in the Donetsk region, including Myrnohrad, Artemivka, Rodynske, and Vilne</li>
+                    </ul>
+                    
+                    <p>However, the Institute for the Study of War (ISW) provides important context to these gains, noting that Russian forces are currently unable to build out a strategic reserve and will likely be constrained to "grinding, slow advances." ISW estimates that at the current rate of advance (approximately 14 square kilometers per day in 2025), it would take Russian forces until April 2029 to seize the rest of the four oblasts they claim to have annexed.</p>
+                    
+                    <div class="highlight-box info">
+                        <h4>Reality Check on Russian Advances</h4>
+                        <p>ISW analysts note that "Putin and high-ranking Russian military commanders continue to aggrandize tactical details to create the false impression that Ukrainian defenses across the frontline are on the verge of collapse." They point out that the calculation to capture the remaining territories doesn't account for major obstacles such as crossing the Dnipro River and capturing major cities like Zaporizhzhia city (pre-war population: 710,000) and Kherson city (pre-war population: 280,000).</p>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3>Massive Russian Attacks on Ukrainian Infrastructure</h3>
+                    <p>During the Christmas period, Russia launched devastating attacks on Ukrainian energy infrastructure:</p>
+                    
+                    <div class="timeline">
+                        <div class="timeline-item">
+                            <div class="timeline-date">December 27, 2025</div>
+                            <div>Russian forces launched a "massive" attack on Kyiv with nearly 500 drones and 40 missiles, targeting energy and civilian infrastructure. The attack killed at least one person, wounded 27 others, and cut power to more than a million households in and around Kyiv. More than 40% of residential buildings in the capital were left without heat as temperatures hovered around 0°C (32°F).</div>
+                        </div>
+                        
+                        <div class="timeline-item">
+                            <div class="timeline-date">December 28-29, 2025</div>
+                            <div>Another massive barrage targeted Kyiv and its suburbs, killing one person and wounding dozens while knocking out heating and electricity for hundreds of thousands of people. The attack targeted energy facilities across Ukraine, forcing emergency power cuts across the capital.</div>
+                        </div>
+                        
+                        <div class="timeline-item">
+                            <div class="timeline-date">December 24, 2025</div>
+                            <div>Russian forces began a "massive attack" on Ukraine, killing three people including a four-year-old girl, and targeting 13 regions with 650 drones and 30 missiles. Ukrainian officials reported that F-16 fighter pilots shot down 621 of 673 Russian aerial targets.</div>
+                        </div>
+                    </div>
+                    
+                    <p>These attacks represent a clear pattern of Russia targeting Ukraine's energy infrastructure during winter months, a tactic that has drawn repeated condemnation from Ukrainian and international officials.</p>
+                </div>
+                
+                <div class="subsection">
+                    <h3>Ukrainian Strikes on Russian Territory</h3>
+                    <p>Ukraine has continued its campaign of drone strikes targeting Russian infrastructure:</p>
+                    <ul>
+                        <li><strong>December 28-29:</strong> Russian Foreign Minister Lavrov claimed that Ukraine attacked Putin's state residence in the Novgorod region with 91 long-range drones. Ukraine has denied this accusation, with Zelenskyy calling it a "lie" and suggesting Moscow was preparing the ground to strike government buildings in Kyiv.</li>
+                        <li><strong>December 19:</strong> Ukrainian drones hit a tanker vessel in the Russian port of Rostov-on-Don, killing three people including two crew members.</li>
+                        <li><strong>December 25:</strong> An explosion in Moscow killed three people, including two police officers. Ukraine's military intelligence (GUR) told the Associated Press the attack was part of a Ukrainian operation and the police officers were targeted for taking part in Russia's war in Ukraine.</li>
+                        <li><strong>Ongoing:</strong> Ukrainian drones have targeted Russian oil refineries and energy infrastructure, including strikes on the Syzran oil refinery in Russia's Samara region and the Slavyansk oil refinery in Krasnodar region.</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <!-- International Developments Section -->
+            <div class="section">
+                <h2>International Developments</h2>
+                
+                <div class="subsection">
+                    <h3>European Support and Coordination</h3>
+                    <ul>
+                        <li><strong>European Unity:</strong> European Commission President Ursula von der Leyen stated that Europe was ready to keep working with Ukraine and the US, emphasizing that having "ironclad security guarantees" would be of "paramount" importance.</li>
+                        <li><strong>German Position:</strong> Germany welcomed Trump's efforts toward achieving a lasting and just peace in Ukraine, with Chancellor Friedrich Merz noting that Germany is Ukraine's largest donor of military aid after the US in absolute terms.</li>
+                        <li><strong>Canadian Support:</strong> Canadian Prime Minister Mark Carney met with Zelenskyy in Halifax and announced $1.83 billion in additional economic aid to Ukraine, denouncing Russia's latest attacks as "barbarism."</li>
+                        <li><strong>Polish Actions:</strong> Poland deployed fighter jets to intercept a Russian reconnaissance aircraft flying near its airspace over the Baltic Sea, while also reporting dozens of aerial objects believed to be balloons used by smugglers approaching from Belarus.</li>
+                    </ul>
+                </div>
+                
+                <div class="subsection">
+                    <h3>US-Russia Communication</h3>
+                    <p>Prior to the Trump-Zelenskyy meeting, Trump and Putin held a phone call lasting more than two hours, which Trump described as "excellent" and "productive." According to Kremlin foreign policy aide Yury Ushakov, the call was "friendly" and Putin told Trump that a 60-day ceasefire proposed by the European Union and Ukraine would simply prolong the war.</p>
+                    
+                    <p>Kremlin spokesman Dmitry Peskov indicated that another Trump-Putin phone call would happen "very soon" after the Trump-Zelenskyy meeting.</p>
+                </div>
+                
+                <div class="subsection">
+                    <h3>Sanctions and Economic Pressure</h3>
+                    <ul>
+                        <li><strong>EU Financial Support:</strong> European Union leaders agreed to provide an interest-free loan to Ukraine to meet its military and economic needs for the next two years, using funds from frozen Russian assets rather than EU borrowing.</li>
+                        <li><strong>British Sanctions:</strong> Britain imposed more sanctions targeting Russian oil companies, including 24 individuals and entities, in what it described as a move against Russia's largest remaining unsanctioned oil companies.</li>
+                        <li><strong>Russian Legal Action:</strong> Russia's central bank has filed a lawsuit seeking $230 billion in damages from Belgian depository Euroclear over plans to use frozen Russian assets to support Ukraine.</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <!-- Humanitarian Impact Section -->
+            <div class="section">
+                <h2>Humanitarian Impact</h2>
+                
+                <div class="subsection">
+                    <h3>Civilian Casualties and Displacement</h3>
+                    <p>The war continues to inflict severe suffering on civilians:</p>
+                    <ul>
+                        <li><strong>Energy Infrastructure:</strong> Millions of Ukrainians face winter without reliable electricity or heating due to Russian attacks on energy infrastructure. The situation is particularly dire in frontline regions.</li>
+                        <li><strong>Environmental Damage:</strong> A sunflower oil spill caused by Russian aerial bombardments contaminated the shoreline around Odesa, killing wildlife and forcing the temporary closure of the Pivdenny port.</li>
+                        <li><strong>Attacks on Civilians:</strong> Russian glide bomb attacks on apartment blocks in Zaporizhzhia wounded 26 people, including a child, while drone attacks on civilian areas continue to cause casualties.</li>
+                    </ul>
+                </div>
+                
+                <div class="subsection">
+                    <h3>Mariupol Theater Reopens Under Russian Occupation</h3>
+                    <p>In a controversial development, the Mariupol Drama Theater, which became a symbol of Russian siege on the city in 2022 when hundreds of civilians were sheltering in its basement during an airstrike, has reopened under Russian occupation. According to Amnesty International, at least 12 people were killed in Russia's bombings of the theater in 2022. The reopening has been described as part of Russian efforts to normalize its occupation of the city.</p>
+                </div>
+            </div>
+            
+            <!-- Russian Domestic Situation Section -->
+            <div class="section">
+                <h2>Russian Domestic Situation</h2>
+                
+                <div class="subsection">
+                    <h3>Military Mobilization and War Costs</h3>
+                    <ul>
+                        <li><strong>Conscription:</strong> Russia's autumn 2025 military conscription has concluded with 135,000 people drafted into military service, according to the Russian Defense Ministry.</li>
+                        <li><strong>War Expenditure:</strong> Russia will spend 5.1% of its GDP on the war in Ukraine in 2025, amounting to approximately 11 trillion rubles ($136 billion) according to Defense Minister Andrei Belousov.</li>
+                        <li><strong>Defense Production:</strong> Russia is delaying exports of Russian-made weapons and military equipment to prioritize deliveries to its own armed forces, according to First Deputy Prime Minister Denis Manturov.</li>
+                    </ul>
+                </div>
+                
+                <div class="subsection">
+                    <h3>Legal Maneuvers</h3>
+                    <p>President Putin signed into law changes that give Russia the right to ignore judgments in criminal cases issued by foreign and international courts. This appears to be a response to initiatives to prosecute Russian officials and military officers for alleged war crimes in Ukraine, including the International Criminal Court's arrest warrant for Putin issued in March 2023 for allegedly illegally deporting hundreds of children from Ukraine.</p>
+                </div>
+                
+                <div class="subsection">
+                    <h3>Public Opinion</h3>
+                    <p>According to Russia's state pollster VTsIOM, a majority of Russians expect the war in Ukraine to end in 2026. The poll found that 70% of 1,600 respondents saw 2026 as a more "successful" year for Russia than 2025, while for 55% that hope was linked to a possible end to Russia's war in Ukraine.</p>
+                </div>
+            </div>
+            
+            <!-- Analysis and Outlook Section -->
+            <div class="section">
+                <h2>Analysis and Outlook</h2>
+                
+                <div class="subsection">
+                    <h3>Key Challenges for Peace</h3>
+                    <div class="highlight-box warning">
+                        <h4>Fundamental Obstacles Remain</h4>
+                        <p>Despite progress in negotiations, several fundamental issues remain unresolved:</p>
+                        <ul>
+                            <li><strong>Territorial Disputes:</strong> The question of who controls Donbas and other Russian-occupied territories remains the primary sticking point.</li>
+                            <li><strong>Security Guarantees:</strong> The duration and nature of security guarantees, including whether foreign troops will be deployed in Ukraine, remains contentious.</li>
+                            <li><strong>Zaporizhzhia Nuclear Power Plant:</strong> The status of Europe's largest nuclear facility, currently under Russian control, remains unresolved.</li>
+                            <li><strong>Ukrainian Public Approval:</strong> Zelenskyy has indicated that any peace agreement would need to be approved by Ukraine's parliament or by a referendum.</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="subsection">
+                    <h3>Russia's Strategic Calculus</h3>
+                    <p>Russia continues to signal that it believes it has the military advantage. Putin has stated that Russia is "confidently advancing" in Ukraine and would take more land by force if Ukraine and its European allies did not engage with US proposals for a peace settlement. The televised meetings between Putin and military commanders, timed to coincide with diplomatic meetings between US and Ukrainian leaders, appear designed to influence negotiations and project Russian strength.</p>
+                    
+                    <p>However, the Institute for the Study of War notes that Russian forces are "currently unable to build out a strategic reserve and will therefore likely be constrained to grinding, slow advances." The human cost of these advances has been enormous, with an estimated 382,000 Russian killed and injured during 2025 alone.</p>
+                </div>
+                
+                <div class="subsection">
+                    <h3>Ukraine's Dilemma</h3>
+                    <p>Ukraine faces a difficult strategic situation. While diplomatic negotiations offer hope for ending the war, any agreement that cedes territory to Russia would represent a significant concession. Zelenskyy has maintained that Ukraine cannot be considered truly at peace without security guarantees, given the risk of renewed aggression from Russia. The continued Russian attacks on civilian infrastructure, particularly energy facilities, demonstrate that Russia is willing to continue applying pressure even as negotiations progress.</p>
+                </div>
+                
+                <div class="subsection">
+                    <h3>The Path Forward</h3>
+                    <p>The coming weeks will be critical. Trump has indicated that "in a few weeks, we will know one way or the other" whether the negotiations will succeed. The planned meeting of European leaders in Paris in early January to finalize concrete contributions to security guarantees will be an important test of Western unity and commitment to Ukraine's security.</p>
+                    
+                    <p>However, the fundamental asymmetry in the situation remains: Russia continues to make incremental territorial gains while Ukraine seeks security guarantees that may not fully restore its territorial integrity. The question of whether any agreement can achieve both lasting peace and justice for Ukraine remains unanswered.</p>
+                </div>
+            </div>
+            
+            <!-- Sources Section -->
+            <div class="source-list">
+                <h3>Sources</h3>
+                <ul>
+                    <li><strong>Al Jazeera</strong> - Daily war coverage (December 18-29, 2025)</li>
+                    <li><strong>The Guardian</strong> - Live coverage and analysis (December 29, 2025)</li>
+                    <li><strong>NPR</strong> - Peace negotiations reporting (December 28, 2025)</li>
+                    <li><strong>Deutsche Welle (DW)</strong> - Live blog and diplomatic coverage (December 28-29, 2025)</li>
+                    <li><strong>Institute for the Study of War (ISW)</strong> - Military assessments (December 26-28, 2025)</li>
+                    <li><strong>PBS NewsHour</strong> - Analysis of US-Ukraine talks (December 28, 2025)</li>
+                    <li><strong>Associated Press</strong> - Reporting via multiple outlets</li>
+                    <li><strong>Reuters</strong> - Regional security and energy coverage</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

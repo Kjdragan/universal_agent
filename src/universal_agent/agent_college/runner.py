@@ -1,0 +1,98 @@
+import asyncio
+import logging
+import os
+import signal
+import sys
+from datetime import datetime
+
+# Adjust path to find src
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
+
+from src.universal_agent.agent_college.critic import CriticAgent
+from src.universal_agent.agent_college.professor import ProfessorAgent
+from src.Memory_System.manager import MemoryManager
+
+import logfire
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [AgentCollege] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+# Configure Logfire
+logfire.configure(service_name="agent-college-worker")
+logfire.instrument_logging()
+
+from src.universal_agent.agent_college.logfire_reader import LogfireReader
+
+async def main():
+    logger.info("🎓 Agent College Worker Starting...")
+    
+    # 1. Initialize Memory
+    try:
+        memory_manager = MemoryManager()
+        logger.info("✅ Memory System connected.")
+    except Exception as e:
+        logger.error(f"❌ Failed to connect to Memory System: {e}")
+        return
+
+    # 2. Initialize Agents & Logfire
+    try:
+        critic = CriticAgent(memory_manager)
+        professor = ProfessorAgent(memory_manager)
+        reader = LogfireReader()
+        logger.info("✅ Critic, Professor & Logfire Reader initialized.")
+    except Exception as e:
+        logger.error(f"❌ Failed to initialize components: {e}")
+        return
+
+    # 3. Main Loop
+    logger.info("🚀 Agent College is active and monitoring...")
+    
+    running = True
+    processed_traces = set()
+    
+    def signal_handler(sig, frame):
+        nonlocal running
+        logger.info("🛑 Shutdown signal received.")
+        running = False
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    while running:
+        try:
+            # Poll Logfire for recent failures
+            failures = reader.get_failures(limit=5)
+            
+            for fail in failures:
+                tid = fail.get('trace_id')
+                if tid and tid not in processed_traces:
+                    # New failure found!
+                    msg = f"Exception: {fail.get('exception_type')}: {fail.get('exception_message')}"
+                    logger.info(f"🔍 Critic analyzing trace {tid}: {msg}")
+                    
+                    # Propose correction to Memory
+                    result = critic.propose_correction(tid, msg)
+                    logger.info(f"   -> {result}")
+                    
+                    processed_traces.add(tid)
+            
+            # Keep set size manageable
+            if len(processed_traces) > 1000:
+                processed_traces = set(list(processed_traces)[-500:])
+
+            # Sleep
+            await asyncio.sleep(60) 
+            
+        except Exception as e:
+            logger.error(f"Error in main loop: {e}")
+            await asyncio.sleep(5)
+
+    logger.info("👋 Agent College Worker Shutting Down.")
+
+if __name__ == "__main__":
+    asyncio.run(main())

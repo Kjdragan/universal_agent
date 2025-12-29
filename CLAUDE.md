@@ -114,6 +114,7 @@ The Composio Planner (`COMPOSIO_SEARCH_TOOLS` / `COMPOSIO_MULTI_EXECUTE_TOOL`) i
 
 **Toolkit Bans**: Session is configured with `toolkits={"disable": ["firecrawl", "exa"]}` so `COMPOSIO_SEARCH_TOOLS` won't recommend external crawlers—use our `mcp__local_toolkit__crawl_parallel` instead.
 
+
 ## Sub-Agent Guidelines
 
 **✅ SubagentStop Hook Pattern**

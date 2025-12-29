@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import Application, CommandHandler
+from telegram.request import HTTPXRequest
 import os
 
 from .config import TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, WEBHOOK_URL, PORT
@@ -27,35 +28,58 @@ async def lifespan(app: FastAPI):
     agent_adapter = AgentAdapter()
     await agent_adapter.initialize()
     
-    # 2. Initialize Telegram Bot
-    ptb_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    # 2. Initialize Telegram Bot with increased timeouts
+    # Custom request with longer timeouts to avoid TimedOut errors
+    request = HTTPXRequest(
+        connect_timeout=30.0,  # Increased from default 5.0
+        read_timeout=30.0,     # Increased from default 5.0
+        write_timeout=30.0,    # Increased from default 5.0
+        pool_timeout=30.0,     # Increased from default 1.0
+    )
     
-    # 3. Setup Task Manager with Notification Callback
+    ptb_app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .request(request)
+        .get_updates_request(request)  # Also for receiving updates
+        .build()
+    )
+    
+    # 3. Setup Task Manager with Notification Callback (with retry)
     async def notify_user(task):
-        try:
-            msg = f"Task Update: `{task.id[:8]}`\nStatus: {task.status.upper()}"
-            if task.status == "completed":
-                 res_preview = str(task.result)[:500] + ("..." if len(str(task.result)) > 500 else "")
-                 msg += f"\n\n**Result Preview:**\n{res_preview}"
-            elif task.status == "error":
-                msg += f"\n\nError: {task.result}"
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                msg = f"Task Update: `{task.id[:8]}`\nStatus: {task.status.upper()}"
+                if task.status == "completed":
+                     res_preview = str(task.result)[:500] + ("..." if len(str(task.result)) > 500 else "")
+                     msg += f"\n\n**Result Preview:**\n{res_preview}"
+                elif task.status == "error":
+                    msg += f"\n\nError: {task.result}"
 
-            await ptb_app.bot.send_message(chat_id=task.user_id, text=msg, parse_mode="Markdown")
-            
-            # Send Log File if completed or error
-            if task.status in ["completed", "error"] and task.log_file and os.path.exists(task.log_file):
-                try:
-                     await ptb_app.bot.send_document(
-                        chat_id=task.user_id,
-                        document=open(task.log_file, 'rb'),
-                        filename=f"task_{task.id[:8]}.log",
-                        caption=f"📝 Execution Log for {task.id[:8]}"
-                    )
-                except Exception as e:
-                    print(f"⚠️ Failed to send log: {e}")
+                await ptb_app.bot.send_message(chat_id=task.user_id, text=msg, parse_mode="Markdown")
+                
+                # Send Log File if completed or error
+                if task.status in ["completed", "error"] and task.log_file and os.path.exists(task.log_file):
+                    try:
+                         await ptb_app.bot.send_document(
+                            chat_id=task.user_id,
+                            document=open(task.log_file, 'rb'),
+                            filename=f"task_{task.id[:8]}.log",
+                            caption=f"📝 Execution Log for {task.id[:8]}"
+                        )
+                    except Exception as e:
+                        print(f"⚠️ Failed to send log: {e}")
+                
+                # Success - break retry loop
+                break
 
-        except Exception as e:
-            print(f"⚠️ Notification failed: {e}")
+            except Exception as e:
+                print(f"⚠️ Notification attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)  # Wait before retry
+                else:
+                    print(f"❌ All notification attempts failed for task {task.id[:8]}")
 
     task_manager = TaskManager(status_callback=notify_user)
     

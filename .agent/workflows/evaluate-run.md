@@ -3,14 +3,23 @@ description: Evaluate the latest run traces using LogFire MCP and agent workspac
 ---
 
 1.  **Identify Latest Run**
-    *   List the `AGENT_RUN_WORKSPACES` directory.
+    *   **For local runs**: List the `AGENT_RUN_WORKSPACES` directory in the repo root.
+    *   **For Docker/Telegram runs**: List the Docker container's temp directory:
+        ```bash
+        docker exec universal_agent_bot ls -la /tmp/AGENT_RUN_WORKSPACES/
+        ```
     *   Identify the most recent session directory (e.g., `session_YYYYMMDD_HHMMSS`).
     *   Set this as the `TARGET_SESSION`.
+    *   **Note**: For Docker runs, prefix all file access commands with `docker exec universal_agent_bot`.
 
 2.  **Extract Run Metadata**
-    *   Read `TARGET_SESSION/run.log` or `trace.json`.
-    *   Extract the **Trace ID**.
+    *   Read the **FULL** `TARGET_SESSION/run.log` file (use view_file without line limits).
+    *   > [!IMPORTANT]
+    *   > You MUST read the entire log file, not just the first portion. Critical errors often appear mid-file (e.g., malformed tool calls, recovery loops, context overflow).
+    *   Extract the **Trace ID** from the log header.
     *   Extract the **Start Time** and **End Time**.
+    *   Note any `tool_use_error`, `Error:`, or malformed tool names (e.g., `TOOLname</arg_key>`).
+
 
 3.  **Analyze Logfire Traces**
     *   Use the `mcp_logfire_arbitrary_query` tool to analyze the `Trace ID`.

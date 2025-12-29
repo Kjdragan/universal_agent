@@ -9,6 +9,8 @@ services:
     ports:
       - "11235:11235"
     shm_size: "2gb"
+    environment:
+      - CRAWL4AI_API_TOKEN=universal_agent_token # API token for authentication
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:11235/health" ]
       interval: 30s
@@ -28,9 +30,11 @@ services:
     environment:
       - PORT=8000
       - CRAWL4AI_API_URL=http://crawl4ai:11235 # Internal Docker network URL
+      - CRAWL4AI_API_TOKEN=universal_agent_token # Must match crawl4ai service token
     volumes:
       - ./AGENT_RUN_WORKSPACES:/app/AGENT_RUN_WORKSPACES
       - ./src:/app/src
       - ./Memory_System:/app/Memory_System
+      - ./Memory_System_Data:/app/Memory_System/data
     depends_on:
       - crawl4ai
