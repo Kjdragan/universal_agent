@@ -324,6 +324,14 @@ To ensure high-quality output, choose your tool based on your source file format
     doc.build(story)
     ```
 
+    ### ⚠️ Critical Implementation Rules
+    1.  **Absolute Paths**: When generating Python scripts, ALWAYS save to `{workspace_path}/work_products/` and execute using the **Full Absolute Path**.
+        *   ❌ `python create_pdf.py` (Unsafe - relies on CWD)
+        *   ✅ `python /abs/path/to/work_products/create_pdf.py`
+    2.  **Code Syntax**: Be extremely careful with f-strings in generated code.
+        *   ❌ `f"• {source"` (SyntaxError)
+        *   ✅ `f"• {source}"`
+
 ### Check Availability
 Before running, verify the tool exists:
 ```bash

@@ -715,7 +715,7 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
 
 
 @mcp.tool()
-async def finalize_research_corpus(session_dir: str) -> str:
+async def finalize_research(session_dir: str) -> str:
     """
     AUTOMATED RESEARCH PIPELINE:
     1. Scans 'search_results/' for JSON search outputs.
