@@ -477,13 +477,13 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                         # Post-process: Strip markdown links, keep just the text
                         # [link text](url) -> link text
                         import re
-                        content = re.sub(r'\\[([^\\]]+)\\]\\([^)]+\\)', r'\\1', content)
+                        content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
                         # Also remove bare URLs that start lines
-                        content = re.sub(r'^https?://[^\\s]+\\s*$', '', content, flags=re.MULTILINE)
+                        content = re.sub(r'^https?://[^\s]+\s*$', '', content, flags=re.MULTILINE)
                         # Remove image markdown ![alt](url)
-                        content = re.sub(r'!\\[[^\\]]*\\]\\([^)]+\\)', '', content)
+                        content = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', content)
                         # Clean up excessive blank lines
-                        content = re.sub(r'\\n{3,}', '\\n\\n', content)
+                        content = re.sub(r'\n{3,}', '\n\n', content)
                         
                         return {
                             "url": url,
@@ -544,11 +544,11 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                         article_date = None
                         
                         # Try URL pattern first (most reliable)
-                        date_match = re.search(r'/(\\d{4})/(\\d{1,2})/(\\d{1,2})/', url)
+                        date_match = re.search(r'/(\d{4})/(\d{1,2})/(\d{1,2})/', url)
                         if date_match:
                             article_date = f"{date_match.group(1)}-{date_match.group(2).zfill(2)}-{date_match.group(3).zfill(2)}"
                         else:
-                            date_match = re.search(r'/(\\d{4})-(\\d{1,2})-(\\d{1,2})/', url)
+                            date_match = re.search(r'/(\d{4})-(\d{1,2})-(\d{1,2})/', url)
                             if date_match:
                                 article_date = f"{date_match.group(1)}-{date_match.group(2).zfill(2)}-{date_match.group(3).zfill(2)}"
                         
@@ -558,14 +558,14 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                             # Search full content for date patterns (some sites have tons of nav bloat)
                             # Pattern: "Month Day, Year" (e.g., December 28, 2025)
                             months = 'January|February|March|April|May|June|July|August|September|October|November|December'
-                            match = re.search(rf'({months})\\s+(\\d{{1,2}}),?\\s+(\\d{{4}})', raw_content, re.I)
+                            match = re.search(rf'({months})\s+(\d{{1,2}}),?\s+(\d{{4}})', raw_content, re.I)
                             if match:
                                 month_map = {'january':'01','february':'02','march':'03','april':'04','may':'05','june':'06',
                                              'july':'07','august':'08','september':'09','october':'10','november':'11','december':'12'}
                                 article_date = f"{match.group(3)}-{month_map[match.group(1).lower()]}-{match.group(2).zfill(2)}"
                             else:
                                 # Pattern: "Day Mon Year" (e.g., 29 Dec 2025)
-                                match = re.search(r'(\\d{1,2})\\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\\s+(\\d{4})', raw_content, re.I)
+                                match = re.search(r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})', raw_content, re.I)
                                 if match:
                                     month_map = {'jan':'01','feb':'02','mar':'03','apr':'04','may':'05','jun':'06',
                                                  'jul':'07','aug':'08','sep':'09','oct':'10','nov':'11','dec':'12'}
