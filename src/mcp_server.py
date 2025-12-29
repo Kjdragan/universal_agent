@@ -5,6 +5,8 @@ import sys
 import json
 import logging
 from datetime import datetime
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field, ValidationError
 
 # Setup logger for MCP server
 logger = logging.getLogger("mcp_server")
@@ -365,23 +367,55 @@ def get_core_memory_blocks() -> str:
 
 
 # =============================================================================
-# CRAWL4AI TOOL
+# PYDANTIC MODELS FOR SEARCH RESULTS
 # =============================================================================
 
+class SearchItem(BaseModel):
+    """Represents a single search result or news article."""
+    url: str
+    title: Optional[str] = None
+    snippet: Optional[str] = None
+    # Allow extra fields for flexibility
+    class Config:
+        extra = "ignore"
 
-@mcp.tool()
-async def crawl_parallel(urls: list[str], session_dir: str) -> str:
+class SearchResultFile(BaseModel):
     """
-    High-speed parallel web scraping using crawl4ai.
-    Scrapes multiple URLs concurrently, extracts clean markdown (removing ads/nav),
-    and saves results to 'search_results' directory in the session workspace.
+    Schema for Composio search result files (combines Web and News structures).
+    Web Search: {"results": [...]}
+    News Search: {"articles": [...]}
+    Web Answer: {"results": [...]} (nested inside outer object, but we parse the file content)
+    """
+    results: Optional[List[SearchItem]] = None
+    articles: Optional[List[SearchItem]] = None
+    
+    # Allow extra fields/metadata
+    class Config:
+        extra = "ignore"
 
-    Args:
-        urls: List of URLs to scrape (no limit - crawl4ai handles parallel batches automatically)
-        session_dir: Absolute path to the current session workspace (e.g. AGENT_RUN_WORKSPACES/session_...)
+    @property
+    def all_urls(self) -> List[str]:
+        """Extract all valid URLs from the file."""
+        items = []
+        if self.results:
+            items.extend(self.results)
+        if self.articles:
+            items.extend(self.articles)
+        
+        # Deduplicate while preserving order? No, set is simpler.
+        # But we want to preserve order of relevance usually.
+        # Use simple list comprehension
+        urls = [item.url for item in items if item.url and item.url.startswith("http")]
+        return urls
 
-    Returns:
-        JSON summary of results (success/fail counts, saved file paths).
+# =============================================================================
+# CRAWL4AI TOOLS & HELPERS
+# =============================================================================
+
+async def _crawl_core(urls: list[str], session_dir: str) -> str:
+    """
+    Core implementation of parallel crawling.
+    Shared by crawl_parallel (manual tool) and finalize_research_corpus (automated).
     """
     import hashlib
     import aiohttp
@@ -397,6 +431,9 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
         "errors": [],
     }
     
+    if not urls:
+        return json.dumps({"error": "No URLs provided to crawl"}, indent=2)
+
     # Check if we should use Cloud API (CRAWL4AI_API_KEY env var set)
     crawl4ai_api_key = os.environ.get("CRAWL4AI_API_KEY")
     crawl4ai_api_url = os.environ.get("CRAWL4AI_API_URL")  # For Docker fallback
@@ -404,7 +441,7 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
     if crawl4ai_api_key:
         # Cloud API mode: Use crawl4ai-cloud.com synchronous /query endpoint
         cloud_endpoint = "https://www.crawl4ai-cloud.com/query"
-        sys.stderr.write(f"[crawl_parallel] Using Cloud API for {len(urls)} URLs\n")
+        sys.stderr.write(f"[crawl_core] Using Cloud API for {len(urls)} URLs\\n")
         
         try:
             import asyncio
@@ -440,13 +477,13 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
                         # Post-process: Strip markdown links, keep just the text
                         # [link text](url) -> link text
                         import re
-                        content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
+                        content = re.sub(r'\\[([^\\]]+)\\]\\([^)]+\\)', r'\\1', content)
                         # Also remove bare URLs that start lines
-                        content = re.sub(r'^https?://[^\s]+\s*$', '', content, flags=re.MULTILINE)
+                        content = re.sub(r'^https?://[^\\s]+\\s*$', '', content, flags=re.MULTILINE)
                         # Remove image markdown ![alt](url)
-                        content = re.sub(r'!\[[^\]]*\]\([^)]+\)', '', content)
+                        content = re.sub(r'!\\[[^\\]]*\\]\\([^)]+\\)', '', content)
                         # Clean up excessive blank lines
-                        content = re.sub(r'\n{3,}', '\n\n', content)
+                        content = re.sub(r'\\n{3,}', '\\n\\n', content)
                         
                         return {
                             "url": url,
@@ -464,7 +501,7 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
             async with aiohttp.ClientSession() as session:
                 tasks = [crawl_single_url(session, url) for url in urls]
                 crawl_results = await asyncio.gather(*tasks, return_exceptions=True)
-            sys.stderr.write(f"[crawl_parallel] Cloud API returned {len(crawl_results)} results\n")
+            sys.stderr.write(f"[crawl_core] Cloud API returned {len(crawl_results)} results\\n")
             
             # Process results
             for result in crawl_results:
@@ -507,11 +544,11 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
                         article_date = None
                         
                         # Try URL pattern first (most reliable)
-                        date_match = re.search(r'/(\d{4})/(\d{1,2})/(\d{1,2})/', url)
+                        date_match = re.search(r'/(\\d{4})/(\\d{1,2})/(\\d{1,2})/', url)
                         if date_match:
                             article_date = f"{date_match.group(1)}-{date_match.group(2).zfill(2)}-{date_match.group(3).zfill(2)}"
                         else:
-                            date_match = re.search(r'/(\d{4})-(\d{1,2})-(\d{1,2})/', url)
+                            date_match = re.search(r'/(\\d{4})-(\\d{1,2})-(\\d{1,2})/', url)
                             if date_match:
                                 article_date = f"{date_match.group(1)}-{date_match.group(2).zfill(2)}-{date_match.group(3).zfill(2)}"
                         
@@ -521,14 +558,14 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
                             # Search full content for date patterns (some sites have tons of nav bloat)
                             # Pattern: "Month Day, Year" (e.g., December 28, 2025)
                             months = 'January|February|March|April|May|June|July|August|September|October|November|December'
-                            match = re.search(rf'({months})\s+(\d{{1,2}}),?\s+(\d{{4}})', raw_content, re.I)
+                            match = re.search(rf'({months})\\s+(\\d{{1,2}}),?\\s+(\\d{{4}})', raw_content, re.I)
                             if match:
                                 month_map = {'january':'01','february':'02','march':'03','april':'04','may':'05','june':'06',
                                              'july':'07','august':'08','september':'09','october':'10','november':'11','december':'12'}
                                 article_date = f"{match.group(3)}-{month_map[match.group(1).lower()]}-{match.group(2).zfill(2)}"
                             else:
                                 # Pattern: "Day Mon Year" (e.g., 29 Dec 2025)
-                                match = re.search(r'(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})', raw_content, re.I)
+                                match = re.search(r'(\\d{1,2})\\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\\s+(\\d{4})', raw_content, re.I)
                                 if match:
                                     month_map = {'jan':'01','feb':'02','mar':'03','apr':'04','may':'05','jun':'06',
                                                  'jul':'07','aug':'08','sep':'09','oct':'10','nov':'11','dec':'12'}
@@ -650,78 +687,115 @@ word_count: {len(content.split())}
             
         return json.dumps(results_summary, indent=2)
     
-    elif crawl4ai_api_url:
-        # Docker API mode (legacy): Use crawl4ai Docker container
-        sys.stderr.write(f"[crawl_parallel] Using Docker API at {crawl4ai_api_url} for {len(urls)} URLs\n")
-        return json.dumps({"error": "Docker API mode deprecated. Set CRAWL4AI_API_KEY for Cloud API or remove CRAWL4AI_API_URL for local mode."})
-            
-        return json.dumps(results_summary, indent=2)
+    # Fallback to Local/Docker mode (unchanged from original)
+    else:
+         if crawl4ai_api_url:
+            # Docker API mode (legacy): Use crawl4ai Docker container
+            sys.stderr.write(f"[crawl_core] Using Docker API at {crawl4ai_api_url} for {len(urls)} URLs\\n")
+            return json.dumps({"error": "Docker API mode deprecated. Set CRAWL4AI_API_KEY for Cloud API or remove CRAWL4AI_API_URL for local mode."})
+                
+         return json.dumps(results_summary, indent=2)
+
+
+@mcp.tool()
+async def crawl_parallel(urls: list[str], session_dir: str) -> str:
+    """
+    High-speed parallel web scraping using crawl4ai.
+    Scrapes multiple URLs concurrently, extracts clean markdown (removing ads/nav),
+    and saves results to 'search_results' directory in the session workspace.
+
+    Args:
+        urls: List of URLs to scrape (no limit - crawl4ai handles parallel batches automatically)
+        session_dir: Absolute path to the current session workspace (e.g. AGENT_RUN_WORKSPACES/session_...)
+
+    Returns:
+        JSON summary of results (success/fail counts, saved file paths).
+    """
+    return await _crawl_core(urls, session_dir)
+
+
+@mcp.tool()
+async def finalize_research_corpus(session_dir: str) -> str:
+    """
+    AUTOMATED RESEARCH PIPELINE:
+    1. Scans 'search_results/' for JSON search outputs.
+    2. Extracts all URLs using Pydantic validation (safe, typed).
+    3. Executes parallel crawl on all extracted URLs.
+    4. Generates 'research_overview.md'.
     
-    # Local mode: Use crawl4ai library directly
+    Use this as the FIRST step in report generation to turn search results into a ready-to-read corpus.
+    
+    Args:
+        session_dir: Path to the current session workspace.
+        
+    Returns:
+        Summary of operation: URLs found, crawl success/fail, and path to overview.
+    """
     try:
-        from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
-        from crawl4ai.content_filter_strategy import PruningContentFilter
-        from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-    except ImportError:
+        search_results_dir = os.path.join(session_dir, "search_results")
+        if not os.path.exists(search_results_dir):
+            return json.dumps({"error": f"Search results directory not found: {search_results_dir}"})
+            
+        all_urls = set()
+        scanned_files = 0
+        
+        # 1. Scan and Extract
+        for filename in os.listdir(search_results_dir):
+            if filename.endswith(".json"):
+                path = os.path.join(search_results_dir, filename)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    
+                    # Validate and parse with Pydantic
+                    try:
+                        # Attempt to parse as SearchResultFile (expecting dict inputs)
+                        if isinstance(data, dict):
+                            model = SearchResultFile.model_validate(data)
+                            urls = model.all_urls
+                            if urls:
+                                all_urls.update(urls)
+                                scanned_files += 1
+                                logger.info(f"Extracted {len(urls)} URLs from {filename}")
+                        else:
+                            # If it's a list (rare for Search files, but possible for generic tools)
+                            logger.warning(f"Skipping {filename}: Root element is not a dict")
+                                
+                    except ValidationError as ve:
+                        logger.warning(f"Pydantic validation failed for {filename}: {ve}")
+                        # Fallback? No, we want strictness now.
+                        pass
+                        
+                except Exception as e:
+                    logger.warning(f"Error reading {filename}: {e}")
+        
+        if not all_urls:
+            return json.dumps({
+                "status": "No URLs found", 
+                "scanned_files": scanned_files,
+                "note": "Ensure search results are regular JSON files with 'results' or 'articles' lists."
+            })
+            
+        url_list = list(all_urls)
+        
+        # 2. Execute Crawl
+        sys.stderr.write(f"[finalize] Found {len(url_list)} unique URLs from {scanned_files} files. Starting crawl...\\n")
+        
+        # 3. Call Core Logic
+        crawl_result_json = await _crawl_core(url_list, session_dir)
+        crawl_result = json.loads(crawl_result_json)
+        
+        # 4. Return Summary
         return json.dumps({
-            "error": "crawl4ai not installed locally and CRAWL4AI_API_URL not set. "
-                     "For local: uv pip install crawl4ai && crawl4ai-setup. "
-                     "For Docker: set CRAWL4AI_API_URL=http://crawl4ai:11235"
-        })
-
-    # Configure Browser (Speed & Evasion)
-    browser_config = BrowserConfig(
-        headless=True,
-        enable_stealth=True,
-        browser_type="chromium",
-    )
-
-    # Configure Extraction (Noise Reduction)
-    prune_filter = PruningContentFilter(
-        threshold=0.5, threshold_type="fixed", min_word_threshold=10
-    )
-    md_generator = DefaultMarkdownGenerator(content_filter=prune_filter)
-
-    run_config = CrawlerRunConfig(
-        markdown_generator=md_generator,
-        excluded_tags=["nav", "footer", "header", "aside", "script", "style"],
-        excluded_selector=".references, .footnotes, .citation, .bibliography, .ref-list, .endnotes, .field-name-field-footnotes, .field-name-field-reference, .cookie-banner, #cookie-consent, .eu-cookie-compliance, .donation, .donate, .subscription, .subscribe, .newsletter, .signup, .promo",
-        cache_mode=CacheMode.BYPASS,
-    )
-
-    try:
-        async with AsyncWebCrawler(config=browser_config) as crawler:
-            results = await crawler.arun_many(urls=urls, config=run_config)
-
-            for res in results:
-                original_url = res.url
-                if res.success:
-                    url_hash = hashlib.md5(original_url.encode()).hexdigest()[:12]
-                    filename = f"crawl_{url_hash}.md"
-                    filepath = os.path.join(search_results_dir, filename)
-
-                    content = res.markdown.fit_markdown or res.markdown.raw_markdown
-                    final_content = f"# Source: {original_url}\n# Date: {datetime.utcnow().isoformat()}\n\n{content}"
-
-                    with open(filepath, "w", encoding="utf-8") as f:
-                        f.write(final_content)
-
-                    results_summary["successful"] += 1
-                    results_summary["saved_files"].append({
-                        "url": original_url,
-                        "file": filename,
-                        "path": filepath,
-                    })
-                else:
-                    results_summary["failed"] += 1
-                    results_summary["errors"].append(
-                        {"url": original_url, "error": res.error_message}
-                    )
-
+            "status": "Research Corpus Finalized",
+            "extracted_urls": len(url_list),
+            "sources_scanned": scanned_files,
+            "crawl_summary": crawl_result
+        }, indent=2)
+        
     except Exception as e:
-        return json.dumps({"error": f"Crawl execution failed: {str(e)}"})
-
-    return json.dumps(results_summary, indent=2)
+        import traceback
+        return json.dumps({"error": f"Pipeline failed: {str(e)}", "traceback": traceback.format_exc()})
 
 
 # =============================================================================

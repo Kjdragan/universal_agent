@@ -46,6 +46,14 @@ class StorageManager:
             last_updated TEXT
         )
         ''')
+
+        # Table for Processed Traces (Agent College)
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS processed_traces (
+            trace_id TEXT PRIMARY KEY,
+            timestamp TEXT
+        )
+        ''')
         
         conn.commit()
         conn.close()
@@ -111,6 +119,30 @@ class StorageManager:
                 last_updated=datetime.fromisoformat(row[4])
             )
         return None
+
+    def add_processed_trace(self, trace_id: str):
+        """Record a trace ID as processed."""
+        conn = sqlite3.connect(self.sqlite_path)
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+        INSERT OR IGNORE INTO processed_traces (trace_id, timestamp)
+        VALUES (?, ?)
+        ''', (trace_id, datetime.now().isoformat()))
+        
+        conn.commit()
+        conn.close()
+
+    def is_trace_processed(self, trace_id: str) -> bool:
+        """Check if a trace ID has already been processed."""
+        conn = sqlite3.connect(self.sqlite_path)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT 1 FROM processed_traces WHERE trace_id = ?", (trace_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        return row is not None
 
     # =========================================================================
     # ARCHIVAL MEMORY METHODS (ChromaDB)

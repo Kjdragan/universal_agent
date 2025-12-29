@@ -5,12 +5,16 @@ import signal
 import sys
 from datetime import datetime
 
-# Adjust path to find src
+# Adjust path to find root (universal_agent/)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../")))
 
+# Import from root packages
+from Memory_System.manager import MemoryManager
+
+# Import from src packages
 from src.universal_agent.agent_college.critic import CriticAgent
 from src.universal_agent.agent_college.professor import ProfessorAgent
-from src.Memory_System.manager import MemoryManager
+from src.universal_agent.agent_college.logfire_reader import LogfireReader
 
 import logfire
 
@@ -24,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 # Configure Logfire
 logfire.configure(service_name="agent-college-worker")
-logfire.instrument_logging()
 
 from src.universal_agent.agent_college.logfire_reader import LogfireReader
 
@@ -53,7 +56,7 @@ async def main():
     logger.info("🚀 Agent College is active and monitoring...")
     
     running = True
-    processed_traces = set()
+    # processed_traces = set() # Removed in favor of persistent memory
     
     def signal_handler(sig, frame):
         nonlocal running
@@ -70,7 +73,7 @@ async def main():
             
             for fail in failures:
                 tid = fail.get('trace_id')
-                if tid and tid not in processed_traces:
+                if tid and not memory_manager.has_trace_been_processed(tid):
                     # New failure found!
                     msg = f"Exception: {fail.get('exception_type')}: {fail.get('exception_message')}"
                     logger.info(f"🔍 Critic analyzing trace {tid}: {msg}")
@@ -79,12 +82,9 @@ async def main():
                     result = critic.propose_correction(tid, msg)
                     logger.info(f"   -> {result}")
                     
-                    processed_traces.add(tid)
+                    # Mark as processed in persistent memory
+                    memory_manager.mark_trace_processed(tid)
             
-            # Keep set size manageable
-            if len(processed_traces) > 1000:
-                processed_traces = set(list(processed_traces)[-500:])
-
             # Sleep
             await asyncio.sleep(60) 
             

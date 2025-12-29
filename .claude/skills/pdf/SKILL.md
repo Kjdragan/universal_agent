@@ -281,8 +281,8 @@ with open("encrypted.pdf", "wb") as output:
 | Split PDFs | pypdf | One page per file |
 | Extract text | pdfplumber | `page.extract_text()` |
 | Extract tables | pdfplumber | `page.extract_tables()` |
-| Create PDFs | reportlab | Canvas or Platypus |
-| Command line merge | qpdf | `qpdf --empty --pages ...` |
+| Create PDFs | reportlab | Canvas or Platypus (Preferred) |
+| Md to PDF | reportlab | Use Platypus (Do not use Pandoc) |
 | OCR scanned PDFs | pytesseract | Convert to image first |
 | Fill PDF forms | pdf-lib or pypdf (see forms.md) | See forms.md |
 
@@ -307,20 +307,29 @@ To ensure high-quality output, choose your tool based on your source file format
     ```
 
 ### Scenario B: Source is Markdown (`.md`) or Text (`.txt`)
-**Use Pandoc**.
-*   **Why**: Best for clean, structured, "academic" or formal documents. Handles typography beautifully.
-*   **Do NOT use Chrome**: It will print raw markdown syntax without rendering it.
-*   **Command**:
-    ```bash
-    pandoc input.md -o output.pdf --pdf-engine=weasyprint
+**Use Python ReportLab (PREFERRED)**.
+*   **Why**: Self-contained Python solution, no external binaries (like latex/pandoc) required. Reliable on all platforms (Heroku, Docker).
+*   **Do NOT use Pandoc**: Requires heavy latex dependencies often missing in production.
+*   **Approach**:
+    1.  Parse markdown (simple headings/text).
+    2.  Use `reportlab.platypus` to build the PDF programmatically.
+    *   **Snippet**:
+    ```python
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    
+    doc = SimpleDocTemplate("report.pdf", pagesize=letter)
+    story = [Paragraph("Title", getSampleStyleSheet()['Title'])]
+    doc.build(story)
     ```
-    *(Note: Ensure `weasyprint` is installed via `uv add weasyprint`)*
 
 ### Check Availability
 Before running, verify the tool exists:
 ```bash
 which google-chrome || echo "Chrome missing"
-which pandoc || echo "Pandoc missing"
+which google-chrome || echo "Chrome missing (use reportlab)"
+
 ```
 
 ### Check Availability First

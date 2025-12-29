@@ -98,6 +98,14 @@ class MemoryManager:
             self.storage.save_block(new_block)
 
     # --- Tool Implementations (Bound to this Manager) ---
+    
+    def mark_trace_processed(self, trace_id: str):
+        """Mark a trace ID as processed in persistent storage."""
+        self.storage.add_processed_trace(trace_id)
+
+    def has_trace_been_processed(self, trace_id: str) -> bool:
+        """Check if a trace ID has been processed."""
+        return self.storage.is_trace_processed(trace_id)
 
     def core_memory_replace(self, label: str, new_value: str) -> str:
         """Tool: Overwrite a specific memory block."""
