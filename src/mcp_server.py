@@ -372,7 +372,8 @@ def get_core_memory_blocks() -> str:
 
 class SearchItem(BaseModel):
     """Represents a single search result or news article."""
-    url: str
+    url: Optional[str] = None
+    link: Optional[str] = None  # Fallback for Scholar/News
     title: Optional[str] = None
     snippet: Optional[str] = None
     # Allow extra fields for flexibility
@@ -405,7 +406,11 @@ class SearchResultFile(BaseModel):
         # Deduplicate while preserving order? No, set is simpler.
         # But we want to preserve order of relevance usually.
         # Use simple list comprehension
-        urls = [item.url for item in items if item.url and item.url.startswith("http")]
+        urls = []
+        for item in items:
+            target_url = item.url or item.link
+            if target_url and target_url.startswith("http"):
+                urls.append(target_url)
         return urls
 
 # =============================================================================

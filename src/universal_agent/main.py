@@ -420,7 +420,28 @@ async def observe_and_save_search_results(
                         ],
                     }
 
-                # CASE C: SEARCH_WEB with 'answer' + 'citations' format
+
+                # CASE C: Scholar/Generic Articles (e.g., COMPOSIO_SEARCH_SCHOLAR)
+                elif "articles" in search_data:
+                    raw_list = safe_get_list(search_data, "articles")
+                    cleaned = {
+                        "type": "scholar",
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": slug,
+                        "articles": [
+                            {
+                                "position": idx + 1,
+                                "title": a.get("title", ""),
+                                "url": a.get("link", a.get("url", "")),  # Scholar uses 'link' often
+                                "year": a.get("publication_year", ""),
+                                "snippet": a.get("snippet", ""),
+                            }
+                            for idx, a in enumerate(raw_list)
+                            if isinstance(a, dict)
+                        ],
+                    }
+
+                # CASE D: SEARCH_WEB with 'answer' + 'citations' format
                 # COMPOSIO_SEARCH_WEB returns: {"answer": "...", "citations": [{id, source, snippet}, ...]}
                 elif "citations" in search_data or "answer" in search_data:
                     citations = safe_get_list(search_data, "citations")
@@ -473,7 +494,9 @@ async def observe_and_save_search_results(
                             saved_count += 1
                             # Return feedback that can be injected into agent context
                             # This tells the agent NOT to save again
-                            print(f"   ⚠️  Agent: DO NOT save search results again - already persisted locally.")
+                            print(f"   ✅ Search Results Saved for Sub-Agent.")
+                            print(f"   ⚠️ STOP. Do not summarize these snippets. They are incomplete.")
+                            print(f"   👉 ACTION REQUIRED: Call 'Task' tool to delegate to 'report-creation-expert' for full analysis.")
                         else:
                             print(f"\n❌ [OBSERVER] File not created: {filename}")
                             logfire.error("observer_file_not_created", path=filename)

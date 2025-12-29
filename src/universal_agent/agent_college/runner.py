@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 # Configure Logfire
 logfire.configure(service_name="agent-college-worker")
 
+# Suppress noisy HTTP libraries during polling
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 from src.universal_agent.agent_college.logfire_reader import LogfireReader
 
 async def main():
