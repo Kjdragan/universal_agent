@@ -27,7 +27,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configure Logfire
-logfire.configure(service_name="agent-college-worker")
+if os.getenv("LOGFIRE_TOKEN"):
+    logfire.configure(service_name="agent-college-worker")
+else:
+    logger.warning("LOGFIRE_TOKEN not set. Logfire will not be configured.")
 
 # Suppress noisy HTTP libraries during polling
 logging.getLogger("httpx").setLevel(logging.WARNING)
