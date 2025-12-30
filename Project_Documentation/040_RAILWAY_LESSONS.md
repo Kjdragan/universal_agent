@@ -75,8 +75,33 @@ We manually added the missing packages to `pyproject.toml`.
 
 ---
 
+## 5. The "Custom Start Command" Override (Silent Killer)
+**The Issue**:
+Even after fixing our `Dockerfile` and `start.sh`, the app kept failing with errors we couldn't see in our script debugging.
+**Why**: Railway has a "Start Command" field in Settings. If this is populated, **it ignores your Dockerfile CMD entirely**.
+We had an old command cached there (`uvicorn src...`) that was broken.
+
+**The Fix**:
+We went to Settings -> Deploy -> Start Command and **deleted it**. This restored control to our `Dockerfile`.
+
+---
+
+## 6. Quotes in Variables (The Crash)
+**The Issue**:
+The app crashed with `Invalid webhook url`.
+**Why**: We entered `"https://..."` (with quotes) in the Railway Variable UI. Railway passes this literally, so the app tried to use the quote character as part of the URL.
+
+**The Fix**:
+Never put quotes around values in Railway Variables.
+- Bad: `"https://example.com"`
+- Good: `https://example.com`
+
+---
+
 ## Summary Checklist for Future Deployments
 - [ ] **One Entrypoint**: Use `Dockerfile` OR `Procfile`, not both (unless you really want split services).
+- [ ] **Empty Start Command**: Check Railway Settings to ensure no old command is overriding your Dockerfile.
+- [ ] **No Quotes**: Don't put quotes in Railway Variables.
 - [ ] **Bind 0.0.0.0**: Always listen on all interfaces, not just localhost.
 - [ ] **Respect $PORT**: Your app finds the internet through this variable.
 - [ ] **Pin Versions**: Lock your Python version to something stable (3.12 is the current "Sweet Spot").
