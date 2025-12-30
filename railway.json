@@ -1,0 +1,15 @@
+{
+    "$schema": "https://railway.app/railway.schema.json",
+    "build": {
+        "watchPatterns": [
+            "src/**",
+            "AgentCollege/**",
+            "Memory_System/**",
+            "Dockerfile",
+            "pyproject.toml",
+            "start.sh",
+            ".claude/knowledge/**",
+            ".claude/skills/**"
+        ]
+    }
+}
