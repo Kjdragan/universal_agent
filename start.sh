@@ -1,10 +1,22 @@
 #!/bin/bash
 set -e
 
+# ==========================================
+# PERMISSION FIX FOR RAILWAY VOLUMES
+# ==========================================
+# Railway mounts /app/data as root. We must give ownership to appuser.
+echo "🛠️  Fixing permissions for /app/data..."
+chown -R appuser:appuser /app/data
+mkdir -p /app/AGENT_RUN_WORKSPACES
+chown -R appuser:appuser /app/AGENT_RUN_WORKSPACES
+
+# ==========================================
+# START SERVICES AS APPUSER
+# ==========================================
+
 # Start Agent College (LogfireFetch) in the background
-# running on localhost:8000 (Internal Only for now, effectively)
 echo "🎓 Starting Agent College Service..."
-uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8000 --host 127.0.0.1 &
+su -s /bin/bash appuser -c "uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8000 --host 127.0.0.1" &
 
 # Start Telegram Bot (Main Process)
 # This will handle the $PORT binding for Webhooks if configured
@@ -20,5 +32,6 @@ echo "DEBUG: PYTHONPATH: $PYTHONPATH"
 # Force unbuffered output to see logs immediately
 export PYTHONUNBUFFERED=1
 
-# Run with debug logging
-exec uv run uvicorn universal_agent.bot.main:app --host 0.0.0.0 --port "$SERVER_PORT" --log-level debug
+# Run with debug logging as appuser
+# exec acts on the last command to take over PID 1 (or close to it)
+exec su -s /bin/bash appuser -c "exec uv run uvicorn universal_agent.bot.main:app --host 0.0.0.0 --port $SERVER_PORT --log-level debug"

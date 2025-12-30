@@ -62,8 +62,8 @@ RUN mkdir -p /app/data && \
     mkdir -p /app/AGENT_RUN_WORKSPACES && \
     chown -R appuser:appuser /app
 
-# Switch to non-root user
-USER appuser
+# Switch to non-root user (Moved to start.sh for runtime permission fix)
+# USER appuser
 
 # Entrypoint
 CMD ["./start.sh"]
