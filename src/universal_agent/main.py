@@ -2192,16 +2192,7 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
              options.system_prompt = f"## Tool Knowledge\n{knowledge_content}"
         print(f"✅ Injected Knowledge Base ({len(knowledge_content)} chars)")
 
-    print(f"\n=== Composio Session Info ===")
-    print(f"Session URL: {session.mcp.url}")
-    print(f"User ID: {user_id}")
-    print(f"Timestamp: {timestamp}")
-    print(f"============================\n")
 
-    print("=" * 80)
-    print("Composio Agent Ready")
-    print("=" * 80)
-    print()
 
     return options, session, user_id, workspace_dir, trace
 
