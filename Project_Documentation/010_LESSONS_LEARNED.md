@@ -895,3 +895,35 @@ When the Observer detects it has saved a search result file, it injects a high-p
 - **Success Rate**: 100% in testing (vs ~40% with prompt-only instructions).
 
 **Key Takeaway**: Don't rely on the System Prompt (static) for critical workflow branching. Use **Dynamic Context Injection** (Observer) to guide the agent *exactly when it matters*.
+
+### Lesson 40: Static Knowledge Base vs Dynamic Hooks (The JIT Solution)
+**Date**: 2025-12-29
+
+**Problem**: We needed to force the agent to delegate to a sub-agent ONLY when search results were returned, to prevent it from summarizing snippets.
+**Failed Approach**: Using `PostToolUse` hooks or Observers to inject a "Please delegate" message.
+- **Why it failed**: Claude often batches tool calls or generates "Thinking" tokens immediately after tool execution. The hook fired too late (race condition), and the agent had already decided to summarize the snippets.
+
+**Successful Approach**: **Static Knowledge Base Injection**.
+- We created `.claude/knowledge/report_workflow.md` which explicitly states: "When you receive search results, they are INCOMPLETE snippets. You MUST delegate."
+- We load this file into the System Prompt at startup.
+
+**Lesson**: Don't try to "catch" the agent with code hooks during runtime execution flow. It's brittle. Instead, **pre-program the behavior** into the immutable System Prompt (Knowledge Base). If the rule is in the "Brain" from the start, the agent follows it 100% of the time.
+
+---
+
+### Lesson 41: Dual Trace Observability (MCP Subprocesses)
+**Date**: 2025-12-29
+
+**Discovery**: When using `stdio` aggregation for Local MCP servers, you effectively have two distinct processes:
+1.  **Main Agent**: The orchestrator (CLI/Telegram).
+2.  **MCP Server**: The subprocess running the tools.
+
+**Logfire Behavior**: Because `stdio` doesn't automatically propagate distributed tracing headers like HTTP, Logfire treats these as **two separate traces**.
+- **Trace A**: Main Agent calls `mcp__local_toolkit__crawl_parallel`.
+- **Trace B**: MCP Server receives request and executes `crawl_parallel`.
+
+**Workaround**: We accept the "Dual Trace" reality.
+- Use the **Time Range** and **Tool Name** to correlate them if needed.
+- This actually enables better isolation: if the MCP server crashes, the Main Agent trace remains clean and readable, showing only the error received from the pipe.
+
+---

@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2025-12-27 08:25 CST
+**Last Updated**: 2025-12-30 08:30 CST
 
 ---
 
@@ -28,35 +28,33 @@
 
 ---
 
-## 📍 Current State (December 27, 2025)
+## 📍 Current State (December 30, 2025)
 
 ### ✅ What's Working Well
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| **Research & Report Generation** | ✅ Production-ready | Full workflow tested and optimized |
+| **Research & Report Generation** | ✅ Production-ready | JIT Delegation fixed via Knowledge Base |
+| **Telegram Integration** | ✅ Working | Multi-user, async messaging support |
 | **PDF/PPTX Creation** | ✅ Working | Skills-based, conditional routing |
 | **Email Delivery (Gmail)** | ✅ Working | Attachments via `upload_to_composio` |
 | **Memory System** | ✅ Working | Core blocks, archival search |
-| **Agent College (Basic)** | ✅ Working | LogfireFetch + Critic + Sandbox |
-| **Logfire Tracing** | ✅ Working | Full observability |
+| **Logfire Tracing** | ✅ Working | Dual Trace (Main + Subprocess) |
 
 ### 🆕 Recent Additions (This Session)
 
-1. **Agent College Implementation**:
-   - `AgentCollege/logfire_fetch/` — FastAPI service for trace querying and webhooks
-   - `src/universal_agent/agent_college/` — Professor, Critic, Scribe modules
-   - `[AGENT_COLLEGE_NOTES]` — Sandbox memory block for unverified learnings
-   - Integration with existing Memory System (shared SQLite database)
+1.  **JIT Delegation Guide Rail**:
+    -   **Problem**: Agent summarizing snippets instead of delegating.
+    -   **Solution**: `Knowledge Base Injection` (.claude/knowledge/report_workflow.md).
+    -   **Result**: 100% reliable delegation to `report-creation-expert`.
 
-2. **LogfireFetch Service**:
-   - `GET /traces/recent` — Query recent traces
-   - `GET /failures` — Query error traces
-   - `POST /webhook/alert` — Receive alerts → Critic → Sandbox
+2.  **Architecture Documentation Overhaul (v1.1)**:
+    -   Updated `Project_Documentation/Architecture/` to reflect current state.
+    -   Added docs for Telegram, JIT Guide Rails, and Sub-Agent Specialists.
 
-3. **Database Fix**:
-   - Fixed split-brain issue where LogfireFetch wrote to wrong database
-   - Now both `main.py` and `LogfireFetch` use `Memory_System_Data/agent_core.db`
+3.  **Codebase Cleanup**:
+    -   Removed dead code (failed JIT hooks, redundant startup logs).
+    -   Merged `main-yolo` branches into `main`.
 
 ### Architectural Inspiration: LangSmith-Fetch
 
@@ -74,26 +72,27 @@ The Agent College design is inspired by [LangSmith-Fetch](https://github.com/lan
 
 ## 🚧 Where We're Going Next
 
-### Immediate Priority: Agent College Refinement
+### Immediate Priority: Railway Deployment
+We are ready to deploy the Universal Agent to **Railway**.
 
-A comprehensive exploration of Agent College design decisions is needed. See [036_AGENT_COLLEGE_OPEN_QUESTIONS.md](./036_AGENT_COLLEGE_OPEN_QUESTIONS.md) for the full agenda.
+**Keys for Deployment**:
+1.  **Plan**: Follow **[11_railway_deployment_plan.md](./Architecture/11_railway_deployment_plan.md)** (Created Dec 30).
+2.  **Strategy**:
+    *   **GitHub Integration**: Push-to-Deploy workflow.
+    *   **Automation**: `bot/main.py` MUST be updated to self-register webhooks on startup.
+    *   **Dependencies**: Hybrid approach (Cloud API for crawling, Docker `apt` packages for PDF/Video).
+3.  **Persistence**: Ensure `AGENT_RUN_WORKSPACES` and `Memory_System_Data` are mounted as Volumes.
 
 **Key Questions to Explore**:
 
 | Topic | Question |
 |-------|----------|
-| **Polling vs Webhooks** | Implement background polling for automatic error capture |
-| **Critic Thresholds** | What severity level triggers notes? |
-| **HITL Triggers** | `/review-notes` command? Startup check? |
-| **Staleness Detection** | How to mark issues as resolved? |
-| **Scribe Filtering** | How to identify "noteworthy" successes? |
-| **Professor Workflow** | When/how to graduate skills? |
-| **Deployment** | Docker/always-on architecture? |
+| **Agent College** | How to run the `LogfireFetch` service alongside the bot? (Plan: Monolith via script) |
+| **Cost** | "Always-On" RAM reservation is required (Stateful architecture). |
 
 **Next Dialogue Goals**:
-1. **Telegram Integration**: Enable remote task management via phone
-2. **Docker Containerization**: Package application for "always-on" deployment
-3. **Agent College**: Continue refinement (Critic/Professor) in background
+1.  **Execute Plan**: Create `Dockerfile`, `.dockerignore`, and update `bot/main.py` code.
+2.  **Deploy**: Connect GitHub to Railway and go live.
 
 ---
 
