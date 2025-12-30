@@ -14,5 +14,11 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)/src
 # Ensure PORT is set and treated as a number
 SERVER_PORT=${PORT:-8000}
 echo "DEBUG: Using Port: '$SERVER_PORT'"
+echo "DEBUG: Current Directory: $(pwd)"
+echo "DEBUG: PYTHONPATH: $PYTHONPATH"
 
-exec uv run uvicorn universal_agent.bot.main:app --host 0.0.0.0 --port "$SERVER_PORT"
+# Force unbuffered output to see logs immediately
+export PYTHONUNBUFFERED=1
+
+# Run with debug logging
+exec uv run uvicorn universal_agent.bot.main:app --host 0.0.0.0 --port "$SERVER_PORT" --log-level debug
