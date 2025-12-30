@@ -25,16 +25,26 @@ async def lifespan(app: FastAPI):
     
     # 1. Initialize Agent
     print("🚀 Starting Universal Agent Bot...")
+    
+    # DEBUG: Check Network/DNS
+    import socket
+    try:
+        ip = socket.gethostbyname("api.telegram.org")
+        print(f"📡 DNS RESOLVED: api.telegram.org -> {ip}")
+    except Exception as e:
+        print(f"❌ DNS FAILED: {e}")
+
     agent_adapter = AgentAdapter()
     await agent_adapter.initialize()
     
     # 2. Initialize Telegram Bot with increased timeouts
     # Custom request with longer timeouts to avoid TimedOut errors
     request = HTTPXRequest(
-        connect_timeout=60.0,  # Increased to 60s for Railway latency
-        read_timeout=60.0,     
-        write_timeout=60.0,    
-        pool_timeout=60.0,     
+        connect_timeout=60.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=60.0,
+        http_version="1.1",  # Force HTTP/1.1 to avoid HTTP/2 hangs
     )
     
     ptb_app = (
