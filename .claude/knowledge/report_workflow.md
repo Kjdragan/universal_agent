@@ -32,3 +32,41 @@ These search results contain **incomplete snippets**, not full article content.
 1. COMPOSIO_MULTI_EXECUTE_TOOL → search results saved to search_results/
 2. Task(subagent_type="report-creation-expert", description="...", background="Search results saved in search_results/ directory. Read them, crawl URLs for full content, create HTML report, convert to PDF.")
 ```
+
+---
+
+## Critical: Batch File Reading
+
+After `crawl_parallel` creates multiple `crawl_*.md` files:
+
+⚠️ **DO NOT** call `read_local_file` individually for each crawled file.
+✅ **DO** use `mcp__local_toolkit__read_research_files` to read all files at once.
+
+### Required Pattern for Reading Crawled Content
+
+```python
+# WRONG (slow, 30+ tool calls):
+read_local_file(path="search_results/crawl_abc123.md")
+read_local_file(path="search_results/crawl_def456.md")
+# ... 30 more calls
+
+# CORRECT (fast, 1 tool call):
+read_research_files(file_paths=[
+    "search_results/crawl_abc123.md",
+    "search_results/crawl_def456.md",
+    # ... all files
+])
+```
+
+### How to Get File List
+
+1. After `crawl_parallel` completes, call `list_directory(path="search_results/")`
+2. Collect all `crawl_*.md` file paths
+3. Pass entire list to `read_research_files(file_paths=[...])`
+
+### Context Overflow Protection
+
+`read_research_files` has built-in protection:
+- Stops at 25,000 words to prevent context overflow
+- Returns list of skipped files that exceed limit
+- For skipped files only, use `read_local_file` individually
