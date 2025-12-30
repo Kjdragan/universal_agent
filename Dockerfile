@@ -52,5 +52,18 @@ RUN chmod +x start.sh
 ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app/src:/app"
 
+# Create a non-root user and group
+# This is required because the Claude CLI refuses to run with --dangerously-skip-permissions as root
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+
+# Create data directory and set permissions
+# We do this before switching user so the directory exists with correct ownership
+RUN mkdir -p /app/data && \
+    mkdir -p /app/AGENT_RUN_WORKSPACES && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
 # Entrypoint
 CMD ["./start.sh"]
