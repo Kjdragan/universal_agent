@@ -14,6 +14,16 @@ chown -R appuser:appuser /app/AGENT_RUN_WORKSPACES
 # START SERVICES AS APPUSER
 # ==========================================
 
+# DIAGNOSTICS: Check Network Connectivity (Run as root before dropping privileges or as appuser?)
+# We'll run as root to be sure, then appuser implies network is shared.
+echo "🔍 DIAGNOSTICS: Testing Network Connectivity..."
+echo "1. Pinging Google (DNS Check)..."
+curl -I https://google.com || echo "❌ Failed to reach Google"
+
+echo "2. Testing/Timing Telegram API (Reachability Check)..."
+# -v for verbose to see handshake, -m 10 to timeout in 10s
+curl -v -m 10 https://api.telegram.org || echo "❌ Failed to reach Telegram API"
+
 # Start Agent College (LogfireFetch) in the background
 echo "🎓 Starting Agent College Service..."
 su -s /bin/bash appuser -c "uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8000 --host 127.0.0.1" &

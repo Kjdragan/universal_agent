@@ -46,6 +46,16 @@ async def lifespan(app: FastAPI):
         pool_timeout=60.0,
         http_version="1.1",  # Force HTTP/1.1 to avoid HTTP/2 hangs
     )
+    # Note: HTTPXRequest in PTB doesn't expose trust_env directly in constructor in older versions, 
+    # but let's check if we can pass it via connection_pool_kwargs or similar if needed.
+    # Actually, PTB 20+ passes arbitrary kwargs to httpx.AsyncClient? No, it uses restricted args.
+    # Let's double check PTB docs / code if needed. 
+    # For now, we rely on the fact that if we don't set proxy_url, it defaults to None.
+    # But trust_env=False is safer.
+    
+    # PTB's HTTPXRequest wrapper is specific.
+    # Let's try to inject it if possible, otherwise we skip for now to avoid AttributeError.
+    # Instead, let's verify if `connect_timeout` is actually being respected.
     
     ptb_app = (
         Application.builder()
