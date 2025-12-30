@@ -9,7 +9,7 @@ import os
 from .config import TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, WEBHOOK_URL, PORT
 from .task_manager import TaskManager
 from .agent_adapter import AgentAdapter
-from .telegram_handlers import start_command, help_command, status_command, agent_command
+from .telegram_handlers import start_command, help_command, status_command, agent_command, continue_command, new_command
 
 # nest_asyncio removed to avoid conflict with uvicorn loop_factory in Python 3.13
 
@@ -118,6 +118,8 @@ async def lifespan(app: FastAPI):
     ptb_app.add_handler(CommandHandler("help", help_command))
     ptb_app.add_handler(CommandHandler("status", status_command))
     ptb_app.add_handler(CommandHandler("agent", agent_command))
+    ptb_app.add_handler(CommandHandler("continue", continue_command))
+    ptb_app.add_handler(CommandHandler("new", new_command))
     
     # Store Task Manager in bot_data for handlers
     ptb_app.bot_data["task_manager"] = task_manager

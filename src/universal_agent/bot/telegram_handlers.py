@@ -13,10 +13,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update): return
     await update.message.reply_text(
         "🤖 **Universal Agent Bot Online**\n\n"
-        "Commands:\n"
-        "/agent <prompt> - Run a task\n"
-        "/status - Check running tasks\n"
-        "/help - Show this message",
+        "**Commands:**\n"
+        "`/agent <prompt>` - Run a task (fresh session)\n"
+        "`/continue` - Enable multi-turn mode\n"
+        "`/new` - Start fresh session\n"
+        "`/status` - Check running tasks\n"
+        "`/help` - Show this message\n\n"
+        "**Session Modes:**\n"
+        "• Default: Each `/agent` = fresh start\n"
+        "• After `/continue`: Tasks share context",
         parse_mode="Markdown"
     )
 
@@ -27,19 +32,22 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update): return
     
-    # context.bot_data should hold the TaskManager
     task_manager = context.bot_data.get("task_manager")
     if not task_manager:
         await update.message.reply_text("⚠️ Task Manager not ready.")
         return
 
-    tasks = task_manager.get_user_tasks(update.effective_user.id)
+    user_id = update.effective_user.id
+    tasks = task_manager.get_user_tasks(user_id)
+    
+    # Show continuation mode status
+    mode = "🔗 CONTINUE" if task_manager.is_continuation_enabled(user_id) else "🆕 FRESH"
+    
     if not tasks:
-        await update.message.reply_text("📭 No recent tasks found.")
+        await update.message.reply_text(f"📭 No recent tasks found.\n\nSession Mode: {mode}")
         return
 
-    msg = "📋 **Task Status** (Last 5)\n\n"
-    # Show last 5 tasks
+    msg = f"📋 **Task Status** (Last 5)\nSession Mode: {mode}\n\n"
     for task in tasks[:5]:
         icon = "⏳" if task.status == "pending" else \
                "🔄" if task.status == "running" else \
@@ -50,6 +58,38 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg += f"   _{prompt_snippet}_\n\n"
         
     await update.message.reply_text(msg, parse_mode="Markdown")
+
+async def continue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Enable continuation mode - next /agent commands will reuse the session."""
+    if not await check_auth(update): return
+    
+    task_manager = context.bot_data.get("task_manager")
+    user_id = update.effective_user.id
+    
+    task_manager.enable_continuation(user_id)
+    
+    await update.message.reply_text(
+        "🔗 **Continuation Mode Enabled**\n\n"
+        "Your next `/agent` commands will continue in the same session.\n"
+        "Use `/new` to start fresh.",
+        parse_mode="Markdown"
+    )
+
+async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Disable continuation mode and start fresh on next /agent."""
+    if not await check_auth(update): return
+    
+    task_manager = context.bot_data.get("task_manager")
+    user_id = update.effective_user.id
+    
+    task_manager.disable_continuation(user_id)
+    
+    await update.message.reply_text(
+        "🆕 **Fresh Session Mode**\n\n"
+        "Your next `/agent` will start a new session.\n"
+        "Use `/continue` to enable multi-turn mode.",
+        parse_mode="Markdown"
+    )
 
 async def agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await check_auth(update): return
@@ -62,7 +102,16 @@ async def agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task_manager = context.bot_data.get("task_manager")
     user_id = update.effective_user.id
     
-    # Enqueue Task
+    # Check if continuation mode and show in response
+    is_continue = task_manager.is_continuation_enabled(user_id)
+    mode_text = "🔗 Continuing session" if is_continue else "🆕 Fresh session"
+    
+    # Enqueue Task (TaskManager checks continuation mode internally)
     task_id = await task_manager.add_task(user_id, prompt)
     
-    await update.message.reply_text(f"✅ Task Queued: `{task_id}`\n\nI will notify you when it starts and finishes.", parse_mode="Markdown")
+    await update.message.reply_text(
+        f"✅ Task Queued: `{task_id}`\n"
+        f"{mode_text}\n\n"
+        f"I will notify you when it starts and finishes.",
+        parse_mode="Markdown"
+    )

@@ -1,13 +1,14 @@
 import asyncio
 from datetime import datetime
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Set
 import uuid
 
 class Task:
-    def __init__(self, user_id: int, prompt: str):
+    def __init__(self, user_id: int, prompt: str, continue_session: bool = False):
         self.id = str(uuid.uuid4())
         self.user_id = user_id
         self.prompt = prompt
+        self.continue_session = continue_session  # Whether to continue previous session
         self.status = "pending"  # pending, running, completed, error
         self.created_at = datetime.now()
         self.started_at: Optional[datetime] = None
@@ -24,11 +25,33 @@ class TaskManager:
         self.status_callback = status_callback
         from .config import MAX_CONCURRENT_TASKS
         self.max_concurrent = MAX_CONCURRENT_TASKS
+        
+        # Track which users have continuation mode enabled
+        self.continuation_mode: Set[int] = set()
+
+    def enable_continuation(self, user_id: int):
+        """Enable continuation mode for a user. Next /agent will reuse session."""
+        self.continuation_mode.add(user_id)
+        
+    def disable_continuation(self, user_id: int):
+        """Disable continuation mode for a user."""
+        self.continuation_mode.discard(user_id)
+        
+    def is_continuation_enabled(self, user_id: int) -> bool:
+        """Check if user has continuation mode enabled."""
+        return user_id in self.continuation_mode
 
     async def add_task(self, user_id: int, prompt: str) -> str:
-        task = Task(user_id, prompt)
+        # Check if continuation mode is enabled for this user
+        continue_session = self.is_continuation_enabled(user_id)
+        
+        task = Task(user_id, prompt, continue_session=continue_session)
         self.tasks[task.id] = task
         await self.queue.put(task.id)
+        
+        # After queuing, continuation mode stays ON until user does /new
+        # (they can keep sending /agent to continue)
+        
         return task.id
 
     def get_task(self, task_id: str) -> Optional[Task]:
@@ -62,14 +85,12 @@ class TaskManager:
                 asyncio.create_task(self.status_callback(task))
             
             try:
-                print(f"🚀 Starting task {task_id} for user {task.user_id}")
-                # Execute via adapter
-                # agent_adapter.execute MUST be awaitable and return result info
-                await agent_adapter.execute(task)
+                mode = "CONTINUE" if task.continue_session else "FRESH"
+                print(f"🚀 Starting task {task_id} for user {task.user_id} [{mode}]")
                 
-                # Status is updated by adapter usually? Or here?
-                # If adapter returns, we assume success unless it raised exception.
-                # However, adapter might update `task.result`.
+                # Execute via adapter with continuation flag
+                await agent_adapter.execute(task, continue_session=task.continue_session)
+                
                 if task.status == "running":
                     task.status = "completed"
                     
