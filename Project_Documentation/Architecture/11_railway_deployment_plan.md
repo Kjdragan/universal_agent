@@ -40,8 +40,8 @@ We will use **Railway's GitHub Integration** for a seamless CI/CD pipeline.
 
 ### Pre-Deployment Checklist
 Before pushing to GitHub:
-- [ ] `Dockerfile` present in root.
-- [ ] `.dockerignore` filters out `AGENT_RUN_WORKSPACES` (local) and `__pycache__`.
+- [x] `Dockerfile` present in root.
+- [x] `.dockerignore` filters out `AGENT_RUN_WORKSPACES` (local) and `__pycache__`.
 - [ ] `railway.json` (optional) or Dashboard config set.
 - [ ] Secrets (API Keys) added to Railway Dashboard variables.
 

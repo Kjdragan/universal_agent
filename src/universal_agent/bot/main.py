@@ -95,6 +95,15 @@ async def lifespan(app: FastAPI):
     # Initialize Bot App
     await ptb_app.initialize()
     await ptb_app.start()
+
+    # 4.5 Configure Webhook or Polling
+    if WEBHOOK_URL:
+        print(f"🌍 functionality: Webhook Mode enabled. URL: {WEBHOOK_URL}")
+        await ptb_app.bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
+    else:
+        print("📡 functionality: Polling Mode enabled (No WEBHOOK_URL set)")
+        await ptb_app.bot.delete_webhook()
+        await ptb_app.updater.start_polling()
     
     # 5. Start Worker
     worker_task = asyncio.create_task(task_manager.worker(agent_adapter))

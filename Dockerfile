@@ -1,49 +1,56 @@
-FROM python:3.13-slim
+FROM python:3.12-slim-bookworm
+
+# Install UV
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
+
+# Install System Dependencies
+# - ffmpeg (Video)
+# - libcairo2, libpango* (WeasyPrint)
+# - curl, gnupg, wget, unzip (Utils)
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    wget \
+    gnupg \
+    unzip \
+    curl \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf2.0-0 \
+    libffi-dev \
+    shared-mime-info \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Google Chrome (for Crawl4AI local fallback & PDF)
+RUN wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
+    && echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list \
+    && apt-get update && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    git \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+# Enable bytecode compilation
+ENV UV_COMPILE_BYTECODE=1
 
-# Install uv (same package manager as local dev)
-RUN pip install uv
+# Copy project definition & lock file
+COPY pyproject.toml uv.lock ./
 
-# Copy project definition
-COPY pyproject.toml .
-COPY uv.lock .
-
-# Install dependencies using uv (matches local .venv)
-RUN uv sync --frozen
-
-# Install additional bot dependencies
-RUN uv pip install uvicorn python-telegram-bot nest_asyncio aiohttp
+# Install dependencies
+RUN uv sync --frozen --no-dev
 
 # Copy Source Code
-COPY src /app/src
-COPY Memory_System /app/Memory_System
-COPY Project_Documentation /app/Project_Documentation
+COPY src/ ./src/
+COPY AgentCollege/ ./AgentCollege/
+COPY Memory_System/ ./Memory_System/
+COPY .claude/ ./.claude/
 
-# Set Environment Variables
-ENV PYTHONPATH=/app/src:/app
-ENV PORT=8000
-ENV PYTHONUNBUFFERED=1
-ENV VIRTUAL_ENV=/app/.venv
+# Copy start script
+COPY start.sh ./
+RUN chmod +x start.sh
+
+# Environment variables
 ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONPATH="/app/src:/app"
 
-# Create a non-root user (Claude SDK refuses --dangerously-skip-permissions as root)
-RUN useradd -m -s /bin/bash agentuser && \
-    chown -R agentuser:agentuser /app
-
-# Create workspace directory with correct ownership (AFTER chown)
-RUN mkdir -p /app/AGENT_RUN_WORKSPACES && \
-    chown agentuser:agentuser /app/AGENT_RUN_WORKSPACES
-
-USER agentuser
-
-# Run Command
-CMD ["python", "-m", "universal_agent.bot.main"]
+# Entrypoint
+CMD ["./start.sh"]

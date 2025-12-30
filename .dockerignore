@@ -1,0 +1,40 @@
+# Exclude version control
+.git
+.gitignore
+.github
+
+# Exclude python/environment artifacts
+.venv
+.venv_yt
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache
+.coverage
+htmlcov/
+
+# Exclude local environment config
+.env
+.env.local
+
+# Exclude local data and workspaces
+AGENT_RUN_WORKSPACES/
+Memory_System_Data/
+SAVED_REPORTS/
+work_products/
+downloads/
+playground/
+
+# Exclude Mac system files
+.DS_Store
+
+# Exclude Docker artifacts (if any local builds)
+Dockerfile
+docker-compose.yml
+start_telegram_bot.sh
