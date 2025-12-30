@@ -1655,16 +1655,24 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
     
     # Setup Session Workspace
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Try /app first (Docker), then project root (local), fallback to /tmp
-    for base_dir in ["/app", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "/tmp"]:
-        workspace_dir = os.path.join(base_dir, "AGENT_RUN_WORKSPACES", f"session_{timestamp}")
-        try:
-            os.makedirs(workspace_dir, exist_ok=True)
-            break  # Success
-        except PermissionError:
-            continue  # Try next base_dir
+    
+    # 1. Configured Root (Railway/Docker)
+    if os.getenv("AGENT_WORKSPACE_ROOT"):
+        base_dir = os.getenv("AGENT_WORKSPACE_ROOT")
+        workspace_dir = os.path.join(base_dir, f"session_{timestamp}")
     else:
-        raise RuntimeError("Cannot create workspace directory in any location")
+        # 2. Auto-Discovery (Local)
+        # Try /app first (Docker), then project root (local), fallback to /tmp
+        for base_dir in ["/app", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "/tmp"]:
+            workspace_dir = os.path.join(base_dir, "AGENT_RUN_WORKSPACES", f"session_{timestamp}")
+            try:
+                os.makedirs(workspace_dir, exist_ok=True)
+                break  # Success
+            except PermissionError:
+                continue
+        else:
+            raise RuntimeError("Cannot create workspace directory in any location")
+            
     os.makedirs(workspace_dir, exist_ok=True)
 
     # Initialize Composio with automatic file downloads to this workspace
@@ -1772,7 +1780,8 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
         from src.universal_agent.agent_college.integration import setup_agent_college
         
         # Initialize strictly for reading context (shared storage) - Use src_dir (Repo Root)
-        mem_mgr = MemoryManager(storage_dir=os.path.join(src_dir, "Memory_System_Data"))
+        storage_path = os.getenv("PERSIST_DIRECTORY", os.path.join(src_dir, "Memory_System_Data"))
+        mem_mgr = MemoryManager(storage_dir=storage_path)
         
         # Initialize Agent College (Sandbox)
         setup_agent_college(mem_mgr)

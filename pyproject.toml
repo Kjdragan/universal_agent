@@ -3,7 +3,7 @@ name = "universal-agent"
 version = "0.1.0"
 description = "A universal agent built using Claude Agent SDK and the Composio Tool Router"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 authors = [
     { name = "Kevin Dragan", email = "kevin.dragan@outlook.com" }
 ]
