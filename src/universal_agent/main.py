@@ -123,6 +123,13 @@ if LOGFIRE_TOKEN:
     except Exception as e:
         print(f"⚠️ HTTPX instrumentation not available: {e}")
 
+    # Instrument Anthropic SDK to trace Claude conversation turns and tool calls
+    try:
+        logfire.instrument_anthropic()
+        print("✅ Logfire Anthropic instrumentation enabled")
+    except Exception as e:
+        print(f"⚠️ Anthropic instrumentation not available: {e}")
+
     print("✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/")
 else:
     print("⚠️ No LOGFIRE_TOKEN found - tracing disabled")
@@ -504,15 +511,15 @@ async def observe_and_save_search_results(
                             path=filename if "filename" in locals() else "unknown",
                         )
 
-            # === JIT DELEGATION GUIDE RAIL (fires ONCE after ALL payloads processed) ===
+            # === JIT DELEGATION GUIDE RAIL (console output for logging) ===
             if saved_count > 0:
                 print(f"\n   ✅ {saved_count} Search Result File(s) Saved for Sub-Agent.")
-                print(f"   ⚠️ STOP. Do not summarize these snippets. They are incomplete.")
-                print(f"   👉 ACTION REQUIRED: Call 'Task' tool to delegate to 'report-creation-expert' for full analysis.")
+                print(f"   ⚠️ Reminder: Delegate to 'report-creation-expert' for full analysis.")
 
         except Exception as e:
             print(f"\n❌ [OBSERVER] Parse error: {e}")
             logfire.warning("observer_error", tool=tool_name, error=str(e))
+
 
 
 async def observe_and_save_workbench_activity(
@@ -1103,7 +1110,6 @@ async def on_pre_task_skill_awareness(
         }
     
     return {}
-
 
 
 async def on_user_prompt_skill_awareness(
@@ -2356,17 +2362,17 @@ SEARCH_TOOL_CONFIG = {
 async def main():
     global trace
 
-    global trace, composio, user_id, session, options, OBSERVER_WORKSPACE_DIR
-
     # Create main span for entire execution
-    with logfire.span("standalone_composio_test") as span:
-        options, session, user_id, workspace_dir, trace = await setup_session()
-    # Extract Trace ID (Lazy import to ensure OTel is ready)
-    # Extract Trace ID (Lazy import to ensure OTel is ready)
+    # NOTE: Local MCP tools run in separate subprocess with their own trace ID
+    main_span = logfire.span("standalone_composio_test")
+    span_ctx = main_span.__enter__()  # Start the span manually
+    
+    options, session, user_id, workspace_dir, trace = await setup_session()
+    
+    # Extract Trace ID immediately after span creation
     if LOGFIRE_TOKEN:
         try:
-            # Span was created above with 'as span'
-            trace_id = span.get_span_context().trace_id
+            trace_id = main_span.get_span_context().trace_id
             trace_id_hex = format(trace_id, "032x")
             trace["trace_id"] = trace_id_hex
         except Exception as e:
@@ -2606,6 +2612,8 @@ async def main():
             print("\n" + "=" * 80)
             print("Session ended. Thank you!")
 
+    # Close the main span to ensure all nested spans are captured in trace
+    main_span.__exit__(None, None, None)
 
 if __name__ == "__main__":
     print("\n" + "=" * 80)
