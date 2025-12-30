@@ -100,18 +100,70 @@ Using the extracted content from `crawl_parallel` (NEVER rely on snippets) AND g
 - Professional color scheme (purple/gradient suggested)
 - **Images:** Ensure all images are properly captioned and embedded.
 
+**E. Narrative Flow (CRITICAL - DO NOT CREATE BULLET LISTS):**
+
+| ❌ Avoid | ✅ Do Instead |
+|---------|--------------|
+| Long bullet lists of facts | Prose paragraphs that weave facts together |
+| Source-by-source summaries | Thematic sections with cross-source synthesis |
+| Isolated data points | Connected insights with transitions |
+
+**Balance Rule:** For every 5 bullet points, there MUST be at least 2 full paragraphs of prose.
+
+**Flow Techniques:**
+- Use topic sentences to introduce each section's theme.
+- Add transitions like "Building on this," "In contrast," "This aligns with..."
+- Create a narrative arc: Context → Current State → Future Implications.
+
+**Example Transformation:**
+```
+❌ BAD:
+- Mercedes-Benz integrated SSBs in Feb 2025
+- 20% range improvement
+- Sub-10-minute charging
+
+✅ GOOD:
+In February 2025, Mercedes-Benz achieved a historic milestone by integrating 
+solid-state batteries into production vehicles. This wasn't just a technical 
+demonstration—production models now offer a 20% improvement in cruising range 
+and can charge from 10-80% in under 10 minutes, addressing two of the most 
+persistent concerns among EV buyers.
+```
+
+**F. References Format (REQUIRED - MUST BE CLICKABLE):**
+
+All entries in the References section MUST be clickable markdown links:
+```markdown
+## References
+1. [CarBuzz - Solid-State Battery Breakthroughs](https://carbuzz.com/the-latest-solid-state-battery-developments) (December 25, 2025)
+2. [Electrek - Solid-state EV battery maker](https://electrek.co/2025/12/23/...) (December 23, 2025)
+```
+
+In-text citations should also be clickable when citing specific sources.
+
 ### Step 5: Save Quick HTML Report (Parallel with PDF)
 
 - Filename: `{topic}_{month}_{year}.html` (e.g., `ai_developments_december_2025.html`)
 - Save to: `{CURRENT_SESSION_WORKSPACE}/work_products/`
 - Use: `mcp__local_toolkit__write_local_file`
 
-### Step 6: Generate PDF Report (MANDATORY)
+### Step 6: Generate PDF Report (MANDATORY - DETERMINISTIC PATH)
 
-- **Tool:** Use the `pdf` skill logic.
-- **Method:** `python-reportlab` is PREFERRED. Do NOT use `pandoc` (latex missing).
-- Create a professional PDF version of the report.
-- Save to: `{CURRENT_SESSION_WORKSPACE}/work_products/`
+**For Markdown Reports (PREFERRED PATH):**
+1. First, save the report as `.md` (you did this in Step 5).
+2. Then convert using one of these commands (try in order):
+
+```bash
+# Option 1: weasyprint (if available)
+weasyprint work_products/report.html work_products/report.pdf
+
+# Option 2: Chrome headless
+google-chrome --headless --disable-gpu --print-to-pdf=work_products/report.pdf work_products/report.html
+```
+
+**DO NOT** create custom Python scripts. Use existing tools.
+
+**If conversion fails:** Save the `.md` file and notify the user that PDF conversion requires manual tools.
 
 ---
 

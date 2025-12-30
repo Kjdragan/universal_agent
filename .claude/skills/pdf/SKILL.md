@@ -281,8 +281,8 @@ with open("encrypted.pdf", "wb") as output:
 | Split PDFs | pypdf | One page per file |
 | Extract text | pdfplumber | `page.extract_text()` |
 | Extract tables | pdfplumber | `page.extract_tables()` |
-| Create PDFs | reportlab | Canvas or Platypus (Preferred) |
-| Md to PDF | reportlab | Use Platypus (Do not use Pandoc) |
+| Create PDFs | reportlab | Canvas or Platypus |
+| Command line merge | qpdf | `qpdf --empty --pages ...` |
 | OCR scanned PDFs | pytesseract | Convert to image first |
 | Fill PDF forms | pdf-lib or pypdf (see forms.md) | See forms.md |
 
@@ -293,55 +293,19 @@ with open("encrypted.pdf", "wb") as output:
 - If you need to fill out a PDF form, follow the instructions in forms.md
 - For troubleshooting guides, see reference.md
 
-## 🧠 Smart Routing: Choosing the Right Tool
+## HTML to PDF Conversion
 
-To ensure high-quality output, choose your tool based on your source file format:
+For converting HTML reports to PDF (preserving CSS styling, tables, layout):
 
-### Scenario A: Source is HTML (`.html`)
-**Use Google Chrome (Headless)**.
-*   **Why**: Best for preserving complex layouts, CSS, grids, and "dashboard" styles.
-*   **Do NOT use Pandoc**: It will strip styling and break the layout.
-*   **Command**:
-    ```bash
-    google-chrome --headless --disable-gpu --print-to-pdf=output.pdf --no-margins input.html
-    ```
-
-### Scenario B: Source is Markdown (`.md`) or Text (`.txt`)
-**Use Python ReportLab (PREFERRED)**.
-*   **Why**: Self-contained Python solution, no external binaries (like latex/pandoc) required. Reliable on all platforms (Heroku, Docker).
-*   **Do NOT use Pandoc**: Requires heavy latex dependencies often missing in production.
-*   **Approach**:
-    1.  Parse markdown (simple headings/text).
-    2.  Use `reportlab.platypus` to build the PDF programmatically.
-    *   **Snippet**:
-    ```python
-    from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-    from reportlab.lib.styles import getSampleStyleSheet
-    
-    doc = SimpleDocTemplate("report.pdf", pagesize=letter)
-    story = [Paragraph("Title", getSampleStyleSheet()['Title'])]
-    doc.build(story)
-    ```
-
-    ### ⚠️ Critical Implementation Rules
-    1.  **Absolute Paths**: When generating Python scripts, ALWAYS save to `{workspace_path}/work_products/` and execute using the **Full Absolute Path**.
-        *   ❌ `python create_pdf.py` (Unsafe - relies on CWD)
-        *   ✅ `python /abs/path/to/work_products/create_pdf.py`
-    2.  **Code Syntax**: Be extremely careful with f-strings in generated code.
-        *   ❌ `f"• {source"` (SyntaxError)
-        *   ✅ `f"• {source}"`
-
-### Check Availability
-Before running, verify the tool exists:
+### Google Chrome Headless (Recommended)
 ```bash
-which google-chrome || echo "Chrome missing"
-which google-chrome || echo "Chrome missing (use reportlab)"
-
+google-chrome --headless --disable-gpu --print-to-pdf=output.pdf --no-margins input.html
 ```
 
-### Check Availability First
-Before attempting import/install, you can check for tools:
+### Alternative: weasyprint
 ```bash
-which google-chrome || which chromium-browser || echo "Chrome not found"
+pip install weasyprint
+weasyprint input.html output.pdf
 ```
+
+**Note:** For simple text/markdown content, use `reportlab` to create PDFs directly. Use Chrome headless only when you have an existing HTML file with complex styling.

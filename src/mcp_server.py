@@ -42,9 +42,44 @@ try:
             send_to_logfire="if-token-present",
         )
         logfire.instrument_mcp()
-        sys.stderr.write("[Local Toolkit] Logfire instrumentation enabled\\n")
+        sys.stderr.write("[Local Toolkit] Logfire instrumentation enabled\n")
 except ImportError:
     pass
+
+# =============================================================================
+# SEARCH TOOL CONFIGURATION REGISTRY
+# =============================================================================
+# Single source of truth for parsing different Composio Search tool schemas.
+# Maps Tool Slug -> {list_key: str, url_key: str}
+SEARCH_TOOL_CONFIG = {
+    # Web & Default
+    "COMPOSIO_SEARCH":         {"list_key": "results",  "url_key": "url"},
+    "COMPOSIO_SEARCH_WEB":     {"list_key": "results",  "url_key": "url"},
+    "COMPOSIO_SEARCH_TAVILY":  {"list_key": "results",  "url_key": "url"},
+    "COMPOSIO_SEARCH_DUCK_DUCK_GO": {"list_key": "results", "url_key": "url"},
+    "COMPOSIO_SEARCH_EXA_ANSWER":   {"list_key": "results", "url_key": "url"},
+    "COMPOSIO_SEARCH_GROQ_CHAT":    {"list_key": "choices", "url_key": "message"}, # LLM chat, edge case
+    
+    # News & Articles
+    "COMPOSIO_SEARCH_NEWS":    {"list_key": "articles", "url_key": "url"},
+    "COMPOSIO_SEARCH_SCHOLAR": {"list_key": "articles", "url_key": "link"},
+    
+    # Products & Services
+    "COMPOSIO_SEARCH_AMAZON":  {"list_key": "data",     "url_key": "product_url"},
+    "COMPOSIO_SEARCH_SHOPPING":{"list_key": "data",     "url_key": "product_url"},
+    "COMPOSIO_SEARCH_WALMART": {"list_key": "data",     "url_key": "product_url"},
+    
+    # Travel & Events
+    "COMPOSIO_SEARCH_FLIGHTS": {"list_key": "data",     "url_key": "booking_url"}, # Assuming generic 'data' or specific list
+    "COMPOSIO_SEARCH_HOTELS":  {"list_key": "data",     "url_key": "url"},
+    "COMPOSIO_SEARCH_EVENT":   {"list_key": "data",     "url_key": "link"},
+    "COMPOSIO_SEARCH_TRIP_ADVISOR": {"list_key": "data", "url_key": "url"},
+    
+    # Other
+    "COMPOSIO_SEARCH_IMAGE":   {"list_key": "data",     "url_key": "original_url"}, # Google Images often 'original_url' or 'link'
+    "COMPOSIO_SEARCH_FINANCE": {"list_key": "data",     "url_key": "link"},
+    "COMPOSIO_SEARCH_GOOGLE_MAPS": {"list_key": "data", "url_key": "google_maps_link"},
+}
 
 try:
     sys.stderr.write("[Local Toolkit] Server starting components...\n")
@@ -114,13 +149,24 @@ def read_local_file(path: str) -> str:
         return f"Error reading file: {str(e)}"
 
 
+# =============================================================================
+# CORPUS SIZE LIMITS - Conservative limits to prevent context overflow
+# =============================================================================
+BATCH_SAFE_THRESHOLD = 2500    # Files under this are "batch-safe" (auto-include)
+BATCH_MAX_TOTAL = 25000        # Stop batch reading when cumulative hits this
+LARGE_FILE_THRESHOLD = 5000    # Files over this marked as "read individually"
+
+
 @mcp.tool()
 def read_research_files(file_paths: list[str]) -> str:
     """
-    Read multiple research files in a single batch call.
+    Read multiple research files in a single batch call with context overflow protection.
     
     Use this after reviewing research_overview.md to efficiently read 
     the full content of selected source files for quotes and facts.
+    
+    IMPORTANT: This tool has a batch limit of ~25,000 words to prevent context overflow.
+    If files are skipped, use read_local_file to read them individually.
     
     Args:
         file_paths: List of file paths to read (from research_overview.md listing)
@@ -133,8 +179,9 @@ def read_research_files(file_paths: list[str]) -> str:
         return "Error: No file paths provided"
     
     results = []
-    total_words = 0
+    cumulative_words = 0
     success_count = 0
+    skipped_files = []
     
     for path in file_paths:
         try:
@@ -149,7 +196,13 @@ def read_research_files(file_paths: list[str]) -> str:
                 content = f.read()
             
             word_count = len(content.split())
-            total_words += word_count
+            
+            # Check if adding this file would exceed the batch limit
+            if cumulative_words + word_count > BATCH_MAX_TOTAL:
+                skipped_files.append((path, word_count))
+                continue
+            
+            cumulative_words += word_count
             success_count += 1
             
             # Add clear section marker
@@ -167,10 +220,24 @@ def read_research_files(file_paths: list[str]) -> str:
     header = (
         f"# Research Files Batch Read\n"
         f"**Files read:** {success_count}/{len(file_paths)}\n"
-        f"**Total words:** {total_words:,}\n\n"
+        f"**Total words:** {cumulative_words:,}\n\n"
     )
     
-    return header + "\n".join(results)
+    output = header + "\n".join(results)
+    
+    # Add skipped files notice if any were skipped
+    if skipped_files:
+        output += f"\n\n---\n⚠️ **Batch limit reached ({BATCH_MAX_TOTAL:,} words)**\n"
+        output += f"Skipped {len(skipped_files)} file(s) to prevent context overflow:\n\n"
+        for path, wc in skipped_files:
+            filename = os.path.basename(path)
+            output += f"- `{filename}` ({wc:,} words)\n"
+        output += (
+            f"\nTo read these files, use `read_local_file` individually:\n"
+            f"```\nread_local_file(path=\"{skipped_files[0][0]}\")\n```"
+        )
+    
+    return output
 
 
 @mcp.tool()
@@ -398,10 +465,20 @@ class SearchResultFile(BaseModel):
     def all_urls(self) -> List[str]:
         """Extract all valid URLs from the file."""
         items = []
+        # Support hardcoded keys (Web/News)
         if self.results:
             items.extend(self.results)
         if self.articles:
             items.extend(self.articles)
+        
+        # NOTE: For fully generic support, we rely on the caller to inject tool-specific logic
+        # OR we could iterate through all extra fields if pydantic allows.
+        # But 'extra="ignore"' prevents us from seeing dynamic fields in this model.
+        #
+        # INSTEAD: We rely on the 'finalize_research' tool to use the 'SEARCH_TOOL_CONFIG'
+        # to parse dynamic schemas from the raw JSON if this static model fails.
+        #
+        # For now, just return what matches standard schemas:
         
         # Deduplicate while preserving order? No, set is simpler.
         # But we want to preserve order of relevance usually.
@@ -609,11 +686,11 @@ word_count: {len(content.split())}
         except Exception as e:
             return json.dumps({"error": f"Crawl4AI Cloud API error: {str(e)}"})
         
-        # Generate research_overview.md - combined context-efficient file
+        # Generate research_overview.md - combined context-efficient file with size tiers
         if results_summary["saved_files"]:
             try:
                 total_words = 0
-                overview_sections = []
+                file_metadata = []  # Store metadata for tiered categorization
                 
                 for i, file_info in enumerate(results_summary["saved_files"], 1):
                     with open(file_info["path"], "r", encoding="utf-8") as f:
@@ -641,50 +718,82 @@ word_count: {len(content.split())}
                     word_count = len(body.split())
                     total_words += word_count
                     
-                    # Create 1000-word excerpt
-                    words = body.split()
-                    excerpt = " ".join(words[:1000])
-                    if len(words) > 1000:
-                        excerpt += "..."
-                    
-                    # Build section
-                    title = metadata.get("title", "Untitled")
-                    date = metadata.get("date", "unknown")
-                    description = metadata.get("description", "")
-                    
-                    section = f"""## Source {i}
-**File:** {file_info['file']} ({word_count:,} words full)
-**Title:** {title}
-**Date:** {date}
-**URL:** {file_info['url']}
-
-### Excerpt (first 1000 words):
-{excerpt}
-
----
-"""
-                    overview_sections.append(section)
+                    # Store metadata for categorization
+                    file_metadata.append({
+                        "index": i,
+                        "file": file_info['file'],
+                        "path": file_info['path'],
+                        "url": file_info['url'],
+                        "title": metadata.get("title", "Untitled"),
+                        "date": metadata.get("date", "unknown"),
+                        "word_count": word_count,
+                    })
                 
-                # Assemble overview file
+                # Categorize files by size
+                batch_safe_files = [f for f in file_metadata if f["word_count"] <= BATCH_SAFE_THRESHOLD]
+                large_files = [f for f in file_metadata if f["word_count"] > LARGE_FILE_THRESHOLD]
+                medium_files = [f for f in file_metadata if BATCH_SAFE_THRESHOLD < f["word_count"] <= LARGE_FILE_THRESHOLD]
+                
+                # Build tiered overview
                 overview_header = f"""# Research Sources Overview
 **Generated:** {datetime.utcnow().isoformat()}Z
 **Total Sources:** {len(results_summary['saved_files'])} articles
 **Total Words Available:** {total_words:,} words across all sources
 
-> **Usage Guide:** This overview contains metadata and 1000-word excerpts for each source.
-> For quotes, specific facts, and deeper analysis, read the full source files listed below.
+## Corpus Size Breakdown
+| Category | Count | Description |
+|----------|-------|-------------|
+| **Batch-Safe** | {len(batch_safe_files)} | Under {BATCH_SAFE_THRESHOLD:,} words - safe for batch reading |
+| **Medium** | {len(medium_files)} | {BATCH_SAFE_THRESHOLD:,}-{LARGE_FILE_THRESHOLD:,} words - included in batch |
+| **Large** | {len(large_files)} | Over {LARGE_FILE_THRESHOLD:,} words - read individually |
+
+⚠️ **Batch Limit:** `read_research_files` stops at **{BATCH_MAX_TOTAL:,} words** cumulative.
+If you need large files, read them individually with `read_local_file`.
 
 ---
 
+## Batch-Safe Files (Recommended for batch read)
+
+| # | File | Words | Title |
+|---|------|-------|-------|
 """
-                overview_content = overview_header + "\n".join(overview_sections)
+                for f in batch_safe_files:
+                    overview_header += f"| {f['index']} | `{f['file']}` | {f['word_count']:,} | {f['title'][:50]}... |\n"
+                
+                if medium_files:
+                    overview_header += f"\n## Medium Files (Included in batch if space)\n\n| # | File | Words | Title |\n|---|------|-------|-------|\n"
+                    for f in medium_files:
+                        overview_header += f"| {f['index']} | `{f['file']}` | {f['word_count']:,} | {f['title'][:50]}... |\n"
+                
+                if large_files:
+                    overview_header += f"\n## ⚠️ Large Files (Read Individually)\n\n| # | File | Words | Title | Command |\n|---|------|-------|-------|--------|\n"
+                    for f in large_files:
+                        overview_header += f"| {f['index']} | `{f['file']}` | {f['word_count']:,} | {f['title'][:40]}... | `read_local_file(path=\"{f['path']}\")` |\n"
+                
+                overview_header += f"""
+---
+
+## All Sources Detail
+
+"""
+                # Add brief metadata for each source (no excerpts to save space)
+                for f in file_metadata:
+                    overview_header += f"""### Source {f['index']}: {f['title'][:60]}
+- **File:** `{f['file']}` ({f['word_count']:,} words)
+- **URL:** {f['url']}
+- **Date:** {f['date']}
+
+"""
+                
                 overview_path = os.path.join(search_results_dir, "research_overview.md")
                 
                 with open(overview_path, "w", encoding="utf-8") as f:
-                    f.write(overview_content)
+                    f.write(overview_header)
                 
                 results_summary["overview_file"] = overview_path
                 results_summary["total_words_available"] = total_words
+                results_summary["batch_safe_count"] = len(batch_safe_files)
+                results_summary["large_file_count"] = len(large_files)
                 logger.info(f"Created research_overview.md with {len(results_summary['saved_files'])} sources, {total_words:,} total words")
                 
             except Exception as e:
@@ -752,25 +861,53 @@ async def finalize_research(session_dir: str) -> str:
                     with open(path, "r", encoding="utf-8") as f:
                         data = json.load(f)
                     
-                    # Validate and parse with Pydantic
-                    try:
-                        # Attempt to parse as SearchResultFile (expecting dict inputs)
-                        if isinstance(data, dict):
-                            model = SearchResultFile.model_validate(data)
-                            urls = model.all_urls
-                            if urls:
-                                all_urls.update(urls)
-                                scanned_files += 1
-                                logger.info(f"Extracted {len(urls)} URLs from {filename}")
-                        else:
-                            # If it's a list (rare for Search files, but possible for generic tools)
-                            logger.warning(f"Skipping {filename}: Root element is not a dict")
-                                
-                    except ValidationError as ve:
-                        logger.warning(f"Pydantic validation failed for {filename}: {ve}")
-                        # Fallback? No, we want strictness now.
-                        pass
+                    if not isinstance(data, dict):
+                         logger.warning(f"Skipping {filename}: Root element is not a dict")
+                         continue
+
+                    # ---------------------------------------------------------
+                    # STRATEGY A: Configuration-Driven Extraction (Robust)
+                    # ---------------------------------------------------------
+                    tool_name = data.get("tool", "")
+                    config = SEARCH_TOOL_CONFIG.get(tool_name)
+                    
+                    extracted_count = 0
+                    
+                    if config:
+                        # We know exactly how to parse this tool
+                        list_key = config["list_key"]
+                        url_key = config["url_key"]
                         
+                        # Get the list of items
+                        items = data.get(list_key, [])
+                        if isinstance(items, list):
+                            for item in items:
+                                if isinstance(item, dict):
+                                    url = item.get(url_key)
+                                    if url and isinstance(url, str) and url.startswith("http"):
+                                        all_urls.add(url)
+                                        extracted_count += 1
+                        
+                        if extracted_count > 0:
+                            logger.info(f"[{tool_name}] Config-parsed {extracted_count} URLs from {filename}")
+                            scanned_files += 1
+                            continue # Successfully handled
+                    
+                    # ---------------------------------------------------------
+                    # STRATEGY B: Static Pydantic Fallback (Legacy/Unknown Tools)
+                    # ---------------------------------------------------------
+                    try:
+                        model = SearchResultFile.model_validate(data)
+                        urls = model.all_urls
+                        if urls:
+                            all_urls.update(urls)
+                            scanned_files += 1
+                            logger.info(f"[Legacy] Pydantic-parsed {len(urls)} URLs from {filename}")
+                    except ValidationError:
+                        # Only warn if we didn't already handle it via config
+                        if not config:
+                             logger.warning(f"Unknown tool schema in {filename} (Tool: {tool_name})")
+
                 except Exception as e:
                     logger.warning(f"Error reading {filename}: {e}")
         

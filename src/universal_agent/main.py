@@ -373,77 +373,13 @@ async def observe_and_save_search_results(
 
                 cleaned = None
 
-                # CASE A: News Results
-                if "news_results" in search_data:
-                    raw_list = safe_get_list(search_data, "news_results")
-                    cleaned = {
-                        "type": "news",
-                        "timestamp": datetime.now().isoformat(),
-                        "tool": slug,
-                        "articles": [
-                            {
-                                "position": a.get("position")
-                                or (idx + 1),  # Use API position or 1-indexed array order
-                                "title": a.get("title"),
-                                "url": a.get("link"),
-                                "source": a.get("source", {}).get("name")
-                                if isinstance(a.get("source"), dict)
-                                else (
-                                    a.get("source")
-                                    if isinstance(a.get("source"), str)
-                                    else None
-                                ),
-                                "date": parse_relative_date(a.get("date", "")),
-                                "snippet": a.get("snippet"),
-                            }
-                            for idx, a in enumerate(raw_list)
-                            if isinstance(a, dict)
-                        ],
-                    }
-
-                # CASE B: Organic Web Results
-                elif "organic_results" in search_data:
-                    raw_list = safe_get_list(search_data, "organic_results")
-                    cleaned = {
-                        "type": "web",
-                        "timestamp": datetime.now().isoformat(),
-                        "tool": slug,
-                        "results": [
-                            {
-                                "position": r.get("position")
-                                or (idx + 1),  # Use API position or 1-indexed array order
-                                "title": r.get("title"),
-                                "url": r.get("link"),
-                                "snippet": r.get("snippet"),
-                            }
-                            for idx, r in enumerate(raw_list)
-                        ],
-                    }
-
-
-                # CASE C: Scholar/Generic Articles (e.g., COMPOSIO_SEARCH_SCHOLAR)
-                elif "articles" in search_data:
-                    raw_list = safe_get_list(search_data, "articles")
-                    cleaned = {
-                        "type": "scholar",
-                        "timestamp": datetime.now().isoformat(),
-                        "tool": slug,
-                        "articles": [
-                            {
-                                "position": idx + 1,
-                                "title": a.get("title", ""),
-                                "url": a.get("link", a.get("url", "")),  # Scholar uses 'link' often
-                                "year": a.get("publication_year", ""),
-                                "snippet": a.get("snippet", ""),
-                            }
-                            for idx, a in enumerate(raw_list)
-                            if isinstance(a, dict)
-                        ],
-                    }
-
-                # CASE D: SEARCH_WEB with 'answer' + 'citations' format
-                # COMPOSIO_SEARCH_WEB returns: {"answer": "...", "citations": [{id, source, snippet}, ...]}
-                elif "citations" in search_data or "answer" in search_data:
+                # ---------------------------------------------------------
+                # DYNAMIC SCHEMA PARSING
+                # Priority: Special formats FIRST, then config-driven fallback
+                # ---------------------------------------------------------
+                
+                # PRIORITY 1: Special "Answer + Citations" format (COMPOSIO_SEARCH_WEB)
+                if "answer" in search_data and "citations" in search_data:
                     citations = safe_get_list(search_data, "citations")
                     cleaned = {
                         "type": "web_answer",
@@ -454,13 +390,77 @@ async def observe_and_save_search_results(
                             {
                                 "position": idx + 1,
                                 "title": c.get("source", c.get("id", "")),
-                                "url": c.get("id", c.get("source", "")),  # 'id' often contains URL
+                                "url": c.get("id", c.get("source", "")),
                                 "snippet": c.get("snippet", ""),
                             }
                             for idx, c in enumerate(citations)
                             if isinstance(c, dict)
                         ],
                     }
+                
+                # PRIORITY 2: News Results (explicit news_results key)
+                elif "news_results" in search_data:
+                    raw_list = safe_get_list(search_data, "news_results")
+                    cleaned = {
+                        "type": "news",
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": slug,
+                        "articles": [
+                            {
+                                "position": idx + 1,
+                                "title": a.get("title"),
+                                "url": a.get("link"),
+                                "source": a.get("source", {}).get("name") if isinstance(a.get("source"), dict) else a.get("source"),
+                                "snippet": a.get("snippet"),
+                            }
+                            for idx, a in enumerate(raw_list)
+                            if isinstance(a, dict)
+                        ],
+                    }
+                
+                # PRIORITY 3: Organic Results (raw SERP format)
+                elif "organic_results" in search_data:
+                    raw_list = safe_get_list(search_data, "organic_results")
+                    cleaned = {
+                        "type": "web",
+                        "timestamp": datetime.now().isoformat(),
+                        "tool": slug,
+                        "results": [
+                            {
+                                "position": r.get("position") or (idx + 1),
+                                "title": r.get("title"),
+                                "url": r.get("link"),
+                                "snippet": r.get("snippet"),
+                            }
+                            for idx, r in enumerate(raw_list)
+                        ],
+                    }
+                
+                # PRIORITY 4: Config-driven parsing (for Scholar, Amazon, Shopping, etc.)
+                else:
+                    config = SEARCH_TOOL_CONFIG.get(slug)
+                    if config:
+                        list_key = config["list_key"]
+                        url_key = config["url_key"]
+                        raw_list = safe_get_list(search_data, list_key)
+                        
+                        if raw_list:
+                            cleaned = {
+                                "type": "search_result",
+                                "timestamp": datetime.now().isoformat(),
+                                "tool": slug,
+                                config["list_key"]: [
+                                    {
+                                        "position": idx + 1,
+                                        "title": item.get("title", f"Result {idx+1}"),
+                                        "url": item.get(url_key),
+                                        "snippet": item.get("snippet", item.get("description", "")),
+                                        "source": item.get("source"),
+                                    }
+                                    for idx, item in enumerate(raw_list)
+                                    if isinstance(item, dict)
+                                ]
+                            }
 
 
                 # Save if we found cleanable data
@@ -492,11 +492,6 @@ async def observe_and_save_search_results(
                                 size=file_size,
                             )
                             saved_count += 1
-                            # Return feedback that can be injected into agent context
-                            # This tells the agent NOT to save again
-                            print(f"   ✅ Search Results Saved for Sub-Agent.")
-                            print(f"   ⚠️ STOP. Do not summarize these snippets. They are incomplete.")
-                            print(f"   👉 ACTION REQUIRED: Call 'Task' tool to delegate to 'report-creation-expert' for full analysis.")
                         else:
                             print(f"\n❌ [OBSERVER] File not created: {filename}")
                             logfire.error("observer_file_not_created", path=filename)
@@ -508,6 +503,12 @@ async def observe_and_save_search_results(
                             error=str(file_error),
                             path=filename if "filename" in locals() else "unknown",
                         )
+
+            # === JIT DELEGATION GUIDE RAIL (fires ONCE after ALL payloads processed) ===
+            if saved_count > 0:
+                print(f"\n   ✅ {saved_count} Search Result File(s) Saved for Sub-Agent.")
+                print(f"   ⚠️ STOP. Do not summarize these snippets. They are incomplete.")
+                print(f"   👉 ACTION REQUIRED: Call 'Task' tool to delegate to 'report-creation-expert' for full analysis.")
 
         except Exception as e:
             print(f"\n❌ [OBSERVER] Parse error: {e}")
@@ -984,6 +985,124 @@ def build_skill_prompt_triggers() -> dict[str, list[str]]:
 
 # Build triggers at module load (cached)
 SKILL_PROMPT_TRIGGERS = build_skill_prompt_triggers()
+
+
+# =============================================================================
+# SKILL AWARENESS REGISTRY - For injecting skill context into sub-agents
+# =============================================================================
+
+class SkillAwarenessRegistry:
+    """
+    Provides skill awareness context for sub-agents.
+    Sub-agents receive YAML skill summaries when spawned, enabling them
+    to progressively load full skill content when needed.
+    """
+    
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self.skills = discover_skills()  # Reuse existing function
+        logfire.info("skill_awareness_registry_initialized", skill_count=len(self.skills))
+    
+    def get_awareness_context(self, expected_skills: list[str] = None) -> str:
+        """
+        Generate skill awareness injection for sub-agent.
+        
+        Args:
+            expected_skills: List of skill names this sub-agent is expected to use.
+        
+        Returns:
+            Formatted string with skill awareness guidance.
+        """
+        if not self.skills:
+            return ""
+        
+        expected_str = ", ".join(expected_skills) if expected_skills else "none specified"
+        
+        skill_lines = []
+        for skill in self.skills:
+            name = skill.get("name", "unknown")
+            desc = skill.get("description", "No description")
+            # Truncate long descriptions
+            if len(desc) > 150:
+                desc = desc[:150] + "..."
+            skill_lines.append(f"- **{name}**: {desc}")
+        
+        return f"""
+## Inherited Skill Awareness
+
+The following skills are available in this project. Your agent definition 
+indicates you may need: **{expected_str}**. Pay particular attention to these 
+as they are expected to be useful for your activities.
+
+**To use any skill**, first read its SKILL.md for full instructions:
+```
+Read file_path=".claude/skills/{{skill_name}}/SKILL.md"
+```
+
+**Available Skills:**
+{chr(10).join(skill_lines)}
+"""
+
+
+# Global registry instance (lazy init)
+SKILL_AWARENESS_REGISTRY = None
+
+
+def get_skill_awareness_registry() -> SkillAwarenessRegistry:
+    """Get or create the skill awareness registry singleton."""
+    global SKILL_AWARENESS_REGISTRY
+    if SKILL_AWARENESS_REGISTRY is None:
+        SKILL_AWARENESS_REGISTRY = SkillAwarenessRegistry()
+    return SKILL_AWARENESS_REGISTRY
+
+
+# Expected skills mapping for sub-agents
+# This maps subagent_type to the skills they're likely to use
+SUBAGENT_EXPECTED_SKILLS = {
+    "report-creation-expert": ["pdf", "image-generation"],
+    "image-expert": ["image-generation"],
+    "video-creation-expert": [],  # Uses MCP tools, not skills
+}
+
+
+async def on_pre_task_skill_awareness(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """
+    PreToolUse Hook: Before Task tool executes (spawning a sub-agent),
+    inject skill awareness context so the sub-agent knows what skills exist.
+    """
+    tool_input = input_data.get("tool_input", {})
+    subagent_type = tool_input.get("subagent_type", "unknown")
+    
+    # Get expected skills for this sub-agent type
+    expected_skills = SUBAGENT_EXPECTED_SKILLS.get(subagent_type, [])
+    
+    # Get skill awareness context
+    registry = get_skill_awareness_registry()
+    awareness_context = registry.get_awareness_context(expected_skills)
+    
+    if awareness_context:
+        logfire.info(
+            "skill_awareness_injected_to_subagent",
+            subagent_type=subagent_type,
+            expected_skills=expected_skills,
+        )
+        return {
+            "systemMessage": awareness_context
+        }
+    
+    return {}
 
 
 
@@ -2006,6 +2125,7 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
             ],
             "PreToolUse": [
                 HookMatcher(matcher="Bash", hooks=[on_pre_bash_skill_hint]),
+                HookMatcher(matcher="Task", hooks=[on_pre_task_skill_awareness]),
             ],
             # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
             # "error: 'types.UnionType' object is not callable"
@@ -2197,6 +2317,40 @@ async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: 
     trace["total_duration_seconds"] = round(end_ts - start_ts, 3)
 
     return final_response_text
+
+
+# =============================================================================
+# SEARCH TOOL CONFIGURATION REGISTRY (Synced with mcp_server.py)
+# =============================================================================
+SEARCH_TOOL_CONFIG = {
+    # Web & Default
+    "COMPOSIO_SEARCH":         {"list_key": "results",  "url_key": "url"},
+    "COMPOSIO_SEARCH_WEB":     {"list_key": "results",  "url_key": "url"},
+    "COMPOSIO_SEARCH_TAVILY":  {"list_key": "results",  "url_key": "url"},
+    "COMPOSIO_SEARCH_DUCK_DUCK_GO": {"list_key": "results", "url_key": "url"},
+    "COMPOSIO_SEARCH_EXA_ANSWER":   {"list_key": "results", "url_key": "url"},
+    "COMPOSIO_SEARCH_GROQ_CHAT":    {"list_key": "choices", "url_key": "message"}, 
+    
+    # News & Articles
+    "COMPOSIO_SEARCH_NEWS":    {"list_key": "articles", "url_key": "url"},
+    "COMPOSIO_SEARCH_SCHOLAR": {"list_key": "articles", "url_key": "link"},
+    
+    # Products & Services
+    "COMPOSIO_SEARCH_AMAZON":  {"list_key": "data",     "url_key": "product_url"},
+    "COMPOSIO_SEARCH_SHOPPING":{"list_key": "data",     "url_key": "product_url"},
+    "COMPOSIO_SEARCH_WALMART": {"list_key": "data",     "url_key": "product_url"},
+    
+    # Travel & Events
+    "COMPOSIO_SEARCH_FLIGHTS": {"list_key": "data",     "url_key": "booking_url"},
+    "COMPOSIO_SEARCH_HOTELS":  {"list_key": "data",     "url_key": "url"},
+    "COMPOSIO_SEARCH_EVENT":   {"list_key": "data",     "url_key": "link"},
+    "COMPOSIO_SEARCH_TRIP_ADVISOR": {"list_key": "data", "url_key": "url"},
+    
+    # Other
+    "COMPOSIO_SEARCH_IMAGE":   {"list_key": "data",     "url_key": "original_url"},
+    "COMPOSIO_SEARCH_FINANCE": {"list_key": "data",     "url_key": "link"},
+    "COMPOSIO_SEARCH_GOOGLE_MAPS": {"list_key": "data", "url_key": "google_maps_link"},
+}
 
 
 async def main():

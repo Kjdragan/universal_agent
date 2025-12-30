@@ -848,3 +848,50 @@ print("Intermediate transcript saved.")
 **Benefit**: User gets real-time artifacts without breaking the session state.
 
 ---
+
+---
+
+### Lesson 40: Centralized Search Schema Registry
+**Date**: 2025-12-29
+
+**Problem**: Handling diverse JSON schemas from 15+ search tools (Web, News, Scholar, Shopping, Flights) using ad-hoc `if/else` conditions is brittle and unmaintainable. Adding a new tool required code changes in multiple places (Observer, specific Parsers).
+
+**Solution**: Implement a single **Configuration Registry** (`SEARCH_TOOL_CONFIG`) that defines the parsing rules for every tool:
+```python
+SEARCH_TOOL_CONFIG = {
+    "COMPOSIO_SEARCH_SCHOLAR": {"list_key": "articles", "url_key": "link"},
+    "COMPOSIO_SEARCH_AMAZON":  {"list_key": "data",     "url_key": "product_url"},
+    # ...
+}
+```
+
+**Implementation**:
+- **Observer (`main.py`)**: Uses config to normalize data before validating/saving.
+- **Backend (`mcp_server.py`)**: Uses the same config to extract URLs for crawling.
+
+**Benefit**:
+- **Robustness**: Unknown schemas log warnings instead of crashing.
+- **Scalability**: New tools work instantly by adding one line to the config.
+
+---
+
+### Lesson 41: Just-in-Time (JIT) Delegation Guide Rails
+**Date**: 2025-12-29
+
+**Problem**: The "Scout" agent would search, see 3-4 snippets in the search result JSON, and immediately try to write a "Report" based on those snippets, ignoring the "Delegate to Expert" instruction. The temptation of available text was too strong to resist.
+
+**Solution**: **Active Observer Intervention**.
+When the Observer detects it has saved a search result file, it injects a high-priority system message into the conversation stream:
+
+```
+✅ Search Results Saved for Sub-Agent.
+⚠️ STOP. Do not summarize these snippets. They are incomplete.
+👉 ACTION REQUIRED: Call 'Task' tool to delegate to 'report-creation-expert' for full analysis.
+```
+
+**Result**:
+- The agent reads this "Traffic Sign" and immediately stops its thought process.
+- It executes the `Task` tool as commanded.
+- **Success Rate**: 100% in testing (vs ~40% with prompt-only instructions).
+
+**Key Takeaway**: Don't rely on the System Prompt (static) for critical workflow branching. Use **Dynamic Context Injection** (Observer) to guide the agent *exactly when it matters*.
