@@ -927,3 +927,41 @@ When the Observer detects it has saved a search result file, it injects a high-p
 - This actually enables better isolation: if the MCP server crashes, the Main Agent trace remains clean and readable, showing only the error received from the pipe.
 
 ---
+
+### Lesson 43: Batch File Reading with `read_research_files`
+**Date**: 2025-12-30
+
+**Problem**: After `crawl_parallel` generates 30+ `crawl_*.md` files, the agent was making **individual `read_local_file` calls** for each file. This took ~25 seconds and generated excessive tool calls.
+
+**Discovery**: We had a batch reading tool `mcp__local_toolkit__read_research_files` that could read all files in 1 call, but the agent wasn't using it.
+
+**Root Cause**: The Knowledge Base didn't instruct the agent to use the batch tool.
+
+**Solution**: Updated `.claude/knowledge/report_workflow.md` with explicit instructions:
+
+```markdown
+## Critical: Batch File Reading
+
+After `crawl_parallel` creates multiple `crawl_*.md` files:
+
+⚠️ **DO NOT** call `read_local_file` individually for each crawled file.
+✅ **DO** use `read_research_files` to read all files at once.
+```
+
+**Results**:
+| Metric | Before | After |
+|--------|--------|-------|
+| Tool Calls | 30+ individual | 6 batch |
+| Time | ~25 seconds | ~0.4 seconds |
+| **Savings** | - | **~24.6 seconds** |
+
+**Key Features of `read_research_files`**:
+1. **Context Overflow Protection**: Stops at 25,000 words to prevent context overflow
+2. **Parallel Batching**: Agent can call multiple times in parallel (6 files per call)
+3. **Clear Output**: Returns word counts and file markers for easy parsing
+
+**Lesson**: When you have a Python function that can replace many agent tool calls, **document it in the Knowledge Base**. The agent will follow explicit instructions to use efficient patterns.
+
+---
+
+*Last updated: 2025-12-30*
