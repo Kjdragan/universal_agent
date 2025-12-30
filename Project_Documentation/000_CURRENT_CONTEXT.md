@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2025-12-30 08:30 CST
+**Last Updated**: 2025-12-30 16:15 CST
 
 ---
 
@@ -19,7 +19,7 @@
 - Sub-agent delegation for specialized tasks (report generation)
 - Logfire tracing for observability
 - **Letta-style Memory System** with Core Memory blocks (persona, human, system_rules)
-- **Agent College** self-improvement subsystem (NEW)
+- **Agent College** self-improvement subsystem
 - Automatic workspace and artifact management
 - Observer pattern for async result processing and error tracking
 
@@ -30,64 +30,94 @@
 
 ## 📍 Current State (December 30, 2025)
 
-### ✅ What's Working Well
+### ✅ What's Working
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| **Research & Report Generation** | ✅ Production-ready | JIT Delegation fixed via Knowledge Base |
-| **Telegram Integration** | ✅ Working | Multi-user, async messaging support |
+| **Railway Deployment** | ✅ Production | US West, Static IP, Pro plan |
+| **Telegram Bot** | ✅ Working | Webhook mode, FastAPI + PTB |
+| **Research & Report Generation** | ✅ Production-ready | JIT Delegation via Knowledge Base |
 | **PDF/PPTX Creation** | ✅ Working | Skills-based, conditional routing |
 | **Email Delivery (Gmail)** | ✅ Working | Attachments via `upload_to_composio` |
+| **Image Generation** | ✅ Working | Gemini 2.5 Flash Image |
 | **Memory System** | ✅ Working | Core blocks, archival search |
 | **Logfire Tracing** | ✅ Working | Dual Trace (Main + Subprocess) |
 
-### 🆕 Recent Additions (This Session)
+### 🆕 Recent Fixes (Dec 30, 2025)
 
-1.  **Railway Deployment (Production)**:
-    -   **Status**: ✅ Deployed & Fully Operational.
-    -   **Architecture**: Monolythic container (Bot + Worker) running as `appuser`.
-    -   **Persistence**: Persistent Volume (`/app/data`) for long-term memory.
-    -   **Security**: Non-root container with `chown` permission fix on startup.
+1. **Resilient Startup**: Bot no longer crashes if Telegram API is unreachable on startup. Runs in "degraded mode" and logs manual fix instructions.
 
-2.  **JIT Delegation Guide Rail**:
-    -   **Problem**: Agent summarizing snippets instead of delegating.
-    -   **Solution**: `Knowledge Base Injection` (.claude/knowledge/report_workflow.md).
-    -   **Result**: 100% reliable delegation to `report-creation-expert`.
-
-3.  **Architecture Documentation Overhaul (v1.1)**:
-    -   Updated `Project_Documentation/Architecture/` to reflect current state.
-    -   Added docs for Telegram, JIT Guide Rails, and Sub-Agent Specialists.
-
-### Architectural Inspiration: LangSmith-Fetch
-
-The Agent College design is inspired by [LangSmith-Fetch](https://github.com/langchain-ai/langsmith-fetch), which provides API access to LangSmith traces. We're adapting this pattern for Logfire:
-
-| LangSmith-Fetch | Our LogfireFetch |
-|-----------------|------------------|
-| REST API to LangSmith | SQL queries via `LogfireQueryClient` |
-| Push-based webhooks | Polling (TBD) or FastAPI endpoints |
-| Trace analysis | Critic/Professor agents |
-
-**Open Question**: Should we build a more complete FastAPI layer that mirrors LangSmith-Fetch's endpoints, or is polling sufficient?
+2. **Documentation Overhaul**: Rewrote all Telegram integration docs to match actual FastAPI + PTB webhook architecture.
 
 ---
 
-## 🚧 Where We're Going Next
+## 🚧 Known Issues & Next Steps
 
-### Immediate Priority: Usability Enhancements
-The bot is live, but interaction is still text-heavy.
+### 🔴 CRITICAL: Session Persistence After Task
 
-**Next Tasks**:
-1.  **Remote File Access**: Implement `/files` command to allow users to download artifacts (PDFs/Reports) directly from Telegram (fetching from persistent storage).
-2.  **Control Commands**: Implement `/stop` or `/cancel` to gracefully terminate running agent tasks.
-3.  **Agent College Automation**: Finalize the loop where the Critic automatically reviews Logfire traces (currently manual).
+**Problem**: After a task completes, the agent session sometimes becomes unresponsive. Network timeouts during notification can leave the session in a bad state, preventing new `/start` or `/agent` commands from working.
 
-**Key Questions to Explore**:
+**Symptom**: Logs show `⚠️ Notification attempt 1/3 failed: Timed out` then subsequent commands don't respond.
 
-| Topic | Question |
-|-------|----------|
-| **Mobile UX** | How to make complex report generation feel native on mobile? |
-| **Cost Optimization** | Monitor RAM usage of the monolithic container. |
+**Root Cause**: `AgentAdapter` keeps a single `self.session` that persists across all tasks. If the session gets corrupted, all subsequent tasks fail.
+
+**Potential Fixes**:
+1. **Per-Task Session**: Create fresh Claude SDK session for each task (slower but safer)
+2. **Session Health Check**: Validate session before each task, reinitialize if unhealthy
+3. **Watchdog Timer**: Restart container if no successful task in N minutes
+
+### 🟡 Other Issues
+
+| Issue | Status | Notes |
+|-------|--------|-------|
+| Agent College not auto-triggered | ⏳ Pending | Requires manual invocation |
+| `/files` command not implemented | ⏳ Pending | Users can't download artifacts |
+| `/stop` command not implemented | ⏳ Pending | Can't cancel running tasks |
+
+---
+
+## 🏗️ Architecture Overview
+
+### Railway Deployment
+
+```
+GitHub (git push main)
+        │
+        ▼
+Railway Auto-Deploy
+        │
+        ▼
+┌─────────────────────────────────────────┐
+│ Container (python:3.12-slim-bookworm)   │
+│                                         │
+│  start.sh → Bot (FastAPI + PTB)         │
+│           → Agent College (internal)    │
+│                                         │
+│  /app/data (Persistent Volume)          │
+│   └── memory/, workspaces/              │
+└─────────────────────────────────────────┘
+```
+
+**Production URL**: `https://web-production-3473.up.railway.app`
+
+### Telegram Bot Flow
+
+```
+Telegram Cloud
+    │
+    │ HTTPS POST /webhook
+    ▼
+FastAPI (Uvicorn)
+    │
+    ▼
+PTB Command Handlers
+    │
+    ▼
+TaskManager (Queue)
+    │
+    ▼
+AgentAdapter → Claude SDK
+```
 
 ---
 
@@ -116,41 +146,32 @@ Agent Runtime                    LogfireFetch Service
   Graduation (New Skill / Rule)
 ```
 
-**Key Files**:
-| File | Purpose |
-|------|---------|
-| `AgentCollege/logfire_fetch/main.py` | FastAPI service |
-| `src/universal_agent/agent_college/critic.py` | Error analysis → Sandbox |
-| `src/universal_agent/agent_college/professor.py` | Skill graduation |
-| `src/universal_agent/agent_college/integration.py` | Boot-time hook |
-| `Memory_System/manager.py` | Core memory management |
-
 ---
 
 ## 🔧 Running the System
 
-### Main Agent
+### Production (Railway)
+Automatic on `git push main`. Monitor via Railway Dashboard.
+
+### Local Development
 ```bash
 cd /home/kjdragan/lrepos/universal_agent
-uv run src/universal_agent/main.py
+
+# Start bot with ngrok
+ngrok http 8080  # Get URL, update .env WEBHOOK_URL
+uv run uvicorn universal_agent.bot.main:app --host 0.0.0.0 --port 8080
 ```
 
-### LogfireFetch Service (Agent College)
+### Useful Commands
 ```bash
-uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8000
-```
+# Check webhook status
+curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
 
-### Test Webhook
-```bash
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"trace_id": "test", "error": "example failure"}' \
-  http://localhost:8000/webhook/alert
-```
+# Force webhook registration
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL>&secret_token=<SECRET>"
 
-### Check Sandbox Contents
-```bash
-sqlite3 Memory_System_Data/agent_core.db \
-  "SELECT value FROM core_blocks WHERE label='AGENT_COLLEGE_NOTES';"
+# Check health
+curl https://web-production-3473.up.railway.app/health
 ```
 
 ---
@@ -159,11 +180,11 @@ sqlite3 Memory_System_Data/agent_core.db \
 
 | Priority | Document | Purpose |
 |----------|----------|---------|
-| 1 | `036_AGENT_COLLEGE_OPEN_QUESTIONS.md` | **READ FIRST** — Exploration agenda |
-| 2 | `035_AGENT_COLLEGE_ARCHITECTURE.md` | Agent College overview |
-| 3 | `034_LETTA_MEMORY_SYSTEM_MANUAL.md` | Memory System design |
-| 4 | `010_LESSONS_LEARNED.md` | 39 lessons on patterns and gotchas |
-| 5 | `.claude/skills/` | Skill definitions (pdf, pptx, etc.) |
+| 1 | `Telegram_Integration/` | Bot architecture & deployment |
+| 2 | `Architecture/11_railway_deployment_plan.md` | Railway setup |
+| 3 | `035_AGENT_COLLEGE_ARCHITECTURE.md` | Agent College overview |
+| 4 | `034_LETTA_MEMORY_SYSTEM_MANUAL.md` | Memory System design |
+| 5 | `010_LESSONS_LEARNED.md` | Patterns and gotchas |
 
 ---
 
@@ -174,51 +195,26 @@ universal_agent/
 ├── src/
 │   ├── universal_agent/
 │   │   ├── main.py                 # Main agent
-│   │   └── agent_college/          # Professor, Critic, Scribe 🆕
-│   │       ├── integration.py
-│   │       ├── professor.py
-│   │       ├── critic.py
-│   │       └── scribe.py
+│   │   ├── bot/                    # Telegram bot
+│   │   │   ├── main.py             # FastAPI + PTB
+│   │   │   ├── config.py           # Environment vars
+│   │   │   ├── telegram_handlers.py# Commands
+│   │   │   ├── task_manager.py     # Async queue
+│   │   │   └── agent_adapter.py    # Claude SDK bridge
+│   │   └── agent_college/          # Professor, Critic, Scribe
 │   └── mcp_server.py               # Local MCP tools
-├── AgentCollege/                    # 🆕
-│   └── logfire_fetch/              # FastAPI service
-│       ├── main.py
-│       ├── logfire_reader.py
-│       └── models.py
-├── Memory_System/                   # Letta-style memory
-│   ├── manager.py
-│   └── storage.py
-├── Memory_System_Data/              # Databases (gitignored)
-│   └── agent_core.db
+├── AgentCollege/                   # FastAPI service
+├── Memory_System/                  # Letta-style memory
 ├── .claude/
 │   ├── skills/                     # Skill definitions
 │   └── knowledge/                  # Knowledge base
 ├── Project_Documentation/
 │   ├── 000_CURRENT_CONTEXT.md      # This file
-│   ├── 035_AGENT_COLLEGE_ARCHITECTURE.md
-│   └── 036_AGENT_COLLEGE_OPEN_QUESTIONS.md 🆕
-└── AGENT_RUN_WORKSPACES/           # Session artifacts
+│   └── Telegram_Integration/       # Bot docs
+├── Dockerfile                      # Container build
+├── start.sh                        # Container entrypoint
+└── AGENT_RUN_WORKSPACES/           # Session artifacts (local)
 ```
-
----
-
-## ⚠️ Known Issues
-
-1. **Agent College Notes not auto-surfaced** — User must manually query database or implement `/review-notes`
-2. **Logfire Webhooks not configured** — Currently using polling/curl, not push from Logfire cloud
-3. **Professor not triggered automatically** — Skill graduation requires manual invocation
-
----
-
-## 🎯 Success Metrics
-
-| Metric | Target | Status |
-|--------|--------|--------|
-| Research workflow | <10 min | ✅ ~8 min |
-| PDF/PPTX generation | Working | ✅ |
-| Memory persistence | Across sessions | ✅ |
-| Agent College capture | Errors to sandbox | ✅ (manual) |
-| Skill graduation | HITL workflow | ⏳ Not yet |
 
 ---
 

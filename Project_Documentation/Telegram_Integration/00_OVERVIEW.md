@@ -1,40 +1,76 @@
-# Telegram Bot Integration - Overview
+# Telegram Bot Integration
 
-## Introduction
-The Universal Agent includes a Telegram Bot interface (`src/universal_agent/bot/`) that allows you to trigger agent tasks and receive results remotely. This system is designed to be:
-1.  **Secure**: Uses a secret webhook token and an allowlist of User IDs.
-2.  **Asynchronous**: Tasks are queued and processed one by one without blocking the bot.
-3.  **Containerized**: The entire stack runs in Docker for consistency.
+> [!IMPORTANT]
+> **Last Updated**: 2025-12-30  
+> **Status**: ✅ Production (Railway)
 
-## Architecture
-```mermaid
-graph LR
-    User[Telegram User] -- Message --> TG[Telegram Server]
-    TG -- Webhook (HTTPS) --> Ngrok[Ngrok Tunnel]
-    Ngrok -- Forward (HTTP) --> Bot[Bot (FastAPI)]
-    Bot -- Add Task --> Queue[Task Manager]
-    Queue -- Pick Task --> Adapter[Agent Adapter]
-    Adapter -- Execute --> Agent[Universal Agent]
-    Agent -- Result --> Bot
-    Bot -- Reply --> User
+This directory documents the Universal Agent's Telegram bot integration, which provides a mobile-friendly interface to the agent.
+
+---
+
+## Architecture Overview
+
+```
+┌──────────────┐     HTTPS POST     ┌─────────────────────────────┐
+│   Telegram   │ ─────────────────► │  Railway Container          │
+│   Cloud      │                    │  ┌───────────────────────┐  │
+│              │                    │  │  FastAPI (Uvicorn)    │  │
+│              │                    │  │  - /webhook endpoint  │  │
+│              │                    │  │  - /health endpoint   │  │
+│              │                    │  └───────────┬───────────┘  │
+│              │                    │              │               │
+│              │                    │  ┌───────────▼───────────┐  │
+│              │   Send Message     │  │  python-telegram-bot  │  │
+│              │ ◄───────────────── │  │  Command Handlers     │  │
+│              │                    │  └───────────┬───────────┘  │
+└──────────────┘                    │              │               │
+                                    │  ┌───────────▼───────────┐  │
+                                    │  │  TaskManager (Queue)  │  │
+                                    │  └───────────┬───────────┘  │
+                                    │              │               │
+                                    │  ┌───────────▼───────────┐  │
+                                    │  │  AgentAdapter         │  │
+                                    │  │  (Claude SDK Bridge)  │  │
+                                    │  └───────────────────────┘  │
+                                    └─────────────────────────────┘
 ```
 
-## Folder Structure
-- `src/universal_agent/bot/`: Contains all bot-specific code.
-    - `main.py`: Entry point for the FastAPI server.
-    - `telegram_handlers.py`: Logic for `/start`, `/agent`, etc.
-    - `agent_adapter.py`: Bridge that calls `setup_session` and `process_turn`.
-- `Dockerfile` & `docker-compose.yml`: For building the container environment.
+---
 
-## Prerequisites
-1.  **Telegram Account**: To talk to the bot.
-2.  **Ngrok Account**: To expose your local bot to the internet.
-3.  **Docker**: To run the application isolated.
-4.  **Hardware**: A Linux machine (or WSL) with ~16GB RAM for the agent.
+## Key Components
 
-## Next Steps
-Please follow the numbered guides in this folder to set up your environment:
-1.  `01_TELEGRAM_BOT_SETUP.md`: Create your bot and get credentials.
-2.  `02_NGROK_SETUP.md`: Setup the tunneling service.
-3.  `03_DOCKER_DEPLOYMENT.md`: Build and run the system.
-4.  `04_USAGE_GUIDE.md`: How to use the bot.
+| File | Purpose |
+|------|---------|
+| [main.py](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/bot/main.py) | FastAPI app, lifespan, webhook endpoint |
+| [config.py](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/bot/config.py) | Environment variables (tokens, URLs) |
+| [telegram_handlers.py](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/bot/telegram_handlers.py) | Command handlers (`/start`, `/agent`, `/status`) |
+| [task_manager.py](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/bot/task_manager.py) | Async task queue with status tracking |
+| [agent_adapter.py](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/bot/agent_adapter.py) | Bridge to main agent session |
+
+---
+
+## Bot Commands
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Display welcome message and available commands |
+| `/help` | Same as `/start` |
+| `/agent <prompt>` | Queue a task for the agent to execute |
+| `/status` | Show status of your last 5 tasks |
+
+---
+
+## Security Model
+
+1. **User Whitelist**: Only users in `ALLOWED_USER_IDS` can use the bot
+2. **Webhook Secret**: Telegram sends a secret token header validated by FastAPI
+3. **Non-root Container**: Bot runs as `appuser`, not root
+
+---
+
+## More Documentation
+
+- [01_BOT_ARCHITECTURE.md](./01_BOT_ARCHITECTURE.md) — Detailed component breakdown
+- [02_RAILWAY_DEPLOYMENT.md](./02_RAILWAY_DEPLOYMENT.md) — Production deployment guide
+- [03_LOCAL_DEVELOPMENT.md](./03_LOCAL_DEVELOPMENT.md) — Testing locally with ngrok
+- [04_COMMANDS_AND_USAGE.md](./04_COMMANDS_AND_USAGE.md) — User guide for bot commands
