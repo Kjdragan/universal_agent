@@ -43,18 +43,20 @@
 
 ### 🆕 Recent Additions (This Session)
 
-1.  **JIT Delegation Guide Rail**:
+1.  **Railway Deployment (Production)**:
+    -   **Status**: ✅ Deployed & Fully Operational.
+    -   **Architecture**: Monolythic container (Bot + Worker) running as `appuser`.
+    -   **Persistence**: Persistent Volume (`/app/data`) for long-term memory.
+    -   **Security**: Non-root container with `chown` permission fix on startup.
+
+2.  **JIT Delegation Guide Rail**:
     -   **Problem**: Agent summarizing snippets instead of delegating.
     -   **Solution**: `Knowledge Base Injection` (.claude/knowledge/report_workflow.md).
     -   **Result**: 100% reliable delegation to `report-creation-expert`.
 
-2.  **Architecture Documentation Overhaul (v1.1)**:
+3.  **Architecture Documentation Overhaul (v1.1)**:
     -   Updated `Project_Documentation/Architecture/` to reflect current state.
     -   Added docs for Telegram, JIT Guide Rails, and Sub-Agent Specialists.
-
-3.  **Codebase Cleanup**:
-    -   Removed dead code (failed JIT hooks, redundant startup logs).
-    -   Merged `main-yolo` branches into `main`.
 
 ### Architectural Inspiration: LangSmith-Fetch
 
@@ -72,27 +74,20 @@ The Agent College design is inspired by [LangSmith-Fetch](https://github.com/lan
 
 ## 🚧 Where We're Going Next
 
-### Immediate Priority: Railway Deployment
-We are ready to deploy the Universal Agent to **Railway**.
+### Immediate Priority: Usability Enhancements
+The bot is live, but interaction is still text-heavy.
 
-**Keys for Deployment**:
-1.  **Plan**: Follow **[11_railway_deployment_plan.md](./Architecture/11_railway_deployment_plan.md)** (Created Dec 30).
-2.  **Strategy**:
-    *   **GitHub Integration**: Push-to-Deploy workflow.
-    *   **Automation**: `bot/main.py` MUST be updated to self-register webhooks on startup.
-    *   **Dependencies**: Hybrid approach (Cloud API for crawling, Docker `apt` packages for PDF/Video).
-3.  **Persistence**: Ensure `AGENT_RUN_WORKSPACES` and `Memory_System_Data` are mounted as Volumes.
+**Next Tasks**:
+1.  **Remote File Access**: Implement `/files` command to allow users to download artifacts (PDFs/Reports) directly from Telegram (fetching from persistent storage).
+2.  **Control Commands**: Implement `/stop` or `/cancel` to gracefully terminate running agent tasks.
+3.  **Agent College Automation**: Finalize the loop where the Critic automatically reviews Logfire traces (currently manual).
 
 **Key Questions to Explore**:
 
 | Topic | Question |
 |-------|----------|
-| **Agent College** | How to run the `LogfireFetch` service alongside the bot? (Plan: Monolith via script) |
-| **Cost** | "Always-On" RAM reservation is required (Stateful architecture). |
-
-**Next Dialogue Goals**:
-1.  **Execute Plan**: Create `Dockerfile`, `.dockerignore`, and update `bot/main.py` code.
-2.  **Deploy**: Connect GitHub to Railway and go live.
+| **Mobile UX** | How to make complex report generation feel native on mobile? |
+| **Cost Optimization** | Monitor RAM usage of the monolithic container. |
 
 ---
 

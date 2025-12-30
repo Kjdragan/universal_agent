@@ -106,3 +106,26 @@ Never put quotes around values in Railway Variables.
 - [ ] **Respect $PORT**: Your app finds the internet through this variable.
 - [ ] **Pin Versions**: Lock your Python version to something stable (3.12 is the current "Sweet Spot").
 - [ ] **Code Your Deps**: Don't just `pip install`. Add it to `pyproject.toml`.
+
+---
+
+## 7. The Permissions Paradox (Root vs. AppUser)
+**The Issue**:
+The app crashed with `PermissionError: [Errno 13] Permission denied: '/app/data/workspaces'`.
+**Why**:
+1.  Railway mounts Persistent Volumes (`/app/data`) owned by **root**.
+2.  We configured our Dockerfile to run as `USER appuser` (non-root) to satisfy the strict security checks of the Claude Agent SDK (`--dangerously-skip-permissions` fails as root).
+3.  **Conflict**: `appuser` cannot write to the `root`-owned volume.
+
+**The Fix (The "Sudo" Sandwich)**:
+We implemented a startup pattern that gets the best of both worlds:
+1.  **Start as Root**: The Dockerfile starts as root (removed `USER appuser`).
+2.  **Fix Permissions**: `start.sh` runs `chown -R appuser /app/data`.
+3.  **Drop Privileges**: `start.sh` then executes the app using `su appuser`.
+
+```bash
+# In start.sh
+chown -R appuser:appuser /app/data
+exec su -s /bin/bash appuser -c "exec uv run ..."
+```
+**Lesson**: When using volumes with non-root containers, you often need a root entrypoint to fix permissions before dropping privileges.
