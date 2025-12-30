@@ -33,6 +33,16 @@ async def lifespan(app: FastAPI):
         print(f"📡 DNS RESOLVED: api.telegram.org -> {ip}")
     except Exception as e:
         print(f"❌ DNS FAILED: {e}")
+    
+    # DEBUG: Print critical environment variables
+    print("=" * 60)
+    print("🔍 STARTUP DEBUG INFO")
+    print("=" * 60)
+    print(f"   WEBHOOK_URL: {WEBHOOK_URL}")
+    print(f"   WEBHOOK_SECRET: {'***SET***' if WEBHOOK_SECRET else 'NOT SET'}")
+    print(f"   TELEGRAM_BOT_TOKEN: {'***SET***' if TELEGRAM_BOT_TOKEN else 'NOT SET'}")
+    print(f"   PORT: {PORT}")
+    print("=" * 60)
 
     agent_adapter = AgentAdapter()
     await agent_adapter.initialize()
@@ -113,8 +123,9 @@ async def lifespan(app: FastAPI):
     ptb_app.bot_data["task_manager"] = task_manager
     
     # Initialize Bot App
-    # Initialize Bot App with Retry Logic
+    # Initialize Bot App with Retry Logic (but don't crash if Telegram unreachable)
     max_retries = 3
+    startup_success = False
     for attempt in range(max_retries):
         try:
             print(f"🔄 Connection Attempt {attempt + 1}/{max_retries}...")
@@ -123,15 +134,16 @@ async def lifespan(app: FastAPI):
             
             # 4.5 Configure Webhook or Polling
             if WEBHOOK_URL:
-                print(f"🌍 functionality: Webhook Mode enabled. URL: {WEBHOOK_URL}")
+                print(f"🌍 Webhook Mode enabled. URL: {WEBHOOK_URL}")
                 await ptb_app.bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
             else:
-                print("📡 functionality: Polling Mode enabled (No WEBHOOK_URL set)")
+                print("📡 Polling Mode enabled (No WEBHOOK_URL set)")
                 await ptb_app.bot.delete_webhook()
                 await ptb_app.updater.start_polling()
             
             await ptb_app.start()
             print("✅ Bot is fully running!")
+            startup_success = True
             break  # Success!
             
         except Exception as e:
@@ -140,8 +152,27 @@ async def lifespan(app: FastAPI):
                 print("⏳ Retrying in 5 seconds...")
                 await asyncio.sleep(5)
             else:
-                print("❌ All startup attempts failed. Exiting.")
-                raise e
+                # DON'T CRASH - let container stay up for debugging
+                print("=" * 60)
+                print("❌ ALL STARTUP ATTEMPTS FAILED - RUNNING IN DEGRADED MODE")
+                print("=" * 60)
+                print(f"Error: {e}")
+                print("")
+                print("📋 MANUAL FIX: Register webhook manually with:")
+                print(f"   curl 'https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url={WEBHOOK_URL}&secret_token={WEBHOOK_SECRET}'")
+                print("")
+                print("🔍 DEBUG INFO:")
+                print(f"   WEBHOOK_URL: {WEBHOOK_URL}")
+                print(f"   PORT: {PORT}")
+                print("=" * 60)
+                # Still try to start the app so webhook endpoint is available
+                try:
+                    if not ptb_app._initialized:
+                        await ptb_app.initialize()
+                    await ptb_app.start()
+                    print("✅ Bot started in DEGRADED MODE (webhook not registered)")
+                except Exception as e2:
+                    print(f"❌ Even degraded startup failed: {e2}")
 
     # 5. Start Worker
     worker_task = asyncio.create_task(task_manager.worker(agent_adapter))
