@@ -31,10 +31,10 @@ async def lifespan(app: FastAPI):
     # 2. Initialize Telegram Bot with increased timeouts
     # Custom request with longer timeouts to avoid TimedOut errors
     request = HTTPXRequest(
-        connect_timeout=30.0,  # Increased from default 5.0
-        read_timeout=30.0,     # Increased from default 5.0
-        write_timeout=30.0,    # Increased from default 5.0
-        pool_timeout=30.0,     # Increased from default 1.0
+        connect_timeout=60.0,  # Increased to 60s for Railway latency
+        read_timeout=60.0,     
+        write_timeout=60.0,    
+        pool_timeout=60.0,     
     )
     
     ptb_app = (
@@ -93,22 +93,39 @@ async def lifespan(app: FastAPI):
     ptb_app.bot_data["task_manager"] = task_manager
     
     # Initialize Bot App
-    await ptb_app.initialize()
-    await ptb_app.start()
+    # Initialize Bot App with Retry Logic
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            print(f"🔄 Connection Attempt {attempt + 1}/{max_retries}...")
+            if not ptb_app._initialized:
+                await ptb_app.initialize()
+            
+            # 4.5 Configure Webhook or Polling
+            if WEBHOOK_URL:
+                print(f"🌍 functionality: Webhook Mode enabled. URL: {WEBHOOK_URL}")
+                await ptb_app.bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
+            else:
+                print("📡 functionality: Polling Mode enabled (No WEBHOOK_URL set)")
+                await ptb_app.bot.delete_webhook()
+                await ptb_app.updater.start_polling()
+            
+            await ptb_app.start()
+            print("✅ Bot is fully running!")
+            break  # Success!
+            
+        except Exception as e:
+            print(f"⚠️ Startup attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                print("⏳ Retrying in 5 seconds...")
+                await asyncio.sleep(5)
+            else:
+                print("❌ All startup attempts failed. Exiting.")
+                raise e
 
-    # 4.5 Configure Webhook or Polling
-    if WEBHOOK_URL:
-        print(f"🌍 functionality: Webhook Mode enabled. URL: {WEBHOOK_URL}")
-        await ptb_app.bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
-    else:
-        print("📡 functionality: Polling Mode enabled (No WEBHOOK_URL set)")
-        await ptb_app.bot.delete_webhook()
-        await ptb_app.updater.start_polling()
-    
     # 5. Start Worker
     worker_task = asyncio.create_task(task_manager.worker(agent_adapter))
     
-    print("✅ Bot is fully running!")
     yield
     
     # Shutdown
