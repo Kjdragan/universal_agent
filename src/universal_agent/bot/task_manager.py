@@ -16,6 +16,7 @@ class Task:
         self.result: Any = None
         self.log_file: Optional[str] = None
         self.workspace: Optional[str] = None
+        self.execution_summary: Optional[Any] = None  # Holds ExecutionResult object
 
 class TaskManager:
     def __init__(self, status_callback=None):

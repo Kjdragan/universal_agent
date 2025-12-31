@@ -10,6 +10,7 @@ from .config import TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, WEBHOOK_URL, PORT
 from .task_manager import TaskManager
 from .agent_adapter import AgentAdapter
 from .telegram_handlers import start_command, help_command, status_command, agent_command, continue_command, new_command
+from .telegram_formatter import format_telegram_response
 
 # nest_asyncio removed to avoid conflict with uvicorn loop_factory in Python 3.13
 
@@ -80,12 +81,22 @@ async def lifespan(app: FastAPI):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                msg = f"Task Update: `{task.id[:8]}`\nStatus: {task.status.upper()}"
+            try:
                 if task.status == "completed":
-                     res_preview = str(task.result)[:500] + ("..." if len(str(task.result)) > 500 else "")
-                     msg += f"\n\n**Result Preview:**\n{res_preview}"
+                    # Use rich formatter for completed tasks
+                    # Prefer execution_summary (ExecutionResult object) if available
+                    result_to_format = task.execution_summary if task.execution_summary else task.result
+                    formatted_msg = format_telegram_response(result_to_format)
+                    # We might want to prepend "✅ Task Completed" or similar? 
+                    # Actually formatted_msg includes stats, so maybe just send it.
+                    # Use a short header
+                    msg = f"✅ *Task Completed*\n\n{formatted_msg}"
+                    
                 elif task.status == "error":
-                    msg += f"\n\nError: {task.result}"
+                    msg = f"❌ *Task Failed*\n\nError: {task.result}"
+                else:
+                    # Updates for running/pending
+                    msg = f"Task Update: `{task.id[:8]}`\nStatus: {task.status.upper()}"
 
                 await ptb_app.bot.send_message(chat_id=task.user_id, text=msg, parse_mode="Markdown")
                 
@@ -186,7 +197,11 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    print("🛑 Shutting down...")
+    if agent_adapter:
+        print("🛑 Shutting down Agent Adapter...")
+        await agent_adapter.shutdown()
+        
+    print("👋 Bot shutting down...")
     worker_task.cancel()
     await ptb_app.stop()
     await ptb_app.shutdown()

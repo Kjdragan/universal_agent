@@ -8,8 +8,9 @@ import asyncio
 import os
 import time
 import json
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 from dotenv import load_dotenv
 
 # Timezone helper for consistent date/time across deployments
@@ -29,6 +30,22 @@ def get_user_datetime():
         utc_now = datetime.now(timezone.utc)
         cst_offset = timezone(timedelta(hours=-6))
         return utc_now.astimezone(cst_offset)
+
+
+@dataclass
+class ExecutionResult:
+    """
+    Structured result from process_turn() for rich Telegram feedback.
+    Contains all the data needed to display execution summary + agent response.
+    """
+    response_text: str                           # Agent's final response
+    execution_time_seconds: float = 0.0          # Total execution time
+    tool_calls: int = 0                          # Number of tool calls
+    tool_breakdown: list = field(default_factory=list)  # [{name, time_offset, iteration}]
+    code_execution_used: bool = False            # Whether code exec tools were used
+    workspace_path: str = ""                     # Session workspace directory
+    trace_id: Optional[str] = None               # Logfire trace ID for deep linking
+    follow_up_suggestions: list = field(default_factory=list)  # Extracted follow-up options
 
 from dotenv import load_dotenv
 
@@ -2233,10 +2250,10 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
 
 
 
-async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: str):
+async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: str) -> ExecutionResult:
     """
     Process a single user query.
-    Returns: (response_text, execution_summary)
+    Returns: ExecutionResult with rich feedback
     """
     global trace, start_ts 
     
@@ -2292,7 +2309,7 @@ async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: 
             else:
                 break
 
-        # Per-request Execution Summary (shown before agent response)
+        # Per-request Execution Summary
         request_end_ts = time.time()
         request_duration = round(request_end_ts - request_start_ts, 3)
         
@@ -2314,11 +2331,18 @@ async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: 
             print("🏭 Code execution was used")
         
         # Tool breakdown
+        tool_breakdown = []
         if request_tool_calls:
             print("\n=== TOOL CALL BREAKDOWN ===")
             for tc in request_tool_calls:
                 marker = "🏭" if any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]) else "  "
                 print(f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}")
+                tool_breakdown.append({
+                    "name": tc["name"],
+                    "time_offset": tc["time_offset_seconds"],
+                    "iteration": tc["iteration"],
+                    "marker": marker
+                })
         
         print(f"{'=' * 80}")
         
@@ -2326,8 +2350,22 @@ async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: 
         if final_response_text:
             print(f"\n{final_response_text}")
 
+        # Extract follow-up suggestions
+        suggestions = []
+        if "Follow-up Options" in final_response_text:
+            try:
+                # Simple extraction: look for bullet points after "Follow-up Options"
+                parts = final_response_text.split("Follow-up Options")
+                if len(parts) > 1:
+                    raw_suggestions = parts[1].split("\n")
+                    for line in raw_suggestions:
+                        line = line.strip()
+                        if line.startswith(("-", "*")) and len(line) > 5:
+                            suggestions.append(line.lstrip("-* ").strip())
+            except Exception:
+                pass
+
         # NEW: Intermediate Transcript Save
-        # Only save if we actually ran a conversation (not just simple path)
         try:
             from universal_agent import transcript_builder
             
@@ -2340,7 +2378,6 @@ async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: 
             if transcript_builder.generate_transcript(trace, transcript_path):
                 print(f"\n🎬 Intermediate transcript saved to {transcript_path}")
         except Exception as e:
-            # Don't let transcript failure crash the agent
             print(f"⚠️ Failed to save intermediate transcript: {e}")
 
     # End of Turn Update
@@ -2348,7 +2385,16 @@ async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: 
     trace["end_time"] = datetime.now().isoformat()
     trace["total_duration_seconds"] = round(end_ts - start_ts, 3)
 
-    return final_response_text
+    return ExecutionResult(
+        response_text=final_response_text,
+        execution_time_seconds=request_duration if not is_simple else 0.0,
+        tool_calls=len(request_tool_calls) if not is_simple else 0,
+        tool_breakdown=tool_breakdown if not is_simple else [],
+        code_execution_used=code_exec_used if not is_simple else False,
+        workspace_path=workspace_dir,
+        trace_id=trace.get("trace_id"),
+        follow_up_suggestions=suggestions if not is_simple else []
+    )
 
 
 # =============================================================================
@@ -2468,9 +2514,15 @@ async def main():
                     success = await handle_simple_query(client, user_input)
                     if not success:
                         is_simple = False  # Fallback to Complex Path
+                    else:
+                        print("(See output above)")
 
                 if not is_simple:
                     # Complex Path (Tool Loop) - track per-request timing
+                    result = await process_turn(client, user_input, workspace_dir)
+                    # Result is already printed by process_turn for detailed feedback
+                    # We just need to catch the object returning
+
                     request_start_ts = time.time()
                     iteration = 1
                     current_query = user_input
