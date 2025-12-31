@@ -1738,7 +1738,11 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
     # 3. Initialize Composio    # User Identity
     # Using specific entity ID that holds the active integrations (GitHub, Linear, Notion, etc.)
     # user_id = "user_123"  # Consolidated to the primary admin identity
-    user_id = "pg-test-86524ebc-9b1e-4f08-bd20-b77dd71c2df9"
+    user_id = os.getenv("COMPOSIO_USER_ID") or os.getenv("DEFAULT_USER_ID")
+    if not user_id:
+        print("⚠️  WARNING: No COMPOSIO_USER_ID or DEFAULT_USER_ID found, defaulting to 'unknown_user'")
+        user_id = "unknown_user"
+        # raise ValueError("COMPOSIO_USER_ID or DEFAULT_USER_ID must be set in .env")
     
     from universal_agent.utils.composio_discovery import discover_connected_toolkits, get_local_tools
 

@@ -110,6 +110,7 @@ Thumbs.db
 # =============================================================================
 docs/_build/
 site/
+AI_DOCS/
 
 # Media downloads from mcp-youtube (persistent media workspace)
 downloads/

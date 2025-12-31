@@ -8,7 +8,13 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 # Webhook Secret (for securing the endpoint)
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "super-secret-token")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+if not WEBHOOK_SECRET:
+    # We might want to warn or crash, but importing config usually shouldn't crash unless verified.
+    # However, for security, let's keep it None and let main.py handle the crash/warning if needed,
+    # OR trigger a ValueError here.
+    # Given this is a config file, let's just leave it as None or strict.
+    pass      
 
 # Allowed User IDs (comma-separated list of Telegram User IDs)
 ALLOWED_USER_IDS = [
