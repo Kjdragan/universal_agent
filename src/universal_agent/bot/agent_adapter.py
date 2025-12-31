@@ -141,11 +141,31 @@ class AgentAdapter:
             )
             
             try:
+                # Health Check: Ensure worker is alive
+                if self.worker_task and self.worker_task.done():
+                    print("🔥 Worker task found dead! Force re-initializing...")
+                    # If worker died, previous loop is gone. We must restart.
+                    # Retrying this specific task might require re-queuing logic, 
+                    # but for now let's just fail fast-ish or try to recover?
+                    # The queue is likely dead or pointing to old loop.
+                    await self.reinitialize()
+                    # Re-create items (queue is new now)
+                    reply_future = asyncio.get_running_loop().create_future()
+                    req = AgentRequest(prompt=task.prompt, workspace_dir=self.workspace_dir, reply_future=reply_future)
+                
                 # Send to actor
                 await self.request_queue.put(req)
                 
-                # Wait for result
-                result = await reply_future
+                # Wait for result with TIMEOUT (Prevent infinite hang)
+                try:
+                    # 5 minutes max for any single turn
+                    result = await asyncio.wait_for(reply_future, timeout=300.0)
+                except asyncio.TimeoutError:
+                    print("⏰ Agent Execution Timed Out (>300s). Killing session.")
+                    self.initialized = False # Mark as dead so next run re-inits
+                    # Cancel the future so we don't leak?
+                    req.reply_future.cancel()
+                    raise TimeoutError("Agent execution timed out")
                 
                 # Store data
                 task.execution_summary = result
@@ -158,9 +178,8 @@ class AgentAdapter:
                 print(f"🔥 Critical Error during execution: {e}")
                 task.status = "error"
                 task.result = f"Error: {e}"
-                # If actor crashed, trigger reinit logic on next run?
-                if self.worker_task and self.worker_task.done():
-                    self.initialized = False
+                # If actor crashed or timed out, force reinit on next run
+                self.initialized = False
             
             print("-" * 50)
             print(f"=== Task Execution End: {task.id} ===")
