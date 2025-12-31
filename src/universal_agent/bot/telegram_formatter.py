@@ -37,7 +37,10 @@ def format_telegram_response(task_result: Any) -> str:
             lines.append("")  # Spacer
             
         # 2. Main Response
-        lines.append(result.response_text)
+        # Escape markdown V2 special characters in the response text
+        from telegram.utils.helpers import escape_markdown
+        safe_text = escape_markdown(str(result.response_text), version=2)
+        lines.append(safe_text)
         lines.append("")
         
         # 3. Footer Links & Meta

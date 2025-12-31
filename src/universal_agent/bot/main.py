@@ -97,7 +97,13 @@ async def lifespan(app: FastAPI):
                     # Updates for running/pending
                     msg = f"Task Update: `{task.id[:8]}`\nStatus: {task.status.upper()}"
 
-                await ptb_app.bot.send_message(chat_id=task.user_id, text=msg, parse_mode="Markdown")
+                try:
+                    await ptb_app.bot.send_message(chat_id=task.user_id, text=msg, parse_mode="MarkdownV2")
+                except Exception as e_md:
+                    print(f"⚠️ MarkdownV2 failed, trying plain text: {e_md}")
+                    # Fallback to plain text if markdown fails
+                    # We might want to strip markdown chars or just send raw
+                    await ptb_app.bot.send_message(chat_id=task.user_id, text=msg, parse_mode=None)
                 
                 # Send Log File if completed or error
                 if task.status in ["completed", "error"] and task.log_file and os.path.exists(task.log_file):
