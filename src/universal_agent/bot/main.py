@@ -81,7 +81,6 @@ async def lifespan(app: FastAPI):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-            try:
                 if task.status == "completed":
                     # Use rich formatter for completed tasks
                     # Prefer execution_summary (ExecutionResult object) if available
