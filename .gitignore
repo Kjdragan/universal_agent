@@ -111,6 +111,8 @@ Thumbs.db
 docs/_build/
 site/
 AI_DOCS/
+Project_Documentation/
+SAVED_REPORTS/
 
 # Media downloads from mcp-youtube (persistent media workspace)
 downloads/
