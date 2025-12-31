@@ -227,6 +227,11 @@ async def telegram_webhook(request: Request):
 async def health_check():
     return {"status": "healthy", "tasks_active": task_manager.active_tasks if task_manager else 0}
 
+@app.get("/")
+async def root():
+    """Root endpoint for basic health check"""
+    return {"status": "Universal Agent Bot Running", "version": "1.0.0"}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("universal_agent.bot.main:app", host="0.0.0.0", port=PORT, reload=True)

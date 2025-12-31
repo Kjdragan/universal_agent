@@ -965,11 +965,17 @@ After `crawl_parallel` creates multiple `crawl_*.md` files:
 ---
 
 ### Lesson 44: Railway Container Timezone (UTC vs User Local Time)
-**Date**: 2025-12-30
+- **Issue:** Railway containers run in UTC. The agent was telling the user (in CST) that "tomorrow" was a different day because it calculated dates based on UTC.
+- **Fix:** Introduced `get_user_datetime()` helper in `main.py` that defaults to `America/Chicago` (CST) or falls back to a manual offset if `pytz` isn't available. Injected this timezone-aware date into the system prompt.
+- **Outcome:** Agent now correctly perceives the user's "today" and "tomorrow".
 
-**Problem**: User asked the Telegram bot for "tomorrow's weather" while in CST (6:32 PM on Tuesday Dec 30). The agent searched for "January 1, 2025" and claimed it was Wednesday.
-
-**Root Cause**: Railway containers run in **UTC by default**. When `datetime.now()` ran at 6:32 PM CST, the container saw **00:32 UTC on December 31**, one day ahead.
+### Lesson 45: Deployment Verification & Connectivity Fragility
+- **Issue 1:** A simple copy-paste error (duplicate `try:` block) caused a deployment crash (`IndentationError`) that wasn't caught until runtime because local compilation wasn't enforced.
+- **Issue 2:** Railway often times out connecting to Telegram API during startup (`TimeoutError`).
+- **Fixes:** 
+    1. Always run `python3 -m compileall src/` locally before deploying major refactors.
+    2. Implemented robust retry logic with increased timeouts (60s) for HTTPX requests to Telegram.
+    3. Added a root (`/`) health check endpoint to prevent Railway from marking the service as unhealthy if it just pings the port.
 
 **Evidence from Logfire**:
 ```json
