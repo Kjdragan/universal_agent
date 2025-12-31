@@ -964,4 +964,44 @@ After `crawl_parallel` creates multiple `crawl_*.md` files:
 
 ---
 
+### Lesson 44: Railway Container Timezone (UTC vs User Local Time)
+**Date**: 2025-12-30
+
+**Problem**: User asked the Telegram bot for "tomorrow's weather" while in CST (6:32 PM on Tuesday Dec 30). The agent searched for "January 1, 2025" and claimed it was Wednesday.
+
+**Root Cause**: Railway containers run in **UTC by default**. When `datetime.now()` ran at 6:32 PM CST, the container saw **00:32 UTC on December 31**, one day ahead.
+
+**Evidence from Logfire**:
+```json
+{
+  "start_timestamp": "2025-12-31T00:32:23.975095Z",
+  "query": "Houston Texas weather forecast tomorrow January 1 2025"
+}
+```
+
+**Solution**: Created `get_user_datetime()` helper that converts to user timezone:
+
+```python
+def get_user_datetime():
+    """Get datetime in user's timezone (CST/CDT)."""
+    try:
+        import pytz
+        user_tz = pytz.timezone(os.getenv("USER_TIMEZONE", "America/Chicago"))
+        return datetime.now(user_tz)
+    except ImportError:
+        utc_now = datetime.now(timezone.utc)
+        cst_offset = timezone(timedelta(hours=-6))
+        return utc_now.astimezone(cst_offset)
+```
+
+**Also Added**: Explicit "Tomorrow is" line in system prompt to prevent LLM date calculation errors:
+```python
+f"Current Date: {today_str}\n"
+f"Tomorrow is: {tomorrow_str}\n"
+```
+
+**Lesson**: When deploying to cloud containers, always use timezone-aware datetime. Never assume server time matches user time.
+
+---
+
 *Last updated: 2025-12-30*

@@ -8,8 +8,28 @@ import asyncio
 import os
 import time
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from dotenv import load_dotenv
+
+# Timezone helper for consistent date/time across deployments
+def get_user_datetime():
+    """
+    Get current datetime in user's timezone (CST/CDT).
+    Railway containers run in UTC, so we offset to Central Time.
+    """
+    # Try to use pytz if available, otherwise manual offset
+    try:
+        import pytz
+        user_tz = pytz.timezone(os.getenv("USER_TIMEZONE", "America/Chicago"))
+        return datetime.now(user_tz)
+    except ImportError:
+        # Fallback: CST is UTC-6 (or CDT is UTC-5 in summer)
+        # For simplicity, use -6 (CST). For production, add DST logic.
+        utc_now = datetime.now(timezone.utc)
+        cst_offset = timezone(timedelta(hours=-6))
+        return utc_now.astimezone(cst_offset)
+
 from dotenv import load_dotenv
 
 # Load environment FIRST
@@ -1791,11 +1811,17 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
     except Exception as e:
         print(f"⚠️ Failed to load Memory Context/Agent College: {e}")
 
+    # Use timezone-aware datetime for consistent results across deployments
+    user_now = get_user_datetime()
+    today_str = user_now.strftime('%A, %B %d, %Y')
+    tomorrow_str = (user_now + timedelta(days=1)).strftime('%A, %B %d, %Y')
+    
     options = ClaudeAgentOptions(
         model="claude-3-5-sonnet-20241022",
         system_prompt=(
-            f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
-            f"{memory_context_str}\n" # <--- INJECTED HERE
+            f"Current Date: {today_str}\n"
+            f"Tomorrow is: {tomorrow_str}\n"
+            f"{memory_context_str}\n"
             "TEMPORAL CONSISTENCY WARNING: You are operating in a timeline where it is December 2025. "
             "If 'real-world' search tools return results dated 2024, explicitly note the date discrepancy. "
                 "Do NOT present 2024 news as 2025 news without qualification.\n\n"
