@@ -38,7 +38,7 @@ def format_telegram_response(task_result: Any) -> str:
             
         # 2. Main Response
         # Escape markdown V2 special characters in the response text
-        from telegram.utils.helpers import escape_markdown
+        from telegram.helpers import escape_markdown
         safe_text = escape_markdown(str(result.response_text), version=2)
         lines.append(safe_text)
         lines.append("")
@@ -64,4 +64,5 @@ def format_telegram_response(task_result: Any) -> str:
     except Exception as e:
         # Safe fallback if formatting fails
         print(f"⚠️ Formatting error: {e}")
-        return str(task_result)
+        # Try to return just the response text if possible, otherwise raw string
+        return getattr(task_result, "response_text", str(task_result))
