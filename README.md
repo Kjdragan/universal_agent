@@ -4,15 +4,15 @@ A powerful, self-hosted autonomous agent built on the **Claude Agent SDK**, **Co
 
 ## 🚀 Key Capabilities
 
--   **� Advanced Brain**: Powered by **Claude 3.5 Sonnet** using the native Anthropic Agent SDK.
--   **🔌 Universal Integrations**: Uses **Composio SDK** to route actions to 100+ external apps (GitHub, Gmail, Slack, Calendar) without building custom auth flows.
--   **� Long-Term Memory**: Implements **Letta (MemGPT)** concepts with persistent memory blocks (Human, Persona, Tasks) that the agent edits and consults.
+-   **🧠 Advanced Brain**: Powered by **Claude Sonnet 4** using the native Anthropic Agent SDK.
+-   **🔌 Universal Integrations**: Uses **Composio Tool Router** to access 500+ tools (Gmail, SERP, Slack, GitHub) without building custom auth flows.
+-   **📚 Long-Term Memory**: Implements **Letta (MemGPT)** concepts with persistent memory blocks (Human, Persona, System Rules) that the agent edits and consults.
 -   **🕷️ High-Performance Research**: Built-in **Crawl4AI** integration for parallel web scraping and "LLM-ready" markdown extraction.
 -   **🤖 Dual Interfaces**:
     -   **Telegram Bot**: Rich, interactive chat with execution stats, timing, and direct Logfire trace links.
     -   **CLI**: Full-featured local terminal interface for development and debugging.
 -   **🔄 Session Continuity**: Persistent agent context (Actor Model) allows natural multi-turn conversations without losing history.
--   **�️ Full Observability**: Deep tracing with **Pydantic Logfire** for every tool call and thought process.
+-   **📊 Full Observability**: Deep tracing with **Pydantic Logfire** for every tool call and thought process.
 -   **🎓 Agent College (Sidecar)**: Background service that analyzes execution traces to provide feedback and critiques (experimental).
 
 ## 🏗️ Architecture
@@ -23,7 +23,7 @@ graph TD
     Bot -->|Async Queue| Actor[Agent Actor (Context)]
     
     subgraph "Agent Brain (Main Process)"
-        Actor -->|Think| Claude[Claude 3.5 Sonnet]
+        Actor -->|Think| Claude[Claude Sonnet 4]
         Actor -->|Execute| Router{Tool Router}
     end
     
@@ -70,16 +70,24 @@ LOGFIRE_TOKEN=...             # Optional: For tracing
 ```
 
 ### 3. Running Locally
-**Telegram Bot:**
+
+**CLI Agent + Agent College (Recommended):**
 ```bash
-./start.sh
-# Or manually:
-uv run uvicorn src.universal_agent.bot.main:app --reload
+./local_dev.sh
 ```
 
-**CLI Mode:**
+**CLI Only (Manual):**
 ```bash
-uv run -m universal_agent.main
+PYTHONPATH=src uv run python -m universal_agent.main
+```
+
+**Telegram Bot (Local with ngrok):**
+```bash
+# Terminal 1: Start ngrok
+ngrok http 8080
+
+# Terminal 2: Set WEBHOOK_URL in .env, then:
+PYTHONPATH=src uv run uvicorn universal_agent.bot.main:app --host 0.0.0.0 --port 8080
 ```
 
 ## 🚢 Deployment (Railway)
