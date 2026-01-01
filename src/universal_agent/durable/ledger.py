@@ -1,0 +1,196 @@
+import hashlib
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+from .classification import classify_tool
+from .normalize import hash_normalized_json, normalize_json
+
+
+@dataclass
+class LedgerReceipt:
+    tool_call_id: str
+    idempotency_key: str
+    status: str
+    response_ref: Optional[str]
+    external_correlation_id: Optional[str]
+
+
+class ToolCallLedger:
+    def __init__(self, conn, workspace_dir: Optional[str] = None):
+        self.conn = conn
+        self.workspace_dir = workspace_dir
+
+    def _now(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _json_ref(self, payload: Any) -> str:
+        if payload is None:
+            return ""
+        if isinstance(payload, str):
+            return payload
+        return json.dumps(payload, default=str)
+
+    def _compute_scope(self, tool_name: str, tool_input: dict[str, Any]) -> str:
+        upper = tool_name.upper()
+        if "GMAIL_SEND_EMAIL" in upper:
+            to_addr = tool_input.get("to") or tool_input.get("to_email") or ""
+            subject = tool_input.get("subject") or ""
+            attachment = tool_input.get("attachment") or {}
+            attachment_key = attachment.get("s3key") if isinstance(attachment, dict) else ""
+            return f"email:{to_addr}:{subject}:{attachment_key}"
+        if "UPLOAD" in upper:
+            file_path = tool_input.get("path") or tool_input.get("file_path") or ""
+            destination = tool_input.get("destination") or tool_input.get("bucket") or ""
+            return f"upload:{file_path}:{destination}"
+        if "MEMORY" in upper:
+            content = tool_input.get("content") or ""
+            return f"memory:{hash_normalized_json(content)}"
+        return hash_normalized_json(tool_input)
+
+    def _idempotency_key(
+        self,
+        run_id: str,
+        tool_namespace: str,
+        tool_name: str,
+        normalized_args_hash: str,
+        side_effect_scope: str,
+    ) -> str:
+        raw = "|".join(
+            [run_id, tool_namespace, tool_name, normalized_args_hash, side_effect_scope]
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def prepare_tool_call(
+        self,
+        *,
+        tool_call_id: str,
+        run_id: str,
+        step_id: str,
+        tool_name: str,
+        tool_namespace: str,
+        tool_input: dict[str, Any],
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> tuple[Optional[LedgerReceipt], str]:
+        side_effect_class = classify_tool(tool_name, tool_namespace, metadata)
+        normalized_args_hash = hash_normalized_json(tool_input)
+        side_effect_scope = self._compute_scope(tool_name, tool_input)
+        idempotency_key = self._idempotency_key(
+            run_id, tool_namespace, tool_name, normalized_args_hash, side_effect_scope
+        )
+
+        existing = self.conn.execute(
+            "SELECT * FROM tool_calls WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        if existing and existing["status"] == "succeeded":
+            return (
+                LedgerReceipt(
+                    tool_call_id=existing["tool_call_id"],
+                    idempotency_key=existing["idempotency_key"],
+                    status=existing["status"],
+                    response_ref=existing["response_ref"],
+                    external_correlation_id=existing["external_correlation_id"],
+                ),
+                idempotency_key,
+            )
+
+        now = self._now()
+        self.conn.execute(
+            """
+            INSERT INTO tool_calls (
+                tool_call_id,
+                run_id,
+                step_id,
+                created_at,
+                updated_at,
+                tool_name,
+                tool_namespace,
+                side_effect_class,
+                normalized_args_hash,
+                idempotency_key,
+                status,
+                attempt,
+                request_ref
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tool_call_id,
+                run_id,
+                step_id,
+                now,
+                now,
+                tool_name,
+                tool_namespace,
+                side_effect_class,
+                normalized_args_hash,
+                idempotency_key,
+                "prepared",
+                1,
+                normalize_json(tool_input),
+            ),
+        )
+        self.conn.commit()
+        return (None, idempotency_key)
+
+    def mark_running(self, tool_call_id: str) -> None:
+        self.conn.execute(
+            "UPDATE tool_calls SET status = ?, updated_at = ? WHERE tool_call_id = ?",
+            ("running", self._now(), tool_call_id),
+        )
+        self.conn.commit()
+
+    def mark_succeeded(
+        self, tool_call_id: str, response: Any, external_correlation_id: Optional[str] = None
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE tool_calls
+            SET status = ?, updated_at = ?, response_ref = ?, external_correlation_id = ?
+            WHERE tool_call_id = ?
+            """,
+            (
+                "succeeded",
+                self._now(),
+                self._json_ref(response),
+                external_correlation_id,
+                tool_call_id,
+            ),
+        )
+        self.conn.commit()
+
+    def mark_failed(self, tool_call_id: str, error_detail: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE tool_calls
+            SET status = ?, updated_at = ?, error_detail = ?
+            WHERE tool_call_id = ?
+            """,
+            ("failed", self._now(), error_detail, tool_call_id),
+        )
+        self.conn.commit()
+
+    def get_receipt_by_idempotency(self, idempotency_key: str) -> Optional[LedgerReceipt]:
+        row = self.conn.execute(
+            "SELECT * FROM tool_calls WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+        if not row or row["status"] != "succeeded":
+            return None
+        return LedgerReceipt(
+            tool_call_id=row["tool_call_id"],
+            idempotency_key=row["idempotency_key"],
+            status=row["status"],
+            response_ref=row["response_ref"],
+            external_correlation_id=row["external_correlation_id"],
+        )
+
+    def get_tool_call(self, tool_call_id: str) -> Optional[dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT * FROM tool_calls WHERE tool_call_id = ?",
+            (tool_call_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)

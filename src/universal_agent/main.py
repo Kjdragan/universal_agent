@@ -54,6 +54,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import sys
+import argparse
 
 # Add 'src' to sys.path to allow imports from universal_agent package
 # This ensures functional imports regardless of invocation directory
@@ -143,6 +144,61 @@ def load_budget_config() -> dict:
     }
 
 
+def _insert_run_row(conn, run_id_value: str, entrypoint: str, run_spec: dict) -> None:
+    now = datetime.utcnow().isoformat()
+    conn.execute(
+        \"\"\"
+        INSERT OR REPLACE INTO runs (
+            run_id,
+            created_at,
+            updated_at,
+            status,
+            entrypoint,
+            run_spec_json
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        \"\"\",
+        (
+            run_id_value,
+            now,
+            now,
+            \"running\",
+            entrypoint,
+            json.dumps(run_spec, default=str),
+        ),
+    )
+    conn.commit()
+
+
+def _start_step_row(conn, run_id_value: str, step_id_value: str, step_index: int) -> None:
+    now = datetime.utcnow().isoformat()
+    conn.execute(
+        \"\"\"
+        INSERT OR REPLACE INTO run_steps (
+            step_id,
+            run_id,
+            step_index,
+            created_at,
+            updated_at,
+            status,
+            phase
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        \"\"\",
+        (
+            step_id_value,
+            run_id_value,
+            step_index,
+            now,
+            now,
+            \"running\",
+            \"unspecified\",
+        ),
+    )
+    conn.execute(
+        \"UPDATE runs SET current_step_id = ?, updated_at = ? WHERE run_id = ?\",
+        (step_id_value, now, run_id_value),
+    )
+    conn.commit()
+
 # Configure Logfire BEFORE importing Claude SDK
 import logfire
 
@@ -231,6 +287,19 @@ from claude_agent_sdk.types import (
 )
 from typing import Any
 from composio import Composio
+# Durable runtime support
+from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.ledger import ToolCallLedger
+from universal_agent.durable.tool_gateway import prepare_tool_call
+from universal_agent.durable.state import (
+    upsert_run,
+    update_run_status,
+    start_step,
+    complete_step,
+    get_run,
+    get_step_count,
+)
+from universal_agent.durable.checkpointing import save_checkpoint, load_last_checkpoint
 # Local MCP server provides: crawl_parallel, read_local_file, write_local_file
 
 # Composio client - will be initialized in main() with file_download_dir
@@ -962,6 +1031,107 @@ DOCUMENT_SKILL_TRIGGERS = {
 }
 
 
+async def on_pre_tool_use_ledger(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """
+    PreToolUse Hook: prepare tool call ledger entry and enforce idempotency.
+    """
+    global tool_ledger, run_id, current_step_id
+    if tool_ledger is None or run_id is None:
+        return {}
+
+    tool_name = input_data.get("tool_name", "")
+    tool_input = input_data.get("tool_input", {}) or {}
+    step_id = current_step_id or "unknown"
+    tool_call_id = str(tool_use_id or uuid.uuid4())
+
+    try:
+        decision = prepare_tool_call(
+            tool_ledger,
+            tool_call_id=tool_call_id,
+            run_id=run_id,
+            step_id=step_id,
+            raw_tool_name=tool_name,
+            tool_input=tool_input,
+        )
+    except Exception as exc:
+        logfire.warning("ledger_prepare_failed", tool_name=tool_name, error=str(exc))
+        return {}
+
+    if decision.deduped and decision.receipt:
+        prior_entry = tool_ledger.get_tool_call(decision.receipt.tool_call_id)
+        side_effect_class = (prior_entry or {}).get("side_effect_class")
+        if side_effect_class in ("external", "memory", "local"):
+            logfire.warning(
+                "tool_deduped",
+                tool_name=tool_name,
+                tool_use_id=tool_call_id,
+                idempotency_key=decision.idempotency_key,
+            )
+            receipt_preview = ""
+            if decision.receipt.response_ref:
+                receipt_preview = decision.receipt.response_ref[:500]
+            return {
+                "systemMessage": (
+                    "⚠️ Idempotency guard: tool call already succeeded. "
+                    "Skipping execution and using cached receipt."
+                ),
+                "reason": receipt_preview,
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Idempotent tool call detected.",
+                },
+            }
+
+    try:
+        tool_ledger.mark_running(tool_call_id)
+    except Exception as exc:
+        logfire.warning("ledger_mark_running_failed", tool_use_id=tool_call_id, error=str(exc))
+    return {}
+
+
+async def on_post_tool_use_ledger(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """
+    PostToolUse Hook: persist tool response to the ledger.
+    """
+    global tool_ledger
+    if tool_ledger is None:
+        return {}
+
+    tool_call_id = str(tool_use_id or "")
+    if not tool_call_id:
+        return {}
+
+    tool_response = input_data.get("tool_response")
+    is_error = False
+    error_detail = ""
+    if isinstance(tool_response, dict):
+        is_error = bool(tool_response.get("is_error") or tool_response.get("error"))
+        if tool_response.get("error"):
+            error_detail = str(tool_response.get("error"))
+
+    try:
+        if is_error:
+            tool_ledger.mark_failed(tool_call_id, error_detail or "tool error")
+        else:
+            external_id = None
+            if isinstance(tool_response, dict):
+                external_id = (
+                    tool_response.get("id")
+                    or tool_response.get("message_id")
+                    or tool_response.get("request_id")
+                )
+            tool_ledger.mark_succeeded(tool_call_id, tool_response, external_id)
+    except Exception as exc:
+        logfire.warning("ledger_mark_result_failed", tool_use_id=tool_call_id, error=str(exc))
+
+    return {}
+
+
 async def on_pre_bash_skill_hint(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
@@ -1359,12 +1529,22 @@ trace: dict = {}
 run_id: Optional[str] = None
 budget_config: dict = {}
 budget_state: dict = {"start_ts": None, "steps": 0, "tool_calls": 0}
+runtime_db_conn = None
+tool_ledger: Optional[ToolCallLedger] = None
+current_step_id: Optional[str] = None
 
 
 async def run_conversation(client, query: str, start_ts: float, iteration: int = 1):
     """Run a single conversation turn with full tracing."""
-    global trace, run_id, budget_config, budget_state
+    global trace, run_id, budget_config, budget_state, runtime_db_conn, current_step_id, tool_ledger
     step_id = str(uuid.uuid4())
+    current_step_id = step_id
+
+    if runtime_db_conn and run_id:
+        try:
+            _start_step_row(runtime_db_conn, run_id, step_id, iteration)
+        except Exception as exc:
+            logfire.warning("runtime_step_insert_failed", step_id=step_id, error=str(exc))
 
     if budget_state["start_ts"] is None:
         budget_state["start_ts"] = start_ts
@@ -1443,6 +1623,18 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     if hasattr(block, "input") and block.input
                                     else 0,
                                 }
+                                if tool_ledger:
+                                    ledger_entry = tool_ledger.get_tool_call(str(block.id))
+                                    if ledger_entry:
+                                        tool_record["idempotency_key"] = ledger_entry.get(
+                                            "idempotency_key"
+                                        )
+                                        tool_record["side_effect_class"] = ledger_entry.get(
+                                            "side_effect_class"
+                                        )
+                                        tool_record["ledger_status"] = ledger_entry.get(
+                                            "status"
+                                        )
                                 trace["tool_calls"].append(tool_record)
                                 tool_calls_this_iter.append(tool_record)
                                 budget_state["tool_calls"] += 1
@@ -1578,6 +1770,15 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 if len(content_str) > 1000
                                 else content_str,
                             }
+                            if tool_ledger and tool_use_id:
+                                ledger_entry = tool_ledger.get_tool_call(str(tool_use_id))
+                                if ledger_entry:
+                                    result_record["idempotency_key"] = ledger_entry.get(
+                                        "idempotency_key"
+                                    )
+                                    result_record["ledger_status"] = ledger_entry.get(
+                                        "status"
+                                    )
                             trace["tool_results"].append(result_record)
 
                             # Log to Logfire with CONTENT preview
@@ -1685,6 +1886,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
             "auth_link": auth_link,
         }
         trace["iterations"].append(iter_record)
+        current_step_id = None
 
         return needs_user_input, auth_link, final_text
 
@@ -2285,8 +2487,12 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
                 HookMatcher(matcher=None, hooks=[on_subagent_stop]),
             ],
             "PreToolUse": [
+                HookMatcher(matcher=None, hooks=[on_pre_tool_use_ledger]),
                 HookMatcher(matcher="Bash", hooks=[on_pre_bash_skill_hint]),
                 HookMatcher(matcher="Task", hooks=[on_pre_task_skill_awareness]),
+            ],
+            "PostToolUse": [
+                HookMatcher(matcher=None, hooks=[on_post_tool_use_ledger]),
             ],
             # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
             # "error: 'types.UnionType' object is not callable"
@@ -2546,7 +2752,7 @@ SEARCH_TOOL_CONFIG = {
 
 
 async def main():
-    global trace, run_id, budget_config, budget_state
+    global trace, run_id, budget_config, budget_state, runtime_db_conn, tool_ledger
 
     # Create main span for entire execution
     # NOTE: Local MCP tools run in separate subprocess with their own trace ID
@@ -2556,6 +2762,15 @@ async def main():
     options, session, user_id, workspace_dir, trace = await setup_session()
     budget_config = load_budget_config()
     trace["budgets"] = budget_config
+    runtime_db_conn = connect_runtime_db()
+    tool_ledger = ToolCallLedger(runtime_db_conn, workspace_dir)
+    run_spec = {
+        "entrypoint": "cli",
+        "workspace_dir": workspace_dir,
+        "budgets": budget_config,
+    }
+    if run_id:
+        _insert_run_row(runtime_db_conn, run_id, "cli", run_spec)
     
     # Extract Trace ID immediately after span creation
     if LOGFIRE_TOKEN:
