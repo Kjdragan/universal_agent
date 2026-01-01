@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Universal Agent** is a standalone AI agent using Claude Agent SDK with Composio Tool Router integration. It enables complex agentic workflows combining LLM reasoning with 500+ external tool integrations (web search, Gmail, Slack, file operations, code execution, etc.).
 
-**Main Entry Point**: `src/universal_agent/main.py` (~1400 lines)
+**Main Entry Point**: `src/universal_agent/main.py` (~2600 lines)
 **Custom MCP Tools**: `src/mcp_server.py`
 
 ## Development Commands
@@ -18,8 +18,14 @@ uv sync
 # Add a new dependency
 uv add <package>
 
-# Run the main agent
-uv run src/universal_agent/main.py
+# Run the CLI Agent + Agent College locally (RECOMMENDED)
+./local_dev.sh
+
+# Manual: Run CLI Agent only
+PYTHONPATH=src uv run python -m universal_agent.main
+
+# Manual: Run Agent College sidecar only
+PYTHONPATH=src uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8001
 
 # Run the local MCP server standalone
 python src/mcp_server.py
@@ -84,12 +90,15 @@ AGENT_RUN_WORKSPACES/session_*/ (run.log, trace.json, search_results/, work_prod
 Each run creates `AGENT_RUN_WORKSPACES/session_YYYYMMDD_HHMMSS/`:
 ```
 session_*/
+├── .prompt_history          # Prompt toolkit history
 ├── run.log                  # Full console output
-├── summary.txt              # Brief summary
-├── trace.json               # Tool call/result trace
-├── search_results/          # Cleaned SERP artifacts (*.json)
-└── work_products/           # Final outputs (reports, etc.)
-    └── *.html
+├── session_summary.txt      # Session metrics summary
+├── trace.json               # Tool call/result trace (live-updated)
+├── transcript.md            # Rich markdown transcript (live-updated)
+├── downloads/               # Files downloaded via Composio
+├── search_results/          # Cleaned SERP artifacts + crawled markdown
+└── work_products/           # Final outputs (reports, PDFs, etc.)
+    └── media/               # Video/audio outputs
 ```
 
 ## Critical Gotchas and Patterns
@@ -167,7 +176,7 @@ uv run <command>  # Run in UV environment
 
 ## Python Version
 
-Python 3.13+ (specified in `.python-version`)
+Python 3.12+ (specified in `pyproject.toml`)
 
 ## Global Context Notes
 

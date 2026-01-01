@@ -43,22 +43,19 @@
 | **Memory System** | ✅ Working | Core blocks, archival search |
 | **Logfire Tracing** | ✅ Working | Dual Trace (Main + Subprocess) |
 
-### 🆕 Recent Fixes (Dec 30, 2025)
+### 🆕 Recent Fixes (Dec 31, 2025)
 
-1. **Resilient Startup**: Bot no longer crashes if Telegram API is unreachable on startup. Runs in "degraded mode" and logs manual fix instructions.
-
-2. **Documentation Overhaul**: Rewrote all Telegram integration docs to match actual FastAPI + PTB webhook architecture.
+1. **Double Execution Bug (CLI)**: Identify & Fixed a critical bug where `main.py` was calling `process_turn` then immediately re-running the task in a redundant loop. The CLI is now streamlined.
+2. **Session Optimization**: `work_products/media` is now pre-created during session init, preventing runtime errors.
+3. **Live Trace Saving**: `trace.json` is now saved incrementally after every turn (alongside `transcript.md`) for real-time debugging.
+4. **Local Dev Script**: Added `./local_dev.sh` for easy one-command start of Agent College + CLI.
 
 ---
 
 ## 🚧 Known Issues & Next Steps
 
 ### ✅ RESOLVED: Session Persistence After Task (Fixed Dec 31, 2025)
-
-**Problem**: After a task completes, the agent session sometimes becomes unresponsive due to worker crashes or hangs.
-**Fix Implemented**:
-1.  **Session Health Check**: Validates worker task state before every execution.
-2.  **Watchdog Timeout**: Added 5-minute hard timeout. if agent hangs, the session is forcibly killed and re-initialized on the next run.
+**Fix**: Watchdog timeout + Worker health checks implemented in Bot.
 
 ### 🟡 Other Issues
 
@@ -67,6 +64,7 @@
 | Agent College not auto-triggered | ⏳ Pending | Requires manual invocation |
 | `/files` command not implemented | ⏳ Pending | Users can't download artifacts |
 | `/stop` command not implemented | ⏳ Pending | Can't cancel running tasks |
+| Document Run Instructions | ⏳ In Progress | `0000_how_to_run.md` created |
 
 ---
 

@@ -2386,7 +2386,16 @@ async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: 
             if transcript_builder.generate_transcript(trace, transcript_path):
                 print(f"\n🎬 Intermediate transcript saved to {transcript_path}")
         except Exception as e:
+            # Don't let transcript failure crash the agent
             print(f"⚠️ Failed to save intermediate transcript: {e}")
+
+        # NEW: Incremental Trace JSON Save (for live debugging)
+        try:
+            trace_path = os.path.join(workspace_dir, "trace.json")
+            with open(trace_path, "w") as f:
+                json.dump(trace, f, indent=2, default=str)
+        except Exception as e:
+            print(f"⚠️ Failed to save incremental trace: {e}")
 
     # End of Turn Update
     end_ts = time.time()
