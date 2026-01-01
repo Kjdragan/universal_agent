@@ -54,7 +54,10 @@ def format_telegram_response(task_result: Any) -> str:
             # "https://logfire.pydantic.dev/Kjdragan/composio-claudemultiagent?q=trace_id%3D%27{trace_id}%27"
             # We'll use a generic search link if possible, or build it
             logfire_url = f"https://logfire.pydantic.dev/Kjdragan/composio-claudemultiagent?q=trace_id%3D%27{trace_id}%27"
-            footer_parts.append(f"📊 [View Trace]({logfire_url})")
+            # Escape the link components for MarkdownV2
+            escaped_url = escape_markdown(logfire_url, version=2)
+            # escape_markdown escapes '(', ')', etc. which is safe for the link destination in V2
+            footer_parts.append(f"📊 [View Trace]({escaped_url})")
             
         if footer_parts:
             lines.append(" · ".join(footer_parts))

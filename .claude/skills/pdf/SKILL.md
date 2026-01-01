@@ -298,9 +298,15 @@ with open("encrypted.pdf", "wb") as output:
 For converting HTML reports to PDF (preserving CSS styling, tables, layout):
 
 ### Google Chrome Headless (Recommended)
-```bash
 google-chrome --headless --disable-gpu --print-to-pdf=output.pdf --no-margins input.html
 ```
+google-chrome --headless --disable-gpu --print-to-pdf=output.pdf --no-margins input.html
+```
+**Maximizing Content Area (Very Narrow Margins):**
+To maximize the space available for text and allow for larger font sizes:
+1.  **Add CSS**: Include `<style>@page { margin: 0; } body { margin: 0.5cm; font-size: 16pt; line-height: 1.5; }</style>` in your HTML.
+2.  **Use Flags**: Always use `--no-margins` to strip default printer margins.
+3.  **No Fixed Widths**: Use `width: 100%` for containers to fill the available space.
 
 ### Alternative: weasyprint
 ```bash

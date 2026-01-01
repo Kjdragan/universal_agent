@@ -1,0 +1,7 @@
+# Exclude documentation from Railway build context to prevent unnecessary uploads
+Project_Documentation/
+AI_DOCS/
+SAVED_REPORTS/
+docs/_build/
+site/
+.git/

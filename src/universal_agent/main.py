@@ -1715,6 +1715,10 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
     # Initialize Composio with automatic file downloads to this workspace
     downloads_dir = os.path.join(workspace_dir, "downloads")
     os.makedirs(downloads_dir, exist_ok=True)
+    
+    # Pre-create standard work_products directories to avoid runtime interruptions
+    work_products_dir = os.path.join(workspace_dir, "work_products", "media")
+    os.makedirs(work_products_dir, exist_ok=True)
 
     # =========================================================================
     # 2. NON-BLOCKING AUTH FIX
@@ -1818,7 +1822,7 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
     memory_context_str = ""
     try:
         from Memory_System.manager import MemoryManager
-        from src.universal_agent.agent_college.integration import setup_agent_college
+        from universal_agent.agent_college.integration import setup_agent_college
         
         # Initialize strictly for reading context (shared storage) - Use src_dir (Repo Root)
         storage_path = os.getenv("PERSIST_DIRECTORY", os.path.join(src_dir, "Memory_System_Data"))
@@ -2503,108 +2507,13 @@ async def main():
                 if not user_input or user_input.lower() in ("quit", "exit"):
                     break
 
-                trace["query"] = user_input
-                if LOGFIRE_TOKEN:
-                    logfire.info("query_started", query=user_input)
-
-                # 2. Determine Complexity
-                complexity = await classify_query(client, user_input)
-
-                # 3. Route Query
-                is_simple = complexity == "SIMPLE"
-
-                if is_simple:
-                    # Try Fast Path
-                    success = await handle_simple_query(client, user_input)
-                    if not success:
-                        is_simple = False  # Fallback to Complex Path
-                    else:
-                        print("(See output above)")
-
-                if not is_simple:
-                    # Complex Path (Tool Loop) - track per-request timing
-                    result = await process_turn(client, user_input, workspace_dir)
-                    # Result is already printed by process_turn for detailed feedback
-                    # We just need to catch the object returning
-
-                    request_start_ts = time.time()
-                    iteration = 1
-                    current_query = user_input
-
-                    final_response_text = ""
-                    while True:
-                        needs_input, auth_link, final_text = await run_conversation(
-                            client, current_query, start_ts, iteration
-                        )
-                        final_response_text = final_text  # Capture for printing after summary
-
-                        if needs_input and auth_link:
-                            print(f"\n{'=' * 80}")
-                            print("🔐 AUTHENTICATION REQUIRED")
-                            print(f"{'=' * 80}")
-                            print(f"\nPlease open this link in your browser:\n")
-                            print(f"  {auth_link}\n")
-                            print(
-                                "After completing authentication, press Enter to continue..."
-                            )
-                            input()
-
-                            current_query = "I have completed the authentication. Please continue with the task."
-                            iteration += 1
-                            continue
-                        else:
-                            break
-
-                    # Per-request Execution Summary (shown before agent response)
-                    request_end_ts = time.time()
-                    request_duration = round(request_end_ts - request_start_ts, 3)
-                    
-                    # Collect tool calls for this request
-                    request_tool_calls = [tc for tc in trace["tool_calls"] if tc.get("time_offset_seconds", 0) >= (request_start_ts - start_ts)]
-                    
-                    print(f"\n{'=' * 80}")
-                    print("=== EXECUTION SUMMARY ===")
-                    print(f"{'=' * 80}")
-                    print(f"Execution Time: {request_duration} seconds")
-                    print(f"Tool Calls: {len(request_tool_calls)}")
-                    
-                    # Check for code execution
-                    code_exec_used = any(
-                        any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"])
-                        for tc in request_tool_calls
-                    )
-                    if code_exec_used:
-                        print("🏭 Code execution was used")
-                    
-                    # Tool breakdown
-                    if request_tool_calls:
-                        print("\n=== TOOL CALL BREAKDOWN ===")
-                        for tc in request_tool_calls:
-                            marker = "🏭" if any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]) else "  "
-                            print(f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}")
-                    
-                    print(f"{'=' * 80}")
-                    
-                    # Print agent's final response (with follow-up suggestions) AFTER execution summary
-                    if final_response_text:
-                        print(f"\n{final_response_text}")
-
-                    # NEW: Intermediate Transcript Save
-                    # Only save if we actually ran a conversation (not just simple path)
-                    try:
-                        from universal_agent import transcript_builder
-                        
-                        # Update stats for the snapshot
-                        current_ts = time.time()
-                        trace["end_time"] = datetime.now().isoformat()
-                        trace["total_duration_seconds"] = round(current_ts - start_ts, 3)
-                        
-                        transcript_path = os.path.join(workspace_dir, "transcript.md")
-                        if transcript_builder.generate_transcript(trace, transcript_path):
-                            print(f"\n🎬 Intermediate transcript saved to {transcript_path}")
-                    except Exception as e:
-                        # Don't let transcript failure crash the agent
-                        print(f"⚠️ Failed to save intermediate transcript: {e}")
+                # Call process_turn which handles:
+                # 1. Tracing setup
+                # 2. Complexity classification
+                # 3. Simple/Complex routing
+                # 4. Tool execution loop (if complex)
+                # 5. Output and Transcripts
+                await process_turn(client, user_input, workspace_dir)
 
             # End of Session Summary
             end_ts = time.time()
