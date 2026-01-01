@@ -11,6 +11,7 @@ import asyncio
 import os
 import time
 import json
+import uuid
 import re
 from datetime import datetime
 from typing import AsyncGenerator, Any, Callable, Optional
@@ -392,6 +393,7 @@ class UniversalAgent:
     def __init__(self, workspace_dir: Optional[str] = None, user_id: str = "user_123"):
         self.user_id = user_id
         self.workspace_dir = workspace_dir or self._create_workspace()
+        self.run_id = str(uuid.uuid4())
         self.trace: dict = {}
         self.start_ts: float = 0
         self.composio: Optional[Composio] = None
@@ -464,9 +466,11 @@ class UniversalAgent:
 
         # Initialize trace
         self.trace = {
+            "run_id": self.run_id,
             "session_info": {
                 "url": self.session.mcp.url,
                 "user_id": self.user_id,
+                "run_id": self.run_id,
                 "timestamp": datetime.now().isoformat(),
             },
             "query": None,
@@ -480,6 +484,8 @@ class UniversalAgent:
         }
 
         self._initialized = True
+        if LOGFIRE_TOKEN:
+            logfire.set_baggage(run_id=self.run_id)
 
     def _build_system_prompt(self, workspace_path: str) -> str:
         """Build the main system prompt."""
@@ -624,6 +630,9 @@ class UniversalAgent:
         self, query: str, iteration: int
     ) -> AsyncGenerator[AgentEvent, None]:
         """Run a single conversation turn."""
+        step_id = str(uuid.uuid4())
+        if LOGFIRE_TOKEN:
+            logfire.set_baggage(step_id=step_id)
         yield AgentEvent(
             type=EventType.STATUS, data={"status": "processing", "iteration": iteration}
         )
@@ -638,6 +647,8 @@ class UniversalAgent:
                 for block in msg.content:
                     if isinstance(block, ToolUseBlock):
                         tool_record = {
+                            "run_id": self.run_id,
+                            "step_id": step_id,
                             "iteration": iteration,
                             "name": block.name,
                             "id": block.id,
@@ -696,6 +707,8 @@ class UniversalAgent:
                         content_str = str(block_content)
 
                         result_record = {
+                            "run_id": self.run_id,
+                            "step_id": step_id,
                             "tool_use_id": tool_use_id,
                             "time_offset_seconds": round(
                                 time.time() - self.start_ts, 3
@@ -775,6 +788,16 @@ class UniversalAgent:
                                         logfire.warning(
                                             "work_product_read_error", error=str(e)
                                         )
+
+        iter_record = {
+            "run_id": self.run_id,
+            "step_id": step_id,
+            "iteration": iteration,
+            "query": query[:200],
+            "duration_seconds": round(time.time() - self.start_ts, 3),
+            "tool_calls": len(tool_calls_this_iter),
+        }
+        self.trace["iterations"].append(iter_record)
 
         yield AgentEvent(
             type=EventType.ITERATION_END,

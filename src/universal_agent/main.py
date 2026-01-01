@@ -8,6 +8,7 @@ import asyncio
 import os
 import time
 import json
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -99,6 +100,47 @@ class DualWriter:
     def fileno(self):
         """Return file descriptor (needed by prompt_toolkit)."""
         return self.stream.fileno()
+
+
+class BudgetExceeded(RuntimeError):
+    def __init__(self, budget_name: str, limit: float, current: float, detail: str = ""):
+        self.budget_name = budget_name
+        self.limit = limit
+        self.current = current
+        self.detail = detail
+        message = (
+            f"Budget exceeded: {budget_name} "
+            f"(limit={limit}, current={current})"
+        )
+        if detail:
+            message = f"{message} - {detail}"
+        super().__init__(message)
+
+    def to_dict(self) -> dict:
+        return {
+            "budget_name": self.budget_name,
+            "limit": self.limit,
+            "current": self.current,
+            "detail": self.detail,
+        }
+
+
+def _get_env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def load_budget_config() -> dict:
+    return {
+        "max_wallclock_minutes": _get_env_int("UA_MAX_WALLCLOCK_MINUTES", 90),
+        "max_steps": _get_env_int("UA_MAX_STEPS", 50),
+        "max_tool_calls": _get_env_int("UA_MAX_TOOL_CALLS", 250),
+    }
 
 
 # Configure Logfire BEFORE importing Claude SDK
@@ -1314,11 +1356,37 @@ options = None
 # Trace will be created in main() after session is initialized
 # Type hint: Dict[str, Any] - initialized in main()
 trace: dict = {}
+run_id: Optional[str] = None
+budget_config: dict = {}
+budget_state: dict = {"start_ts": None, "steps": 0, "tool_calls": 0}
 
 
 async def run_conversation(client, query: str, start_ts: float, iteration: int = 1):
     """Run a single conversation turn with full tracing."""
-    global trace
+    global trace, run_id, budget_config, budget_state
+    step_id = str(uuid.uuid4())
+
+    if budget_state["start_ts"] is None:
+        budget_state["start_ts"] = start_ts
+
+    elapsed = time.time() - budget_state["start_ts"]
+    wallclock_limit = budget_config.get("max_wallclock_minutes", 0) * 60
+    if wallclock_limit and elapsed >= wallclock_limit:
+        raise BudgetExceeded(
+            "max_wallclock_minutes",
+            budget_config.get("max_wallclock_minutes", 0),
+            round(elapsed / 60, 2),
+            detail="wallclock budget reached before starting next step",
+        )
+
+    if budget_config.get("max_steps") and budget_state["steps"] >= budget_config["max_steps"]:
+        raise BudgetExceeded(
+            "max_steps",
+            budget_config["max_steps"],
+            budget_state["steps"],
+            detail="step limit reached before starting next step",
+        )
+    budget_state["steps"] += 1
 
     # Initialize Logfire Context (Baggage) for Trace Organization
     if iteration == 1:
@@ -1330,9 +1398,17 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         # Update loop count for main agent
         logfire.set_baggage(loop=str(iteration))
         logfire.set_baggage(step="execution") # Default for subsequent turns
+    if run_id:
+        logfire.set_baggage(run_id=run_id)
+    logfire.set_baggage(step_id=step_id)
 
     # Create Logfire span for this iteration
-    with logfire.span(f"conversation_iteration_{iteration}", iteration=iteration):
+    with logfire.span(
+        f"conversation_iteration_{iteration}",
+        iteration=iteration,
+        run_id=run_id,
+        step_id=step_id,
+    ):
         print(f"\n{'=' * 80}")
         print(
             f"[ITERATION {iteration}] Sending: {query[:100]}{'...' if len(query) > 100 else ''}"
@@ -1356,6 +1432,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             # Nested tool_use span
                             with logfire.span("tool_use", tool_name=block.name, tool_id=block.id):
                                 tool_record = {
+                                    "run_id": run_id,
+                                    "step_id": step_id,
                                     "iteration": iteration,
                                     "name": block.name,
                                     "id": block.id,
@@ -1367,6 +1445,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 }
                                 trace["tool_calls"].append(tool_record)
                                 tool_calls_this_iter.append(tool_record)
+                                budget_state["tool_calls"] += 1
+                                if budget_config.get("max_tool_calls") and budget_state["tool_calls"] > budget_config["max_tool_calls"]:
+                                    raise BudgetExceeded(
+                                        "max_tool_calls",
+                                        budget_config["max_tool_calls"],
+                                        budget_state["tool_calls"],
+                                        detail="tool call limit exceeded",
+                                    )
 
                                 # Log to Logfire with PAYLOAD preview
                                 input_preview = None
@@ -1390,6 +1476,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     input_preview=input_preview,
                                     parent_tool_use_id=parent_tool_id,  # Sub-agent context
                                     is_subagent_call=bool(parent_tool_id),
+                                    run_id=run_id,
+                                    step_id=step_id,
                                 )
                                 
                                 # Sub-agent tagging logic: Entering sub-agent
@@ -1480,6 +1568,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             content_str = str(block_content)
 
                             result_record = {
+                                "run_id": run_id,
+                                "step_id": step_id,
                                 "tool_use_id": tool_use_id,
                                 "time_offset_seconds": round(time.time() - start_ts, 3),
                                 "is_error": is_error,
@@ -1499,6 +1589,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 content_size=result_record["content_size_bytes"],
                                 is_error=result_record["is_error"],
                                 content_preview=full_content,
+                                run_id=run_id,
+                                step_id=step_id,
                             )
 
                             print(
@@ -1583,6 +1675,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                 )
 
         iter_record = {
+            "run_id": run_id,
+            "step_id": step_id,
             "iteration": iteration,
             "query": query[:200],
             "duration_seconds": round(time.time() - iter_start, 3),
@@ -1685,7 +1779,8 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
     Initialize the agent session, tools, and options.
     Returns: (options, session, user_id, workspace_dir, trace)
     """
-    global trace, composio, user_id, session, options, OBSERVER_WORKSPACE_DIR
+    global trace, composio, user_id, session, options, OBSERVER_WORKSPACE_DIR, run_id
+    run_id = str(uuid.uuid4())
 
     # Create main span for entire execution
     # with logfire.span("standalone_composio_test") as span: # Moved to caller
@@ -2205,9 +2300,11 @@ async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
 
     # Initialize trace dict now that session is available (requires session.mcp.url)
     trace = {
+        "run_id": run_id,
         "session_info": {
             "url": session.mcp.url,
             "user_id": user_id,
+            "run_id": run_id,
             "timestamp": datetime.now().isoformat(),
         },
         "query": None,
@@ -2449,7 +2546,7 @@ SEARCH_TOOL_CONFIG = {
 
 
 async def main():
-    global trace
+    global trace, run_id, budget_config, budget_state
 
     # Create main span for entire execution
     # NOTE: Local MCP tools run in separate subprocess with their own trace ID
@@ -2457,6 +2554,8 @@ async def main():
     span_ctx = main_span.__enter__()  # Start the span manually
     
     options, session, user_id, workspace_dir, trace = await setup_session()
+    budget_config = load_budget_config()
+    trace["budgets"] = budget_config
     
     # Extract Trace ID immediately after span creation
     if LOGFIRE_TOKEN:
@@ -2476,6 +2575,7 @@ async def main():
     print(f"\n=== Composio Session Info ===")
     print(f"Session URL: {session.mcp.url}")
     print(f"User ID: {user_id}")
+    print(f"Run ID: {run_id}")
     print(f"Timestamp: {timestamp}")
     print(f"Trace ID: {trace_id_hex}")
     print(f"============================\n")
@@ -2487,6 +2587,11 @@ async def main():
 
     trace["start_time"] = datetime.now().isoformat()
     start_ts = time.time()
+    budget_state["start_ts"] = start_ts
+    budget_state["steps"] = 0
+    budget_state["tool_calls"] = 0
+    if LOGFIRE_TOKEN and run_id:
+        logfire.set_baggage(run_id=run_id)
 
     # Configure prompt with history (persists across sessions) and better editing
     history_file = os.path.join(workspace_dir, ".prompt_history")
@@ -2522,7 +2627,15 @@ async def main():
                 # 3. Simple/Complex routing
                 # 4. Tool execution loop (if complex)
                 # 5. Output and Transcripts
-                await process_turn(client, user_input, workspace_dir)
+                try:
+                    await process_turn(client, user_input, workspace_dir)
+                except BudgetExceeded as exc:
+                    trace["status"] = "budget_exceeded"
+                    trace["budget_error"] = exc.to_dict()
+                    print(f"\n⛔ {exc}")
+                    if LOGFIRE_TOKEN:
+                        logfire.error("budget_exceeded", **exc.to_dict())
+                    break
 
             # End of Session Summary
             end_ts = time.time()
