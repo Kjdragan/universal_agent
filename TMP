@@ -1,0 +1,7 @@
+Okay, one issue I see is where these files and maybe some others are being stored relating to our long-running agents. Take a look at these files for example. Location.
+/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/runtime_state.db
+/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/runtime_state.db-shm
+/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/runtime_state.db-wal
+
+We need a persistent storage location for this. This directory is storing our session information, but often I purge this directory because I want to just have the latest session saved as the only one in the directory so it's easier to evaluate./home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES
+Are we developing all this functionality for the long-running agent in some module directory? Can you not keep that information to get that in a directory there so that we keep things organized rather than storing it in this somewhat temporary directory?

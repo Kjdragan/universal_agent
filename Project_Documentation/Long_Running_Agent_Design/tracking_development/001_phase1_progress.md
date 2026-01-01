@@ -21,6 +21,17 @@
 6) Added pytest config for `src` imports and made ledger timestamps UTC-aware.
    - Updated: `pyproject.toml`, `src/universal_agent/durable/ledger.py`, `tests/test_durable_ledger.py`
 
+7) Implemented Phase 2 run/step state machine, checkpoints, and CLI resume UX.
+   - Added: `src/universal_agent/durable/state.py`, `src/universal_agent/durable/checkpointing.py`
+   - Updated: `src/universal_agent/main.py`, `src/universal_agent/durable/__init__.py`
+
+8) Ran CLI resume demo with run_id `2676413d-c3f0-45d5-920f-de4db7662148` and loaded checkpoint `16a8a66a-29ee-40f3-ace1-33161a587e23`.
+   - Workspace: `AGENT_RUN_WORKSPACES/session_20260101_152404`
+
+9) Added Phase 2 unit tests for state machine + checkpointing and executed them.
+   - Added: `tests/test_durable_state.py`, `tests/test_durable_checkpointing.py`
+   - Tests: `uv run pytest tests/test_durable_state.py -q`, `uv run pytest tests/test_durable_checkpointing.py -q`
+
 Notes:
 - Tests not executed in this log entry.
 - Runtime DB path default: `AGENT_RUN_WORKSPACES/runtime_state.db` (override with `UA_RUNTIME_DB_PATH`).

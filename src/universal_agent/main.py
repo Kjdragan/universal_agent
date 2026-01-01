@@ -144,61 +144,6 @@ def load_budget_config() -> dict:
     }
 
 
-def _insert_run_row(conn, run_id_value: str, entrypoint: str, run_spec: dict) -> None:
-    now = datetime.utcnow().isoformat()
-    conn.execute(
-        \"\"\"
-        INSERT OR REPLACE INTO runs (
-            run_id,
-            created_at,
-            updated_at,
-            status,
-            entrypoint,
-            run_spec_json
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        \"\"\",
-        (
-            run_id_value,
-            now,
-            now,
-            \"running\",
-            entrypoint,
-            json.dumps(run_spec, default=str),
-        ),
-    )
-    conn.commit()
-
-
-def _start_step_row(conn, run_id_value: str, step_id_value: str, step_index: int) -> None:
-    now = datetime.utcnow().isoformat()
-    conn.execute(
-        \"\"\"
-        INSERT OR REPLACE INTO run_steps (
-            step_id,
-            run_id,
-            step_index,
-            created_at,
-            updated_at,
-            status,
-            phase
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        \"\"\",
-        (
-            step_id_value,
-            run_id_value,
-            step_index,
-            now,
-            now,
-            \"running\",
-            \"unspecified\",
-        ),
-    )
-    conn.execute(
-        \"UPDATE runs SET current_step_id = ?, updated_at = ? WHERE run_id = ?\",
-        (step_id_value, now, run_id_value),
-    )
-    conn.commit()
-
 # Configure Logfire BEFORE importing Claude SDK
 import logfire
 
@@ -1542,7 +1487,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
     if runtime_db_conn and run_id:
         try:
-            _start_step_row(runtime_db_conn, run_id, step_id, iteration)
+            start_step(runtime_db_conn, run_id, step_id, iteration)
         except Exception as exc:
             logfire.warning("runtime_step_insert_failed", step_id=step_id, error=str(exc))
 
@@ -1886,6 +1831,33 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
             "auth_link": auth_link,
         }
         trace["iterations"].append(iter_record)
+        if runtime_db_conn and run_id:
+            last_tool_call_id = None
+            if tool_calls_this_iter:
+                last_tool_call_id = tool_calls_this_iter[-1].get("id")
+            state_snapshot = {
+                "run_id": run_id,
+                "step_id": step_id,
+                "iteration": iteration,
+                "query_preview": query[:200],
+                "tool_calls": len(tool_calls_this_iter),
+                "needs_user_input": needs_user_input,
+            }
+            cursor = {
+                "last_tool_call_id": last_tool_call_id,
+            }
+            try:
+                save_checkpoint(
+                    runtime_db_conn,
+                    run_id=run_id,
+                    step_id=step_id,
+                    checkpoint_type="step_boundary",
+                    state_snapshot=state_snapshot,
+                    cursor=cursor,
+                )
+                complete_step(runtime_db_conn, step_id, "succeeded")
+            except Exception as exc:
+                logfire.warning("checkpoint_save_failed", step_id=step_id, error=str(exc))
         current_step_id = None
 
         return needs_user_input, auth_link, final_text
@@ -1975,38 +1947,61 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> bool:
     return True
 
 
+def parse_cli_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Universal Agent CLI")
+    parser.add_argument("--run-id", dest="run_id", help="Use an explicit run id.")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume an existing run from the runtime DB.",
+    )
+    parser.add_argument(
+        "--job",
+        dest="job_path",
+        help="Path to a run spec JSON file.",
+    )
+    return parser.parse_args()
 
-async def setup_session() -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
+
+
+async def setup_session(
+    run_id_override: Optional[str] = None,
+    workspace_dir_override: Optional[str] = None,
+) -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
     """
     Initialize the agent session, tools, and options.
     Returns: (options, session, user_id, workspace_dir, trace)
     """
     global trace, composio, user_id, session, options, OBSERVER_WORKSPACE_DIR, run_id
-    run_id = str(uuid.uuid4())
+    run_id = run_id_override or str(uuid.uuid4())
 
     # Create main span for entire execution
     # with logfire.span("standalone_composio_test") as span: # Moved to caller
     
     # Setup Session Workspace
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # 1. Configured Root (Railway/Docker)
-    if os.getenv("AGENT_WORKSPACE_ROOT"):
-        base_dir = os.getenv("AGENT_WORKSPACE_ROOT")
-        workspace_dir = os.path.join(base_dir, f"session_{timestamp}")
+    if workspace_dir_override:
+        workspace_dir = workspace_dir_override
+        os.makedirs(workspace_dir, exist_ok=True)
     else:
-        # 2. Auto-Discovery (Local)
-        # Try /app first (Docker), then project root (local), fallback to /tmp
-        for base_dir in ["/app", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "/tmp"]:
-            workspace_dir = os.path.join(base_dir, "AGENT_RUN_WORKSPACES", f"session_{timestamp}")
-            try:
-                os.makedirs(workspace_dir, exist_ok=True)
-                break  # Success
-            except PermissionError:
-                continue
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # 1. Configured Root (Railway/Docker)
+        if os.getenv("AGENT_WORKSPACE_ROOT"):
+            base_dir = os.getenv("AGENT_WORKSPACE_ROOT")
+            workspace_dir = os.path.join(base_dir, f"session_{timestamp}")
         else:
-            raise RuntimeError("Cannot create workspace directory in any location")
-            
+            # 2. Auto-Discovery (Local)
+            # Try /app first (Docker), then project root (local), fallback to /tmp
+            for base_dir in ["/app", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "/tmp"]:
+                workspace_dir = os.path.join(base_dir, "AGENT_RUN_WORKSPACES", f"session_{timestamp}")
+                try:
+                    os.makedirs(workspace_dir, exist_ok=True)
+                    break  # Success
+                except PermissionError:
+                    continue
+            else:
+                raise RuntimeError("Cannot create workspace directory in any location")
+
     os.makedirs(workspace_dir, exist_ok=True)
 
     # Initialize Composio with automatic file downloads to this workspace
@@ -2751,7 +2746,7 @@ SEARCH_TOOL_CONFIG = {
 }
 
 
-async def main():
+async def main(args: argparse.Namespace):
     global trace, run_id, budget_config, budget_state, runtime_db_conn, tool_ledger
 
     # Create main span for entire execution
@@ -2759,18 +2754,45 @@ async def main():
     main_span = logfire.span("standalone_composio_test")
     span_ctx = main_span.__enter__()  # Start the span manually
     
-    options, session, user_id, workspace_dir, trace = await setup_session()
     budget_config = load_budget_config()
-    trace["budgets"] = budget_config
     runtime_db_conn = connect_runtime_db()
+
+    run_spec = None
+    workspace_override = None
+    if args.resume:
+        if not args.run_id:
+            print("❌ --resume requires --run-id")
+            return
+        run_row = get_run(runtime_db_conn, args.run_id)
+        if not run_row:
+            print(f"❌ No run found for run_id={args.run_id}")
+            return
+        run_spec = json.loads(run_row["run_spec_json"])
+        workspace_override = run_spec.get("workspace_dir")
+        run_id_override = args.run_id
+    else:
+        run_id_override = args.run_id
+
+    options, session, user_id, workspace_dir, trace = await setup_session(
+        run_id_override=run_id_override,
+        workspace_dir_override=workspace_override,
+    )
+
+    trace["budgets"] = budget_config
     tool_ledger = ToolCallLedger(runtime_db_conn, workspace_dir)
-    run_spec = {
-        "entrypoint": "cli",
-        "workspace_dir": workspace_dir,
-        "budgets": budget_config,
-    }
+
+    if run_spec is None:
+        if args.job_path:
+            with open(args.job_path, "r", encoding="utf-8") as f:
+                run_spec = json.load(f)
+        else:
+            run_spec = {}
+        run_spec.setdefault("entrypoint", "cli")
+        run_spec.setdefault("workspace_dir", workspace_dir)
+        run_spec.setdefault("budgets", budget_config)
+
     if run_id:
-        _insert_run_row(runtime_db_conn, run_id, "cli", run_spec)
+        upsert_run(runtime_db_conn, run_id, "cli", run_spec, status="running")
     
     # Extract Trace ID immediately after span creation
     if LOGFIRE_TOKEN:
@@ -2793,6 +2815,9 @@ async def main():
     print(f"Run ID: {run_id}")
     print(f"Timestamp: {timestamp}")
     print(f"Trace ID: {trace_id_hex}")
+    if run_id:
+        resume_cmd = f"uv run python src/universal_agent/main.py --resume --run-id {run_id}"
+        print(f"Resume Command: {resume_cmd}")
     print(f"============================\n")
 
     print("=" * 80)
@@ -2803,10 +2828,21 @@ async def main():
     trace["start_time"] = datetime.now().isoformat()
     start_ts = time.time()
     budget_state["start_ts"] = start_ts
-    budget_state["steps"] = 0
+    budget_state["steps"] = get_step_count(runtime_db_conn, run_id) if run_id else 0
     budget_state["tool_calls"] = 0
     if LOGFIRE_TOKEN and run_id:
         logfire.set_baggage(run_id=run_id)
+    if args.resume and run_id:
+        checkpoint = load_last_checkpoint(runtime_db_conn, run_id)
+        if checkpoint:
+            trace["resume_checkpoint"] = {
+                "checkpoint_id": checkpoint["checkpoint_id"],
+                "created_at": checkpoint["created_at"],
+                "checkpoint_type": checkpoint["checkpoint_type"],
+            }
+            print(f"✅ Resume checkpoint loaded: {checkpoint['checkpoint_id']}")
+        else:
+            print("⚠️ No checkpoint found for resume; starting fresh.")
 
     # Configure prompt with history (persists across sessions) and better editing
     history_file = os.path.join(workspace_dir, ".prompt_history")
@@ -2822,6 +2858,7 @@ async def main():
     )
 
     async with ClaudeSDKClient(options) as client:
+            run_failed = False
             while True:
                 # 1. Get User Input
                 print("\n" + "=" * 80)
@@ -2845,12 +2882,37 @@ async def main():
                 try:
                     await process_turn(client, user_input, workspace_dir)
                 except BudgetExceeded as exc:
+                    run_failed = True
                     trace["status"] = "budget_exceeded"
                     trace["budget_error"] = exc.to_dict()
                     print(f"\n⛔ {exc}")
                     if LOGFIRE_TOKEN:
                         logfire.error("budget_exceeded", **exc.to_dict())
+                    if runtime_db_conn and current_step_id:
+                        complete_step(
+                            runtime_db_conn,
+                            current_step_id,
+                            "failed",
+                            error_code="budget_exceeded",
+                            error_detail=str(exc),
+                        )
+                    if runtime_db_conn and run_id:
+                        update_run_status(runtime_db_conn, run_id, "failed")
                     break
+                except Exception as exc:
+                    run_failed = True
+                    print(f"\n❌ Execution error: {exc}")
+                    if runtime_db_conn and current_step_id:
+                        complete_step(
+                            runtime_db_conn,
+                            current_step_id,
+                            "failed",
+                            error_code="exception",
+                            error_detail=str(exc),
+                        )
+                    if runtime_db_conn and run_id:
+                        update_run_status(runtime_db_conn, run_id, "failed")
+                    raise
 
             # End of Session Summary
             end_ts = time.time()
@@ -2939,6 +3001,8 @@ async def main():
             print("\n" + "=" * 80)
             print("\n" + "=" * 80)
             print("Session ended. Thank you!")
+            if runtime_db_conn and run_id and not run_failed:
+                update_run_status(runtime_db_conn, run_id, "succeeded")
 
     # Close the main span to ensure all nested spans are captured in trace
     main_span.__exit__(None, None, None)
@@ -2948,8 +3012,9 @@ if __name__ == "__main__":
     print("Composio Agent - Claude SDK with Tool Router")
     print("Logfire tracing enabled for observability.")
     print("=" * 80 + "\n")
+    cli_args = parse_cli_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(cli_args))
     except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n\n⚠️ Execution cancelled by user.")
         # logfire might not be configured if it failed early, but we try
