@@ -11,6 +11,10 @@ READ_ONLY_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+REPLAY_EXACT = "REPLAY_EXACT"
+REPLAY_IDEMPOTENT = "REPLAY_IDEMPOTENT"
+RELAUNCH = "RELAUNCH"
+
 KNOWN_MCP_SIDE_EFFECTS = {
     "workbench_upload": "external",
     "upload_to_composio": "external",
@@ -58,3 +62,21 @@ def classify_tool(tool_name: str, tool_namespace: str, metadata: dict[str, Any] 
 
     # Default to external to be conservative
     return "external"
+
+
+def classify_replay_policy(
+    tool_name: str, tool_namespace: str, metadata: dict[str, Any] | None = None
+) -> str:
+    """
+    Classify tool into replay policy: REPLAY_EXACT | REPLAY_IDEMPOTENT | RELAUNCH.
+    """
+    normalized_name = tool_name.lower()
+    normalized_namespace = tool_namespace.lower()
+
+    if normalized_namespace == "claude_code" and normalized_name == "task":
+        return RELAUNCH
+
+    side_effect_class = classify_tool(tool_name, tool_namespace, metadata)
+    if side_effect_class == "read_only":
+        return REPLAY_IDEMPOTENT
+    return REPLAY_EXACT

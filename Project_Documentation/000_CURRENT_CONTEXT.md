@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2026-01-02 00:15 CST
+**Last Updated**: 2026-01-02 11:15 CST
 
 ---
 
@@ -65,7 +65,7 @@
 
 | Issue | Status | Notes |
 |-------|--------|-------|
-| Resume does not auto-continue | ⏳ Pending | Resume loads checkpoint but waits for new input |
+| Provider session_id only captured after ResultMessage | ⏳ Known | Early interrupts may lack provider_session_id for resume |
 | Multiple local-toolkit trace IDs | ⏳ Known | Local MCP uses multiple trace IDs per window |
 | Agent College not auto-triggered | ⏳ Pending | Requires manual invocation |
 | `/files` command not implemented | ⏳ Pending | Users can't download artifacts |
@@ -171,6 +171,15 @@ PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
 Latest resume command is written to:
 `Project_Documentation/Long_Running_Agent_Design/KevinRestartWithThis.md`
 
+### Quick Resume Test (CLI)
+```bash
+PYTHONPATH=src uv run python -m universal_agent.main --job /home/kjdragan/lrepos/universal_agent/tmp/quick_resume_job.json
+```
+Kill during the sleep step, then resume:
+```bash
+PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
+```
+
 ### Useful Commands
 ```bash
 # Check webhook status
@@ -195,6 +204,24 @@ curl https://web-production-3473.up.railway.app/health
 | 4 | `012_LETTA_MEMORY_SYSTEM_MANUAL.md` | Memory System design |
 | 5 | `002_LESSONS_LEARNED.md` | Patterns and gotchas |
 | 6 | `Project_Documentation/Long_Running_Agent_Design/` | Durable Jobs v1 + tracking |
+
+### Latest Durability Reports (Read These)
+| Doc | Purpose |
+|-----|---------|
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/006_provider_session_wiring_report.md` | Provider session resume/fork wiring + tests |
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/007_resume_continuity_evaluation_quick_job.md` | Latest resume evaluation (in-flight replay works) |
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/008_durable_runner_architecture.md` | Current durability architecture |
+
+---
+
+## ✅ Recent Durability Updates (Jan 2, 2026)
+1) **Job-mode auto-resume**: `--resume` now auto-continues job runs (no prompt) unless terminal or waiting_for_human.
+2) **Resume packet + job completion summary**: Saved to workspace and linked in KevinRestartWithThis.
+3) **Provider session continuity**: Store `provider_session_id`; use `resume` + `continue_conversation` when available.
+4) **Fork support**: `--fork --run-id <BASE>` creates a new run with provider session fork and parent_run_id.
+5) **In-flight tool replay**: On resume, tools in prepared/running are deterministically re-run before continuation.
+6) **SIGINT debounce**: Avoids multiple interrupt checkpoints for a single stop.
+7) **Replay note injected**: Continuation prompt includes a note to avoid re-running replayed steps.
 
 ---
 

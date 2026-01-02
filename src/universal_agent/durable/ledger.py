@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .classification import classify_tool
+from .classification import classify_replay_policy, classify_tool
 from .normalize import hash_normalized_json, normalize_json
 
 
@@ -75,6 +75,7 @@ class ToolCallLedger:
         metadata: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[LedgerReceipt], str]:
         side_effect_class = classify_tool(tool_name, tool_namespace, metadata)
+        replay_policy = classify_replay_policy(tool_name, tool_namespace, metadata)
         normalized_args_hash = hash_normalized_json(tool_input)
         side_effect_scope = self._compute_scope(tool_name, tool_input)
         idempotency_key = self._idempotency_key(
@@ -110,12 +111,13 @@ class ToolCallLedger:
                 tool_name,
                 tool_namespace,
                 side_effect_class,
+                replay_policy,
                 normalized_args_hash,
                 idempotency_key,
                 status,
                 attempt,
                 request_ref
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 tool_call_id,
@@ -127,6 +129,7 @@ class ToolCallLedger:
                 tool_name,
                 tool_namespace,
                 side_effect_class,
+                replay_policy,
                 normalized_args_hash,
                 idempotency_key,
                 "prepared",

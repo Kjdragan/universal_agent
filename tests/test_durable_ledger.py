@@ -60,6 +60,9 @@ def test_ledger_dedupe_returns_receipt():
         tool_input=tool_input,
     )
     assert receipt is None
+    entry = ledger.get_tool_call("tool-1")
+    assert entry is not None
+    assert entry["replay_policy"] == "REPLAY_EXACT"
 
     ledger.mark_succeeded("tool-1", {"ok": True, "message_id": "msg-1"})
 

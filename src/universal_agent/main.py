@@ -1075,8 +1075,14 @@ async def on_pre_tool_use_ledger(
 
     if decision.deduped and decision.receipt:
         prior_entry = tool_ledger.get_tool_call(decision.receipt.tool_call_id)
+        replay_policy = (prior_entry or {}).get("replay_policy")
         side_effect_class = (prior_entry or {}).get("side_effect_class")
-        if side_effect_class in ("external", "memory", "local"):
+        should_dedupe = False
+        if replay_policy:
+            should_dedupe = replay_policy == "REPLAY_EXACT"
+        else:
+            should_dedupe = side_effect_class in ("external", "memory", "local")
+        if should_dedupe:
             logfire.warning(
                 "tool_deduped",
                 tool_name=tool_name,
@@ -1686,7 +1692,7 @@ def _load_inflight_tool_calls(
     rows = conn.execute(
         """
         SELECT tool_call_id, tool_name, tool_namespace, raw_tool_name,
-               request_ref, status, idempotency_key, created_at
+               request_ref, status, idempotency_key, created_at, replay_policy
         FROM tool_calls
         WHERE run_id = ? AND status IN ('prepared', 'running')
         ORDER BY created_at ASC
@@ -1717,6 +1723,7 @@ def _load_inflight_tool_calls(
                 "status": row["status"],
                 "idempotency_key": row["idempotency_key"],
                 "created_at": row["created_at"],
+                "replay_policy": row["replay_policy"],
                 "attempts": 0,
             }
         )
@@ -1838,7 +1845,7 @@ def build_resume_packet(
     inflight = []
     inflight_rows = conn.execute(
         """
-        SELECT tool_name, status, idempotency_key, created_at
+        SELECT tool_name, status, idempotency_key, created_at, replay_policy
         FROM tool_calls
         WHERE run_id = ? AND status IN ('prepared', 'running')
         ORDER BY created_at DESC
@@ -1852,6 +1859,7 @@ def build_resume_packet(
                 "status": row["status"],
                 "idempotency_key": row["idempotency_key"],
                 "created_at": row["created_at"],
+                "replay_policy": row["replay_policy"],
             }
         )
 
@@ -2206,6 +2214,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         )
                                         tool_record["side_effect_class"] = ledger_entry.get(
                                             "side_effect_class"
+                                        )
+                                        tool_record["replay_policy"] = ledger_entry.get(
+                                            "replay_policy"
                                         )
                                         tool_record["ledger_status"] = ledger_entry.get(
                                             "status"

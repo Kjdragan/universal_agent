@@ -22,8 +22,17 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - Added CLI resume flags and a printed resume command.
 - Resume demo executed: loaded last checkpoint and reused the workspace.
 - Added unit tests for state machine and checkpointing.
- - Added SIGINT handling to always save interrupt checkpoints (Ctrl-C reliability).
- - Resume now loads checkpoint but requires manual prompt entry to continue.
+- Added SIGINT handling to always save interrupt checkpoints (Ctrl-C reliability).
+
+### Phase 2.5 (job auto-resume + provider session continuity + replay)
+- Job-mode resume now auto-continues (no prompt) unless terminal or waiting_for_human.
+- Persisted run metadata: run_mode, job_path, last_job_prompt, provider_session_id, parent_run_id.
+- Resume packet + job completion summary are written to workspace and linked in `KevinRestartWithThis.md`.
+- Provider session continuity: store `provider_session_id` and resume with `continue_conversation=True`.
+- Added `--fork` to branch provider sessions into a new run with parent linkage.
+- In-flight tool replay: on resume, tools in prepared/running are deterministically re-run before continuation.
+- Replay note injected to prevent duplicate tool replays after recovery.
+- SIGINT debounced to avoid multiple interrupt checkpoints.
 
 ### Research pipeline hardening (supporting durable runs)
 - `finalize_research` builds a filtered corpus in `search_results_filtered_best/`.
@@ -43,6 +52,9 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 ## Progress log for detailed updates
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/001_phase1_progress.md`
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/002_phase2_progress.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/006_provider_session_wiring_report.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/007_resume_continuity_evaluation_quick_job.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/008_durable_runner_architecture.md`
 
 ## Current status
-Phase 2 is implemented. Current focus is validation of kill/resume behavior (checkpoint save/reload + no duplicated side effects) and deciding whether resume should auto-continue or require manual prompt input.
+Phase 2.5 is implemented and validated on the quick resume test. Resume now auto-continues in job mode and replays in-flight tool calls before continuation; duplicate replays are blocked. Next focus: capture provider session IDs earlier (if possible), add replay outcomes to completion summaries, and reduce replay noise in logs.

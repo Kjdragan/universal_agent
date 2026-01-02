@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   tool_name TEXT NOT NULL,
   tool_namespace TEXT NOT NULL,
   side_effect_class TEXT NOT NULL,
+  replay_policy TEXT NOT NULL DEFAULT 'REPLAY_EXACT',
   normalized_args_hash TEXT NOT NULL,
   idempotency_key TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL,
@@ -97,4 +98,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "runs", "provider_session_last_seen_at", "TEXT")
     _add_column_if_missing(conn, "runs", "parent_run_id", "TEXT")
     _add_column_if_missing(conn, "tool_calls", "raw_tool_name", "TEXT")
+    _add_column_if_missing(
+        conn, "tool_calls", "replay_policy", "TEXT NOT NULL DEFAULT 'REPLAY_EXACT'"
+    )
     conn.commit()
