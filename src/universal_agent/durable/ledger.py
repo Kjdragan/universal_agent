@@ -70,6 +70,7 @@ class ToolCallLedger:
         step_id: str,
         tool_name: str,
         tool_namespace: str,
+        raw_tool_name: Optional[str] = None,
         tool_input: dict[str, Any],
         metadata: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[LedgerReceipt], str]:
@@ -105,6 +106,7 @@ class ToolCallLedger:
                 step_id,
                 created_at,
                 updated_at,
+                raw_tool_name,
                 tool_name,
                 tool_namespace,
                 side_effect_class,
@@ -113,7 +115,7 @@ class ToolCallLedger:
                 status,
                 attempt,
                 request_ref
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 tool_call_id,
@@ -121,6 +123,7 @@ class ToolCallLedger:
                 step_id,
                 now,
                 now,
+                raw_tool_name,
                 tool_name,
                 tool_namespace,
                 side_effect_class,

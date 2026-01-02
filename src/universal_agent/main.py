@@ -237,7 +237,8 @@ from composio import Composio
 # Durable runtime support
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.ledger import ToolCallLedger
-from universal_agent.durable.tool_gateway import prepare_tool_call
+from universal_agent.durable.tool_gateway import prepare_tool_call, parse_tool_identity
+from universal_agent.durable.normalize import normalize_json
 from universal_agent.durable.state import (
     upsert_run,
     update_run_status,
@@ -985,7 +986,7 @@ async def on_pre_tool_use_ledger(
     """
     PreToolUse Hook: prepare tool call ledger entry and enforce idempotency.
     """
-    global tool_ledger, run_id, current_step_id
+    global tool_ledger, run_id, current_step_id, forced_tool_queue, forced_tool_active_ids
     if tool_ledger is None or run_id is None:
         return {}
 
@@ -1013,6 +1014,42 @@ async def on_pre_tool_use_ledger(
     tool_input = input_data.get("tool_input", {}) or {}
     step_id = current_step_id or "unknown"
     tool_call_id = str(tool_use_id or uuid.uuid4())
+
+    if forced_tool_queue:
+        expected = forced_tool_queue[0]
+        if not _forced_tool_matches(tool_name, tool_input, expected):
+            expected_input = json.dumps(expected.get("tool_input") or {}, indent=2)
+            expected_tool = expected.get("raw_tool_name") or expected.get("tool_name")
+            return {
+                "systemMessage": (
+                    "Recovery in progress: re-run the exact in-flight tool call. "
+                    f"Next required tool: {expected_tool} with input {expected_input}"
+                ),
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Forced in-flight replay active.",
+                },
+            }
+        forced_tool_active_ids[tool_call_id] = expected
+        expected["attempts"] = expected.get("attempts", 0) + 1
+        try:
+            tool_ledger.mark_running(expected["tool_call_id"])
+            logfire.info(
+                "replay_mark_running",
+                tool_use_id=tool_call_id,
+                replay_tool_call_id=expected["tool_call_id"],
+                run_id=run_id,
+                step_id=step_id,
+                idempotency_key=expected.get("idempotency_key"),
+            )
+        except Exception as exc:
+            logfire.warning(
+                "replay_mark_running_failed",
+                tool_use_id=tool_call_id,
+                error=str(exc),
+            )
+        return {}
 
     try:
         decision = prepare_tool_call(
@@ -1081,7 +1118,7 @@ async def on_post_tool_use_ledger(
     """
     PostToolUse Hook: persist tool response to the ledger.
     """
-    global tool_ledger
+    global tool_ledger, forced_tool_active_ids, forced_tool_queue, runtime_db_conn, run_id
     if tool_ledger is None:
         return {}
 
@@ -1096,6 +1133,58 @@ async def on_post_tool_use_ledger(
         is_error = bool(tool_response.get("is_error") or tool_response.get("error"))
         if tool_response.get("error"):
             error_detail = str(tool_response.get("error"))
+
+    if tool_call_id in forced_tool_active_ids:
+        expected = forced_tool_active_ids.pop(tool_call_id)
+        try:
+            if is_error:
+                tool_ledger.mark_failed(
+                    expected["tool_call_id"], error_detail or "tool error"
+                )
+                logfire.warning(
+                    "replay_mark_failed",
+                    tool_use_id=tool_call_id,
+                    replay_tool_call_id=expected["tool_call_id"],
+                    error_detail=error_detail or "tool error",
+                )
+                if expected.get("attempts", 0) >= FORCED_TOOL_MAX_ATTEMPTS:
+                    if runtime_db_conn and run_id:
+                        update_run_status(runtime_db_conn, run_id, "waiting_for_human")
+                    forced_tool_queue = []
+                    logfire.warning(
+                        "replay_exhausted",
+                        run_id=run_id,
+                        tool_call_id=expected["tool_call_id"],
+                    )
+                else:
+                    forced_tool_queue.insert(0, expected)
+            else:
+                external_id = None
+                if isinstance(tool_response, dict):
+                    external_id = (
+                        tool_response.get("id")
+                        or tool_response.get("message_id")
+                        or tool_response.get("request_id")
+                    )
+                tool_ledger.mark_succeeded(
+                    expected["tool_call_id"], tool_response, external_id
+                )
+                logfire.info(
+                    "replay_mark_succeeded",
+                    tool_use_id=tool_call_id,
+                    replay_tool_call_id=expected["tool_call_id"],
+                    idempotency_key=expected.get("idempotency_key"),
+                )
+                if (
+                    forced_tool_queue
+                    and forced_tool_queue[0]["tool_call_id"] == expected["tool_call_id"]
+                ):
+                    forced_tool_queue.pop(0)
+        except Exception as exc:
+            logfire.warning(
+                "replay_mark_result_failed", tool_use_id=tool_call_id, error=str(exc)
+            )
+        return {}
 
     try:
         if is_error:
@@ -1530,7 +1619,11 @@ runtime_db_conn = None
 tool_ledger: Optional[ToolCallLedger] = None
 current_step_id: Optional[str] = None
 interrupt_requested = False
+last_sigint_ts: float | None = None
 provider_session_forked_from: Optional[str] = None
+forced_tool_queue: list[dict[str, Any]] = []
+forced_tool_active_ids: dict[str, dict[str, Any]] = {}
+FORCED_TOOL_MAX_ATTEMPTS = 2
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 WAITING_STATUSES = {"waiting_for_human"}
 
@@ -1556,6 +1649,137 @@ def infer_run_mode(
     if run_spec.get("prompt") or run_spec.get("objective"):
         return "job"
     return "interactive"
+
+
+def _normalize_tool_input(tool_input: Any) -> str:
+    try:
+        return normalize_json(tool_input or {})
+    except Exception:
+        return json.dumps(tool_input or {}, default=str)
+
+
+def _raw_tool_name_from_identity(tool_name: str, tool_namespace: str) -> str:
+    if tool_namespace == "claude_code":
+        if tool_name == "bash":
+            return "Bash"
+        if tool_name == "task":
+            return "Task"
+    return tool_name
+
+
+def _forced_tool_matches(
+    raw_tool_name: str, tool_input: dict[str, Any], expected: dict[str, Any]
+) -> bool:
+    identity = parse_tool_identity(raw_tool_name or "")
+    if (
+        identity.tool_name != expected.get("tool_name")
+        or identity.tool_namespace != expected.get("tool_namespace")
+    ):
+        return False
+    normalized = _normalize_tool_input(tool_input)
+    return normalized == expected.get("normalized_input")
+
+
+def _load_inflight_tool_calls(
+    conn: sqlite3.Connection, run_id: str
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT tool_call_id, tool_name, tool_namespace, raw_tool_name,
+               request_ref, status, idempotency_key, created_at
+        FROM tool_calls
+        WHERE run_id = ? AND status IN ('prepared', 'running')
+        ORDER BY created_at ASC
+        """,
+        (run_id,),
+    ).fetchall()
+    inflight = []
+    for row in rows:
+        normalized_input = row["request_ref"] or ""
+        tool_input: dict[str, Any] = {}
+        if normalized_input:
+            try:
+                tool_input = json.loads(normalized_input)
+            except Exception:
+                tool_input = {}
+        raw_name = row["raw_tool_name"] or _raw_tool_name_from_identity(
+            row["tool_name"], row["tool_namespace"]
+        )
+        inflight.append(
+            {
+                "tool_call_id": row["tool_call_id"],
+                "tool_name": row["tool_name"],
+                "tool_namespace": row["tool_namespace"],
+                "raw_tool_name": raw_name,
+                "normalized_input": normalized_input
+                or _normalize_tool_input(tool_input),
+                "tool_input": tool_input,
+                "status": row["status"],
+                "idempotency_key": row["idempotency_key"],
+                "created_at": row["created_at"],
+                "attempts": 0,
+            }
+        )
+    return inflight
+
+
+def _build_forced_tool_prompt(queue: list[dict[str, Any]]) -> str:
+    lines = [
+        "Recovery mode: re-run the in-flight tool calls below in the exact order.",
+        "Do NOT run any other tools.",
+        "Use the exact tool name and input shown.",
+    ]
+    for idx, item in enumerate(queue, 1):
+        raw_name = item.get("raw_tool_name") or item.get("tool_name")
+        lines.append(f"{idx}) tool: {raw_name}")
+        lines.append(
+            f"   input: {json.dumps(item.get('tool_input') or {}, indent=2)}"
+        )
+    return "\n".join(lines)
+
+
+async def reconcile_inflight_tools(
+    client: ClaudeSDKClient,
+    run_id: str,
+    workspace_dir: str,
+    max_turns: int = 3,
+) -> bool:
+    global forced_tool_queue, forced_tool_active_ids, runtime_db_conn
+    if not runtime_db_conn:
+        return True
+    inflight = _load_inflight_tool_calls(runtime_db_conn, run_id)
+    if not inflight:
+        return True
+    forced_tool_queue = inflight
+    forced_tool_active_ids = {}
+    print("🔁 Replaying in-flight tool calls before resume...")
+    for _ in range(max_turns):
+        if not forced_tool_queue:
+            break
+        prompt = _build_forced_tool_prompt(forced_tool_queue)
+        try:
+            await process_turn(client, prompt, workspace_dir)
+        except BudgetExceeded:
+            raise
+        except Exception as exc:
+            print(f"⚠️ In-flight replay error: {exc}")
+            logfire.warning("inflight_replay_error", run_id=run_id, error=str(exc))
+            break
+        if forced_tool_queue:
+            print("⚠️ In-flight replay incomplete; retrying...")
+    if forced_tool_queue:
+        if runtime_db_conn and run_id:
+            update_run_status(runtime_db_conn, run_id, "waiting_for_human")
+        logfire.warning(
+            "inflight_replay_incomplete",
+            run_id=run_id,
+            remaining=len(forced_tool_queue),
+        )
+        forced_tool_queue = []
+        forced_tool_active_ids = {}
+        return False
+    forced_tool_active_ids = {}
+    return True
 
 
 def _list_workspace_artifacts(workspace_dir: str) -> list[str]:
@@ -1812,6 +2036,7 @@ async def continue_job_run(
     workspace_dir: str,
     last_job_prompt: Optional[str],
     resume_packet_summary: str,
+    replay_note: Optional[str] = None,
     max_error_retries: int = 3,
 ) -> Optional[str]:
     error_retries = 0
@@ -1825,6 +2050,8 @@ async def continue_job_run(
         "\n\nResume packet:\n"
         f"{resume_packet_summary}"
     )
+    if replay_note:
+        resume_message += f"\n\nReplay note:\n{replay_note}"
 
     while True:
         if runtime_db_conn and run_id:
@@ -3437,7 +3664,11 @@ async def main(args: argparse.Namespace):
 
     def handle_sigint(signum, frame):  # noqa: ARG001
         nonlocal last_user_input
-        global interrupt_requested
+        global interrupt_requested, last_sigint_ts
+        now_ts = time.monotonic()
+        if last_sigint_ts is not None and (now_ts - last_sigint_ts) < 1.0:
+            return
+        last_sigint_ts = now_ts
         interrupt_requested = True
         print("\n⚠️ Interrupted by user (SIGINT). Saving checkpoint...")
         try:
@@ -3495,25 +3726,42 @@ async def main(args: argparse.Namespace):
                         resume_packet_path=resume_packet_path,
                     )
                 try:
-                    final_response = await continue_job_run(
-                        client,
-                        run_id,
-                        workspace_dir,
-                        job_prompt,
-                        resume_summary,
+                    replay_ok = await reconcile_inflight_tools(
+                        client, run_id, workspace_dir
                     )
-                    if runtime_db_conn and run_id:
-                        status_row = get_run(runtime_db_conn, run_id)
-                        status_value = status_row["status"] if status_row else "running"
-                        if status_value in TERMINAL_STATUSES:
-                            print_job_completion_summary(
-                                runtime_db_conn,
-                                run_id,
-                                status_value,
-                                workspace_dir,
-                                final_response or "",
+                    if not replay_ok:
+                        print(
+                            "⚠️ In-flight tool replay incomplete; run set to waiting_for_human."
+                        )
+                        auto_resume_complete = True
+                    else:
+                        resume_summary = (
+                            resume_summary
+                            + "\nreplay_status: completed"
+                            + "\nreplay_note: in-flight tool calls already replayed; do not re-run them."
+                        )
+                        final_response = await continue_job_run(
+                            client,
+                            run_id,
+                            workspace_dir,
+                            job_prompt,
+                            resume_summary,
+                            replay_note="In-flight tool calls were replayed; do not re-run them.",
+                        )
+                        if runtime_db_conn and run_id:
+                            status_row = get_run(runtime_db_conn, run_id)
+                            status_value = (
+                                status_row["status"] if status_row else "running"
                             )
-                    auto_resume_complete = True
+                            if status_value in TERMINAL_STATUSES:
+                                print_job_completion_summary(
+                                    runtime_db_conn,
+                                    run_id,
+                                    status_value,
+                                    workspace_dir,
+                                    final_response or "",
+                                )
+                        auto_resume_complete = True
                 except BudgetExceeded as exc:
                     run_failed = True
                     trace["status"] = "budget_exceeded"

@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   step_id TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  raw_tool_name TEXT,
   tool_name TEXT NOT NULL,
   tool_namespace TEXT NOT NULL,
   side_effect_class TEXT NOT NULL,
@@ -95,4 +96,5 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "runs", "provider_session_forked_from", "TEXT")
     _add_column_if_missing(conn, "runs", "provider_session_last_seen_at", "TEXT")
     _add_column_if_missing(conn, "runs", "parent_run_id", "TEXT")
+    _add_column_if_missing(conn, "tool_calls", "raw_tool_name", "TEXT")
     conn.commit()

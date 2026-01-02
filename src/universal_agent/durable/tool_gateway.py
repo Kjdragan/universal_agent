@@ -46,6 +46,7 @@ def prepare_tool_call(
         step_id=step_id,
         tool_name=identity.tool_name,
         tool_namespace=identity.tool_namespace,
+        raw_tool_name=raw_tool_name,
         tool_input=tool_input,
     )
     return ToolDecision(
