@@ -56,10 +56,12 @@ class ToolCallLedger:
         tool_name: str,
         normalized_args_hash: str,
         side_effect_scope: str,
+        nonce: Optional[str] = None,
     ) -> str:
-        raw = "|".join(
-            [run_id, tool_namespace, tool_name, normalized_args_hash, side_effect_scope]
-        )
+        parts = [run_id, tool_namespace, tool_name, normalized_args_hash, side_effect_scope]
+        if nonce:
+            parts.append(nonce)
+        raw = "|".join(parts)
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def prepare_tool_call(
@@ -79,7 +81,12 @@ class ToolCallLedger:
         normalized_args_hash = hash_normalized_json(tool_input)
         side_effect_scope = self._compute_scope(tool_name, tool_input)
         idempotency_key = self._idempotency_key(
-            run_id, tool_namespace, tool_name, normalized_args_hash, side_effect_scope
+            run_id,
+            tool_namespace,
+            tool_name,
+            normalized_args_hash,
+            side_effect_scope,
+            nonce=tool_call_id if replay_policy == "RELAUNCH" else None,
         )
 
         existing = self.conn.execute(
@@ -174,6 +181,30 @@ class ToolCallLedger:
             WHERE tool_call_id = ?
             """,
             ("failed", self._now(), error_detail, tool_call_id),
+        )
+        self.conn.commit()
+
+    def mark_abandoned_on_resume(
+        self, tool_call_id: str, error_detail: str = "abandoned_on_resume"
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE tool_calls
+            SET status = ?, updated_at = ?, error_detail = ?
+            WHERE tool_call_id = ?
+            """,
+            ("abandoned_on_resume", self._now(), error_detail, tool_call_id),
+        )
+        self.conn.commit()
+
+    def mark_replay_status(self, tool_call_id: str, replay_status: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE tool_calls
+            SET replay_status = ?, updated_at = ?
+            WHERE tool_call_id = ?
+            """,
+            (replay_status, self._now(), tool_call_id),
         )
         self.conn.commit()
 

@@ -77,3 +77,77 @@ def test_ledger_dedupe_returns_receipt():
     assert idem_key == idem_key2
     assert receipt2 is not None
     assert receipt2.status == "succeeded"
+
+
+def test_mark_abandoned_on_resume_updates_status():
+    conn = _setup_conn()
+    run_id = "run-2"
+    step_id = "step-2"
+    _insert_run_and_step(conn, run_id, step_id)
+
+    ledger = ToolCallLedger(conn)
+    receipt, _ = ledger.prepare_tool_call(
+        tool_call_id="tool-3",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="Task",
+        tool_namespace="claude_code",
+        tool_input={"subagent_type": "report-creation-expert", "prompt": "Hello"},
+    )
+    assert receipt is None
+
+    ledger.mark_abandoned_on_resume("tool-3", "relaunch_on_resume")
+    row = ledger.get_tool_call("tool-3")
+    assert row is not None
+    assert row["status"] == "abandoned_on_resume"
+
+
+def test_relaunch_idempotency_key_unique_per_call():
+    conn = _setup_conn()
+    run_id = "run-3"
+    step_id = "step-3"
+    _insert_run_and_step(conn, run_id, step_id)
+
+    ledger = ToolCallLedger(conn)
+    tool_input = {"subagent_type": "report-creation-expert", "prompt": "Hello"}
+
+    _, key1 = ledger.prepare_tool_call(
+        tool_call_id="tool-4",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="task",
+        tool_namespace="claude_code",
+        tool_input=tool_input,
+    )
+    _, key2 = ledger.prepare_tool_call(
+        tool_call_id="tool-5",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="task",
+        tool_namespace="claude_code",
+        tool_input=tool_input,
+    )
+    assert key1 != key2
+
+
+def test_mark_replay_status_updates_column():
+    conn = _setup_conn()
+    run_id = "run-4"
+    step_id = "step-4"
+    _insert_run_and_step(conn, run_id, step_id)
+
+    ledger = ToolCallLedger(conn)
+    receipt, _ = ledger.prepare_tool_call(
+        tool_call_id="tool-6",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="bash",
+        tool_namespace="claude_code",
+        tool_input={"command": "echo hi"},
+    )
+    assert receipt is None
+
+    ledger.mark_replay_status("tool-6", "succeeded")
+    row = ledger.get_tool_call("tool-6")
+    assert row is not None
+    assert row["replay_status"] == "succeeded"

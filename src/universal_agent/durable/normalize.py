@@ -23,3 +23,8 @@ def normalize_json(value: Any) -> str:
 def hash_normalized_json(value: Any) -> str:
     payload = normalize_json(value)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def deterministic_task_key(tool_input: dict[str, Any]) -> str:
+    base = {k: v for k, v in tool_input.items() if k != "task_key"}
+    return f"task:{hash_normalized_json(base)}"

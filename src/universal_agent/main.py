@@ -5,6 +5,7 @@ Traces are sent to Logfire for observability.
 """
 
 import asyncio
+import copy
 import signal
 import os
 import sqlite3
@@ -238,7 +239,7 @@ from composio import Composio
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.tool_gateway import prepare_tool_call, parse_tool_identity
-from universal_agent.durable.normalize import normalize_json
+from universal_agent.durable.normalize import deterministic_task_key, normalize_json
 from universal_agent.durable.state import (
     upsert_run,
     update_run_status,
@@ -1147,6 +1148,7 @@ async def on_post_tool_use_ledger(
                 tool_ledger.mark_failed(
                     expected["tool_call_id"], error_detail or "tool error"
                 )
+                tool_ledger.mark_replay_status(expected["tool_call_id"], "failed")
                 logfire.warning(
                     "replay_mark_failed",
                     tool_use_id=tool_call_id,
@@ -1175,6 +1177,7 @@ async def on_post_tool_use_ledger(
                 tool_ledger.mark_succeeded(
                     expected["tool_call_id"], tool_response, external_id
                 )
+                tool_ledger.mark_replay_status(expected["tool_call_id"], "succeeded")
                 logfire.info(
                     "replay_mark_succeeded",
                     tool_use_id=tool_call_id,
@@ -1664,6 +1667,56 @@ def _normalize_tool_input(tool_input: Any) -> str:
         return json.dumps(tool_input or {}, default=str)
 
 
+def _maybe_update_provider_session(session_id: Optional[str]) -> None:
+    if not session_id:
+        return
+    if runtime_db_conn and run_id:
+        update_run_provider_session(runtime_db_conn, run_id, session_id)
+    if trace is not None:
+        trace["provider_session_id"] = session_id
+
+
+def _is_resume_session_error(error_msg: str) -> bool:
+    if not error_msg:
+        return False
+    if not options:
+        return False
+    if not (options.resume or options.continue_conversation or options.fork_session):
+        return False
+    lowered = error_msg.lower()
+    return "resume" in lowered or "session" in lowered
+
+
+def _disable_provider_resume() -> None:
+    global options
+    if not options:
+        return
+    options.resume = None
+    options.continue_conversation = False
+    options.fork_session = False
+
+
+def _invalidate_provider_session(error_msg: str) -> None:
+    if runtime_db_conn and run_id:
+        update_run_provider_session(runtime_db_conn, run_id, None)
+    if trace is not None:
+        trace["provider_session_id"] = None
+    logfire.warning(
+        "provider_session_invalidated",
+        run_id=run_id,
+        error=error_msg[:200],
+    )
+
+
+def _ensure_task_key(tool_input: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    relaunch_input = copy.deepcopy(tool_input)
+    task_key = relaunch_input.get("task_key")
+    if not task_key:
+        task_key = deterministic_task_key(relaunch_input)
+        relaunch_input["task_key"] = task_key
+    return relaunch_input, str(task_key)
+
+
 def _raw_tool_name_from_identity(tool_name: str, tool_namespace: str) -> str:
     if tool_namespace == "claude_code":
         if tool_name == "bash":
@@ -1691,7 +1744,7 @@ def _load_inflight_tool_calls(
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT tool_call_id, tool_name, tool_namespace, raw_tool_name,
+        SELECT tool_call_id, tool_name, tool_namespace, raw_tool_name, step_id,
                request_ref, status, idempotency_key, created_at, replay_policy
         FROM tool_calls
         WHERE run_id = ? AND status IN ('prepared', 'running')
@@ -1717,6 +1770,7 @@ def _load_inflight_tool_calls(
                 "tool_name": row["tool_name"],
                 "tool_namespace": row["tool_namespace"],
                 "raw_tool_name": raw_name,
+                "step_id": row["step_id"],
                 "normalized_input": normalized_input
                 or _normalize_tool_input(tool_input),
                 "tool_input": tool_input,
@@ -1745,6 +1799,64 @@ def _build_forced_tool_prompt(queue: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _relaunch_inflight_task(
+    inflight: dict[str, Any], run_id: str, step_id: str
+) -> Optional[dict[str, Any]]:
+    global tool_ledger
+    if tool_ledger is None:
+        return None
+    tool_input = inflight.get("tool_input")
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    relaunch_input, task_key = _ensure_task_key(tool_input)
+    tool_call_id = str(uuid.uuid4())
+    try:
+        receipt, idempotency_key = tool_ledger.prepare_tool_call(
+            tool_call_id=tool_call_id,
+            run_id=run_id,
+            step_id=step_id,
+            tool_name=inflight.get("tool_name") or "",
+            tool_namespace=inflight.get("tool_namespace") or "",
+            raw_tool_name=inflight.get("raw_tool_name"),
+            tool_input=relaunch_input,
+        )
+    except Exception as exc:
+        logfire.warning(
+            "relaunch_prepare_failed",
+            tool_call_id=inflight.get("tool_call_id"),
+            error=str(exc),
+        )
+        return None
+    if receipt is not None:
+        logfire.warning(
+            "relaunch_deduped",
+            tool_call_id=inflight.get("tool_call_id"),
+            idempotency_key=idempotency_key,
+        )
+        return None
+    logfire.info(
+        "relaunch_prepared",
+        tool_call_id=tool_call_id,
+        previous_tool_call_id=inflight.get("tool_call_id"),
+        task_key=task_key,
+        idempotency_key=idempotency_key,
+    )
+    return {
+        "tool_call_id": tool_call_id,
+        "tool_name": inflight.get("tool_name"),
+        "tool_namespace": inflight.get("tool_namespace"),
+        "raw_tool_name": inflight.get("raw_tool_name"),
+        "step_id": step_id,
+        "normalized_input": _normalize_tool_input(relaunch_input),
+        "tool_input": relaunch_input,
+        "status": "prepared",
+        "idempotency_key": idempotency_key,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "replay_policy": inflight.get("replay_policy"),
+        "attempts": 0,
+    }
+
+
 async def reconcile_inflight_tools(
     client: ClaudeSDKClient,
     run_id: str,
@@ -1757,7 +1869,22 @@ async def reconcile_inflight_tools(
     inflight = _load_inflight_tool_calls(runtime_db_conn, run_id)
     if not inflight:
         return True
-    forced_tool_queue = inflight
+    forced_tool_queue = []
+    for item in inflight:
+        if item.get("replay_policy") == "RELAUNCH":
+            relaunch_step_id = item.get("step_id") or current_step_id or "unknown"
+            relaunched = _relaunch_inflight_task(item, run_id, relaunch_step_id)
+            if tool_ledger:
+                abandon_detail = (
+                    "relaunch_enqueued" if relaunched else "relaunch_needs_human"
+                )
+                tool_ledger.mark_abandoned_on_resume(
+                    item["tool_call_id"], abandon_detail
+                )
+            if relaunched:
+                forced_tool_queue.append(relaunched)
+            continue
+        forced_tool_queue.append(item)
     forced_tool_active_ids = {}
     print("🔁 Replaying in-flight tool calls before resume...")
     for _ in range(max_turns):
@@ -1989,6 +2116,39 @@ def print_job_completion_summary(
             }
         )
 
+    replay_rows = conn.execute(
+        """
+        SELECT tool_name, replay_status
+        FROM tool_calls
+        WHERE run_id = ? AND replay_status IS NOT NULL
+        ORDER BY updated_at DESC
+        LIMIT 10
+        """,
+        (run_id,),
+    ).fetchall()
+    replayed = [
+        {"tool_name": row["tool_name"], "replay_status": row["replay_status"]}
+        for row in replay_rows
+    ]
+
+    abandoned_rows = conn.execute(
+        """
+        SELECT tool_name, error_detail
+        FROM tool_calls
+        WHERE run_id = ? AND status = 'abandoned_on_resume'
+        ORDER BY updated_at DESC
+        LIMIT 10
+        """,
+        (run_id,),
+    ).fetchall()
+    abandoned = []
+    for row in abandoned_rows:
+        detail = (row["error_detail"] or "").lower()
+        outcome = "relaunched"
+        if "needs_human" in detail or "failed" in detail:
+            outcome = "needs-human"
+        abandoned.append({"tool_name": row["tool_name"], "outcome": outcome})
+
     print("\n" + "=" * 80)
     print("=== JOB COMPLETE ===")
     print(f"Run ID: {run_id}")
@@ -2003,6 +2163,14 @@ def print_job_completion_summary(
             print(
                 f"- {receipt['tool_name']} | {receipt['status']} | {receipt['idempotency_key']}"
             )
+    if replayed:
+        print("Replayed tools:")
+        for row in replayed:
+            print(f"- {row['tool_name']} | {row['replay_status']}")
+    if abandoned:
+        print("Abandoned tools:")
+        for row in abandoned:
+            print(f"- {row['tool_name']} | {row['outcome']}")
     summary = _summarize_response(response_text)
     if summary:
         print("Summary:")
@@ -2028,6 +2196,16 @@ def print_job_completion_summary(
                         f.write(
                             f"- {receipt['tool_name']} | {receipt['status']} | {receipt['idempotency_key']}\n"
                         )
+                    f.write("\n")
+                if replayed:
+                    f.write("Replayed tools:\n")
+                    for row in replayed:
+                        f.write(f"- {row['tool_name']} | {row['replay_status']}\n")
+                    f.write("\n")
+                if abandoned:
+                    f.write("Abandoned tools:\n")
+                    for row in abandoned:
+                        f.write(f"- {row['tool_name']} | {row['outcome']}\n")
                     f.write("\n")
                 if summary:
                     f.write("Summary:\n")
@@ -2460,14 +2638,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     num_turns=msg.num_turns,
                     is_error=msg.is_error
                 )
-                if msg.session_id and runtime_db_conn and run_id:
+                if msg.session_id:
                     update_run_provider_session(
                         runtime_db_conn,
                         run_id,
                         msg.session_id,
                         forked_from=provider_session_forked_from,
                     )
-                    trace["provider_session_id"] = msg.session_id
+                    _maybe_update_provider_session(msg.session_id)
                 if msg.is_error and msg.result and runtime_db_conn and run_id:
                     error_text = str(msg.result).lower()
                     if "resume" in error_text or "session" in error_text:
@@ -2555,6 +2733,8 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
             for block in msg.content:
                 if isinstance(block, TextBlock):
                     result_text += block.text
+        elif isinstance(msg, ResultMessage):
+            _maybe_update_provider_session(msg.session_id)
 
     decision = result_text.strip().upper()
 
@@ -2601,6 +2781,8 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> bool:
 
             if tool_use_detected:
                 break
+        elif isinstance(msg, ResultMessage):
+            _maybe_update_provider_session(msg.session_id)
 
     if tool_use_detected:
         print("\n" + "=" * 40)

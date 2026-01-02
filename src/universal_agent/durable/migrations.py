@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   tool_namespace TEXT NOT NULL,
   side_effect_class TEXT NOT NULL,
   replay_policy TEXT NOT NULL DEFAULT 'REPLAY_EXACT',
+  replay_status TEXT,
   normalized_args_hash TEXT NOT NULL,
   idempotency_key TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL,
@@ -101,4 +102,5 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(
         conn, "tool_calls", "replay_policy", "TEXT NOT NULL DEFAULT 'REPLAY_EXACT'"
     )
+    _add_column_if_missing(conn, "tool_calls", "replay_status", "TEXT")
     conn.commit()
