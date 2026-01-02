@@ -987,7 +987,7 @@ async def on_pre_tool_use_ledger(
     """
     PreToolUse Hook: prepare tool call ledger entry and enforce idempotency.
     """
-    global tool_ledger, run_id, current_step_id, forced_tool_queue, forced_tool_active_ids
+    global tool_ledger, run_id, current_step_id, forced_tool_queue, forced_tool_active_ids, forced_tool_mode_active
     if tool_ledger is None or run_id is None:
         return {}
 
@@ -1027,6 +1027,19 @@ async def on_pre_tool_use_ledger(
     tool_input = input_data.get("tool_input", {}) or {}
     step_id = current_step_id or "unknown"
     tool_call_id = str(tool_use_id or uuid.uuid4())
+
+    if forced_tool_mode_active and not forced_tool_queue:
+        return {
+            "systemMessage": (
+                "Recovery replay completed. Do not call any additional tools in recovery mode. "
+                "End the turn with a brief confirmation."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Forced replay completed.",
+            },
+        }
 
     if forced_tool_queue:
         expected = forced_tool_queue[0]
@@ -1675,18 +1688,68 @@ last_sigint_ts: float | None = None
 provider_session_forked_from: Optional[str] = None
 forced_tool_queue: list[dict[str, Any]] = []
 forced_tool_active_ids: dict[str, dict[str, Any]] = {}
+forced_tool_mode_active = False
 FORCED_TOOL_MAX_ATTEMPTS = 2
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 WAITING_STATUSES = {"waiting_for_human"}
 
 
+def _resolve_input_paths(
+    inputs: dict, workspace_dir: Optional[str]
+) -> dict:
+    if not workspace_dir:
+        return inputs
+    resolved: dict = {}
+    for key, value in inputs.items():
+        if isinstance(value, str):
+            if os.path.isabs(value):
+                resolved[key] = value
+                continue
+            is_path_key = key.endswith("_path")
+            is_path_value = value.startswith(
+                (
+                    "work_products/",
+                    "search_results/",
+                    "search_results_filtered_best/",
+                    "downloads/",
+                    "workbench/",
+                )
+            )
+            if is_path_key or is_path_value:
+                resolved[key] = os.path.join(workspace_dir, value)
+            else:
+                resolved[key] = value
+        elif isinstance(value, dict):
+            resolved[key] = _resolve_input_paths(value, workspace_dir)
+        else:
+            resolved[key] = value
+    return resolved
+
+
 def build_job_prompt(run_spec: dict) -> Optional[str]:
     job_prompt = run_spec.get("prompt") or run_spec.get("objective")
+    workspace_dir = run_spec.get("workspace_dir")
     if job_prompt and run_spec.get("inputs"):
-        job_prompt += "\n\nInputs:\n" + json.dumps(run_spec["inputs"], indent=2)
+        resolved_inputs = _resolve_input_paths(run_spec["inputs"], workspace_dir)
+        job_prompt += "\n\nInputs:\n" + json.dumps(resolved_inputs, indent=2)
     if job_prompt and run_spec.get("constraints"):
         job_prompt += "\n\nConstraints:\n" + json.dumps(run_spec["constraints"], indent=2)
+    if job_prompt and workspace_dir:
+        job_prompt += (
+            "\n\nWorkspace:\n"
+            f"{workspace_dir}\n"
+            "Use absolute paths under this workspace for any file operations."
+        )
     return job_prompt
+
+
+def _next_step_index(conn: sqlite3.Connection, run_id: str) -> int:
+    row = conn.execute(
+        "SELECT MAX(step_index) AS max_step FROM run_steps WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    max_step = row["max_step"] if row else 0
+    return int(max_step or 0) + 1
 
 
 def infer_run_mode(
@@ -1897,6 +1960,7 @@ def _build_forced_tool_prompt(queue: list[dict[str, Any]]) -> str:
         "Recovery mode: re-run the in-flight tool calls below in the exact order.",
         "Do NOT run any other tools.",
         "Use the exact tool name and input shown.",
+        "After completing the listed tool calls, respond with DONE and do not invoke any other tools.",
     ]
     for idx, item in enumerate(queue, 1):
         raw_name = item.get("raw_tool_name") or item.get("tool_name")
@@ -1978,7 +2042,7 @@ async def reconcile_inflight_tools(
     workspace_dir: str,
     max_turns: int = 3,
 ) -> bool:
-    global forced_tool_queue, forced_tool_active_ids, runtime_db_conn
+    global forced_tool_queue, forced_tool_active_ids, forced_tool_mode_active, runtime_db_conn
     if not runtime_db_conn:
         return True
     inflight = _load_inflight_tool_calls(runtime_db_conn, run_id)
@@ -2001,6 +2065,7 @@ async def reconcile_inflight_tools(
             continue
         forced_tool_queue.append(item)
     forced_tool_active_ids = {}
+    forced_tool_mode_active = True
     print("🔁 Replaying in-flight tool calls before resume...")
     fallback_client: Optional[ClaudeSDKClient] = None
     fallback_client_active = False
@@ -2032,6 +2097,7 @@ async def reconcile_inflight_tools(
     finally:
         if fallback_client is not None and fallback_client_active:
             await fallback_client.__aexit__(None, None, None)
+        forced_tool_mode_active = False
     if forced_tool_queue:
         if runtime_db_conn and run_id:
             update_run_status(runtime_db_conn, run_id, "waiting_for_human")
@@ -2434,15 +2500,17 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
     global trace, run_id, budget_config, budget_state, runtime_db_conn, current_step_id, tool_ledger, provider_session_forked_from
     step_id = str(uuid.uuid4())
     current_step_id = step_id
+    step_index = iteration
 
     if runtime_db_conn and run_id:
         try:
-            start_step(runtime_db_conn, run_id, step_id, iteration)
+            step_index = _next_step_index(runtime_db_conn, run_id)
+            start_step(runtime_db_conn, run_id, step_id, step_index)
             logfire.info(
                 "durable_step_started",
                 run_id=run_id,
                 step_id=step_id,
-                step_index=iteration,
+                step_index=step_index,
             )
         except Exception as exc:
             logfire.warning("runtime_step_insert_failed", step_id=step_id, error=str(exc))
@@ -3939,7 +4007,6 @@ async def main(args: argparse.Namespace):
     run_status = run_row["status"] if run_row else None
     should_auto_continue_job = (
         args.resume
-        and run_mode == "job"
         and run_status not in TERMINAL_STATUSES
         and run_status not in WAITING_STATUSES
     )
