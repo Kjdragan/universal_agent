@@ -241,6 +241,7 @@ from universal_agent.durable.tool_gateway import prepare_tool_call
 from universal_agent.durable.state import (
     upsert_run,
     update_run_status,
+    update_run_provider_session,
     start_step,
     complete_step,
     get_run,
@@ -1529,6 +1530,7 @@ runtime_db_conn = None
 tool_ledger: Optional[ToolCallLedger] = None
 current_step_id: Optional[str] = None
 interrupt_requested = False
+provider_session_forked_from: Optional[str] = None
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 WAITING_STATUSES = {"waiting_for_human"}
 
@@ -1846,6 +1848,15 @@ async def continue_job_run(
             raise
         except Exception as exc:
             error_msg = str(exc)
+            if runtime_db_conn and run_id:
+                lowered = error_msg.lower()
+                if "resume" in lowered or "session" in lowered:
+                    update_run_provider_session(runtime_db_conn, run_id, None)
+                    logfire.warning(
+                        "provider_session_invalidated",
+                        run_id=run_id,
+                        error=lowered[:200],
+                    )
             if error_msg == last_error:
                 error_retries += 1
             else:
@@ -1867,7 +1878,7 @@ async def continue_job_run(
 
 async def run_conversation(client, query: str, start_ts: float, iteration: int = 1):
     """Run a single conversation turn with full tracing."""
-    global trace, run_id, budget_config, budget_state, runtime_db_conn, current_step_id, tool_ledger
+    global trace, run_id, budget_config, budget_state, runtime_db_conn, current_step_id, tool_ledger, provider_session_forked_from
     step_id = str(uuid.uuid4())
     current_step_id = step_id
 
@@ -2211,6 +2222,23 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     num_turns=msg.num_turns,
                     is_error=msg.is_error
                 )
+                if msg.session_id and runtime_db_conn and run_id:
+                    update_run_provider_session(
+                        runtime_db_conn,
+                        run_id,
+                        msg.session_id,
+                        forked_from=provider_session_forked_from,
+                    )
+                    trace["provider_session_id"] = msg.session_id
+                if msg.is_error and msg.result and runtime_db_conn and run_id:
+                    error_text = str(msg.result).lower()
+                    if "resume" in error_text or "session" in error_text:
+                        update_run_provider_session(runtime_db_conn, run_id, None)
+                        logfire.warning(
+                            "provider_session_invalidated",
+                            run_id=run_id,
+                            error=error_text[:200],
+                        )
 
         iter_record = {
             "run_id": run_id,
@@ -2363,6 +2391,11 @@ def parse_cli_args() -> argparse.Namespace:
         "--job",
         dest="job_path",
         help="Path to a run spec JSON file.",
+    )
+    parser.add_argument(
+        "--fork",
+        action="store_true",
+        help="Fork an existing run using provider session state (requires --run-id).",
     )
     return parser.parse_args()
 
@@ -3153,7 +3186,7 @@ SEARCH_TOOL_CONFIG = {
 
 
 async def main(args: argparse.Namespace):
-    global trace, run_id, budget_config, budget_state, runtime_db_conn, tool_ledger
+    global trace, run_id, budget_config, budget_state, runtime_db_conn, tool_ledger, provider_session_forked_from
 
     # Create main span for entire execution
     # NOTE: Local MCP tools run in separate subprocess with their own trace ID
@@ -3166,7 +3199,37 @@ async def main(args: argparse.Namespace):
     run_spec = None
     workspace_override = None
     run_row = None
-    if args.resume:
+    base_run_row = None
+    parent_run_id = None
+    base_provider_session_id = None
+    provider_session_forked_from = None
+
+    if args.resume and args.fork:
+        print("❌ --fork cannot be combined with --resume")
+        return
+
+    run_id_override = args.run_id
+    if args.fork:
+        if not args.run_id:
+            print("❌ --fork requires --run-id (base run to fork)")
+            return
+        base_run_row = get_run(runtime_db_conn, args.run_id)
+        if not base_run_row:
+            print(f"❌ No run found for run_id={args.run_id}")
+            return
+        run_spec = json.loads(base_run_row["run_spec_json"])
+        workspace_override = None
+        run_id_override = None
+        parent_run_id = base_run_row["run_id"]
+        base_provider_session_id = (
+            base_run_row["provider_session_id"]
+            if "provider_session_id" in base_run_row.keys()
+            else None
+        )
+        if not base_provider_session_id:
+            print("❌ Base run does not have provider_session_id; cannot fork.")
+            return
+    elif args.resume:
         if not args.run_id:
             print("❌ --resume requires --run-id")
             return
@@ -3177,8 +3240,6 @@ async def main(args: argparse.Namespace):
         run_spec = json.loads(run_row["run_spec_json"])
         workspace_override = run_spec.get("workspace_dir")
         run_id_override = args.run_id
-    else:
-        run_id_override = args.run_id
 
     options, session, user_id, workspace_dir, trace = await setup_session(
         run_id_override=run_id_override,
@@ -3187,6 +3248,23 @@ async def main(args: argparse.Namespace):
 
     trace["budgets"] = budget_config
     tool_ledger = ToolCallLedger(runtime_db_conn, workspace_dir)
+
+    provider_session_id = None
+    resume_source_row = run_row if args.resume else base_run_row
+    if resume_source_row and "provider_session_id" in resume_source_row.keys():
+        provider_session_id = resume_source_row["provider_session_id"]
+    if args.resume and provider_session_id:
+        options.continue_conversation = True
+        options.resume = provider_session_id
+        print(f"✅ Using provider session resume: {provider_session_id}")
+        trace["provider_session_id"] = provider_session_id
+    if args.fork and base_provider_session_id:
+        options.continue_conversation = True
+        options.resume = base_provider_session_id
+        options.fork_session = True
+        provider_session_forked_from = base_provider_session_id
+        print(f"✅ Forking provider session: {base_provider_session_id}")
+        trace["provider_session_forked_from"] = base_provider_session_id
 
     if run_spec is None:
         if args.job_path:
@@ -3198,14 +3276,20 @@ async def main(args: argparse.Namespace):
         run_spec.setdefault("entrypoint", "cli")
         run_spec.setdefault("workspace_dir", workspace_dir)
         run_spec.setdefault("budgets", budget_config)
+    elif args.fork:
+        run_spec["workspace_dir"] = workspace_dir
 
-    run_mode = infer_run_mode(run_row, run_spec, args.job_path)
-    job_path = args.job_path or (run_row["job_path"] if run_row else None)
+    if run_row and "parent_run_id" in run_row.keys() and not parent_run_id:
+        parent_run_id = run_row["parent_run_id"]
+
+    run_mode = infer_run_mode(run_row or base_run_row, run_spec, args.job_path)
+    prompt_run_row = run_row or base_run_row
+    job_path = args.job_path or (prompt_run_row["job_path"] if prompt_run_row else None)
     job_prompt = None
     if run_spec:
         job_prompt = build_job_prompt(run_spec)
-    if run_row and run_row["last_job_prompt"]:
-        job_prompt = run_row["last_job_prompt"]
+    if prompt_run_row and prompt_run_row["last_job_prompt"]:
+        job_prompt = prompt_run_row["last_job_prompt"]
 
     if run_id:
         status_to_set = "running"
@@ -3225,9 +3309,12 @@ async def main(args: argparse.Namespace):
             run_mode=run_mode,
             job_path=job_path,
             last_job_prompt=job_prompt,
+            parent_run_id=parent_run_id,
             status=status_to_set,
         )
         logfire.info("durable_run_upserted", run_id=run_id, entrypoint="cli")
+        if parent_run_id:
+            trace["parent_run_id"] = parent_run_id
     
     # Extract Trace ID immediately after span creation
     if LOGFIRE_TOKEN:
@@ -3365,7 +3452,9 @@ async def main(args: argparse.Namespace):
 
     async with ClaudeSDKClient(options) as client:
         run_failed = False
-        pending_prompt = job_prompt if job_prompt and not args.resume else None
+        pending_prompt = (
+            job_prompt if job_prompt and not args.resume and not args.fork else None
+        )
         try:
             if args.resume and run_mode == "job" and run_status in TERMINAL_STATUSES and run_id:
                 print("✅ Run already terminal. No resume needed.")

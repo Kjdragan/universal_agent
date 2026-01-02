@@ -28,6 +28,7 @@ from claude_agent_sdk.types import (
     ClaudeAgentOptions,
     AgentDefinition,
     AssistantMessage,
+    ResultMessage,
     TextBlock,
     ToolUseBlock,
     ToolResultBlock,
@@ -697,6 +698,10 @@ class UniversalAgent:
                             type=EventType.THINKING,
                             data={"thinking": block.thinking[:500]},
                         )
+
+            elif isinstance(msg, ResultMessage):
+                if msg.session_id:
+                    self.trace["provider_session_id"] = msg.session_id
 
             elif isinstance(msg, (UserMessage, ToolResultBlock)):
                 blocks = msg.content if isinstance(msg, UserMessage) else [msg]

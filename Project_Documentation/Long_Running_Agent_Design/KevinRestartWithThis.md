@@ -1,15 +1,15 @@
 # Restart Instructions
 
-Run ID: a4917348-9985-4dce-bc5a-aee7eeefa8df
+Run ID: c8459572-a45f-408a-a53e-b19b99c9b0c4
 
 Resume Command:
 
-uv run python src/universal_agent/main.py --resume --run-id a4917348-9985-4dce-bc5a-aee7eeefa8df
+uv run python src/universal_agent/main.py --resume --run-id c8459572-a45f-408a-a53e-b19b99c9b0c4
 
 Workspace:
 
-/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_082839
+/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_100839
 
 Job Completion Summary:
 
-/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_082839/job_completion_a4917348-9985-4dce-bc5a-aee7eeefa8df.md
+/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_100839/job_completion_c8459572-a45f-408a-a53e-b19b99c9b0c4.md

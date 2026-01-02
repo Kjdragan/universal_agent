@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS runs (
   run_mode TEXT,
   job_path TEXT,
   last_job_prompt TEXT,
+  provider_session_id TEXT,
+  provider_session_forked_from TEXT,
+  provider_session_last_seen_at TEXT,
+  parent_run_id TEXT,
   current_step_id TEXT,
   last_checkpoint_id TEXT,
   final_artifact_ref TEXT
@@ -87,4 +91,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "runs", "run_mode", "TEXT")
     _add_column_if_missing(conn, "runs", "job_path", "TEXT")
     _add_column_if_missing(conn, "runs", "last_job_prompt", "TEXT")
+    _add_column_if_missing(conn, "runs", "provider_session_id", "TEXT")
+    _add_column_if_missing(conn, "runs", "provider_session_forked_from", "TEXT")
+    _add_column_if_missing(conn, "runs", "provider_session_last_seen_at", "TEXT")
+    _add_column_if_missing(conn, "runs", "parent_run_id", "TEXT")
     conn.commit()

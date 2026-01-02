@@ -16,6 +16,7 @@ def upsert_run(
     run_mode: Optional[str] = None,
     job_path: Optional[str] = None,
     last_job_prompt: Optional[str] = None,
+    parent_run_id: Optional[str] = None,
     status: str = "running",
 ) -> None:
     now = _now()
@@ -23,8 +24,8 @@ def upsert_run(
         """
         INSERT OR IGNORE INTO runs (
             run_id, created_at, updated_at, status, entrypoint, run_spec_json,
-            run_mode, job_path, last_job_prompt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            run_mode, job_path, last_job_prompt, parent_run_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -36,6 +37,7 @@ def upsert_run(
             run_mode,
             job_path,
             last_job_prompt,
+            parent_run_id,
         ),
     )
     conn.execute(
@@ -47,7 +49,8 @@ def upsert_run(
             run_spec_json = ?,
             run_mode = ?,
             job_path = ?,
-            last_job_prompt = ?
+            last_job_prompt = ?,
+            parent_run_id = ?
         WHERE run_id = ?
         """,
         (
@@ -58,6 +61,7 @@ def upsert_run(
             run_mode,
             job_path,
             last_job_prompt,
+            parent_run_id,
             run_id,
         ),
     )
@@ -68,6 +72,26 @@ def update_run_status(conn: sqlite3.Connection, run_id: str, status: str) -> Non
     conn.execute(
         "UPDATE runs SET status = ?, updated_at = ? WHERE run_id = ?",
         (status, _now(), run_id),
+    )
+    conn.commit()
+
+
+def update_run_provider_session(
+    conn: sqlite3.Connection,
+    run_id: str,
+    session_id: Optional[str],
+    forked_from: Optional[str] = None,
+) -> None:
+    conn.execute(
+        """
+        UPDATE runs
+        SET provider_session_id = ?,
+            provider_session_forked_from = COALESCE(?, provider_session_forked_from),
+            provider_session_last_seen_at = ?,
+            updated_at = ?
+        WHERE run_id = ?
+        """,
+        (session_id, forked_from, _now(), _now(), run_id),
     )
     conn.commit()
 
