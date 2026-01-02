@@ -22,6 +22,18 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - Added CLI resume flags and a printed resume command.
 - Resume demo executed: loaded last checkpoint and reused the workspace.
 - Added unit tests for state machine and checkpointing.
+ - Added SIGINT handling to always save interrupt checkpoints (Ctrl-C reliability).
+ - Resume now loads checkpoint but requires manual prompt entry to continue.
+
+### Research pipeline hardening (supporting durable runs)
+- `finalize_research` builds a filtered corpus in `search_results_filtered_best/`.
+- Filter rules loosened to retain more usable sources.
+- `research_overview.md` now explicitly lists filtered-only files and dropped files/reasons.
+- Report sub-agent prompt unified to use filtered corpus only.
+
+### MCP Server stabilization
+- Fixed indentation/syntax error in `_crawl_core` async helper.
+- Removed duplicate import in `src/mcp_server.py`.
 
 ## Where this lives
 - Durable modules: `src/universal_agent/durable/`
@@ -30,6 +42,7 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 
 ## Progress log for detailed updates
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/001_phase1_progress.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/002_phase2_progress.md`
 
 ## Current status
-Phase 2 is implemented. Remaining work is validation against the durable job demo scenario (kill/resume with no duplicated side effects) and any follow-on phases.
+Phase 2 is implemented. Current focus is validation of kill/resume behavior (checkpoint save/reload + no duplicated side effects) and deciding whether resume should auto-continue or require manual prompt input.

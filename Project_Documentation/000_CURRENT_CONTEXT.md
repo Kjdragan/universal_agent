@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2025-12-30 16:15 CST
+**Last Updated**: 2026-01-02 00:15 CST
 
 ---
 
@@ -28,7 +28,7 @@
 
 ---
 
-## 📍 Current State (December 30, 2025)
+## 📍 Current State (January 2, 2026)
 
 ### ✅ What's Working
 
@@ -42,13 +42,17 @@
 | **Image Generation** | ✅ Working | Gemini 2.5 Flash Image |
 | **Memory System** | ✅ Working | Core blocks, archival search |
 | **Logfire Tracing** | ✅ Working | Dual Trace (Main + Subprocess) |
+| **Durable Runs (Phase 0–2)** | ✅ Working | Run/step tracking, checkpoints, resume UX |
+| **Filtered Research Corpus** | ✅ Working | `finalize_research` + filtered corpus + overview |
 
-### 🆕 Recent Fixes (Dec 31, 2025)
+### 🆕 Recent Fixes (Jan 1–2, 2026)
 
-1. **Double Execution Bug (CLI)**: Identify & Fixed a critical bug where `main.py` was calling `process_turn` then immediately re-running the task in a redundant loop. The CLI is now streamlined.
-2. **Session Optimization**: `work_products/media` is now pre-created during session init, preventing runtime errors.
-3. **Live Trace Saving**: `trace.json` is now saved incrementally after every turn (alongside `transcript.md`) for real-time debugging.
-4. **Local Dev Script**: Added `./local_dev.sh` for easy one-command start of Agent College + CLI.
+1. **Durable Jobs Phase 0–2**: Runtime DB, tool-call ledger, idempotency, step checkpoints, resume UX.
+2. **Ctrl-C Reliability**: SIGINT handler saves interrupt checkpoints; fallback to last step_id in DB.
+3. **Filtered Research Pipeline**: `finalize_research` builds filtered corpus + `research_overview.md`.
+4. **Filter Tuning**: Looser drop thresholds; explicit filtered vs dropped tables in overview.
+5. **Report Prompt Unification**: Report sub-agent now uses filtered corpus only (no raw crawl reads).
+6. **MCP Server Fix**: Syntax/indent error fixed; Crawl4AI Cloud API handling stabilized.
 
 ---
 
@@ -57,14 +61,15 @@
 ### ✅ RESOLVED: Session Persistence After Task (Fixed Dec 31, 2025)
 **Fix**: Watchdog timeout + Worker health checks implemented in Bot.
 
-### 🟡 Other Issues
+### 🟡 Known Issues / In Progress
 
 | Issue | Status | Notes |
 |-------|--------|-------|
+| Resume does not auto-continue | ⏳ Pending | Resume loads checkpoint but waits for new input |
+| Multiple local-toolkit trace IDs | ⏳ Known | Local MCP uses multiple trace IDs per window |
 | Agent College not auto-triggered | ⏳ Pending | Requires manual invocation |
 | `/files` command not implemented | ⏳ Pending | Users can't download artifacts |
 | `/stop` command not implemented | ⏳ Pending | Can't cancel running tasks |
-| Document Run Instructions | ⏳ In Progress | `0000_how_to_run.md` created |
 
 ---
 
@@ -145,14 +150,26 @@ Agent Runtime                    LogfireFetch Service
 ### Production (Railway)
 Automatic on `git push main`. Monitor via Railway Dashboard.
 
-### Local Development
+### Local Development (CLI)
 ```bash
 cd /home/kjdragan/lrepos/universal_agent
 
-# Start bot with ngrok
-ngrok http 8080  # Get URL, update .env WEBHOOK_URL
-uv run uvicorn universal_agent.bot.main:app --host 0.0.0.0 --port 8080
+# Start Agent College + CLI
+./local_dev.sh
 ```
+
+### Durable Test Run (CLI)
+```bash
+PYTHONPATH=src uv run python -m universal_agent.main --job /home/kjdragan/lrepos/universal_agent/src/universal_agent/durable_demo.json
+```
+
+Interrupt with Ctrl-C to save a checkpoint. Resume with:
+```bash
+PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
+```
+
+Latest resume command is written to:
+`Project_Documentation/Long_Running_Agent_Design/KevinRestartWithThis.md`
 
 ### Useful Commands
 ```bash
@@ -177,6 +194,7 @@ curl https://web-production-3473.up.railway.app/health
 | 3 | `013_AGENT_COLLEGE_ARCHITECTURE.md` | Agent College overview |
 | 4 | `012_LETTA_MEMORY_SYSTEM_MANUAL.md` | Memory System design |
 | 5 | `002_LESSONS_LEARNED.md` | Patterns and gotchas |
+| 6 | `Project_Documentation/Long_Running_Agent_Design/` | Durable Jobs v1 + tracking |
 
 ---
 
