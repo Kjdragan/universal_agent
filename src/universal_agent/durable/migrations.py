@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS runs (
   status TEXT NOT NULL,
   entrypoint TEXT NOT NULL,
   run_spec_json TEXT NOT NULL,
+  run_mode TEXT,
+  job_path TEXT,
+  last_job_prompt TEXT,
   current_step_id TEXT,
   last_checkpoint_id TEXT,
   final_artifact_ref TEXT
@@ -66,6 +69,22 @@ CREATE INDEX IF NOT EXISTS idx_run_steps_run ON run_steps(run_id, step_index);
 """
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row[1] == column for row in rows)
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, column_type: str
+) -> None:
+    if _column_exists(conn, table, column):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_type}")
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
+    _add_column_if_missing(conn, "runs", "run_mode", "TEXT")
+    _add_column_if_missing(conn, "runs", "job_path", "TEXT")
+    _add_column_if_missing(conn, "runs", "last_job_prompt", "TEXT")
     conn.commit()

@@ -7,6 +7,7 @@ Traces are sent to Logfire for observability.
 import asyncio
 import signal
 import os
+import sqlite3
 import time
 import json
 import uuid
@@ -1528,6 +1529,340 @@ runtime_db_conn = None
 tool_ledger: Optional[ToolCallLedger] = None
 current_step_id: Optional[str] = None
 interrupt_requested = False
+TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
+WAITING_STATUSES = {"waiting_for_human"}
+
+
+def build_job_prompt(run_spec: dict) -> Optional[str]:
+    job_prompt = run_spec.get("prompt") or run_spec.get("objective")
+    if job_prompt and run_spec.get("inputs"):
+        job_prompt += "\n\nInputs:\n" + json.dumps(run_spec["inputs"], indent=2)
+    if job_prompt and run_spec.get("constraints"):
+        job_prompt += "\n\nConstraints:\n" + json.dumps(run_spec["constraints"], indent=2)
+    return job_prompt
+
+
+def infer_run_mode(
+    run_row: Optional[sqlite3.Row],
+    run_spec: dict,
+    job_path: Optional[str],
+) -> str:
+    if run_row and "run_mode" in run_row.keys() and run_row["run_mode"]:
+        return run_row["run_mode"]
+    if job_path:
+        return "job"
+    if run_spec.get("prompt") or run_spec.get("objective"):
+        return "job"
+    return "interactive"
+
+
+def _list_workspace_artifacts(workspace_dir: str) -> list[str]:
+    if not workspace_dir or not os.path.isdir(workspace_dir):
+        return []
+    artifacts = []
+    for name in sorted(os.listdir(workspace_dir)):
+        if name.lower().endswith((".html", ".pdf", ".pptx")):
+            artifacts.append(name)
+    return artifacts
+
+
+def build_resume_packet(
+    conn: sqlite3.Connection,
+    run_id: str,
+    workspace_dir: str,
+    last_n: int = 5,
+) -> tuple[dict[str, Any], str]:
+    run_row = get_run(conn, run_id)
+    checkpoint = load_last_checkpoint(conn, run_id)
+    checkpoint_id = checkpoint["checkpoint_id"] if checkpoint else None
+
+    step_index = None
+    step_phase = None
+    current_step_id = run_row["current_step_id"] if run_row else None
+    if current_step_id:
+        step_row = conn.execute(
+            "SELECT step_index, phase FROM run_steps WHERE step_id = ?",
+            (current_step_id,),
+        ).fetchone()
+        if step_row:
+            step_index = step_row["step_index"]
+            step_phase = step_row["phase"]
+
+    last_tool_calls = []
+    rows = conn.execute(
+        """
+        SELECT tool_name, status, idempotency_key, created_at
+        FROM tool_calls
+        WHERE run_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (run_id, last_n),
+    ).fetchall()
+    for row in rows:
+        last_tool_calls.append(
+            {
+                "tool_name": row["tool_name"],
+                "status": row["status"],
+                "idempotency_key": row["idempotency_key"],
+                "created_at": row["created_at"],
+            }
+        )
+
+    inflight = []
+    inflight_rows = conn.execute(
+        """
+        SELECT tool_name, status, idempotency_key, created_at
+        FROM tool_calls
+        WHERE run_id = ? AND status IN ('prepared', 'running')
+        ORDER BY created_at DESC
+        """,
+        (run_id,),
+    ).fetchall()
+    for row in inflight_rows:
+        inflight.append(
+            {
+                "tool_name": row["tool_name"],
+                "status": row["status"],
+                "idempotency_key": row["idempotency_key"],
+                "created_at": row["created_at"],
+            }
+        )
+
+    artifacts = _list_workspace_artifacts(workspace_dir)
+
+    packet = {
+        "run_id": run_id,
+        "checkpoint_id": checkpoint_id,
+        "current_step_index": step_index,
+        "current_phase": step_phase,
+        "last_tool_calls": last_tool_calls,
+        "in_flight_tool_calls": inflight,
+        "artifacts": artifacts,
+    }
+
+    summary_lines = [
+        f"run_id: {run_id}",
+        f"checkpoint_id: {checkpoint_id or 'none'}",
+        f"current_step: {step_index if step_index is not None else 'unknown'}",
+        f"current_phase: {step_phase or 'unknown'}",
+    ]
+    if last_tool_calls:
+        summary_lines.append("recent_tool_calls:")
+        for row in last_tool_calls:
+            summary_lines.append(
+                f"- {row['tool_name']} | {row['status']} | {row['idempotency_key']}"
+            )
+    if inflight:
+        summary_lines.append("in_flight_tool_calls:")
+        for row in inflight:
+            summary_lines.append(
+                f"- {row['tool_name']} | {row['status']} | {row['idempotency_key']}"
+            )
+    if artifacts:
+        summary_lines.append("artifacts:")
+        for name in artifacts:
+            summary_lines.append(f"- {name}")
+
+    return packet, "\n".join(summary_lines)
+
+
+def _summarize_response(text: str, max_chars: int = 700) -> str:
+    if not text:
+        return ""
+    compact = " ".join(text.split())
+    if len(compact) > max_chars:
+        return compact[: max_chars - 3] + "..."
+    return compact
+
+
+def update_restart_file(
+    run_id: str,
+    workspace_dir: str,
+    resume_cmd: Optional[str] = None,
+    resume_packet_path: Optional[str] = None,
+    job_summary_path: Optional[str] = None,
+) -> None:
+    if not run_id:
+        return
+    if resume_cmd is None:
+        resume_cmd = f"uv run python src/universal_agent/main.py --resume --run-id {run_id}"
+    try:
+        restart_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "Project_Documentation",
+            "Long_Running_Agent_Design",
+            "KevinRestartWithThis.md",
+        )
+        lines = [
+            "# Restart Instructions",
+            "",
+            f"Run ID: {run_id}",
+            "",
+        ]
+        if resume_cmd:
+            lines.append("Resume Command:")
+            lines.append("")
+            lines.append(resume_cmd)
+            lines.append("")
+        lines.append("Workspace:")
+        lines.append("")
+        lines.append(workspace_dir or "N/A")
+        lines.append("")
+        if resume_packet_path:
+            lines.append("Resume Packet:")
+            lines.append("")
+            lines.append(resume_packet_path)
+            lines.append("")
+        if job_summary_path:
+            lines.append("Job Completion Summary:")
+            lines.append("")
+            lines.append(job_summary_path)
+            lines.append("")
+        with open(restart_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+    except Exception as exc:
+        print(f"⚠️ Failed to save restart file: {exc}")
+
+
+def print_job_completion_summary(
+    conn: sqlite3.Connection,
+    run_id: str,
+    status: str,
+    workspace_dir: str,
+    response_text: str,
+) -> None:
+    artifacts = _list_workspace_artifacts(workspace_dir)
+    receipt_rows = conn.execute(
+        """
+        SELECT tool_name, status, idempotency_key, response_ref
+        FROM tool_calls
+        WHERE run_id = ? AND status = 'succeeded' AND side_effect_class != 'read_only'
+        ORDER BY updated_at DESC
+        LIMIT 5
+        """,
+        (run_id,),
+    ).fetchall()
+    receipts = []
+    for row in receipt_rows:
+        response_preview = (row["response_ref"] or "")[:200]
+        receipts.append(
+            {
+                "tool_name": row["tool_name"],
+                "status": row["status"],
+                "idempotency_key": row["idempotency_key"],
+                "response_ref": response_preview,
+            }
+        )
+
+    print("\n" + "=" * 80)
+    print("=== JOB COMPLETE ===")
+    print(f"Run ID: {run_id}")
+    print(f"Status: {status}")
+    if artifacts:
+        print("Artifacts:")
+        for name in artifacts:
+            print(f"- {os.path.join(workspace_dir, name)}")
+    if receipts:
+        print("Last side-effect receipts:")
+        for receipt in receipts:
+            print(
+                f"- {receipt['tool_name']} | {receipt['status']} | {receipt['idempotency_key']}"
+            )
+    summary = _summarize_response(response_text)
+    if summary:
+        print("Summary:")
+        print(summary)
+    print("=" * 80)
+
+    summary_path = None
+    if workspace_dir:
+        summary_path = os.path.join(workspace_dir, f"job_completion_{run_id}.md")
+        try:
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(f"# Job Completion Summary\n\n")
+                f.write(f"Run ID: {run_id}\n\n")
+                f.write(f"Status: {status}\n\n")
+                if artifacts:
+                    f.write("Artifacts:\n")
+                    for name in artifacts:
+                        f.write(f"- {os.path.join(workspace_dir, name)}\n")
+                    f.write("\n")
+                if receipts:
+                    f.write("Last side-effect receipts:\n")
+                    for receipt in receipts:
+                        f.write(
+                            f"- {receipt['tool_name']} | {receipt['status']} | {receipt['idempotency_key']}\n"
+                        )
+                    f.write("\n")
+                if summary:
+                    f.write("Summary:\n")
+                    f.write(summary + "\n")
+        except Exception as exc:
+            print(f"⚠️ Failed to save job completion summary: {exc}")
+    if summary_path:
+        update_restart_file(run_id, workspace_dir, job_summary_path=summary_path)
+
+
+async def continue_job_run(
+    client: ClaudeSDKClient,
+    run_id: str,
+    workspace_dir: str,
+    last_job_prompt: Optional[str],
+    resume_packet_summary: str,
+    max_error_retries: int = 3,
+) -> Optional[str]:
+    error_retries = 0
+    last_error = None
+    final_response_text = ""
+
+    resume_message = (
+        f"Resuming job run {run_id}. Continue executing the existing job to completion. "
+        "You have access to tool receipts; do not repeat side-effecting tool calls that already "
+        "succeeded—reuse receipts. If blocked, set status waiting_for_human with a clear request."
+        "\n\nResume packet:\n"
+        f"{resume_packet_summary}"
+    )
+
+    while True:
+        if runtime_db_conn and run_id:
+            update_run_status(runtime_db_conn, run_id, "running")
+
+        prompt_parts = []
+        if last_job_prompt:
+            prompt_parts.append(last_job_prompt.strip())
+        prompt_parts.append(resume_message)
+        user_input = "\n\n".join(prompt_parts)
+
+        try:
+            result = await process_turn(client, user_input, workspace_dir)
+            final_response_text = result.response_text or ""
+            if runtime_db_conn and run_id:
+                update_run_status(runtime_db_conn, run_id, "succeeded")
+            return final_response_text
+        except BudgetExceeded as exc:
+            if runtime_db_conn and run_id:
+                update_run_status(runtime_db_conn, run_id, "failed")
+            raise
+        except Exception as exc:
+            error_msg = str(exc)
+            if error_msg == last_error:
+                error_retries += 1
+            else:
+                error_retries = 1
+                last_error = error_msg
+            if error_retries >= max_error_retries:
+                if runtime_db_conn and run_id:
+                    update_run_status(runtime_db_conn, run_id, "waiting_for_human")
+                print(
+                    "\n⚠️ Repeated errors detected. "
+                    "Run status set to waiting_for_human."
+                )
+                return final_response_text
+            print(
+                f"\n⚠️ Job run error (attempt {error_retries}/{max_error_retries}): {exc}"
+            )
+            continue
 
 
 async def run_conversation(client, query: str, start_ts: float, iteration: int = 1):
@@ -2830,6 +3165,7 @@ async def main(args: argparse.Namespace):
 
     run_spec = None
     workspace_override = None
+    run_row = None
     if args.resume:
         if not args.run_id:
             print("❌ --resume requires --run-id")
@@ -2856,14 +3192,41 @@ async def main(args: argparse.Namespace):
         if args.job_path:
             with open(args.job_path, "r", encoding="utf-8") as f:
                 run_spec = json.load(f)
+            run_spec.setdefault("job_path", args.job_path)
         else:
             run_spec = {}
         run_spec.setdefault("entrypoint", "cli")
         run_spec.setdefault("workspace_dir", workspace_dir)
         run_spec.setdefault("budgets", budget_config)
 
+    run_mode = infer_run_mode(run_row, run_spec, args.job_path)
+    job_path = args.job_path or (run_row["job_path"] if run_row else None)
+    job_prompt = None
+    if run_spec:
+        job_prompt = build_job_prompt(run_spec)
+    if run_row and run_row["last_job_prompt"]:
+        job_prompt = run_row["last_job_prompt"]
+
     if run_id:
-        upsert_run(runtime_db_conn, run_id, "cli", run_spec, status="running")
+        status_to_set = "running"
+        if args.resume and run_row:
+            status_to_set = run_row["status"]
+            if (
+                run_mode == "job"
+                and status_to_set not in TERMINAL_STATUSES
+                and status_to_set not in WAITING_STATUSES
+            ):
+                status_to_set = "running"
+        upsert_run(
+            runtime_db_conn,
+            run_id,
+            "cli",
+            run_spec,
+            run_mode=run_mode,
+            job_path=job_path,
+            last_job_prompt=job_prompt,
+            status=status_to_set,
+        )
         logfire.info("durable_run_upserted", run_id=run_id, entrypoint="cli")
     
     # Extract Trace ID immediately after span creation
@@ -2890,20 +3253,7 @@ async def main(args: argparse.Namespace):
     if run_id:
         resume_cmd = f"uv run python src/universal_agent/main.py --resume --run-id {run_id}"
         print(f"Resume Command: {resume_cmd}")
-        try:
-            restart_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                "Project_Documentation",
-                "Long_Running_Agent_Design",
-                "KevinRestartWithThis.md",
-            )
-            with open(restart_path, "w", encoding="utf-8") as f:
-                f.write("# Restart Instructions\n\n")
-                f.write(f"Run ID: {run_id}\n\n")
-                f.write("Resume Command:\n\n")
-                f.write(f"{resume_cmd}\n")
-        except Exception as exc:
-            print(f"⚠️ Failed to save restart file: {exc}")
+        update_restart_file(run_id, workspace_dir, resume_cmd=resume_cmd)
     print(f"============================\n")
 
     print("=" * 80)
@@ -2943,13 +3293,13 @@ async def main(args: argparse.Namespace):
         enable_history_search=True,  # Ctrl+R for history search
     )
 
-    job_prompt = None
-    if run_spec and not args.resume:
-        job_prompt = run_spec.get("prompt") or run_spec.get("objective")
-        if job_prompt and run_spec.get("inputs"):
-            job_prompt += "\n\nInputs:\n" + json.dumps(run_spec["inputs"], indent=2)
-        if job_prompt and run_spec.get("constraints"):
-            job_prompt += "\n\nConstraints:\n" + json.dumps(run_spec["constraints"], indent=2)
+    run_status = run_row["status"] if run_row else None
+    should_auto_continue_job = (
+        args.resume
+        and run_mode == "job"
+        and run_status not in TERMINAL_STATUSES
+        and run_status not in WAITING_STATUSES
+    )
 
     def save_interrupt_checkpoint(prompt_preview: str) -> None:
         if not runtime_db_conn or not run_id:
@@ -3011,11 +3361,97 @@ async def main(args: argparse.Namespace):
 
     signal.signal(signal.SIGINT, handle_sigint)
 
+    auto_resume_complete = False
+
     async with ClaudeSDKClient(options) as client:
         run_failed = False
-        pending_prompt = job_prompt
+        pending_prompt = job_prompt if job_prompt and not args.resume else None
         try:
-            while True:
+            if args.resume and run_mode == "job" and run_status in TERMINAL_STATUSES and run_id:
+                print("✅ Run already terminal. No resume needed.")
+                print_job_completion_summary(
+                    runtime_db_conn,
+                    run_id,
+                    run_status,
+                    workspace_dir,
+                    "",
+                )
+                auto_resume_complete = True
+            if should_auto_continue_job and run_id:
+                resume_packet, resume_summary = build_resume_packet(
+                    runtime_db_conn, run_id, workspace_dir
+                )
+                print("✅ Resume packet constructed")
+                print(resume_summary)
+                resume_packet_path = None
+                if workspace_dir:
+                    resume_packet_path = os.path.join(
+                        workspace_dir, f"resume_packet_{run_id}.md"
+                    )
+                    try:
+                        with open(resume_packet_path, "w", encoding="utf-8") as f:
+                            f.write("# Resume Packet\n\n")
+                            f.write("Summary:\n\n")
+                            f.write(resume_summary + "\n\n")
+                            f.write("Packet JSON:\n\n")
+                            f.write(json.dumps(resume_packet, indent=2, default=str))
+                            f.write("\n")
+                    except Exception as exc:
+                        print(f"⚠️ Failed to save resume packet: {exc}")
+                        resume_packet_path = None
+                if resume_packet_path:
+                    update_restart_file(
+                        run_id,
+                        workspace_dir,
+                        resume_packet_path=resume_packet_path,
+                    )
+                try:
+                    final_response = await continue_job_run(
+                        client,
+                        run_id,
+                        workspace_dir,
+                        job_prompt,
+                        resume_summary,
+                    )
+                    if runtime_db_conn and run_id:
+                        status_row = get_run(runtime_db_conn, run_id)
+                        status_value = status_row["status"] if status_row else "running"
+                        if status_value in TERMINAL_STATUSES:
+                            print_job_completion_summary(
+                                runtime_db_conn,
+                                run_id,
+                                status_value,
+                                workspace_dir,
+                                final_response or "",
+                            )
+                    auto_resume_complete = True
+                except BudgetExceeded as exc:
+                    run_failed = True
+                    trace["status"] = "budget_exceeded"
+                    trace["budget_error"] = exc.to_dict()
+                    print(f"\n⛔ {exc}")
+                    if LOGFIRE_TOKEN:
+                        logfire.error("budget_exceeded", **exc.to_dict())
+                    if runtime_db_conn and current_step_id:
+                        complete_step(
+                            runtime_db_conn,
+                            current_step_id,
+                            "failed",
+                            error_code="budget_exceeded",
+                            error_detail=str(exc),
+                        )
+                    if runtime_db_conn and run_id:
+                        update_run_status(runtime_db_conn, run_id, "failed")
+                        logfire.warning(
+                            "durable_run_failed",
+                            run_id=run_id,
+                            error_code="budget_exceeded",
+                            error_detail=str(exc),
+                        )
+                    auto_resume_complete = True
+            if auto_resume_complete:
+                pass
+            while not auto_resume_complete:
                 if interrupt_requested:
                     break
                 # 1. Get User Input (auto-inject job prompt once when provided)
@@ -3050,7 +3486,18 @@ async def main(args: argparse.Namespace):
                 # 4. Tool execution loop (if complex)
                 # 5. Output and Transcripts
                 try:
-                    await process_turn(client, user_input, workspace_dir)
+                    result = await process_turn(client, user_input, workspace_dir)
+                    if run_mode == "job" and args.job_path:
+                        if runtime_db_conn and run_id:
+                            update_run_status(runtime_db_conn, run_id, "succeeded")
+                            print_job_completion_summary(
+                                runtime_db_conn,
+                                run_id,
+                                "succeeded",
+                                workspace_dir,
+                                result.response_text or "",
+                            )
+                        break
                 except KeyboardInterrupt:
                     run_failed = True
                     print("\n⚠️ Interrupted by user. Saving checkpoint...")

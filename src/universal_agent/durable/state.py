@@ -13,24 +13,53 @@ def upsert_run(
     run_id: str,
     entrypoint: str,
     run_spec: dict[str, Any],
+    run_mode: Optional[str] = None,
+    job_path: Optional[str] = None,
+    last_job_prompt: Optional[str] = None,
     status: str = "running",
 ) -> None:
     now = _now()
     conn.execute(
         """
         INSERT OR IGNORE INTO runs (
-            run_id, created_at, updated_at, status, entrypoint, run_spec_json
-        ) VALUES (?, ?, ?, ?, ?, ?)
+            run_id, created_at, updated_at, status, entrypoint, run_spec_json,
+            run_mode, job_path, last_job_prompt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (run_id, now, now, status, entrypoint, json.dumps(run_spec, default=str)),
+        (
+            run_id,
+            now,
+            now,
+            status,
+            entrypoint,
+            json.dumps(run_spec, default=str),
+            run_mode,
+            job_path,
+            last_job_prompt,
+        ),
     )
     conn.execute(
         """
         UPDATE runs
-        SET updated_at = ?, status = ?, entrypoint = ?, run_spec_json = ?
+        SET updated_at = ?,
+            status = ?,
+            entrypoint = ?,
+            run_spec_json = ?,
+            run_mode = ?,
+            job_path = ?,
+            last_job_prompt = ?
         WHERE run_id = ?
         """,
-        (now, status, entrypoint, json.dumps(run_spec, default=str), run_id),
+        (
+            now,
+            status,
+            entrypoint,
+            json.dumps(run_spec, default=str),
+            run_mode,
+            job_path,
+            last_job_prompt,
+            run_id,
+        ),
     )
     conn.commit()
 
