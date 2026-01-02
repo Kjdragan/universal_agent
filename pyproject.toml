@@ -48,6 +48,7 @@ dependencies = [
     "crawl4ai>=0.3.7",
     "playwright>=1.49.1",
     "yt-dlp>=2025.01.0",
+    "markdown>=3.10",
 ]
 
 

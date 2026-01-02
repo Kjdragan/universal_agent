@@ -18,7 +18,6 @@ sys.path.append(os.path.abspath("src"))
 sys.path.append(os.path.dirname(os.path.abspath(__file__))) # src/
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Repo Root
 from tools.workbench_bridge import WorkbenchBridge
-from tools.workbench_bridge import WorkbenchBridge
 from composio import Composio
 
 # Memory System Integration
@@ -174,6 +173,15 @@ FILTER_PROMO_TOKENS = (
     "subscribe", "sign in", "sign up", "support", "donate", "contribute",
     "membership", "account", "continue", "payment", "your support",
 )
+FILTER_URL_ALLOW_PATTERNS = (
+    # Al Jazeera key events timeline pages (useful despite list structure)
+    "aljazeera.com/news/202",
+    "aljazeera.com/news/2025/",
+    "aljazeera.com/news/2026/",
+    "russia-ukraine-war-list-of-key-events",
+    # ISW assessment pages sometimes render with "Home" titles
+    "understandingwar.org/research/russia-ukraine/",
+)
 
 
 def _split_front_matter(raw_text: str) -> tuple[dict, str, str]:
@@ -209,6 +217,8 @@ def _url_is_blacklisted(url: str) -> bool:
 def _url_title_gate(meta: dict) -> tuple[bool, str]:
     url = (meta.get("source") or "").lower()
     title = (meta.get("title") or "").lower()
+    if any(pattern in url for pattern in FILTER_URL_ALLOW_PATTERNS):
+        return True, "allowlist"
     if _url_is_blacklisted(url):
         return False, "domain_blacklist"
     if any(token in url for token in FILTER_URL_SKIP_TOKENS):
@@ -241,11 +251,11 @@ def _filter_crawl_content(raw_text: str) -> tuple[str | None, str, dict, str]:
         return None, reason, meta, meta_block
 
     cleaned, short_line_count = _remove_navigation_lines(body)
-    if _word_count(cleaned) < 350:
+    if _word_count(cleaned) < 250:
         return None, "too_short", meta, meta_block
-    if _word_count(cleaned) < 400 and _is_promotional(cleaned):
+    if _word_count(cleaned) < 300 and _is_promotional(cleaned):
         return None, "promo_short", meta, meta_block
-    if short_line_count > 200 and _word_count(cleaned) < 600:
+    if short_line_count > 300 and _word_count(cleaned) < 800:
         return None, "nav_heavy", meta, meta_block
     return cleaned, "ok", meta, meta_block
 
@@ -275,11 +285,21 @@ def read_research_files(file_paths: list[str]) -> str:
     cumulative_words = 0
     success_count = 0
     skipped_files = []
+    remapped_files = []
     
     for path in file_paths:
         try:
             path = fix_path_typos(path)
             abs_path = os.path.abspath(path)
+
+            # Prefer filtered corpus when raw crawl paths are provided.
+            if "/search_results/" in abs_path and "/search_results_filtered_best/" not in abs_path:
+                filtered_path = abs_path.replace(
+                    "/search_results/", "/search_results_filtered_best/"
+                )
+                if os.path.exists(filtered_path):
+                    remapped_files.append((abs_path, filtered_path))
+                    abs_path = filtered_path
             
             if not os.path.exists(abs_path):
                 results.append(f"\n{'='*60}\n❌ FILE NOT FOUND: {path}\n{'='*60}\n")
@@ -313,8 +333,15 @@ def read_research_files(file_paths: list[str]) -> str:
     header = (
         f"# Research Files Batch Read\n"
         f"**Files read:** {success_count}/{len(file_paths)}\n"
-        f"**Total words:** {cumulative_words:,}\n\n"
+        f"**Total words:** {cumulative_words:,}\n"
     )
+    if remapped_files:
+        remap_lines = "\n".join(
+            f"- {os.path.basename(src)} → {os.path.basename(dst)}"
+            for src, dst in remapped_files
+        )
+        header += f"\n**Remapped to filtered corpus:**\n{remap_lines}\n"
+    header += "\n"
     
     output = header + "\n".join(results)
     
@@ -620,7 +647,7 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
         
         try:
             import asyncio
-            
+
             async def crawl_single_url(session, url):
                 """Crawl a single URL using Cloud API"""
                 payload = {
@@ -644,9 +671,17 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                         # Cloud API returns content directly (no polling needed)
                         if data.get("success") == False:
                             return {"url": url, "success": False, "error": data.get("error", "Unknown error")}
+                        if isinstance(data.get("data"), str):
+                            return {"url": url, "success": False, "error": data.get("data")}
                         
-                        # Get content (Cloud API returns 'content' key)
-                        raw_content = data.get("content", "")
+                        # Get content (may be nested under data)
+                        payload = data.get("data") if isinstance(data.get("data"), dict) else data
+                        raw_content = (
+                            payload.get("content")
+                            or payload.get("markdown")
+                            or payload.get("fit_markdown")
+                            or ""
+                        )
                         content = raw_content
                         
                         # Post-process: Strip markdown links, keep just the text
@@ -665,7 +700,7 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                             "success": True,
                             "content": content,
                             "raw_content": raw_content,  # Keep for date extraction
-                            "metadata": data.get("metadata", {})
+                            "metadata": payload.get("metadata", {}),
                         }
                 except asyncio.TimeoutError:
                     return {"url": url, "success": False, "error": "Timeout (60s)"}
@@ -1114,13 +1149,27 @@ async def finalize_research(session_dir: str) -> str:
                 overview_lines.append(f"- {url}")
 
         overview_lines.append("")
-        overview_lines.append("## Filtered Corpus (Use for Report Content)")
+        overview_lines.append("## Filtered Corpus (Use for Report Content Only)")
+        overview_lines.append(
+            "Only files listed below should be read for report generation. "
+            "Do NOT read raw `search_results/crawl_*.md` files."
+        )
         overview_lines.append("| # | File | Words | Title | Date | URL |")
         overview_lines.append("|---|------|-------|-------|------|-----|")
         for idx, f in enumerate(filtered_files, 1):
             overview_lines.append(
                 f"| {idx} | `{f['file']}` | {f['word_count']:,} | {f['title'][:50]} | {f['date']} | {f['url']} |"
             )
+
+        if filtered_dropped:
+            overview_lines.append("")
+            overview_lines.append("## Filtered-Out Crawl Files (Dropped After Crawl)")
+            overview_lines.append("| # | File | Reason |")
+            overview_lines.append("|---|------|--------|")
+            for idx, dropped in enumerate(filtered_dropped, 1):
+                overview_lines.append(
+                    f"| {idx} | `{os.path.basename(dropped['path'])}` | {dropped['status']} |"
+                )
 
         overview_path = os.path.join(search_results_dir, "research_overview.md")
         with open(overview_path, "w", encoding="utf-8") as f:

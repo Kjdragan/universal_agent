@@ -2362,26 +2362,25 @@ async def setup_session(
                     "🚨 CRITICAL TOOL INSTRUCTIONS:\n"
                     "1. DO NOT use COMPOSIO_SEARCH_TOOLS - you already have the tools you need.\n"
                     "2. DO NOT use Firecrawl or any Composio crawling tools.\n"
-                    "3. USE ONLY these specific tools:\n"
-                    "   - `mcp__local_toolkit__list_directory` - to find search result files\n"
-                    "   - `mcp__local_toolkit__read_local_file` - to get URLs from JSONs\n"
-                    "   - `mcp__local_toolkit__crawl_parallel` - to extract content\n"
-                    "   - `mcp__local_toolkit__write_local_file` - to save report\n\n"
+                    "3. DO NOT read raw `search_results/crawl_*.md` files.\n"
+                    "4. USE ONLY these specific tools for research:\n"
+                    "   - `mcp__local_toolkit__finalize_research` - builds the filtered corpus\n"
+                    "   - `mcp__local_toolkit__read_local_file` - read research_overview.md and search JSONs\n"
+                    "   - `mcp__local_toolkit__read_research_files` - batch read filtered files only\n"
+                    "   - `mcp__local_toolkit__list_directory` - list filtered corpus files\n"
+                    "   - `mcp__local_toolkit__write_local_file` - save report\n\n"
                     "---\n\n"
                     "## WORKFLOW\n\n"
-                    "### Step 1: Discover & Scrape (MANDATORY)\n"
-                    "1. Call `mcp__local_toolkit__list_directory` on filenames in `{workspace_dir}/search_results/`.\n"
-                    "2. Read EVERY `.json` file found using `read_local_file`.\n"
-                    "3. Extract EVERY `url` from ALL files (consolidate into one list). Merge lists from multiple files.\n"
-                    "4. Call `mcp__local_toolkit__crawl_parallel` with the COMPLETE, MERGED list (no batch limit).\n"
-                    "   *Our scraper is instant. Do not cherry-pick. If you find 40 URLs across 5 files, scrape 40 URLs.*\n"
-                    "   *CRITICAL: Do not stop at the first file. Scrape everything.*\n\n"
-                    "### Step 2: Read ALL Scraped Content (MANDATORY - DO NOT SKIP FILES)\n"
-                    "1. After crawl_parallel completes, call `list_directory` again to see all `crawl_*.md` files.\n"
-                    "2. You MUST read EVERY crawl_*.md file. There is no limit.\n"
-                    "3. If there are more than ~6 files, read them in batches (6 files per read operation).\n"
-                    "4. DO NOT generate the report until you have read ALL crawl_*.md files.\n"
-                    "5. Keep track: 'Read X of Y files' - if X < Y, continue reading.\n\n"
+                    "### Step 1: Finalize Research (MANDATORY)\n"
+                    "1. Call `mcp__local_toolkit__finalize_research` with the current session directory.\n"
+                    "2. This tool creates `search_results/research_overview.md` and the filtered corpus in `search_results_filtered_best/`.\n"
+                    "3. DO NOT manually crawl URLs or build your own URL list.\n\n"
+                    "### Step 2: Read the Filtered Corpus (MANDATORY)\n"
+                    f"1. Read `{workspace_dir}/search_results/research_overview.md` using `read_local_file`.\n"
+                    f"2. List `{workspace_dir}/search_results_filtered_best/` to see filtered crawl files.\n"
+                    "3. Use `read_research_files` with ONLY the filtered files.\n"
+                    "4. DO NOT read raw `search_results/crawl_*.md` files.\n"
+                    "5. If you need search snippets, read the `COMPOSIO_SEARCH_*.json` files.\n\n"
                     "### Step 3: Synthesize Report\n"
                     "Evaluate your source material and design an appropriate structure for the content.\n\n"
                     "**QUALITY PRINCIPLES:**\n"
@@ -2412,7 +2411,7 @@ async def setup_session(
                     "- Aim for thematic grouping where natural, standalone items where not\n\n"
                     "### Step 4: Save Report\n"
                     f"Save as `.html` to `{workspace_dir}/work_products/` using `mcp__local_toolkit__write_local_file`.\n\n"
-                    "🚨 START IMMEDIATELY: List the directory to find your targets."
+                    "🚨 START IMMEDIATELY: Call `mcp__local_toolkit__finalize_research`."
                 ),
                 # Omit 'tools' so sub-agent inherits ALL tools including MCP tools
                 model="inherit",
@@ -2889,6 +2888,20 @@ async def main(args: argparse.Namespace):
     if run_id:
         resume_cmd = f"uv run python src/universal_agent/main.py --resume --run-id {run_id}"
         print(f"Resume Command: {resume_cmd}")
+        try:
+            restart_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                "Project_Documentation",
+                "Long_Running_Agent_Design",
+                "KevinRestartWithThis.md",
+            )
+            with open(restart_path, "w", encoding="utf-8") as f:
+                f.write("# Restart Instructions\n\n")
+                f.write(f"Run ID: {run_id}\n\n")
+                f.write("Resume Command:\n\n")
+                f.write(f"{resume_cmd}\n")
+        except Exception as exc:
+            print(f"⚠️ Failed to save restart file: {exc}")
     print(f"============================\n")
 
     print("=" * 80)
@@ -2928,17 +2941,70 @@ async def main(args: argparse.Namespace):
         enable_history_search=True,  # Ctrl+R for history search
     )
 
+    job_prompt = None
+    if run_spec and not args.resume:
+        job_prompt = run_spec.get("prompt") or run_spec.get("objective")
+        if job_prompt and run_spec.get("inputs"):
+            job_prompt += "\n\nInputs:\n" + json.dumps(run_spec["inputs"], indent=2)
+        if job_prompt and run_spec.get("constraints"):
+            job_prompt += "\n\nConstraints:\n" + json.dumps(run_spec["constraints"], indent=2)
+
+    def save_interrupt_checkpoint(prompt_preview: str) -> None:
+        if not runtime_db_conn or not run_id:
+            return
+        step_id = current_step_id
+        if not step_id:
+            run_row = get_run(runtime_db_conn, run_id)
+            if run_row:
+                step_id = run_row["current_step_id"]
+        if not step_id:
+            return
+        last_tool_call_id = None
+        if trace.get("tool_calls"):
+            last_tool_call_id = trace["tool_calls"][-1].get("id")
+        state_snapshot = {
+            "run_id": run_id,
+            "step_id": step_id,
+            "phase": "interrupt",
+            "query_preview": prompt_preview[:200],
+            "budget_state": budget_state,
+        }
+        cursor = {"last_tool_call_id": last_tool_call_id}
+        save_checkpoint(
+            runtime_db_conn,
+            run_id=run_id,
+            step_id=step_id,
+            checkpoint_type="interrupt",
+            state_snapshot=state_snapshot,
+            cursor=cursor,
+        )
+        update_run_status(runtime_db_conn, run_id, "paused")
+        if LOGFIRE_TOKEN:
+            logfire.info(
+                "durable_checkpoint_saved",
+                run_id=run_id,
+                step_id=step_id,
+                checkpoint_type="interrupt",
+            )
+
     async with ClaudeSDKClient(options) as client:
-            run_failed = False
+        run_failed = False
+        pending_prompt = job_prompt
+        try:
             while True:
-                # 1. Get User Input
+                # 1. Get User Input (auto-inject job prompt once when provided)
                 print("\n" + "=" * 80)
                 try:
-                    with patch_stdout():
-                        user_input = await prompt_session.prompt_async(
-                            "🤖 Enter your request (or 'quit'): ",
-                        )
-                    user_input = user_input.strip()
+                    if pending_prompt:
+                        user_input = pending_prompt
+                        pending_prompt = None
+                        print("🤖 Auto-running job prompt from run spec...")
+                    else:
+                        with patch_stdout():
+                            user_input = await prompt_session.prompt_async(
+                                "🤖 Enter your request (or 'quit'): ",
+                            )
+                        user_input = user_input.strip()
                 except (EOFError, KeyboardInterrupt):
                     break
                 if not user_input or user_input.lower() in ("quit", "exit"):
@@ -2952,6 +3018,14 @@ async def main(args: argparse.Namespace):
                 # 5. Output and Transcripts
                 try:
                     await process_turn(client, user_input, workspace_dir)
+                except KeyboardInterrupt:
+                    run_failed = True
+                    print("\n⚠️ Interrupted by user. Saving checkpoint...")
+                    try:
+                        save_interrupt_checkpoint(user_input)
+                    except Exception as exc:
+                        print(f"⚠️ Failed to save interrupt checkpoint: {exc}")
+                    break
                 except BudgetExceeded as exc:
                     run_failed = True
                     trace["status"] = "budget_exceeded"
@@ -2996,6 +3070,13 @@ async def main(args: argparse.Namespace):
                             error_detail=str(exc),
                         )
                     raise
+        except KeyboardInterrupt:
+            run_failed = True
+            print("\n⚠️ Interrupted by user. Saving checkpoint...")
+            try:
+                save_interrupt_checkpoint(job_prompt or "")
+            except Exception as exc:
+                print(f"⚠️ Failed to save interrupt checkpoint: {exc}")
 
             # End of Session Summary
             end_ts = time.time()

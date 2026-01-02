@@ -35,6 +35,9 @@
 10) Added malformed tool name guardrail + Logfire instrumentation for durable lifecycle + ledger.
    - Updated: `src/universal_agent/main.py`
 
+11) TODO: Investigate making job/run prompts follow the standard “complex query → Composio search → finalize_research → filtered corpus” pipeline before improvisation.
+   - Goal: ensure durable job prompts trigger the same decomposition and guardrails as normal user queries.
+
 Notes:
 - Tests not executed in this log entry.
 - Runtime DB path default: `AGENT_RUN_WORKSPACES/runtime_state.db` (override with `UA_RUNTIME_DB_PATH`).
