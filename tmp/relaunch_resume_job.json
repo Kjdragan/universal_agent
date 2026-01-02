@@ -1,0 +1,13 @@
+{
+  "objective": "Durability relaunch test (Task + side effects). Step 1: Call Task to spawn subagent_type 'report-creation-expert' that writes a small HTML report to work_products/relaunch_report.html (include a title, 2-3 short sections, and a timestamp). Do not call external search tools. Step 2: Convert that HTML to PDF via Bash (headless Chrome) and save as work_products/relaunch_report.pdf. Step 3: Upload the PDF with mcp__local_toolkit__upload_to_composio and send ONE Gmail email with the PDF attached. Use the email address from env var UA_TEST_EMAIL_TO; if missing, ask the user. Step 4: Reply DONE.",
+  "inputs": {
+    "task_key": "relaunch_report_v1",
+    "html_path": "work_products/relaunch_report.html",
+    "pdf_path": "work_products/relaunch_report.pdf"
+  },
+  "constraints": {
+    "must_use_tools": true,
+    "no_external_network": false,
+    "no_duplicate_external_actions": true
+  }
+}

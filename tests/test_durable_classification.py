@@ -4,6 +4,7 @@ from universal_agent.durable.classification import (
     RELAUNCH,
     classify_replay_policy,
     classify_tool,
+    _reset_tool_policy_cache,
 )
 
 
@@ -37,3 +38,31 @@ def test_replay_policy_read_only_idempotent():
 
 def test_replay_policy_side_effect_exact():
     assert classify_replay_policy("GMAIL_SEND_EMAIL", "composio") == REPLAY_EXACT
+
+
+def test_policy_config_override(tmp_path, monkeypatch):
+    policy = """version: 1
+policies:
+  - name: test_read_only
+    tool_namespace: composio
+    side_effect_class: read_only
+    replay_policy: REPLAY_IDEMPOTENT
+    patterns:
+      - "^COMPOSIO_TEST_READ$"
+"""
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(policy)
+    monkeypatch.setenv("UA_TOOL_POLICIES_PATH", str(policy_path))
+    _reset_tool_policy_cache()
+    assert classify_tool("COMPOSIO_TEST_READ", "composio") == "read_only"
+    assert classify_replay_policy("COMPOSIO_TEST_READ", "composio") == REPLAY_IDEMPOTENT
+
+
+def test_task_output_forces_relaunch():
+    assert classify_replay_policy("TaskOutput", "composio") == RELAUNCH
+    assert (
+        classify_replay_policy(
+            "any", "composio", metadata={"raw_tool_name": "TaskResult"}
+        )
+        == RELAUNCH
+    )

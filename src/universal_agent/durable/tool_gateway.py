@@ -48,6 +48,7 @@ def prepare_tool_call(
         tool_namespace=identity.tool_namespace,
         raw_tool_name=raw_tool_name,
         tool_input=tool_input,
+        metadata={"raw_tool_name": raw_tool_name},
     )
     return ToolDecision(
         deduped=receipt is not None,

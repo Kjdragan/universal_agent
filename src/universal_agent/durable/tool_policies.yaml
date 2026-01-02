@@ -1,0 +1,39 @@
+version: 1
+policies:
+  - name: composio_read_only
+    tool_namespace: composio
+    side_effect_class: read_only
+    replay_policy: REPLAY_IDEMPOTENT
+    patterns:
+      - "^COMPOSIO_SEARCH_"
+      - "^COMPOSIO_GET_"
+      - "^COMPOSIO_LIST_"
+      - "^COMPOSIO_RETRIEVE_"
+      - "^COMPOSIO_READ_"
+      - "^COMPOSIO_FETCH_"
+      - "^COMPOSIO_DESCRIBE_"
+      - "^COMPOSIO_LOOKUP_"
+      - "^COMPOSIO_SEARCH_TOOLS$"
+  - name: composio_side_effect
+    tool_namespace: composio
+    side_effect_class: external
+    replay_policy: REPLAY_EXACT
+    patterns:
+      - "SEND"
+      - "CREATE"
+      - "UPDATE"
+      - "DELETE"
+      - "PATCH"
+      - "POST"
+      - "MERGE"
+      - "UPLOAD"
+      - "INVITE"
+      - "PUBLISH"
+      - "COMMENT"
+      - "REPLY"
+      - "FORWARD"
+      - "ARCHIVE"
+      - "LABEL"
+      - "MOVE"
+      - "MARK"
+      - "ASSIGN"

@@ -992,6 +992,18 @@ async def on_pre_tool_use_ledger(
         return {}
 
     tool_name = input_data.get("tool_name", "")
+    if _is_task_output_name(tool_name):
+        return {
+            "systemMessage": (
+                "⚠️ TaskOutput/TaskResult is not a callable tool. "
+                "Relaunch the subagent using the Task tool instead."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "TaskOutput/TaskResult is not a tool call.",
+            },
+        }
     malformed_markers = ("</arg_key>", "<arg_key>", "</arg_value>", "<arg_value>")
     if any(marker in tool_name for marker in malformed_markers):
         logfire.warning(
@@ -1035,6 +1047,10 @@ async def on_pre_tool_use_ledger(
         forced_tool_active_ids[tool_call_id] = expected
         expected["attempts"] = expected.get("attempts", 0) + 1
         try:
+            _assert_prepared_tool_row(
+                expected["tool_call_id"],
+                expected.get("raw_tool_name") or expected.get("tool_name") or tool_name,
+            )
             tool_ledger.mark_running(expected["tool_call_id"])
             logfire.info(
                 "replay_mark_running",
@@ -1107,6 +1123,7 @@ async def on_pre_tool_use_ledger(
             }
 
     try:
+        _assert_prepared_tool_row(tool_call_id, tool_name)
         tool_ledger.mark_running(tool_call_id)
         logfire.info(
             "ledger_mark_running",
@@ -1167,6 +1184,11 @@ async def on_post_tool_use_ledger(
                 else:
                     forced_tool_queue.insert(0, expected)
             else:
+                _maybe_crash_after_tool(
+                    raw_tool_name=expected.get("raw_tool_name") or "",
+                    tool_call_id=expected["tool_call_id"],
+                    stage="after_tool_success_before_ledger_commit",
+                )
                 external_id = None
                 if isinstance(tool_response, dict):
                     external_id = (
@@ -1178,6 +1200,11 @@ async def on_post_tool_use_ledger(
                     expected["tool_call_id"], tool_response, external_id
                 )
                 tool_ledger.mark_replay_status(expected["tool_call_id"], "succeeded")
+                _maybe_crash_after_tool(
+                    raw_tool_name=expected.get("raw_tool_name") or "",
+                    tool_call_id=expected["tool_call_id"],
+                    stage="after_ledger_mark_succeeded",
+                )
                 logfire.info(
                     "replay_mark_succeeded",
                     tool_use_id=tool_call_id,
@@ -1206,6 +1233,17 @@ async def on_post_tool_use_ledger(
                 error_detail=error_detail or "tool error",
             )
         else:
+            raw_tool_name = ""
+            if tool_ledger:
+                ledger_entry = tool_ledger.get_tool_call(tool_call_id)
+                raw_tool_name = (ledger_entry or {}).get("raw_tool_name") or ""
+            if not raw_tool_name:
+                raw_tool_name = input_data.get("tool_name", "") or ""
+            _maybe_crash_after_tool(
+                raw_tool_name=raw_tool_name,
+                tool_call_id=tool_call_id,
+                stage="after_tool_success_before_ledger_commit",
+            )
             external_id = None
             if isinstance(tool_response, dict):
                 external_id = (
@@ -1214,6 +1252,11 @@ async def on_post_tool_use_ledger(
                     or tool_response.get("request_id")
                 )
             tool_ledger.mark_succeeded(tool_call_id, tool_response, external_id)
+            _maybe_crash_after_tool(
+                raw_tool_name=raw_tool_name,
+                tool_call_id=tool_call_id,
+                stage="after_ledger_mark_succeeded",
+            )
             logfire.info(
                 "ledger_mark_succeeded",
                 tool_use_id=tool_call_id,
@@ -1667,11 +1710,15 @@ def _normalize_tool_input(tool_input: Any) -> str:
         return json.dumps(tool_input or {}, default=str)
 
 
-def _maybe_update_provider_session(session_id: Optional[str]) -> None:
+def _maybe_update_provider_session(
+    session_id: Optional[str], forked_from: Optional[str] = None
+) -> None:
     if not session_id:
         return
     if runtime_db_conn and run_id:
-        update_run_provider_session(runtime_db_conn, run_id, session_id)
+        update_run_provider_session(
+            runtime_db_conn, run_id, session_id, forked_from=forked_from
+        )
     if trace is not None:
         trace["provider_session_id"] = session_id
 
@@ -1706,6 +1753,67 @@ def _invalidate_provider_session(error_msg: str) -> None:
         run_id=run_id,
         error=error_msg[:200],
     )
+
+
+def _maybe_crash_after_tool(
+    *,
+    raw_tool_name: str,
+    tool_call_id: str,
+    stage: str,
+) -> None:
+    crash_tool = os.getenv("UA_TEST_CRASH_AFTER_TOOL")
+    crash_id = os.getenv("UA_TEST_CRASH_AFTER_TOOL_CALL_ID")
+    crash_stage = os.getenv("UA_TEST_CRASH_STAGE")
+    if not crash_tool and not crash_id:
+        return
+    if crash_tool and raw_tool_name != crash_tool:
+        return
+    if crash_id and tool_call_id != crash_id:
+        return
+    if crash_stage and crash_stage != stage:
+        return
+    message = (
+        "UA_TEST_CRASH triggered "
+        f"(tool_call_id={tool_call_id}, raw_tool_name={raw_tool_name}, stage={stage})"
+    )
+    print(f"\n🧨 {message}")
+    if LOGFIRE_TOKEN:
+        logfire.error(
+            "test_crash_hook_triggered",
+            tool_call_id=tool_call_id,
+            raw_tool_name=raw_tool_name,
+            stage=stage,
+            crash_tool=crash_tool,
+            crash_id=crash_id,
+            crash_stage=crash_stage,
+        )
+    os._exit(137)
+
+
+def _assert_prepared_tool_row(tool_call_id: str, raw_tool_name: str) -> None:
+    if os.getenv("UA_DEBUG_ASSERT_PREPARED", "").lower() not in ("1", "true", "yes"):
+        return
+    if tool_ledger is None:
+        return
+    row = tool_ledger.get_tool_call(tool_call_id)
+    status = (row or {}).get("status")
+    if status not in ("prepared", "running"):
+        message = (
+            "Prepared ledger row missing or invalid before tool execution "
+            f"(tool_call_id={tool_call_id}, raw_tool_name={raw_tool_name}, status={status})"
+        )
+        if LOGFIRE_TOKEN:
+            logfire.error(
+                "prepared_ledger_row_missing",
+                tool_call_id=tool_call_id,
+                raw_tool_name=raw_tool_name,
+                status=status,
+            )
+        raise RuntimeError(message)
+
+
+def _is_task_output_name(raw_tool_name: str) -> bool:
+    return raw_tool_name.lower() in ("taskoutput", "taskresult")
 
 
 def _ensure_task_key(tool_input: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -1810,14 +1918,21 @@ def _relaunch_inflight_task(
         tool_input = {}
     relaunch_input, task_key = _ensure_task_key(tool_input)
     tool_call_id = str(uuid.uuid4())
+    relaunch_tool_name = inflight.get("tool_name") or ""
+    relaunch_namespace = inflight.get("tool_namespace") or ""
+    relaunch_raw_name = inflight.get("raw_tool_name") or relaunch_tool_name
+    if _is_task_output_name(relaunch_raw_name):
+        relaunch_tool_name = "task"
+        relaunch_namespace = "claude_code"
+        relaunch_raw_name = "Task"
     try:
         receipt, idempotency_key = tool_ledger.prepare_tool_call(
             tool_call_id=tool_call_id,
             run_id=run_id,
             step_id=step_id,
-            tool_name=inflight.get("tool_name") or "",
-            tool_namespace=inflight.get("tool_namespace") or "",
-            raw_tool_name=inflight.get("raw_tool_name"),
+            tool_name=relaunch_tool_name,
+            tool_namespace=relaunch_namespace,
+            raw_tool_name=relaunch_raw_name,
             tool_input=relaunch_input,
         )
     except Exception as exc:
@@ -1843,9 +1958,9 @@ def _relaunch_inflight_task(
     )
     return {
         "tool_call_id": tool_call_id,
-        "tool_name": inflight.get("tool_name"),
-        "tool_namespace": inflight.get("tool_namespace"),
-        "raw_tool_name": inflight.get("raw_tool_name"),
+        "tool_name": relaunch_tool_name,
+        "tool_namespace": relaunch_namespace,
+        "raw_tool_name": relaunch_raw_name,
         "step_id": step_id,
         "normalized_input": _normalize_tool_input(relaunch_input),
         "tool_input": relaunch_input,
@@ -1887,20 +2002,36 @@ async def reconcile_inflight_tools(
         forced_tool_queue.append(item)
     forced_tool_active_ids = {}
     print("🔁 Replaying in-flight tool calls before resume...")
-    for _ in range(max_turns):
-        if not forced_tool_queue:
-            break
-        prompt = _build_forced_tool_prompt(forced_tool_queue)
-        try:
-            await process_turn(client, prompt, workspace_dir)
-        except BudgetExceeded:
-            raise
-        except Exception as exc:
-            print(f"⚠️ In-flight replay error: {exc}")
-            logfire.warning("inflight_replay_error", run_id=run_id, error=str(exc))
-            break
-        if forced_tool_queue:
-            print("⚠️ In-flight replay incomplete; retrying...")
+    fallback_client: Optional[ClaudeSDKClient] = None
+    fallback_client_active = False
+    active_client = client
+    try:
+        for _ in range(max_turns):
+            if not forced_tool_queue:
+                break
+            prompt = _build_forced_tool_prompt(forced_tool_queue)
+            try:
+                await process_turn(active_client, prompt, workspace_dir)
+            except BudgetExceeded:
+                raise
+            except Exception as exc:
+                error_msg = str(exc)
+                if _is_resume_session_error(error_msg) and fallback_client is None:
+                    _invalidate_provider_session(error_msg)
+                    _disable_provider_resume()
+                    fallback_client = ClaudeSDKClient(options)
+                    await fallback_client.__aenter__()
+                    fallback_client_active = True
+                    active_client = fallback_client
+                    continue
+                print(f"⚠️ In-flight replay error: {exc}")
+                logfire.warning("inflight_replay_error", run_id=run_id, error=str(exc))
+                break
+            if forced_tool_queue:
+                print("⚠️ In-flight replay incomplete; retrying...")
+    finally:
+        if fallback_client is not None and fallback_client_active:
+            await fallback_client.__aexit__(None, None, None)
     if forced_tool_queue:
         if runtime_db_conn and run_id:
             update_run_status(runtime_db_conn, run_id, "waiting_for_human")
@@ -2228,6 +2359,7 @@ async def continue_job_run(
     error_retries = 0
     last_error = None
     final_response_text = ""
+    resume_fallback_attempted = False
 
     resume_message = (
         f"Resuming job run {run_id}. Continue executing the existing job to completion. "
@@ -2261,15 +2393,23 @@ async def continue_job_run(
             raise
         except Exception as exc:
             error_msg = str(exc)
-            if runtime_db_conn and run_id:
-                lowered = error_msg.lower()
-                if "resume" in lowered or "session" in lowered:
-                    update_run_provider_session(runtime_db_conn, run_id, None)
-                    logfire.warning(
-                        "provider_session_invalidated",
-                        run_id=run_id,
-                        error=lowered[:200],
-                    )
+            if _is_resume_session_error(error_msg) and not resume_fallback_attempted:
+                resume_fallback_attempted = True
+                _invalidate_provider_session(error_msg)
+                _disable_provider_resume()
+                try:
+                    async with ClaudeSDKClient(options) as fallback_client:
+                        result = await process_turn(
+                            fallback_client, user_input, workspace_dir
+                        )
+                    final_response_text = result.response_text or ""
+                    if runtime_db_conn and run_id:
+                        update_run_status(runtime_db_conn, run_id, "succeeded")
+                    return final_response_text
+                except Exception as fallback_exc:
+                    error_msg = str(fallback_exc)
+            elif _is_resume_session_error(error_msg):
+                _invalidate_provider_session(error_msg)
             if error_msg == last_error:
                 error_retries += 1
             else:
@@ -2639,13 +2779,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     is_error=msg.is_error
                 )
                 if msg.session_id:
-                    update_run_provider_session(
-                        runtime_db_conn,
-                        run_id,
-                        msg.session_id,
-                        forked_from=provider_session_forked_from,
+                    _maybe_update_provider_session(
+                        msg.session_id, forked_from=provider_session_forked_from
                     )
-                    _maybe_update_provider_session(msg.session_id)
                 if msg.is_error and msg.result and runtime_db_conn and run_id:
                     error_text = str(msg.result).lower()
                     if "resume" in error_text or "session" in error_text:
