@@ -29,10 +29,22 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - Persisted run metadata: run_mode, job_path, last_job_prompt, provider_session_id, parent_run_id.
 - Resume packet + job completion summary are written to workspace and linked in `KevinRestartWithThis.md`.
 - Provider session continuity: store `provider_session_id` and resume with `continue_conversation=True`.
+- Provider session fallback: if resume token invalid/expired, start a fresh provider session.
 - Added `--fork` to branch provider sessions into a new run with parent linkage.
 - In-flight tool replay: on resume, tools in prepared/running are deterministically re-run before continuation.
 - Replay note injected to prevent duplicate tool replays after recovery.
 - SIGINT debounced to avoid multiple interrupt checkpoints.
+
+### Phase 3 (replay policy + recovery hardening + audit summaries)
+- Replay policy classification added (REPLAY_EXACT, REPLAY_IDEMPOTENT, RELAUNCH).
+- RELAUNCH path for Task: on resume, abandon original Task and enqueue a deterministic re-launch.
+- TaskOutput/TaskResult guardrail: force RELAUNCH and block direct invocation.
+- Recovery-mode guard prevents tool calls after forced replay queue drains.
+- Config-driven tool policy map in `durable/tool_policies.yaml`.
+- Crash hooks for tool-boundary fault injection (UA_TEST_CRASH_AFTER_TOOL, etc.).
+- Run-wide completion summary (aggregated by run_id) printed and persisted to job completion + KevinRestartWithThis.
+- Workspace paths resolved to absolute paths in job prompts to avoid $PWD drift.
+- Monotonic step_index across recovery/continuation for audit clarity.
 
 ### Research pipeline hardening (supporting durable runs)
 - `finalize_research` builds a filtered corpus in `search_results_filtered_best/`.
@@ -57,4 +69,4 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/008_durable_runner_architecture.md`
 
 ## Current status
-Phase 2.5 is implemented and validated on the quick resume test. Resume now auto-continues in job mode and replays in-flight tool calls before continuation; duplicate replays are blocked. Next focus: capture provider session IDs earlier (if possible), add replay outcomes to completion summaries, and reduce replay noise in logs.
+Phase 3 durability features are implemented and validated on both quick_resume_job.json and relaunch_resume_job.json. Replay is deterministic, recovery is constrained, side effects are not duplicated, and run-wide summaries are written at completion. Remaining rough edges are mostly noise (headless Chrome DBus warnings) and optional tightening (subagent workspace exploration). Next focus: optional run-wide timing aggregation and any remaining tool-policy tuning as the tool universe grows.

@@ -1,78 +1,79 @@
-# 009: Relaunch Resume Evaluation (relaunch_resume_job.json)
+# 009: Relaunch Resume Evaluation (post-fix run)
 
 Date: 2026-01-02
-Run ID: a1a63c8f-9738-4d2c-9c8b-aa0ec3156dac
-Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_135815
+Run ID: e7339747-5675-48d5-8248-02bb59561a29
+Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_144640
 Job Spec: tmp/relaunch_resume_job.json (Task + HTML->PDF + sleep + email)
 
 ## Sources Reviewed
 - Terminal output (start + resume)
 - run.log
-- resume_packet_a1a63c8f-9738-4d2c-9c8b-aa0ec3156dac.md
-- job_completion_a1a63c8f-9738-4d2c-9c8b-aa0ec3156dac.md
+- resume_packet_e7339747-5675-48d5-8248-02bb59561a29.md
+- job_completion_e7339747-5675-48d5-8248-02bb59561a29.md
 - transcript.md
 - trace.json
-- Logfire traces via MCP
 - runtime_state.db (runs + run_steps + tool_calls)
+- Logfire traces via MCP
 
 ## Trace IDs (Logfire)
-- Initial run: 019b804a0c20c62ca877188e2b4e457e
-- Resume run: 019b804b102e23b569e22f33a15980c6
+- Initial run: 019b8076611d5da50aca133f1fde9b2d
+- Resume run: 019b8077572b8bb8f84f6612df850549
 
 ## Outcome (High Level)
-The resume path successfully replayed the in-flight sleep tool call and continued execution. However, after finishing the resume continuation, the job prompt was run a second time in the same resume session, resulting in a duplicate email send. This indicates the durability system is replaying in-flight tools correctly, but the job-run flow re-enters the job prompt after recovery and causes duplicated side effects.
+The resume path behaved as intended: the in-flight sleep was replayed exactly once, recovery stopped cleanly, and the job continued to completion with a single email send. The PDF and HTML artifacts were saved inside the session workspace. The new run-wide summary printed at the end and was persisted to job_completion and KevinRestartWithThis.
 
 ## Evidence of Expected Behavior
-1) In-flight tool replay executed on resume
-   - resume_packet shows `bash | running` (sleep 30) as the only in-flight tool.
-   - Logfire shows `replay_mark_running` and `replay_mark_succeeded` for the sleep tool.
-   - runtime_state.db tool_calls shows replay_status=succeeded for the sleep tool (idempotency_key 25c10c...).
+1) In-flight tool replay executed and stopped
+   - Resume packet shows only `bash | running` (sleep) as in-flight.
+   - Resume output shows recovery prompt, one `sleep 30`, then DONE.
+   - Ledger shows replay_status=succeeded for idempotency_key f1d801….
 
-2) Work products were created once
-   - work_products/relaunch_report.html and work_products/relaunch_report.pdf exist and have single timestamps.
-   - PDF size is consistent (161330 bytes).
+2) Single external email send
+   - Only one COMPOSIO_MULTI_EXECUTE_TOOL in ledger (call_d265cf…).
+   - Gmail message ID: 19b807893aee745f (single occurrence).
 
-## Evidence of Duplicate Side Effects
-1) Two Gmail sends occurred
-   - tool_calls contains two `COMPOSIO_MULTI_EXECUTE_TOOL` entries with different Gmail IDs:
-     - call_f06f4f6e... => Gmail id 19b804c0fd3b339d
-     - call_8354166d... => Gmail id 19b804c816e3fa6e
-   - run.log shows two separate blocks of `COMPOSIO_MULTI_EXECUTE_TOOL` for GMAIL_SEND_EMAIL.
-
-2) Resume session re-ran the job prompt
-   - run.log shows the full job prompt starting again after the first “DONE” section.
-   - transcript.md includes two sequences of “Step 4/Step 5” actions and two email sends.
-   - run_steps contains two completed step rows with step_index=1 (step_id 7aa... and f771...).
+3) Artifacts saved in session workspace
+   - `work_products/relaunch_report.html` and `work_products/relaunch_report.pdf` exist in `/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_144640/`.
 
 ## Tool Ledger (runtime_state.db)
-Tool calls for run_id=a1a63c8f-9738-4d2c-9c8b-aa0ec3156dac (ordered by created_at):
-- Task | succeeded | call_e833c4... (subagent report creation)
-- write_local_file | succeeded | call_ca330c...
-- bash | succeeded | call_2acea6... (chrome PDF conversion)
-- bash | succeeded | call_9f5355... (sleep 30 replayed)
-- bash | succeeded | call_c72a4f... (echo UA_TEST_EMAIL_TO)
-- upload_to_composio | succeeded | call_f9158b...
-- COMPOSIO_MULTI_EXECUTE_TOOL | succeeded | call_f06f4f... (email #1)
-- bash | succeeded | call_1a21c7... (wc -c)
-- COMPOSIO_SEARCH_TOOLS | succeeded | call_64ee2e...
-- COMPOSIO_MULTI_EXECUTE_TOOL | succeeded | call_835416... (email #2)
+Tool calls for run_id=e7339747-5675-48d5-8248-02bb59561a29 (ordered):
+- Task | succeeded | call_7a9303… (subagent report creation)
+- write_local_file | succeeded | call_9225fd…
+- bash | succeeded | call_6a0958… (chrome PDF)
+- bash | succeeded | call_ed1d54… (sleep replayed)
+- bash | succeeded | call_2a132e… (echo email)
+- upload_to_composio | succeeded | call_2d3505…
+- COMPOSIO_SEARCH_TOOLS | succeeded | call_b1c3f9…
+- COMPOSIO_MULTI_EXECUTE_TOOL | succeeded | call_d265cf… (email)
+
+COMPOSIO_MULTI_EXECUTE_TOOL count: 1
+
+## Step Indexing (run_steps)
+Monotonic step indexes were used:
+- step_index=1 (initial run, interrupted during sleep)
+- step_index=2 (replay-only recovery step)
+- step_index=3 (resume continuation)
+
+This confirms the step-index fix is working and removes the earlier ambiguity.
+
+## Run-wide Summary (from job completion)
+- Tools: 8 total | 8 succeeded | 0 failed | 0 abandoned | 1 replayed
+- Steps: 3 total (min 1, max 3)
+- Timeline: 2026-01-02T20:46:58.259612+00:00 → 2026-01-02T20:49:04.190172+00:00
+- Top tools: bash (3), COMPOSIO_MULTI_EXECUTE_TOOL (1), COMPOSIO_SEARCH_TOOLS (1), task (1), upload_to_composio (1), write_local_file (1)
 
 ## Logfire Findings (Selected)
-- Replay flow uses a recovery query (“re-run the in-flight tool calls”) and completes the sleep replay before continuing.
-- A new durable step is started after the replay step and proceeds to re-run parts of the job prompt (including another email send).
-- The two email sends are visible in the same resume trace (019b804b...).
+- Recovery prompt explicitly instructed “respond DONE; do not invoke other tools.”
+- replay_mark_running / replay_mark_succeeded recorded for the sleep tool.
+- Resume continuation prompt includes absolute workspace paths.
+- Gmail send recorded once with log_id log_PTQORUr7GU8Q.
+
+## Issues / Opportunities
+1) Headless Chrome DBus warnings
+   - Chrome prints DBus connection errors but still generates the PDF successfully. No functional failure observed.
+
+2) Subagent extra workspace reads
+   - Subagent reads/walks the workspace in some runs (list/read). Not harmful, but optional to tighten if you want minimal IO.
 
 ## Conclusion
-The replay mechanism for in-flight tool calls is working (sleep is replayed deterministically), but the resume continuation runs the full job prompt again after completing recovery, leading to duplicate side effects (two emails). This is not expected for the durability invariant (“no duplicate external actions”) and should be addressed.
-
-## Recommendations / Next Fix
-1) Prevent re-running the job prompt after recovery completes
-   - If the resume path already continues the job, do not auto-run the job prompt again in the same session.
-   - Verify run_steps for the same step_index to avoid creating a second step.
-
-2) Strengthen side-effect dedupe for multi-tool wrappers
-   - Consider marking COMPOSIO_MULTI_EXECUTE_TOOL as REPLAY_IDEMPOTENT and/or dedupe on inner tool slug + args when tool_slug is GMAIL_SEND_EMAIL.
-   - Ensure idempotency keys or receipts prevent a second send when resuming.
-
-3) Update completion summary
-   - Flag duplicate side effects in job_completion summary when multiple external tool calls with same logical action are observed.
+This run passes the durability criteria: replay is deterministic, recovery does not leak into extra tool execution, paths stay within the session workspace, and external side effects are not duplicated. The run-wide summary now aggregates the entire run across resume boundaries.

@@ -2240,6 +2240,7 @@ def update_restart_file(
     resume_cmd: Optional[str] = None,
     resume_packet_path: Optional[str] = None,
     job_summary_path: Optional[str] = None,
+    runwide_summary_line: Optional[str] = None,
 ) -> None:
     if not run_id:
         return
@@ -2276,6 +2277,11 @@ def update_restart_file(
             lines.append("Job Completion Summary:")
             lines.append("")
             lines.append(job_summary_path)
+            lines.append("")
+        if runwide_summary_line:
+            lines.append("Run-wide Summary:")
+            lines.append("")
+            lines.append(runwide_summary_line)
             lines.append("")
         with open(restart_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
@@ -2346,6 +2352,95 @@ def print_job_completion_summary(
             outcome = "needs-human"
         abandoned.append({"tool_name": row["tool_name"], "outcome": outcome})
 
+    summary_row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS total_tool_calls,
+            SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
+            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
+            SUM(CASE WHEN status = 'prepared' THEN 1 ELSE 0 END) AS prepared,
+            SUM(CASE WHEN status = 'abandoned_on_resume' THEN 1 ELSE 0 END) AS abandoned,
+            SUM(CASE WHEN replay_status IS NOT NULL THEN 1 ELSE 0 END) AS replayed
+        FROM tool_calls
+        WHERE run_id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    tool_counts = conn.execute(
+        """
+        SELECT tool_name, COUNT(*) AS count
+        FROM tool_calls
+        WHERE run_id = ?
+        GROUP BY tool_name
+        ORDER BY count DESC, tool_name ASC
+        LIMIT 10
+        """,
+        (run_id,),
+    ).fetchall()
+    step_row = conn.execute(
+        """
+        SELECT COUNT(*) AS total_steps, MIN(step_index) AS min_step, MAX(step_index) AS max_step
+        FROM run_steps
+        WHERE run_id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    time_row = conn.execute(
+        """
+        SELECT MIN(created_at) AS first_event, MAX(updated_at) AS last_event
+        FROM tool_calls
+        WHERE run_id = ?
+        """,
+        (run_id,),
+    ).fetchone()
+    side_effect_row = conn.execute(
+        """
+        SELECT COUNT(*) AS side_effect_succeeded
+        FROM tool_calls
+        WHERE run_id = ? AND status = 'succeeded' AND side_effect_class != 'read_only'
+        """,
+        (run_id,),
+    ).fetchone()
+    runwide_summary = {
+        "total_tool_calls": summary_row["total_tool_calls"] if summary_row else 0,
+        "status_counts": {
+            "succeeded": summary_row["succeeded"] if summary_row else 0,
+            "failed": summary_row["failed"] if summary_row else 0,
+            "running": summary_row["running"] if summary_row else 0,
+            "prepared": summary_row["prepared"] if summary_row else 0,
+            "abandoned_on_resume": summary_row["abandoned"] if summary_row else 0,
+            "replayed": summary_row["replayed"] if summary_row else 0,
+        },
+        "top_tools": [
+            {"tool_name": row["tool_name"], "count": row["count"]}
+            for row in tool_counts
+        ],
+        "steps": {
+            "total_steps": step_row["total_steps"] if step_row else 0,
+            "min_step": step_row["min_step"] if step_row else None,
+            "max_step": step_row["max_step"] if step_row else None,
+        },
+        "timeline": {
+            "first_event": time_row["first_event"] if time_row else None,
+            "last_event": time_row["last_event"] if time_row else None,
+        },
+        "side_effect_succeeded": (
+            side_effect_row["side_effect_succeeded"] if side_effect_row else 0
+        ),
+    }
+    runwide_line = None
+    if runwide_summary["total_tool_calls"]:
+        runwide_line = (
+            "Run-wide: "
+            f"{runwide_summary['total_tool_calls']} tools | "
+            f"{runwide_summary['status_counts']['succeeded']} succeeded | "
+            f"{runwide_summary['status_counts']['failed']} failed | "
+            f"{runwide_summary['status_counts']['abandoned_on_resume']} abandoned | "
+            f"{runwide_summary['status_counts']['replayed']} replayed | "
+            f"{runwide_summary['steps']['total_steps']} steps"
+        )
+
     print("\n" + "=" * 80)
     print("=== JOB COMPLETE ===")
     print(f"Run ID: {run_id}")
@@ -2372,6 +2467,33 @@ def print_job_completion_summary(
     if summary:
         print("Summary:")
         print(summary)
+    if runwide_summary["total_tool_calls"]:
+        if runwide_line:
+            print(runwide_line)
+        print("Run-wide summary:")
+        print(
+            "Tool calls: "
+            f"{runwide_summary['total_tool_calls']} total | "
+            f"{runwide_summary['status_counts']['succeeded']} succeeded | "
+            f"{runwide_summary['status_counts']['failed']} failed | "
+            f"{runwide_summary['status_counts']['abandoned_on_resume']} abandoned | "
+            f"{runwide_summary['status_counts']['replayed']} replayed"
+        )
+        print(
+            "Steps: "
+            f"{runwide_summary['steps']['total_steps']} total "
+            f"(min {runwide_summary['steps']['min_step']}, "
+            f"max {runwide_summary['steps']['max_step']})"
+        )
+        print(
+            "Timeline: "
+            f"{runwide_summary['timeline']['first_event']} → "
+            f"{runwide_summary['timeline']['last_event']}"
+        )
+        if runwide_summary["top_tools"]:
+            print("Top tools:")
+            for row in runwide_summary["top_tools"]:
+                print(f"- {row['tool_name']} | {row['count']}")
     print("=" * 80)
 
     summary_path = None
@@ -2407,10 +2529,42 @@ def print_job_completion_summary(
                 if summary:
                     f.write("Summary:\n")
                     f.write(summary + "\n")
+                if runwide_summary["total_tool_calls"]:
+                    f.write("\nRun-wide summary:\n")
+                    if runwide_line:
+                        f.write(runwide_line + "\n")
+                    f.write(
+                        "Tool calls: "
+                        f"{runwide_summary['total_tool_calls']} total | "
+                        f"{runwide_summary['status_counts']['succeeded']} succeeded | "
+                        f"{runwide_summary['status_counts']['failed']} failed | "
+                        f"{runwide_summary['status_counts']['abandoned_on_resume']} abandoned | "
+                        f"{runwide_summary['status_counts']['replayed']} replayed\n"
+                    )
+                    f.write(
+                        "Steps: "
+                        f"{runwide_summary['steps']['total_steps']} total "
+                        f"(min {runwide_summary['steps']['min_step']}, "
+                        f"max {runwide_summary['steps']['max_step']})\n"
+                    )
+                    f.write(
+                        "Timeline: "
+                        f"{runwide_summary['timeline']['first_event']} → "
+                        f"{runwide_summary['timeline']['last_event']}\n"
+                    )
+                    if runwide_summary["top_tools"]:
+                        f.write("Top tools:\n")
+                        for row in runwide_summary["top_tools"]:
+                            f.write(f"- {row['tool_name']} | {row['count']}\n")
         except Exception as exc:
             print(f"⚠️ Failed to save job completion summary: {exc}")
     if summary_path:
-        update_restart_file(run_id, workspace_dir, job_summary_path=summary_path)
+        update_restart_file(
+            run_id,
+            workspace_dir,
+            job_summary_path=summary_path,
+            runwide_summary_line=runwide_line,
+        )
 
 
 async def continue_job_run(

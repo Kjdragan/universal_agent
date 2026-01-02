@@ -4,7 +4,7 @@ Date: 2026-01-02
 Scope: Durable job execution, resume, provider session continuity, and observability
 
 ## Overview
-The durable runner uses a runtime SQLite DB, tool-call ledger, and workspace artifacts to make long-running jobs resumable after interrupts. Job runs persist state and tool receipts so a `--resume` can reconstruct a minimal resume packet, auto-continue without prompting, and avoid duplicate side effects. Provider session IDs (when available) are stored to optionally resume server-side conversation state in addition to local rehydration. In-flight tool calls are now deterministically replayed before the main job continuation, and SIGINT handling is debounced to avoid multiple interrupt checkpoints.
+The durable runner uses a runtime SQLite DB, tool-call ledger, and workspace artifacts to make long-running jobs resumable after interrupts. Job runs persist state and tool receipts so a `--resume` can reconstruct a minimal resume packet, auto-continue without prompting, and avoid duplicate side effects. Provider session IDs (when available) are stored to optionally resume server-side conversation state in addition to local rehydration, with fallback when resume tokens are invalid. In-flight tool calls are deterministically replayed before main job continuation, and recovery mode is constrained to only those forced tool calls. SIGINT handling is debounced to avoid multiple interrupt checkpoints.
 
 ## Main Components
 1) CLI entrypoint
@@ -20,9 +20,9 @@ The durable runner uses a runtime SQLite DB, tool-call ledger, and workspace art
      - `checkpoints`: serialized snapshots (including interrupt checkpoints).
 
 3) Tool Call Ledger
-   - Tracks tool calls with idempotency keys and side-effect classification.
+   - Tracks tool calls with idempotency keys, replay_policy, replay_status, and side-effect classification.
    - Used to detect and avoid duplicating successful side effects after resume.
-   - Stores `raw_tool_name` for accurate replay matching.
+   - Stores `raw_tool_name` for accurate replay matching and Task/TaskOutput guardrails.
 
 4) Checkpointing
    - Saved at step boundaries and on SIGINT (interrupt).
@@ -36,27 +36,41 @@ The durable runner uses a runtime SQLite DB, tool-call ledger, and workspace art
 6) In-flight Tool Replay (auto-recovery)
    - On resume, all tool calls in `prepared|running` are queued for forced replay.
    - A recovery prompt is sent to the model; PreToolUse enforces the exact tool + input.
+   - Recovery mode blocks any other tool calls once the forced queue drains.
    - On success, ledger updates the original tool_call_id and removes the replay item.
    - If replay fails repeatedly, the run is set to `waiting_for_human`.
 
 7) Replay-aware continuation
    - After replay, a replay note is appended to the resume prompt so the model avoids re-running replayed steps.
+   - Task relaunch uses deterministic task_key to avoid duplicate subagent work.
 
 8) Job Completion Summary
-   - Written to `job_completion_<run_id>.md` with status, artifacts, and last side-effect receipts.
+   - Written to `job_completion_<run_id>.md` with status, artifacts, side-effect receipts, replayed/abandoned tools.
+   - Includes a run-wide summary aggregating tool calls and steps across resume boundaries.
 
 9) Provider Session Continuity (optional)
-   - On `ResultMessage.session_id`, store `provider_session_id`.
+   - On `ResultMessage.session_id`, store `provider_session_id` as soon as available.
    - On resume (if present), set `continue_conversation=True` and `resume=<provider_session_id>`.
+   - If resume token is invalid/expired, fallback to a fresh provider session.
    - Forks (`--fork`) use `fork_session=True`, and persist `parent_run_id` + `provider_session_forked_from`.
 
 10) Workspaces + Artifacts
    - Each run uses `AGENT_RUN_WORKSPACES/session_<timestamp>`.
    - Standard outputs: `run.log`, `trace.json`, `transcript.md`, resume/job summary files, work_products/.
+   - Job prompts resolve workspace-relative input paths to absolute paths to avoid $PWD drift.
 
 11) Observability (Logfire)
    - Spans record checkpoints, ledger events, tool calls, replay events, and step transitions.
    - Useful for correlating multiple trace IDs per run (initial + resume + checkpoint).
+
+12) Replay Policy + Tool Classification
+   - Replay policies: REPLAY_EXACT, REPLAY_IDEMPOTENT, RELAUNCH.
+   - Config-driven tool policy map in `durable/tool_policies.yaml`.
+   - TaskOutput/TaskResult are forced to RELAUNCH (guardrail).
+
+13) Crash Hooks (test-only)
+   - Env vars: UA_TEST_CRASH_AFTER_TOOL, UA_TEST_CRASH_AFTER_TOOL_CALL_ID, UA_TEST_CRASH_STAGE.
+   - Crash points after tool success and after ledger commit to validate PREPARED→SUCCEEDED correctness.
 
 ## Execution Flow (Job Run)
 1) Start `--job`:
@@ -78,17 +92,29 @@ The durable runner uses a runtime SQLite DB, tool-call ledger, and workspace art
 
 ## Known Limitations (Observed)
 1) Provider session ID capture can be delayed
-   - If the run is interrupted before a ResultMessage, provider_session_id is unavailable for resume.
-2) Replay results are not yet written into the job completion summary
-   - Recovery outcomes are visible in logs but not summarized in the completion artifact.
+   - If the run is interrupted before a ResultMessage, provider_session_id is unavailable for resume (fallback still works).
+2) Chrome DBus warnings during headless PDF conversion
+   - No functional failure observed, but logs are noisy.
+3) Subagent workspace exploration
+   - Some subagents list/read workspace files; harmless but can be tightened if desired.
 
-## Current Test Harness (quick_resume_job.json)
+## Current Test Harness
+### quick_resume_job.json
 - Step 1: `sleep 30` (clear interrupt point)
 - Step 2: write `work_products/resume_test.txt` with timestamp
 - Step 3: `ls -la`
 - Step 4: reply DONE
 
 This test validates auto-resume, forced replay of in-flight tools, and replay-aware continuation behavior.
+
+### relaunch_resume_job.json
+- Step 1: Task subagent writes HTML report in workspace
+- Step 2: HTML → PDF via Bash
+- Step 3: `sleep 30` (interrupt point)
+- Step 4: upload + Gmail send (idempotent via ledger)
+- Step 5: DONE
+
+This test validates RELAUNCH path for Tasks, side-effect dedupe, and recovery-mode enforcement.
 
 ## Key Files
 - Flow + CLI: `src/universal_agent/main.py`
@@ -97,4 +123,3 @@ This test validates auto-resume, forced replay of in-flight tools, and replay-aw
 - Ledger + tool replay: `src/universal_agent/durable/ledger.py`, `src/universal_agent/durable/tool_gateway.py`
 - Runtime DB path: `src/universal_agent/durable/db.py`
 - Test job spec: `tmp/quick_resume_job.json`
-
