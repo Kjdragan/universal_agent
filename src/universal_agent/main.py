@@ -5,6 +5,7 @@ Traces are sent to Logfire for observability.
 """
 
 import asyncio
+import signal
 import os
 import time
 import json
@@ -1526,6 +1527,7 @@ budget_state: dict = {"start_ts": None, "steps": 0, "tool_calls": 0}
 runtime_db_conn = None
 tool_ledger: Optional[ToolCallLedger] = None
 current_step_id: Optional[str] = None
+interrupt_requested = False
 
 
 async def run_conversation(client, query: str, start_ts: float, iteration: int = 1):
@@ -2957,6 +2959,13 @@ async def main(args: argparse.Namespace):
             run_row = get_run(runtime_db_conn, run_id)
             if run_row:
                 step_id = run_row["current_step_id"]
+        if not step_id and runtime_db_conn:
+            row = runtime_db_conn.execute(
+                "SELECT step_id FROM run_steps WHERE run_id = ? ORDER BY created_at DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
+            if row:
+                step_id = row["step_id"]
         if not step_id:
             return
         last_tool_call_id = None
@@ -2987,11 +2996,28 @@ async def main(args: argparse.Namespace):
                 checkpoint_type="interrupt",
             )
 
+    last_user_input = ""
+
+    def handle_sigint(signum, frame):  # noqa: ARG001
+        nonlocal last_user_input
+        global interrupt_requested
+        interrupt_requested = True
+        print("\n⚠️ Interrupted by user (SIGINT). Saving checkpoint...")
+        try:
+            save_interrupt_checkpoint(last_user_input or job_prompt or "")
+        except Exception as exc:
+            print(f"⚠️ Failed to save interrupt checkpoint: {exc}")
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGINT, handle_sigint)
+
     async with ClaudeSDKClient(options) as client:
         run_failed = False
         pending_prompt = job_prompt
         try:
             while True:
+                if interrupt_requested:
+                    break
                 # 1. Get User Input (auto-inject job prompt once when provided)
                 print("\n" + "=" * 80)
                 try:
@@ -3006,10 +3032,17 @@ async def main(args: argparse.Namespace):
                             )
                         user_input = user_input.strip()
                 except (EOFError, KeyboardInterrupt):
+                    run_failed = True
+                    print("\n⚠️ Interrupted by user. Saving checkpoint...")
+                    try:
+                        save_interrupt_checkpoint(last_user_input or job_prompt or "")
+                    except Exception as exc:
+                        print(f"⚠️ Failed to save interrupt checkpoint: {exc}")
                     break
                 if not user_input or user_input.lower() in ("quit", "exit"):
                     break
 
+                last_user_input = user_input
                 # Call process_turn which handles:
                 # 1. Tracing setup
                 # 2. Complexity classification
