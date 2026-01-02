@@ -987,6 +987,26 @@ async def on_pre_tool_use_ledger(
         return {}
 
     tool_name = input_data.get("tool_name", "")
+    malformed_markers = ("</arg_key>", "<arg_key>", "</arg_value>", "<arg_value>")
+    if any(marker in tool_name for marker in malformed_markers):
+        logfire.warning(
+            "malformed_tool_name_guardrail",
+            tool_name=tool_name,
+            run_id=run_id,
+            step_id=current_step_id,
+        )
+        return {
+            "systemMessage": (
+                "⚠️ Malformed tool call name detected. "
+                "Reissue the tool call with proper JSON arguments and do NOT "
+                "concatenate XML-like arg_key/arg_value into the tool name."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Malformed tool name (XML-style args detected).",
+            },
+        }
     tool_input = input_data.get("tool_input", {}) or {}
     step_id = current_step_id or "unknown"
     tool_call_id = str(tool_use_id or uuid.uuid4())
@@ -999,6 +1019,15 @@ async def on_pre_tool_use_ledger(
             step_id=step_id,
             raw_tool_name=tool_name,
             tool_input=tool_input,
+        )
+        logfire.info(
+            "ledger_prepare",
+            tool_name=tool_name,
+            tool_use_id=tool_call_id,
+            run_id=run_id,
+            step_id=step_id,
+            idempotency_key=decision.idempotency_key,
+            deduped=decision.deduped,
         )
     except Exception as exc:
         logfire.warning("ledger_prepare_failed", tool_name=tool_name, error=str(exc))
@@ -1032,6 +1061,12 @@ async def on_pre_tool_use_ledger(
 
     try:
         tool_ledger.mark_running(tool_call_id)
+        logfire.info(
+            "ledger_mark_running",
+            tool_use_id=tool_call_id,
+            run_id=run_id,
+            step_id=step_id,
+        )
     except Exception as exc:
         logfire.warning("ledger_mark_running_failed", tool_use_id=tool_call_id, error=str(exc))
     return {}
@@ -1062,6 +1097,13 @@ async def on_post_tool_use_ledger(
     try:
         if is_error:
             tool_ledger.mark_failed(tool_call_id, error_detail or "tool error")
+            logfire.warning(
+                "ledger_mark_failed",
+                tool_use_id=tool_call_id,
+                run_id=run_id,
+                step_id=current_step_id,
+                error_detail=error_detail or "tool error",
+            )
         else:
             external_id = None
             if isinstance(tool_response, dict):
@@ -1071,6 +1113,13 @@ async def on_post_tool_use_ledger(
                     or tool_response.get("request_id")
                 )
             tool_ledger.mark_succeeded(tool_call_id, tool_response, external_id)
+            logfire.info(
+                "ledger_mark_succeeded",
+                tool_use_id=tool_call_id,
+                run_id=run_id,
+                step_id=current_step_id,
+                external_correlation_id=external_id,
+            )
     except Exception as exc:
         logfire.warning("ledger_mark_result_failed", tool_use_id=tool_call_id, error=str(exc))
 
@@ -1488,6 +1537,12 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
     if runtime_db_conn and run_id:
         try:
             start_step(runtime_db_conn, run_id, step_id, iteration)
+            logfire.info(
+                "durable_step_started",
+                run_id=run_id,
+                step_id=step_id,
+                step_index=iteration,
+            )
         except Exception as exc:
             logfire.warning("runtime_step_insert_failed", step_id=step_id, error=str(exc))
 
@@ -1855,7 +1910,19 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     state_snapshot=state_snapshot,
                     cursor=cursor,
                 )
+                logfire.info(
+                    "durable_checkpoint_saved",
+                    run_id=run_id,
+                    step_id=step_id,
+                    checkpoint_type="step_boundary",
+                )
                 complete_step(runtime_db_conn, step_id, "succeeded")
+                logfire.info(
+                    "durable_step_completed",
+                    run_id=run_id,
+                    step_id=step_id,
+                    status="succeeded",
+                )
             except Exception as exc:
                 logfire.warning("checkpoint_save_failed", step_id=step_id, error=str(exc))
         current_step_id = None
@@ -2148,6 +2215,9 @@ async def setup_session(
             "- For web/news research, ALWAYS use Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
             "- Do NOT use native 'WebSearch' - it bypasses our artifact saving system.\n"
             "- Composio search results are auto-saved by the Observer for sub-agent access.\n\n"
+            "🔒 SEARCH HYGIENE:\n"
+            "- When using COMPOSIO_SEARCH_NEWS or COMPOSIO_SEARCH_WEB, append `-site:wikipedia.org` to the query by default to avoid wasting search slots.\n"
+            "- Only omit this if the user explicitly asks for Wikipedia.\n\n"
             "IMPORTANT EXECUTION GUIDELINES:\n"
             "- When the user requests an action (send email, upload file, execute code), proceed immediately without asking for confirmation.\n"
             "- The user has already authorized these actions by making the request.\n"
@@ -2178,7 +2248,7 @@ async def setup_session(
             "     2. DO NOT read these files or extract URLs yourself. You are not the Expert.\n"
             "     3. DELEGATE immediately to 'report-creation-expert' using `Task`.\n"
             "     4. HAND-OFF PROMPT (Use EXACTLY this string, do not add URLs):\n"
-            "        'Scan the search_results/ directory for JSON files and generate the report.'\n"
+            "        'Call finalize_research, then use research_overview.md + filtered crawl files to generate the report.'\n"
             "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject a system message with next steps.\n"
             "     Wait for this message before proceeding with upload/email.\n"
             "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
@@ -2210,7 +2280,7 @@ async def setup_session(
             "   - After a Composio search, the Observer AUTO-SAVES results to `search_results/` directory.\n"
             "   - You will see: '📁 [OBSERVER] Saved: search_results/xxx.json'.\n"
             "   - DO NOT write the report yourself. DO NOT call `crawl_parallel` yourself.\n"
-            "   - IMMEDIATELY delegate to 'report-creation-expert' with: 'Scan search_results/ directory for JSON files and generate the report.'\n"
+            "   - IMMEDIATELY delegate to 'report-creation-expert' with: 'Call finalize_research, then use research_overview.md + filtered crawl files to generate the report.'\n"
             "   - WHY: The sub-agent will scrape ALL URLs for full article content. Your search only has snippets.\n"
             "   - WITHOUT DELEGATION: Your report will be shallow (snippets only). WITH DELEGATION: Deep research (full articles).\n"
             "   - Trust the Observer. Trust the sub-agent. Your job is to search and delegate.\n\n"
@@ -2793,6 +2863,7 @@ async def main(args: argparse.Namespace):
 
     if run_id:
         upsert_run(runtime_db_conn, run_id, "cli", run_spec, status="running")
+        logfire.info("durable_run_upserted", run_id=run_id, entrypoint="cli")
     
     # Extract Trace ID immediately after span creation
     if LOGFIRE_TOKEN:
@@ -2898,6 +2969,12 @@ async def main(args: argparse.Namespace):
                         )
                     if runtime_db_conn and run_id:
                         update_run_status(runtime_db_conn, run_id, "failed")
+                        logfire.warning(
+                            "durable_run_failed",
+                            run_id=run_id,
+                            error_code="budget_exceeded",
+                            error_detail=str(exc),
+                        )
                     break
                 except Exception as exc:
                     run_failed = True
@@ -2912,6 +2989,12 @@ async def main(args: argparse.Namespace):
                         )
                     if runtime_db_conn and run_id:
                         update_run_status(runtime_db_conn, run_id, "failed")
+                        logfire.warning(
+                            "durable_run_failed",
+                            run_id=run_id,
+                            error_code="exception",
+                            error_detail=str(exc),
+                        )
                     raise
 
             # End of Session Summary
@@ -3003,6 +3086,7 @@ async def main(args: argparse.Namespace):
             print("Session ended. Thank you!")
             if runtime_db_conn and run_id and not run_failed:
                 update_run_status(runtime_db_conn, run_id, "succeeded")
+                logfire.info("durable_run_completed", run_id=run_id)
 
     # Close the main span to ensure all nested spans are captured in trace
     main_span.__exit__(None, None, None)

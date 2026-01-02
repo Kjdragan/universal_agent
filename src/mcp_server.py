@@ -156,6 +156,99 @@ BATCH_SAFE_THRESHOLD = 2500    # Files under this are "batch-safe" (auto-include
 BATCH_MAX_TOTAL = 25000        # Stop batch reading when cumulative hits this
 LARGE_FILE_THRESHOLD = 5000    # Files over this marked as "read individually"
 
+# =============================================================================
+# FILTERED CORPUS RULES (for report generation)
+# =============================================================================
+FILTER_BLACKLIST_DOMAINS = {
+    "wikipedia.org",
+}
+FILTER_URL_SKIP_TOKENS = (
+    "/live", "/liveblog", "/live-blog", "/home", "/topics", "/tag/",
+    "/sitemap", "/video", "/videos", "/podcast", "/audio", "/photo",
+)
+FILTER_TITLE_SKIP_TOKENS = (
+    "home", "live", "liveblog", "newsletter", "podcast", "video",
+    "watch", "listen", "most read", "trending",
+)
+FILTER_PROMO_TOKENS = (
+    "subscribe", "sign in", "sign up", "support", "donate", "contribute",
+    "membership", "account", "continue", "payment", "your support",
+)
+
+
+def _split_front_matter(raw_text: str) -> tuple[dict, str, str]:
+    if raw_text.startswith("---"):
+        parts = raw_text.split("---", 2)
+        if len(parts) >= 3:
+            meta_block = parts[1]
+            body = parts[2]
+            meta = {}
+            for line in meta_block.splitlines():
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    meta[key.strip()] = value.strip()
+            return meta, meta_block.strip(), body.strip()
+    return {}, "", raw_text.strip()
+
+
+def _is_promotional(text: str) -> bool:
+    lowered = text.lower()
+    hits = sum(lowered.count(token) for token in FILTER_PROMO_TOKENS)
+    return hits >= 4
+
+
+def _word_count(text: str) -> int:
+    return len(text.split())
+
+
+def _url_is_blacklisted(url: str) -> bool:
+    lowered = url.lower()
+    return any(domain in lowered for domain in FILTER_BLACKLIST_DOMAINS)
+
+
+def _url_title_gate(meta: dict) -> tuple[bool, str]:
+    url = (meta.get("source") or "").lower()
+    title = (meta.get("title") or "").lower()
+    if _url_is_blacklisted(url):
+        return False, "domain_blacklist"
+    if any(token in url for token in FILTER_URL_SKIP_TOKENS):
+        return False, "url_skip"
+    if any(token in title for token in FILTER_TITLE_SKIP_TOKENS):
+        return False, "title_skip"
+    return True, "ok"
+
+
+def _remove_navigation_lines(body: str) -> tuple[str, int]:
+    lines = []
+    short_line_count = 0
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#") or stripped.startswith("*") or stripped.startswith("!"):
+            continue
+        if len(stripped) < 40:
+            short_line_count += 1
+            continue
+        lines.append(stripped)
+    return "\n".join(lines).strip(), short_line_count
+
+
+def _filter_crawl_content(raw_text: str) -> tuple[str | None, str, dict, str]:
+    meta, meta_block, body = _split_front_matter(raw_text)
+    ok, reason = _url_title_gate(meta)
+    if not ok:
+        return None, reason, meta, meta_block
+
+    cleaned, short_line_count = _remove_navigation_lines(body)
+    if _word_count(cleaned) < 350:
+        return None, "too_short", meta, meta_block
+    if _word_count(cleaned) < 400 and _is_promotional(cleaned):
+        return None, "promo_short", meta, meta_block
+    if short_line_count > 200 and _word_count(cleaned) < 600:
+        return None, "nav_heavy", meta, meta_block
+    return cleaned, "ok", meta, meta_block
+
 
 @mcp.tool()
 def read_research_files(file_paths: list[str]) -> str:
@@ -919,20 +1012,133 @@ async def finalize_research(session_dir: str) -> str:
             })
             
         url_list = list(all_urls)
-        
+        filtered_urls = [u for u in url_list if not _url_is_blacklisted(u)]
+        dropped_urls = [u for u in url_list if _url_is_blacklisted(u)]
+
         # 2. Execute Crawl
-        sys.stderr.write(f"[finalize] Found {len(url_list)} unique URLs from {scanned_files} files. Starting crawl...\\n")
+        sys.stderr.write(
+            f"[finalize] Found {len(url_list)} unique URLs from {scanned_files} files "
+            f"({len(filtered_urls)} after blacklist). Starting crawl...\\n"
+        )
         
         # 3. Call Core Logic
-        crawl_result_json = await _crawl_core(url_list, session_dir)
+        crawl_result_json = await _crawl_core(filtered_urls, session_dir)
         crawl_result = json.loads(crawl_result_json)
+
+        # 4. Build filtered corpus + enriched overview
+        filtered_dir = os.path.join(session_dir, "search_results_filtered_best")
+        os.makedirs(filtered_dir, exist_ok=True)
+        filtered_files = []
+        filtered_dropped = []
+
+        for item in crawl_result.get("saved_files", []):
+            path = item.get("path")
+            if not path or not os.path.exists(path):
+                continue
+            with open(path, "r", encoding="utf-8") as f:
+                raw_text = f.read()
+            filtered_body, status, meta, meta_block = _filter_crawl_content(raw_text)
+            if not filtered_body:
+                filtered_dropped.append({"path": path, "status": status})
+                continue
+            frontmatter = f"---\n{meta_block}\n---\n\n" if meta_block else ""
+            filename = os.path.basename(path)
+            filtered_path = os.path.join(filtered_dir, filename)
+            final_content = frontmatter + filtered_body
+            with open(filtered_path, "w", encoding="utf-8") as f:
+                f.write(final_content)
+            filtered_files.append({
+                "file": filename,
+                "path": filtered_path,
+                "url": meta.get("source", ""),
+                "title": meta.get("title", "Untitled"),
+                "date": meta.get("date", "unknown"),
+                "word_count": _word_count(filtered_body),
+            })
+
+        # Build overview with search snippets + filtered corpus
+        search_items = []
+        for filename in os.listdir(search_results_dir):
+            if filename.endswith(".json"):
+                path = os.path.join(search_results_dir, filename)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    tool_name = data.get("tool", "")
+                    config = SEARCH_TOOL_CONFIG.get(tool_name)
+                    if not config:
+                        continue
+                    items = data.get(config["list_key"], [])
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        url = item.get(config["url_key"])
+                        if not url or not isinstance(url, str):
+                            continue
+                        search_items.append({
+                            "tool": tool_name,
+                            "position": item.get("position"),
+                            "title": item.get("title"),
+                            "url": url,
+                            "snippet": item.get("snippet"),
+                            "source": item.get("source"),
+                        })
+                except Exception as e:
+                    logger.warning(f"Error reading {filename}: {e}")
+
+        filtered_lookup = {f["url"]: f for f in filtered_files if f.get("url")}
+        overview_lines = []
+        overview_lines.append("# Research Sources Overview")
+        overview_lines.append(f"**Generated:** {datetime.utcnow().isoformat()}Z")
+        overview_lines.append(f"**Search Results Files:** {scanned_files}")
+        overview_lines.append(f"**Search Results URLs:** {len(url_list)}")
+        overview_lines.append(f"**Filtered Corpus Files:** {len(filtered_files)}")
+        overview_lines.append("")
+        overview_lines.append("## Search Results Index (Snippets)")
+        overview_lines.append("| # | Tool | Title | URL | Snippet | Filtered File |")
+        overview_lines.append("|---|------|-------|-----|---------|---------------|")
+        for idx, item in enumerate(search_items, 1):
+            url = item.get("url", "")
+            title = (item.get("title") or "")[:60]
+            snippet = (item.get("snippet") or "")[:90]
+            filtered = filtered_lookup.get(url)
+            filtered_file = f"`{filtered['file']}`" if filtered else ""
+            overview_lines.append(
+                f"| {idx} | {item.get('tool','')} | {title} | {url} | {snippet} | {filtered_file} |"
+            )
+
+        if dropped_urls:
+            overview_lines.append("")
+            overview_lines.append("## Blacklisted URLs (Skipped Before Crawl)")
+            for url in dropped_urls:
+                overview_lines.append(f"- {url}")
+
+        overview_lines.append("")
+        overview_lines.append("## Filtered Corpus (Use for Report Content)")
+        overview_lines.append("| # | File | Words | Title | Date | URL |")
+        overview_lines.append("|---|------|-------|-------|------|-----|")
+        for idx, f in enumerate(filtered_files, 1):
+            overview_lines.append(
+                f"| {idx} | `{f['file']}` | {f['word_count']:,} | {f['title'][:50]} | {f['date']} | {f['url']} |"
+            )
+
+        overview_path = os.path.join(search_results_dir, "research_overview.md")
+        with open(overview_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(overview_lines))
         
-        # 4. Return Summary
+        # 5. Return Summary
         return json.dumps({
             "status": "Research Corpus Finalized",
             "extracted_urls": len(url_list),
+            "urls_after_blacklist": len(filtered_urls),
             "sources_scanned": scanned_files,
-            "crawl_summary": crawl_result
+            "crawl_summary": crawl_result,
+            "filtered_corpus": {
+                "filtered_dir": filtered_dir,
+                "kept_files": len(filtered_files),
+                "dropped_files": len(filtered_dropped),
+            },
+            "overview_path": overview_path,
         }, indent=2)
         
     except Exception as e:

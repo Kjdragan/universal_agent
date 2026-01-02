@@ -32,6 +32,9 @@
    - Added: `tests/test_durable_state.py`, `tests/test_durable_checkpointing.py`
    - Tests: `uv run pytest tests/test_durable_state.py -q`, `uv run pytest tests/test_durable_checkpointing.py -q`
 
+10) Added malformed tool name guardrail + Logfire instrumentation for durable lifecycle + ledger.
+   - Updated: `src/universal_agent/main.py`
+
 Notes:
 - Tests not executed in this log entry.
 - Runtime DB path default: `AGENT_RUN_WORKSPACES/runtime_state.db` (override with `UA_RUNTIME_DB_PATH`).
