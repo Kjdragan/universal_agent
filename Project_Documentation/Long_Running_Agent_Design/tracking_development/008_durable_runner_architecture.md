@@ -122,4 +122,16 @@ This test validates RELAUNCH path for Tasks, side-effect dedupe, and recovery-mo
 - DB state updates: `src/universal_agent/durable/state.py`
 - Ledger + tool replay: `src/universal_agent/durable/ledger.py`, `src/universal_agent/durable/tool_gateway.py`
 - Runtime DB path: `src/universal_agent/durable/db.py`
+- Tool policy map: `src/universal_agent/durable/tool_policies.yaml`
 - Test job spec: `tmp/quick_resume_job.json`
+- Relaunch test job spec: `tmp/relaunch_resume_job.json`
+
+## Phase 4 Roadmap (Operator + Worker + Policy + Receipts + Triggers)
+Reference: `Project_Documentation/Long_Running_Agent_Design/Phase4_Ticket_Pack.md`
+
+Planned additions:
+1) Operator CLI for runs list/show/tail/cancel (read-only views + cancel flag).
+2) Worker mode with DB-backed leasing/heartbeat for background execution.
+3) Policy audit + unknown-tool detection for safer classification.
+4) Receipt summary export for side-effect evidence.
+5) Trigger scaffolding (cron/webhook) for queued runs.

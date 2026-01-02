@@ -17,3 +17,7 @@ Job Completion Summary:
 Run-wide Summary:
 
 Run-wide: 8 tools | 8 succeeded | 0 failed | 0 abandoned | 1 replayed | 3 steps
+
+Notes:
+- This file is overwritten on each run with the latest resume command.
+- The run-wide summary line is aggregated across resumes from the runtime DB.

@@ -67,6 +67,15 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/006_provider_session_wiring_report.md`
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/007_resume_continuity_evaluation_quick_job.md`
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/008_durable_runner_architecture.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/009_relaunch_resume_evaluation.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/011_relaunch_resume_evaluation_post_fix_v2.md`
 
 ## Current status
-Phase 3 durability features are implemented and validated on both quick_resume_job.json and relaunch_resume_job.json. Replay is deterministic, recovery is constrained, side effects are not duplicated, and run-wide summaries are written at completion. Remaining rough edges are mostly noise (headless Chrome DBus warnings) and optional tightening (subagent workspace exploration). Next focus: optional run-wide timing aggregation and any remaining tool-policy tuning as the tool universe grows.
+Phase 3 durability features are implemented and validated on both quick_resume_job.json and relaunch_resume_job.json. Replay is deterministic, recovery is constrained, side effects are not duplicated, and run-wide summaries are written at completion. Remaining rough edges are mostly noise (headless Chrome DBus warnings) and optional tightening (subagent workspace exploration). The next planned scope is the Phase 4 ticket pack (operator CLI, worker mode, policy audit, receipt summaries, trigger scaffolding) in `Project_Documentation/Long_Running_Agent_Design/Phase4_Ticket_Pack.md`.
+
+## Latest durability test results (reference run)
+- Run ID: `e7339747-5675-48d5-8248-02bb59561a29`
+- Workspace: `/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_144640`
+- Behavior: interrupted during sleep, resumed cleanly, forced replay re-ran only the sleep, side-effect email sent once after resume
+- Run-wide summary: 8 tools total, 0 failed, 1 replayed, 0 abandoned, 3 steps
+- Evidence: job completion summary in workspace + Logfire traces linked in evaluation report `009_relaunch_resume_evaluation.md`

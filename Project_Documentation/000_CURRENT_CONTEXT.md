@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2026-01-02 11:15 CST
+**Last Updated**: 2026-01-02 17:24 CST
 
 ---
 
@@ -42,17 +42,23 @@
 | **Image Generation** | ✅ Working | Gemini 2.5 Flash Image |
 | **Memory System** | ✅ Working | Core blocks, archival search |
 | **Logfire Tracing** | ✅ Working | Dual Trace (Main + Subprocess) |
-| **Durable Runs (Phase 0–2)** | ✅ Working | Run/step tracking, checkpoints, resume UX |
+| **Durable Runs (Phase 0–3)** | ✅ Working | Run/step tracking, checkpoints, replay policy, RELAUNCH |
+| **Run-Wide Completion Summary** | ✅ Working | Aggregated tool/step summary across resumes |
 | **Filtered Research Corpus** | ✅ Working | `finalize_research` + filtered corpus + overview |
 
 ### 🆕 Recent Fixes (Jan 1–2, 2026)
 
-1. **Durable Jobs Phase 0–2**: Runtime DB, tool-call ledger, idempotency, step checkpoints, resume UX.
-2. **Ctrl-C Reliability**: SIGINT handler saves interrupt checkpoints; fallback to last step_id in DB.
-3. **Filtered Research Pipeline**: `finalize_research` builds filtered corpus + `research_overview.md`.
-4. **Filter Tuning**: Looser drop thresholds; explicit filtered vs dropped tables in overview.
-5. **Report Prompt Unification**: Report sub-agent now uses filtered corpus only (no raw crawl reads).
-6. **MCP Server Fix**: Syntax/indent error fixed; Crawl4AI Cloud API handling stabilized.
+1. **Durable Jobs Phase 0–3**: Runtime DB, tool-call ledger, idempotency, checkpoints, replay policy, RELAUNCH.
+2. **Recovery Hardening**: Forced replay queue prevents extra tool calls after recovery drains.
+3. **Tool Policies**: Config-driven policy map in `durable/tool_policies.yaml` plus TaskOutput/TaskResult guardrail.
+4. **Crash Hooks**: Deterministic crash injection at tool boundaries for idempotency testing.
+5. **Run-Wide Summaries**: Aggregated tool/step counts across resumes written to job completion + restart file.
+6. **Step Indexing**: Monotonic `step_index` across recovery + continuation for audit clarity.
+7. **Workspace Paths**: Job prompts resolve workspace-relative paths to absolute to avoid `$PWD` drift.
+8. **Filtered Research Pipeline**: `finalize_research` builds filtered corpus + `research_overview.md`.
+9. **Filter Tuning**: Looser drop thresholds; explicit filtered vs dropped tables in overview.
+10. **Report Prompt Unification**: Report sub-agent now uses filtered corpus only (no raw crawl reads).
+11. **MCP Server Fix**: Syntax/indent error fixed; Crawl4AI Cloud API handling stabilized.
 
 ---
 
@@ -65,13 +71,24 @@
 
 | Issue | Status | Notes |
 |-------|--------|-------|
-| Provider session_id only captured after ResultMessage | ⏳ Known | Early interrupts may lack provider_session_id for resume |
+| Provider session_id only captured after ResultMessage | ⏳ Known | Early interrupts may lack provider_session_id; fallback works |
+| Headless Chrome DBus warnings | ⏳ Known | No functional failures observed; logs are noisy |
 | Multiple local-toolkit trace IDs | ⏳ Known | Local MCP uses multiple trace IDs per window |
 | Agent College not auto-triggered | ⏳ Pending | Requires manual invocation |
 | `/files` command not implemented | ⏳ Pending | Users can't download artifacts |
 | `/stop` command not implemented | ⏳ Pending | Can't cancel running tasks |
 
 ---
+
+## 📌 Phase 4 Ticket Pack (Next Focus)
+Source of truth: `Project_Documentation/Long_Running_Agent_Design/Phase4_Ticket_Pack.md`
+
+Planned work (in recommended sequence):
+1) **Operator CLI**: list/show/tail/cancel runs from the runtime DB.
+2) **Worker mode**: background execution with leasing + heartbeat.
+3) **Receipt summaries**: export side-effect receipts for auditability.
+4) **Policy audit**: unknown-tool detection + classification report.
+5) **Triggers**: cron/webhook scaffolding to queue runs.
 
 ## 🏗️ Architecture Overview
 
@@ -180,6 +197,16 @@ Kill during the sleep step, then resume:
 PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
 ```
 
+### Relaunch Resume Test (Task + Side Effects)
+```bash
+export UA_TEST_EMAIL_TO="kevin.dragan@outlook.com"
+PYTHONPATH=src uv run python -m universal_agent.main --job /home/kjdragan/lrepos/universal_agent/tmp/relaunch_resume_job.json
+```
+Kill during the sleep step, then resume:
+```bash
+PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
+```
+
 ### Useful Commands
 ```bash
 # Check webhook status
@@ -204,6 +231,7 @@ curl https://web-production-3473.up.railway.app/health
 | 4 | `012_LETTA_MEMORY_SYSTEM_MANUAL.md` | Memory System design |
 | 5 | `002_LESSONS_LEARNED.md` | Patterns and gotchas |
 | 6 | `Project_Documentation/Long_Running_Agent_Design/` | Durable Jobs v1 + tracking |
+| 7 | `Project_Documentation/Long_Running_Agent_Design/Phase4_Ticket_Pack.md` | Next-phase ticket pack (operator/worker/policy/receipts/triggers) |
 
 ### Latest Durability Reports (Read These)
 | Doc | Purpose |
@@ -211,17 +239,48 @@ curl https://web-production-3473.up.railway.app/health
 | `Project_Documentation/Long_Running_Agent_Design/tracking_development/006_provider_session_wiring_report.md` | Provider session resume/fork wiring + tests |
 | `Project_Documentation/Long_Running_Agent_Design/tracking_development/007_resume_continuity_evaluation_quick_job.md` | Latest resume evaluation (in-flight replay works) |
 | `Project_Documentation/Long_Running_Agent_Design/tracking_development/008_durable_runner_architecture.md` | Current durability architecture |
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/009_relaunch_resume_evaluation.md` | Relaunch resume evaluation (Task + side effects) |
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/011_relaunch_resume_evaluation_post_fix_v2.md` | Post-fix evaluation with run-wide summary |
 
 ---
 
 ## ✅ Recent Durability Updates (Jan 2, 2026)
-1) **Job-mode auto-resume**: `--resume` now auto-continues job runs (no prompt) unless terminal or waiting_for_human.
-2) **Resume packet + job completion summary**: Saved to workspace and linked in KevinRestartWithThis.
-3) **Provider session continuity**: Store `provider_session_id`; use `resume` + `continue_conversation` when available.
-4) **Fork support**: `--fork --run-id <BASE>` creates a new run with provider session fork and parent_run_id.
-5) **In-flight tool replay**: On resume, tools in prepared/running are deterministically re-run before continuation.
-6) **SIGINT debounce**: Avoids multiple interrupt checkpoints for a single stop.
-7) **Replay note injected**: Continuation prompt includes a note to avoid re-running replayed steps.
+1) **Replay policy classification**: REPLAY_EXACT, REPLAY_IDEMPOTENT, RELAUNCH.
+2) **Relaunch semantics**: Task tool calls are abandoned on resume and deterministically relaunched.
+3) **TaskOutput guardrail**: TaskOutput/TaskResult forced to RELAUNCH (no direct replay).
+4) **Recovery hardening**: Forced replay queue prevents extra tool calls after recovery drains.
+5) **Run-wide summaries**: Aggregated across resumes in job completion and restart file.
+6) **Workspace path resolution**: Job prompts resolve workspace-relative paths to absolute.
+7) **Step index monotonicity**: Recovery and continuation share a single step_index sequence.
+8) **Crash hooks**: Deterministic crash injection for PREPARED→SUCCEEDED testing.
+9) **Provider session continuity**: Store `provider_session_id`; resume with continue_conversation when available.
+10) **Fork support**: `--fork --run-id <BASE>` creates new run with parent_run_id.
+11) **In-flight tool replay**: Prepared/running tools re-run before continuation.
+12) **SIGINT debounce**: Avoids multiple interrupt checkpoints.
+
+---
+
+## 🧭 New Coder Handoff (Quick Start)
+**Goal**: Maintain durable jobs with no duplicate side effects across resume.
+
+**What’s implemented now**:
+1) Runtime DB + tool ledger + idempotency (Phases 1–3).
+2) Replay policy (EXACT/IDEMPOTENT/RELAUNCH) with Task/TaskOutput guardrails.
+3) Recovery-only tool execution during forced replay (no extra tool calls).
+4) Run-wide completion summary across resumes (job_completion + KevinRestartWithThis).
+5) Workspace path resolution to avoid $PWD drift in job prompts.
+
+**Primary tests**:
+1) `tmp/quick_resume_job.json` (sleep → resume).
+2) `tmp/relaunch_resume_job.json` (Task → PDF → sleep → email; verify no duplicate email).
+
+**Where to look**:
+1) Durable logic: `src/universal_agent/durable/` (ledger, tool_gateway, state).
+2) CLI entrypoint: `src/universal_agent/main.py`.
+3) Runtime DB: `AGENT_RUN_WORKSPACES/runtime_state.db`.
+4) Latest evals: `Project_Documentation/Long_Running_Agent_Design/tracking_development/009_relaunch_resume_evaluation.md`.
+
+**Next milestone**: Phase 4 ticket pack (operator CLI, worker mode, policy audit, receipts, triggers).
 
 ---
 
