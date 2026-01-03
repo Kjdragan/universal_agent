@@ -248,6 +248,8 @@ from universal_agent.durable.state import (
     complete_step,
     get_run,
     get_step_count,
+    is_cancel_requested,
+    mark_run_cancelled,
 )
 from universal_agent.durable.checkpointing import save_checkpoint, load_last_checkpoint
 # Local MCP server provides: crawl_parallel, read_local_file, write_local_file
@@ -987,9 +989,21 @@ async def on_pre_tool_use_ledger(
     """
     PreToolUse Hook: prepare tool call ledger entry and enforce idempotency.
     """
-    global tool_ledger, run_id, current_step_id, forced_tool_queue, forced_tool_active_ids, forced_tool_mode_active
+    global tool_ledger, run_id, current_step_id, forced_tool_queue, forced_tool_active_ids, forced_tool_mode_active, runtime_db_conn
     if tool_ledger is None or run_id is None:
         return {}
+    if runtime_db_conn and run_id and is_cancel_requested(runtime_db_conn, run_id):
+        return {
+            "systemMessage": (
+                "⚠️ Run cancellation requested. "
+                "Do not call any more tools; end the turn."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Run cancellation requested.",
+            },
+        }
 
     tool_name = input_data.get("tool_name", "")
     if _is_task_output_name(tool_name):
@@ -1689,6 +1703,7 @@ provider_session_forked_from: Optional[str] = None
 forced_tool_queue: list[dict[str, Any]] = []
 forced_tool_active_ids: dict[str, dict[str, Any]] = {}
 forced_tool_mode_active = False
+run_cancelled_by_operator = False
 FORCED_TOOL_MAX_ATTEMPTS = 2
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 WAITING_STATUSES = {"waiting_for_human"}
@@ -1764,6 +1779,21 @@ def infer_run_mode(
     if run_spec.get("prompt") or run_spec.get("objective"):
         return "job"
     return "interactive"
+
+
+def _handle_cancel_request(
+    conn: Optional[sqlite3.Connection], run_id: Optional[str], workspace_dir: str
+) -> bool:
+    global run_cancelled_by_operator
+    if not conn or not run_id:
+        return False
+    if not is_cancel_requested(conn, run_id):
+        return False
+    mark_run_cancelled(conn, run_id)
+    run_cancelled_by_operator = True
+    print("⚠️ Run cancellation requested. Stopping at safe boundary.")
+    print_job_completion_summary(conn, run_id, "cancelled", workspace_dir, "")
+    return True
 
 
 def _normalize_tool_input(tool_input: Any) -> str:
@@ -4275,71 +4305,77 @@ async def main(args: argparse.Namespace):
                         workspace_dir,
                         resume_packet_path=resume_packet_path,
                     )
-                try:
-                    replay_ok = await reconcile_inflight_tools(
-                        client, run_id, workspace_dir
-                    )
-                    if not replay_ok:
-                        print(
-                            "⚠️ In-flight tool replay incomplete; run set to waiting_for_human."
-                        )
-                        auto_resume_complete = True
-                    else:
-                        resume_summary = (
-                            resume_summary
-                            + "\nreplay_status: completed"
-                            + "\nreplay_note: in-flight tool calls already replayed; do not re-run them."
-                        )
-                        final_response = await continue_job_run(
-                            client,
-                            run_id,
-                            workspace_dir,
-                            job_prompt,
-                            resume_summary,
-                            replay_note="In-flight tool calls were replayed; do not re-run them.",
-                        )
-                        if runtime_db_conn and run_id:
-                            status_row = get_run(runtime_db_conn, run_id)
-                            status_value = (
-                                status_row["status"] if status_row else "running"
-                            )
-                            if status_value in TERMINAL_STATUSES:
-                                print_job_completion_summary(
-                                    runtime_db_conn,
-                                    run_id,
-                                    status_value,
-                                    workspace_dir,
-                                    final_response or "",
-                                )
-                        auto_resume_complete = True
-                except BudgetExceeded as exc:
-                    run_failed = True
-                    trace["status"] = "budget_exceeded"
-                    trace["budget_error"] = exc.to_dict()
-                    print(f"\n⛔ {exc}")
-                    if LOGFIRE_TOKEN:
-                        logfire.error("budget_exceeded", **exc.to_dict())
-                    if runtime_db_conn and current_step_id:
-                        complete_step(
-                            runtime_db_conn,
-                            current_step_id,
-                            "failed",
-                            error_code="budget_exceeded",
-                            error_detail=str(exc),
-                        )
-                    if runtime_db_conn and run_id:
-                        update_run_status(runtime_db_conn, run_id, "failed")
-                        logfire.warning(
-                            "durable_run_failed",
-                            run_id=run_id,
-                            error_code="budget_exceeded",
-                            error_detail=str(exc),
-                        )
+                if _handle_cancel_request(runtime_db_conn, run_id, workspace_dir):
                     auto_resume_complete = True
+                else:
+                    try:
+                        replay_ok = await reconcile_inflight_tools(
+                            client, run_id, workspace_dir
+                        )
+                        if not replay_ok:
+                            print(
+                                "⚠️ In-flight tool replay incomplete; run set to waiting_for_human."
+                            )
+                            auto_resume_complete = True
+                        else:
+                            resume_summary = (
+                                resume_summary
+                                + "\nreplay_status: completed"
+                                + "\nreplay_note: in-flight tool calls already replayed; do not re-run them."
+                            )
+                            final_response = await continue_job_run(
+                                client,
+                                run_id,
+                                workspace_dir,
+                                job_prompt,
+                                resume_summary,
+                                replay_note="In-flight tool calls were replayed; do not re-run them.",
+                            )
+                            if runtime_db_conn and run_id:
+                                status_row = get_run(runtime_db_conn, run_id)
+                                status_value = (
+                                    status_row["status"] if status_row else "running"
+                                )
+                                if status_value in TERMINAL_STATUSES:
+                                    print_job_completion_summary(
+                                        runtime_db_conn,
+                                        run_id,
+                                        status_value,
+                                        workspace_dir,
+                                        final_response or "",
+                                    )
+                            auto_resume_complete = True
+                    except BudgetExceeded as exc:
+                        run_failed = True
+                        trace["status"] = "budget_exceeded"
+                        trace["budget_error"] = exc.to_dict()
+                        print(f"\n⛔ {exc}")
+                        if LOGFIRE_TOKEN:
+                            logfire.error("budget_exceeded", **exc.to_dict())
+                        if runtime_db_conn and current_step_id:
+                            complete_step(
+                                runtime_db_conn,
+                                current_step_id,
+                                "failed",
+                                error_code="budget_exceeded",
+                                error_detail=str(exc),
+                            )
+                        if runtime_db_conn and run_id:
+                            update_run_status(runtime_db_conn, run_id, "failed")
+                            logfire.warning(
+                                "durable_run_failed",
+                                run_id=run_id,
+                                error_code="budget_exceeded",
+                                error_detail=str(exc),
+                            )
+                        auto_resume_complete = True
             if auto_resume_complete:
                 pass
             while not auto_resume_complete:
                 if interrupt_requested:
+                    break
+                if _handle_cancel_request(runtime_db_conn, run_id, workspace_dir):
+                    auto_resume_complete = True
                     break
                 # 1. Get User Input (auto-inject job prompt once when provided)
                 print("\n" + "=" * 80)
@@ -4373,9 +4409,15 @@ async def main(args: argparse.Namespace):
                 # 4. Tool execution loop (if complex)
                 # 5. Output and Transcripts
                 try:
+                    if _handle_cancel_request(runtime_db_conn, run_id, workspace_dir):
+                        auto_resume_complete = True
+                        break
                     result = await process_turn(client, user_input, workspace_dir)
                     if run_mode == "job" and args.job_path:
                         if runtime_db_conn and run_id:
+                            if _handle_cancel_request(runtime_db_conn, run_id, workspace_dir):
+                                auto_resume_complete = True
+                                break
                             update_run_status(runtime_db_conn, run_id, "succeeded")
                             print_job_completion_summary(
                                 runtime_db_conn,
@@ -4532,7 +4574,7 @@ async def main(args: argparse.Namespace):
             print("\n" + "=" * 80)
             print("\n" + "=" * 80)
             print("Session ended. Thank you!")
-            if runtime_db_conn and run_id and not run_failed:
+            if runtime_db_conn and run_id and not run_failed and not run_cancelled_by_operator:
                 update_run_status(runtime_db_conn, run_id, "succeeded")
                 logfire.info("durable_run_completed", run_id=run_id)
 

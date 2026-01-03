@@ -18,7 +18,12 @@ CREATE TABLE IF NOT EXISTS runs (
   parent_run_id TEXT,
   current_step_id TEXT,
   last_checkpoint_id TEXT,
-  final_artifact_ref TEXT
+  final_artifact_ref TEXT,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  last_heartbeat_at TEXT,
+  cancel_requested_at TEXT,
+  cancel_reason TEXT
 );
 
 CREATE TABLE IF NOT EXISTS run_steps (
@@ -98,6 +103,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "runs", "provider_session_forked_from", "TEXT")
     _add_column_if_missing(conn, "runs", "provider_session_last_seen_at", "TEXT")
     _add_column_if_missing(conn, "runs", "parent_run_id", "TEXT")
+    _add_column_if_missing(conn, "runs", "lease_owner", "TEXT")
+    _add_column_if_missing(conn, "runs", "lease_expires_at", "TEXT")
+    _add_column_if_missing(conn, "runs", "last_heartbeat_at", "TEXT")
+    _add_column_if_missing(conn, "runs", "cancel_requested_at", "TEXT")
+    _add_column_if_missing(conn, "runs", "cancel_reason", "TEXT")
     _add_column_if_missing(conn, "tool_calls", "raw_tool_name", "TEXT")
     _add_column_if_missing(
         conn, "tool_calls", "replay_policy", "TEXT NOT NULL DEFAULT 'REPLAY_EXACT'"

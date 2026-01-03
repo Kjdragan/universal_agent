@@ -1,7 +1,7 @@
 import json
 import sqlite3
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Iterable, Optional
 
 
 def _now() -> str:
@@ -142,6 +142,128 @@ def get_run(conn: sqlite3.Connection, run_id: str) -> Optional[sqlite3.Row]:
         "SELECT * FROM runs WHERE run_id = ?",
         (run_id,),
     ).fetchone()
+
+
+def get_run_status(conn: sqlite3.Connection, run_id: str) -> Optional[str]:
+    row = conn.execute(
+        "SELECT status FROM runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    return row["status"] if row else None
+
+
+def is_cancel_requested(conn: sqlite3.Connection, run_id: str) -> bool:
+    return get_run_status(conn, run_id) == "cancel_requested"
+
+
+def request_run_cancel(
+    conn: sqlite3.Connection, run_id: str, reason: Optional[str] = None
+) -> None:
+    conn.execute(
+        """
+        UPDATE runs
+        SET status = ?, cancel_requested_at = ?, cancel_reason = ?, updated_at = ?
+        WHERE run_id = ?
+        """,
+        ("cancel_requested", _now(), reason, _now(), run_id),
+    )
+    conn.commit()
+
+
+def mark_run_cancelled(conn: sqlite3.Connection, run_id: str) -> None:
+    conn.execute(
+        "UPDATE runs SET status = ?, updated_at = ? WHERE run_id = ?",
+        ("cancelled", _now(), run_id),
+    )
+    conn.commit()
+
+
+def list_runs_with_status(
+    conn: sqlite3.Connection,
+    statuses: Iterable[str],
+    limit: int = 25,
+) -> list[sqlite3.Row]:
+    status_list = [status for status in statuses if status]
+    if not status_list:
+        return []
+    placeholders = ", ".join("?" for _ in status_list)
+    rows = conn.execute(
+        f"""
+        SELECT run_id, status, lease_owner, lease_expires_at, created_at
+        FROM runs
+        WHERE status IN ({placeholders})
+        ORDER BY created_at ASC
+        LIMIT ?
+        """,
+        (*status_list, limit),
+    ).fetchall()
+    return list(rows)
+
+
+def acquire_run_lease(
+    conn: sqlite3.Connection,
+    run_id: str,
+    lease_owner: str,
+    lease_ttl_seconds: int,
+) -> bool:
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=lease_ttl_seconds)
+    now_iso = now.isoformat()
+    expires_iso = expires_at.isoformat()
+    result = conn.execute(
+        """
+        UPDATE runs
+        SET lease_owner = ?,
+            lease_expires_at = ?,
+            last_heartbeat_at = ?,
+            updated_at = ?,
+            status = CASE WHEN status = 'queued' THEN 'running' ELSE status END
+        WHERE run_id = ?
+          AND status IN ('queued', 'running')
+          AND (lease_expires_at IS NULL OR lease_expires_at < ?)
+        """,
+        (lease_owner, expires_iso, now_iso, now_iso, run_id, now_iso),
+    )
+    conn.commit()
+    return result.rowcount == 1
+
+
+def heartbeat_run_lease(
+    conn: sqlite3.Connection,
+    run_id: str,
+    lease_owner: str,
+    lease_ttl_seconds: int,
+) -> bool:
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=lease_ttl_seconds)
+    now_iso = now.isoformat()
+    expires_iso = expires_at.isoformat()
+    result = conn.execute(
+        """
+        UPDATE runs
+        SET lease_expires_at = ?, last_heartbeat_at = ?, updated_at = ?
+        WHERE run_id = ? AND lease_owner = ?
+        """,
+        (expires_iso, now_iso, now_iso, run_id, lease_owner),
+    )
+    conn.commit()
+    return result.rowcount == 1
+
+
+def release_run_lease(
+    conn: sqlite3.Connection, run_id: str, lease_owner: str
+) -> None:
+    conn.execute(
+        """
+        UPDATE runs
+        SET lease_owner = NULL,
+            lease_expires_at = NULL,
+            updated_at = ?
+        WHERE run_id = ? AND lease_owner = ?
+        """,
+        (_now(), run_id, lease_owner),
+    )
+    conn.commit()
 
 
 def get_step_count(conn: sqlite3.Connection, run_id: str) -> int:

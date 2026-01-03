@@ -4,6 +4,8 @@
 cd "$(dirname "$0")"
 
 echo "🚀 Starting Agent College (Sidecar) on port 8001..."
+# Keep uv cache inside repo to avoid sandbox permission issues
+export UV_CACHE_DIR="$(pwd)/.uv-cache"
 # Run Agent College in background, redirect logs to file to keep CLI clean
 PYTHONPATH=src uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8001 > agent_college.log 2>&1 &
 AC_PID=$!
