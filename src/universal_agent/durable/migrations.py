@@ -66,6 +66,18 @@ CREATE TABLE IF NOT EXISTS tool_calls (
   FOREIGN KEY(step_id) REFERENCES run_steps(step_id)
 );
 
+CREATE TABLE IF NOT EXISTS tool_receipts (
+  tool_call_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  tool_namespace TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  response_ref TEXT,
+  external_correlation_id TEXT,
+  FOREIGN KEY(run_id) REFERENCES runs(run_id)
+);
+
 CREATE TABLE IF NOT EXISTS checkpoints (
   checkpoint_id TEXT PRIMARY KEY,
   run_id TEXT NOT NULL,
@@ -80,6 +92,7 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 
 CREATE INDEX IF NOT EXISTS idx_tool_calls_run_step ON tool_calls(run_id, step_id);
 CREATE INDEX IF NOT EXISTS idx_run_steps_run ON run_steps(run_id, step_index);
+CREATE INDEX IF NOT EXISTS idx_tool_receipts_run ON tool_receipts(run_id);
 """
 
 

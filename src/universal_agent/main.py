@@ -1131,6 +1131,17 @@ async def on_pre_tool_use_ledger(
             idempotency_key=decision.idempotency_key,
             deduped=decision.deduped,
         )
+        identity = parse_tool_identity(tool_name)
+        side_effect_class = classify_tool(
+            identity.tool_name,
+            identity.tool_namespace,
+            {"raw_tool_name": tool_name},
+        )
+        if (
+            identity.tool_namespace == "composio"
+            and side_effect_class in ("external", "memory", "local")
+        ):
+            _inject_provider_idempotency(tool_name, tool_input, decision.idempotency_key)
     except Exception as exc:
         logfire.warning("ledger_prepare_failed", tool_name=tool_name, error=str(exc))
         return {
@@ -1291,11 +1302,6 @@ async def on_post_tool_use_ledger(
                 else:
                     forced_tool_queue.insert(0, expected)
             else:
-                _maybe_crash_after_tool(
-                    raw_tool_name=expected.get("raw_tool_name") or "",
-                    tool_call_id=expected["tool_call_id"],
-                    stage="after_tool_success_before_ledger_commit",
-                )
                 external_id = None
                 if isinstance(tool_response, dict):
                     external_id = (
@@ -1303,9 +1309,30 @@ async def on_post_tool_use_ledger(
                         or tool_response.get("message_id")
                         or tool_response.get("request_id")
                     )
+                _maybe_crash_after_tool(
+                    raw_tool_name=expected.get("raw_tool_name") or "",
+                    tool_call_id=expected["tool_call_id"],
+                    stage="after_tool_success_before_receipt",
+                )
+                if tool_ledger:
+                    recorded = tool_ledger.record_receipt_pending(
+                        expected["tool_call_id"], tool_response, external_id
+                    )
+                    if not recorded:
+                        logfire.warning(
+                            "receipt_pending_record_failed",
+                            tool_call_id=expected["tool_call_id"],
+                        )
+                _maybe_crash_after_tool(
+                    raw_tool_name=expected.get("raw_tool_name") or "",
+                    tool_call_id=expected["tool_call_id"],
+                    stage="after_tool_success_before_ledger_commit",
+                )
                 tool_ledger.mark_succeeded(
                     expected["tool_call_id"], tool_response, external_id
                 )
+                if tool_ledger:
+                    tool_ledger.clear_pending_receipt(expected["tool_call_id"])
                 tool_ledger.mark_replay_status(expected["tool_call_id"], "succeeded")
                 _maybe_crash_after_tool(
                     raw_tool_name=expected.get("raw_tool_name") or "",
@@ -1346,11 +1373,6 @@ async def on_post_tool_use_ledger(
                 raw_tool_name = (ledger_entry or {}).get("raw_tool_name") or ""
             if not raw_tool_name:
                 raw_tool_name = input_data.get("tool_name", "") or ""
-            _maybe_crash_after_tool(
-                raw_tool_name=raw_tool_name,
-                tool_call_id=tool_call_id,
-                stage="after_tool_success_before_ledger_commit",
-            )
             external_id = None
             if isinstance(tool_response, dict):
                 external_id = (
@@ -1358,7 +1380,28 @@ async def on_post_tool_use_ledger(
                     or tool_response.get("message_id")
                     or tool_response.get("request_id")
                 )
+            _maybe_crash_after_tool(
+                raw_tool_name=raw_tool_name,
+                tool_call_id=tool_call_id,
+                stage="after_tool_success_before_receipt",
+            )
+            if tool_ledger:
+                recorded = tool_ledger.record_receipt_pending(
+                    tool_call_id, tool_response, external_id
+                )
+                if not recorded:
+                    logfire.warning(
+                        "receipt_pending_record_failed",
+                        tool_call_id=tool_call_id,
+                    )
+            _maybe_crash_after_tool(
+                raw_tool_name=raw_tool_name,
+                tool_call_id=tool_call_id,
+                stage="after_tool_success_before_ledger_commit",
+            )
             tool_ledger.mark_succeeded(tool_call_id, tool_response, external_id)
+            if tool_ledger:
+                tool_ledger.clear_pending_receipt(tool_call_id)
             _maybe_crash_after_tool(
                 raw_tool_name=raw_tool_name,
                 tool_call_id=tool_call_id,
@@ -1876,11 +1919,53 @@ def _handle_cancel_request(
     return True
 
 
+def _strip_idempotency_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_idempotency_fields(val)
+            for key, val in value.items()
+            if key not in ("idempotency_key", "client_request_id")
+        }
+    if isinstance(value, list):
+        return [_strip_idempotency_fields(item) for item in value]
+    if isinstance(value, tuple):
+        return [_strip_idempotency_fields(item) for item in value]
+    if isinstance(value, set):
+        return sorted(_strip_idempotency_fields(item) for item in value)
+    return value
+
+
 def _normalize_tool_input(tool_input: Any) -> str:
     try:
-        return normalize_json(tool_input or {})
+        sanitized = _strip_idempotency_fields(tool_input or {})
+        return normalize_json(sanitized)
     except Exception:
         return json.dumps(tool_input or {}, default=str)
+
+
+def _inject_provider_idempotency(
+    raw_tool_name: str, tool_input: Any, idempotency_key: str
+) -> None:
+    if not idempotency_key:
+        return
+    if not isinstance(tool_input, dict):
+        return
+    if "client_request_id" not in tool_input:
+        tool_input["client_request_id"] = idempotency_key
+    upper = raw_tool_name.upper()
+    if upper.startswith("COMPOSIO_MULTI_EXECUTE_TOOL"):
+        tools = tool_input.get("tools")
+        if not isinstance(tools, list):
+            return
+        for idx, entry in enumerate(tools):
+            if not isinstance(entry, dict):
+                continue
+            args = entry.get("arguments")
+            if not isinstance(args, dict):
+                continue
+            if "client_request_id" in args or "idempotency_key" in args:
+                continue
+            args["client_request_id"] = f"{idempotency_key}:{idx}"
 
 
 def _maybe_update_provider_session(
@@ -2349,6 +2434,16 @@ async def reconcile_inflight_tools(
         return True
     forced_tool_queue = []
     for item in inflight:
+        if tool_ledger and tool_ledger.promote_pending_receipt(item["tool_call_id"]):
+            tool_ledger.mark_replay_status(
+                item["tool_call_id"], "succeeded_pending"
+            )
+            logfire.info(
+                "pending_receipt_promoted",
+                tool_call_id=item["tool_call_id"],
+                idempotency_key=item.get("idempotency_key"),
+            )
+            continue
         if item.get("replay_policy") == "RELAUNCH":
             relaunch_step_id = item.get("step_id") or current_step_id or "unknown"
             if tool_ledger and workspace_dir:

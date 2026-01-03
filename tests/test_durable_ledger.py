@@ -188,3 +188,32 @@ def test_mark_replay_status_updates_column():
     row = ledger.get_tool_call("tool-6")
     assert row is not None
     assert row["replay_status"] == "succeeded"
+
+
+def test_pending_receipt_promote_marks_succeeded():
+    conn = _setup_conn()
+    run_id = "run-5"
+    step_id = "step-5"
+    _insert_run_and_step(conn, run_id, step_id)
+
+    ledger = ToolCallLedger(conn)
+    receipt, _ = ledger.prepare_tool_call(
+        tool_call_id="tool-7",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="GMAIL_SEND_EMAIL",
+        tool_namespace="composio",
+        tool_input={"to": "a@example.com", "subject": "Hello"},
+    )
+    assert receipt is None
+
+    recorded = ledger.record_receipt_pending(
+        "tool-7", {"ok": True, "message_id": "msg-123"}, "msg-123"
+    )
+    assert recorded is True
+
+    promoted = ledger.promote_pending_receipt("tool-7")
+    assert promoted is True
+    row = ledger.get_tool_call("tool-7")
+    assert row is not None
+    assert row["status"] == "succeeded"

@@ -35,6 +35,21 @@ class ToolCallLedger:
             return payload
         return json.dumps(payload, default=str)
 
+    def _strip_idempotency_fields(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: self._strip_idempotency_fields(val)
+                for key, val in value.items()
+                if key not in ("idempotency_key", "client_request_id")
+            }
+        if isinstance(value, list):
+            return [self._strip_idempotency_fields(item) for item in value]
+        if isinstance(value, tuple):
+            return [self._strip_idempotency_fields(item) for item in value]
+        if isinstance(value, set):
+            return sorted(self._strip_idempotency_fields(item) for item in value)
+        return value
+
     def _compute_scope(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         upper = tool_name.upper()
         if "GMAIL_SEND_EMAIL" in upper:
@@ -86,8 +101,9 @@ class ToolCallLedger:
         policy = resolve_tool_policy(tool_name, tool_namespace)
         policy_matched = 1 if policy else 0
         policy_rule_id = policy.name if policy else None
-        normalized_args_hash = hash_normalized_json(tool_input)
-        side_effect_scope = self._compute_scope(tool_name, tool_input)
+        normalized_input = self._strip_idempotency_fields(tool_input)
+        normalized_args_hash = hash_normalized_json(normalized_input)
+        side_effect_scope = self._compute_scope(tool_name, normalized_input)
         nonce = None
         if allow_duplicate:
             nonce = idempotency_nonce or tool_call_id
@@ -198,7 +214,7 @@ class ToolCallLedger:
                 idempotency_key,
                 "prepared",
                 1,
-                normalize_json(tool_input),
+                normalize_json(normalized_input),
             ),
         )
         self.conn.commit()
@@ -229,6 +245,70 @@ class ToolCallLedger:
             ),
         )
         self.conn.commit()
+
+    def record_receipt_pending(
+        self,
+        tool_call_id: str,
+        response: Any,
+        external_correlation_id: Optional[str] = None,
+    ) -> bool:
+        row = self.get_tool_call(tool_call_id)
+        if not row:
+            return False
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO tool_receipts (
+                tool_call_id,
+                run_id,
+                tool_name,
+                tool_namespace,
+                idempotency_key,
+                created_at,
+                response_ref,
+                external_correlation_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tool_call_id,
+                row["run_id"],
+                row["tool_name"],
+                row["tool_namespace"],
+                row["idempotency_key"],
+                self._now(),
+                self._json_ref(response),
+                external_correlation_id,
+            ),
+        )
+        self.conn.commit()
+        return True
+
+    def get_pending_receipt(self, tool_call_id: str) -> Optional[dict[str, Any]]:
+        row = self.conn.execute(
+            "SELECT * FROM tool_receipts WHERE tool_call_id = ?",
+            (tool_call_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def clear_pending_receipt(self, tool_call_id: str) -> None:
+        self.conn.execute(
+            "DELETE FROM tool_receipts WHERE tool_call_id = ?",
+            (tool_call_id,),
+        )
+        self.conn.commit()
+
+    def promote_pending_receipt(self, tool_call_id: str) -> bool:
+        receipt = self.get_pending_receipt(tool_call_id)
+        if not receipt:
+            return False
+        self.mark_succeeded(
+            tool_call_id,
+            receipt.get("response_ref") or "",
+            receipt.get("external_correlation_id"),
+        )
+        self.clear_pending_receipt(tool_call_id)
+        return True
 
     def mark_failed(self, tool_call_id: str, error_detail: str) -> None:
         self.conn.execute(
