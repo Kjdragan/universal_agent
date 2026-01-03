@@ -1110,31 +1110,9 @@ async def on_pre_tool_use_ledger(
     step_id = current_step_id or "unknown"
 
     if forced_tool_mode_active and not forced_tool_queue:
-        return {
-            "systemMessage": (
-                "Recovery replay completed. Do not call any additional tools in recovery mode. "
-                "End the turn with a brief confirmation."
-            ),
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": "Forced replay completed.",
-            },
-        }
+        forced_tool_mode_active = False
 
     if forced_tool_queue:
-        if tool_name in ("Write", "Edit", "MultiEdit"):
-            return {
-                "systemMessage": (
-                    "Recovery in progress: do not use file edit tools. "
-                    "Re-run the exact in-flight tool call shown in the replay queue."
-                ),
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "Forced replay active; file edit tool blocked.",
-                },
-            }
         expected = forced_tool_queue[0]
         if _forced_tool_matches(tool_name, tool_input, expected):
             forced_tool_active_ids[tool_call_id] = expected
@@ -1173,6 +1151,18 @@ async def on_pre_tool_use_ledger(
                     },
                 }
             return _allow_with_updated_input()
+        if tool_name in ("Write", "Edit", "MultiEdit"):
+            return {
+                "systemMessage": (
+                    "Recovery in progress: do not use file edit tools. "
+                    "Re-run the exact in-flight tool call shown in the replay queue."
+                ),
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Forced replay active; file edit tool blocked.",
+                },
+            }
         if not _forced_task_active():
             expected_input = json.dumps(expected.get("tool_input") or {}, indent=2)
             expected_tool = expected.get("raw_tool_name") or expected.get("tool_name")
@@ -1454,6 +1444,15 @@ async def on_post_tool_use_ledger(
                     and forced_tool_queue[0]["tool_call_id"] == expected["tool_call_id"]
                 ):
                     forced_tool_queue.pop(0)
+                if not forced_tool_queue:
+                    forced_tool_mode_active = False
+                    forced_tool_active_ids = {}
+                    logfire.info(
+                        "replay_queue_drained",
+                        run_id=run_id,
+                        step_id=current_step_id,
+                        tool_call_id=expected["tool_call_id"],
+                    )
         except Exception as exc:
             logfire.warning(
                 "replay_mark_result_failed", tool_use_id=tool_call_id, error=str(exc)

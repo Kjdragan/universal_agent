@@ -57,6 +57,14 @@ Durability tests validate that the agent can recover after crashes without dupli
 - read_local_file succeeds.
 - No side effects.
 
+### Test 6: Replay drain continuation
+**Purpose:** ensure replay mode exits cleanly and does not block subsequent tool calls.
+**What it validates:**
+- Replay queue drains and normal tool execution resumes in the same run.
+**Expected:**
+- No "Forced replay completed" responses in transcript/run.log.
+- Upload/email execute once after replay completes.
+
 ## Full Commands
 
 ### Test 1 (Task crash)
@@ -99,6 +107,20 @@ PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
 UA_TEST_CRASH_AFTER_TOOL=mcp__local_toolkit__list_directory \
 PYTHONPATH=src uv run python -m universal_agent.main --job tmp/read_only_resume_job.json
 PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
+```
+
+### Test 6 (Replay drain continuation)
+```
+UA_TEST_CRASH_AFTER_TOOL=Task \
+PYTHONPATH=src uv run python -m universal_agent.main --job tmp/relaunch_resume_job.json
+UA_TEST_EMAIL_TO=<email> \
+PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
+```
+
+### Replay drain check
+```
+rg -n "Forced replay completed" /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_<STAMP>/transcript.md
+rg -n "Forced replay completed" /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_<STAMP>/run.log
 ```
 
 ## DB Checks

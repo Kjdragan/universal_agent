@@ -24,6 +24,7 @@ GROUP BY tool_name, status;
 
 ## Notes
 - Task replay input normalization ignores `resume` and will map it to `task_key` in PreToolUse, so replay matching stays deterministic.
+- Replay drain should not block subsequent tool calls; no "Forced replay completed" tool outputs should appear once the queue is empty.
 
 ## Matrix
 
@@ -81,6 +82,15 @@ GROUP BY tool_name, status;
   - `PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>`
 - Expected:
   - Read-only tool replays safely; no side effects.
+
+### 6) Replay drain continuation (no forced replay blocks)
+- Start:
+  - `UA_TEST_CRASH_AFTER_TOOL=Task PYTHONPATH=src uv run python -m universal_agent.main --job tmp/relaunch_resume_job.json`
+- Resume:
+  - `UA_TEST_EMAIL_TO=<email> PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>`
+- Verify:
+  - No `"Forced replay completed"` entries in `transcript.md` or `run.log`.
+  - Remaining tool calls proceed normally (upload/email executed once).
 
 ## Pass/Fail Summary
 - **Pass**: No duplicate side effects; in-flight tools replay deterministically; Task relaunch occurs only when output artifacts are missing.
