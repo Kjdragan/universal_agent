@@ -798,7 +798,7 @@ class Settings(BaseSettings):
 
 **Problem**: `main.py` used `from .agent_college.integration import ...` but failed with "attempted relative import with no known parent package" when run directly.
 
-**Cause**: Running `python src/universal_agent/main.py` treats it as a script, not a module.
+**Cause**: Running `PYTHONPATH=src python -m universal_agent.main` treats it as a module-safe entrypoint.
 
 **Solution**: Use absolute imports when the file is the entry point:
 ```python

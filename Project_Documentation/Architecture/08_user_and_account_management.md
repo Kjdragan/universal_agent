@@ -21,7 +21,7 @@ To add a new tool so the agent can use it:
     ```bash
     composio add <tool_name> -e "pg-test-86524ebc-9b1e-4f08-bd20-b77dd71c2df9"
     ```
-3.  **Verify**: Restart the agent (`uv run src/universal_agent/main.py`). The new tool should appear in the "Active Composio Apps" startup log.
+3.  **Verify**: Restart the agent (`PYTHONPATH=src uv run python -m universal_agent.main`). The new tool should appear in the "Active Composio Apps" startup log.
 
 ## Troubleshooting Logic
 If the agent says "Tool X is not available" or you see different tools than expected:

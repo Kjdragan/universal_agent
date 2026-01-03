@@ -12,7 +12,7 @@ Case 4 exposed a crash window after a tool succeeded but before the ledger was m
 - Added `tool_receipts` table to persist pending receipts.
 - Added ledger APIs to record, promote, and clear pending receipts.
 - On resume, pending receipts are promoted to `succeeded` and replay is skipped.
-- Added best-effort `client_request_id` injection for Composio tools.
+- Added best-effort `client_request_id` injection for Composio tools (including `mcp__composio__` wrappers) and forced replay inputs.
 - Normalized tool input ignores injected idempotency fields to keep replay matching stable.
 
 ## Files
@@ -24,9 +24,9 @@ Case 4 exposed a crash window after a tool succeeded but before the ledger was m
 
 ## Tests Run
 ```
-UV_CACHE_DIR=/home/kjdragan/lrepos/universal_agent/.uv_cache uv run pytest tests/test_durable_ledger.py tests/test_forced_tool_matches.py
+PYTHONPATH=src uv run pytest tests/test_durable_ledger.py tests/test_provider_idempotency.py
 ```
 
 ## Notes
 - Provider idempotency is best-effort (adds `client_request_id` where possible).
-- For strict proof, re-run Case 4 with crash hook after deploying this change.
+- Resume validation: `--resume --run-id d177bb38-97bf-495a-b370-da9bf1822509` completed successfully; replay queue showed `COMPOSIO_MULTI_EXECUTE_TOOL | succeeded_pending` and only verification tools executed afterward.

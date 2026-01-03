@@ -53,7 +53,7 @@ Top-level folders and purpose (focus on src, memory, tools, bot/IO, scripts):
 
 ### Web UI subprocess loop
 - `src/web/server.py`
-  - `AgentBridge.execute_query()` spawns `uv run src/universal_agent/main.py` and parses stdout.
+  - `AgentBridge.execute_query()` spawns `PYTHONPATH=src uv run python -m universal_agent.main` and parses stdout.
 
 ## (C) Tool Execution Gateway / Wrappers
 

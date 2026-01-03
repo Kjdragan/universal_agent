@@ -79,7 +79,7 @@ lifespan() [src/universal_agent/bot/main.py]
 
 ```
 AgentBridge.execute_query() [src/web/server.py]
-  -> asyncio.create_subprocess_exec("uv run src/universal_agent/main.py")
+  -> asyncio.create_subprocess_exec("PYTHONPATH=src uv run python -m universal_agent.main")
   -> write query to stdin
   -> parse stdout for tool calls/results
 ```

@@ -37,3 +37,16 @@ policies:
       - "MOVE"
       - "MARK"
       - "ASSIGN"
+  - name: composio_filetool_read_only
+    tool_namespace: composio
+    side_effect_class: read_only
+    replay_policy: REPLAY_IDEMPOTENT
+    patterns:
+      - "^Glob$"
+      - "^Read$"
+  - name: composio_filetool_write
+    tool_namespace: composio
+    side_effect_class: local
+    replay_policy: REPLAY_EXACT
+    patterns:
+      - "^Write$"

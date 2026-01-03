@@ -1064,7 +1064,44 @@ async def on_pre_tool_use_ledger(
 
     if forced_tool_queue:
         expected = forced_tool_queue[0]
-        if not _forced_tool_matches(tool_name, tool_input, expected):
+        if _forced_tool_matches(tool_name, tool_input, expected):
+            forced_tool_active_ids[tool_call_id] = expected
+            expected["attempts"] = expected.get("attempts", 0) + 1
+            try:
+                _assert_prepared_tool_row(
+                    expected["tool_call_id"],
+                    expected.get("raw_tool_name")
+                    or expected.get("tool_name")
+                    or tool_name,
+                )
+                tool_ledger.mark_running(expected["tool_call_id"])
+                logfire.info(
+                    "replay_mark_running",
+                    tool_use_id=tool_call_id,
+                    replay_tool_call_id=expected["tool_call_id"],
+                    run_id=run_id,
+                    step_id=step_id,
+                    idempotency_key=expected.get("idempotency_key"),
+                )
+            except Exception as exc:
+                logfire.warning(
+                    "replay_mark_running_failed",
+                    tool_use_id=tool_call_id,
+                    error=str(exc),
+                )
+                return {
+                    "systemMessage": (
+                        "⚠️ Tool ledger missing prepared entry; refusing to execute tool. "
+                        "Try again or end the turn."
+                    ),
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Prepared ledger row missing.",
+                    },
+                }
+            return {}
+        if not _forced_task_active():
             expected_input = json.dumps(expected.get("tool_input") or {}, indent=2)
             expected_tool = expected.get("raw_tool_name") or expected.get("tool_name")
             return {
@@ -1078,40 +1115,6 @@ async def on_pre_tool_use_ledger(
                     "permissionDecisionReason": "Forced in-flight replay active.",
                 },
             }
-        forced_tool_active_ids[tool_call_id] = expected
-        expected["attempts"] = expected.get("attempts", 0) + 1
-        try:
-            _assert_prepared_tool_row(
-                expected["tool_call_id"],
-                expected.get("raw_tool_name") or expected.get("tool_name") or tool_name,
-            )
-            tool_ledger.mark_running(expected["tool_call_id"])
-            logfire.info(
-                "replay_mark_running",
-                tool_use_id=tool_call_id,
-                replay_tool_call_id=expected["tool_call_id"],
-                run_id=run_id,
-                step_id=step_id,
-                idempotency_key=expected.get("idempotency_key"),
-            )
-        except Exception as exc:
-            logfire.warning(
-                "replay_mark_running_failed",
-                tool_use_id=tool_call_id,
-                error=str(exc),
-            )
-            return {
-                "systemMessage": (
-                    "⚠️ Tool ledger missing prepared entry; refusing to execute tool. "
-                    "Try again or end the turn."
-                ),
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "Prepared ledger row missing.",
-                },
-            }
-        return {}
 
     try:
         decision = prepare_tool_call(
@@ -1137,10 +1140,7 @@ async def on_pre_tool_use_ledger(
             identity.tool_namespace,
             {"raw_tool_name": tool_name},
         )
-        if (
-            identity.tool_namespace == "composio"
-            and side_effect_class in ("external", "memory", "local")
-        ):
+        if _should_inject_provider_idempotency(tool_name, side_effect_class):
             _inject_provider_idempotency(tool_name, tool_input, decision.idempotency_key)
     except Exception as exc:
         logfire.warning("ledger_prepare_failed", tool_name=tool_name, error=str(exc))
@@ -1953,7 +1953,7 @@ def _inject_provider_idempotency(
     if "client_request_id" not in tool_input:
         tool_input["client_request_id"] = idempotency_key
     upper = raw_tool_name.upper()
-    if upper.startswith("COMPOSIO_MULTI_EXECUTE_TOOL"):
+    if "COMPOSIO_MULTI_EXECUTE_TOOL" in upper:
         tools = tool_input.get("tools")
         if not isinstance(tools, list):
             return
@@ -1966,6 +1966,19 @@ def _inject_provider_idempotency(
             if "client_request_id" in args or "idempotency_key" in args:
                 continue
             args["client_request_id"] = f"{idempotency_key}:{idx}"
+
+
+def _looks_like_composio_tool(raw_tool_name: str) -> bool:
+    upper = raw_tool_name.upper()
+    return upper.startswith("COMPOSIO_") or upper.startswith("MCP__COMPOSIO__")
+
+
+def _should_inject_provider_idempotency(
+    raw_tool_name: str, side_effect_class: Optional[str]
+) -> bool:
+    if side_effect_class == "read_only":
+        return False
+    return _looks_like_composio_tool(raw_tool_name)
 
 
 def _maybe_update_provider_session(
@@ -2273,6 +2286,57 @@ def _raw_tool_name_from_identity(tool_name: str, tool_namespace: str) -> str:
     return tool_name
 
 
+def _parse_created_at(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _partition_inflight_for_relaunch(
+    inflight: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Skip in-flight tool calls that likely belong to a running RELAUNCH task."""
+    relaunch_tasks = [
+        item
+        for item in inflight
+        if item.get("replay_policy") == "RELAUNCH"
+        and item.get("status") == "running"
+    ]
+    if not relaunch_tasks:
+        return inflight, []
+    cutoff_by_step: dict[str, datetime] = {}
+    for task in relaunch_tasks:
+        step_id = task.get("step_id")
+        created_at = _parse_created_at(task.get("created_at"))
+        if not step_id or not created_at:
+            continue
+        existing = cutoff_by_step.get(step_id)
+        cutoff_by_step[step_id] = created_at if existing is None else min(existing, created_at)
+    if not cutoff_by_step:
+        return inflight, []
+    replay: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for item in inflight:
+        if item in relaunch_tasks:
+            replay.append(item)
+            continue
+        step_id = item.get("step_id")
+        created_at = _parse_created_at(item.get("created_at"))
+        cutoff = cutoff_by_step.get(step_id)
+        if cutoff and created_at and created_at >= cutoff:
+            skipped.append(item)
+        else:
+            replay.append(item)
+    return replay, skipped
+
+
 def _forced_tool_matches(
     raw_tool_name: str, tool_input: dict[str, Any], expected: dict[str, Any]
 ) -> bool:
@@ -2292,6 +2356,14 @@ def _forced_tool_matches(
         return normalized_actual == normalized_expected
     normalized = _normalize_tool_input(tool_input)
     return normalized == expected.get("normalized_input")
+
+
+def _forced_task_active() -> bool:
+    return any(
+        item.get("tool_name") == "task"
+        and item.get("tool_namespace") == "claude_code"
+        for item in forced_tool_active_ids.values()
+    )
 
 
 def _load_inflight_tool_calls(
@@ -2319,6 +2391,15 @@ def _load_inflight_tool_calls(
         raw_name = row["raw_tool_name"] or _raw_tool_name_from_identity(
             row["tool_name"], row["tool_namespace"]
         )
+        side_effect_class = None
+        try:
+            side_effect_class = row["side_effect_class"]
+        except Exception:
+            side_effect_class = None
+        if _should_inject_provider_idempotency(raw_name, side_effect_class):
+            _inject_provider_idempotency(
+                raw_name, tool_input, row["idempotency_key"] or ""
+            )
         inflight.append(
             {
                 "tool_call_id": row["tool_call_id"],
@@ -2430,6 +2511,22 @@ async def reconcile_inflight_tools(
     if not runtime_db_conn:
         return True
     inflight = _load_inflight_tool_calls(runtime_db_conn, run_id)
+    if not inflight:
+        return True
+    inflight, skipped = _partition_inflight_for_relaunch(inflight)
+    for item in skipped:
+        if tool_ledger:
+            tool_ledger.mark_abandoned_on_resume(
+                item["tool_call_id"], "relaunch_parent_task"
+            )
+            tool_ledger.mark_replay_status(
+                item["tool_call_id"], "skipped_relaunch_parent"
+            )
+        logfire.info(
+            "relaunch_parent_skip",
+            tool_call_id=item["tool_call_id"],
+            step_id=item.get("step_id"),
+        )
     if not inflight:
         return True
     forced_tool_queue = []
@@ -2586,14 +2683,28 @@ def build_resume_packet(
     inflight = []
     inflight_rows = conn.execute(
         """
-        SELECT tool_name, status, idempotency_key, created_at, replay_policy
+        SELECT tool_call_id, tool_name, status, idempotency_key, created_at, replay_policy, step_id
         FROM tool_calls
         WHERE run_id = ? AND status IN ('prepared', 'running')
         ORDER BY created_at DESC
         """,
         (run_id,),
     ).fetchall()
+    inflight_items: list[dict[str, Any]] = []
     for row in inflight_rows:
+        inflight_items.append(
+            {
+                "tool_call_id": row["tool_call_id"],
+                "tool_name": row["tool_name"],
+                "status": row["status"],
+                "idempotency_key": row["idempotency_key"],
+                "created_at": row["created_at"],
+                "replay_policy": row["replay_policy"],
+                "step_id": row["step_id"],
+            }
+        )
+    inflight_items, _ = _partition_inflight_for_relaunch(inflight_items)
+    for row in inflight_items:
         inflight.append(
             {
                 "tool_name": row["tool_name"],
@@ -2662,7 +2773,10 @@ def update_restart_file(
     if not run_id:
         return
     if resume_cmd is None:
-        resume_cmd = f"uv run python src/universal_agent/main.py --resume --run-id {run_id}"
+        resume_cmd = (
+            "PYTHONPATH=src uv run python -m universal_agent.main "
+            f"--resume --run-id {run_id}"
+        )
     try:
         restart_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
@@ -4593,7 +4707,10 @@ async def main(args: argparse.Namespace):
     print(f"Timestamp: {timestamp}")
     print(f"Trace ID: {trace_id_hex}")
     if run_id:
-        resume_cmd = f"uv run python src/universal_agent/main.py --resume --run-id {run_id}"
+        resume_cmd = (
+            "PYTHONPATH=src uv run python -m universal_agent.main "
+            f"--resume --run-id {run_id}"
+        )
         print(f"Resume Command: {resume_cmd}")
         update_restart_file(run_id, workspace_dir, resume_cmd=resume_cmd)
     print(f"============================\n")

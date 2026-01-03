@@ -61,7 +61,7 @@ case $MODE in
         echo ""
         echo "🚀 Starting CLI Mode..."
         echo "=============================================="
-        python src/universal_agent/main.py
+        PYTHONPATH=src python -m universal_agent.main
         ;;
     
     bot)
@@ -94,7 +94,7 @@ case $MODE in
         
         # Start CLI
         echo "🤖 Starting Agent CLI..."
-        python src/universal_agent/main.py
+        PYTHONPATH=src python -m universal_agent.main
         ;;
     
     *)

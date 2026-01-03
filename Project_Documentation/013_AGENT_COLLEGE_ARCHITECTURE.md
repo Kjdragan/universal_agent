@@ -100,7 +100,7 @@ uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8000
 
 ### Run the Agent (Sandbox Auto-Initialized)
 ```bash
-uv run src/universal_agent/main.py
+PYTHONPATH=src uv run python -m universal_agent.main
 ```
 On boot, you should see:
 ```
