@@ -1,3 +1,5 @@
+import pytest
+
 from universal_agent.durable.classification import (
     REPLAY_EXACT,
     REPLAY_IDEMPOTENT,
@@ -56,6 +58,48 @@ policies:
     _reset_tool_policy_cache()
     assert classify_tool("COMPOSIO_TEST_READ", "composio") == "read_only"
     assert classify_replay_policy("COMPOSIO_TEST_READ", "composio") == REPLAY_IDEMPOTENT
+
+
+def test_policy_tool_name_regex_and_overlay(tmp_path, monkeypatch):
+    base = """version: 1
+policies:
+  - name: base_read_only
+    tool_namespace: composio
+    side_effect_class: read_only
+    replay_policy: REPLAY_IDEMPOTENT
+    tool_name_regex: "^COMPOSIO_OVERLAY$"
+"""
+    overlay = """version: 1
+policies:
+  - name: overlay_external
+    namespace: composio
+    side_effect_class: external
+    replay_policy: REPLAY_EXACT
+    tool_name_regex: "^COMPOSIO_OVERLAY$"
+"""
+    base_path = tmp_path / "base.yaml"
+    overlay_path = tmp_path / "overlay.yaml"
+    base_path.write_text(base)
+    overlay_path.write_text(overlay)
+    monkeypatch.setenv("UA_TOOL_POLICIES_PATH", str(base_path))
+    monkeypatch.setenv("UA_TOOL_POLICIES_OVERLAY_PATH", str(overlay_path))
+    _reset_tool_policy_cache()
+    assert classify_tool("COMPOSIO_OVERLAY", "composio") == "external"
+    assert classify_replay_policy("COMPOSIO_OVERLAY", "composio") == REPLAY_EXACT
+
+
+def test_invalid_policy_schema_fails_fast(tmp_path, monkeypatch):
+    bad_policy = """version: 1
+policies:
+  - name: missing_patterns
+    tool_namespace: composio
+"""
+    policy_path = tmp_path / "bad.yaml"
+    policy_path.write_text(bad_policy)
+    monkeypatch.setenv("UA_TOOL_POLICIES_PATH", str(policy_path))
+    _reset_tool_policy_cache()
+    with pytest.raises(ValueError):
+        classify_tool("COMPOSIO_TEST", "composio")
 
 
 def test_task_output_forces_relaunch():

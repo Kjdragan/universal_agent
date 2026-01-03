@@ -79,6 +79,43 @@ def test_ledger_dedupe_returns_receipt():
     assert receipt2.status == "succeeded"
 
 
+def test_prepare_allow_duplicate_creates_new_row():
+    conn = _setup_conn()
+    run_id = "run-1b"
+    step_id = "step-1b"
+    _insert_run_and_step(conn, run_id, step_id)
+
+    ledger = ToolCallLedger(conn)
+    tool_input = {"query": "alpha"}
+
+    receipt, key1 = ledger.prepare_tool_call(
+        tool_call_id="tool-1b",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="COMPOSIO_GET_ITEM",
+        tool_namespace="composio",
+        tool_input=tool_input,
+    )
+    assert receipt is None
+    ledger.mark_succeeded("tool-1b", {"ok": True})
+
+    receipt2, key2 = ledger.prepare_tool_call(
+        tool_call_id="tool-2b",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="COMPOSIO_GET_ITEM",
+        tool_namespace="composio",
+        tool_input=tool_input,
+        allow_duplicate=True,
+        idempotency_nonce="tool-2b",
+    )
+    assert receipt2 is None
+    assert key1 != key2
+    row = ledger.get_tool_call("tool-2b")
+    assert row is not None
+    assert row["status"] == "prepared"
+
+
 def test_mark_abandoned_on_resume_updates_status():
     conn = _setup_conn()
     run_id = "run-2"

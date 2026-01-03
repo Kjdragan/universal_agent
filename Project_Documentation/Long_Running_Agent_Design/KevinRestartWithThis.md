@@ -1,23 +1,19 @@
 # Restart Instructions
 
-Run ID: e7339747-5675-48d5-8248-02bb59561a29
+Run ID: 88d4ecdc-25a6-480d-871e-403d7959e88d
 
 Resume Command:
 
-uv run python src/universal_agent/main.py --resume --run-id e7339747-5675-48d5-8248-02bb59561a29
+uv run python src/universal_agent/main.py --resume --run-id 88d4ecdc-25a6-480d-871e-403d7959e88d
 
 Workspace:
 
-/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_144640
+/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_213424
 
 Job Completion Summary:
 
-/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_144640/job_completion_e7339747-5675-48d5-8248-02bb59561a29.md
+/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_213424/job_completion_88d4ecdc-25a6-480d-871e-403d7959e88d.md
 
 Run-wide Summary:
 
-Run-wide: 8 tools | 8 succeeded | 0 failed | 0 abandoned | 1 replayed | 3 steps
-
-Notes:
-- This file is overwritten on each run with the latest resume command.
-- The run-wide summary line is aggregated across resumes from the runtime DB.
+Run-wide: 3 tools | 3 succeeded | 0 failed | 0 abandoned | 0 replayed | 1 steps

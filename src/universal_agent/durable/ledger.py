@@ -1,10 +1,12 @@
 import hashlib
 import json
+import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from .classification import classify_replay_policy, classify_tool
+from .classification import classify_replay_policy, classify_tool, resolve_tool_policy
 from .normalize import hash_normalized_json, normalize_json
 
 
@@ -21,6 +23,7 @@ class ToolCallLedger:
     def __init__(self, conn, workspace_dir: Optional[str] = None):
         self.conn = conn
         self.workspace_dir = workspace_dir
+        self.logger = logging.getLogger(__name__)
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -75,35 +78,85 @@ class ToolCallLedger:
         raw_tool_name: Optional[str] = None,
         tool_input: dict[str, Any],
         metadata: Optional[dict[str, Any]] = None,
+        allow_duplicate: bool = False,
+        idempotency_nonce: Optional[str] = None,
     ) -> tuple[Optional[LedgerReceipt], str]:
         side_effect_class = classify_tool(tool_name, tool_namespace, metadata)
         replay_policy = classify_replay_policy(tool_name, tool_namespace, metadata)
+        policy = resolve_tool_policy(tool_name, tool_namespace)
+        policy_matched = 1 if policy else 0
+        policy_rule_id = policy.name if policy else None
         normalized_args_hash = hash_normalized_json(tool_input)
         side_effect_scope = self._compute_scope(tool_name, tool_input)
+        nonce = None
+        if allow_duplicate:
+            nonce = idempotency_nonce or tool_call_id
+        elif replay_policy == "RELAUNCH":
+            nonce = tool_call_id
         idempotency_key = self._idempotency_key(
             run_id,
             tool_namespace,
             tool_name,
             normalized_args_hash,
             side_effect_scope,
-            nonce=tool_call_id if replay_policy == "RELAUNCH" else None,
+            nonce=nonce,
         )
 
-        existing = self.conn.execute(
-            "SELECT * FROM tool_calls WHERE idempotency_key = ?",
-            (idempotency_key,),
-        ).fetchone()
-        if existing and existing["status"] == "succeeded":
-            return (
-                LedgerReceipt(
-                    tool_call_id=existing["tool_call_id"],
-                    idempotency_key=existing["idempotency_key"],
-                    status=existing["status"],
-                    response_ref=existing["response_ref"],
-                    external_correlation_id=existing["external_correlation_id"],
-                ),
-                idempotency_key,
-            )
+        if not allow_duplicate:
+            existing = self.conn.execute(
+                "SELECT * FROM tool_calls WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if existing and existing["status"] == "succeeded":
+                return (
+                    LedgerReceipt(
+                        tool_call_id=existing["tool_call_id"],
+                        idempotency_key=existing["idempotency_key"],
+                        status=existing["status"],
+                        response_ref=existing["response_ref"],
+                        external_correlation_id=existing["external_correlation_id"],
+                    ),
+                    idempotency_key,
+                )
+
+        if not policy_matched and tool_namespace == "composio":
+            seen = self.conn.execute(
+                """
+                SELECT 1 FROM tool_calls
+                WHERE tool_namespace = ? AND tool_name = ?
+                LIMIT 1
+                """,
+                (tool_namespace, tool_name),
+            ).fetchone()
+            if not seen:
+                self.logger.warning(
+                    "UA_POLICY_UNKNOWN_TOOL tool_name=%s tool_namespace=%s raw_tool_name=%s run_id=%s",
+                    tool_name,
+                    tool_namespace,
+                    raw_tool_name or "",
+                    run_id,
+                )
+                if self.workspace_dir:
+                    base_dir = os.path.dirname(self.workspace_dir)
+                    audit_dir = os.path.join(base_dir, "policy_audit")
+                    os.makedirs(audit_dir, exist_ok=True)
+                    payload = {
+                        "ts": self._now(),
+                        "run_id": run_id,
+                        "tool_name": tool_name,
+                        "tool_namespace": tool_namespace,
+                        "raw_tool_name": raw_tool_name,
+                    }
+                    audit_path = os.path.join(audit_dir, "unknown_tools.jsonl")
+                    try:
+                        with open(audit_path, "a", encoding="utf-8") as handle:
+                            handle.write(json.dumps(payload, default=str) + "\n")
+                    except OSError:
+                        self.logger.warning(
+                            "policy_unknown_tool_log_failed path=%s run_id=%s",
+                            audit_path,
+                            run_id,
+                        )
 
         now = self._now()
         self.conn.execute(
@@ -119,12 +172,14 @@ class ToolCallLedger:
                 tool_namespace,
                 side_effect_class,
                 replay_policy,
+                policy_matched,
+                policy_rule_id,
                 normalized_args_hash,
                 idempotency_key,
                 status,
                 attempt,
                 request_ref
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 tool_call_id,
@@ -137,6 +192,8 @@ class ToolCallLedger:
                 tool_namespace,
                 side_effect_class,
                 replay_policy,
+                policy_matched,
+                policy_rule_id,
                 normalized_args_hash,
                 idempotency_key,
                 "prepared",

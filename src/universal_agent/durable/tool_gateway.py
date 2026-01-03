@@ -38,6 +38,8 @@ def prepare_tool_call(
     step_id: str,
     raw_tool_name: str,
     tool_input: dict[str, Any],
+    allow_duplicate: bool = False,
+    idempotency_nonce: Optional[str] = None,
 ) -> ToolDecision:
     identity = parse_tool_identity(raw_tool_name)
     receipt, idempotency_key = ledger.prepare_tool_call(
@@ -49,6 +51,8 @@ def prepare_tool_call(
         raw_tool_name=raw_tool_name,
         tool_input=tool_input,
         metadata={"raw_tool_name": raw_tool_name},
+        allow_duplicate=allow_duplicate,
+        idempotency_nonce=idempotency_nonce,
     )
     return ToolDecision(
         deduped=receipt is not None,

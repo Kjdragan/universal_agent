@@ -11,6 +11,7 @@ import os
 import sqlite3
 import time
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -240,6 +241,12 @@ from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.tool_gateway import prepare_tool_call, parse_tool_identity
 from universal_agent.durable.normalize import deterministic_task_key, normalize_json
+from universal_agent.durable.classification import (
+    classify_replay_policy,
+    classify_tool,
+    resolve_tool_policy,
+    validate_tool_policies,
+)
 from universal_agent.durable.state import (
     upsert_run,
     update_run_status,
@@ -1093,6 +1100,17 @@ async def on_pre_tool_use_ledger(
                 tool_use_id=tool_call_id,
                 error=str(exc),
             )
+            return {
+                "systemMessage": (
+                    "⚠️ Tool ledger missing prepared entry; refusing to execute tool. "
+                    "Try again or end the turn."
+                ),
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Prepared ledger row missing.",
+                },
+            }
         return {}
 
     try:
@@ -1115,12 +1133,25 @@ async def on_pre_tool_use_ledger(
         )
     except Exception as exc:
         logfire.warning("ledger_prepare_failed", tool_name=tool_name, error=str(exc))
-        return {}
+        return {
+            "systemMessage": (
+                "⚠️ Tool ledger prepare failed; refusing to execute tool without a "
+                "prepared ledger row. Try again or end the turn."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Ledger prepare failed.",
+            },
+        }
 
     if decision.deduped and decision.receipt:
         prior_entry = tool_ledger.get_tool_call(decision.receipt.tool_call_id)
         replay_policy = (prior_entry or {}).get("replay_policy")
-        side_effect_class = (prior_entry or {}).get("side_effect_class")
+        side_effect_class = _normalize_side_effect_class(
+            (prior_entry or {}).get("side_effect_class"),
+            tool_name,
+        )
         should_dedupe = False
         if replay_policy:
             should_dedupe = replay_policy == "REPLAY_EXACT"
@@ -1148,6 +1179,44 @@ async def on_pre_tool_use_ledger(
                     "permissionDecisionReason": "Idempotent tool call detected.",
                 },
             }
+        try:
+            duplicate_decision = prepare_tool_call(
+                tool_ledger,
+                tool_call_id=tool_call_id,
+                run_id=run_id,
+                step_id=step_id,
+                raw_tool_name=tool_name,
+                tool_input=tool_input,
+                allow_duplicate=True,
+                idempotency_nonce=tool_call_id,
+            )
+            logfire.info(
+                "ledger_prepare_duplicate",
+                tool_name=tool_name,
+                tool_use_id=tool_call_id,
+                run_id=run_id,
+                step_id=step_id,
+                idempotency_key=duplicate_decision.idempotency_key,
+                prior_idempotency_key=decision.idempotency_key,
+            )
+        except Exception as exc:
+            logfire.warning(
+                "ledger_prepare_duplicate_failed",
+                tool_name=tool_name,
+                tool_use_id=tool_call_id,
+                error=str(exc),
+            )
+            return {
+                "systemMessage": (
+                    "⚠️ Tool ledger prepare failed; refusing to execute tool without a "
+                    "prepared ledger row. Try again or end the turn."
+                ),
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Ledger prepare failed.",
+                },
+            }
 
     try:
         _assert_prepared_tool_row(tool_call_id, tool_name)
@@ -1160,6 +1229,17 @@ async def on_pre_tool_use_ledger(
         )
     except Exception as exc:
         logfire.warning("ledger_mark_running_failed", tool_use_id=tool_call_id, error=str(exc))
+        return {
+            "systemMessage": (
+                "⚠️ Tool ledger missing prepared entry; refusing to execute tool. "
+                "Try again or end the turn."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Prepared ledger row missing.",
+            },
+        }
     return {}
 
 
@@ -1848,44 +1928,115 @@ def _invalidate_provider_session(error_msg: str) -> None:
     )
 
 
+def _normalize_crash_tool_name(value: str) -> str:
+    if not value:
+        return ""
+    normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower())
+    return normalized.strip("_")
+
+
+def _get_current_step_phase() -> Optional[str]:
+    if not runtime_db_conn or not current_step_id:
+        return None
+    try:
+        row = runtime_db_conn.execute(
+            "SELECT phase FROM run_steps WHERE step_id = ?",
+            (current_step_id,),
+        ).fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    return row["phase"]
+
+
+def _should_trigger_test_crash(
+    *,
+    raw_tool_name: str,
+    tool_call_id: str,
+    stage: str,
+) -> tuple[bool, dict[str, Optional[str]]]:
+    crash_tool = os.getenv("UA_TEST_CRASH_AFTER_TOOL")
+    crash_id = os.getenv("UA_TEST_CRASH_AFTER_TOOL_CALL_ID")
+    crash_stage = os.getenv("UA_TEST_CRASH_STAGE")
+    crash_phase = os.getenv("UA_TEST_CRASH_AFTER_PHASE")
+    crash_step = os.getenv("UA_TEST_CRASH_AFTER_STEP")
+    if not any([crash_tool, crash_id, crash_stage, crash_phase, crash_step]):
+        return False, {}
+
+    normalized_tool = _normalize_crash_tool_name(raw_tool_name)
+    normalized_crash_tool = _normalize_crash_tool_name(crash_tool or "")
+    current_phase = None
+    if crash_phase or crash_step:
+        current_phase = _get_current_step_phase()
+
+    if crash_tool and normalized_tool != normalized_crash_tool:
+        return False, {}
+    if crash_id and tool_call_id != crash_id:
+        return False, {}
+    if crash_stage and crash_stage != stage:
+        return False, {}
+    if crash_step and (current_step_id or "") != crash_step:
+        return False, {}
+    if crash_phase and (current_phase or "").lower() != crash_phase.lower():
+        return False, {}
+
+    return True, {
+        "crash_tool": crash_tool,
+        "crash_id": crash_id,
+        "crash_stage": crash_stage,
+        "crash_phase": crash_phase,
+        "crash_step": crash_step,
+        "current_step_id": current_step_id,
+        "current_phase": current_phase,
+        "normalized_tool_name": normalized_tool,
+    }
+
+
 def _maybe_crash_after_tool(
     *,
     raw_tool_name: str,
     tool_call_id: str,
     stage: str,
 ) -> None:
-    crash_tool = os.getenv("UA_TEST_CRASH_AFTER_TOOL")
-    crash_id = os.getenv("UA_TEST_CRASH_AFTER_TOOL_CALL_ID")
-    crash_stage = os.getenv("UA_TEST_CRASH_STAGE")
-    if not crash_tool and not crash_id:
-        return
-    if crash_tool and raw_tool_name != crash_tool:
-        return
-    if crash_id and tool_call_id != crash_id:
-        return
-    if crash_stage and crash_stage != stage:
-        return
-    message = (
-        "UA_TEST_CRASH triggered "
-        f"(tool_call_id={tool_call_id}, raw_tool_name={raw_tool_name}, stage={stage})"
+    should_crash, crash_context = _should_trigger_test_crash(
+        raw_tool_name=raw_tool_name,
+        tool_call_id=tool_call_id,
+        stage=stage,
     )
-    print(f"\n🧨 {message}")
+    if not should_crash:
+        return
+    current_phase = crash_context.get("current_phase")
+    current_step = crash_context.get("current_step_id")
+    details = f"stage={stage}"
+    if current_step:
+        details += f" step_id={current_step}"
+    if current_phase:
+        details += f" phase={current_phase}"
+    message = (
+        "UA_TEST_CRASH_AFTER_TOOL triggered: "
+        f"{raw_tool_name} {tool_call_id} ({details})"
+    )
+    print(f"\n💥 {message}")
     if LOGFIRE_TOKEN:
         logfire.error(
             "test_crash_hook_triggered",
             tool_call_id=tool_call_id,
             raw_tool_name=raw_tool_name,
+            normalized_tool_name=crash_context.get("normalized_tool_name"),
             stage=stage,
-            crash_tool=crash_tool,
-            crash_id=crash_id,
-            crash_stage=crash_stage,
+            crash_tool=crash_context.get("crash_tool"),
+            crash_id=crash_context.get("crash_id"),
+            crash_stage=crash_context.get("crash_stage"),
+            crash_phase=crash_context.get("crash_phase"),
+            crash_step=crash_context.get("crash_step"),
+            current_step_id=current_step,
+            current_phase=current_phase,
         )
     os._exit(137)
 
 
 def _assert_prepared_tool_row(tool_call_id: str, raw_tool_name: str) -> None:
-    if os.getenv("UA_DEBUG_ASSERT_PREPARED", "").lower() not in ("1", "true", "yes"):
-        return
     if tool_ledger is None:
         return
     row = tool_ledger.get_tool_call(tool_call_id)
@@ -1903,6 +2054,26 @@ def _assert_prepared_tool_row(tool_call_id: str, raw_tool_name: str) -> None:
                 status=status,
             )
         raise RuntimeError(message)
+
+
+VALID_SIDE_EFFECT_CLASSES = {"external", "memory", "local", "read_only"}
+_invalid_side_effect_warnings: set[tuple[str, str, str]] = set()
+
+
+def _normalize_side_effect_class(value: Optional[str], tool_name: str) -> str:
+    if value in VALID_SIDE_EFFECT_CLASSES:
+        return value
+    normalized = (value or "").strip() or "unknown"
+    warn_key = (run_id or "unknown", tool_name, normalized)
+    if warn_key not in _invalid_side_effect_warnings:
+        _invalid_side_effect_warnings.add(warn_key)
+        logfire.warning(
+            "invalid_side_effect_class_defaulting_external",
+            run_id=run_id,
+            tool_name=tool_name,
+            side_effect_class=value,
+        )
+    return "external"
 
 
 def _is_task_output_name(raw_tool_name: str) -> bool:
@@ -3205,7 +3376,46 @@ def parse_cli_args() -> argparse.Namespace:
         action="store_true",
         help="Fork an existing run using provider session state (requires --run-id).",
     )
+    parser.add_argument(
+        "--explain-tool-policy",
+        dest="explain_tool_policy",
+        help="Explain resolved tool policy for a raw tool name.",
+    )
     return parser.parse_args()
+
+
+def _print_tool_policy_explain(raw_tool_name: str) -> None:
+    identity = parse_tool_identity(raw_tool_name)
+    policy = resolve_tool_policy(identity.tool_name, identity.tool_namespace)
+    side_effect_class = classify_tool(
+        identity.tool_name,
+        identity.tool_namespace,
+        metadata={"raw_tool_name": raw_tool_name},
+    )
+    replay_policy = classify_replay_policy(
+        identity.tool_name,
+        identity.tool_namespace,
+        metadata={"raw_tool_name": raw_tool_name},
+    )
+
+    print("Tool policy explain")
+    print(f"- raw_tool_name: {raw_tool_name}")
+    print(f"- tool_name: {identity.tool_name}")
+    print(f"- tool_namespace: {identity.tool_namespace}")
+    print(f"- side_effect_class: {side_effect_class}")
+    print(f"- replay_policy: {replay_policy}")
+    if policy:
+        patterns = [pattern.pattern for pattern in policy.patterns]
+        source = policy.source_path or "unknown"
+        print("- matched_policy: yes")
+        print(f"  - name: {policy.name}")
+        print(f"  - namespace: {policy.tool_namespace or 'any'}")
+        print(f"  - patterns: {patterns}")
+        print(f"  - side_effect_class: {policy.side_effect_class}")
+        print(f"  - replay_policy: {policy.replay_policy}")
+        print(f"  - source: {source}")
+    else:
+        print("- matched_policy: no")
 
 
 
@@ -4003,6 +4213,12 @@ async def main(args: argparse.Namespace):
     
     budget_config = load_budget_config()
     runtime_db_conn = connect_runtime_db()
+    validate_tool_policies()
+
+    if args.explain_tool_policy:
+        _print_tool_policy_explain(args.explain_tool_policy)
+        main_span.__exit__(None, None, None)
+        return
 
     run_spec = None
     workspace_override = None

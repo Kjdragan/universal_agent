@@ -46,6 +46,13 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - Workspace paths resolved to absolute paths in job prompts to avoid $PWD drift.
 - Monotonic step_index across recovery/continuation for audit clarity.
 
+### Phase 4 (operator + worker + receipts + policy audit)
+- Operator CLI: `ua runs list/show/tail/cancel` with DB-backed cancel flags.
+- Worker mode: lease/heartbeat-based background runner (`python -m universal_agent.worker`).
+- Receipts export: `ua runs receipts` (md/json) with external ID extraction.
+- Policy audit: `ua policy audit` with unknown-tool detection and input variance report.
+- Requirement: add a numbered-prefix project doc for each ticket after completion.
+
 ### Research pipeline hardening (supporting durable runs)
 - `finalize_research` builds a filtered corpus in `search_results_filtered_best/`.
 - Filter rules loosened to retain more usable sources.
@@ -69,9 +76,14 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/008_durable_runner_architecture.md`
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/009_relaunch_resume_evaluation.md`
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/011_relaunch_resume_evaluation_post_fix_v2.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/010_phase4_ticket1_operator_cli.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/012_phase4_ticket2_worker_mode.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/013_phase4_ticket4_receipts.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/014_phase4_ticket3_policy_audit.md`
+- `Project_Documentation/Long_Running_Agent_Design/tracking_development/015_durability_smoke_script.md`
 
 ## Current status
-Phase 3 durability features are implemented and validated on both quick_resume_job.json and relaunch_resume_job.json. Replay is deterministic, recovery is constrained, side effects are not duplicated, and run-wide summaries are written at completion. Remaining rough edges are mostly noise (headless Chrome DBus warnings) and optional tightening (subagent workspace exploration). The next planned scope is the Phase 4 ticket pack (operator CLI, worker mode, policy audit, receipt summaries, trigger scaffolding) in `Project_Documentation/Long_Running_Agent_Design/Phase4_Ticket_Pack.md`.
+Phase 3 durability features are implemented and validated on both quick_resume_job.json and relaunch_resume_job.json. Replay is deterministic, recovery is constrained, side effects are not duplicated, and run-wide summaries are written at completion. Phase 4 now includes operator CLI, worker mode, receipts export, and policy audit; remaining Phase 4 work is triggers. A new smoke script is available in `scripts/durability_smoke.py` and documented in `Project_Documentation/Long_Running_Agent_Design/tracking_development/015_durability_smoke_script.md`. The next planned scope is the remaining tickets in `Project_Documentation/Long_Running_Agent_Design/Durable_Jobs_Next_Steps_Ticket_Pack.md`.
 
 ## Latest durability test results (reference run)
 - Run ID: `e7339747-5675-48d5-8248-02bb59561a29`

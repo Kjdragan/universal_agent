@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2026-01-02 17:24 CST
+**Last Updated**: 2026-01-02 21:39 CST
 
 ---
 
@@ -43,6 +43,8 @@
 | **Memory System** | ✅ Working | Core blocks, archival search |
 | **Logfire Tracing** | ✅ Working | Dual Trace (Main + Subprocess) |
 | **Durable Runs (Phase 0–3)** | ✅ Working | Run/step tracking, checkpoints, replay policy, RELAUNCH |
+| **Operator CLI + Worker Mode** | ✅ Working | Runs list/show/tail/cancel + lease-based worker |
+| **Policy Audit + Receipts** | ✅ Working | Tool policy audit + side-effect receipt export |
 | **Run-Wide Completion Summary** | ✅ Working | Aggregated tool/step summary across resumes |
 | **Filtered Research Corpus** | ✅ Working | `finalize_research` + filtered corpus + overview |
 
@@ -59,6 +61,11 @@
 9. **Filter Tuning**: Looser drop thresholds; explicit filtered vs dropped tables in overview.
 10. **Report Prompt Unification**: Report sub-agent now uses filtered corpus only (no raw crawl reads).
 11. **MCP Server Fix**: Syntax/indent error fixed; Crawl4AI Cloud API handling stabilized.
+12. **Operator CLI**: `ua runs list/show/tail/cancel` + cancellation guardrails.
+13. **Worker Mode**: Lease/heartbeat worker entrypoint for background runs.
+14. **Policy Audit**: Unknown-tool detection + policy audit report (`ua policy audit`).
+15. **Receipts Export**: Side-effect receipt summary (`ua runs receipts`).
+16. **Durability Smoke Script**: One-command crash → resume → verify (`scripts/durability_smoke.py`).
 
 ---
 
@@ -84,11 +91,13 @@
 Source of truth: `Project_Documentation/Long_Running_Agent_Design/Phase4_Ticket_Pack.md`
 
 Planned work (in recommended sequence):
-1) **Operator CLI**: list/show/tail/cancel runs from the runtime DB.
-2) **Worker mode**: background execution with leasing + heartbeat.
-3) **Receipt summaries**: export side-effect receipts for auditability.
-4) **Policy audit**: unknown-tool detection + classification report.
-5) **Triggers**: cron/webhook scaffolding to queue runs.
+1) **Operator CLI**: list/show/tail/cancel runs from the runtime DB. ✅ Implemented
+2) **Worker mode**: background execution with leasing + heartbeat. ✅ Implemented
+3) **Receipt summaries**: export side-effect receipts for auditability. ✅ Implemented
+4) **Policy audit**: unknown-tool detection + classification report. ✅ Implemented
+5) **Triggers**: cron/webhook scaffolding to queue runs. ⏳ Pending
+
+Requirement: **Create a numbered-prefix project doc for each ticket after completion** (tracking_development/NNN_*.md).
 
 ## 🏗️ Architecture Overview
 
@@ -232,6 +241,7 @@ curl https://web-production-3473.up.railway.app/health
 | 5 | `002_LESSONS_LEARNED.md` | Patterns and gotchas |
 | 6 | `Project_Documentation/Long_Running_Agent_Design/` | Durable Jobs v1 + tracking |
 | 7 | `Project_Documentation/Long_Running_Agent_Design/Phase4_Ticket_Pack.md` | Next-phase ticket pack (operator/worker/policy/receipts/triggers) |
+| 8 | `Project_Documentation/Long_Running_Agent_Design/Durable_Jobs_Next_Steps_Ticket_Pack.md` | Next steps (smoke test/runbook) |
 
 ### Latest Durability Reports (Read These)
 | Doc | Purpose |
@@ -241,6 +251,11 @@ curl https://web-production-3473.up.railway.app/health
 | `Project_Documentation/Long_Running_Agent_Design/tracking_development/008_durable_runner_architecture.md` | Current durability architecture |
 | `Project_Documentation/Long_Running_Agent_Design/tracking_development/009_relaunch_resume_evaluation.md` | Relaunch resume evaluation (Task + side effects) |
 | `Project_Documentation/Long_Running_Agent_Design/tracking_development/011_relaunch_resume_evaluation_post_fix_v2.md` | Post-fix evaluation with run-wide summary |
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/010_phase4_ticket1_operator_cli.md` | Ticket 1 implementation (Operator CLI) |
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/012_phase4_ticket2_worker_mode.md` | Ticket 2 implementation (Worker mode) |
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/013_phase4_ticket4_receipts.md` | Ticket 4 implementation (Receipts) |
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/014_phase4_ticket3_policy_audit.md` | Ticket 3 implementation (Policy audit) |
+| `Project_Documentation/Long_Running_Agent_Design/tracking_development/015_durability_smoke_script.md` | Smoke test script runbook |
 
 ---
 

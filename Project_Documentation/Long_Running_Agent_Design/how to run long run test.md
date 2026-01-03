@@ -32,12 +32,29 @@ PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
 - The resume command always requires the original Run ID.
 - The job file should include either `prompt` or `objective`. If only `objective` is present, it is used as the prompt, with inputs/constraints appended.
 
+## Ticket Features in This Flow (with Ticket Numbers)
+- Phase 0–3: Runtime DB + tool ledger (runs/steps/tool_calls/checkpoints)
+- Phase 0–3: Replay policies: REPLAY_EXACT / REPLAY_IDEMPOTENT / RELAUNCH
+- Phase 0–3: Task relaunch on resume (TaskOutput/TaskResult guardrail)
+- Phase 0–3: In-flight tool replay + recovery-only tool enforcement
+- Phase 0–3: Run-wide completion summary (aggregated across resumes)
+- Phase 0–3: Provider session continuity with fallback
+- Phase 0–3: Crash hooks for tool-boundary failure injection
+- Phase 0–3: Config-driven tool policies (`durable/tool_policies.yaml`)
+- Phase 4 — Ticket 1: Operator CLI (`ua runs list/show/tail/cancel`)
+- Phase 4 — Ticket 2: Worker mode (lease/heartbeat background runner)
+- Phase 4 — Ticket 3: Policy audit (`ua policy audit`)
+- Phase 4 — Ticket 4: Receipts export (`ua runs receipts`)
+- Next Steps — Ticket 7: Durability smoke script (`scripts/durability_smoke.py`)
+
 ## Crash Hooks (Test-Only)
 Use these env vars to force a hard crash right after a tool succeeds, either
 before or after the ledger commit. This is for durability/idempotency testing.
 
-- `UA_TEST_CRASH_AFTER_TOOL=<raw_tool_name>`
+- `UA_TEST_CRASH_AFTER_TOOL=<raw_or_normalized_tool_name>` (case-insensitive)
 - `UA_TEST_CRASH_AFTER_TOOL_CALL_ID=<tool_call_id>`
+- `UA_TEST_CRASH_AFTER_PHASE=<phase>` (optional)
+- `UA_TEST_CRASH_AFTER_STEP=<step_id>` (optional)
 - `UA_TEST_CRASH_STAGE=after_tool_success_before_ledger_commit` (default) or
   `after_ledger_mark_succeeded`
 

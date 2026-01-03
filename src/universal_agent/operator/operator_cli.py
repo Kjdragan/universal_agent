@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import time
 from collections import deque
@@ -8,7 +9,11 @@ from .operator_db import (
     get_last_checkpoint,
     get_run,
     list_runs,
+    list_receipt_tool_calls,
     list_tool_calls,
+    policy_counts_by_side_effect,
+    policy_input_variance,
+    policy_unknown_tools,
     request_cancel,
     tail_tool_calls,
 )
@@ -42,6 +47,38 @@ def _read_last_lines(path: str, lines: int) -> list[str]:
     except FileNotFoundError:
         return []
     return list(queue)
+
+
+def _collect_external_ids(payload: object, keys: set[str], found: dict[str, set[str]]) -> None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in keys and value is not None and value != "":
+                found.setdefault(key, set()).add(str(value))
+            _collect_external_ids(value, keys, found)
+    elif isinstance(payload, list):
+        for item in payload:
+            _collect_external_ids(item, keys, found)
+
+
+def _extract_external_ids(response_ref: Optional[str]) -> dict[str, list[str]]:
+    if not response_ref:
+        return {}
+    try:
+        parsed = json.loads(response_ref)
+    except json.JSONDecodeError:
+        return {}
+    keys = {
+        "id",
+        "message_id",
+        "threadId",
+        "thread_id",
+        "s3key",
+        "request_id",
+        "log_id",
+    }
+    found: dict[str, set[str]] = {}
+    _collect_external_ids(parsed, keys, found)
+    return {key: sorted(values) for key, values in found.items()}
 
 
 def _tail_file(path: str, lines: int, follow: bool, poll: float) -> None:
@@ -175,6 +212,100 @@ def _cmd_runs_cancel(run_id: str, reason: Optional[str]) -> None:
     print(f"Cancel requested for run {run_id}.")
 
 
+def _cmd_runs_receipts(run_id: str, output_format: str) -> None:
+    rows = list_receipt_tool_calls(run_id)
+    receipts = []
+    for row in rows:
+        external_ids = _extract_external_ids(row.get("response_ref"))
+        if row.get("external_correlation_id"):
+            external_ids.setdefault("external_correlation_id", []).append(
+                str(row["external_correlation_id"])
+            )
+        receipts.append(
+            {
+                "tool_call_id": row.get("tool_call_id"),
+                "created_at": row.get("created_at"),
+                "raw_tool_name": row.get("raw_tool_name"),
+                "tool_name": row.get("tool_name"),
+                "tool_namespace": row.get("tool_namespace"),
+                "side_effect_class": row.get("side_effect_class"),
+                "replay_policy": row.get("replay_policy"),
+                "status": row.get("status"),
+                "idempotency_key": row.get("idempotency_key"),
+                "external_ids": external_ids,
+            }
+        )
+    if output_format == "json":
+        print(json.dumps(receipts, indent=2))
+        return
+    print(f"# Run receipts ({run_id})")
+    print("")
+    if not receipts:
+        print("No side-effect receipts found.")
+        return
+    print("| created_at | tool | status | replay_policy | idempotency_key | external_ids |")
+    print("|---|---|---|---|---|---|")
+    for receipt in receipts:
+        tool_label = receipt.get("raw_tool_name") or f"{receipt.get('tool_namespace')}:{receipt.get('tool_name')}"
+        external_parts = []
+        for key, values in (receipt.get("external_ids") or {}).items():
+            external_parts.append(f"{key}=" + ",".join(values))
+        external_text = "; ".join(external_parts) if external_parts else ""
+        print(
+            f"| {receipt.get('created_at')} | {tool_label} | {receipt.get('status')} | "
+            f"{receipt.get('replay_policy')} | {receipt.get('idempotency_key')} | {external_text} |"
+        )
+
+
+def _cmd_policy_audit(output_format: str, limit: int) -> None:
+    counts = policy_counts_by_side_effect()
+    unknown = policy_unknown_tools(limit=limit)
+    variance = policy_input_variance(limit=limit)
+    if output_format == "json":
+        payload = {
+            "counts_by_side_effect": counts,
+            "unknown_tools": unknown,
+            "input_variance": variance,
+        }
+        print(json.dumps(payload, indent=2))
+        return
+
+    print("# Tool policy audit")
+    print("")
+    print("## Counts by side_effect_class")
+    if not counts:
+        print("No tool calls found.")
+    else:
+        print("| side_effect_class | count |")
+        print("|---|---|")
+        for row in counts:
+            print(f"| {row.get('side_effect_class')} | {row.get('count')} |")
+
+    print("\n## Tools without explicit policy matches")
+    if not unknown:
+        print("None.")
+    else:
+        print("| tool_namespace | tool_name | raw_tool_name | count |")
+        print("|---|---|---|---|")
+        for row in unknown:
+            print(
+                f"| {row.get('tool_namespace')} | {row.get('tool_name')} | "
+                f"{row.get('raw_tool_name') or ''} | {row.get('count')} |"
+            )
+
+    print("\n## Tools with input variance (distinct normalized inputs > 1)")
+    if not variance:
+        print("None.")
+    else:
+        print("| tool_namespace | tool_name | distinct_inputs | distinct_runs |")
+        print("|---|---|---|---|")
+        for row in variance:
+            print(
+                f"| {row.get('tool_namespace')} | {row.get('tool_name')} | "
+                f"{row.get('distinct_inputs')} | {row.get('distinct_runs')} |"
+            )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ua", description="Universal Agent operator CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -202,23 +333,40 @@ def build_parser() -> argparse.ArgumentParser:
     cancel_parser.add_argument("--run-id", required=True)
     cancel_parser.add_argument("--reason", default=None)
 
+    receipts_parser = runs_sub.add_parser("receipts", help="Show side-effect receipt summary")
+    receipts_parser.add_argument("--run-id", required=True)
+    receipts_parser.add_argument("--format", choices=["md", "json"], default="md")
+
+    policy_parser = subparsers.add_parser("policy", help="Policy audit commands")
+    policy_sub = policy_parser.add_subparsers(dest="policy_cmd", required=True)
+    audit_parser = policy_sub.add_parser("audit", help="Audit tool policy coverage")
+    audit_parser.add_argument("--format", choices=["md", "json"], default="md")
+    audit_parser.add_argument("--limit", type=int, default=50)
+
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.runs_cmd == "list":
+    runs_cmd = getattr(args, "runs_cmd", None)
+    if runs_cmd == "list":
         _cmd_runs_list(args.status, args.limit)
         return 0
-    if args.runs_cmd == "show":
+    if runs_cmd == "show":
         _cmd_runs_show(args.run_id)
         return 0
-    if args.runs_cmd == "tail":
+    if runs_cmd == "tail":
         _cmd_runs_tail(args.run_id, args.source, args.follow, args.lines, args.poll)
         return 0
-    if args.runs_cmd == "cancel":
+    if runs_cmd == "cancel":
         _cmd_runs_cancel(args.run_id, args.reason)
+        return 0
+    if runs_cmd == "receipts":
+        _cmd_runs_receipts(args.run_id, args.format)
+        return 0
+    if args.command == "policy" and args.policy_cmd == "audit":
+        _cmd_policy_audit(args.format, args.limit)
         return 0
     return 1
 

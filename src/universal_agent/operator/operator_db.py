@@ -106,6 +106,69 @@ def list_tool_calls(run_id: str, limit: int = 10) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def list_receipt_tool_calls(run_id: str) -> list[dict[str, Any]]:
+    conn = connect_runtime_db()
+    rows = conn.execute(
+        """
+        SELECT tool_call_id, created_at, raw_tool_name, tool_name, tool_namespace,
+               side_effect_class, replay_policy, status, idempotency_key,
+               response_ref, external_correlation_id
+        FROM tool_calls
+        WHERE run_id = ? AND side_effect_class != 'read_only'
+        ORDER BY created_at ASC
+        """,
+        (run_id,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def policy_counts_by_side_effect() -> list[dict[str, Any]]:
+    conn = connect_runtime_db()
+    rows = conn.execute(
+        """
+        SELECT side_effect_class, COUNT(*) AS count
+        FROM tool_calls
+        GROUP BY side_effect_class
+        ORDER BY count DESC
+        """
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def policy_unknown_tools(limit: int = 50) -> list[dict[str, Any]]:
+    conn = connect_runtime_db()
+    rows = conn.execute(
+        """
+        SELECT tool_namespace, tool_name, raw_tool_name, COUNT(*) AS count
+        FROM tool_calls
+        WHERE policy_matched IS NULL OR policy_matched = 0
+        GROUP BY tool_namespace, tool_name, raw_tool_name
+        ORDER BY count DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def policy_input_variance(limit: int = 50) -> list[dict[str, Any]]:
+    conn = connect_runtime_db()
+    rows = conn.execute(
+        """
+        SELECT tool_namespace, tool_name,
+               COUNT(DISTINCT normalized_args_hash) AS distinct_inputs,
+               COUNT(DISTINCT run_id) AS distinct_runs
+        FROM tool_calls
+        GROUP BY tool_namespace, tool_name
+        HAVING distinct_inputs > 1
+        ORDER BY distinct_inputs DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def request_cancel(run_id: str, reason: Optional[str]) -> bool:
     conn = connect_runtime_db()
     row = conn.execute("SELECT run_id FROM runs WHERE run_id = ?", (run_id,)).fetchone()
