@@ -9,6 +9,7 @@ from universal_agent.durable.state import (
     get_run,
     get_step_count,
     update_run_status,
+    update_run_provider_session,
 )
 
 
@@ -43,3 +44,17 @@ def test_run_lifecycle_and_steps():
         ("step-1",),
     ).fetchone()
     assert step["status"] == "succeeded"
+
+
+def test_update_run_provider_session_fields():
+    conn = _conn()
+    run_id = "run-provider"
+    spec = {"objective": "demo"}
+
+    upsert_run(conn, run_id, "cli", spec, status="running")
+    update_run_provider_session(conn, run_id, "session-1", forked_from="base-1")
+
+    row = get_run(conn, run_id)
+    assert row["provider_session_id"] == "session-1"
+    assert row["provider_session_forked_from"] == "base-1"
+    assert row["provider_session_last_seen_at"] is not None

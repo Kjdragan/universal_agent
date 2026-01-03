@@ -2089,6 +2089,96 @@ def _ensure_task_key(tool_input: dict[str, Any]) -> tuple[dict[str, Any], str]:
     return relaunch_input, str(task_key)
 
 
+def _subagent_output_dir(workspace_dir: str, task_key: str) -> str:
+    return os.path.join(workspace_dir, "subagent_outputs", task_key)
+
+
+def _subagent_output_paths(workspace_dir: str, task_key: str) -> dict[str, str]:
+    base_dir = _subagent_output_dir(workspace_dir, task_key)
+    return {
+        "dir": base_dir,
+        "json": os.path.join(base_dir, "subagent_output.json"),
+        "summary": os.path.join(base_dir, "subagent_summary.md"),
+    }
+
+
+def _subagent_output_available(workspace_dir: str, task_key: str) -> bool:
+    if not workspace_dir or not task_key:
+        return False
+    paths = _subagent_output_paths(workspace_dir, task_key)
+    output_path = paths["json"]
+    if not os.path.exists(output_path):
+        return False
+    if os.path.getsize(output_path) <= 0:
+        return False
+    try:
+        with open(output_path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return False
+    if not isinstance(data, dict):
+        return False
+    output_str = (data.get("output_str") or "").strip()
+    output_payload = data.get("output")
+    return bool(output_str or output_payload)
+
+
+def _persist_subagent_output(
+    *,
+    workspace_dir: str,
+    tool_use_id: Optional[str],
+    tool_input: dict[str, Any],
+    raw_tool_name: str,
+    output: Any,
+    output_str: str,
+) -> Optional[dict[str, str]]:
+    if not workspace_dir:
+        return None
+    _, task_key = _ensure_task_key(tool_input)
+    paths = _subagent_output_paths(workspace_dir, task_key)
+    os.makedirs(paths["dir"], exist_ok=True)
+    payload = {
+        "task_key": task_key,
+        "tool_use_id": tool_use_id,
+        "run_id": run_id,
+        "step_id": current_step_id,
+        "raw_tool_name": raw_tool_name,
+        "tool_input": tool_input,
+        "output": output,
+        "output_str": output_str,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        with open(paths["json"], "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, default=str)
+        summary_preview = output_str.strip()
+        if len(summary_preview) > 4000:
+            summary_preview = summary_preview[:4000] + "..."
+        summary_lines = [
+            f"# Subagent Output ({task_key})",
+            "",
+            f"- tool_use_id: {tool_use_id or 'unknown'}",
+            f"- raw_tool_name: {raw_tool_name}",
+            f"- run_id: {run_id}",
+            f"- step_id: {current_step_id}",
+            "",
+            "## Output Preview",
+            "",
+            summary_preview or "_(no output text captured)_",
+            "",
+        ]
+        with open(paths["summary"], "w", encoding="utf-8") as handle:
+            handle.write("\n".join(summary_lines))
+    except Exception as exc:
+        logfire.warning(
+            "subagent_output_persist_failed",
+            task_key=task_key,
+            error=str(exc),
+        )
+        return None
+    return paths
+
+
 def _raw_tool_name_from_identity(tool_name: str, tool_namespace: str) -> str:
     if tool_namespace == "claude_code":
         if tool_name == "bash":
@@ -2253,6 +2343,29 @@ async def reconcile_inflight_tools(
     for item in inflight:
         if item.get("replay_policy") == "RELAUNCH":
             relaunch_step_id = item.get("step_id") or current_step_id or "unknown"
+            if tool_ledger and workspace_dir:
+                tool_input = item.get("tool_input") if isinstance(item.get("tool_input"), dict) else {}
+                _, task_key = _ensure_task_key(tool_input)
+                if task_key and _subagent_output_available(workspace_dir, task_key):
+                    output_paths = _subagent_output_paths(workspace_dir, task_key)
+                    tool_ledger.mark_succeeded(
+                        item["tool_call_id"],
+                        {
+                            "status": "subagent_output_reused",
+                            "task_key": task_key,
+                            "output_path": output_paths["json"],
+                        },
+                    )
+                    tool_ledger.mark_replay_status(
+                        item["tool_call_id"], "skipped_output_present"
+                    )
+                    logfire.info(
+                        "relaunch_skipped_output_present",
+                        tool_call_id=item["tool_call_id"],
+                        task_key=task_key,
+                        output_path=output_paths["json"],
+                    )
+                    continue
             relaunched = _relaunch_inflight_task(item, run_id, relaunch_step_id)
             if tool_ledger:
                 abandon_detail = (
@@ -3145,6 +3258,21 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             if tool_name == "Task":
                                 logfire.set_baggage(agent="main")
                                 logfire.set_baggage(is_subagent="false")
+                                if not is_error and OBSERVER_WORKSPACE_DIR:
+                                    paths = _persist_subagent_output(
+                                        workspace_dir=OBSERVER_WORKSPACE_DIR,
+                                        tool_use_id=str(tool_use_id) if tool_use_id else None,
+                                        tool_input=tool_input or {},
+                                        raw_tool_name=tool_name or "Task",
+                                        output=block_content,
+                                        output_str=content_str,
+                                    )
+                                    if paths:
+                                        logfire.info(
+                                            "subagent_output_persisted",
+                                            task_key=os.path.basename(paths["dir"]),
+                                            output_path=paths["json"],
+                                        )
                                 
                             if tool_name and OBSERVER_WORKSPACE_DIR:
                                 # Search results observer - pass typed content
