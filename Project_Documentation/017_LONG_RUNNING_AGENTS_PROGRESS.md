@@ -39,6 +39,7 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - Replay policy classification added (REPLAY_EXACT, REPLAY_IDEMPOTENT, RELAUNCH).
 - RELAUNCH path for Task: on resume, abandon original Task and enqueue a deterministic re-launch.
 - TaskOutput/TaskResult guardrail: force RELAUNCH and block direct invocation.
+- Task replay normalization: `resume` is mapped to `task_key` so replay matching is deterministic.
 - Recovery-mode guard prevents tool calls after forced replay queue drains.
 - Config-driven tool policy map in `durable/tool_policies.yaml`.
 - Crash hooks for tool-boundary fault injection (UA_TEST_CRASH_AFTER_TOOL, etc.).
@@ -81,9 +82,11 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/013_phase4_ticket4_receipts.md`
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/014_phase4_ticket3_policy_audit.md`
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/015_durability_smoke_script.md`
+- `Project_Documentation/Long_Running_Agent_Design/Durability_Testing_Master_Test.md`
+- `Project_Documentation/Long_Running_Agent_Design/Durability_Testing_Runbook.md`
 
 ## Current status
-Phase 3 durability features are implemented and validated on both quick_resume_job.json and relaunch_resume_job.json. Replay is deterministic, recovery is constrained, side effects are not duplicated, and run-wide summaries are written at completion. Phase 4 now includes operator CLI, worker mode, receipts export, and policy audit; remaining Phase 4 work is triggers. A new smoke script is available in `scripts/durability_smoke.py` and documented in `Project_Documentation/Long_Running_Agent_Design/tracking_development/015_durability_smoke_script.md`. The next planned scope is the remaining tickets in `Project_Documentation/Long_Running_Agent_Design/Durable_Jobs_Next_Steps_Ticket_Pack.md`.
+Phase 3 durability features are implemented with deterministic replay, Task relaunch guardrails, and crash-hook driven fault injection. Recovery now forces Complex Path during replay and blocks TaskOutput. Phase 4 includes operator CLI, worker mode, receipts export, and policy audit; remaining Phase 4 work is triggers. The durability suite is fully documented in the master test and runbook, with the matrix in `docs/durability_test_matrix.md` and the read-only job in `tmp/read_only_resume_job.json`. A smoke script exists in `scripts/durability_smoke.py` with documentation in `Project_Documentation/Long_Running_Agent_Design/tracking_development/015_durability_smoke_script.md`. The next planned scope is the remaining tickets in `Project_Documentation/Long_Running_Agent_Design/Durable_Jobs_Next_Steps_Ticket_Pack.md`.
 
 ## Latest durability test results (reference run)
 - Run ID: `e7339747-5675-48d5-8248-02bb59561a29`
@@ -91,3 +94,9 @@ Phase 3 durability features are implemented and validated on both quick_resume_j
 - Behavior: interrupted during sleep, resumed cleanly, forced replay re-ran only the sleep, side-effect email sent once after resume
 - Run-wide summary: 8 tools total, 0 failed, 1 replayed, 0 abandoned, 3 steps
 - Evidence: job completion summary in workspace + Logfire traces linked in evaluation report `009_relaunch_resume_evaluation.md`
+### Durability testing toolkit (docs + runbook)
+- Master test specification: `Project_Documentation/Long_Running_Agent_Design/Durability_Testing_Master_Test.md`.
+- Runbook with commands/purpose: `Project_Documentation/Long_Running_Agent_Design/Durability_Testing_Runbook.md`.
+- Matrix: `docs/durability_test_matrix.md` (canonical crash hooks + read-only job).
+- Read-only job spec: `tmp/read_only_resume_job.json`.
+- Instruction: when you want the matrix executed, request the runbook (run the runbook, not the master test).

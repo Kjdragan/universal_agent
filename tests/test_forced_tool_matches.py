@@ -42,3 +42,31 @@ def test_forced_tool_matches_task_rejects_mismatch():
         agent_main._forced_tool_matches("Task", {"prompt": "Different"}, expected)
         is False
     )
+
+
+def test_forced_tool_matches_task_ignores_prompt_whitespace():
+    tool_input = {
+        "subagent_type": "report-creation-expert",
+        "prompt": "Create a report\nwith details.",
+    }
+    expected_input = dict(tool_input)
+    expected_input["task_key"] = deterministic_task_key(expected_input)
+
+    expected = {
+        "tool_name": "task",
+        "tool_namespace": "claude_code",
+        "tool_input": expected_input,
+        "normalized_input": agent_main._normalize_tool_input(expected_input),
+    }
+
+    assert (
+        agent_main._forced_tool_matches(
+            "Task",
+            {
+                "subagent_type": "report-creation-expert",
+                "prompt": "Create   a report  with details.",
+            },
+            expected,
+        )
+        is True
+    )

@@ -36,6 +36,7 @@ from claude_agent_sdk.types import (
     UserMessage,
 )
 from composio import Composio
+from universal_agent.durable.tool_gateway import is_malformed_tool_name
 # Local MCP server provides: crawl_parallel, read_local_file, write_local_file
 
 
@@ -78,6 +79,48 @@ LOGFIRE_TOKEN = (
     or os.getenv("LOGFIRE_WRITE_TOKEN")
     or os.getenv("LOGFIRE_API_KEY")
 )
+
+DISALLOWED_TOOLS = [
+    "TaskOutput",
+    "TaskResult",
+    "taskoutput",
+    "taskresult",
+    "mcp__composio__TaskOutput",
+    "mcp__composio__TaskResult",
+]
+
+_TOOL_KNOWLEDGE_CONTENT: Optional[str] = None
+_TOOL_KNOWLEDGE_BLOCK: Optional[str] = None
+
+
+def _load_tool_knowledge() -> str:
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    knowledge_dir = os.path.join(project_root, ".claude", "knowledge")
+    if not os.path.exists(knowledge_dir):
+        return ""
+    knowledge_parts = []
+    for filename in sorted(os.listdir(knowledge_dir)):
+        if filename.endswith(".md"):
+            filepath = os.path.join(knowledge_dir, filename)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    knowledge_parts.append(f.read())
+            except Exception:
+                pass
+    return "\n\n---\n\n".join(knowledge_parts) if knowledge_parts else ""
+
+
+def _get_tool_knowledge_block() -> str:
+    global _TOOL_KNOWLEDGE_CONTENT, _TOOL_KNOWLEDGE_BLOCK
+    if _TOOL_KNOWLEDGE_CONTENT is None:
+        _TOOL_KNOWLEDGE_CONTENT = _load_tool_knowledge()
+    if _TOOL_KNOWLEDGE_BLOCK is None:
+        _TOOL_KNOWLEDGE_BLOCK = (
+            f"## Tool Knowledge\n{_TOOL_KNOWLEDGE_CONTENT}"
+            if _TOOL_KNOWLEDGE_CONTENT
+            else ""
+        )
+    return _TOOL_KNOWLEDGE_BLOCK or ""
 
 
 def configure_logfire():
@@ -436,6 +479,7 @@ class UniversalAgent:
 
         self.options = ClaudeAgentOptions(
             system_prompt=system_prompt,
+            disallowed_tools=DISALLOWED_TOOLS,
             mcp_servers={
                 "composio": {
                     "type": "http",
@@ -490,7 +534,7 @@ class UniversalAgent:
 
     def _build_system_prompt(self, workspace_path: str) -> str:
         """Build the main system prompt."""
-        return (
+        prompt = (
             f"The current date is: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             "You are a helpful assistant with access to external tools and specialized sub-agents.\n\n"
             "## CRITICAL DELEGATION RULES (ABSOLUTE)\n\n"
@@ -525,10 +569,14 @@ class UniversalAgent:
             "- For any research/report task, delegate to sub-agent.\n\n"
             f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
         )
+        tool_knowledge = _get_tool_knowledge_block()
+        if tool_knowledge:
+            prompt += f"\n\n{tool_knowledge}"
+        return prompt
 
     def _build_subagent_prompt(self, workspace_path: str) -> str:
         """Build the report-creation-expert sub-agent prompt."""
-        return (
+        prompt = (
             f"Report Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
             "You are a **Report Creation Expert** sub-agent. Your job is to create high-quality, "
@@ -599,6 +647,10 @@ class UniversalAgent:
             "- `read_local_file(path)` → Only for reading research_overview.md (single file)\n"
             "- `write_local_file(path, content)` → Save report to file\n"
         )
+        tool_knowledge = _get_tool_knowledge_block()
+        if tool_knowledge:
+            prompt += f"\n\n{tool_knowledge}"
+        return prompt
 
     async def run_query(self, query: str) -> AsyncGenerator[AgentEvent, None]:
         """
@@ -653,6 +705,20 @@ class UniversalAgent:
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
                     if isinstance(block, ToolUseBlock):
+                        if is_malformed_tool_name(block.name):
+                            logfire.warning(
+                                "malformed_tool_name_detected",
+                                tool_name=block.name,
+                                run_id=self.run_id,
+                                step_id=step_id,
+                            )
+                            yield AgentEvent(
+                                type=EventType.ERROR,
+                                data={
+                                    "error": "Malformed tool call name detected.",
+                                    "tool_name": block.name,
+                                },
+                            )
                         tool_record = {
                             "run_id": self.run_id,
                             "step_id": step_id,

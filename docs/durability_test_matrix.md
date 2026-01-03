@@ -22,6 +22,9 @@ WHERE side_effect_class != 'read_only'
 GROUP BY tool_name, status;
 ```
 
+## Notes
+- Task replay input normalization ignores `resume` and will map it to `task_key` in PreToolUse, so replay matching stays deterministic.
+
 ## Matrix
 
 ### 1) Kill during subagent Task (RELAUNCH)
@@ -51,6 +54,7 @@ GROUP BY tool_name, status;
   - `PYTHONPATH=src uv run python -m universal_agent.main --job tmp/relaunch_resume_job.json`
 - Kill after upload tool succeeds:
   - `UA_TEST_CRASH_AFTER_TOOL=upload_to_composio PYTHONPATH=src uv run python -m universal_agent.main --job tmp/relaunch_resume_job.json`
+  - (Canonical) `UA_TEST_CRASH_AFTER_TOOL=mcp__local_toolkit__upload_to_composio ...`
 - Resume:
   - `PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>`
 - Expected:
@@ -62,14 +66,16 @@ GROUP BY tool_name, status;
   - `UA_TEST_CRASH_AFTER_TOOL=GMAIL_SEND_EMAIL \
      UA_TEST_CRASH_STAGE=after_tool_success_before_ledger_commit \
      PYTHONPATH=src uv run python -m universal_agent.main --job tmp/relaunch_resume_job.json`
+  - (Canonical raw tool) `UA_TEST_CRASH_AFTER_TOOL=mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL ...`
+  - Optional matcher: `UA_TEST_CRASH_MATCH=raw|slug|any` (defaults to `raw`).
 - Resume:
   - `PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>`
 - Expected:
   - No duplicate email; ledger idempotency prevents re-send.
 
 ### 5) Kill during read-only step (replay/idempotent)
-- Start job with a read-only tool (e.g., search step or list):
-  - `PYTHONPATH=src uv run python -m universal_agent.main --job tmp/quick_resume_job.json`
+- Start job with a read-only tool (e.g., list/read):
+  - `PYTHONPATH=src uv run python -m universal_agent.main --job tmp/read_only_resume_job.json`
 - Kill during read-only tool call.
 - Resume:
   - `PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>`

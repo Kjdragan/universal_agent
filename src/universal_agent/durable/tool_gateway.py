@@ -3,6 +3,8 @@ from typing import Any, Optional
 
 from .ledger import ToolCallLedger, LedgerReceipt
 
+MALFORMED_TOOL_NAME_MARKERS = ("</arg_key>", "<arg_key>", "</arg_value>", "<arg_value>")
+
 
 @dataclass
 class ToolIdentity:
@@ -21,6 +23,12 @@ def parse_tool_identity(raw_name: str) -> ToolIdentity:
     if raw_name.upper() == "TASK":
         return ToolIdentity(tool_name="task", tool_namespace="claude_code")
     return ToolIdentity(tool_name=raw_name, tool_namespace="composio")
+
+
+def is_malformed_tool_name(raw_name: str) -> bool:
+    if not raw_name:
+        return False
+    return any(marker in raw_name for marker in MALFORMED_TOOL_NAME_MARKERS)
 
 
 @dataclass

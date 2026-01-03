@@ -148,6 +148,16 @@ def load_budget_config() -> dict:
     }
 
 
+DISALLOWED_TOOLS = [
+    "TaskOutput",
+    "TaskResult",
+    "taskoutput",
+    "taskresult",
+    "mcp__composio__TaskOutput",
+    "mcp__composio__TaskResult",
+]
+
+
 # Configure Logfire BEFORE importing Claude SDK
 import logfire
 
@@ -239,7 +249,11 @@ from composio import Composio
 # Durable runtime support
 from universal_agent.durable.db import connect_runtime_db
 from universal_agent.durable.ledger import ToolCallLedger
-from universal_agent.durable.tool_gateway import prepare_tool_call, parse_tool_identity
+from universal_agent.durable.tool_gateway import (
+    prepare_tool_call,
+    parse_tool_identity,
+    is_malformed_tool_name,
+)
 from universal_agent.durable.normalize import deterministic_task_key, normalize_json
 from universal_agent.durable.classification import (
     classify_replay_policy,
@@ -254,6 +268,7 @@ from universal_agent.durable.state import (
     start_step,
     complete_step,
     get_run,
+    get_run_status,
     get_step_count,
     is_cancel_requested,
     mark_run_cancelled,
@@ -909,6 +924,25 @@ def load_knowledge() -> str:
     return "\n\n---\n\n".join(knowledge_parts) if knowledge_parts else ""
 
 
+_TOOL_KNOWLEDGE_CONTENT: Optional[str] = None
+_TOOL_KNOWLEDGE_BLOCK: Optional[str] = None
+
+
+def _get_tool_knowledge_content() -> str:
+    global _TOOL_KNOWLEDGE_CONTENT
+    if _TOOL_KNOWLEDGE_CONTENT is None:
+        _TOOL_KNOWLEDGE_CONTENT = load_knowledge()
+    return _TOOL_KNOWLEDGE_CONTENT or ""
+
+
+def _get_tool_knowledge_block() -> str:
+    global _TOOL_KNOWLEDGE_BLOCK
+    if _TOOL_KNOWLEDGE_BLOCK is None:
+        content = _get_tool_knowledge_content()
+        _TOOL_KNOWLEDGE_BLOCK = f"## Tool Knowledge\n{content}" if content else ""
+    return _TOOL_KNOWLEDGE_BLOCK or ""
+
+
 # =============================================================================
 # SKILL DISCOVERY - Parse SKILL.md files for progressive disclosure
 # =============================================================================
@@ -1013,7 +1047,13 @@ async def on_pre_tool_use_ledger(
         }
 
     tool_name = input_data.get("tool_name", "")
+    tool_call_id = str(tool_use_id or uuid.uuid4())
     if _is_task_output_name(tool_name):
+        _mark_run_waiting_for_human(
+            "task_output_tool_call",
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+        )
         return {
             "systemMessage": (
                 "⚠️ TaskOutput/TaskResult is not a callable tool. "
@@ -1025,13 +1065,17 @@ async def on_pre_tool_use_ledger(
                 "permissionDecisionReason": "TaskOutput/TaskResult is not a tool call.",
             },
         }
-    malformed_markers = ("</arg_key>", "<arg_key>", "</arg_value>", "<arg_value>")
-    if any(marker in tool_name for marker in malformed_markers):
+    if is_malformed_tool_name(tool_name):
         logfire.warning(
             "malformed_tool_name_guardrail",
             tool_name=tool_name,
             run_id=run_id,
             step_id=current_step_id,
+        )
+        _mark_run_waiting_for_human(
+            "malformed_tool_name",
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
         )
         return {
             "systemMessage": (
@@ -1046,8 +1090,24 @@ async def on_pre_tool_use_ledger(
             },
         }
     tool_input = input_data.get("tool_input", {}) or {}
+    updated_tool_input = None
+    if isinstance(tool_input, dict) and tool_name.lower() == "task" and "resume" in tool_input:
+        updated_tool_input = dict(tool_input)
+        resume_key = updated_tool_input.pop("resume", None)
+        if resume_key and not updated_tool_input.get("task_key"):
+            updated_tool_input["task_key"] = resume_key
+        tool_input = updated_tool_input
+
+    def _allow_with_updated_input() -> dict:
+        if updated_tool_input is None:
+            return {}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "updatedInput": updated_tool_input,
+            }
+        }
     step_id = current_step_id or "unknown"
-    tool_call_id = str(tool_use_id or uuid.uuid4())
 
     if forced_tool_mode_active and not forced_tool_queue:
         return {
@@ -1063,6 +1123,18 @@ async def on_pre_tool_use_ledger(
         }
 
     if forced_tool_queue:
+        if tool_name in ("Write", "Edit", "MultiEdit"):
+            return {
+                "systemMessage": (
+                    "Recovery in progress: do not use file edit tools. "
+                    "Re-run the exact in-flight tool call shown in the replay queue."
+                ),
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Forced replay active; file edit tool blocked.",
+                },
+            }
         expected = forced_tool_queue[0]
         if _forced_tool_matches(tool_name, tool_input, expected):
             forced_tool_active_ids[tool_call_id] = expected
@@ -1100,7 +1172,7 @@ async def on_pre_tool_use_ledger(
                         "permissionDecisionReason": "Prepared ledger row missing.",
                     },
                 }
-            return {}
+            return _allow_with_updated_input()
         if not _forced_task_active():
             expected_input = json.dumps(expected.get("tool_input") or {}, indent=2)
             expected_tool = expected.get("raw_tool_name") or expected.get("tool_name")
@@ -1251,7 +1323,7 @@ async def on_pre_tool_use_ledger(
                 "permissionDecisionReason": "Prepared ledger row missing.",
             },
         }
-    return {}
+    return _allow_with_updated_input()
 
 
 async def on_post_tool_use_ledger(
@@ -1268,16 +1340,45 @@ async def on_post_tool_use_ledger(
     if not tool_call_id:
         return {}
 
+    ledger_entry = tool_ledger.get_tool_call(tool_call_id) if tool_ledger else None
+    raw_tool_name = (
+        (ledger_entry or {}).get("raw_tool_name")
+        or input_data.get("tool_name", "")
+        or ""
+    )
+    side_effect_class = (ledger_entry or {}).get("side_effect_class")
+    tool_input = input_data.get("tool_input", {}) or {}
+
     tool_response = input_data.get("tool_response")
     is_error = False
     error_detail = ""
+    if input_data.get("is_error"):
+        is_error = True
     if isinstance(tool_response, dict):
         is_error = bool(tool_response.get("is_error") or tool_response.get("error"))
         if tool_response.get("error"):
             error_detail = str(tool_response.get("error"))
 
+    if is_malformed_tool_name(raw_tool_name):
+        _mark_run_waiting_for_human(
+            "malformed_tool_name",
+            tool_name=raw_tool_name,
+            tool_call_id=tool_call_id,
+        )
+
+    expected = None
     if tool_call_id in forced_tool_active_ids:
         expected = forced_tool_active_ids.pop(tool_call_id)
+    elif forced_tool_queue and _forced_tool_matches(raw_tool_name, tool_input, forced_tool_queue[0]):
+        expected = forced_tool_queue[0]
+        logfire.info(
+            "replay_tool_use_id_missing",
+            tool_use_id=tool_call_id,
+            replay_tool_call_id=expected.get("tool_call_id"),
+            raw_tool_name=raw_tool_name,
+        )
+
+    if expected is not None:
         try:
             if is_error:
                 tool_ledger.mark_failed(
@@ -1313,6 +1414,7 @@ async def on_post_tool_use_ledger(
                     raw_tool_name=expected.get("raw_tool_name") or "",
                     tool_call_id=expected["tool_call_id"],
                     stage="after_tool_success_before_receipt",
+                    tool_input=expected.get("tool_input") or {},
                 )
                 if tool_ledger:
                     recorded = tool_ledger.record_receipt_pending(
@@ -1327,6 +1429,7 @@ async def on_post_tool_use_ledger(
                     raw_tool_name=expected.get("raw_tool_name") or "",
                     tool_call_id=expected["tool_call_id"],
                     stage="after_tool_success_before_ledger_commit",
+                    tool_input=expected.get("tool_input") or {},
                 )
                 tool_ledger.mark_succeeded(
                     expected["tool_call_id"], tool_response, external_id
@@ -1338,6 +1441,7 @@ async def on_post_tool_use_ledger(
                     raw_tool_name=expected.get("raw_tool_name") or "",
                     tool_call_id=expected["tool_call_id"],
                     stage="after_ledger_mark_succeeded",
+                    tool_input=expected.get("tool_input") or {},
                 )
                 logfire.info(
                     "replay_mark_succeeded",
@@ -1366,13 +1470,19 @@ async def on_post_tool_use_ledger(
                 step_id=current_step_id,
                 error_detail=error_detail or "tool error",
             )
+            if side_effect_class and side_effect_class != "read_only":
+                _mark_run_waiting_for_human(
+                    "side_effect_tool_failed",
+                    tool_name=raw_tool_name,
+                    tool_call_id=tool_call_id,
+                )
         else:
-            raw_tool_name = ""
-            if tool_ledger:
-                ledger_entry = tool_ledger.get_tool_call(tool_call_id)
-                raw_tool_name = (ledger_entry or {}).get("raw_tool_name") or ""
             if not raw_tool_name:
-                raw_tool_name = input_data.get("tool_name", "") or ""
+                if tool_ledger:
+                    ledger_entry = tool_ledger.get_tool_call(tool_call_id)
+                    raw_tool_name = (ledger_entry or {}).get("raw_tool_name") or ""
+                if not raw_tool_name:
+                    raw_tool_name = input_data.get("tool_name", "") or ""
             external_id = None
             if isinstance(tool_response, dict):
                 external_id = (
@@ -1384,6 +1494,7 @@ async def on_post_tool_use_ledger(
                 raw_tool_name=raw_tool_name,
                 tool_call_id=tool_call_id,
                 stage="after_tool_success_before_receipt",
+                tool_input=tool_input,
             )
             if tool_ledger:
                 recorded = tool_ledger.record_receipt_pending(
@@ -1398,6 +1509,7 @@ async def on_post_tool_use_ledger(
                 raw_tool_name=raw_tool_name,
                 tool_call_id=tool_call_id,
                 stage="after_tool_success_before_ledger_commit",
+                tool_input=tool_input,
             )
             tool_ledger.mark_succeeded(tool_call_id, tool_response, external_id)
             if tool_ledger:
@@ -1406,6 +1518,7 @@ async def on_post_tool_use_ledger(
                 raw_tool_name=raw_tool_name,
                 tool_call_id=tool_call_id,
                 stage="after_ledger_mark_succeeded",
+                tool_input=tool_input,
             )
             logfire.info(
                 "ledger_mark_succeeded",
@@ -1635,18 +1748,50 @@ async def on_pre_task_skill_awareness(
     # Get skill awareness context
     registry = get_skill_awareness_registry()
     awareness_context = registry.get_awareness_context(expected_skills)
-    
+
+    tool_knowledge = _get_tool_knowledge_block()
+    combined_context = ""
     if awareness_context:
+        combined_context = awareness_context
+    if tool_knowledge:
+        combined_context = (
+            f"{combined_context}\n\n{tool_knowledge}".strip()
+            if combined_context
+            else tool_knowledge
+        )
+
+    if combined_context:
         logfire.info(
             "skill_awareness_injected_to_subagent",
             subagent_type=subagent_type,
             expected_skills=expected_skills,
         )
         return {
-            "systemMessage": awareness_context
+            "systemMessage": combined_context
         }
     
     return {}
+
+
+async def on_post_task_guidance(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """
+    PostToolUse Hook: prevent TaskOutput usage by reinforcing relaunch-only guidance.
+    """
+    tool_name = str(input_data.get("tool_name", "") or "")
+    if tool_name.lower() != "task":
+        return {}
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": (
+                "TaskOutput/TaskResult are disabled and will not work. "
+                "Do NOT call them. Wait for SubagentStop guidance or relaunch the Task "
+                "with the original inputs if output is needed."
+            ),
+        }
+    }
 
 
 async def on_user_prompt_skill_awareness(
@@ -1830,6 +1975,27 @@ run_cancelled_by_operator = False
 FORCED_TOOL_MAX_ATTEMPTS = 2
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 WAITING_STATUSES = {"waiting_for_human"}
+
+
+def _mark_run_waiting_for_human(reason: str, *, tool_name: str = "", tool_call_id: str = "") -> None:
+    if runtime_db_conn and run_id:
+        update_run_status(runtime_db_conn, run_id, "waiting_for_human")
+    logfire.warning(
+        "run_waiting_for_human",
+        run_id=run_id,
+        reason=reason,
+        tool_name=tool_name,
+        tool_call_id=tool_call_id,
+    )
+
+
+def _maybe_mark_run_succeeded() -> None:
+    if not runtime_db_conn or not run_id:
+        return
+    status = get_run_status(runtime_db_conn, run_id)
+    if status in WAITING_STATUSES or status in TERMINAL_STATUSES:
+        return
+    update_run_status(runtime_db_conn, run_id, "succeeded")
 
 
 def _resolve_input_paths(
@@ -2033,6 +2199,46 @@ def _normalize_crash_tool_name(value: str) -> str:
     return normalized.strip("_")
 
 
+def _normalized_tool_candidates(raw_tool_name: str) -> set[str]:
+    candidates: set[str] = set()
+    normalized = _normalize_crash_tool_name(raw_tool_name)
+    if normalized:
+        candidates.add(normalized)
+    if raw_tool_name.startswith("mcp__"):
+        parts = raw_tool_name.split("__")
+        if len(parts) >= 3:
+            candidates.add(_normalize_crash_tool_name(parts[-1]))
+    return candidates
+
+
+def _tool_input_slug_matches(
+    tool_input: Optional[dict],
+    normalized_crash_tool: str,
+) -> bool:
+    if not tool_input or not normalized_crash_tool:
+        return False
+
+    def matches(value: Optional[str]) -> bool:
+        if not value:
+            return False
+        return _normalize_crash_tool_name(value) == normalized_crash_tool
+
+    if isinstance(tool_input, dict):
+        if matches(tool_input.get("tool_slug")):
+            return True
+        tools = tool_input.get("tools")
+        if isinstance(tools, str):
+            try:
+                tools = json.loads(tools)
+            except Exception:
+                tools = None
+        if isinstance(tools, list):
+            for item in tools:
+                if isinstance(item, dict) and matches(item.get("tool_slug")):
+                    return True
+    return False
+
+
 def _get_current_step_phase() -> Optional[str]:
     if not runtime_db_conn or not current_step_id:
         return None
@@ -2053,23 +2259,34 @@ def _should_trigger_test_crash(
     raw_tool_name: str,
     tool_call_id: str,
     stage: str,
+    tool_input: Optional[dict] = None,
 ) -> tuple[bool, dict[str, Optional[str]]]:
     crash_tool = os.getenv("UA_TEST_CRASH_AFTER_TOOL")
     crash_id = os.getenv("UA_TEST_CRASH_AFTER_TOOL_CALL_ID")
     crash_stage = os.getenv("UA_TEST_CRASH_STAGE")
     crash_phase = os.getenv("UA_TEST_CRASH_AFTER_PHASE")
     crash_step = os.getenv("UA_TEST_CRASH_AFTER_STEP")
+    crash_match = (os.getenv("UA_TEST_CRASH_MATCH") or "raw").strip().lower()
+    if crash_match not in ("raw", "slug", "any"):
+        crash_match = "raw"
     if not any([crash_tool, crash_id, crash_stage, crash_phase, crash_step]):
         return False, {}
 
-    normalized_tool = _normalize_crash_tool_name(raw_tool_name)
+    normalized_candidates = _normalized_tool_candidates(raw_tool_name)
     normalized_crash_tool = _normalize_crash_tool_name(crash_tool or "")
     current_phase = None
     if crash_phase or crash_step:
         current_phase = _get_current_step_phase()
 
-    if crash_tool and normalized_tool != normalized_crash_tool:
-        return False, {}
+    if crash_tool:
+        raw_match = normalized_crash_tool in normalized_candidates
+        slug_match = _tool_input_slug_matches(tool_input, normalized_crash_tool)
+        if crash_match == "raw" and not raw_match:
+            return False, {}
+        if crash_match == "slug" and not slug_match:
+            return False, {}
+        if crash_match == "any" and not (raw_match or slug_match):
+            return False, {}
     if crash_id and tool_call_id != crash_id:
         return False, {}
     if crash_stage and crash_stage != stage:
@@ -2085,9 +2302,10 @@ def _should_trigger_test_crash(
         "crash_stage": crash_stage,
         "crash_phase": crash_phase,
         "crash_step": crash_step,
+        "crash_match": crash_match,
         "current_step_id": current_step_id,
         "current_phase": current_phase,
-        "normalized_tool_name": normalized_tool,
+        "normalized_tool_name": ",".join(sorted(normalized_candidates)) if normalized_candidates else "",
     }
 
 
@@ -2096,11 +2314,13 @@ def _maybe_crash_after_tool(
     raw_tool_name: str,
     tool_call_id: str,
     stage: str,
+    tool_input: Optional[dict] = None,
 ) -> None:
     should_crash, crash_context = _should_trigger_test_crash(
         raw_tool_name=raw_tool_name,
         tool_call_id=tool_call_id,
         stage=stage,
+        tool_input=tool_input,
     )
     if not should_crash:
         return
@@ -2128,6 +2348,7 @@ def _maybe_crash_after_tool(
             crash_stage=crash_context.get("crash_stage"),
             crash_phase=crash_context.get("crash_phase"),
             crash_step=crash_context.get("crash_step"),
+            crash_match=crash_context.get("crash_match"),
             current_step_id=current_step,
             current_phase=current_phase,
         )
@@ -2175,7 +2396,14 @@ def _normalize_side_effect_class(value: Optional[str], tool_name: str) -> str:
 
 
 def _is_task_output_name(raw_tool_name: str) -> bool:
-    return raw_tool_name.lower() in ("taskoutput", "taskresult")
+    normalized = (raw_tool_name or "").lower()
+    if normalized in ("taskoutput", "taskresult"):
+        return True
+    if normalized.startswith("mcp__"):
+        parts = normalized.split("__")
+        if len(parts) >= 3 and parts[-1] in ("taskoutput", "taskresult"):
+            return True
+    return False
 
 
 def _ensure_task_key(tool_input: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -2286,6 +2514,21 @@ def _raw_tool_name_from_identity(tool_name: str, tool_namespace: str) -> str:
     return tool_name
 
 
+def _normalize_task_prompt(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())
+
+
+def _normalize_task_input(tool_input: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(tool_input or {})
+    normalized.pop("task_key", None)
+    normalized.pop("resume", None)
+    if "prompt" in normalized:
+        normalized["prompt"] = _normalize_task_prompt(normalized.get("prompt"))
+    return normalized
+
+
 def _parse_created_at(value: Any) -> Optional[datetime]:
     if not value:
         return None
@@ -2347,10 +2590,8 @@ def _forced_tool_matches(
     ):
         return False
     if identity.tool_name == "task":
-        actual = dict(tool_input or {})
-        expected_input = dict(expected.get("tool_input") or {})
-        actual.pop("task_key", None)
-        expected_input.pop("task_key", None)
+        actual = _normalize_task_input(tool_input or {})
+        expected_input = _normalize_task_input(expected.get("tool_input") or {})
         normalized_actual = _normalize_tool_input(actual)
         normalized_expected = _normalize_tool_input(expected_input)
         return normalized_actual == normalized_expected
@@ -2424,6 +2665,8 @@ def _build_forced_tool_prompt(queue: list[dict[str, Any]]) -> str:
     lines = [
         "Recovery mode: re-run the in-flight tool calls below in the exact order.",
         "Do NOT run any other tools.",
+        "Do NOT call TaskOutput/TaskResult; they are disabled.",
+        "Do NOT call TodoWrite or provide analysis; run only the listed tool calls.",
         "Use the exact tool name and input shown.",
         "After completing the listed tool calls, respond with DONE and do not invoke any other tools.",
     ]
@@ -2590,7 +2833,7 @@ async def reconcile_inflight_tools(
                 break
             prompt = _build_forced_tool_prompt(forced_tool_queue)
             try:
-                await process_turn(active_client, prompt, workspace_dir)
+                await process_turn(active_client, prompt, workspace_dir, force_complex=True)
             except BudgetExceeded:
                 raise
             except Exception as exc:
@@ -2736,12 +2979,22 @@ def build_resume_packet(
     if last_tool_calls:
         summary_lines.append("recent_tool_calls:")
         for row in last_tool_calls:
+            if (row["tool_name"] or "").lower() == "task":
+                summary_lines.append(
+                    f"- {row['tool_name']} | {row['status']} (do NOT call TaskOutput/TaskResult)"
+                )
+                continue
             summary_lines.append(
                 f"- {row['tool_name']} | {row['status']} | {row['idempotency_key']}"
             )
     if inflight:
         summary_lines.append("in_flight_tool_calls:")
         for row in inflight:
+            if (row["tool_name"] or "").lower() == "task":
+                summary_lines.append(
+                    f"- {row['tool_name']} | {row['status']} (relaunch Task; do NOT call TaskOutput)"
+                )
+                continue
             summary_lines.append(
                 f"- {row['tool_name']} | {row['status']} | {row['idempotency_key']}"
             )
@@ -3116,6 +3369,11 @@ async def continue_job_run(
         f"Resuming job run {run_id}. Continue executing the existing job to completion. "
         "You have access to tool receipts; do not repeat side-effecting tool calls that already "
         "succeeded—reuse receipts. If blocked, set status waiting_for_human with a clear request."
+        "Focus strictly on the job objective and ignore unrelated topics or context."
+        f"\n\nWorkspace: {workspace_dir}\n"
+        "Use absolute paths rooted in the workspace for any local file operations.\n"
+        "Do NOT call TaskOutput/TaskResult; they are not callable tools. "
+        "If you need subagent output, relaunch the Task tool instead.\n"
         "\n\nResume packet:\n"
         f"{resume_packet_summary}"
     )
@@ -3133,10 +3391,11 @@ async def continue_job_run(
         user_input = "\n\n".join(prompt_parts)
 
         try:
-            result = await process_turn(client, user_input, workspace_dir)
+            result = await process_turn(
+                client, user_input, workspace_dir, force_complex=True
+            )
             final_response_text = result.response_text or ""
-            if runtime_db_conn and run_id:
-                update_run_status(runtime_db_conn, run_id, "succeeded")
+            _maybe_mark_run_succeeded()
             return final_response_text
         except BudgetExceeded as exc:
             if runtime_db_conn and run_id:
@@ -3151,11 +3410,10 @@ async def continue_job_run(
                 try:
                     async with ClaudeSDKClient(options) as fallback_client:
                         result = await process_turn(
-                            fallback_client, user_input, workspace_dir
+                            fallback_client, user_input, workspace_dir, force_complex=True
                         )
                     final_response_text = result.response_text or ""
-                    if runtime_db_conn and run_id:
-                        update_run_status(runtime_db_conn, run_id, "succeeded")
+                    _maybe_mark_run_succeeded()
                     return final_response_text
                 except Exception as fallback_exc:
                     error_msg = str(fallback_exc)
@@ -3263,6 +3521,18 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                 with logfire.span("assistant_message", model=msg.model):
                     for block in msg.content:
                         if isinstance(block, ToolUseBlock):
+                            if is_malformed_tool_name(block.name):
+                                logfire.warning(
+                                    "malformed_tool_name_detected",
+                                    tool_name=block.name,
+                                    run_id=run_id,
+                                    step_id=step_id,
+                                )
+                                _mark_run_waiting_for_human(
+                                    "malformed_tool_name_detected",
+                                    tool_name=block.name,
+                                    tool_call_id=str(block.id),
+                                )
                             # Nested tool_use span
                             with logfire.span("tool_use", tool_name=block.name, tool_id=block.id):
                                 tool_record = {
@@ -3906,6 +4176,9 @@ async def setup_session(
     skill_names = [s['name'] for s in discovered_skills]
     print(f"✅ Discovered Skills: {skill_names}")
     skills_xml = generate_skills_xml(discovered_skills)
+    tool_knowledge_content = _get_tool_knowledge_content()
+    tool_knowledge_block = _get_tool_knowledge_block()
+    tool_knowledge_suffix = f"\n\n{tool_knowledge_block}" if tool_knowledge_block else ""
 
     # Create ClaudeAgentOptions now that session is available
     global options
@@ -3935,6 +4208,7 @@ async def setup_session(
     
     options = ClaudeAgentOptions(
         model="claude-3-5-sonnet-20241022",
+        disallowed_tools=DISALLOWED_TOOLS,
         system_prompt=(
             f"Current Date: {today_str}\n"
             f"Tomorrow is: {tomorrow_str}\n"
@@ -4145,6 +4419,7 @@ async def setup_session(
                     "### Step 4: Save Report\n"
                     f"Save as `.html` to `{workspace_dir}/work_products/` using `mcp__local_toolkit__write_local_file`.\n\n"
                     "🚨 START IMMEDIATELY: Call `mcp__local_toolkit__finalize_research`."
+                    + tool_knowledge_suffix
                 ),
                 # Omit 'tools' so sub-agent inherits ALL tools including MCP tools
                 model="inherit",
@@ -4173,6 +4448,7 @@ async def setup_session(
                     "2. Format your message clearly with sections if needed\n"
                     "3. Use `SLACK_SEND_MESSAGE` with the channel ID and formatted message\n\n"
                     "🚨 IMPORTANT: Always use channel IDs (not names) for API calls."
+                    + tool_knowledge_suffix
                 ),
                 model="inherit",
             ),
@@ -4226,6 +4502,7 @@ async def setup_session(
                     "- For charts: describe the data and preferred visualization\\n"
                     "- For editing: describe what to change AND preserve\\n\\n"
                     f"OUTPUT DIRECTORY: {workspace_dir}/work_products/media/"
+                    + tool_knowledge_suffix
                 ),
                 model="inherit",
             ),
@@ -4275,6 +4552,7 @@ async def setup_session(
                     "- Run parallel trims when independent for speed\n"
                     "- If xfade fails, use individual fade_in/fade_out\n\n"
                     "🚨 START IMMEDIATELY: Check if files exist, then process."
+                    + tool_knowledge_suffix
                 ),
                 model="inherit",
             ),
@@ -4290,6 +4568,7 @@ async def setup_session(
             ],
             "PostToolUse": [
                 HookMatcher(matcher=None, hooks=[on_post_tool_use_ledger]),
+                HookMatcher(matcher="Task", hooks=[on_post_task_guidance]),
             ],
             # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
             # "error: 'types.UnionType' object is not callable"
@@ -4344,13 +4623,12 @@ async def setup_session(
     print(f"✅ Injected Session Workspace: {abs_workspace_path}")
 
     # Inject Knowledge Base (Static Tool Guidance)
-    knowledge_content = load_knowledge()
-    if knowledge_content:
+    if tool_knowledge_block:
         if options.system_prompt and isinstance(options.system_prompt, str):
-            options.system_prompt += f"\n\n## Tool Knowledge\n{knowledge_content}"
+            options.system_prompt += f"\n\n{tool_knowledge_block}"
         else:
-             options.system_prompt = f"## Tool Knowledge\n{knowledge_content}"
-        print(f"✅ Injected Knowledge Base ({len(knowledge_content)} chars)")
+            options.system_prompt = tool_knowledge_block
+        print(f"✅ Injected Knowledge Base ({len(tool_knowledge_content)} chars)")
 
 
 
@@ -4358,7 +4636,12 @@ async def setup_session(
 
 
 
-async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: str) -> ExecutionResult:
+async def process_turn(
+    client: ClaudeSDKClient,
+    user_input: str,
+    workspace_dir: str,
+    force_complex: bool = False,
+) -> ExecutionResult:
     """
     Process a single user query.
     Returns: ExecutionResult with rich feedback
@@ -4373,10 +4656,10 @@ async def process_turn(client: ClaudeSDKClient, user_input: str, workspace_dir: 
         logfire.info("query_started", query=user_input)
 
     # 2. Determine Complexity
-    complexity = await classify_query(client, user_input)
+    complexity = "COMPLEX" if force_complex else await classify_query(client, user_input)
 
     # 3. Route Query
-    is_simple = complexity == "SIMPLE"
+    is_simple = (complexity == "SIMPLE") and not force_complex
 
     final_response_text = ""
 
@@ -4982,11 +5265,12 @@ async def main(args: argparse.Namespace):
                             if _handle_cancel_request(runtime_db_conn, run_id, workspace_dir):
                                 auto_resume_complete = True
                                 break
-                            update_run_status(runtime_db_conn, run_id, "succeeded")
+                            _maybe_mark_run_succeeded()
+                            status = get_run_status(runtime_db_conn, run_id) or "succeeded"
                             print_job_completion_summary(
                                 runtime_db_conn,
                                 run_id,
-                                "succeeded",
+                                status,
                                 workspace_dir,
                                 result.response_text or "",
                             )
@@ -5139,7 +5423,7 @@ async def main(args: argparse.Namespace):
             print("\n" + "=" * 80)
             print("Session ended. Thank you!")
             if runtime_db_conn and run_id and not run_failed and not run_cancelled_by_operator:
-                update_run_status(runtime_db_conn, run_id, "succeeded")
+                _maybe_mark_run_succeeded()
                 logfire.info("durable_run_completed", run_id=run_id)
 
     # Close the main span to ensure all nested spans are captured in trace

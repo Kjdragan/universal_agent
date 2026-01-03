@@ -50,3 +50,9 @@ policies:
     replay_policy: REPLAY_EXACT
     patterns:
       - "^Write$"
+  - name: composio_todo_write
+    tool_namespace: composio
+    side_effect_class: memory
+    replay_policy: REPLAY_IDEMPOTENT
+    patterns:
+      - "^TodoWrite$"
