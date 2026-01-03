@@ -1152,6 +1152,8 @@ async def on_pre_tool_use_ledger(
                 }
             return _allow_with_updated_input()
         if tool_name in ("Write", "Edit", "MultiEdit"):
+            if _forced_task_active():
+                return _allow_with_updated_input()
             return {
                 "systemMessage": (
                     "Recovery in progress: do not use file edit tools. "

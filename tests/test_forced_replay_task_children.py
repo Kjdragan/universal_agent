@@ -78,6 +78,18 @@ def test_forced_replay_allows_task_children():
             )
         )
         assert result == {}
+
+        result = asyncio.run(
+            agent_main.on_pre_tool_use_ledger(
+                {
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": "work_products/out.txt", "content": "hi"},
+                },
+                "tool-use-write-claude",
+                {},
+            )
+        )
+        assert result == {}
     finally:
         (
             agent_main.tool_ledger,

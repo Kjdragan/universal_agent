@@ -49,6 +49,7 @@ dependencies = [
     "playwright>=1.49.1",
     "yt-dlp>=2025.01.0",
     "markdown>=3.10",
+    "agentic-learning>=0.4.3",
 ]
 
 

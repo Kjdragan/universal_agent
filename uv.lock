@@ -11,6 +11,23 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "agentic-learning"
+version = "0.4.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "letta-client" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6e/ff/d40b53c7b6f306f858c1114307b375cf4d949841ac0ee6cadee5578a3949/agentic_learning-0.4.3.tar.gz", hash = "sha256:02a50e1f55ac408a6837625a9b594f69447d638a465b06613c084daacffa6299", size = 114583, upload-time = "2025-12-02T20:19:16.709Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ce/7c/2c017baf79eb32f14d3df318c6f9c8f0ac336609008a82e8c46dd4b0590e/agentic_learning-0.4.3-py3-none-any.whl", hash = "sha256:96233e666230a50208ec7c6647e5f0da5c0722c8c128163868db7027d3836a79", size = 34544, upload-time = "2025-12-02T20:19:15.889Z" },
+]
+
+[[package]]
 name = "aiofiles"
 version = "24.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2018,6 +2035,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/da/34/28fff3ab31ccff1fd4f6c7c7b0ceb2b6968d8ea4950663eadcb5720591a0/lark-1.3.1.tar.gz", hash = "sha256:b426a7a6d6d53189d318f2b6236ab5d6429eaf09259f1ca33eb716eed10d2905", size = 382732, upload-time = "2025-10-27T18:25:56.653Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/82/3d/14ce75ef66813643812f3093ab17e46d3a206942ce7376d31ec2d36229e7/lark-1.3.1-py3-none-any.whl", hash = "sha256:c629b661023a014c37da873b4ff58a817398d12635d3bbb2c5a03be7fe5d1e12", size = 113151, upload-time = "2025-10-27T18:25:54.882Z" },
+]
+
+[[package]]
+name = "letta-client"
+version = "1.0.0a20"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b1/32/ada7d968ee14e58d833fc6149b0d4016c5682655ee88c309fc82eecf367b/letta_client-1.0.0a20.tar.gz", hash = "sha256:43a229528d5d8efc3bc105e4e06ba84c7d8da2ae824f6730108bdf63b7c5be50", size = 234625, upload-time = "2025-11-12T23:05:36.999Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/70/da2ebe9c7579d9d6bc0c1d14d3feac8e9435256368d2474629f630d8d89d/letta_client-1.0.0a20-py3-none-any.whl", hash = "sha256:db994e90b27c12b0ebf24e2aed6ee9e40e3834eb7c8cd3ad0b0810be3c43353b", size = 355940, upload-time = "2025-11-12T23:05:34.987Z" },
 ]
 
 [[package]]
@@ -5174,6 +5208,7 @@ name = "universal-agent"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "agentic-learning" },
     { name = "anthropic" },
     { name = "chromadb" },
     { name = "claude-agent-sdk" },
@@ -5224,6 +5259,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agentic-learning", specifier = ">=0.4.3" },
     { name = "anthropic", specifier = ">=0.75.0" },
     { name = "chromadb", specifier = ">=1.4.0" },
     { name = "claude-agent-sdk", specifier = ">=0.1.18" },
