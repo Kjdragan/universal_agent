@@ -2197,6 +2197,14 @@ def _forced_tool_matches(
         or identity.tool_namespace != expected.get("tool_namespace")
     ):
         return False
+    if identity.tool_name == "task":
+        actual = dict(tool_input or {})
+        expected_input = dict(expected.get("tool_input") or {})
+        actual.pop("task_key", None)
+        expected_input.pop("task_key", None)
+        normalized_actual = _normalize_tool_input(actual)
+        normalized_expected = _normalize_tool_input(expected_input)
+        return normalized_actual == normalized_expected
     normalized = _normalize_tool_input(tool_input)
     return normalized == expected.get("normalized_input")
 
