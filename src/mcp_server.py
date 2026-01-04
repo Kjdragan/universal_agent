@@ -40,16 +40,27 @@ else:
 load_dotenv()
 
 # Configure Logfire for MCP observability
+# Session trace ID for consolidation (passed from main agent via env var)
+SESSION_TRACE_ID = os.getenv("UA_SESSION_TRACE_ID", "")
+
 try:
     import logfire
+    from opentelemetry import trace as otel_trace
+    from opentelemetry.trace import SpanContext, TraceFlags
+    
     if os.getenv("LOGFIRE_TOKEN"):
         logfire.configure(
             service_name="local-toolkit",
             send_to_logfire="if-token-present",
         )
         logfire.instrument_mcp()
-        sys.stderr.write("[Local Toolkit] Logfire instrumentation enabled\n")
+        
+        if SESSION_TRACE_ID:
+            sys.stderr.write(f"[Local Toolkit] Logfire enabled - consolidated with main trace: {SESSION_TRACE_ID[:16]}...\n")
+        else:
+            sys.stderr.write("[Local Toolkit] Logfire instrumentation enabled (standalone trace)\n")
 except ImportError:
+    SESSION_TRACE_ID = ""
     pass
 
 TRACE_OUTPUT_ENABLED = os.getenv("UA_EMIT_LOCAL_TRACE_IDS", "1").lower() in {
@@ -60,8 +71,15 @@ TRACE_OUTPUT_ENABLED = os.getenv("UA_EMIT_LOCAL_TRACE_IDS", "1").lower() in {
 
 
 def _current_trace_id() -> Optional[str]:
+    """Get the current trace ID - prefers consolidated session trace if available."""
     if not TRACE_OUTPUT_ENABLED:
         return None
+    
+    # Prefer session trace ID for consolidation
+    if SESSION_TRACE_ID:
+        return SESSION_TRACE_ID
+    
+    # Fallback to current span's trace ID
     try:
         from opentelemetry import trace as otel_trace
 
@@ -1247,12 +1265,22 @@ async def finalize_research(session_dir: str) -> str:
             f.write("\n".join(overview_lines))
         
         # 5. Return Summary
+        # Extract failed URLs for explicit debugging visibility
+        failed_urls = crawl_result.get("errors", [])
+        
         return json.dumps({
             "status": "Research Corpus Finalized",
             "extracted_urls": len(url_list),
             "urls_after_blacklist": len(filtered_urls),
             "sources_scanned": scanned_files,
-            "crawl_summary": crawl_result,
+            "crawl_summary": {
+                "total": crawl_result.get("total", 0),
+                "successful": crawl_result.get("successful", 0),
+                "failed": crawl_result.get("failed", 0),
+                "saved_files": crawl_result.get("saved_files", []),
+            },
+            # Explicit failed URLs at top level for easy debugging
+            "failed_urls": failed_urls,
             "filtered_corpus": {
                 "filtered_dir": filtered_dir,
                 "kept_files": len(filtered_files),
