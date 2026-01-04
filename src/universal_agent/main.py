@@ -310,7 +310,23 @@ MEMORY_MANAGER = None
 # to automatically capture conversations and inject memory.
 LETTA_ENABLED = True
 LETTA_AGENT_NAME = "universal_agent"
-LETTA_MEMORY_BLOCKS = ["human", "system_rules", "project_context"]
+LETTA_MEMORY_BLOCKS = [
+    "human",
+    "system_rules",
+    "project_context",
+    "recent_queries",
+    "recent_reports",
+]
+LETTA_MEMORY_BLOCK_DESCRIPTIONS = {
+    "recent_queries": (
+        "Track recent user requests and tasks run in the Universal Agent. "
+        "Keep a short rolling list with timestamps, request summaries, and outcomes."
+    ),
+    "recent_reports": (
+        "Track the latest reports generated (topic, sub-agent, date, file path, "
+        "recipient or destination). Keep the last few entries."
+    ),
+}
 _LETTA_CONTEXT = None
 _LETTA_CONTEXT_READY = False
 _letta_client = None
@@ -357,7 +373,17 @@ async def _ensure_letta_context() -> None:
     )
     await _LETTA_CONTEXT.__aenter__()
     _LETTA_CONTEXT_READY = True
+    await _ensure_letta_memory_blocks(LETTA_AGENT_NAME)
     print(f"🧠 Letta memory active for '{LETTA_AGENT_NAME}'")
+
+
+def _sanitize_letta_agent_name(name: str) -> str:
+    if not name:
+        return name
+    sanitized = re.sub(r"[^\w\s\-']", "-", name)
+    sanitized = re.sub(r"\s+", " ", sanitized).strip()
+    sanitized = re.sub(r"-{2,}", "-", sanitized)
+    return sanitized or name
 
 
 def _letta_subagent_name(tool_input: dict[str, Any]) -> str:
@@ -365,8 +391,10 @@ def _letta_subagent_name(tool_input: dict[str, Any]) -> str:
     if isinstance(tool_input, dict):
         subagent_type = tool_input.get("subagent_type", "") or ""
     if subagent_type:
-        return f"{LETTA_AGENT_NAME}::{subagent_type}"
-    return f"{LETTA_AGENT_NAME}::{deterministic_task_key(tool_input or {})}"
+        return _sanitize_letta_agent_name(f"{LETTA_AGENT_NAME} {subagent_type}")
+    return _sanitize_letta_agent_name(
+        f"{LETTA_AGENT_NAME} {deterministic_task_key(tool_input or {})}"
+    )
 
 
 async def _ensure_letta_agent(agent_name: str) -> None:
@@ -375,6 +403,7 @@ async def _ensure_letta_agent(agent_name: str) -> None:
     try:
         agent = await _letta_async_client.agents.retrieve(agent=agent_name)
         if agent:
+            await _ensure_letta_memory_blocks(agent_name)
             return
     except Exception:
         pass
@@ -386,6 +415,49 @@ async def _ensure_letta_agent(agent_name: str) -> None:
         )
     except Exception:
         return
+    await _ensure_letta_memory_blocks(agent_name)
+
+
+async def _ensure_letta_memory_blocks(agent_name: str) -> None:
+    if not (LETTA_ENABLED and _letta_async_client and LETTA_MEMORY_BLOCK_DESCRIPTIONS):
+        return
+    try:
+        blocks = await _letta_async_client.memory.list(agent=agent_name)
+    except Exception:
+        return
+
+    existing = {}
+    for block in blocks:
+        label = getattr(block, "label", None)
+        if label:
+            existing[label] = block
+
+    for label, description in LETTA_MEMORY_BLOCK_DESCRIPTIONS.items():
+        if label not in existing:
+            try:
+                await _letta_async_client.memory.create(
+                    agent=agent_name,
+                    label=label,
+                    description=description,
+                )
+            except Exception:
+                continue
+            continue
+
+        block = existing[label]
+        block_description = getattr(block, "description", "") or ""
+        if block_description:
+            continue
+        block_value = getattr(block, "value", "") or ""
+        try:
+            await _letta_async_client.memory.upsert(
+                agent=agent_name,
+                label=label,
+                value=block_value,
+                description=description,
+            )
+        except Exception:
+            continue
 
 
 async def _get_subagent_memory_context(tool_input: dict[str, Any]) -> str:
@@ -1305,7 +1377,39 @@ async def on_pre_tool_use_ledger(
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": "Forced in-flight replay active.",
+                "permissionDecisionReason": "Forced in-flight replay active.",
+            },
+        }
+
+    if "write_local_file" in tool_name.lower():
+        missing_fields = []
+        if not isinstance(tool_input, dict):
+            missing_fields = ["path", "content"]
+        else:
+            if not tool_input.get("path"):
+                missing_fields.append("path")
+            if not tool_input.get("content"):
+                missing_fields.append("content")
+        if missing_fields:
+            logfire.warning(
+                "tool_validation_failed",
+                tool_name=tool_name,
+                missing_fields=missing_fields,
+                run_id=run_id,
+                step_id=current_step_id,
+            )
+            return {
+                "systemMessage": (
+                    "⚠️ Invalid write_local_file call. "
+                    "Reissue with both 'path' and 'content' fields."
+                ),
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": (
+                        "write_local_file missing required args: "
+                        + ", ".join(missing_fields)
+                    ),
                 },
             }
 
@@ -1662,6 +1766,48 @@ async def on_post_tool_use_ledger(
 
     return {}
 
+
+async def on_post_tool_use_validation(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """
+    PostToolUse Hook: nudge the model when write_local_file validation fails.
+    """
+    global run_id, current_step_id
+    tool_name = str(input_data.get("tool_name", "") or "")
+    if "write_local_file" not in tool_name.lower():
+        return {}
+
+    tool_response = input_data.get("tool_response")
+    is_error = bool(input_data.get("is_error"))
+    error_detail = ""
+    if isinstance(tool_response, dict):
+        is_error = is_error or bool(tool_response.get("is_error") or tool_response.get("error"))
+        error_detail = str(tool_response.get("error") or tool_response.get("result") or "")
+    elif isinstance(tool_response, str):
+        error_detail = tool_response
+
+    if not is_error:
+        return {}
+    if "validation error" not in error_detail.lower() and "field required" not in error_detail.lower():
+        return {}
+
+    logfire.warning(
+        "tool_validation_nudge",
+        tool_name=tool_name,
+        run_id=run_id,
+        step_id=current_step_id,
+        error_detail=error_detail[:200],
+    )
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PostToolUse",
+            "additionalContext": (
+                "The last write_local_file call failed validation. "
+                "Reissue it with both 'path' and 'content' fields."
+            ),
+        },
+    }
 
 async def on_pre_bash_skill_hint(
     input_data: dict, tool_use_id: object, context: dict
@@ -4779,6 +4925,7 @@ async def setup_session(
             ],
             "PostToolUse": [
                 HookMatcher(matcher=None, hooks=[on_post_tool_use_ledger]),
+                HookMatcher(matcher=None, hooks=[on_post_tool_use_validation]),
                 HookMatcher(matcher="Task", hooks=[on_post_task_guidance]),
             ],
             # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:

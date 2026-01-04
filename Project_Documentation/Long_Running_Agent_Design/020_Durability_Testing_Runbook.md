@@ -123,6 +123,18 @@ rg -n "Forced replay completed" /home/kjdragan/lrepos/universal_agent/AGENT_RUN_
 rg -n "Forced replay completed" /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_<STAMP>/run.log
 ```
 
+## Related Sub-agent Evaluation (Latest)
+These are not crash/replay tests, but they validate sub-agent behavior and
+Letta capture after durability changes.
+
+- **Sub-agent capture + history**:
+  `uv run python tests/test_letta_subagent.py`
+- **Sub-agent isolation**:
+  `uv run python tests/test_letta_subagent_isolation.py`
+- **Report run confirmation**:
+  Trigger a report Task and confirm Letta lists
+  `universal_agent report-creation-expert` with its own memory blocks/messages.
+
 ## DB Checks
 ```
 SELECT idempotency_key, COUNT(*) AS c

@@ -46,6 +46,18 @@ with learning(agent="my_agent", memory=["human", "context"]):
 ✅ Memory retrieval in subsequent calls
 ```
 
+## Test Matrix
+
+- Connection: `uv run python tests/test_letta_connection.py`
+- Memory workflow (basic): `uv run python tests/test_letta_memory.py`
+- Full suite: `uv run python tests/test_letta_full.py`
+- Memory flow (step-by-step): `uv run python tests/test_letta_memory_flow.py`
+- Memory timing: `uv run python tests/test_letta_timing.py`
+- Sleeptime trigger: `uv run python tests/test_letta_sleeptime.py`
+- Memory verification: `uv run python tests/test_letta_verify.py`
+- Sub-agent capture: `uv run python tests/test_letta_subagent.py`
+- Sub-agent isolation: `uv run python tests/test_letta_subagent_isolation.py`
+
 ## Dependencies Added
 
 ```

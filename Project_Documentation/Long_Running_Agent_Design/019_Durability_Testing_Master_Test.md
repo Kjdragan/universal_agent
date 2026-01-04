@@ -63,3 +63,11 @@ Each run creates:
 - No duplicate side effects (email/upload).
 - Task relaunch does not call TaskOutput/TaskResult.
 - Replay queue contains only the expected tool calls.
+
+## Related Sub-agent Evaluation (Latest)
+- **Letta sub-agent capture + history**: `uv run python tests/test_letta_subagent.py`
+  - ✅ Sub-agent messages captured and visible in Letta.
+- **Sub-agent isolation**: `uv run python tests/test_letta_subagent_isolation.py`
+  - ✅ Sub-agent memory/messages do not leak into primary agent.
+- **Report run confirmation** (manual): trigger a report Task and verify Letta lists
+  `universal_agent report-creation-expert` with its own memory blocks/messages.

@@ -82,11 +82,19 @@ We are upgrading the Universal Agent from a short-lived, task-by-task CLI loop i
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/013_phase4_ticket4_receipts.md`
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/014_phase4_ticket3_policy_audit.md`
 - `Project_Documentation/Long_Running_Agent_Design/tracking_development/015_durability_smoke_script.md`
-- `Project_Documentation/Long_Running_Agent_Design/Durability_Testing_Master_Test.md`
-- `Project_Documentation/Long_Running_Agent_Design/Durability_Testing_Runbook.md`
+- `Project_Documentation/Long_Running_Agent_Design/019_Durability_Testing_Master_Test.md`
+- `Project_Documentation/Long_Running_Agent_Design/020_Durability_Testing_Runbook.md`
 
 ## Current status
 Phase 3 durability features are implemented with deterministic replay, Task relaunch guardrails, and crash-hook driven fault injection. Recovery now forces Complex Path during replay and blocks TaskOutput. Phase 4 includes operator CLI, worker mode, receipts export, and policy audit; remaining Phase 4 work is triggers. The durability suite is fully documented in the master test and runbook, with the matrix in `docs/durability_test_matrix.md` and the read-only job in `tmp/read_only_resume_job.json`. A smoke script exists in `scripts/durability_smoke.py` with documentation in `Project_Documentation/Long_Running_Agent_Design/tracking_development/015_durability_smoke_script.md`. The next planned scope is the remaining tickets in `Project_Documentation/Long_Running_Agent_Design/Durable_Jobs_Next_Steps_Ticket_Pack.md`.
+
+## Durability testing quick-start
+- Use the runbook for commands: `Project_Documentation/Long_Running_Agent_Design/020_Durability_Testing_Runbook.md`.
+- Use the master test for the canonical matrix and invariants: `Project_Documentation/Long_Running_Agent_Design/019_Durability_Testing_Master_Test.md`.
+- Minimum steps:
+  - `export PYTHONPATH=src`
+  - `export UA_TEST_EMAIL_TO=<email>` for email tests
+  - Run the crash tests from the runbook, then resume with the printed command.
 
 ## Latest durability test results (reference run)
 - Run ID: `e7339747-5675-48d5-8248-02bb59561a29`
@@ -95,8 +103,8 @@ Phase 3 durability features are implemented with deterministic replay, Task rela
 - Run-wide summary: 8 tools total, 0 failed, 1 replayed, 0 abandoned, 3 steps
 - Evidence: job completion summary in workspace + Logfire traces linked in evaluation report `009_relaunch_resume_evaluation.md`
 ### Durability testing toolkit (docs + runbook)
-- Master test specification: `Project_Documentation/Long_Running_Agent_Design/Durability_Testing_Master_Test.md`.
-- Runbook with commands/purpose: `Project_Documentation/Long_Running_Agent_Design/Durability_Testing_Runbook.md`.
+- Master test specification: `Project_Documentation/Long_Running_Agent_Design/019_Durability_Testing_Master_Test.md`.
+- Runbook with commands/purpose: `Project_Documentation/Long_Running_Agent_Design/020_Durability_Testing_Runbook.md`.
 - Matrix: `docs/durability_test_matrix.md` (canonical crash hooks + read-only job).
 - Read-only job spec: `tmp/read_only_resume_job.json`.
 - Instruction: when you want the matrix executed, request the runbook (run the runbook, not the master test).
