@@ -4,7 +4,9 @@ import os
 import sys
 import json
 import logging
+import inspect
 from datetime import datetime
+from functools import wraps
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ValidationError
 
@@ -49,6 +51,55 @@ try:
         sys.stderr.write("[Local Toolkit] Logfire instrumentation enabled\n")
 except ImportError:
     pass
+
+TRACE_OUTPUT_ENABLED = os.getenv("UA_EMIT_LOCAL_TRACE_IDS", "1").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+
+def _current_trace_id() -> Optional[str]:
+    if not TRACE_OUTPUT_ENABLED:
+        return None
+    try:
+        from opentelemetry import trace as otel_trace
+
+        span = otel_trace.get_current_span()
+        ctx = span.get_span_context()
+        if ctx and ctx.trace_id:
+            return format(ctx.trace_id, "032x")
+    except Exception:
+        return None
+    return None
+
+
+def _attach_trace_output(text: str) -> str:
+    trace_id = _current_trace_id()
+    if not trace_id:
+        return text
+    return f"[local-toolkit-trace-id: {trace_id}]\n{text}"
+
+
+def trace_tool_output(func):
+    if inspect.iscoroutinefunction(func):
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            result = await func(*args, **kwargs)
+            if isinstance(result, str):
+                return _attach_trace_output(result)
+            return result
+
+        return async_wrapper
+
+    @wraps(func)
+    def sync_wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        if isinstance(result, str):
+            return _attach_trace_output(result)
+        return result
+
+    return sync_wrapper
 
 # =============================================================================
 # SEARCH TOOL CONFIGURATION REGISTRY
@@ -110,6 +161,7 @@ def fix_path_typos(path: str) -> str:
 
 
 @mcp.tool()
+@trace_tool_output
 def workbench_download(
     remote_path: str, local_path: str, session_id: str = None
 ) -> str:
@@ -124,6 +176,7 @@ def workbench_download(
 
 
 @mcp.tool()
+@trace_tool_output
 def workbench_upload(local_path: str, remote_path: str, session_id: str = None) -> str:
     """
     Upload a file from the Local Workspace to the Remote Composio Workbench.
@@ -136,6 +189,7 @@ def workbench_upload(local_path: str, remote_path: str, session_id: str = None) 
 
 
 @mcp.tool()
+@trace_tool_output
 def read_local_file(path: str) -> str:
     """
     Read content from a file in the Local Workspace.
@@ -266,6 +320,7 @@ def _filter_crawl_content(raw_text: str) -> tuple[str | None, str, dict, str]:
 
 
 @mcp.tool()
+@trace_tool_output
 def read_research_files(file_paths: list[str]) -> str:
     """
     Read multiple research files in a single batch call with context overflow protection.
@@ -366,6 +421,7 @@ def read_research_files(file_paths: list[str]) -> str:
 
 
 @mcp.tool()
+@trace_tool_output
 def write_local_file(path: str, content: str) -> str:
     """
     Write content to a file in the Local Workspace.
@@ -382,6 +438,7 @@ def write_local_file(path: str, content: str) -> str:
 
 
 @mcp.tool()
+@trace_tool_output
 def list_directory(path: str) -> str:
     """
     List contents of a directory in the Local Workspace.
@@ -400,6 +457,7 @@ def list_directory(path: str) -> str:
 
 
 @mcp.tool()
+@trace_tool_output
 def compress_files(files: list[str], output_archive: str) -> str:
     """
     Compress a list of files into a zip archive.
@@ -443,6 +501,7 @@ def compress_files(files: list[str], output_archive: str) -> str:
 
 
 @mcp.tool()
+@trace_tool_output
 def upload_to_composio(
     path: str, 
     tool_slug: str = "GMAIL_SEND_EMAIL",
@@ -504,6 +563,7 @@ def upload_to_composio(
 # =============================================================================
 
 @mcp.tool()
+@trace_tool_output
 def core_memory_replace(label: str, new_value: str) -> str:
     """
     Overwrite a Core Memory block (e.g. 'human', 'persona').
@@ -514,6 +574,7 @@ def core_memory_replace(label: str, new_value: str) -> str:
     return MEMORY_MANAGER.core_memory_replace(label, new_value)
 
 @mcp.tool()
+@trace_tool_output
 def core_memory_append(label: str, text_to_append: str) -> str:
     """
     Append text to a Core Memory block.
@@ -524,6 +585,7 @@ def core_memory_append(label: str, text_to_append: str) -> str:
     return MEMORY_MANAGER.core_memory_append(label, text_to_append)
 
 @mcp.tool()
+@trace_tool_output
 def archival_memory_insert(content: str, tags: str = "") -> str:
     """
     Save a fact, document, or event to long-term archival memory.
@@ -534,6 +596,7 @@ def archival_memory_insert(content: str, tags: str = "") -> str:
     return MEMORY_MANAGER.archival_memory_insert(content, tags)
 
 @mcp.tool()
+@trace_tool_output
 def archival_memory_search(query: str, limit: int = 5) -> str:
     """
     Search long-term archival memory using semantic search.
@@ -543,6 +606,7 @@ def archival_memory_search(query: str, limit: int = 5) -> str:
     return MEMORY_MANAGER.archival_memory_search(query, limit)
 
 @mcp.tool()
+@trace_tool_output
 def get_core_memory_blocks() -> str:
     """
     Read all current Core Memory blocks.
@@ -945,6 +1009,7 @@ If you need large files, read them individually with `read_local_file`.
 
 
 @mcp.tool()
+@trace_tool_output
 async def crawl_parallel(urls: list[str], session_dir: str) -> str:
     """
     High-speed parallel web scraping using crawl4ai.
@@ -962,6 +1027,7 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
 
 
 @mcp.tool()
+@trace_tool_output
 async def finalize_research(session_dir: str) -> str:
     """
     AUTOMATED RESEARCH PIPELINE:
@@ -1205,6 +1271,7 @@ async def finalize_research(session_dir: str) -> str:
 # =============================================================================
 
 @mcp.tool()
+@trace_tool_output
 def generate_image(
     prompt: str,
     input_image_path: str = None,
@@ -1344,6 +1411,7 @@ def describe_image_internal(image: 'Image.Image') -> str:
 
 
 @mcp.tool()
+@trace_tool_output
 def describe_image(image_path: str, max_words: int = 10) -> str:
     """
     Get a short description of an image using ZAI Vision (free).
@@ -1378,6 +1446,7 @@ def describe_image(image_path: str, max_words: int = 10) -> str:
 
 
 @mcp.tool()
+@trace_tool_output
 def preview_image(image_path: str, port: int = 7860) -> str:
     """
     Open an image in the Gradio viewer for human review.

@@ -44,6 +44,11 @@ TOOL_REQUIRED_FIELDS = {
 }
 ```
 
+## Implementation Notes
+- Guardrail module: `src/universal_agent/guardrails/tool_schema.py`
+- Hook wiring: `src/universal_agent/main.py` (PreToolUse + PostToolUse)
+- Smoke test: `uv run python scripts/guardrail_schema_smoke.py`
+
 ## Prompt Impact
 - The system prompt stays lean.
 - Schema guidance appears only when the model makes a mistake.

@@ -1,0 +1,10 @@
+{
+  "primary_email": "you@example.com",
+  "secondary_emails": [
+    "you@gmail.com"
+  ],
+  "aliases": {
+    "me": "you@example.com",
+    "my gmail": "you@gmail.com"
+  }
+}

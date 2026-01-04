@@ -96,12 +96,25 @@ Phase 3 durability features are implemented with deterministic replay, Task rela
   - `export UA_TEST_EMAIL_TO=<email>` for email tests
   - Run the crash tests from the runbook, then resume with the printed command.
 
+## Guardrail updates
+- Tool schema guardrails extracted to `src/universal_agent/guardrails/tool_schema.py`.
+- Smoke test: `PYTHONPATH=src uv run python scripts/guardrail_schema_smoke.py`.
+
 ## Latest durability test results (reference run)
 - Run ID: `e7339747-5675-48d5-8248-02bb59561a29`
 - Workspace: `/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_144640`
 - Behavior: interrupted during sleep, resumed cleanly, forced replay re-ran only the sleep, side-effect email sent once after resume
 - Run-wide summary: 8 tools total, 0 failed, 1 replayed, 0 abandoned, 3 steps
 - Evidence: job completion summary in workspace + Logfire traces linked in evaluation report `009_relaunch_resume_evaluation.md`
+
+## Latest durability suite run (2026-01-04)
+- Test 1 Task crash: `56e5bcb9-1b7e-4eb4-abe2-37b7dc47feba`
+- Test 2 Bash crash: `3481a025-d3a7-4660-92bc-dcb1cd60ea76`
+- Test 3 Upload crash: `86d5a787-5cdb-4045-96dc-f8560cab7de4`
+- Test 4 Post-email pre-ledger: `19b48c1c-27b3-444f-b9b4-76f85d021a89`
+- Test 5 Read-only: `da317c8f-c299-43ec-acc2-bbf7af8c5755`
+- Test 6 Replay drain: `4bacbbd0-bcab-44f0-a8fa-b3151003895a`
+- Logs: `/tmp/durability_test1_task_crash.log` ... `/tmp/durability_test6_replay_drain.log`
 ### Durability testing toolkit (docs + runbook)
 - Master test specification: `Project_Documentation/Long_Running_Agent_Design/019_Durability_Testing_Master_Test.md`.
 - Runbook with commands/purpose: `Project_Documentation/Long_Running_Agent_Design/020_Durability_Testing_Runbook.md`.
