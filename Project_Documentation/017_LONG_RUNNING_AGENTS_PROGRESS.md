@@ -115,6 +115,12 @@ Phase 3 durability features are implemented with deterministic replay, Task rela
 - Test 5 Read-only: `da317c8f-c299-43ec-acc2-bbf7af8c5755`
 - Test 6 Replay drain: `4bacbbd0-bcab-44f0-a8fa-b3151003895a`
 - Logs: `/tmp/durability_test1_task_crash.log` ... `/tmp/durability_test6_replay_drain.log`
+
+## Latest durability evaluation (post-fix, 2026-01-04)
+- Report: `Project_Documentation/021_DURABILITY_EVALUATION_REPORT_POST_FIX.md`
+- Run ID: `c46670b6-7351-4494-83af-d0558229ac42`
+- Workspace: `/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260104_141928`
+- Outcome: full complex query succeeded (crawl, report, PDF, upload, email) with evidence summary classification printed in job completion output.
 ### Durability testing toolkit (docs + runbook)
 - Master test specification: `Project_Documentation/Long_Running_Agent_Design/019_Durability_Testing_Master_Test.md`.
 - Runbook with commands/purpose: `Project_Documentation/Long_Running_Agent_Design/020_Durability_Testing_Runbook.md`.
