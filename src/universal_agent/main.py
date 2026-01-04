@@ -4886,6 +4886,11 @@ async def setup_session(
                 "type": "stdio",
                 "command": sys.executable,
                 "args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")],
+                # Pass session trace ID for trace consolidation (all local-toolkit spans share parent)
+                "env": {
+                    "UA_SESSION_TRACE_ID": os.environ.get("UA_SESSION_TRACE_ID", ""),
+                    "LOGFIRE_TOKEN": os.environ.get("LOGFIRE_TOKEN", ""),
+                },
             },
             # External MCP: SEC Edgar Tools for financial research
             "edgartools": {
@@ -5409,9 +5414,20 @@ async def main(args: argparse.Namespace):
     global trace, run_id, budget_config, budget_state, runtime_db_conn, tool_ledger, provider_session_forked_from
 
     # Create main span for entire execution
-    # NOTE: Local MCP tools run in separate subprocess with their own trace ID
+    # NOTE: Local MCP tools will share this trace via UA_SESSION_TRACE_ID env var
     main_span = logfire.span("standalone_composio_test")
     span_ctx = main_span.__enter__()  # Start the span manually
+    
+    # Extract trace ID immediately and set as env var for MCP subprocess trace consolidation
+    main_trace_id_hex = "0" * 32
+    if LOGFIRE_TOKEN:
+        try:
+            trace_id = main_span.get_span_context().trace_id
+            main_trace_id_hex = format(trace_id, "032x")
+            # Set env var so MCP server can attach to this trace
+            os.environ["UA_SESSION_TRACE_ID"] = main_trace_id_hex
+        except Exception as e:
+            print(f"⚠️ Failed to extract main trace ID: {e}")
     
     budget_config = load_budget_config()
     runtime_db_conn = connect_runtime_db()
@@ -5549,27 +5565,26 @@ async def main(args: argparse.Namespace):
         if parent_run_id:
             trace["parent_run_id"] = parent_run_id
     
-    # Extract Trace ID immediately after span creation
-    if LOGFIRE_TOKEN:
-        try:
-            trace_id = main_span.get_span_context().trace_id
-            trace_id_hex = format(trace_id, "032x")
-            trace["trace_id"] = trace_id_hex
-        except Exception as e:
-            print(f"⚠️ Failed to extract trace ID: {e}")
-            trace_id_hex = "0" * 32
-    else:
-        trace_id_hex = "N/A"
+    # Use the trace ID extracted earlier (now stored in main_trace_id_hex and env var)
+    trace["trace_id"] = main_trace_id_hex
 
     # Extract timestamp from workspace_dir (e.g. "session_20251228_123456" -> "20251228_123456")
     timestamp = os.path.basename(workspace_dir).replace("session_", "")
+    
+    # Display session info with both trace IDs prominently for debugging
+    print(f"\n{'='*60}")
+    print("         🔍 TRACING IDS (for Logfire debugging)")
+    print(f"{'='*60}")
+    print(f"  Main Agent Trace ID:    {main_trace_id_hex}")
+    print(f"  Local Toolkit Trace ID: {main_trace_id_hex} (consolidated)")
+    print(f"{'='*60}")
     
     print(f"\n=== Composio Session Info ===")
     print(f"Session URL: {session.mcp.url}")
     print(f"User ID: {user_id}")
     print(f"Run ID: {run_id}")
     print(f"Timestamp: {timestamp}")
-    print(f"Trace ID: {trace_id_hex}")
+    print(f"Trace ID: {main_trace_id_hex}")
     if run_id:
         resume_cmd = (
             "PYTHONPATH=src uv run python -m universal_agent.main "
