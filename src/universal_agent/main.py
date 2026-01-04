@@ -290,6 +290,11 @@ composio = None
 # =============================================================================
 from Memory_System.manager import MemoryManager
 from Memory_System.tools import get_memory_tool_map
+from universal_agent.guardrails import (
+    post_tool_use_schema_nudge,
+    pre_tool_use_schema_guardrail,
+)
+from universal_agent.identity import resolve_email_recipients, validate_recipient_policy
 
 # Global Memory Manager is not needed here as it is used locally for prompt injection
 # MEMORY_MANAGER = None
@@ -1299,6 +1304,80 @@ async def on_pre_tool_use_ledger(
             updated_tool_input["task_key"] = resume_key
         tool_input = updated_tool_input
 
+    raw_tool_input = tool_input if isinstance(tool_input, dict) else {}
+    email_updated_input, email_errors, email_replacements = resolve_email_recipients(
+        tool_name,
+        tool_input if isinstance(tool_input, dict) else {},
+    )
+    if email_errors:
+        logfire.warning(
+            "identity_recipient_unresolved",
+            tool_name=tool_name,
+            unresolved_aliases=email_errors,
+            run_id=run_id,
+            step_id=current_step_id,
+        )
+        alias_list = ", ".join(email_errors)
+        return {
+            "systemMessage": (
+                "⚠️ Email recipient alias could not be resolved. "
+                f"Unresolved: {alias_list}. "
+                "Set UA_PRIMARY_EMAIL (and optional UA_SECONDARY_EMAILS) "
+                "or provide a full email address."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Unresolved email alias.",
+            },
+        }
+    if email_updated_input is not None:
+        updated_tool_input = email_updated_input
+        tool_input = email_updated_input
+        if email_replacements:
+            logfire.info(
+                "identity_recipient_resolved",
+                tool_name=tool_name,
+                replacements=email_replacements,
+                run_id=run_id,
+                step_id=current_step_id,
+            )
+
+    user_query = ""
+    try:
+        if isinstance(trace, dict):
+            user_query = str(trace.get("query") or "")
+    except Exception:
+        user_query = ""
+
+    invalid_recipients = validate_recipient_policy(
+        tool_name,
+        tool_input if isinstance(tool_input, dict) else {},
+        user_query,
+    )
+    if invalid_recipients:
+        logfire.warning(
+            "identity_recipient_policy_denied",
+            tool_name=tool_name,
+            recipients=invalid_recipients,
+            run_id=run_id,
+            step_id=current_step_id,
+        )
+        recipient_list = ", ".join(sorted(set(invalid_recipients)))
+        return {
+            "systemMessage": (
+                "⚠️ Email recipient not allowed by policy. "
+                f"Recipients: {recipient_list}. "
+                "Set UA_PRIMARY_EMAIL/UA_SECONDARY_EMAILS or include the address "
+                "explicitly in the user request."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Recipient policy violation.",
+            },
+        }
+
     def _allow_with_updated_input() -> dict:
         if updated_tool_input is None:
             return {}
@@ -1317,6 +1396,47 @@ async def on_pre_tool_use_ledger(
         expected = forced_tool_queue[0]
         if _forced_tool_matches(tool_name, tool_input, expected):
             forced_tool_active_ids[tool_call_id] = expected
+            expected["attempts"] = expected.get("attempts", 0) + 1
+            try:
+                _assert_prepared_tool_row(
+                    expected["tool_call_id"],
+                    expected.get("raw_tool_name")
+                    or expected.get("tool_name")
+                    or tool_name,
+                )
+                tool_ledger.mark_running(expected["tool_call_id"])
+                logfire.info(
+                    "replay_mark_running",
+                    tool_use_id=tool_call_id,
+                    replay_tool_call_id=expected["tool_call_id"],
+                    run_id=run_id,
+                    step_id=step_id,
+                    idempotency_key=expected.get("idempotency_key"),
+                )
+            except Exception as exc:
+                logfire.warning(
+                    "replay_mark_running_failed",
+                    tool_use_id=tool_call_id,
+                    error=str(exc),
+                )
+                return {
+                    "systemMessage": (
+                        "⚠️ Tool ledger missing prepared entry; refusing to execute tool. "
+                        "Try again or end the turn."
+                    ),
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Prepared ledger row missing.",
+                    },
+                }
+            return _allow_with_updated_input()
+        if raw_tool_input is not tool_input and _forced_tool_matches(
+            tool_name, raw_tool_input, expected
+        ):
+            forced_tool_active_ids[tool_call_id] = expected
+            updated_tool_input = raw_tool_input
+            tool_input = raw_tool_input
             expected["attempts"] = expected.get("attempts", 0) + 1
             try:
                 _assert_prepared_tool_row(
@@ -1381,37 +1501,14 @@ async def on_pre_tool_use_ledger(
             },
         }
 
-    if "write_local_file" in tool_name.lower():
-        missing_fields = []
-        if not isinstance(tool_input, dict):
-            missing_fields = ["path", "content"]
-        else:
-            if not tool_input.get("path"):
-                missing_fields.append("path")
-            if not tool_input.get("content"):
-                missing_fields.append("content")
-        if missing_fields:
-            logfire.warning(
-                "tool_validation_failed",
-                tool_name=tool_name,
-                missing_fields=missing_fields,
-                run_id=run_id,
-                step_id=current_step_id,
-            )
-            return {
-                "systemMessage": (
-                    "⚠️ Invalid write_local_file call. "
-                    "Reissue with both 'path' and 'content' fields."
-                ),
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": (
-                        "write_local_file missing required args: "
-                        + ", ".join(missing_fields)
-                    ),
-                },
-            }
+    schema_guardrail = await pre_tool_use_schema_guardrail(
+        input_data,
+        run_id=run_id,
+        step_id=current_step_id,
+        logger=logfire,
+    )
+    if schema_guardrail:
+        return schema_guardrail
 
     try:
         decision = prepare_tool_call(
@@ -1771,43 +1868,14 @@ async def on_post_tool_use_validation(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
     """
-    PostToolUse Hook: nudge the model when write_local_file validation fails.
+    PostToolUse Hook: nudge the model when schema validation fails.
     """
-    global run_id, current_step_id
-    tool_name = str(input_data.get("tool_name", "") or "")
-    if "write_local_file" not in tool_name.lower():
-        return {}
-
-    tool_response = input_data.get("tool_response")
-    is_error = bool(input_data.get("is_error"))
-    error_detail = ""
-    if isinstance(tool_response, dict):
-        is_error = is_error or bool(tool_response.get("is_error") or tool_response.get("error"))
-        error_detail = str(tool_response.get("error") or tool_response.get("result") or "")
-    elif isinstance(tool_response, str):
-        error_detail = tool_response
-
-    if not is_error:
-        return {}
-    if "validation error" not in error_detail.lower() and "field required" not in error_detail.lower():
-        return {}
-
-    logfire.warning(
-        "tool_validation_nudge",
-        tool_name=tool_name,
+    return await post_tool_use_schema_nudge(
+        input_data,
         run_id=run_id,
         step_id=current_step_id,
-        error_detail=error_detail[:200],
+        logger=logfire,
     )
-    return {
-        "hookSpecificOutput": {
-            "hookEventName": "PostToolUse",
-            "additionalContext": (
-                "The last write_local_file call failed validation. "
-                "Reissue it with both 'path' and 'content' fields."
-            ),
-        },
-    }
 
 async def on_pre_bash_skill_hint(
     input_data: dict, tool_use_id: object, context: dict
@@ -2501,11 +2569,26 @@ def _normalized_tool_candidates(raw_tool_name: str) -> set[str]:
     return candidates
 
 
+def _allows_slug_match_for_tool(raw_tool_name: str) -> bool:
+    if not raw_tool_name:
+        return False
+    normalized_candidates = _normalized_tool_candidates(raw_tool_name)
+    for candidate in normalized_candidates:
+        if candidate == _normalize_crash_tool_name("COMPOSIO_MULTI_EXECUTE_TOOL"):
+            return True
+        if candidate == _normalize_crash_tool_name("COMPOSIO_SEARCH_TOOLS"):
+            return True
+    return False
+
+
 def _tool_input_slug_matches(
     tool_input: Optional[dict],
     normalized_crash_tool: str,
+    raw_tool_name: str,
 ) -> bool:
     if not tool_input or not normalized_crash_tool:
+        return False
+    if not _allows_slug_match_for_tool(raw_tool_name):
         return False
 
     def matches(value: Optional[str]) -> bool:
@@ -2570,7 +2653,11 @@ def _should_trigger_test_crash(
 
     if crash_tool:
         raw_match = normalized_crash_tool in normalized_candidates
-        slug_match = _tool_input_slug_matches(tool_input, normalized_crash_tool)
+        slug_match = _tool_input_slug_matches(
+            tool_input,
+            normalized_crash_tool,
+            raw_tool_name,
+        )
         if crash_match == "raw" and not raw_match:
             return False, {}
         if crash_match == "slug" and not slug_match:
@@ -3305,6 +3392,27 @@ def _summarize_response(text: str, max_chars: int = 700) -> str:
     return compact
 
 
+_LOCAL_TRACE_ID_PATTERN = re.compile(r"\[local-toolkit-trace-id: ([0-9a-f]{32})\]")
+
+
+def _collect_local_tool_trace_ids(workspace_dir: str) -> list[str]:
+    if not workspace_dir:
+        return []
+    run_log_path = os.path.join(workspace_dir, "run.log")
+    if not os.path.exists(run_log_path):
+        return []
+    trace_ids: set[str] = set()
+    try:
+        with open(run_log_path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                match = _LOCAL_TRACE_ID_PATTERN.search(line)
+                if match:
+                    trace_ids.add(match.group(1))
+    except Exception:
+        return []
+    return sorted(trace_ids)
+
+
 def update_restart_file(
     run_id: str,
     workspace_dir: str,
@@ -3370,6 +3478,10 @@ def print_job_completion_summary(
     workspace_dir: str,
     response_text: str,
 ) -> None:
+    local_trace_ids = _collect_local_tool_trace_ids(workspace_dir)
+    main_trace_id = None
+    if isinstance(trace, dict):
+        main_trace_id = trace.get("trace_id")
     artifacts = _list_workspace_artifacts(workspace_dir)
     receipt_rows = conn.execute(
         """
@@ -3503,6 +3615,57 @@ def print_job_completion_summary(
             side_effect_row["side_effect_succeeded"] if side_effect_row else 0
         ),
     }
+
+    def _effects_from_receipts(receipt_items: list[dict]) -> set[str]:
+        effects: set[str] = set()
+        for receipt in receipt_items:
+            haystack = f"{receipt.get('tool_name', '')} {receipt.get('response_ref', '')}".lower()
+            if "gmail_send_email" in haystack or ("send_email" in haystack and "gmail" in haystack):
+                effects.add("email")
+            if "upload_to_composio" in haystack or ("upload" in haystack and "composio" in haystack):
+                effects.add("upload")
+        return effects
+
+    def _text_claims_email(text: str) -> bool:
+        if not text:
+            return False
+        lowered = text.lower()
+        if "email" not in lowered and "gmail" not in lowered and "inbox" not in lowered:
+            return False
+        patterns = [
+            r"(email|gmail).*(sent|emailed|delivered|inbox)",
+            r"(sent|emailed|delivered).*(email|gmail)",
+            r"in your inbox",
+        ]
+        return any(re.search(pattern, lowered) for pattern in patterns)
+
+    def _text_claims_upload(text: str) -> bool:
+        if not text:
+            return False
+        lowered = text.lower()
+        if "upload" not in lowered and "s3" not in lowered and "composio" not in lowered:
+            return False
+        patterns = [
+            r"(upload|uploaded).*(composio|s3|bucket)",
+            r"(composio|s3|bucket).*(upload|uploaded)",
+        ]
+        return any(re.search(pattern, lowered) for pattern in patterns)
+
+    def _effects_from_response_text(text: str) -> set[str]:
+        effects: set[str] = set()
+        if _text_claims_email(text):
+            effects.add("email")
+        if _text_claims_upload(text):
+            effects.add("upload")
+        return effects
+
+    confirmed_effects = _effects_from_receipts(receipts)
+    inferred_effects = _effects_from_response_text(response_text)
+    missing_evidence = inferred_effects - confirmed_effects
+    effect_labels = {
+        "email": "Email sent",
+        "upload": "Upload to Composio/S3",
+    }
     runwide_line = None
     if runwide_summary["total_tool_calls"]:
         runwide_line = (
@@ -3519,6 +3682,12 @@ def print_job_completion_summary(
     print("=== JOB COMPLETE ===")
     print(f"Run ID: {run_id}")
     print(f"Status: {status}")
+    if main_trace_id:
+        print(f"Main Trace ID: {main_trace_id}")
+    if local_trace_ids:
+        print("Related Trace IDs (local-toolkit):")
+        for trace_id in local_trace_ids:
+            print(f"- {trace_id}")
     if artifacts:
         print("Artifacts:")
         for name in artifacts:
@@ -3541,6 +3710,26 @@ def print_job_completion_summary(
     if summary:
         print("Summary:")
         print(summary)
+    if confirmed_effects or inferred_effects or missing_evidence:
+        print("Evidence summary:")
+        print("Confirmed (receipts):")
+        if confirmed_effects:
+            for effect in sorted(confirmed_effects):
+                print(f"- {effect_labels.get(effect, effect)}")
+        else:
+            print("- none")
+        print("Inferred (response claims):")
+        if inferred_effects:
+            for effect in sorted(inferred_effects):
+                print(f"- {effect_labels.get(effect, effect)}")
+        else:
+            print("- none")
+        print("Missing evidence:")
+        if missing_evidence:
+            for effect in sorted(missing_evidence):
+                print(f"- {effect_labels.get(effect, effect)} (no receipt)")
+        else:
+            print("- none")
     if runwide_summary["total_tool_calls"]:
         if runwide_line:
             print(runwide_line)
@@ -3578,6 +3767,13 @@ def print_job_completion_summary(
                 f.write(f"# Job Completion Summary\n\n")
                 f.write(f"Run ID: {run_id}\n\n")
                 f.write(f"Status: {status}\n\n")
+                if main_trace_id:
+                    f.write(f"Main Trace ID: {main_trace_id}\n\n")
+                if local_trace_ids:
+                    f.write("Related Trace IDs (local-toolkit):\n")
+                    for trace_id in local_trace_ids:
+                        f.write(f"- {trace_id}\n")
+                    f.write("\n")
                 if artifacts:
                     f.write("Artifacts:\n")
                     for name in artifacts:
@@ -3603,6 +3799,26 @@ def print_job_completion_summary(
                 if summary:
                     f.write("Summary:\n")
                     f.write(summary + "\n")
+                if confirmed_effects or inferred_effects or missing_evidence:
+                    f.write("Evidence summary:\n")
+                    f.write("Confirmed (receipts):\n")
+                    if confirmed_effects:
+                        for effect in sorted(confirmed_effects):
+                            f.write(f"- {effect_labels.get(effect, effect)}\n")
+                    else:
+                        f.write("- none\n")
+                    f.write("Inferred (response claims):\n")
+                    if inferred_effects:
+                        for effect in sorted(inferred_effects):
+                            f.write(f"- {effect_labels.get(effect, effect)}\n")
+                    else:
+                        f.write("- none\n")
+                    f.write("Missing evidence:\n")
+                    if missing_evidence:
+                        for effect in sorted(missing_evidence):
+                            f.write(f"- {effect_labels.get(effect, effect)} (no receipt)\n")
+                    else:
+                        f.write("- none\n")
                 if runwide_summary["total_tool_calls"]:
                     f.write("\nRun-wide summary:\n")
                     if runwide_line:

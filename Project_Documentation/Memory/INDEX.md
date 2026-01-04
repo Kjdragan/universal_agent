@@ -37,6 +37,13 @@ This documentation provides comprehensive information about the Universal Agent 
 - Error handling examples
 - Performance testing examples
 
+### 🧭 [003_MEMORY_SYSTEM_STATUS_AND_LETTA_PATH.md](003_MEMORY_SYSTEM_STATUS_AND_LETTA_PATH.md)
+**Current Status** - PRD implementation status and Letta pivot
+- In-house memory system status
+- Letta integration rationale
+- Compatibility shim details
+- Criteria for returning to the PRD plan
+
 ## 🎯 Key Concepts
 
 ### Memory Types
