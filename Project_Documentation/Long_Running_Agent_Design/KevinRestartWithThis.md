@@ -1,15 +1,11 @@
 # Restart Instructions
 
-Run ID: 2697a721-0784-4097-9391-c716b64563a2
+Run ID: a58f7854-aacb-4ca6-83b4-d33adbe4a83f
 
 Resume Command:
 
-PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id 2697a721-0784-4097-9391-c716b64563a2
+PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id a58f7854-aacb-4ca6-83b4-d33adbe4a83f
 
 Workspace:
 
-/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260104_140932
-
-Resume Packet:
-
-/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260104_140932/resume_packet_2697a721-0784-4097-9391-c716b64563a2.md
+/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260104_144828
