@@ -11,6 +11,15 @@ from dotenv import load_dotenv
 # Load environment FIRST
 load_dotenv()
 
+import os
+import sys
+
+repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
+import sitecustomize  # noqa: F401
+
 # Check Anthropic configuration
 print("=" * 60)
 print("Environment Check")

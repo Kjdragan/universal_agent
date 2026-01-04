@@ -73,6 +73,12 @@ if os.path.join(src_dir, "src") not in sys.path:
 if src_dir not in sys.path:
     sys.path.append(src_dir)
 
+# Apply local monkey patches (e.g., Letta SDK upsert bug) early.
+try:
+    import sitecustomize  # noqa: F401
+except Exception:
+    pass
+
 # prompt_toolkit for better terminal input (arrow keys, history, multiline)
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -296,6 +302,45 @@ from Memory_System.tools import get_memory_tool_map
 
 # Global Memory Manager Instance
 MEMORY_MANAGER = None
+
+# =============================================================================
+# LETTA LEARNING SDK INTEGRATION  
+# =============================================================================
+# The Letta Learning SDK intercepts Claude Agent SDK transport layer
+# to automatically capture conversations and inject memory.
+LETTA_ENABLED = True
+LETTA_AGENT_NAME = "universal_agent"
+LETTA_MEMORY_BLOCKS = ["human", "system_rules", "project_context"]
+_LETTA_CONTEXT = None
+
+try:
+    from agentic_learning import learning, AgenticLearning
+    
+    _letta_client = AgenticLearning()
+    
+    # Ensure agent exists
+    try:
+        _letta_client.agents.retrieve(LETTA_AGENT_NAME)
+    except Exception:
+        _letta_client.agents.create(
+            agent=LETTA_AGENT_NAME,
+            memory=LETTA_MEMORY_BLOCKS,
+            model="anthropic/claude-sonnet-4-20250514"
+        )
+        print(f"✅ Letta agent '{LETTA_AGENT_NAME}' created")
+    
+    # Enter learning context globally - interceptors patch at class level
+    # so all ClaudeSDKClient instances will be captured
+    _LETTA_CONTEXT = learning(agent=LETTA_AGENT_NAME, memory=LETTA_MEMORY_BLOCKS)
+    _LETTA_CONTEXT.__enter__()
+    print(f"🧠 Letta memory active for '{LETTA_AGENT_NAME}'")
+    
+except ImportError:
+    LETTA_ENABLED = False
+    print("⚠️ Letta Learning SDK not installed - using local memory")
+except Exception as e:
+    LETTA_ENABLED = False
+    print(f"⚠️ Letta initialization error: {e}")
 
 # =============================================================================
 # OBSERVER SETUP - For processing tool results asynchronously
