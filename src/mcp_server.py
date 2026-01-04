@@ -21,13 +21,18 @@ from tools.workbench_bridge import WorkbenchBridge
 from composio import Composio
 
 # Memory System Integration
-try:
-    from Memory_System.manager import MemoryManager
-    MEMORY_MANAGER = MemoryManager(storage_dir=os.path.join(os.path.dirname(__file__), "..", "Memory_System_Data"))
-    sys.stderr.write("[Local Toolkit] Memory System initialized.\n")
-except Exception as e:
-    sys.stderr.write(f"[Local Toolkit] Memory System init failed: {e}\n")
+disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
+if disable_local_memory:
+    sys.stderr.write("[Local Toolkit] Memory System disabled via UA_DISABLE_LOCAL_MEMORY.\n")
     MEMORY_MANAGER = None
+else:
+    try:
+        from Memory_System.manager import MemoryManager
+        MEMORY_MANAGER = MemoryManager(storage_dir=os.path.join(os.path.dirname(__file__), "..", "Memory_System_Data"))
+        sys.stderr.write("[Local Toolkit] Memory System initialized.\n")
+    except Exception as e:
+        sys.stderr.write(f"[Local Toolkit] Memory System init failed: {e}\n")
+        MEMORY_MANAGER = None
 
 # Initialize Configuration
 load_dotenv()

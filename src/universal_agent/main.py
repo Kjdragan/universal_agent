@@ -304,7 +304,7 @@ from Memory_System.tools import get_memory_tool_map
 MEMORY_MANAGER = None
 
 # =============================================================================
-# LETTA LEARNING SDK INTEGRATION  
+# LETTA LEARNING SDK INTEGRATION
 # =============================================================================
 # The Letta Learning SDK intercepts Claude Agent SDK transport layer
 # to automatically capture conversations and inject memory.
@@ -312,12 +312,17 @@ LETTA_ENABLED = True
 LETTA_AGENT_NAME = "universal_agent"
 LETTA_MEMORY_BLOCKS = ["human", "system_rules", "project_context"]
 _LETTA_CONTEXT = None
+_LETTA_CONTEXT_READY = False
+_letta_client = None
+_letta_async_client = None
+_LETTA_SUBAGENT_ENABLED = os.getenv("UA_LETTA_SUBAGENT_MEMORY", "1").lower() not in {"0", "false", "no"}
 
 try:
-    from agentic_learning import learning, AgenticLearning
-    
+    from agentic_learning import learning, AgenticLearning, AsyncAgenticLearning
+
     _letta_client = AgenticLearning()
-    
+    _letta_async_client = AsyncAgenticLearning()
+
     # Ensure agent exists
     try:
         _letta_client.agents.retrieve(LETTA_AGENT_NAME)
@@ -325,22 +330,101 @@ try:
         _letta_client.agents.create(
             agent=LETTA_AGENT_NAME,
             memory=LETTA_MEMORY_BLOCKS,
-            model="anthropic/claude-sonnet-4-20250514"
+            model="anthropic/claude-sonnet-4-20250514",
         )
         print(f"✅ Letta agent '{LETTA_AGENT_NAME}' created")
-    
-    # Enter learning context globally - interceptors patch at class level
-    # so all ClaudeSDKClient instances will be captured
-    _LETTA_CONTEXT = learning(agent=LETTA_AGENT_NAME, memory=LETTA_MEMORY_BLOCKS)
-    _LETTA_CONTEXT.__enter__()
-    print(f"🧠 Letta memory active for '{LETTA_AGENT_NAME}'")
-    
+
 except ImportError:
     LETTA_ENABLED = False
     print("⚠️ Letta Learning SDK not installed - using local memory")
 except Exception as e:
     LETTA_ENABLED = False
     print(f"⚠️ Letta initialization error: {e}")
+
+
+async def _ensure_letta_context() -> None:
+    """Initialize Letta learning context inside the running event loop."""
+    global _LETTA_CONTEXT_READY, _LETTA_CONTEXT
+    if not LETTA_ENABLED or _LETTA_CONTEXT_READY:
+        return
+    if _letta_async_client is None:
+        return
+
+    _LETTA_CONTEXT = learning(
+        agent=LETTA_AGENT_NAME,
+        memory=LETTA_MEMORY_BLOCKS,
+        client=_letta_async_client,
+    )
+    await _LETTA_CONTEXT.__aenter__()
+    _LETTA_CONTEXT_READY = True
+    print(f"🧠 Letta memory active for '{LETTA_AGENT_NAME}'")
+
+
+def _letta_subagent_name(tool_input: dict[str, Any]) -> str:
+    subagent_type = ""
+    if isinstance(tool_input, dict):
+        subagent_type = tool_input.get("subagent_type", "") or ""
+    if subagent_type:
+        return f"{LETTA_AGENT_NAME}::{subagent_type}"
+    return f"{LETTA_AGENT_NAME}::{deterministic_task_key(tool_input or {})}"
+
+
+async def _ensure_letta_agent(agent_name: str) -> None:
+    if not LETTA_ENABLED or not _letta_async_client:
+        return
+    try:
+        agent = await _letta_async_client.agents.retrieve(agent=agent_name)
+        if agent:
+            return
+    except Exception:
+        pass
+    try:
+        await _letta_async_client.agents.create(
+            agent=agent_name,
+            memory=LETTA_MEMORY_BLOCKS,
+            model="anthropic/claude-sonnet-4-20250514",
+        )
+    except Exception:
+        return
+
+
+async def _get_subagent_memory_context(tool_input: dict[str, Any]) -> str:
+    if not (LETTA_ENABLED and _letta_async_client and _LETTA_SUBAGENT_ENABLED):
+        return ""
+    agent_name = _letta_subagent_name(tool_input)
+    await _ensure_letta_agent(agent_name)
+    try:
+        return await _letta_async_client.memory.context.retrieve(agent=agent_name) or ""
+    except Exception:
+        return ""
+
+
+async def _capture_subagent_memory(
+    tool_input: dict[str, Any],
+    output_text: str,
+) -> None:
+    if not (LETTA_ENABLED and _letta_async_client and _LETTA_SUBAGENT_ENABLED):
+        return
+    agent_name = _letta_subagent_name(tool_input)
+    await _ensure_letta_agent(agent_name)
+    prompt = ""
+    if isinstance(tool_input, dict):
+        prompt = tool_input.get("prompt") or tool_input.get("description") or ""
+    if prompt:
+        subagent_type = tool_input.get("subagent_type") if isinstance(tool_input, dict) else None
+        if subagent_type:
+            prompt = f"[Subagent: {subagent_type}]\n{prompt}"
+    request_messages = [{"role": "user", "content": prompt}] if prompt else []
+    try:
+        await _letta_async_client.messages.capture(
+            agent=agent_name,
+            request_messages=request_messages,
+            response_dict={"role": "assistant", "content": output_text or ""},
+            model="claude",
+            provider="claude",
+        )
+    except Exception:
+        return
 
 # =============================================================================
 # OBSERVER SETUP - For processing tool results asynchronously
@@ -1806,12 +1890,26 @@ async def on_pre_task_skill_awareness(
             else tool_knowledge
         )
 
+    # Inject Letta memory for sub-agent (if enabled).
+    memory_context = await _get_subagent_memory_context(tool_input)
+    if memory_context:
+        combined_context = (
+            f"{combined_context}\n\n# 🧠 LETTA MEMORY\n{memory_context}".strip()
+            if combined_context
+            else f"# 🧠 LETTA MEMORY\n{memory_context}"
+        )
+
     if combined_context:
         logfire.info(
             "skill_awareness_injected_to_subagent",
             subagent_type=subagent_type,
             expected_skills=expected_skills,
         )
+        if memory_context:
+            print(
+                f"🧠 Injected Letta memory for sub-agent: {subagent_type or 'unknown'} "
+                f"({len(memory_context)} chars)"
+            )
         return {
             "systemMessage": combined_context
         }
@@ -3806,6 +3904,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             task_key=os.path.basename(paths["dir"]),
                                             output_path=paths["json"],
                                         )
+                                if not is_error:
+                                    asyncio.create_task(
+                                        _capture_subagent_memory(tool_input or {}, content_str)
+                                    )
                                 
                             if tool_name and OBSERVER_WORKSPACE_DIR:
                                 # Search results observer - pass typed content
@@ -3931,8 +4033,40 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         return needs_user_input, auth_link, final_text
 
 
+def _is_memory_intent(query: str) -> bool:
+    lowered = query.lower()
+    memory_phrases = [
+        "please remember",
+        "remember this",
+        "my favorite",
+        "my favourite",
+        "my preferences",
+        "my preference",
+        "what are my",
+        "what's my",
+        "whats my",
+        "when do i like",
+        "do i like to",
+        "my coding preferences",
+        "my work environment",
+        "my name is",
+    ]
+    return any(phrase in lowered for phrase in memory_phrases)
+
+
 async def classify_query(client: ClaudeSDKClient, query: str) -> str:
     """Determine if a query is SIMPLE (direct answer) or COMPLEX (needs tools)."""
+    if _is_memory_intent(query):
+        print("\n🤔 Query Classification: SIMPLE (Heuristic: memory_intent)")
+        if LOGFIRE_TOKEN:
+            logfire.info(
+                "query_classification",
+                query=query,
+                decision="SIMPLE",
+                raw_response="HEURISTIC_MEMORY_INTENT",
+            )
+        return "SIMPLE"
+
     # Classification logic with definition-based prompting
     classification_prompt = (
         f"Classify the following user query as either 'SIMPLE' or 'COMPLEX'.\n"
@@ -3987,6 +4121,18 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> bool:
 
     full_response = ""
     tool_use_detected = False
+    disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
+    ignored_tool_names = set()
+    if disable_local_memory:
+        ignored_tool_names.update(
+            [
+                "mcp__local_toolkit__core_memory_replace",
+                "mcp__local_toolkit__core_memory_append",
+                "mcp__local_toolkit__archival_memory_insert",
+                "mcp__local_toolkit__archival_memory_search",
+                "mcp__local_toolkit__get_core_memory_blocks",
+            ]
+        )
 
     async for msg in client.receive_response():
         if isinstance(msg, AssistantMessage):
@@ -3995,6 +4141,9 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> bool:
                     print(block.text, end="", flush=True)
                     full_response += block.text
                 elif isinstance(block, ToolUseBlock):
+                    if disable_local_memory and block.name in ignored_tool_names:
+                        # Ignore local memory tool attempts when local memory is disabled.
+                        continue
                     # ABORT! The model wants to use a tool.
                     tool_use_detected = True
                     break
@@ -4231,30 +4380,46 @@ async def setup_session(
 
     # --- MEMORY SYSTEM CONTEXT INJECTION ---
     memory_context_str = ""
-    try:
-        from Memory_System.manager import MemoryManager
-        from universal_agent.agent_college.integration import setup_agent_college
-        
-        # Initialize strictly for reading context (shared storage) - Use src_dir (Repo Root)
-        storage_path = os.getenv("PERSIST_DIRECTORY", os.path.join(src_dir, "Memory_System_Data"))
-        mem_mgr = MemoryManager(storage_dir=storage_path)
-        
-        # Initialize Agent College (Sandbox)
-        setup_agent_college(mem_mgr)
-        
-        memory_context_str = mem_mgr.get_system_prompt_addition()
-        print(f"🧠 Injected Core Memory Context ({len(memory_context_str)} chars)")
-    except Exception as e:
-        print(f"⚠️ Failed to load Memory Context/Agent College: {e}")
+    disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
+    if disable_local_memory:
+        print("⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.")
+    else:
+        try:
+            from Memory_System.manager import MemoryManager
+            from universal_agent.agent_college.integration import setup_agent_college
+            
+            # Initialize strictly for reading context (shared storage) - Use src_dir (Repo Root)
+            storage_path = os.getenv("PERSIST_DIRECTORY", os.path.join(src_dir, "Memory_System_Data"))
+            mem_mgr = MemoryManager(storage_dir=storage_path)
+            
+            # Initialize Agent College (Sandbox)
+            setup_agent_college(mem_mgr)
+            
+            memory_context_str = mem_mgr.get_system_prompt_addition()
+            print(f"🧠 Injected Core Memory Context ({len(memory_context_str)} chars)")
+        except Exception as e:
+            print(f"⚠️ Failed to load Memory Context/Agent College: {e}")
 
     # Use timezone-aware datetime for consistent results across deployments
     user_now = get_user_datetime()
     today_str = user_now.strftime('%A, %B %d, %Y')
     tomorrow_str = (user_now + timedelta(days=1)).strftime('%A, %B %d, %Y')
     
+    disallowed_tools = list(DISALLOWED_TOOLS)
+    if disable_local_memory:
+        disallowed_tools.extend(
+            [
+                "mcp__local_toolkit__core_memory_replace",
+                "mcp__local_toolkit__core_memory_append",
+                "mcp__local_toolkit__archival_memory_insert",
+                "mcp__local_toolkit__archival_memory_search",
+                "mcp__local_toolkit__get_core_memory_blocks",
+            ]
+        )
+
     options = ClaudeAgentOptions(
         model="claude-3-5-sonnet-20241022",
-        disallowed_tools=DISALLOWED_TOOLS,
+        disallowed_tools=disallowed_tools,
         system_prompt=(
             f"Current Date: {today_str}\n"
             f"Tomorrow is: {tomorrow_str}\n"
@@ -4888,6 +5053,13 @@ async def main(args: argparse.Namespace):
     budget_config = load_budget_config()
     runtime_db_conn = connect_runtime_db()
     validate_tool_policies()
+
+    # Ensure Letta context is initialized inside the event loop.
+    if LETTA_ENABLED:
+        try:
+            await _ensure_letta_context()
+        except Exception as exc:
+            print(f"⚠️ Letta context init failed: {exc}")
 
     if args.explain_tool_policy:
         _print_tool_policy_explain(args.explain_tool_policy)
