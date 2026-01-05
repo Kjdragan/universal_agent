@@ -273,6 +273,8 @@ from universal_agent.durable.tool_gateway import (
     prepare_tool_call,
     parse_tool_identity,
     is_malformed_tool_name,
+    parse_malformed_tool_name,
+    is_invalid_tool_name,
 )
 from universal_agent.durable.normalize import deterministic_task_key, normalize_json
 from universal_agent.durable.classification import (
@@ -287,6 +289,7 @@ from universal_agent.durable.state import (
     update_run_provider_session,
     start_step,
     complete_step,
+    update_step_phase,
     get_run,
     get_run_status,
     get_step_count,
@@ -308,7 +311,11 @@ from universal_agent.guardrails import (
     post_tool_use_schema_nudge,
     pre_tool_use_schema_guardrail,
 )
-from universal_agent.identity import resolve_email_recipients, validate_recipient_policy
+from universal_agent.identity import (
+    resolve_email_recipients,
+    validate_recipient_policy,
+    load_identity_registry,
+)
 
 # Global Memory Manager is not needed here as it is used locally for prompt injection
 # MEMORY_MANAGER = None
@@ -610,27 +617,81 @@ async def on_pre_tool_use_ledger(
             },
         }
     if is_malformed_tool_name(tool_name):
+        base_name, arg_key, arg_value = parse_malformed_tool_name(tool_name)
+        is_forced_replay = bool(forced_tool_queue or forced_tool_mode_active)
+        expected = forced_tool_queue[0] if forced_tool_queue else None
+        expected_tool = (
+            (expected or {}).get("raw_tool_name")
+            or (expected or {}).get("tool_name")
+            or base_name
+            or tool_name
+        )
+        expected_input = json.dumps((expected or {}).get("tool_input") or {}, indent=2)
+        repair_hint = ""
+        if base_name and arg_key and arg_value is not None:
+            repaired_payload = json.dumps({arg_key: arg_value}, ensure_ascii=True)
+            repair_hint = (
+                f" Reissue as {base_name} with input {repaired_payload}."
+            )
         logfire.warning(
             "malformed_tool_name_guardrail",
             tool_name=tool_name,
             run_id=run_id,
             step_id=current_step_id,
+            forced_replay=is_forced_replay,
         )
-        _mark_run_waiting_for_human(
-            "malformed_tool_name",
-            tool_name=tool_name,
-            tool_call_id=tool_call_id,
-        )
+        if not is_forced_replay:
+            _mark_run_waiting_for_human(
+                "malformed_tool_name",
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+            )
         return {
             "systemMessage": (
                 "⚠️ Malformed tool call name detected. "
                 "Reissue the tool call with proper JSON arguments and do NOT "
                 "concatenate XML-like arg_key/arg_value into the tool name."
+                + (repair_hint or f" Next required tool: {expected_tool} with input {expected_input}")
             ),
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": "Malformed tool name (XML-style args detected).",
+            },
+        }
+    if is_invalid_tool_name(tool_name):
+        is_forced_replay = bool(forced_tool_queue or forced_tool_mode_active)
+        expected = forced_tool_queue[0] if forced_tool_queue else None
+        expected_tool = (
+            (expected or {}).get("raw_tool_name")
+            or (expected or {}).get("tool_name")
+            or tool_name
+        )
+        expected_input = json.dumps((expected or {}).get("tool_input") or {}, indent=2)
+        logfire.warning(
+            "invalid_tool_name_guardrail",
+            tool_name=tool_name,
+            run_id=run_id,
+            step_id=current_step_id,
+            forced_replay=is_forced_replay,
+        )
+        if not is_forced_replay:
+            _mark_run_waiting_for_human(
+                "invalid_tool_name",
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+            )
+        return {
+            "systemMessage": (
+                "⚠️ Invalid tool name detected. Tool names must not include "
+                "angle brackets or JSON fragments. Reissue the tool call with "
+                "a valid tool name and JSON input."
+                + f" Next required tool: {expected_tool} with input {expected_input}"
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Invalid tool name syntax.",
             },
         }
     tool_input = input_data.get("tool_input", {}) or {}
@@ -839,15 +900,49 @@ async def on_pre_tool_use_ledger(
             },
         }
 
+    if _is_job_run() and tool_name in (
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "Read",
+        "COMPOSIO_REMOTE_WORKBENCH",
+    ):
+        if tool_name == "COMPOSIO_REMOTE_WORKBENCH":
+            return {
+                "systemMessage": (
+                    "⚠️ Durable job mode: COMPOSIO_REMOTE_WORKBENCH is disabled. "
+                    "Use local toolkit tools or the allowed Composio tools instead."
+                ),
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Remote workbench blocked in durable job mode.",
+                },
+            }
+        return {
+            "systemMessage": (
+                "⚠️ Durable job mode: use the local toolkit file tools instead of "
+                f"{tool_name}. For example, use mcp__local_toolkit__read_local_file "
+                "or mcp__local_toolkit__write_local_file."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "File tool blocked in durable job mode.",
+            },
+        }
+
     schema_guardrail = await pre_tool_use_schema_guardrail(
         input_data,
         run_id=run_id,
         step_id=current_step_id,
         logger=logfire,
+        skip_guardrail=forced_tool_mode_active,
     )
     if schema_guardrail:
         return schema_guardrail
 
+    side_effect_class = "unknown"
     try:
         decision = prepare_tool_call(
             tool_ledger,
@@ -872,6 +967,7 @@ async def on_pre_tool_use_ledger(
             identity.tool_namespace,
             {"raw_tool_name": tool_name},
         )
+        side_effect_class = _normalize_side_effect_class(side_effect_class, tool_name)
         if _should_inject_provider_idempotency(tool_name, side_effect_class):
             _inject_provider_idempotency(tool_name, tool_input, decision.idempotency_key)
     except Exception as exc:
@@ -983,6 +1079,25 @@ async def on_pre_tool_use_ledger(
                 "permissionDecisionReason": "Prepared ledger row missing.",
             },
         }
+    if not forced_tool_mode_active and not forced_tool_queue:
+        if side_effect_class == "read_only":
+            _ensure_phase_checkpoint(
+                run_id=run_id,
+                step_id=step_id,
+                checkpoint_type="pre_read_only",
+                phase="pre_read_only",
+                tool_name=tool_name,
+                note="first_read_only_in_step",
+            )
+        else:
+            _ensure_phase_checkpoint(
+                run_id=run_id,
+                step_id=step_id,
+                checkpoint_type="pre_side_effect",
+                phase="pre_side_effect",
+                tool_name=tool_name,
+                note="first_side_effect_in_step",
+            )
     return _allow_with_updated_input()
 
 
@@ -1020,11 +1135,12 @@ async def on_post_tool_use_ledger(
             error_detail = str(tool_response.get("error"))
 
     if is_malformed_tool_name(raw_tool_name):
-        _mark_run_waiting_for_human(
-            "malformed_tool_name",
-            tool_name=raw_tool_name,
-            tool_call_id=tool_call_id,
-        )
+        if not (forced_tool_queue or forced_tool_mode_active):
+            _mark_run_waiting_for_human(
+                "malformed_tool_name",
+                tool_name=raw_tool_name,
+                tool_call_id=tool_call_id,
+            )
 
     expected = None
     if tool_call_id in forced_tool_active_ids:
@@ -2090,6 +2206,74 @@ def _assert_prepared_tool_row(tool_call_id: str, raw_tool_name: str) -> None:
         raise RuntimeError(message)
 
 
+def _ensure_phase_checkpoint(
+    *,
+    run_id: Optional[str],
+    step_id: Optional[str],
+    checkpoint_type: str,
+    phase: str,
+    tool_name: Optional[str] = None,
+    note: Optional[str] = None,
+) -> None:
+    if not runtime_db_conn or not run_id or not step_id or step_id == "unknown":
+        return
+    try:
+        row = runtime_db_conn.execute(
+            """
+            SELECT 1
+            FROM checkpoints
+            WHERE run_id = ? AND step_id = ? AND checkpoint_type = ?
+            LIMIT 1
+            """,
+            (run_id, step_id, checkpoint_type),
+        ).fetchone()
+        if row:
+            return
+        update_step_phase(runtime_db_conn, step_id, phase)
+        state_snapshot = {
+            "run_id": run_id,
+            "step_id": step_id,
+            "phase": phase,
+            "checkpoint_type": checkpoint_type,
+            "tool_name": tool_name,
+            "note": note,
+        }
+        cursor = {}
+        if tool_name:
+            cursor["tool_name"] = tool_name
+        save_checkpoint(
+            runtime_db_conn,
+            run_id=run_id,
+            step_id=step_id,
+            checkpoint_type=checkpoint_type,
+            state_snapshot=state_snapshot,
+            cursor=cursor,
+        )
+        logfire.info(
+            "durable_checkpoint_saved",
+            run_id=run_id,
+            step_id=step_id,
+            checkpoint_type=checkpoint_type,
+            phase=phase,
+        )
+    except Exception as exc:
+        logfire.warning(
+            "checkpoint_save_failed",
+            step_id=step_id,
+            error=str(exc),
+        )
+
+
+def _is_job_run() -> bool:
+    if not runtime_db_conn or not run_id:
+        return False
+    try:
+        row = get_run(runtime_db_conn, run_id)
+    except Exception:
+        return False
+    return bool(row and row["run_mode"] == "job")
+
+
 VALID_SIDE_EFFECT_CLASSES = {"external", "memory", "local", "read_only"}
 _invalid_side_effect_warnings: set[tuple[str, str, str]] = set()
 
@@ -2162,6 +2346,19 @@ def _subagent_output_available(workspace_dir: str, task_key: str) -> bool:
     output_str = (data.get("output_str") or "").strip()
     output_payload = data.get("output")
     return bool(output_str or output_payload)
+
+
+def _extract_task_output_paths(tool_input: dict[str, Any]) -> list[str]:
+    if not isinstance(tool_input, dict):
+        return []
+    prompt = tool_input.get("prompt")
+    if not isinstance(prompt, str):
+        return []
+    candidates = []
+    for match in re.findall(r"/[^\s\"']+\.(?:html|pdf|md|json|txt)", prompt):
+        if os.path.exists(match):
+            candidates.append(match)
+    return candidates
 
 
 def _persist_subagent_output(
@@ -2380,9 +2577,11 @@ def _build_forced_tool_prompt(queue: list[dict[str, Any]]) -> str:
     lines = [
         "Recovery mode: re-run the in-flight tool calls below in the exact order.",
         "Do NOT run any other tools.",
+        "Do NOT run Bash or diagnostic commands unless explicitly listed.",
         "Do NOT call TaskOutput/TaskResult; they are disabled.",
         "Do NOT call TodoWrite or provide analysis; run only the listed tool calls.",
         "Use the exact tool name and input shown.",
+        "If a tool is denied, stop and respond with DONE.",
         "After completing the listed tool calls, respond with DONE and do not invoke any other tools.",
     ]
     for idx, item in enumerate(queue, 1):
@@ -2471,6 +2670,7 @@ async def reconcile_inflight_tools(
     inflight = _load_inflight_tool_calls(runtime_db_conn, run_id)
     if not inflight:
         return True
+    replay_step_id = inflight[0].get("step_id")
     inflight, skipped = _partition_inflight_for_relaunch(inflight)
     for item in skipped:
         if tool_ledger:
@@ -2504,6 +2704,26 @@ async def reconcile_inflight_tools(
             if tool_ledger and workspace_dir:
                 tool_input = item.get("tool_input") if isinstance(item.get("tool_input"), dict) else {}
                 _, task_key = _ensure_task_key(tool_input)
+                output_paths = _extract_task_output_paths(tool_input)
+                if output_paths:
+                    tool_ledger.mark_succeeded(
+                        item["tool_call_id"],
+                        {
+                            "status": "subagent_output_reused",
+                            "task_key": task_key,
+                            "output_paths": output_paths,
+                        },
+                    )
+                    tool_ledger.mark_replay_status(
+                        item["tool_call_id"], "skipped_output_present"
+                    )
+                    logfire.info(
+                        "relaunch_skipped_output_present",
+                        tool_call_id=item["tool_call_id"],
+                        task_key=task_key,
+                        output_paths=output_paths,
+                    )
+                    continue
                 if task_key and _subagent_output_available(workspace_dir, task_key):
                     output_paths = _subagent_output_paths(workspace_dir, task_key)
                     tool_ledger.mark_succeeded(
@@ -2582,6 +2802,13 @@ async def reconcile_inflight_tools(
         forced_tool_active_ids = {}
         return False
     forced_tool_active_ids = {}
+    _ensure_phase_checkpoint(
+        run_id=run_id,
+        step_id=replay_step_id,
+        checkpoint_type="post_replay",
+        phase="post_replay",
+        note="replay_queue_drained",
+    )
     return True
 
 
@@ -2842,6 +3069,22 @@ def print_job_completion_summary(
                 "response_ref": response_preview,
             }
         )
+    evidence_rows = conn.execute(
+        """
+        SELECT tool_name, response_ref
+        FROM tool_calls
+        WHERE run_id = ? AND status = 'succeeded' AND side_effect_class != 'read_only'
+        ORDER BY updated_at DESC
+        """,
+        (run_id,),
+    ).fetchall()
+    evidence_receipts = [
+        {
+            "tool_name": row["tool_name"],
+            "response_ref": row["response_ref"] or "",
+        }
+        for row in evidence_rows
+    ]
 
     replay_rows = conn.execute(
         """
@@ -2957,49 +3200,24 @@ def print_job_completion_summary(
     def _effects_from_receipts(receipt_items: list[dict]) -> set[str]:
         effects: set[str] = set()
         for receipt in receipt_items:
-            haystack = f"{receipt.get('tool_name', '')} {receipt.get('response_ref', '')}".lower()
-            if "gmail_send_email" in haystack or ("send_email" in haystack and "gmail" in haystack):
+            tool_name = str(receipt.get("tool_name", "") or "")
+            response_ref = str(receipt.get("response_ref", "") or "")
+            tool_name_upper = tool_name.upper()
+            haystack = f"{tool_name} {response_ref}".lower()
+            if "GMAIL_SEND_EMAIL" in tool_name_upper:
                 effects.add("email")
-            if "upload_to_composio" in haystack or ("upload" in haystack and "composio" in haystack):
+            elif "COMPOSIO_MULTI_EXECUTE_TOOL" in tool_name_upper:
+                if "gmail_send_email" in haystack or "recipient_email" in haystack:
+                    effects.add("email")
+            elif "send_email" in haystack and "gmail" in haystack:
+                effects.add("email")
+            if "UPLOAD_TO_COMPOSIO" in tool_name_upper:
+                effects.add("upload")
+            elif "upload_to_composio" in haystack or ("upload" in haystack and "composio" in haystack):
                 effects.add("upload")
         return effects
 
-    def _text_claims_email(text: str) -> bool:
-        if not text:
-            return False
-        lowered = text.lower()
-        if "email" not in lowered and "gmail" not in lowered and "inbox" not in lowered:
-            return False
-        patterns = [
-            r"(email|gmail).*(sent|emailed|delivered|inbox)",
-            r"(sent|emailed|delivered).*(email|gmail)",
-            r"in your inbox",
-        ]
-        return any(re.search(pattern, lowered) for pattern in patterns)
-
-    def _text_claims_upload(text: str) -> bool:
-        if not text:
-            return False
-        lowered = text.lower()
-        if "upload" not in lowered and "s3" not in lowered and "composio" not in lowered:
-            return False
-        patterns = [
-            r"(upload|uploaded).*(composio|s3|bucket)",
-            r"(composio|s3|bucket).*(upload|uploaded)",
-        ]
-        return any(re.search(pattern, lowered) for pattern in patterns)
-
-    def _effects_from_response_text(text: str) -> set[str]:
-        effects: set[str] = set()
-        if _text_claims_email(text):
-            effects.add("email")
-        if _text_claims_upload(text):
-            effects.add("upload")
-        return effects
-
-    confirmed_effects = _effects_from_receipts(receipts)
-    inferred_effects = _effects_from_response_text(response_text)
-    missing_evidence = inferred_effects - confirmed_effects
+    confirmed_effects = _effects_from_receipts(evidence_receipts)
     effect_labels = {
         "email": "Email sent",
         "upload": "Upload to Composio/S3",
@@ -3048,26 +3266,13 @@ def print_job_completion_summary(
     if summary:
         print("Summary:")
         print(summary)
-    if confirmed_effects or inferred_effects or missing_evidence:
-        print("Evidence summary:")
-        print("Confirmed (receipts):")
-        if confirmed_effects:
-            for effect in sorted(confirmed_effects):
-                print(f"- {effect_labels.get(effect, effect)}")
-        else:
-            print("- none")
-        print("Inferred (response claims):")
-        if inferred_effects:
-            for effect in sorted(inferred_effects):
-                print(f"- {effect_labels.get(effect, effect)}")
-        else:
-            print("- none")
-        print("Missing evidence:")
-        if missing_evidence:
-            for effect in sorted(missing_evidence):
-                print(f"- {effect_labels.get(effect, effect)} (no receipt)")
-        else:
-            print("- none")
+    if confirmed_effects:
+        print("Evidence summary (receipts only):")
+        for effect in sorted(confirmed_effects):
+            print(f"- {effect_labels.get(effect, effect)}")
+    elif receipts:
+        print("Evidence summary (receipts only):")
+        print("- none")
     if runwide_summary["total_tool_calls"]:
         if runwide_line:
             print(runwide_line)
@@ -3137,24 +3342,11 @@ def print_job_completion_summary(
                 if summary:
                     f.write("Summary:\n")
                     f.write(summary + "\n")
-                if confirmed_effects or inferred_effects or missing_evidence:
-                    f.write("Evidence summary:\n")
-                    f.write("Confirmed (receipts):\n")
+                if confirmed_effects or receipts:
+                    f.write("Evidence summary (receipts only):\n")
                     if confirmed_effects:
                         for effect in sorted(confirmed_effects):
                             f.write(f"- {effect_labels.get(effect, effect)}\n")
-                    else:
-                        f.write("- none\n")
-                    f.write("Inferred (response claims):\n")
-                    if inferred_effects:
-                        for effect in sorted(inferred_effects):
-                            f.write(f"- {effect_labels.get(effect, effect)}\n")
-                    else:
-                        f.write("- none\n")
-                    f.write("Missing evidence:\n")
-                    if missing_evidence:
-                        for effect in sorted(missing_evidence):
-                            f.write(f"- {effect_labels.get(effect, effect)} (no receipt)\n")
                     else:
                         f.write("- none\n")
                 if runwide_summary["total_tool_calls"]:
@@ -3216,6 +3408,7 @@ async def continue_job_run(
         "Focus strictly on the job objective and ignore unrelated topics or context."
         f"\n\nWorkspace: {workspace_dir}\n"
         "Use absolute paths rooted in the workspace for any local file operations.\n"
+        "Do NOT look for receipt_*.json files on disk; rely on the ledger receipts in the resume packet.\n"
         "Do NOT call TaskOutput/TaskResult; they are not callable tools. "
         "If you need subagent output, relaunch the Task tool instead.\n"
         "\n\nResume packet:\n"
@@ -4099,6 +4292,17 @@ async def setup_session(
             print(f"🧠 Injected Core Memory Context ({len(memory_context_str)} chars)")
         except Exception as e:
             print(f"⚠️ Failed to load Memory Context/Agent College: {e}")
+
+    try:
+        registry = load_identity_registry()
+        alias_keys = sorted(registry.aliases.keys())
+        print(
+            "✅ Identity registry loaded: "
+            f"primary_email={registry.primary_email or 'unset'}, "
+            f"aliases={alias_keys}"
+        )
+    except Exception as e:
+        print(f"⚠️ Failed to load identity registry: {e}")
 
     # Use timezone-aware datetime for consistent results across deployments
     user_now = get_user_datetime()
