@@ -19,6 +19,7 @@ sys.path.append(os.path.abspath("src"))
 # Ensure project root for Memory_System
 sys.path.append(os.path.dirname(os.path.abspath(__file__))) # src/
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) # Repo Root
+from universal_agent.search_config import SEARCH_TOOL_CONFIG
 from tools.workbench_bridge import WorkbenchBridge
 from composio import Composio
 
@@ -104,41 +105,6 @@ def trace_tool_output(func):
         return result
 
     return sync_wrapper
-
-# =============================================================================
-# SEARCH TOOL CONFIGURATION REGISTRY
-# =============================================================================
-# Single source of truth for parsing different Composio Search tool schemas.
-# Maps Tool Slug -> {list_key: str, url_key: str}
-SEARCH_TOOL_CONFIG = {
-    # Web & Default
-    "COMPOSIO_SEARCH":         {"list_key": "results",  "url_key": "url"},
-    "COMPOSIO_SEARCH_WEB":     {"list_key": "results",  "url_key": "url"},
-    "COMPOSIO_SEARCH_TAVILY":  {"list_key": "results",  "url_key": "url"},
-    "COMPOSIO_SEARCH_DUCK_DUCK_GO": {"list_key": "results", "url_key": "url"},
-    "COMPOSIO_SEARCH_EXA_ANSWER":   {"list_key": "results", "url_key": "url"},
-    "COMPOSIO_SEARCH_GROQ_CHAT":    {"list_key": "choices", "url_key": "message"}, # LLM chat, edge case
-    
-    # News & Articles
-    "COMPOSIO_SEARCH_NEWS":    {"list_key": "articles", "url_key": "url"},
-    "COMPOSIO_SEARCH_SCHOLAR": {"list_key": "articles", "url_key": "link"},
-    
-    # Products & Services
-    "COMPOSIO_SEARCH_AMAZON":  {"list_key": "data",     "url_key": "product_url"},
-    "COMPOSIO_SEARCH_SHOPPING":{"list_key": "data",     "url_key": "product_url"},
-    "COMPOSIO_SEARCH_WALMART": {"list_key": "data",     "url_key": "product_url"},
-    
-    # Travel & Events
-    "COMPOSIO_SEARCH_FLIGHTS": {"list_key": "data",     "url_key": "booking_url"}, # Assuming generic 'data' or specific list
-    "COMPOSIO_SEARCH_HOTELS":  {"list_key": "data",     "url_key": "url"},
-    "COMPOSIO_SEARCH_EVENT":   {"list_key": "data",     "url_key": "link"},
-    "COMPOSIO_SEARCH_TRIP_ADVISOR": {"list_key": "data", "url_key": "url"},
-    
-    # Other
-    "COMPOSIO_SEARCH_IMAGE":   {"list_key": "data",     "url_key": "original_url"}, # Google Images often 'original_url' or 'link'
-    "COMPOSIO_SEARCH_FINANCE": {"list_key": "data",     "url_key": "link"},
-    "COMPOSIO_SEARCH_GOOGLE_MAPS": {"list_key": "data", "url_key": "google_maps_link"},
-}
 
 try:
     sys.stderr.write("[Local Toolkit] Server starting components...\n")
@@ -314,7 +280,7 @@ def _filter_crawl_content(raw_text: str) -> tuple[str | None, str, dict, str]:
         return None, reason, meta, meta_block
 
     cleaned, short_line_count = _remove_navigation_lines(body)
-    if _word_count(cleaned) < 250:
+    if _word_count(cleaned) < 225:
         return None, "too_short", meta, meta_block
     if _word_count(cleaned) < 300 and _is_promotional(cleaned):
         return None, "promo_short", meta, meta_block
