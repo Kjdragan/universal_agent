@@ -137,6 +137,14 @@ def complete_step(
     conn.commit()
 
 
+def update_step_phase(conn: sqlite3.Connection, step_id: str, phase: str) -> None:
+    conn.execute(
+        "UPDATE run_steps SET phase = ?, updated_at = ? WHERE step_id = ?",
+        (phase, _now(), step_id),
+    )
+    conn.commit()
+
+
 def get_run(conn: sqlite3.Connection, run_id: str) -> Optional[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM runs WHERE run_id = ?",

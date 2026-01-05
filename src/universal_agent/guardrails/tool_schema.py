@@ -132,7 +132,10 @@ async def pre_tool_use_schema_guardrail(
     run_id: Optional[str] = None,
     step_id: Optional[str] = None,
     logger: Optional[object] = None,
+    skip_guardrail: bool = False,
 ) -> dict:
+    if skip_guardrail:
+        return {}
     tool_name = str(input_data.get("tool_name", "") or "")
     tool_input = input_data.get("tool_input", {}) or {}
 

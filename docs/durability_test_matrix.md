@@ -92,6 +92,14 @@ GROUP BY tool_name, status;
   - No `"Forced replay completed"` entries in `transcript.md` or `run.log`.
   - Remaining tool calls proceed normally (upload/email executed once).
 
+### 7) Phase checkpoint (pre_side_effect)
+- Start:
+  - `UA_TEST_CRASH_AFTER_TOOL=upload_to_composio PYTHONPATH=src uv run python -m universal_agent.main --job tmp/relaunch_resume_job.json`
+- Check:
+  - `sqlite3 AGENT_RUN_WORKSPACES/runtime_state.db "SELECT checkpoint_type, step_id, created_at FROM checkpoints WHERE run_id = '<RUN_ID>' AND checkpoint_type = 'pre_side_effect' ORDER BY created_at DESC LIMIT 3;"`
+- Expected:
+  - `pre_side_effect` checkpoint exists before the upload/email step.
+
 ## Pass/Fail Summary
 - **Pass**: No duplicate side effects; in-flight tools replay deterministically; Task relaunch occurs only when output artifacts are missing.
 - **Fail**: Duplicate side effects, missing artifacts, or replays outside forced queue.

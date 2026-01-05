@@ -1,9 +1,11 @@
 from dataclasses import dataclass
+import json
 from typing import Any, Optional
 
 from .ledger import ToolCallLedger, LedgerReceipt
 
 MALFORMED_TOOL_NAME_MARKERS = ("</arg_key>", "<arg_key>", "</arg_value>", "<arg_value>")
+INVALID_TOOL_NAME_MARKERS = ("<", ">", "{", "}", "[", "]", "\"")
 
 
 @dataclass
@@ -29,6 +31,48 @@ def is_malformed_tool_name(raw_name: str) -> bool:
     if not raw_name:
         return False
     return any(marker in raw_name for marker in MALFORMED_TOOL_NAME_MARKERS)
+
+
+def is_invalid_tool_name(raw_name: str) -> bool:
+    if not raw_name:
+        return False
+    return any(marker in raw_name for marker in INVALID_TOOL_NAME_MARKERS)
+
+
+def parse_malformed_tool_name(raw_name: str) -> tuple[Optional[str], Optional[str], Optional[Any]]:
+    if not raw_name or not is_malformed_tool_name(raw_name):
+        return None, None, None
+
+    key = None
+    value = None
+
+    if "<arg_key>" in raw_name and "</arg_key>" in raw_name:
+        key = raw_name.split("<arg_key>", 1)[1].split("</arg_key>", 1)[0].strip()
+    elif "</arg_key>" in raw_name:
+        before_key = raw_name.split("</arg_key>", 1)[0]
+        if "-" in before_key:
+            key = before_key.rsplit("-", 1)[-1].strip()
+
+    if "<arg_value>" in raw_name and "</arg_value>" in raw_name:
+        raw_value = raw_name.split("<arg_value>", 1)[1].split("</arg_value>", 1)[0].strip()
+        if raw_value:
+            try:
+                value = json.loads(raw_value)
+            except Exception:
+                value = None
+
+    base = raw_name
+    if "<arg_key>" in raw_name:
+        base = raw_name.split("<arg_key>", 1)[0]
+    elif "</arg_key>" in raw_name:
+        base = raw_name.split("</arg_key>", 1)[0]
+    if "<arg_value>" in base:
+        base = base.split("<arg_value>", 1)[0]
+    base = base.rstrip(" -:")
+    if key and base.endswith(key):
+        base = base[: -len(key)].rstrip(" -:")
+
+    return (base or None), key, value
 
 
 @dataclass
