@@ -1,0 +1,3 @@
+I need you to update our CLAUDE.md here: /home/kjdragan/lrepos/universal_agent/CLAUDE.md
+Unfortunately, we've made a lot of changes to our project, so it may be easier to recreate it than to just edit it, so that we make sure that we get what actually is in our code, not what we think is still in our code.I need you to update our CLAUDE.md here: /home/kjdragan/lrepos/universal_agent/CLAUDE.md
+Unfortunately, we've made a lot of changes to our project, so it may be easier to recreate it than to just edit it, so that we make sure that we get what actually is in our code, not what we think is still in our code.

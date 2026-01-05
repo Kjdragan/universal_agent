@@ -1,9 +1,9 @@
 # Overall System Architecture
 
-**Document Version**: 1.1
-**Last Updated**: 2025-12-29
+**Document Version**: 2.0
+**Last Updated**: 2026-01-05
 **Component**: Universal Agent
-**Primary Files**: `src/universal_agent/main.py`, `src/mcp_server.py`, `src/telegram_bot.py`
+**Primary Files**: `src/universal_agent/main.py` (~5,588 lines)
 
 ---
 
@@ -13,7 +13,7 @@
 2. [High-Level System Overview](#high-level-system-overview)
 3. [Core Components](#core-components)
 4. [Component Relationships](#component-relationships)
-5. [Key Subsystems](#key-subsystems)
+5. [New Architecture Modules](#new-architecture-modules)
 6. [Data Flow Architecture](#data-flow-architecture)
 7. [Deployment Architecture](#deployment-architecture)
 8. [Technology Stack](#technology-stack)
@@ -28,13 +28,14 @@ The Universal Agent is a **standalone AI agent system** built on the Claude Agen
 
 | Aspect | Description |
 |--------|-------------|
-| **Architecture Pattern** | Event-driven, Observer pattern, Sub-agent delegation |
+| **Architecture Pattern** | Event-driven, Observer pattern, Sub-agent delegation, Durable state |
 | **Execution Model** | Dual-path: Simple (direct) vs Complex (tool loop) |
-| **Interfaces** | CLI (prompt_toolkit) and Telegram (aiogram) |
-| **Tool Integration** | MCP (Model Context Protocol) servers |
+| **Interfaces** | CLI (prompt_toolkit), Telegram (aiogram + FastAPI), Web (FastAPI) |
+| **Tool Integration** | MCP (Model Context Protocol) servers - 6 configured |
 | **Observability** | Logfire distributed tracing (Dual Trace: Main + Subprocess) |
-| **State Management** | Per-session workspace with artifact persistence |
-| **Communication** | HTTP (remote MCP) + stdio (local MCP) + Telegram Polling |
+| **State Management** | Per-session workspace + Durable SQLite state with checkpointing |
+| **Communication** | HTTP (remote MCP) + stdio (local MCP) + Telegram Webhook/Polling |
+| **Memory System** | Letta Learning SDK integration for persistent sub-agent memory |
 
 ---
 
@@ -49,6 +50,7 @@ flowchart TB
         ComposioAPI["Composio Tool Router<br/>(500+ tools)"]
         LogfireAPI["Logfire Tracing<br/>(Observability)"]
         TelegramAPI["Telegram Bot API"]
+        LettaAPI["Letta Learning SDK<br/>(Persistent Memory)"]
     end
 
     subgraph UniversalAgent["Universal Agent System"]
@@ -56,36 +58,53 @@ flowchart TB
 
         subgraph Interfaces["User Interfaces"]
             CLI["Terminal CLI<br/>(main.py)"]
-            TGBot["Telegram Bot<br/>(telegram_bot.py)"]
+            Bot["Telegram Bot<br/>(bot/main.py + FastAPI)"]
+            Web["Web Server<br/>(web/server.py)"]
         end
 
         subgraph Core["Core Components"]
             Orchestrator["Agent Orchestrator"]
             Client["ClaudeSDKClient<br/>(Claude Agent SDK)"]
             Options["ClaudeAgentOptions<br/>(Configuration)"]
-            KB["Knowledge Base<br/>(JIT Guide Rails)"]
+            Memory["Memory System<br/>(Letta Integration)"]
         end
 
         subgraph SubAgents["Sub-Agent Specialists"]
-            ReportExpert["report-creation-expert<br/>(Research/Reporting)"]
-            VideoExpert["video-creation-expert<br/>(FFmpeg/Editing)"]
-            ImageExpert["image-expert<br/>(Generation)"]
-            SlackExpert["slack-expert<br/>(Workspace Analysis)"]
+            ReportExpert["report-creation-expert"]
+            VideoExpert["video-creation-expert"]
+            ImageExpert["image-expert"]
+            SlackExpert["slack-expert"]
         end
 
         subgraph Observers["Observer Pattern"]
             SearchObs["Search Results Observer"]
-            CorpusObs["Corpus Enrichment Observer"]
+            CorpusObs["Work Products Observer"]
             WorkbenchObs["Workbench Activity Observer"]
+            VideoObs["Video Outputs Observer"]
+            Compliance["Compliance Verifier"]
+        end
+
+        subgraph Durable["Durable System"]
+            State["State Manager"]
+            Ledger["Tool Ledger"]
+            Checkpoint["Checkpointing"]
+            Gateway["Tool Gateway"]
         end
 
         subgraph MCPLayer["MCP Server Layer"]
             LocalMCP["Local Toolkit MCP<br/>(stdio)"]
             ComposioMCP["Composio MCP<br/>(HTTP)"]
+            EdgarMCP["EdgarTools MCP<br/>(stdio)"]
+            VideoMCP["Video/Audio MCP<br/>(stdio)"]
+            YoutubeMCP["YouTube MCP<br/>(stdio)"]
+            ZaiMCP["ZAI Vision MCP<br/>(stdio)"]
         end
 
-        subgraph Bridges["Bridge Layer"]
-            WorkbenchBridge["WorkbenchBridge<br/>(Local-Remote File Transfer)"]
+        subgraph AgentCollege["Agent College"]
+            Critic["Critic Agent"]
+            Professor["Professor Agent"]
+            Scribe["Scribe Agent"]
+            Runner["College Runner"]
         end
     end
 
@@ -97,65 +116,43 @@ flowchart TB
     end
 
     User(("User")) -->|"Terminal"| CLI
-    User -->|"Message"| TGBot
+    User -->|"Message"| Bot
 
     CLI --> Orchestrator
-    TGBot --> Orchestrator
+    Bot --> Orchestrator
 
     Orchestrator --> Client
     Client --> Options
-    Options --> KB
+    Options --> Memory
     Options --> LocalMCP
     Options --> ComposioMCP
 
     Client -->|"Delegate"| ReportExpert
     Client -->|"Delegate"| VideoExpert
     Client -->|"Delegate"| ImageExpert
-    Client -->|"Delegate"| SlackExpert
 
     Orchestrator -->|"Trigger"| Observers
-
-    LocalMCP --> WorkbenchBridge
+    Orchestrator -->|"Track"| Durable
 
     Client -->|"API Calls"| ClaudeAPI
     ComposioMCP -->|"Tool Execution"| ComposioAPI
-    TGBot -->|"Poll/Push"| TelegramAPI
+    Bot -->|"Poll/Push"| TelegramAPI
+
+    Client -->|"Memory"| LettaAPI
 
     SubAgents -->|"Generate"| WorkProducts
-    Orchestrator -->|"Log Output"| RunLog
-    Orchestrator -->|"Save Trace"| TraceJSON
+
+    Runner -->|"Monitor"| LogfireAPI
 
     style UniversalAgent fill:#e3f2fd
     style Core fill:#bbdefb
     style MCPLayer fill:#c8e6c9
     style Observers fill:#fff9c4
     style SubAgents fill:#ffccbc
+    style Durable fill:#f8bbd0
     style Workspace fill:#f3e5f5
-    style External fill:#ffe0b2
-    style Interfaces fill:#d1c4e9
+    style AgentCollege fill:#d1c4e9
 ```
-
-### Discussion: System Context
-
-This diagram illustrates the complete system boundaries and external dependencies:
-
-1.  **Dual Interfaces**: The system can be operated via:
-    *   **CLI**: Direct terminal interaction.
-    *   **Telegram Bot**: Remote messaging interface.
-
-2.  **External Services**:
-    *   **Claude API**: LLM inference.
-    *   **Composio API**: 500+ integrations.
-    *   **Logfire API**: Distributed tracing.
-    *   **Telegram API**: Messaging platform.
-
-3.  **Core Components**: Main logic, configuration, and the **Knowledge Base** (JIT Guide Rails) which directs high-level behavior.
-
-4.  **Sub-Agents**: Specialized agents for Reports, Video, Images, and Slack.
-
-5.  **MCP Layer**: Local (stdio) and Remote (HTTP) tool execution.
-
-6.  **Observer Pattern**: Async background processing of tool results.
 
 ---
 
@@ -163,151 +160,265 @@ This diagram illustrates the complete system boundaries and external dependencie
 
 ### 1. ClaudeSDKClient (Main Agent Brain)
 
-**Location**: `src/universal_agent/main.py`
+**Location**: `src/universal_agent/main.py` (lines 1-5588)
 
 **Purpose**: The primary interface for Claude Agent SDK, managing conversation state, tool execution, and sub-agent delegation.
 
 **Key Responsibilities**:
-*   Classifying queries (Simple vs Complex).
-*   Executing the ReAct loop.
-*   Routing tasks to specific Sub-Agents.
-*   Applying "Just-In-Time" (JIT) guidance via the Knowledge Base.
+- Classifying queries (SIMPLE vs COMPLEX) with `_is_memory_intent()` heuristic
+- Executing the ReAct loop via `process_turn()`
+- Routing tasks to specific Sub-Agents via Task tool
+- Managing hooks (SubagentStop, PreToolUse, PostToolUse, UserPromptSubmit)
+- Integrating with Letta for persistent memory
+- Applying "Just-In-Time" (JIT) guidance via Knowledge Base
 
-### 2. Knowledge Base (JIT Guide Rails)
+**Major Functions**:
+| Function | Line | Purpose |
+|----------|------|---------|
+| `classify_query()` | ~3950 | Determines SIMPLE vs COMPLEX |
+| `handle_simple_query()` | ~4005 | Fast path for direct answers |
+| `process_turn()` | ~4765 | Main turn orchestrator |
+| `run_conversation()` | ~3478 | Tool loop execution |
+| `on_subagent_stop()` | ~1689 | Post-subagent verification |
+| `main()` | ~4941 | Entry point and event loop |
 
-**Location**: `.claude/knowledge/*.md`
+### 2. Memory System (Letta Integration)
 
-**Purpose**: Provides static, high-priority guidance to the agent to enforce architectural patterns (like mandatory delegation) without complex hooks.
+**Location**: `src/universal_agent/main.py` (lines 333-525)
 
-*   `report_workflow.md`: Enforces delegation to `report-creation-expert` after search.
-*   Other knowledge files inject context at runtime.
+**Purpose**: Provides persistent memory for sub-agents via Letta Learning SDK.
 
-### 3. Telegram Adapter
+**Memory Blocks**:
+- `human` - User preferences and interactions
+- `system_rules` - Architectural guidelines
+- `project_context` - Project-specific knowledge
+- `recent_queries` - Recent requests with timestamps
+- `recent_reports` - Latest reports with metadata
 
-**Location**: `src/telegram_bot.py`
+### 3. Bot Integration (Modular Architecture)
 
-**Purpose**: Adapts the agent for the Telegram messaging platform.
+**Location**: `src/universal_agent/bot/`
 
-*   **Session Management**: Maps Telegram User IDs to Agent Sessions.
-*   **State Persistence**: Maintains conversation history per user.
-*   **Media Handling**: Supports sending/receiving images and files.
+**Components**:
+- `main.py` - FastAPI application with webhook support
+- `agent_adapter.py` - Adapter pattern for agent integration
+- `task_manager.py` - Async task execution with status tracking
+- `telegram_handlers.py` - Command handlers (/start, /help, /status, /continue, /new)
+- `telegram_formatter.py` - MarkdownV2 response formatting
+- `execution_logger.py` - Stdout/stderr capture to files
+
+**Key Features**:
+- Hybrid webhook + polling mode
+- Per-user session management
+- Async task queue with configurable concurrency
+- Automatic webhook registration with fallback to polling
 
 ---
 
 ## Component Relationships
 
-### Component Interaction Diagram
+### Module Structure
 
-```mermaid
-flowchart TB
-    subgraph MainLoop["Main Orchestrator"]
-        direction TB
-        Session["Session Setup"]
-        Interface["Interface Loop (CLI/Telegram)"]
-        Classify["classify_query()"]
-        KB["Load Knowledge Base"]
-    end
+```
+src/universal_agent/
+├── main.py                  # Main CLI agent (~5588 lines)
+├── agent_core.py            # Agent core abstractions
+├── worker.py                # Background worker
+├── prompt_assets.py         # Prompt template management
+├── search_config.py         # Search tool configuration
+├── server.py                # Server components
+├── transcript_builder.py    # Session transcript generation
+│
+├── bot/                     # Telegram Bot (modular)
+│   ├── main.py             # FastAPI + webhook entry
+│   ├── agent_adapter.py    # Agent integration adapter
+│   ├── task_manager.py     # Async task management
+│   ├── telegram_handlers.py # Command handlers
+│   ├── telegram_formatter.py # Response formatting
+│   ├── execution_logger.py # Output capture
+│   └── config.py           # Bot configuration
+│
+├── observers/               # Observer Pattern (NEW)
+│   ├── __init__.py
+│   └── core.py             # 5 observer functions
+│
+├── durable/                 # State Management (NEW)
+│   ├── db.py               # SQLite database operations
+│   ├── state.py            # Run lifecycle management
+│   ├── ledger.py           # Tool call audit trail
+│   ├── checkpointing.py    # State snapshots
+│   ├── tool_gateway.py     # Policy-based execution
+│   ├── migrations.py       # Database schema
+│   ├── normalize.py        # Data normalization
+│   └── classification.py   # Content classification
+│
+├── guardrails/              # Tool Schema Validation (NEW)
+│   └── tool_schema.py      # Schema validation
+│
+├── agent_operator/          # CLI for Agent Operations (NEW)
+│   ├── operator_cli.py     # Interactive CLI
+│   ├── operator_db.py      # Database queries
+│   └── __main__.py         # Entry point
+│
+├── agent_college/           # Agent College (Self-Improvement)
+│   ├── runner.py           # Main event loop
+│   ├── critic.py           # Failure analysis
+│   ├── professor.py        # Review and skills
+│   ├── scribe.py           # Success analysis
+│   ├── logfire_reader.py   # Trace queries
+│   ├── config.py           # Configuration
+│   ├── integration.py      # Setup functions
+│   └── common.py           # Shared constants
+│
+├── identity/                # User Identity (NEW)
+│   └── registry.py         # Identity management
+│
+└── utils/
+    └── composio_discovery.py # Tool discovery
 
-    subgraph Execution["Execution Engine"]
-        Fast["Fast Path"]
-        Complex["Complex Path (Tool Loop)"]
-    end
+AgentCollege/                 # Separate Service
+└── logfire_fetch/
+    └── main.py              # FastAPI for Logfire webhooks
 
-    subgraph Specialists["Sub-Agents"]
-        Report["Report Expert"]
-        Video["Video Expert"]
-        Image["Image Expert"]
-    end
-
-    subgraph Observers["Observer System"]
-        SearchObs["Search Observer"]
-        WorkbenchObs["Workbench Observer"]
-    end
-
-    Session --> KB
-    Session --> Interface
-    Interface --> Classify
-
-    Classify -->|SIMPLE| Fast
-    Classify -->|COMPLEX| Complex
-
-    Complex -->|"Delegate"| Specialists
-    Complex -->|"Tool Result"| Observers
-
-    Observers -->|"Save Artifact"| Workspace
+src/
+├── mcp_server.py            # Local Toolkit MCP (10+ tools)
+├── tools/
+│   └── workbench_bridge.py  # Local-Remote file transfer
+└── web/
+    └── server.py            # Web interface
 ```
 
 ---
 
-## Key Subsystems
+## New Architecture Modules
 
-### 1. Sub-Agent Delegation System
+### 1. Observers Module (`observers/`)
 
-**Purpose**: Delegate specialized tasks to agents with scoped tools and focused prompts.
+**Purpose**: Async fire-and-forget artifact processing
 
-**Available Sub-Agents**:
-*   **`report-creation-expert`**: Research, crawling, and HTML/PDF report generation.
-*   **`video-creation-expert`**: Video downloading (YouTube), editing (FFmpeg), and processing.
-*   **`image-expert`**: Image generation and editing via Gemini/ZAI tools.
-*   **`slack-expert`**: Slack workspace analysis and messaging.
+**Functions**:
+- `observe_and_save_search_results()` - SERP artifact cleaning and storage
+- `observe_and_save_workbench_activity()` - Code execution logging
+- `observe_and_save_work_products()` - Dual-save to persistent storage
+- `observe_and_save_video_outputs()` - Media file tracking
+- `verify_subagent_compliance()` - Quality assurance verification
 
-### 2. Observer Pattern System
+**Integration**: Spawned via `asyncio.create_task()` in main.py lines 3807-3838
 
-**Purpose**: Client-side async processing of tool results. Validates compliance and saves artifacts (SERP JSONs, execution logs) to the workspace in the background.
+### 2. Durable System (`durable/`)
+
+**Purpose**: Persistent state management with checkpointing
+
+**Components**:
+- **State Manager** - Run lifecycle, session management, lease control
+- **Checkpointing** - Full state snapshots for resume capability
+- **Tool Ledger** - Audit trail of all tool calls
+- **Tool Gateway** - Policy-based execution with idempotency
+- **Database** - SQLite with runs, steps, tools, receipts, checkpoints tables
+
+**Status**: Phases 0-3 implemented
+
+### 3. Guardrails (`guardrails/`)
+
+**Purpose**: Tool schema validation and safety
+
+**Features**:
+- Required field checking
+- Content length validation
+- Example hints for invalid calls
+- Pre-tool-use and post-tool-use guards
+
+### 4. Agent Operator (`agent_operator/`)
+
+**Purpose**: CLI for administrative operations
+
+**Capabilities**:
+- View agent runs and tool calls
+- Inspect execution traces
+- Manage agent workspace
+- Cancel running tasks
+
+### 5. Agent College (`agent_college/`)
+
+**Purpose**: Self-improvement subsystem
+
+**Agents**:
+- **Critic** - Analyzes failures and proposes corrections
+- **Professor** - Reviews notes and creates skills
+- **Scribe** - Records facts from successful traces
+
+**Architecture**: Hybrid - embedded agents + separate LogfireFetch service
 
 ---
 
-## Observability (Logfire)
+## Data Flow Architecture
 
-The system uses **Pydantic Logfire** for deep observability.
+### Query Flow
 
-**Dual-Trace Architecture**:
-1.  **Main Process Trace**: Captures the agent's logic, reasoning, and high-level tool calls.
-2.  **Subprocess Trace**: Captures the internal execution of Local MCP tools (running in a separate stdio process).
+```
+User Input
+    ↓
+Query Classification (SIMPLE vs COMPLEX)
+    ↓
+[Complex Path] → Sub-Agent Delegation (report-creation-expert)
+    ↓
+Claude Agent SDK (Main Brain)
+    ├─→ Composio MCP Server (500+ tools)
+    ├─→ Local Toolkit MCP (crawl_parallel, write_local_file, etc.)
+    ├─→ External MCPs (edgartools, video_audio, youtube, zai_vision)
+    └─→ Skills (.claude/skills/)
+    ↓
+Observer Pattern (async artifact processing)
+    ↓
+Durable System (state tracking, checkpointing)
+    ↓
+AGENT_RUN_WORKSPACES/session_*/ (artifacts)
+```
 
-Logfire provides:
-*   Real-time trace visualization.
-*   "Time-travel" debugging of agent reasoning.
-*   Performance metrics (latency, tool usage).
+### MCP Server Configuration
+
+**Location**: `main.py` lines 4427-4470
+
+| Server | Type | Purpose |
+|--------|------|---------|
+| `composio` | HTTP | 500+ SaaS integrations |
+| `local_toolkit` | stdio | Local file ops, web extraction |
+| `edgartools` | stdio | SEC Edgar research |
+| `video_audio` | stdio | FFmpeg video/audio editing |
+| `youtube` | stdio | yt-dlp downloads |
+| `zai_vision` | stdio | GLM-4.6V analysis |
 
 ---
 
 ## Deployment Architecture
 
-### Physical Architecture
+### Local Development
 
-```mermaid
-flowchart TB
-    subgraph Host["Host Machine (Local/Server)"]
-        direction LR
+```bash
+# Run CLI Agent + Agent College
+./local_dev.sh
 
-        subgraph ProcessGroup["Agent Processes"]
-            MainProc["Python: Main Agent<br/>(CLI or Bot)"]
-            MCPProc["Python: Local MCP<br/>(Subprocess)"]
-        end
+# Manual: Run CLI Agent only
+PYTHONPATH=src uv run python -m universal_agent.main
 
-        subgraph Storage["File System"]
-            Workspaces["AGENT_RUN_WORKSPACES/"]
-            Brain["Architecture Docs/"]
-        end
-    end
+# Manual: Run Agent College
+PYTHONPATH=src uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8001
 
-    subgraph Cloud["Cloud Services"]
-        TeleCloud["Telegram Cloud"]
-        Claude["Anthropic/Z.AI API"]
-        Composio["Composio Platform"]
-        Logfire["Logfire Platform"]
-    end
-
-    MainProc <-->|"Socket"| TeleCloud
-    MainProc <-->|"HTTP"| Claude
-    MainProc <-->|"HTTP"| Composio
-    MainProc -->|"HTTPS"| Logfire
-
-    MainProc <-->|"stdio"| MCPProc
-    MainProc -->|"Read/Write"| Storage
-    MCPProc -->|"Read/Write"| Storage
+# Run Telegram Bot
+PYTHONPATH=src uv run uvicorn universal_agent.bot.main:app --port 8000
 ```
+
+### Railway Deployment
+
+**Production**: `https://web-production-3473.up.railway.app`
+
+**Container**: Monolithic (Bot + Agent College)
+
+**Endpoints**:
+- Webhook: `/webhook`
+- Health: `/health`
+
+**Persistence**: Railway Volume at `/app/data`
 
 ---
 
@@ -315,10 +426,44 @@ flowchart TB
 
 **Languages**: Python 3.12+
 **Core Framework**: Claude Agent SDK
-**Tooling**: Composio Tool Router, MCP (Model Context Protocol)
-**Interfaces**: prompt_toolkit (CLI), aiogram (Telegram)
-**Observability**: Pydantic Logfire
+**Tooling**:
+- Composio Tool Router (500+ tools)
+- MCP (Model Context Protocol) - 6 servers
+- FastMCP (local MCP framework)
+
+**Interfaces**:
+- prompt_toolkit (CLI)
+- aiogram + FastAPI (Telegram Bot)
+- FastAPI (Web)
+
+**Observability**:
+- Pydantic Logfire (distributed tracing)
+- SQLite (durable state)
+
+**Memory**:
+- Letta Learning SDK (persistent sub-agent memory)
+
 **Dependency Management**: `uv`
 
+---
+
+## Architecture Evolution
+
+### Key Changes from Initial Design
+
+| Previous | Current |
+|----------|---------|
+| `main.py` ~2600 lines | `main.py` ~5588 lines |
+| `src/telegram_bot.py` | `src/universal_agent/bot/` (modular) |
+| Observers in main.py | `src/universal_agent/observers/` module |
+| No state persistence | `src/universal_agent/durable/` system |
+| No validation | `src/universal_agent/guardrails/` |
+| 2 MCP servers | 6 MCP servers |
+| No self-improvement | Agent College subsystem |
+| No persistent memory | Letta Learning SDK integration |
+
+---
+
 **Document Status**: ✅ Active & Updated
-**Last System Sync**: 2025-12-29
+**Last System Sync**: 2026-01-05
+**Maintainer**: Universal Agent Team
