@@ -86,6 +86,13 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.styles import Style
 
+from universal_agent.prompt_assets import (
+    discover_skills,
+    generate_skills_xml,
+    get_tool_knowledge_block,
+    get_tool_knowledge_content,
+)
+from universal_agent.search_config import SEARCH_TOOL_CONFIG
 
 class DualWriter:
     """Writes to both a file and the original stream (stdout/stderr)."""
@@ -1099,128 +1106,6 @@ def verify_subagent_compliance(
     return None
 
 
-# =============================================================================
-# KNOWLEDGE BASE - Static tool guidance loaded at startup
-# =============================================================================
-
-def load_knowledge() -> str:
-    """
-    Load all knowledge files from .claude/knowledge/ directory.
-    These contain critical tool usage patterns (e.g., Gmail attachment format)
-    that are appended to the system prompt at startup.
-    
-    Returns: Combined knowledge content as a single string.
-    """
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    knowledge_dir = os.path.join(project_root, ".claude", "knowledge")
-    
-    if not os.path.exists(knowledge_dir):
-        return ""
-    
-    knowledge_parts = []
-    for filename in sorted(os.listdir(knowledge_dir)):
-        if filename.endswith('.md'):
-            filepath = os.path.join(knowledge_dir, filename)
-            try:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    knowledge_parts.append(f.read())
-            except Exception:
-                pass  # Skip files that can't be read
-    
-    return "\n\n---\n\n".join(knowledge_parts) if knowledge_parts else ""
-
-
-_TOOL_KNOWLEDGE_CONTENT: Optional[str] = None
-_TOOL_KNOWLEDGE_BLOCK: Optional[str] = None
-
-
-def _get_tool_knowledge_content() -> str:
-    global _TOOL_KNOWLEDGE_CONTENT
-    if _TOOL_KNOWLEDGE_CONTENT is None:
-        _TOOL_KNOWLEDGE_CONTENT = load_knowledge()
-    return _TOOL_KNOWLEDGE_CONTENT or ""
-
-
-def _get_tool_knowledge_block() -> str:
-    global _TOOL_KNOWLEDGE_BLOCK
-    if _TOOL_KNOWLEDGE_BLOCK is None:
-        content = _get_tool_knowledge_content()
-        _TOOL_KNOWLEDGE_BLOCK = f"## Tool Knowledge\n{content}" if content else ""
-    return _TOOL_KNOWLEDGE_BLOCK or ""
-
-
-# =============================================================================
-# SKILL DISCOVERY - Parse SKILL.md files for progressive disclosure
-# =============================================================================
-
-
-def discover_skills(skills_dir: str = None) -> list[dict]:
-    """
-    Scan .claude/skills/ directory and parse SKILL.md frontmatter.
-    Returns list of {name, description, path} for each skill.
-    
-    Progressive disclosure: We only load name+description here.
-    Full SKILL.md content is loaded by the agent when needed via read_local_file.
-    """
-    import yaml
-    
-    if skills_dir is None:
-        # Default to project's .claude/skills
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        skills_dir = os.path.join(project_root, ".claude", "skills")
-    
-    skills = []
-    
-    if not os.path.exists(skills_dir):
-        return skills
-    
-    for skill_name in os.listdir(skills_dir):
-        skill_path = os.path.join(skills_dir, skill_name)
-        skill_md = os.path.join(skill_path, "SKILL.md")
-        
-        if os.path.isdir(skill_path) and os.path.exists(skill_md):
-            try:
-                with open(skill_md, "r", encoding="utf-8") as f:
-                    content = f.read()
-                
-                # Parse YAML frontmatter (between --- markers)
-                if content.startswith("---"):
-                    parts = content.split("---", 2)
-                    if len(parts) >= 3:
-                        frontmatter = yaml.safe_load(parts[1])
-                        if frontmatter and isinstance(frontmatter, dict):
-                            skills.append({
-                                "name": frontmatter.get("name", skill_name),
-                                "description": frontmatter.get("description", "No description"),
-                                "path": skill_md,
-                            })
-            except Exception as e:
-                # Skip malformed SKILL.md files
-                logfire.warning("skill_parse_error", skill=skill_name, error=str(e))
-                continue
-    
-    return skills
-
-
-def generate_skills_xml(skills: list[dict]) -> str:
-    """
-    Generate <available_skills> XML block for system prompt injection.
-    This enables Claude to be aware of skills and read them when relevant.
-    """
-    if not skills:
-        return ""
-    
-    lines = ["<available_skills>"]
-    for skill in skills:
-        lines.append(f"""<skill>
-  <name>{skill['name']}</name>
-  <description>{skill['description']}</description>
-  <path>{skill['path']}</path>
-</skill>""")
-    lines.append("</available_skills>")
-    return "\n".join(lines)
-
-
 # Document skills that trigger PreToolUse hints
 DOCUMENT_SKILL_TRIGGERS = {
     "pdf": ["pdf", "reportlab", "pypdf", "pdfplumber"],
@@ -2093,7 +1978,7 @@ async def on_pre_task_skill_awareness(
     registry = get_skill_awareness_registry()
     awareness_context = registry.get_awareness_context(expected_skills)
 
-    tool_knowledge = _get_tool_knowledge_block()
+    tool_knowledge = get_tool_knowledge_block()
     combined_context = ""
     if awareness_context:
         combined_context = awareness_context
@@ -4733,8 +4618,8 @@ async def setup_session(
     skill_names = [s['name'] for s in discovered_skills]
     print(f"✅ Discovered Skills: {skill_names}")
     skills_xml = generate_skills_xml(discovered_skills)
-    tool_knowledge_content = _get_tool_knowledge_content()
-    tool_knowledge_block = _get_tool_knowledge_block()
+    tool_knowledge_content = get_tool_knowledge_content()
+    tool_knowledge_block = get_tool_knowledge_block()
     tool_knowledge_suffix = f"\n\n{tool_knowledge_block}" if tool_knowledge_block else ""
 
     # Create ClaudeAgentOptions now that session is available
@@ -5394,40 +5279,6 @@ async def process_turn(
         trace_id=trace.get("trace_id"),
         follow_up_suggestions=suggestions if not is_simple else []
     )
-
-
-# =============================================================================
-# SEARCH TOOL CONFIGURATION REGISTRY (Synced with mcp_server.py)
-# =============================================================================
-SEARCH_TOOL_CONFIG = {
-    # Web & Default
-    "COMPOSIO_SEARCH":         {"list_key": "results",  "url_key": "url"},
-    "COMPOSIO_SEARCH_WEB":     {"list_key": "results",  "url_key": "url"},
-    "COMPOSIO_SEARCH_TAVILY":  {"list_key": "results",  "url_key": "url"},
-    "COMPOSIO_SEARCH_DUCK_DUCK_GO": {"list_key": "results", "url_key": "url"},
-    "COMPOSIO_SEARCH_EXA_ANSWER":   {"list_key": "results", "url_key": "url"},
-    "COMPOSIO_SEARCH_GROQ_CHAT":    {"list_key": "choices", "url_key": "message"}, 
-    
-    # News & Articles
-    "COMPOSIO_SEARCH_NEWS":    {"list_key": "articles", "url_key": "url"},
-    "COMPOSIO_SEARCH_SCHOLAR": {"list_key": "articles", "url_key": "link"},
-    
-    # Products & Services
-    "COMPOSIO_SEARCH_AMAZON":  {"list_key": "data",     "url_key": "product_url"},
-    "COMPOSIO_SEARCH_SHOPPING":{"list_key": "data",     "url_key": "product_url"},
-    "COMPOSIO_SEARCH_WALMART": {"list_key": "data",     "url_key": "product_url"},
-    
-    # Travel & Events
-    "COMPOSIO_SEARCH_FLIGHTS": {"list_key": "data",     "url_key": "booking_url"},
-    "COMPOSIO_SEARCH_HOTELS":  {"list_key": "data",     "url_key": "url"},
-    "COMPOSIO_SEARCH_EVENT":   {"list_key": "data",     "url_key": "link"},
-    "COMPOSIO_SEARCH_TRIP_ADVISOR": {"list_key": "data", "url_key": "url"},
-    
-    # Other
-    "COMPOSIO_SEARCH_IMAGE":   {"list_key": "data",     "url_key": "original_url"},
-    "COMPOSIO_SEARCH_FINANCE": {"list_key": "data",     "url_key": "link"},
-    "COMPOSIO_SEARCH_GOOGLE_MAPS": {"list_key": "data", "url_key": "google_maps_link"},
-}
 
 
 async def main(args: argparse.Namespace):
