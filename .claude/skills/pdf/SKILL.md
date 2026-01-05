@@ -298,10 +298,21 @@ with open("encrypted.pdf", "wb") as output:
 For converting HTML reports to PDF (preserving CSS styling, tables, layout):
 
 ### Google Chrome Headless (Recommended)
-google-chrome --headless --disable-gpu --print-to-pdf=output.pdf --no-margins input.html
+
+**IMPORTANT:** Use these flags to avoid D-Bus errors in headless/containerized environments:
+
+```bash
+google-chrome --headless --no-sandbox --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --print-to-pdf=output.pdf --no-margins input.html
 ```
-google-chrome --headless --disable-gpu --print-to-pdf=output.pdf --no-margins input.html
-```
+
+**Required Flags Explanation:**
+- `--headless` - Run without UI
+- `--no-sandbox` - Required for containerized environments
+- `--disable-gpu` - Disable GPU hardware acceleration
+- `--disable-software-rasterizer` - Prevents rendering issues
+- `--disable-dev-shm-usage` - Uses /tmp instead of /dev/shm (fixes Docker memory issues)
+- `--print-to-pdf=output.pdf` - Output file path
+- `--no-margins` - Maximize content area
 **Maximizing Content Area (Very Narrow Margins):**
 To maximize the space available for text and allow for larger font sizes:
 1.  **Add CSS**: Include `<style>@page { margin: 0; } body { margin: 0.5cm; font-size: 16pt; line-height: 1.5; }</style>` in your HTML.

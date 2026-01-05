@@ -71,6 +71,17 @@
 
 ## 🚧 Known Issues & Next Steps
 
+### 🚀 IMMEDIATE NEXT STEP: Submit Letta SDK Pull Request
+**Purpose**: Fix critical `UnboundLocalError` in upstream `letta-ai/learning-sdk` to remove our local monkey patch.
+**Artifacts for Submission**:
+*   **PR Draft Description**: [`Project_Documentation/PR_DRAFT_LETTA_MEMORY_FIX.md`](Project_Documentation/PR_DRAFT_LETTA_MEMORY_FIX.md)
+*   **Technical Context**: [`Project_Documentation/027_LETTA_INTEGRATION_TECHNICAL_NOTES.md`](Project_Documentation/027_LETTA_INTEGRATION_TECHNICAL_NOTES.md)
+*   **Source Code Reference**: `sitecustomize.py` (specifically `_patch_letta_memory_upsert`)
+**Action Required**:
+1.  Fork/Clone `letta-ai/learning-sdk`.
+2.  Apply the fix (typo correction in `client/memory/client.py`).
+3.  Submit PR using the text from the draft artifact.
+
 ### ✅ RESOLVED: Session Persistence After Task (Fixed Dec 31, 2025)
 **Fix**: Watchdog timeout + Worker health checks implemented in Bot.
 

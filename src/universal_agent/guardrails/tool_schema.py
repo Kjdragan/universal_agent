@@ -15,6 +15,8 @@ class ToolSchema:
     required: Sequence[str] = field(default_factory=tuple)
     required_any: Sequence[Sequence[str]] = field(default_factory=tuple)
     example: str = ""
+    # Minimum content length for string fields (0 = no validation)
+    content_min_length: dict[str, int] = field(default_factory=dict)
 
 
 _TOOL_SCHEMAS: dict[str, ToolSchema] = {
@@ -24,6 +26,8 @@ _TOOL_SCHEMAS: dict[str, ToolSchema] = {
         example=(
             "write_local_file({path: '/tmp/report.html', content: '<html>...</html>'})"
         ),
+        # Require at least 10 bytes to prevent 0-byte/empty writes
+        content_min_length={"content": 10},
     ),
     "upload_to_composio": ToolSchema(
         required=("path", "tool_slug", "toolkit_slug"),
@@ -88,6 +92,17 @@ def _missing_required(schema: ToolSchema, tool_input: dict) -> list[str]:
                 break
         if not satisfied:
             missing.append("one_of:" + "|".join(",".join(group) for group in schema.required_any))
+    
+    # Validate content_min_length for string fields
+    for field_name, min_len in schema.content_min_length.items():
+        value = tool_input.get(field_name)
+        if isinstance(value, str) and len(value) < min_len:
+            missing.append(f"{field_name}_too_short(min:{min_len})")
+        elif value is None or (isinstance(value, str) and len(value) == 0):
+            # Already caught by required check, but re-emphasize for 0-byte case
+            if field_name not in missing:
+                missing.append(f"{field_name}_empty")
+    
     return missing
 
 

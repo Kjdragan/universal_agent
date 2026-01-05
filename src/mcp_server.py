@@ -40,13 +40,9 @@ else:
 load_dotenv()
 
 # Configure Logfire for MCP observability
-# Session trace ID for consolidation (passed from main agent via env var)
-SESSION_TRACE_ID = os.getenv("UA_SESSION_TRACE_ID", "")
-
 try:
     import logfire
     from opentelemetry import trace as otel_trace
-    from opentelemetry.trace import SpanContext, TraceFlags
     
     if os.getenv("LOGFIRE_TOKEN"):
         logfire.configure(
@@ -54,13 +50,8 @@ try:
             send_to_logfire="if-token-present",
         )
         logfire.instrument_mcp()
-        
-        if SESSION_TRACE_ID:
-            sys.stderr.write(f"[Local Toolkit] Logfire enabled - consolidated with main trace: {SESSION_TRACE_ID[:16]}...\n")
-        else:
-            sys.stderr.write("[Local Toolkit] Logfire instrumentation enabled (standalone trace)\n")
+        sys.stderr.write("[Local Toolkit] Logfire instrumentation enabled\n")
 except ImportError:
-    SESSION_TRACE_ID = ""
     pass
 
 TRACE_OUTPUT_ENABLED = os.getenv("UA_EMIT_LOCAL_TRACE_IDS", "1").lower() in {
@@ -71,15 +62,10 @@ TRACE_OUTPUT_ENABLED = os.getenv("UA_EMIT_LOCAL_TRACE_IDS", "1").lower() in {
 
 
 def _current_trace_id() -> Optional[str]:
-    """Get the current trace ID - prefers consolidated session trace if available."""
+    """Get the current trace ID from the active span."""
     if not TRACE_OUTPUT_ENABLED:
         return None
     
-    # Prefer session trace ID for consolidation
-    if SESSION_TRACE_ID:
-        return SESSION_TRACE_ID
-    
-    # Fallback to current span's trace ID
     try:
         from opentelemetry import trace as otel_trace
 

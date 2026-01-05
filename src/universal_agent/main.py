@@ -4782,6 +4782,12 @@ async def setup_session(
     options = ClaudeAgentOptions(
         model="claude-3-5-sonnet-20241022",
         disallowed_tools=disallowed_tools,
+        # Unlock GLM-4.7/Claude full potential with 128k output limit
+        env={
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32000",
+            # Also increase MCP output limit just in case
+            "MAX_MCP_OUTPUT_TOKENS": "32000",
+        },
         system_prompt=(
             f"Current Date: {today_str}\n"
             f"Tomorrow is: {tomorrow_str}\n"
@@ -4886,9 +4892,8 @@ async def setup_session(
                 "type": "stdio",
                 "command": sys.executable,
                 "args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")],
-                # Pass session trace ID for trace consolidation (all local-toolkit spans share parent)
+                # Pass Logfire token for observability
                 "env": {
-                    "UA_SESSION_TRACE_ID": os.environ.get("UA_SESSION_TRACE_ID", ""),
                     "LOGFIRE_TOKEN": os.environ.get("LOGFIRE_TOKEN", ""),
                 },
             },
@@ -5314,6 +5319,21 @@ async def process_turn(
                     "marker": marker
                 })
         
+        # Collect and display all trace IDs for debugging
+        local_trace_ids = _collect_local_tool_trace_ids(workspace_dir)
+        print("\n=== TRACE IDS (for Logfire debugging) ===")
+        print(f"  Main Agent:     {trace.get('trace_id', 'N/A')}")
+        if local_trace_ids:
+            # Always list all unique local-toolkit trace IDs (don't hide if matches main)
+            print(f"  Local Toolkit:  {', '.join(local_trace_ids[:5])}")
+            if len(local_trace_ids) > 5:
+                print(f"                  (+{len(local_trace_ids) - 5} more)")
+        else:
+            print(f"  Local Toolkit:  (no local tool calls)")
+        
+        # Store in trace for transcript/evaluation
+        trace["local_toolkit_trace_ids"] = local_trace_ids
+        
         print(f"{'=' * 80}")
         
         # Print agent's final response (with follow-up suggestions) AFTER execution summary
@@ -5414,18 +5434,15 @@ async def main(args: argparse.Namespace):
     global trace, run_id, budget_config, budget_state, runtime_db_conn, tool_ledger, provider_session_forked_from
 
     # Create main span for entire execution
-    # NOTE: Local MCP tools will share this trace via UA_SESSION_TRACE_ID env var
     main_span = logfire.span("standalone_composio_test")
     span_ctx = main_span.__enter__()  # Start the span manually
     
-    # Extract trace ID immediately and set as env var for MCP subprocess trace consolidation
+    # Extract trace ID for display
     main_trace_id_hex = "0" * 32
     if LOGFIRE_TOKEN:
         try:
             trace_id = main_span.get_span_context().trace_id
             main_trace_id_hex = format(trace_id, "032x")
-            # Set env var so MCP server can attach to this trace
-            os.environ["UA_SESSION_TRACE_ID"] = main_trace_id_hex
         except Exception as e:
             print(f"⚠️ Failed to extract main trace ID: {e}")
     
@@ -5576,7 +5593,7 @@ async def main(args: argparse.Namespace):
     print("         🔍 TRACING IDS (for Logfire debugging)")
     print(f"{'='*60}")
     print(f"  Main Agent Trace ID:    {main_trace_id_hex}")
-    print(f"  Local Toolkit Trace ID: {main_trace_id_hex} (consolidated)")
+    print(f"  Local Toolkit Trace ID: (shown in tool results)")
     print(f"{'='*60}")
     
     print(f"\n=== Composio Session Info ===")
@@ -5623,13 +5640,19 @@ async def main(args: argparse.Namespace):
     prompt_style = Style.from_dict({
         'prompt': '#00aa00 bold',  # Green prompt
     })
-    prompt_session = PromptSession(
-        history=FileHistory(history_file),
-        auto_suggest=AutoSuggestFromHistory(),
-        multiline=False,  # Single line, but with full editing support
-        style=prompt_style,
-        enable_history_search=True,  # Ctrl+R for history search
-    )
+    
+    # Only use PromptSession if running in an interactive terminal
+    if sys.stdin.isatty():
+        prompt_session = PromptSession(
+            history=FileHistory(history_file),
+            auto_suggest=AutoSuggestFromHistory(),
+            multiline=False,  # Single line, but with full editing support
+            style=prompt_style,
+            enable_history_search=True,  # Ctrl+R for history search
+        )
+    else:
+        # Non-interactive mode (e.g. piped input)
+        prompt_session = None
 
     run_status = run_row["status"] if run_row else None
     should_auto_continue_job = (
@@ -5828,10 +5851,23 @@ async def main(args: argparse.Namespace):
                         pending_prompt = None
                         print("🤖 Auto-running job prompt from run spec...")
                     else:
-                        with patch_stdout():
-                            user_input = await prompt_session.prompt_async(
-                                "🤖 Enter your request (or 'quit'): ",
-                            )
+                        if prompt_session:
+                            with patch_stdout():
+                                user_input = await prompt_session.prompt_async(
+                                    "🤖 Enter your request (or 'quit'): ",
+                                )
+                        else:
+                            # Non-interactive mode: read from stdin directly
+                            try:
+                                # Run in executor to avoid blocking the event loop
+                                user_input = await asyncio.get_event_loop().run_in_executor(
+                                    None, sys.stdin.readline
+                                )
+                                if not user_input:  # EOF
+                                    raise EOFError
+                            except Exception:
+                                raise EOFError
+
                         user_input = user_input.strip()
                 except (EOFError, KeyboardInterrupt):
                     run_failed = True
