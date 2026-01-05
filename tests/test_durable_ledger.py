@@ -79,6 +79,62 @@ def test_ledger_dedupe_returns_receipt():
     assert receipt2.status == "succeeded"
 
 
+def test_multi_execute_idempotency_ignores_session_metadata():
+    conn = _setup_conn()
+    run_id = "run-multi"
+    step_id = "step-multi"
+    _insert_run_and_step(conn, run_id, step_id)
+
+    ledger = ToolCallLedger(conn)
+    tool_call = {
+        "tool_slug": "GMAIL_SEND_EMAIL",
+        "arguments": {
+            "recipient_email": "person@example.com",
+            "subject": "Durability Relaunch Test Report",
+            "body": "Test email",
+            "attachment": {"name": "report.pdf", "mimetype": "application/pdf", "s3key": "s3://key"},
+        },
+    }
+    tool_input_a = {
+        "session_id": "session-a",
+        "current_step": "SENDING_EMAIL",
+        "current_step_metric": "1/1 emails",
+        "sync_response_to_workbench": False,
+        "thought": "first attempt",
+        "tools": [tool_call],
+    }
+    receipt, key_a = ledger.prepare_tool_call(
+        tool_call_id="tool-multi-a",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="COMPOSIO_MULTI_EXECUTE_TOOL",
+        tool_namespace="composio",
+        tool_input=tool_input_a,
+    )
+    assert receipt is None
+    ledger.mark_succeeded("tool-multi-a", {"ok": True, "message_id": "msg-1"})
+
+    tool_input_b = {
+        "session_id": "session-b",
+        "current_step": "SENDING_EMAIL",
+        "current_step_metric": "1/1 emails",
+        "sync_response_to_workbench": False,
+        "thought": "retry attempt",
+        "tools": [tool_call],
+    }
+    receipt_b, key_b = ledger.prepare_tool_call(
+        tool_call_id="tool-multi-b",
+        run_id=run_id,
+        step_id=step_id,
+        tool_name="COMPOSIO_MULTI_EXECUTE_TOOL",
+        tool_namespace="composio",
+        tool_input=tool_input_b,
+    )
+    assert key_a == key_b
+    assert receipt_b is not None
+    assert receipt_b.status == "succeeded"
+
+
 def test_prepare_allow_duplicate_creates_new_row():
     conn = _setup_conn()
     run_id = "run-1b"

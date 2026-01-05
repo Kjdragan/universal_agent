@@ -50,6 +50,23 @@ class ToolCallLedger:
             return sorted(self._strip_idempotency_fields(item) for item in value)
         return value
 
+    def _sanitize_for_idempotency(self, tool_name: str, tool_input: Any) -> Any:
+        sanitized = self._strip_idempotency_fields(tool_input)
+        if not isinstance(sanitized, dict):
+            return sanitized
+        upper = tool_name.upper()
+        if "COMPOSIO_MULTI_EXECUTE_TOOL" in upper:
+            sanitized = dict(sanitized)
+            for key in (
+                "session_id",
+                "current_step",
+                "current_step_metric",
+                "sync_response_to_workbench",
+                "thought",
+            ):
+                sanitized.pop(key, None)
+        return sanitized
+
     def _compute_scope(self, tool_name: str, tool_input: dict[str, Any]) -> str:
         upper = tool_name.upper()
         if "GMAIL_SEND_EMAIL" in upper:
@@ -101,9 +118,10 @@ class ToolCallLedger:
         policy = resolve_tool_policy(tool_name, tool_namespace)
         policy_matched = 1 if policy else 0
         policy_rule_id = policy.name if policy else None
-        normalized_input = self._strip_idempotency_fields(tool_input)
-        normalized_args_hash = hash_normalized_json(normalized_input)
-        side_effect_scope = self._compute_scope(tool_name, normalized_input)
+        request_input = self._strip_idempotency_fields(tool_input)
+        idempotency_input = self._sanitize_for_idempotency(tool_name, tool_input)
+        normalized_args_hash = hash_normalized_json(idempotency_input)
+        side_effect_scope = self._compute_scope(tool_name, idempotency_input)
         nonce = None
         if allow_duplicate:
             nonce = idempotency_nonce or tool_call_id
@@ -214,7 +232,7 @@ class ToolCallLedger:
                 idempotency_key,
                 "prepared",
                 1,
-                normalize_json(normalized_input),
+                normalize_json(request_input),
             ),
         )
         self.conn.commit()
