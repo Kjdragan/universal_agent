@@ -3885,7 +3885,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             
                                             # Tell agent to wait for user answers
                                             waiting_msg = "Waiting for user to answer interview questions. Answers will be provided in the next message."
-                                            block_content.content = waiting_msg
+                                            # Only modify block_content if it has a content attribute
+                                            if hasattr(block_content, 'content'):
+                                                block_content.content = waiting_msg
                                             result_record["content_preview"] = waiting_msg
                             except (json.JSONDecodeError, Exception) as e:
                                 print(f"   ⚠️ Interview setup error: {e}")
@@ -4677,6 +4679,10 @@ async def setup_session(
                     "  `<img src='media/filename.png' style='max-width: 100%; height: auto; display: block; margin: 20px auto;' alt='Description'>`\n"
                     "- Save generated images to `work_products/media/`.\n"
                     "- Embed in HTML using relative paths.\n\n"
+                    "**ERROR RECOVERY:**\n"
+                    "- If a Write call fails with 'missing parameter', retry with SMALLER content chunks.\n"
+                    "- Use the exact parameter names: `file_path`, `content` (not `path`, `file`, etc).\n"
+                    "- Ensure you provide BOTH parameters. Do not leave content empty.\n\n"
                     "**SYNTHESIS & COHERENCE:**\n"
                     "- Where sources discuss related topics, group and synthesize them into cohesive sections\n"
                     "- BUT: News often covers genuinely disjointed events - don't force artificial connections\n"
@@ -5718,6 +5724,7 @@ async def main(args: argparse.Namespace):
                         except Exception as e:
                             print(f"   ⚠️ Interview error: {e}")
 
+                    # HARNESS LOOP: Manual check (since AgentStop hook is unreliable)
                     if hasattr(result, "response_text"):
                         # Synthesize context for the hook
                         h_ctx = HookContext(
