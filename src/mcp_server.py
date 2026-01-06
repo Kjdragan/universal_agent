@@ -574,11 +574,9 @@ def ask_user_questions(questions: list) -> str:
     Use this tool when you detect ambiguity in a massive task request.
     Only ask 2-4 essential questions. Be helpful, not annoying.
     
-    Examples of good questions:
-    - Delivery preferences (email results? Slack notification?)
-    - Output format (detailed report vs summary vs raw research?)
-    - Scope constraints (date range? specific focus areas?)
-    - Quality expectations (quick scan vs deep analysis?)
+    The questions will be displayed to the user in the main CLI terminal.
+    Each question can have pre-defined options PLUS the user can always
+    provide a custom free-text response if the options don't fit.
     
     Args:
         questions: List of question objects, each containing:
@@ -588,27 +586,15 @@ def ask_user_questions(questions: list) -> str:
             - multiSelect (bool): Allow multiple selections
     
     Returns:
-        JSON string with answers: {"question_text": "selected_option_label", ...}
-    
-    Example:
-        ask_user_questions([
-            {
-                "question": "Would you like me to email the final results?",
-                "header": "Delivery",
-                "options": [
-                    {"label": "Yes, email me", "description": "Send to your registered email"},
-                    {"label": "No, save locally", "description": "Just save files to workspace"}
-                ],
-                "multiSelect": False
-            }
-        ])
+        JSON string with "__INTERVIEW_REQUEST__" marker and questions.
+        The main CLI will intercept this, display the interview, and
+        inject the answers into the next prompt.
     """
-    try:
-        from universal_agent.harness import ask_user_questions as _ask
-        answers = _ask(questions)
-        return json.dumps(answers, indent=2)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    # Return a structured signal that the main CLI can intercept
+    return json.dumps({
+        "__INTERVIEW_REQUEST__": True,
+        "questions": questions
+    }, indent=2)
 
 # =============================================================================
 # MEMORY SYSTEM TOOLS

@@ -3850,6 +3850,45 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 print(
                                     f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 500 else ''}"
                                 )
+                            
+                            # [Interview Tool Interception] Check if this is an interview request
+                            # NON-BLOCKING: Save questions to file, let iteration complete,
+                            # then display interview between iterations
+                            try:
+                                full_result_content = content_str  # Use full content, not truncated preview
+                                if "__INTERVIEW_REQUEST__" in full_result_content:
+                                    print(f"\n   📋 Interview questions detected - will display after this iteration")
+                                    
+                                    # Parse the outer wrapper (may be {"result": "..."})
+                                    try:
+                                        outer = json.loads(full_result_content)
+                                        inner_content = outer.get("result", full_result_content)
+                                    except json.JSONDecodeError:
+                                        inner_content = full_result_content
+                                    
+                                    # Strip trace ID prefix if present (format: "[local-toolkit-trace-id: ...]\n{...")
+                                    if isinstance(inner_content, str) and inner_content.startswith("["):
+                                        json_start = inner_content.find("{")
+                                        if json_start != -1:
+                                            inner_content = inner_content[json_start:]
+                                    
+                                    # Parse the interview data 
+                                    interview_data = json.loads(inner_content) if isinstance(inner_content, str) else inner_content
+                                    
+                                    if interview_data.get("__INTERVIEW_REQUEST__"):
+                                        questions = interview_data.get("questions", [])
+                                        if questions and OBSERVER_WORKSPACE_DIR:
+                                            # Save questions to workspace for post-iteration processing
+                                            pending_interview_file = os.path.join(OBSERVER_WORKSPACE_DIR, "pending_interview.json")
+                                            with open(pending_interview_file, "w") as f:
+                                                json.dump({"questions": questions}, f, indent=2)
+                                            
+                                            # Tell agent to wait for user answers
+                                            waiting_msg = "Waiting for user to answer interview questions. Answers will be provided in the next message."
+                                            block_content.content = waiting_msg
+                                            result_record["content_preview"] = waiting_msg
+                            except (json.JSONDecodeError, Exception) as e:
+                                print(f"   ⚠️ Interview setup error: {e}")
 
                             # Observer Pattern: Fire-and-forget async save for SERP results
                             # Look up tool name from tool_use_id
@@ -5638,8 +5677,47 @@ async def main(args: argparse.Namespace):
                         auto_resume_complete = True
                         break
                     result = await process_turn(client, user_input, workspace_dir)
+                    
+                    # [Non-Blocking Interview] Check for pending interview after iteration
+                    pending_interview_file = os.path.join(workspace_dir, "pending_interview.json")
+                    if os.path.exists(pending_interview_file):
+                        try:
+                            with open(pending_interview_file, "r") as f:
+                                interview_data = json.load(f)
+                            questions = interview_data.get("questions", [])
+                            
+                            if questions:
+                                print(f"\n" + "="*60)
+                                print("📋 PLANNING PHASE - Interview Required")
+                                print("="*60)
+                                
+                                # Display and collect answers using the harness interview tool
+                                from universal_agent.harness import ask_user_questions as do_interview
+                                answers = do_interview(questions)
+                                
+                                print("="*60 + "\n")
+                                print(f"   ✅ Interview answers collected")
+                                
+                                # Save answers for next iteration
+                                answers_file = os.path.join(workspace_dir, "interview_answers.json")
+                                with open(answers_file, "w") as f:
+                                    json.dump(answers, f, indent=2)
+                                
+                                # Set pending_prompt to inject answers into next iteration
+                                answers_summary = "\n".join([f"- {q}: {a}" for q, a in answers.items()])
+                                pending_prompt = (
+                                    f"USER INTERVIEW ANSWERS:\n"
+                                    f"The user has answered your clarifying questions:\n\n"
+                                    f"{answers_summary}\n\n"
+                                    f"Now create the mission.json manifest with these clarifications and the detailed task breakdown. "
+                                    f"Set status to 'PLANNING' when complete."
+                                )
+                            
+                            # Clean up the pending interview file
+                            os.remove(pending_interview_file)
+                        except Exception as e:
+                            print(f"   ⚠️ Interview error: {e}")
 
-                    # HARNESS LOOP: Manual check (since AgentStop hook is unreliable)
                     if hasattr(result, "response_text"):
                         # Synthesize context for the hook
                         h_ctx = HookContext(
