@@ -1,257 +1,122 @@
-# 004: Hooks Architecture - Computation vs Reasoning
+# 001: Hooks Architecture & Guardrails
 
-## The Core Insight
+## Core Philosophy: The Hook Spectrum
 
-Efficient agent systems separate **deterministic computation** from **LLM reasoning**. Tasks that can be described as pure functions (same input → same output) should execute as code, not consume LLM tokens.
+In agentic systems, "hooks" serve two distinct purposes: **Control** and **Observation**. We implement these using different patterns to optimize for latency, cost, and safety.
 
-| Task Type | Execute As | Examples |
-|-----------|------------|----------|
-| **Deterministic** | Python hook/observer | Data cleaning, formatting, caching, validation, artifact saving |
-| **Reasoning** | LLM inference | Decision-making, synthesis, creative generation |
-
----
-
-## Universal Agent's Implementation: Observer Pattern
-
-**This project uses MCP Mode exclusively**, which means traditional Composio hooks (`@before_execute`, `@after_execute`) **do not fire**. Instead, we implement the **Observer Pattern** for post-execution processing.
-
-### Why Observers Instead of Hooks?
-
-| Aspect | Composio Hooks | Observer Pattern (Our Implementation) |
-|--------|----------------|---------------------------------------|
-| **Compatibility** | Native Tool Mode only | Works with MCP Mode ✅ |
-| **Execution Point** | Before/during tool call | After tool result returns |
-| **Agent Visibility** | Can transform data before agent sees it | Agent sees raw data |
-| **Latency Impact** | Can block tool execution | Zero (async fire-and-forget) |
-| **Use Cases** | Input validation, caching | Artifact saving, logging, analytics |
+| Hook Type | Implementation Pattern | Execution Timing | Purpose | Blocking? |
+|-----------|------------------------|------------------|---------|-----------|
+| **Guardrails** | Claude SDK `HookMatcher` | **Pre-Tool** (Before Execution) | Safety, Schema Validation, Policy Enforcement | ✅ YES |
+| **Observers** | Async Event Loop | **Post-Tool** (After Execution) | logging, Artifact Saving, Analytics | ❌ NO |
 
 ---
 
-## Active Observer Functions
+## 1. PreToolUse Guardrails (Claude SDK)
 
-The project implements **4 observer functions**, all triggered in the conversation loop when tool results return (see `main.py:1529-1562`):
+We use the **Claude Agent SDK's `HookMatcher`** system to intercept tool calls *before* they are sent to the tool executor. This is our primary defense line.
 
-### 1. `observe_and_save_search_results`
-**Purpose**: Parse and save cleaned SERP (Search Engine Results Page) artifacts.
+### How It Works
+Hooks are registered in `ClaudeAgentOptions` within `agent_core.py`. They receive the raw tool input and can:
+1.  **Allow**: Return `{}` to let the call proceed.
+2.  **Block**: Return a `permissionDecision: deny` to reject the call.
+3.  **Guide**: Inject a `systemMessage` to guide the agent to fix the error.
 
-**Triggers on**: Any search-related tool (COMPOSIO_SEARCH, SERPAPI, TAVILY, EXA, etc.)
+### Active Implementation: `malformed_tool_guardrail_hook`
+We currently use a global hook (`matcher="*"`) to catch common errors:
 
-**What it does**:
--   Filters out tool discovery searches (`COMPOSIO_SEARCH_TOOLS`)
--   Parses JSON from multiple search provider schemas
--   Handles nested `MULTI_EXECUTE_TOOL` responses
--   Extracts URLs from different field names (`url`, `link`, `product_url`, etc.)
--   Saves cleaned JSON to `search_results/<tool>_<timestamp>.json`
--   Saves individual URLs to `search_results/urls.txt` for batch crawling
+```python
+# src/universal_agent/agent_core.py
 
-**Performance**:
--   Async (non-blocking)
--   Processes 100s of search results in ~50ms
--   Zero token cost
+async def malformed_tool_guardrail_hook(input_data: dict, tool_use_id: str, context) -> dict:
+    tool_name = input_data.get("tool_name")
+    
+    # 1. Detect XML Concatenation Errors
+    if is_malformed_tool_name(tool_name):
+        return {
+            "systemMessage": "⚠️ BLOCKED: Malformed tool name. Use proper JSON arguments.",
+            "hookSpecificOutput": { "permissionDecision": "deny", ... }
+        }
 
-**Example Saved Artifact**:
-```json
-{
-  "tool": "COMPOSIO_SEARCH_NEWS",
-  "query": "Russia Ukraine war latest",
-  "timestamp": "2025-12-31T10:15:30",
-  "results": [
-    {
-      "title": "Ukraine Reports Missile Strike...",
-      "url": "https://example.com/article1",
-      "snippet": "Latest developments..."
-    }
-  ],
-  "url_count": 25
+    # 2. Schema Validation
+    is_valid, missing, schema = validate_tool_input(tool_name, tool_input)
+    if not is_valid:
+        return {
+            "systemMessage": f"⚠️ BLOCKED: Missing required fields: {missing}",
+            "hookSpecificOutput": { "permissionDecision": "deny", ... }
+        }
+    
+    return {}
+```
+
+### Wiring
+```python
+# Registered in ClaudeAgentOptions
+hooks={
+    "PreToolUse": [
+        HookMatcher(matcher="*", hooks=[malformed_tool_guardrail_hook]),
+    ],
 }
 ```
 
 ---
 
-### 2. `observe_and_save_workbench_activity`
-**Purpose**: Capture code execution activity from `COMPOSIO_REMOTE_WORKBENCH`.
+## 2. PostToolUse Observers (Async Pattern)
 
-**Triggers on**: `COMPOSIO_REMOTE_WORKBENCH` tool calls
+Since we treat tool execution as the "source of truth," we use **Observers** to capture outputs *after* they happen. This ensures we capture exactly what the agent saw.
 
-**What it does**:
--   Logs code input (truncated to 1000 chars for readability)
--   Captures stdout, stderr, and execution results
--   Records session_id for debugging
--   Saves to `workbench_activity/workbench_<timestamp>.json`
+### Key Characteristics
+-   **Non-blocking**: Uses `asyncio.create_task()` to run in the background.
+-   **Zero Latency**: Does not delay the agent's next thought.
+-   **Fire-and-Forget**: Failures in observers do not crash the agent.
 
-**Use Case**: Debug remote code execution failures without re-running expensive agent loops.
-
-**Example Saved Artifact**:
-```json
-{
-  "timestamp": "2025-12-31T10:20:15",
-  "tool": "COMPOSIO_REMOTE_WORKBENCH",
-  "input": {
-    "code": "import pandas as pd\ndf = pd.read_csv(...)",
-    "session_id": "session_abc123"
-  },
-  "output": {
-    "stdout": "Processing 1000 rows...",
-    "stderr": "",
-    "successful": true
-  }
-}
-```
+### Active Observers
+| Observer Name | Triggers On | Action |
+|---------------|-------------|--------|
+| `observe_and_save_search_results` | Search tools (`COMPOSIO_SEARCH_*`) | Parses JSON, saves cleaned results to `search_results/` |
+| `observe_and_save_workbench_activity` | `COMPOSIO_REMOTE_WORKBENCH` | Logs code submission and execution results |
+| `observe_and_save_work_products` | `Write` / `write_local_file` | Copies reports/artifacts to persistent storage |
+| `observe_and_save_video_outputs` | Video tools | Copies generated media to `work_products/media/` |
 
 ---
 
-### 3. `observe_and_save_work_products`
-**Purpose**: Copy work product reports to persistent storage outside session workspaces.
+## 3. Tool Definition & Disable Strategy
 
-**Triggers on**: `write_local_file` calls targeting `work_products/` directory
+We control *which* tools are available to the agent at the **source definition level** first, and via **blacklists** second.
 
-**What it does**:
--   Monitors file writes to `work_products/` directory
--   Copies reports to persistent `SAVED_REPORTS/` directory (survives session cleanup)
--   Adds timestamp suffix for uniqueness
--   Waits 0.5s for file to finish writing before copying
+### Disabling Tools
+To prevent the agent from using a problematic tool (e.g., `write_local_file` for large reports), we prefer **removing it from the source** over blacklisting:
 
-**Use Case**: Preserve critical reports (e.g., research summaries, PDFs) even after workspace cleanup.
+1.  **Source Removal**: Comment out `@mcp.tool()` in `mcp_server.py`.
+    *   *Effect*: Tool acts as if it doesn't exist. Agent sees only valid alternatives (e.g., native `Write`).
+2.  **Blacklisting**: Add to `DISALLOWED_TOOLS` in `agent_core.py`.
+    *   *Effect*: Tool exists but execution is blocked. Can confuse the agent if it sees the tool in the list.
 
-**Example**:
-```
-Source:      session_20251231_102030/work_products/ukraine_report.pdf
-Destination: SAVED_REPORTS/ukraine_report_20251231_102045.pdf
-```
+### Recommendation: Native Tools
+For large file I/O (>50KB), we explicitly disable custom MCP tools and rely on Claude's **native `Write` and `Read` tools**, which utilize highly optimized "overflow" mechanisms for handling massive contexts.
 
 ---
 
-### 4. `observe_and_save_video_outputs`
-**Purpose**: Copy video/audio outputs to session workspace for persistence.
+## Recommendations for Future Improvements
 
-**Triggers on**: Video tools (`trim_video`, `download_video`, `add_text_overlay`, etc.)
+Based on recent stress testing, here are recommended enhancements to the hook architecture:
 
-**What it does**:
--   Detects video tool completion
--   Extracts output path from tool input or result message
--   Filters out intermediate files (`temp_`, `_part`, etc.)
--   Copies final videos to `work_products/media/`
+### 1. Post-Tool Output Validation Hook
+**Problem**: The agent sometimes generates empty calls (0 bytes) under heavy load.
+**Solution**: Implement a `PostToolExecution` hook that checks for:
+-   Empty outputs
+-   Truncated JSON
+-   Repeated error patterns
+**Action**: If detected, inject a *new* system message into the context to prompt the agent to retry with a specific strategy (e.g., "Your last call was empty. Try chunking the content.").
 
-**Use Case**: Preserve generated media files in session workspace.
+### 2. Token Budget Guardrail
+**Problem**: Unlimited search loops can drain budgets.
+**Solution**: A `PreToolUse` hook that tracks accumulated token usage or tool call counts.
+**Action**: Deny new costly tool calls (like Search or Crawl) if a session budget is exceeded, forcing the agent to proceed with "best available info."
 
-**Example**:
-```
-Download → /tmp/video_12345.mp4
-Observer → session/work_products/media/video_12345.mp4
-```
+### 3. Prompt Injection Shield
+**Problem**: External content (web pages) might contain "Ignore previous instructions" attacks.
+**Solution**: A `PostToolUse` observer that scans incoming tool results (search snippets, crawled text) for adversarial patterns before they enter the context.
 
----
-
-## Implementation Pattern
-
-All observers follow this pattern in the conversation loop (`main.py:1529-1562`):
-
-```python
-# In the main conversation loop, after receiving ToolResultBlock:
-if tool_name and OBSERVER_WORKSPACE_DIR:
-    # Fire-and-forget async observers (zero latency)
-    asyncio.create_task(
-        observe_and_save_search_results(
-            tool_name, block_content, OBSERVER_WORKSPACE_DIR
-        )
-    )
-    asyncio.create_task(
-        observe_and_save_workbench_activity(
-            tool_name, tool_input or {}, content_str, OBSERVER_WORKSPACE_DIR
-        )
-    )
-    asyncio.create_task(
-        observe_and_save_work_products(
-            tool_name, tool_input or {}, content_str, OBSERVER_WORKSPACE_DIR
-        )
-    )
-    asyncio.create_task(
-        observe_and_save_video_outputs(
-            tool_name, tool_input or {}, content_str, OBSERVER_WORKSPACE_DIR
-        )
-    )
-```
-
-**Key Characteristics**:
--   **Non-blocking**: `asyncio.create_task()` returns immediately
--   **Zero latency impact**: Observers run in background
--   **Safe**: Exceptions caught and logged via Logfire
--   **Selective**: Each observer filters for relevant tools only
-
----
-
-## Performance Comparison
-
-| Approach | Latency | Token Cost | When to Use |
-|----------|---------|------------|-------------|
-| **Observer (Async)** | ~0 ms (non-blocking) | 0 | Artifact saving, logging, analytics |
-| **Composio Hook** | ~10 ms | 0 | Input validation, caching (Native Mode only) |
-| **Agent Reasoning** | 2-5 seconds | ~1,000 | Decision-making, synthesis |
-
-**Rule of Thumb**: If the operation is deterministic and doesn't need to modify what the agent sees, use an observer.
-
----
-
-## Composio Hooks (For Reference)
-
-> [!NOTE]
-> The following hooks are **NOT used in this project** because we operate in MCP Mode. This section is retained for reference.
-
-Composio provides three decorator-based hooks that intercept tool execution **in Native Tool Mode**:
-
-### `@before_execute`
-Runs **before** the tool executes.
-```python
-from composio import before_execute
-
-@before_execute(tools=["GMAIL_SEND_EMAIL"])
-def audit_emails(tool: str, toolkit: str, request: dict) -> dict:
-    print(f"[AUDIT] Sending email to: {request['arguments']['recipient']}")
-    return request
-```
-
-### `@after_execute`
-Runs **after** the tool executes.
-```python
-from composio import after_execute
-
-@after_execute(tools=["COMPOSIO_SEARCH_NEWS"])
-def clean_and_save(tool: str, toolkit: str, result: dict) -> dict:
-    # Transform and save
-    return modified_result
-```
-
-### `@schema_modifier`
-Modifies tool schemas before presentation to the agent.
-
----
-
-## MCP Mode vs Native Tool Mode
-
-| Aspect | Native Tool Mode | MCP Mode (Our Implementation) |
-|--------|------------------|-------------------------------|
-| **Tool Definition** | `session.tools()` | `session.mcp.url` |
-| **Execution** | Local SDK via `handle_tool_calls()` | Remote Composio server |
-| **Hooks** | ✅ Fire normally | ❌ Bypassed |
-| **Alternative** | N/A | Observer Pattern ✅ |
-
----
-
-## Design Principle
-
-```
-┌─────────────────────────────────────────────────────┐
-│  REASONING LAYER (Agent)                            │
-│  Decide • Synthesize • Judge • Create               │
-│  Cost: Seconds, thousands of tokens                 │
-└─────────────────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────┐
-│  DETERMINISTIC LAYER (Observers)                    │
-│  Transform • Parse • Save • Log • Archive           │
-│  Cost: Milliseconds, zero tokens, zero latency      │
-└─────────────────────────────────────────────────────┘
-```
-
-**Rule**: If the operation is a pure function that doesn't need to modify agent input, use an observer.
+### 4. Smart Retry Logic
+**Problem**: The agent often retries the exact same failed call.
+**Solution**: A hybrid Pre/Post hook system that caches failed calls. If the agent attempts the exact same input validation failure twice, the hook intervenes with a more forceful "Stop and Think" system message.
