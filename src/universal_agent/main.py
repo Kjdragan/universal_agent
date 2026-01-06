@@ -5581,9 +5581,34 @@ async def main(args: argparse.Namespace):
 
                         if action == "restart":
                             next_prompt = hook_out.get("nextPrompt")
+                            
+                            # [Mission Manifest Injection]
+                            # Detect strict handoff files and inject them into the system prompt
+                            mission_file = os.path.join(workspace_dir, "mission.json")
+                            progress_file = os.path.join(workspace_dir, "mission_progress.txt")
+                            
+                            manifest_context = ""
+                            if os.path.exists(mission_file):
+                                try:
+                                    with open(mission_file, "r") as f:
+                                        manifest_context += f"\n\n[RESUMING MISSION]\nHere is the official Mission Manifest (mission.json): \n```json\n{f.read()}\n```"
+                                except Exception as e:
+                                    print(f"⚠️ Failed to read mission.json: {e}")
+                                    
+                            if os.path.exists(progress_file):
+                                try:
+                                    with open(progress_file, "r") as f:
+                                        manifest_context += f"\n\n[PREVIOUS NOTES]\nHere are your notes from the previous session (mission_progress.txt): \n```text\n{f.read()}\n```"
+                                except Exception as e:
+                                    print(f"⚠️ Failed to read mission_progress.txt: {e}")
+
+                            if manifest_context:
+                                print(f"📥 Injecting Mission Manifest context ({len(manifest_context)} chars)")
+                                next_prompt += manifest_context
+
                             if next_prompt:
                                 print(f"\n🔄 HARNESS RESTART TRIGGERED")
-                                print(f"Next Prompt: {next_prompt[:100]}...")
+                                print(f"Next Prompt: {next_prompt.splitlines()[0][:100]}...")
                                 pending_prompt = next_prompt
                                 
                                 # Clear Client History
