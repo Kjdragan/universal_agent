@@ -1843,12 +1843,21 @@ def on_agent_stop(context: HookContext) -> dict:
     new_iter = increment_iteration_count(runtime_db_conn, run_id)
     
     # 3. Construct Continuation Prompt
+    import json
+    run_spec_json = info.get("run_spec_json") or "{}"
+    try:
+        run_spec = json.loads(run_spec_json)
+    except:
+        run_spec = {}
+        
+    original_objective = run_spec.get("original_objective", "(See system prompt or previous context)")
+
     continuation_prompt = f"""
 You are continuing a long-running task.
 Current Iteration: {new_iter} / {max_iter}
 
 ## Original Objective
-(See system prompt or previous context)
+{original_objective}
 
 ## Required Completion Artifact
 You must output exactly "{promise}" when you are fully done.
@@ -4255,22 +4264,14 @@ async def setup_session(
     os.makedirs(work_products_dir, exist_ok=True)
 
     # =========================================================================
+    # =========================================================================
     # 2. NON-BLOCKING AUTH FIX
-    # Monkeypatch builtins.input to prevent EOFError during headless auth prompts
+    # (Removed to restore interactive input for /harness command)
     # =========================================================================
     import builtins
     
-    original_input = builtins.input
-    
-    def non_blocking_input(prompt=None):
-        if prompt:
-            print(prompt, end="")  # Print prompt to stdout/logs
-        # Return empty string instead of blocking/crashing
-        print("\n\n [System] Non-blocking input called. Skipping pause.", flush=True)
-        return ""
-        
-    builtins.input = non_blocking_input
-    print("✅ Non-blocking input handler installed (Fix 1)")
+    # original_input = builtins.input (Not needed, keeping standard input)
+    # print("✅ Non-blocking input handler REMOVED (Interactive Mode)")
 
     # =========================================================================
     # 3. Initialize Composio    # User Identity
@@ -5484,18 +5485,46 @@ async def main(args: argparse.Namespace):
 
                 if user_input.lower().strip().startswith("/harness"):
                     print("\n⚙️  Activating Universal Agent Harness...")
-                    # Enable harness with defaults
+                    
+                    # Check if user provided an objective in the command
+                    parts = user_input.strip().split(" ", 1)
+                    if len(parts) > 1:
+                        target_objective = parts[1]
+                    else:
+                        print("📝 Please enter the OBJECTIVE for this long-running task:")
+                        print("(e.g. 'Research quantum computing and write a report')")
+                        target_objective = input("Objective > ").strip()
+                        
+                    if not target_objective:
+                        print("⚠️ No objective provided. Harness activation cancelled.")
+                        continue
+
+                    # Update run_spec with objective
+                    updated_spec = (run_spec or {}).copy()
+                    updated_spec["original_objective"] = target_objective
+                    run_spec = updated_spec # Update local expectation
+
+                    # Enable harness with objective in run_spec
                     upsert_run(
                         runtime_db_conn, 
                         run_id, 
                         "cli", 
-                        run_spec or {}, 
+                        updated_spec, 
                         max_iterations=10, 
                         completion_promise="TASK_COMPLETE"
                     )
-                    print("✅ Harness activated: max_iterations=10, completion_promise='TASK_COMPLETE'")
-                    print("Prompting agent to acknowledge...")
-                    user_input = "System: Harness mode activated. Please acknowledge."
+                    print(f"✅ Harness activated: max_iterations=10, completion_promise='TASK_COMPLETE'")
+                    print(f"🎯 Objective: {target_objective}")
+                    print("Prompting agent to begin...")
+                    
+                    # Synthesize the FIRST prompt for the agent
+                    user_input = (
+                        f"HARNESS MODE ACTIVATED\n"
+                        f"OBJECTIVE: {target_objective}\n\n"
+                        f"Instructions: You are starting a long-running multi-phase task.\n"
+                        f"You must eventually output 'TASK_COMPLETE' to finish.\n"
+                        f"Begin Phase 1 now."
+                    )
                     # Fall through to process_turn
 
                 last_user_input = user_input
@@ -5524,6 +5553,13 @@ async def main(args: argparse.Namespace):
                         
                         hook_out = hook_res.get("hookSpecificOutput", {})
                         action = hook_out.get("action")
+
+                        if action == "complete":
+                             print(f"\n✅ HARNESS: Completion promise met. Finishing run.")
+                             # Clear harness config to prevent future restarts if loop continues
+                             upsert_run(runtime_db_conn, run_id, "cli", run_spec or {}, completion_promise=None)
+                             # Optional: break if we want to stop the CLI entirely, but for now just don't restart
+                             pass
 
                         if action == "restart":
                             next_prompt = hook_out.get("nextPrompt")

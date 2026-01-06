@@ -309,8 +309,8 @@ def increment_iteration_count(conn: sqlite3.Connection, run_id: str) -> int:
 
 def get_iteration_info(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
     row = conn.execute(
-        "SELECT iteration_count, max_iterations, completion_promise FROM runs WHERE run_id = ?",
+        "SELECT iteration_count, max_iterations, completion_promise, run_spec_json FROM runs WHERE run_id = ?",
         (run_id,),
     ).fetchone()
-    return dict(row) if row else {"iteration_count": 0, "max_iterations": None, "completion_promise": None}
+    return dict(row) if row else {"iteration_count": 0, "max_iterations": None, "completion_promise": None, "run_spec_json": "{}"}
 
