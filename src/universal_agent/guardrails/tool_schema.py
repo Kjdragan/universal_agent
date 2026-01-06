@@ -66,6 +66,12 @@ _TOOL_SCHEMAS: dict[str, ToolSchema] = {
             "GMAIL_SEND_EMAIL({recipient_email: 'user@example.com', subject: 'Report', body: '...', attachment: {...}})"
         ),
     ),
+    # Native Claude SDK tools
+    "write": ToolSchema(
+        required=("file_path", "content"),
+        example="Write(file_path='/path/to/file.html', content='<html>...</html>')",
+        content_min_length={"content": 10},
+    ),
 }
 
 
