@@ -130,4 +130,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "tool_calls", "replay_status", "TEXT")
     _add_column_if_missing(conn, "tool_calls", "policy_matched", "INTEGER")
     _add_column_if_missing(conn, "tool_calls", "policy_rule_id", "TEXT")
+    _add_column_if_missing(conn, "runs", "iteration_count", "INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "runs", "max_iterations", "INTEGER")
+    _add_column_if_missing(conn, "runs", "completion_promise", "TEXT")
     conn.commit()
