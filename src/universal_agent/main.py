@@ -320,6 +320,7 @@ from universal_agent.identity import (
     validate_recipient_policy,
     load_identity_registry,
 )
+from universal_agent.harness import ask_user_questions, present_plan_summary
 
 # Global Memory Manager is not needed here as it is used locally for prompt injection
 # MEMORY_MANAGER = None
@@ -5605,6 +5606,25 @@ async def main(args: argparse.Namespace):
                             if manifest_context:
                                 print(f"📥 Injecting Mission Manifest context ({len(manifest_context)} chars)")
                                 next_prompt += manifest_context
+                                
+                                # [V2 Approval Gate] Check if mission is in PLANNING status
+                                if os.path.exists(mission_file):
+                                    try:
+                                        with open(mission_file, "r") as f:
+                                            mission_data = json.load(f)
+                                        if mission_data.get("status") == "PLANNING":
+                                            print("\n📋 Planning Phase Complete - Awaiting User Approval")
+                                            approved = present_plan_summary(mission_data)
+                                            if approved:
+                                                mission_data["status"] = "IN_PROGRESS"
+                                                with open(mission_file, "w") as f:
+                                                    json.dump(mission_data, f, indent=2)
+                                                print("✅ Plan approved. Transitioning to IN_PROGRESS.")
+                                            else:
+                                                print("⏸️ Plan not approved. Waiting for user changes...")
+                                                continue  # Wait for another iteration
+                                    except Exception as e:
+                                        print(f"⚠️ Failed to check mission status: {e}")
 
                             if next_prompt:
                                 print(f"\n🔄 HARNESS RESTART TRIGGERED")
