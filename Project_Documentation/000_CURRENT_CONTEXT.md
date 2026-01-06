@@ -47,6 +47,8 @@
 | **Policy Audit + Receipts** | ✅ Working | Tool policy audit + side-effect receipt export |
 | **Run-Wide Completion Summary** | ✅ Working | Aggregated tool/step summary across resumes |
 | **Filtered Research Corpus** | ✅ Working | `finalize_research` + filtered corpus + overview |
+| **Long-Running Harness** | ✅ Working | Ralph Wiggum Loop, Token/Promise triggers, Context Handoff |
+| **Research: Inbox Pattern** | ✅ Working | File-based handoff (Inbox -> Processed -> Task Artifacts) |
 
 ### 🆕 Recent Fixes (Jan 1–2, 2026)
 
@@ -66,6 +68,9 @@
 14. **Policy Audit**: Unknown-tool detection + policy audit report (`ua policy audit`).
 15. **Receipts Export**: Side-effect receipt summary (`ua runs receipts`).
 16. **Durability Smoke Script**: One-command crash → resume → verify (`scripts/durability_smoke.py`).
+17. **Harness Implementation**: Full "Ralph Wiggum" loop with DB persistence and CLI/Slash activation.
+18. **Harness Robustness**: Fixed "Empty Output" bug; Verified "Happy Path" (single-turn completion).
+19. **Research Isolation**: Implemented "Inbox Pattern" to decouple research artifacts from chat history for cleaner handoffs.
 
 ---
 

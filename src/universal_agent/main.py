@@ -1791,18 +1791,21 @@ def check_harness_threshold(
     return False
 
 
-def on_agent_stop(context: HookContext) -> dict:
+def on_agent_stop(context: HookContext, run_id: str = None, db_conn = None) -> dict:
     """
     Post-Run Hook: Checks for Harness Loop conditions.
     If completion promise is NOT met, restarts the agent with fresh context.
     """
-    global run_id, runtime_db_conn
     
-    if not run_id or not runtime_db_conn:
+    # Resolve dependencies (Args > Globals)
+    use_run_id = run_id or globals().get('run_id')
+    use_db = db_conn or globals().get('runtime_db_conn')
+
+    if not use_run_id or not use_db:
         return {}
 
     # Load run spec to check for harness config
-    info = get_iteration_info(runtime_db_conn, run_id)
+    info = get_iteration_info(use_db, use_run_id)
     max_iter = info.get("max_iterations") or 10
     current_iter = info.get("iteration_count") or 0
     promise = info.get("completion_promise")
@@ -1817,8 +1820,13 @@ def on_agent_stop(context: HookContext) -> dict:
     if isinstance(final_output, dict):
          final_output = str(final_output) # fallback
          
+    # [FIX] If output is empty (e.g. just tool use), assume intermediate step and do nothing
+    # This prevents the harness from restarting the agent when it's just working (e.g. sending emails)
+    if not final_output or not final_output.strip():
+        return {}
+         
     if promise in final_output:
-        logfire.info("harness_completion_promise_met", run_id=run_id)
+        logfire.info("harness_completion_promise_met", run_id=use_run_id)
         return {
             "hookSpecificOutput": {
                 "hookEventName": "AgentStop",
@@ -1828,7 +1836,7 @@ def on_agent_stop(context: HookContext) -> dict:
     
     # Promise NOT met -> Check limits
     if current_iter >= max_iter:
-        logfire.warning("harness_max_iterations_reached", run_id=run_id, current=current_iter, max=max_iter)
+        logfire.warning("harness_max_iterations_reached", run_id=use_run_id, current=current_iter, max=max_iter)
         return {
              "systemMessage": f"⚠️ Max iterations ({max_iter}) reached without completion promise '{promise}'. Stopping.",
              "hookSpecificOutput": {
@@ -1840,7 +1848,7 @@ def on_agent_stop(context: HookContext) -> dict:
     # PROCEED TO HANDOFF
     # 1. Save checkpoint (happens automatically in main loop mostly, but good to ensure)
     # 2. Increment iteration
-    new_iter = increment_iteration_count(runtime_db_conn, run_id)
+    new_iter = increment_iteration_count(use_db, use_run_id)
     
     # 3. Construct Continuation Prompt
     import json
@@ -4076,10 +4084,11 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
     return final_decision
 
 
-async def handle_simple_query(client: ClaudeSDKClient, query: str) -> bool:
+async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool, str]:
     """
     Handle simple queries directly without complex tool loops.
     Returns True if handled successfully, False if tool use was attempted (fallback needed).
+    Also returns the full response text.
     """
     print(f"\n⚡ Direct Answer (Fast Path):")
     print("-" * 40)
@@ -4118,21 +4127,20 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> bool:
             if tool_use_detected:
                 break
         elif isinstance(msg, ResultMessage):
-            _maybe_update_provider_session(msg.session_id)
+            pass  # stream end
+
+    print("\n" + "-" * 40) # separator
 
     if tool_use_detected:
-        print("\n" + "=" * 40)
-        print(
-            "⚠️  Model attempted tool use in Fast Path. Redirecting to Complex Path..."
-        )
+        print(f"\n⚠️  Model attempted tool use in Fast Path. Redirecting to Complex Path...")
+        print("=" * 80)
         if LOGFIRE_TOKEN:
             logfire.warn("fast_path_fallback", reason="tool_use_detected")
-        return False
+        return False, full_response
 
-    print("\n" + "-" * 40)
     if LOGFIRE_TOKEN:
         logfire.info("direct_answer", length=len(full_response))
-    return True
+    return True, full_response
 
 
 def parse_cli_args() -> argparse.Namespace:
@@ -4587,18 +4595,27 @@ async def setup_session(
                     "   - `mcp__local_toolkit__list_directory` - list filtered corpus files\n"
                     "   - `mcp__local_toolkit__write_local_file` - save report\n\n"
                     "---\n\n"
-                    "## WORKFLOW\n\n"
-                    "### Step 1: Finalize Research (MANDATORY)\n"
-                    "1. Call `mcp__local_toolkit__finalize_research` with the current session directory.\n"
-                    "2. This tool creates `search_results/research_overview.md` and the filtered corpus in `search_results_filtered_best/`.\n"
-                    "3. DO NOT manually crawl URLs or build your own URL list.\n\n"
-                    "### Step 2: Read the Filtered Corpus (MANDATORY)\n"
-                    f"1. Read `{workspace_dir}/search_results/research_overview.md` using `read_local_file`.\n"
-                    f"2. List `{workspace_dir}/search_results_filtered_best/` to see filtered crawl files.\n"
-                    "3. Use `read_research_files` with ONLY the filtered files.\n"
-                    "4. DO NOT read raw `search_results/crawl_*.md` files.\n"
-                    "5. If you need search snippets, read the `COMPOSIO_SEARCH_*.json` files.\n\n"
-                    "### Step 3: Synthesize Report\n"
+                    "## PIPELINE: How to Generate Reports\n"
+                    f"1. **RESEARCH**: Accumulate research using Composio tools. The tool `observe_and_save_search_results` detects this.\n"
+                    f"   - **Rule**: If you use search, ALWAYS output at least 2 distinct search tool calls to ensure breadth.\n"
+                    f"   - After a Composio search, the Observer AUTO-SAVES results to `search_results/` INBOX.\n"
+                    f"   - You will see: '📁 [OBSERVER] Saved: search_results/xxx.json'.\n"
+                    f"\n"
+                    f"2. **FINALIZE & CRAWL (Mandatory)**: Turn search results into reading material.\n"
+                    f"   - **Call `maximize_context_precision(session_dir='{workspace_dir}', task_name='YOUR_TASK_ID')`** (aliased as finalize_research).\n"
+                    f"   - `task_name` should be a short slug for your current report (e.g. '01_venezuela').\n"
+                    f"   - This tool moves processed inputs to `search_results/processed_json/` (Archive).\n"
+                    f"   - It creates `tasks/YOUR_TASK_ID/research_overview.md` and `tasks/YOUR_TASK_ID/filtered_corpus/`.\n"
+                    f"   - **CRITICAL**: Do NOT crawl manually. This tool does safe parallel crawling for you.\n"
+                    f"\n"
+                    f"3. **READ & SYNTHESIZE**:\n"
+                    f"   - **read_local_file** `tasks/YOUR_TASK_ID/research_overview.md` FIRST.\n"
+                    f"   - Use the index in that file to choose which deep-dive files to read from `tasks/YOUR_TASK_ID/filtered_corpus/`.\n"
+                    f"   - DO NOT read raw `search_results/crawl_*.md` files directly unless necessary.\n"
+                    f"\n"
+                    f"4. **WRITE REPORT**:\n"
+                    f"   - Write the final report source (Markdown/HTML) to `work_products/`.\n"
+                    f"   - Convert to PDF if requested.\n"
                     "Evaluate your source material and design an appropriate structure for the content.\n\n"
                     "**QUALITY PRINCIPLES:**\n"
                     "- Use specific quotes, numbers, and named examples to support points\n"
@@ -4879,11 +4896,12 @@ async def process_turn(
 
     if is_simple:
         # Try Fast Path
-        success = await handle_simple_query(client, user_input)
+        # Try Fast Path
+        success, fast_path_text = await handle_simple_query(client, user_input)
         if not success:
             is_simple = False  # Fallback to Complex Path
         else:
-            final_response_text = "(See output above)"
+            final_response_text = fast_path_text
 
     if not is_simple:
         # Complex Path (Tool Loop) - track per-request timing
@@ -5549,7 +5567,7 @@ async def main(args: argparse.Namespace):
                             toolResults=[], 
                             output=result.response_text
                         )
-                        hook_res = on_agent_stop(h_ctx)
+                        hook_res = on_agent_stop(h_ctx, run_id=run_id, db_conn=runtime_db_conn)
                         
                         hook_out = hook_res.get("hookSpecificOutput", {})
                         action = hook_out.get("action")
