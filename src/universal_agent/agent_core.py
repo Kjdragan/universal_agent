@@ -640,6 +640,7 @@ class UniversalAgent:
             "tool_calls": [],
             "tool_results": [],
             "iterations": [],
+            "token_usage": {"input": 0, "output": 0, "total": 0},
             "logfire_enabled": bool(LOGFIRE_TOKEN),
         }
 
@@ -855,6 +856,15 @@ class UniversalAgent:
                         self.trace["tool_calls"].append(tool_record)
                         tool_calls_this_iter.append(tool_record)
 
+                        # Track token usage if available in tool use block message (unlikely but safe)
+                        if hasattr(msg, "usage") and msg.usage:
+                            u = msg.usage
+                            inp = getattr(u, "input_tokens", 0) or 0
+                            out = getattr(u, "output_tokens", 0) or 0
+                            self.trace["token_usage"]["input"] += inp
+                            self.trace["token_usage"]["output"] += out
+                            self.trace["token_usage"]["total"] += (inp + out)
+
                         yield AgentEvent(
                             type=EventType.TOOL_CALL,
                             data={
@@ -890,6 +900,24 @@ class UniversalAgent:
             elif isinstance(msg, ResultMessage):
                 if msg.session_id:
                     self.trace["provider_session_id"] = msg.session_id
+                
+                # Check for usage info in ResultMessage (Anthropic often puts it here)
+                if hasattr(msg, "usage") and msg.usage:
+                    u = msg.usage
+                    inp = getattr(u, "input_tokens", 0) or 0
+                    out = getattr(u, "output_tokens", 0) or 0
+                    
+                    self.trace["token_usage"]["input"] += inp
+                    self.trace["token_usage"]["output"] += out
+                    self.trace["token_usage"]["total"] += (inp + out)
+                    
+                    logfire.info(
+                        "token_usage_update", 
+                        run_id=self.run_id, 
+                        input=inp, 
+                        output=out, 
+                        total_so_far=self.trace["token_usage"]["total"]
+                    )
 
             elif isinstance(msg, (UserMessage, ToolResultBlock)):
                 blocks = msg.content if isinstance(msg, UserMessage) else [msg]
@@ -1004,6 +1032,7 @@ class UniversalAgent:
                 "iteration": iteration,
                 "tool_calls": len(tool_calls_this_iter),
                 "duration_seconds": round(time.time() - self.start_ts, 3),
+                "token_usage": self.trace.get("token_usage"),
             },
         )
 
