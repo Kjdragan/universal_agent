@@ -267,7 +267,8 @@ from claude_agent_sdk.types import (
 from typing import Any
 from composio import Composio
 # Durable runtime support
-from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.tool_gateway import (
     prepare_tool_call,
@@ -294,7 +295,10 @@ from universal_agent.durable.state import (
     get_run_status,
     get_step_count,
     is_cancel_requested,
+    is_cancel_requested,
     mark_run_cancelled,
+    increment_iteration_count,
+    get_iteration_info,
 )
 from universal_agent.durable.checkpointing import save_checkpoint, load_last_checkpoint
 # Local MCP server provides: crawl_parallel, read_local_file, write_local_file
@@ -1754,6 +1758,118 @@ async def on_subagent_stop(
                 )
             }
     
+    # Stop the subagent
+    return {
+        "systemMessage": "Subagent completed task successfully.",
+        "hookSpecificOutput": {
+            "hookEventName": "SubagentStop",
+            "action": "stop",
+        },
+    }
+def check_harness_threshold(
+    token_usage_approx: int,
+    iteration: int,
+    max_iterations: int,
+    force_debug: bool = False,
+) -> bool:
+    """
+    Hybrid Trigger for Harness Handoff.
+    Returns True if we should force a restart.
+    
+    Conditions:
+    1. Debug flag is set (UA_DEBUG_FORCE_HANDOFF)
+    2. Context usage is high (>75% approx 150k tokens) AND we are at a natural break
+    """
+    if force_debug or os.getenv("UA_DEBUG_FORCE_HANDOFF") == "1":
+        return True
+    
+    # Approx 75% of 200k context
+    TOKEN_THRESHOLD = 150000
+    if token_usage_approx > TOKEN_THRESHOLD:
+        return True
+        
+    return False
+
+
+def on_agent_stop(context: HookContext) -> dict:
+    """
+    Post-Run Hook: Checks for Harness Loop conditions.
+    If completion promise is NOT met, restarts the agent with fresh context.
+    """
+    global run_id, runtime_db_conn
+    
+    if not run_id or not runtime_db_conn:
+        return {}
+
+    # Load run spec to check for harness config
+    info = get_iteration_info(runtime_db_conn, run_id)
+    max_iter = info.get("max_iterations") or 10
+    current_iter = info.get("iteration_count") or 0
+    promise = info.get("completion_promise")
+
+    if not promise:
+        # Normal stop, no harness
+        return {}
+        
+    # Check if promise is fulfilled in output
+    # context.output is expected to be the final agent text response
+    final_output = context.output if hasattr(context, "output") else ""
+    if isinstance(final_output, dict):
+         final_output = str(final_output) # fallback
+         
+    if promise in final_output:
+        logfire.info("harness_completion_promise_met", run_id=run_id)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "AgentStop",
+                "action": "complete", # Let it stop naturally
+            }
+        }
+    
+    # Promise NOT met -> Check limits
+    if current_iter >= max_iter:
+        logfire.warning("harness_max_iterations_reached", run_id=run_id, current=current_iter, max=max_iter)
+        return {
+             "systemMessage": f"⚠️ Max iterations ({max_iter}) reached without completion promise '{promise}'. Stopping.",
+             "hookSpecificOutput": {
+                "hookEventName": "AgentStop",
+                "action": "stop",
+            }
+        }
+
+    # PROCEED TO HANDOFF
+    # 1. Save checkpoint (happens automatically in main loop mostly, but good to ensure)
+    # 2. Increment iteration
+    new_iter = increment_iteration_count(runtime_db_conn, run_id)
+    
+    # 3. Construct Continuation Prompt
+    continuation_prompt = f"""
+You are continuing a long-running task.
+Current Iteration: {new_iter} / {max_iter}
+
+## Original Objective
+(See system prompt or previous context)
+
+## Required Completion Artifact
+You must output exactly "{promise}" when you are fully done.
+You have NOT output this yet, so you must continue.
+
+## Instructions
+1. Review your workspace files to see what has been done.
+2. Continue the work. Do NOT start over.
+"""
+
+    logfire.info("harness_handoff_triggered", run_id=run_id, new_iteration=new_iter)
+
+    return {
+        "systemMessage": continuation_prompt,
+        "hookSpecificOutput": {
+            "hookEventName": "AgentStop",
+            "action": "restart", # Signal to main loop to clear history and restart
+            "nextPrompt": continuation_prompt
+        }
+    }
+    
     return {}
 
 
@@ -2090,7 +2206,7 @@ def _should_trigger_test_crash(
 ) -> tuple[bool, dict[str, Optional[str]]]:
     crash_tool = os.getenv("UA_TEST_CRASH_AFTER_TOOL")
     crash_id = os.getenv("UA_TEST_CRASH_AFTER_TOOL_CALL_ID")
-    crash_stage = os.getenv("UA_TEST_CRASH_STAGE")
+    crash_stage = os.getenv("UA_TEST_CRASH_AFTER_STAGE")
     crash_phase = os.getenv("UA_TEST_CRASH_AFTER_PHASE")
     crash_step = os.getenv("UA_TEST_CRASH_AFTER_STEP")
     crash_match = (os.getenv("UA_TEST_CRASH_MATCH") or "raw").strip().lower()
@@ -2219,12 +2335,7 @@ def _ensure_phase_checkpoint(
         return
     try:
         row = runtime_db_conn.execute(
-            """
-            SELECT 1
-            FROM checkpoints
-            WHERE run_id = ? AND step_id = ? AND checkpoint_type = ?
-            LIMIT 1
-            """,
+            "SELECT 1 FROM checkpoints WHERE run_id = ? AND step_id = ? AND checkpoint_type = ? LIMIT 1",
             (run_id, step_id, checkpoint_type),
         ).fetchone()
         if row:
@@ -2860,7 +2971,7 @@ def build_resume_packet(
             {
                 "tool_name": row["tool_name"],
                 "status": row["status"],
-                "idempotency_key": row["idempotency_key"],
+                "idempotency_key": row["idency_key"],
                 "created_at": row["created_at"],
             }
         )
@@ -4029,9 +4140,28 @@ def parse_cli_args() -> argparse.Namespace:
         help="Path to a run spec JSON file.",
     )
     parser.add_argument(
+        "--job-path",
+        help="Path to a JSON file containing job specification (implies --run-mode=job)",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        help="Maximum number of harness iterations (default: 10)",
+    )
+    parser.add_argument(
+        "--completion-promise",
+        type=str,
+        help="Wait for this string in output before true completion",
+    )
+    parser.add_argument(
         "--fork",
         action="store_true",
         help="Fork an existing run using provider session state (requires --run-id).",
+    )
+    parser.add_argument(
+        "--workspace",
+        dest="workspace",
+        help="Override workspace directory.",
     )
     parser.add_argument(
         "--explain-tool-policy",
@@ -4637,6 +4767,9 @@ async def setup_session(
             ),
         },
         hooks={
+            "AgentStop": [
+                HookMatcher(matcher=None, hooks=[on_agent_stop]),
+            ],
             "SubagentStop": [
                 HookMatcher(matcher=None, hooks=[on_subagent_stop]),
             ],
@@ -4909,7 +5042,10 @@ async def main(args: argparse.Namespace):
             print(f"⚠️ Failed to extract main trace ID: {e}")
     
     budget_config = load_budget_config()
-    runtime_db_conn = connect_runtime_db()
+    db_path = get_runtime_db_path()
+    print(f"DEBUG: Connecting to DB at {db_path}", flush=True)
+    runtime_db_conn = connect_runtime_db(db_path)
+    ensure_schema(runtime_db_conn)
     validate_tool_policies()
 
     # Ensure Letta context is initialized inside the event loop.
@@ -4925,7 +5061,7 @@ async def main(args: argparse.Namespace):
         return
 
     run_spec = None
-    workspace_override = None
+    workspace_override = args.workspace
     run_row = None
     base_run_row = None
     parent_run_id = None
@@ -5019,6 +5155,8 @@ async def main(args: argparse.Namespace):
     if prompt_run_row and prompt_run_row["last_job_prompt"]:
         job_prompt = prompt_run_row["last_job_prompt"]
 
+    print(f"DEBUG: After setups - run_id global is {run_id}", flush=True)
+
     if run_id:
         status_to_set = "running"
         if args.resume and run_row:
@@ -5039,6 +5177,8 @@ async def main(args: argparse.Namespace):
             last_job_prompt=job_prompt,
             parent_run_id=parent_run_id,
             status=status_to_set,
+            max_iterations=args.max_iterations,
+            completion_promise=args.completion_promise,
         )
         logfire.info("durable_run_upserted", run_id=run_id, entrypoint="cli")
         if parent_run_id:
@@ -5342,6 +5482,22 @@ async def main(args: argparse.Namespace):
                 if not user_input or user_input.lower() in ("quit", "exit"):
                     break
 
+                if user_input.lower().strip().startswith("/harness"):
+                    print("\n⚙️  Activating Universal Agent Harness...")
+                    # Enable harness with defaults
+                    upsert_run(
+                        runtime_db_conn, 
+                        run_id, 
+                        "cli", 
+                        run_spec or {}, 
+                        max_iterations=10, 
+                        completion_promise="TASK_COMPLETE"
+                    )
+                    print("✅ Harness activated: max_iterations=10, completion_promise='TASK_COMPLETE'")
+                    print("Prompting agent to acknowledge...")
+                    user_input = "System: Harness mode activated. Please acknowledge."
+                    # Fall through to process_turn
+
                 last_user_input = user_input
                 # Call process_turn which handles:
                 # 1. Tracing setup
@@ -5354,6 +5510,39 @@ async def main(args: argparse.Namespace):
                         auto_resume_complete = True
                         break
                     result = await process_turn(client, user_input, workspace_dir)
+
+                    # HARNESS LOOP: Manual check (since AgentStop hook is unreliable)
+                    if hasattr(result, "response_text"):
+                        # Synthesize context for the hook
+                        h_ctx = HookContext(
+                            systemMessage="", 
+                            toolCalls=[], 
+                            toolResults=[], 
+                            output=result.response_text
+                        )
+                        hook_res = on_agent_stop(h_ctx)
+                        
+                        hook_out = hook_res.get("hookSpecificOutput", {})
+                        action = hook_out.get("action")
+
+                        if action == "restart":
+                            next_prompt = hook_out.get("nextPrompt")
+                            if next_prompt:
+                                print(f"\n🔄 HARNESS RESTART TRIGGERED")
+                                print(f"Next Prompt: {next_prompt[:100]}...")
+                                pending_prompt = next_prompt
+                                
+                                # Clear Client History
+                                if hasattr(client, "history"):
+                                    client.history = []
+                                    print("🧹 Client history cleared.")
+                                
+                                continue
+                        elif action == "complete":
+                             # Harness satisfied
+                             pass
+
+
                     if run_mode == "job" and args.job_path:
                         if runtime_db_conn and run_id:
                             if _handle_cancel_request(runtime_db_conn, run_id, workspace_dir):

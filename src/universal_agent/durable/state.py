@@ -17,15 +17,20 @@ def upsert_run(
     job_path: Optional[str] = None,
     last_job_prompt: Optional[str] = None,
     parent_run_id: Optional[str] = None,
+    iteration_count: int = 0,
+    max_iterations: Optional[int] = None,
+    completion_promise: Optional[str] = None,
     status: str = "running",
 ) -> None:
+    print(f"DEBUG: Inside upsert_run for {run_id} path={conn}", flush=True)
     now = _now()
     conn.execute(
         """
         INSERT OR IGNORE INTO runs (
             run_id, created_at, updated_at, status, entrypoint, run_spec_json,
-            run_mode, job_path, last_job_prompt, parent_run_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            run_mode, job_path, last_job_prompt, parent_run_id,
+            iteration_count, max_iterations, completion_promise
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -38,6 +43,9 @@ def upsert_run(
             job_path,
             last_job_prompt,
             parent_run_id,
+            iteration_count,
+            max_iterations,
+            completion_promise,
         ),
     )
     conn.execute(
@@ -50,7 +58,9 @@ def upsert_run(
             run_mode = ?,
             job_path = ?,
             last_job_prompt = ?,
-            parent_run_id = ?
+            parent_run_id = ?,
+            max_iterations = COALESCE(?, max_iterations),
+            completion_promise = COALESCE(?, completion_promise)
         WHERE run_id = ?
         """,
         (
@@ -62,6 +72,8 @@ def upsert_run(
             job_path,
             last_job_prompt,
             parent_run_id,
+            max_iterations,
+            completion_promise,
             run_id,
         ),
     )
@@ -280,3 +292,25 @@ def get_step_count(conn: sqlite3.Connection, run_id: str) -> int:
         (run_id,),
     ).fetchone()
     return int(row["count"]) if row else 0
+
+
+def increment_iteration_count(conn: sqlite3.Connection, run_id: str) -> int:
+    conn.execute(
+        "UPDATE runs SET iteration_count = iteration_count + 1, updated_at = ? WHERE run_id = ?",
+        (_now(), run_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT iteration_count FROM runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    return int(row["iteration_count"]) if row else 0
+
+
+def get_iteration_info(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT iteration_count, max_iterations, completion_promise FROM runs WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    return dict(row) if row else {"iteration_count": 0, "max_iterations": None, "completion_promise": None}
+
