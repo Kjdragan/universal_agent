@@ -5534,16 +5534,96 @@ async def main(args: argparse.Namespace):
                     )
                     print(f"✅ Harness activated: max_iterations=10, completion_promise='TASK_COMPLETE'")
                     print(f"🎯 Objective: {target_objective}")
+                    
+                    # [V2 Planning Phase] Check for mission.json with PLANNING status
+                    planning_mission_file = os.path.join(workspace_dir, "mission.json")
+                    if os.path.exists(planning_mission_file):
+                        try:
+                            with open(planning_mission_file, "r") as f:
+                                mission_data = json.load(f)
+                            if mission_data.get("status") == "PLANNING":
+                                print("\n📋 Planning Phase Detected - Awaiting User Approval")
+                                approved = present_plan_summary(mission_data)
+                                if approved:
+                                    mission_data["status"] = "IN_PROGRESS"
+                                    with open(planning_mission_file, "w") as f:
+                                        json.dump(mission_data, f, indent=2)
+                                    print("✅ Plan approved. Transitioning to IN_PROGRESS.")
+                                else:
+                                    print("⏸️ Plan not approved. Please edit mission.json and retry.")
+                                    continue  # Go back to prompt, don't start execution
+                        except Exception as e:
+                            print(f"⚠️ Failed to check mission.json: {e}")
+                    
                     print("Prompting agent to begin...")
                     
                     # Synthesize the FIRST prompt for the agent
-                    user_input = (
-                        f"HARNESS MODE ACTIVATED\n"
-                        f"OBJECTIVE: {target_objective}\n\n"
-                        f"Instructions: You are starting a long-running multi-phase task.\n"
-                        f"You must eventually output 'TASK_COMPLETE' to finish.\n"
-                        f"Begin Phase 1 now."
-                    )
+                    # Check if this is a Planning Phase (mission.json with PLANNING status was approved)
+                    is_planning_complete = os.path.exists(planning_mission_file)
+                    if is_planning_complete:
+                        try:
+                            with open(planning_mission_file, "r") as f:
+                                check_mission = json.load(f)
+                            is_planning_complete = check_mission.get("status") == "IN_PROGRESS"
+                        except Exception:
+                            is_planning_complete = False
+                    
+                    if is_planning_complete:
+                        # Execution mode: Plan already approved
+                        user_input = (
+                            f"HARNESS MODE ACTIVATED - EXECUTION PHASE\n"
+                            f"OBJECTIVE: {target_objective}\n\n"
+                            f"A Mission Manifest (mission.json) exists in your workspace with status=IN_PROGRESS.\n"
+                            f"Read it, identify the next PENDING task, execute it fully, then mark it COMPLETE.\n"
+                            f"Update mission_progress.txt with notes for future iterations.\n"
+                            f"When ALL tasks are complete, output 'TASK_COMPLETE'.\n"
+                            f"If you cannot complete a phase in this iteration, output a clear stopping point.\n"
+                            f"Begin execution now."
+                        )
+                    else:
+                        # Planning mode: Need to decompose and clarify
+                        user_input = (
+                            f"HARNESS MODE ACTIVATED - PLANNING PHASE\n"
+                            f"OBJECTIVE: {target_objective}\n\n"
+                            f"You are starting a LONG-RUNNING multi-phase task that may run for hours unattended.\n"
+                            f"This is a planning phase - do NOT start execution yet.\n\n"
+                            f"## Your Responsibility: PROACTIVE PLANNING\n"
+                            f"Users often submit vague requests without thinking through what they actually need.\n"
+                            f"YOUR JOB is to think through everything required for a complete, high-quality output:\n\n"
+                            f"### 1. TASK COMPLETION: What does this task *actually* need?\n"
+                            f"   - What are the concrete deliverables?\n"
+                            f"   - What research/data is required?\n"
+                            f"   - What format makes the output most useful?\n"
+                            f"   - How should the user receive/access the results?\n\n"
+                            f"### 2. NATURAL EXTENSIONS: What would make this better?\n"
+                            f"   - Are there related topics the user should know about?\n"
+                            f"   - Would visualizations, summaries, or executive briefs add value?\n"
+                            f"   - Should this be emailed, saved, or sent to Slack?\n\n"
+                            f"### 3. SENSIBLE DEFAULTS (Apply these unless user specifies otherwise):\n"
+                            f"   - Research tasks → Markdown report with executive summary\n"
+                            f"   - Long-running tasks → Email notification on completion\n"
+                            f"   - 'Recent' or 'latest' → Last 7 days\n"
+                            f"   - No date specified → Last 30 days\n"
+                            f"   - Moderate depth unless 'deep dive' or 'quick' specified\n\n"
+                            f"### 4. WHEN TO ASK (use mcp__local_toolkit__ask_user_questions tool):\n"
+                            f"   - ASK when: multiple valid interpretations, unknown preferences, high stakes\n"
+                            f"   - DON'T ASK when: sensible default exists, request is specific, asking would be pedantic\n"
+                            f"   - Limit to 2-4 essential questions maximum\n\n"
+                            f"### 5. CREATE MISSION MANIFEST (mission.json):\n"
+                            f"   Write to your workspace with:\n"
+                            f"   - mission_root: The overall goal\n"
+                            f"   - status: 'PLANNING'\n"
+                            f"   - clarifications: User answers (if any questions asked)\n"
+                            f"   - tasks: Array of sub-tasks with id, description, context, use_case, success_criteria, output_artifacts\n\n"
+                            f"## Example Interview Questions (when needed):\n"
+                            f"   - 'This topic is broad. Should I focus on [A], [B], or both?'\n"
+                            f"   - 'Would you prefer a detailed report or a quick summary?'\n"
+                            f"   - 'Since this will take a while, would you like me to email you when done?'\n"
+                            f"   - 'I noticed [related topic] is relevant. Should I include that too?'\n\n"
+                            f"Once you have created mission.json with status='PLANNING', output:\n"
+                            f"'PLANNING PHASE COMPLETE - Awaiting approval'\n"
+                            f"The harness will then present the plan to the user for approval."
+                        )
                     # Fall through to process_turn
 
                 last_user_input = user_input

@@ -562,6 +562,55 @@ def upload_to_composio(
         return json.dumps({"error": str(e)})
 
 # =============================================================================
+# HARNESS PLANNING TOOLS
+# =============================================================================
+
+@mcp.tool()
+@trace_tool_output
+def ask_user_questions(questions: list) -> str:
+    """
+    Present structured questions to the user for clarification during Planning Phase.
+    
+    Use this tool when you detect ambiguity in a massive task request.
+    Only ask 2-4 essential questions. Be helpful, not annoying.
+    
+    Examples of good questions:
+    - Delivery preferences (email results? Slack notification?)
+    - Output format (detailed report vs summary vs raw research?)
+    - Scope constraints (date range? specific focus areas?)
+    - Quality expectations (quick scan vs deep analysis?)
+    
+    Args:
+        questions: List of question objects, each containing:
+            - question (str): The full question text
+            - header (str): Short label (max 12 chars), e.g., "Delivery"
+            - options (list): Available choices with 'label' and 'description'
+            - multiSelect (bool): Allow multiple selections
+    
+    Returns:
+        JSON string with answers: {"question_text": "selected_option_label", ...}
+    
+    Example:
+        ask_user_questions([
+            {
+                "question": "Would you like me to email the final results?",
+                "header": "Delivery",
+                "options": [
+                    {"label": "Yes, email me", "description": "Send to your registered email"},
+                    {"label": "No, save locally", "description": "Just save files to workspace"}
+                ],
+                "multiSelect": False
+            }
+        ])
+    """
+    try:
+        from universal_agent.harness import ask_user_questions as _ask
+        answers = _ask(questions)
+        return json.dumps(answers, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+# =============================================================================
 # MEMORY SYSTEM TOOLS
 # =============================================================================
 
