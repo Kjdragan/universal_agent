@@ -34,9 +34,11 @@ from claude_agent_sdk.types import (
     ToolResultBlock,
     ThinkingBlock,
     UserMessage,
+    HookMatcher,
 )
 from composio import Composio
-from universal_agent.durable.tool_gateway import is_malformed_tool_name
+from universal_agent.durable.tool_gateway import is_malformed_tool_name, parse_malformed_tool_name
+from universal_agent.guardrails.tool_schema import validate_tool_input
 from universal_agent.prompt_assets import get_tool_knowledge_block
 # Local MCP server provides: crawl_parallel, read_local_file, write_local_file
 
@@ -88,7 +90,122 @@ DISALLOWED_TOOLS = [
     "taskresult",
     "mcp__composio__TaskOutput",
     "mcp__composio__TaskResult",
+    # Force agent to use native Write tool for large report output
+    "mcp__local_toolkit__write_local_file",
+    "write_local_file",
 ]
+
+
+# =============================================================================
+# PRE-TOOL-USE GUARDRAIL HOOK
+# =============================================================================
+
+
+async def malformed_tool_guardrail_hook(input_data: dict, tool_use_id: str, context) -> dict:
+    """
+    Pre-tool-use hook that blocks malformed tool calls and injects schema guidance.
+    
+    This catches the XML-concatenation bug where tool names include arg_key/arg_value,
+    denies the call, and provides corrective guidance for faster recovery.
+    """
+    tool_name = str(input_data.get("tool_name", "") or "")
+    tool_input = input_data.get("tool_input", {}) or {}
+    
+    # Check for malformed tool name (XML fragments concatenated)
+    if is_malformed_tool_name(tool_name):
+        base_name, arg_key, arg_value = parse_malformed_tool_name(tool_name)
+        
+        repair_hint = ""
+        if base_name and arg_key and arg_value is not None:
+            import json
+            repaired_payload = json.dumps({arg_key: arg_value}, ensure_ascii=True)
+            repair_hint = f" Reissue as {base_name} with input {repaired_payload}."
+        
+        logfire.warning(
+            "malformed_tool_guardrail_blocked",
+            tool_name=tool_name,
+            base_name=base_name,
+            tool_use_id=tool_use_id,
+        )
+        
+        return {
+            "systemMessage": (
+                "⚠️ BLOCKED: Malformed tool call. "
+                "Do NOT concatenate XML-like arg_key/arg_value into the tool name. "
+                "Use proper JSON arguments instead."
+                + repair_hint
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Malformed tool name (XML-style args in name).",
+            },
+        }
+    
+    # Check for schema validation (empty required fields)
+    is_valid, missing, schema = validate_tool_input(tool_name, tool_input)
+    if not is_valid:
+        example = schema.example if schema else ""
+        example_hint = f" Example: {example}" if example else ""
+        
+        logfire.warning(
+            "schema_guardrail_blocked",
+            tool_name=tool_name,
+            missing_fields=missing,
+            tool_use_id=tool_use_id,
+        )
+        
+        return {
+            "systemMessage": (
+                f"⚠️ BLOCKED: Invalid {tool_name} call. "
+                f"Missing required fields: {', '.join(missing)}."
+                f"{example_hint}"
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Tool schema validation failed.",
+            },
+        }
+    
+    return {}
+
+async def tool_output_validator_hook(tool_output: dict, tool_use_id: str, context) -> dict:
+    """
+    Post-Tool hook to catch empty or failed tool executions (especially Write calls).
+    If the tool failed with InputValidationError due to missing content/path (common in high load),
+    we intervene to guide the agent to retry with correct arguments.
+    """
+    # Check for Claude SDK's internal InputValidationError which appears in the output content
+    # or empty outputs for critical tools like Write.
+    
+    # tool_output is a ToolResultBlock-like dict or just the result structure?
+    # In the Claude SDK, hook receives the raw result block.
+    
+    content_list = tool_output.get("content", [])
+    if not content_list:
+        return {}
+        
+    for block in content_list:
+        if block.get("type") == "text":
+            text = block.get("text", "")
+            
+            # Case 1: Detect InputValidationError (missing params)
+            if "InputValidationError" in text and ("missing" in text or "required parameter" in text):
+                logfire.warning("post_tool_hook_caught_validation_error", tool_use_id=tool_use_id)
+                return {
+                    "systemMessage": (
+                        "⚠️ CRITICAL: Your last tool call failed because you did not provide any arguments (content/path). "
+                        "This often happens when context is full. "
+                        "PLEASE RETRY IMMEDIATELY, but attempt to write the content in smaller chunks if it is very large."
+                    )
+                }
+            
+            # Case 2: Detect Empty Write (for native Write tool specifically)
+            # This is harder to detect from output alone unless we trace the input too, 
+            # but usually empty input -> InputValidationError.
+            
+    return {}
 
 def configure_logfire():
     """Configure Logfire for tracing if token is available."""
@@ -247,7 +364,7 @@ async def observe_and_save_search_results(
             search_data = payload
             if "results" in payload and isinstance(payload["results"], dict):
                 search_data = payload["results"]
-
+            
             def safe_get_list(data, key):
                 val = data.get(key, [])
                 if isinstance(val, dict):
@@ -279,6 +396,29 @@ async def observe_and_save_search_results(
                         if isinstance(a, dict)
                     ],
                 }
+
+            # Normalization for Scholar/other types using 'articles' key
+            elif "articles" in search_data:
+                raw_list = safe_get_list(search_data, "articles")
+                cleaned = {
+                    "type": "scholar",  # Distinguish type but keep structure compatible
+                    "timestamp": datetime.now().isoformat(),
+                    "tool": slug,
+                    "results": [  # Normalize 'articles' -> 'results' for consistency
+                        {
+                            "position": a.get("position") or (idx + 1),
+                            "title": a.get("title"),
+                            "url": a.get("link") or a.get("url"),  # Normalize 'link' -> 'url'
+                            "snippet": a.get("snippet"),
+                            "source": a.get("source", {}).get("name")
+                            if isinstance(a.get("source"), dict)
+                            else a.get("source"),
+                        }
+                        for idx, a in enumerate(raw_list)
+                        if isinstance(a, dict)
+                    ],
+                }
+
             elif "organic_results" in search_data:
                 raw_list = safe_get_list(search_data, "organic_results")
                 cleaned = {
@@ -473,6 +613,14 @@ class UniversalAgent:
                     model="inherit",
                 ),
             },
+            hooks={
+                "PreToolUse": [
+                    HookMatcher(matcher="*", hooks=[malformed_tool_guardrail_hook]),
+                ],
+                "PostToolUse": [
+                    HookMatcher(matcher="Write", hooks=[tool_output_validator_hook]),
+                ],
+            },
             permission_mode="bypassPermissions",
         )
 
@@ -599,23 +747,27 @@ class UniversalAgent:
             "   Let the content dictate the structure.\n\n"
             "### Step 5: Save Work Product (HTML + PDF)\n"
             f"- ALWAYS save the HTML report to: {workspace_path}/work_products/\n"
-            "- Use `write_local_file` with descriptive filename (e.g., `report_topic.html`)\n"
-            "- **PDF GENERATION:**\n"
-            "  - **For HTML reports:** Use Chrome Headless with these flags to avoid D-Bus errors:\n"
-            "    `google-chrome --headless --no-sandbox --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --print-to-pdf=/path/output.pdf /path/input.html`\n"
-            "  - **For Markdown reports:** Use `python-reportlab` for programmatic PDF generation.\n"
-            "- ❌ Do NOT use `pandoc` or `latex` (not installed).\n"
-            "- Save PDF to `{workspace_path}/work_products/`\n"
-            "- **IMPORTANT:** When creating the python script (e.g. `create_pdf.py`), save it to `{workspace_path}/work_products/` and ALWAYS execute it using the **ABSOLUTE PATH**: `python {workspace_path}/work_products/create_pdf.py` to avoid file not found errors.\n\n"
-            "### Step 6: Email Delivery (if requested)\n"
-            "When asked to email the report:\n"
-            "- Return control to the main agent with the saved file path\n"
-            "- Instruct that the email should ATTACH the PDF file (preferred) or HTML file\n\n"
-            "## TOOLS AVAILABLE\n"
-            "- `crawl_parallel(urls, session_dir)` → Extract content from URLs, creates research_overview.md\n"
-            "- `read_research_files(file_paths)` → **USE THIS** to batch read multiple files in ONE call\n"
-            "- `read_local_file(path)` → Only for reading research_overview.md (single file)\n"
-            "- `write_local_file(path, content)` → Save report to file\n"
+            "- ⚠️ **FOR HTML REPORTS:** Use the **native Write tool** (NOT `write_local_file`):\\n"
+            "  The native Write tool handles large content better and avoids MCP token limits.\\n"
+            "- **PDF GENERATION:**\\n"
+            "  - **For HTML reports:** Use Chrome Headless with these flags to avoid D-Bus errors:\\n"
+            "    `google-chrome --headless --no-sandbox --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --print-to-pdf=/path/output.pdf /path/input.html`\\n"
+            "  - **For Markdown reports:** Use `python-reportlab` for programmatic PDF generation.\\n"
+            "- ❌ Do NOT use `pandoc` or `latex` (not installed).\\n"
+            f"- Save PDF to `{workspace_path}/work_products/`\\n"
+            f"- **IMPORTANT:** When creating the python script (e.g. `create_pdf.py`), save it to `{workspace_path}/work_products/` and ALWAYS execute it using the **ABSOLUTE PATH**: `python {workspace_path}/work_products/create_pdf.py` to avoid file not found errors.\\n\\n"
+            "### Step 6: Email Delivery (if requested)\\n"
+            "When asked to email the report:\\n"
+            "- Return control to the main agent with the saved file path\\n"
+            "- Instruct that the email should ATTACH the PDF file (preferred) or HTML file\\n\\n"
+            "## TOOLS AVAILABLE\\n"
+            "- `crawl_parallel(urls, session_dir)` → Extract content from URLs, creates research_overview.md\\n"
+            "- `read_research_files(file_paths)` → **USE PARALLEL BATCHING:**\\n"
+            "  - Issue multiple `read_research_files` calls in the *same turn*.\\n"
+            "  - Each call MUST contain exactly **5 files** (e.g. Call 1: files 1-5, Call 2: files 6-10, etc).\\n"
+            "  - This optimizes speed while avoiding context overflow.\\n"
+            "- `read_local_file(path)` → Only for reading research_overview.md (single file)\\n"
+            "- `Write(file_path, content)` → **USE THIS** for ALL file writes (native tool)\\n"
         )
         tool_knowledge = get_tool_knowledge_block()
         if tool_knowledge:

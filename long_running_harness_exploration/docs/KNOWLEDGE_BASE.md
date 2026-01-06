@@ -2,8 +2,8 @@
 
 This document is the **source of truth** for knowledge accumulated during development of Universal Agent's long-running harness capabilities. It is designed to persist across multiple chat sessions.
 
-**Last Updated**: 2026-01-05  
-**Status**: Active Research
+**Last Updated**: 2026-01-05 17:10 CST  
+**Status**: Stress Testing Complete - Failure Point Identified
 
 ---
 
@@ -98,6 +98,25 @@ Anthropic chose fresh sessions because:
 - Compaction loses specificity
 - Agent doesn't know what was already done
 - Agent may repeat work or skip incomplete work
+
+### 6. ⚠️ CRITICAL: SDK Token Limits (New Discovery)
+
+**L5 Stress Test (2026-01-05)** revealed SDK hard limits:
+
+| Limit | Value | Source |
+|-------|-------|--------|
+| Tool output max | **25,000 tokens** | Claude Agent SDK |
+| Effective words | ~17-18K | 25K tokens ÷ 1.4 tokens/word |
+| Our safe limit | **15,000 words** | Recommended per batch |
+
+**Failure sequence observed:**
+1. `read_research_files` returned 50,583 tokens (29K words)
+2. SDK truncated output, saved to temp file
+3. Agent tried to recover with offset/limit
+4. Agent got stuck in infinite retry loop with empty Write calls
+5. Manual termination required
+
+**This confirms harness intervention is required.** Agent cannot self-recover.
 
 ---
 

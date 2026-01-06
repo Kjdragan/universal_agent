@@ -2986,54 +2986,8 @@ def update_restart_file(
     job_summary_path: Optional[str] = None,
     runwide_summary_line: Optional[str] = None,
 ) -> None:
-    if not run_id:
-        return
-    if resume_cmd is None:
-        resume_cmd = (
-            "PYTHONPATH=src uv run python -m universal_agent.main "
-            f"--resume --run-id {run_id}"
-        )
-    try:
-        restart_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "Project_Documentation",
-            "Long_Running_Agent_Design",
-            "KevinRestartWithThis.md",
-        )
-        lines = [
-            "# Restart Instructions",
-            "",
-            f"Run ID: {run_id}",
-            "",
-        ]
-        if resume_cmd:
-            lines.append("Resume Command:")
-            lines.append("")
-            lines.append(resume_cmd)
-            lines.append("")
-        lines.append("Workspace:")
-        lines.append("")
-        lines.append(workspace_dir or "N/A")
-        lines.append("")
-        if resume_packet_path:
-            lines.append("Resume Packet:")
-            lines.append("")
-            lines.append(resume_packet_path)
-            lines.append("")
-        if job_summary_path:
-            lines.append("Job Completion Summary:")
-            lines.append("")
-            lines.append(job_summary_path)
-            lines.append("")
-        if runwide_summary_line:
-            lines.append("Run-wide Summary:")
-            lines.append("")
-            lines.append(runwide_summary_line)
-            lines.append("")
-        with open(restart_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-    except Exception as exc:
-        print(f"⚠️ Failed to save restart file: {exc}")
+    # Logic removed per user request to avoid file path errors
+    pass
 
 
 def print_job_completion_summary(
