@@ -169,11 +169,20 @@ def present_plan_summary(mission: dict[str, Any]) -> bool:
     console.print(f"\n[bold]Mission:[/bold] {mission.get('mission_root', 'Unknown')}\n")
     
     # Show clarifications if any
-    clarifications = mission.get("clarifications", [])
+    clarifications = mission.get("clarifications", {})
     if clarifications:
         console.print("[bold]Clarifications:[/bold]")
-        for c in clarifications:
-            console.print(f"  • {c['question']}: [cyan]{c['answer']}[/cyan]")
+        if isinstance(clarifications, dict):
+            # Agent wrote as key-value dict
+            for key, value in clarifications.items():
+                console.print(f"  • {key}: [cyan]{value}[/cyan]")
+        elif isinstance(clarifications, list):
+            # Expected format: list of {question, answer}
+            for c in clarifications:
+                if isinstance(c, dict):
+                    console.print(f"  • {c.get('question', 'N/A')}: [cyan]{c.get('answer', 'N/A')}[/cyan]")
+                else:
+                    console.print(f"  • {c}")
         console.print()
     
     # Show tasks
@@ -185,12 +194,12 @@ def present_plan_summary(mission: dict[str, Any]) -> bool:
     table.add_column("Success Criteria", style="dim")
     
     for task in tasks:
-        table.add_row(
-            task.get("id", "?"),
-            task.get("description", ""),
-            task.get("use_case", "general"),
-            task.get("success_criteria", "")[:40] + "..." if len(task.get("success_criteria", "")) > 40 else task.get("success_criteria", "")
-        )
+        task_id = str(task.get("id", "?"))
+        description = str(task.get("description", ""))
+        use_case = str(task.get("use_case", "general"))
+        criteria = str(task.get("success_criteria", ""))
+        criteria_display = criteria[:40] + "..." if len(criteria) > 40 else criteria
+        table.add_row(task_id, description, use_case, criteria_display)
     
     console.print(table)
     console.print()

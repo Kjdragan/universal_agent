@@ -133,6 +133,7 @@ def start_step(
     step_index: int,
     phase: str = "unspecified",
 ) -> None:
+    print(f"DEBUG: start_step {step_id} for run {run_id} phase={phase}", flush=True)
     now = _now()
     conn.execute(
         """
