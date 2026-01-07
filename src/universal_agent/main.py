@@ -817,7 +817,17 @@ async def on_pre_tool_use_ledger(
     if forced_tool_mode_active and not forced_tool_queue:
         forced_tool_mode_active = False
 
-    if forced_tool_queue:
+    # Early bypass: Allow Task/Bash in harness mode (not crash recovery)
+    # This ensures sub-agent delegation and shell commands work during
+    # harness execution, even if there are stale 'prepared' entries in DB.
+    if (
+        tool_name in ("Task", "Bash")
+        and _is_harness_mode()
+        and not forced_tool_mode_active
+    ):
+        # Fall through to normal ledger preparation below
+        pass
+    elif forced_tool_queue:
         expected = forced_tool_queue[0]
         if _forced_tool_matches(tool_name, tool_input, expected):
             forced_tool_active_ids[tool_call_id] = expected
@@ -898,15 +908,7 @@ async def on_pre_tool_use_ledger(
                 }
             return _allow_with_updated_input()
         
-        if tool_name in ("Task", "Bash") and _is_job_run():
-            print(f"DEBUG: Harness Override - Force enabling {tool_name}", flush=True)
-            return {
-                "hookSpecificOutput": {
-                     "hookEventName": "PreToolUse",
-                     "permissionDecision": "allow",
-                     "permissionDecisionReason": "Harness mode override enabled.",
-                }
-            }
+        # Note: Task/Bash harness bypass moved to line ~820 (early bypass before forced_tool_queue)
 
         if tool_name in ("Write", "Edit", "MultiEdit"):
             if _forced_task_active():
@@ -2477,6 +2479,22 @@ def _is_job_run() -> bool:
     except Exception:
         return False
     return bool(row and row["run_mode"] == "job")
+
+
+def _is_harness_mode() -> bool:
+    """
+    Check if running in harness mode (long-running task orchestration).
+    Returns True if max_iterations is set in the run config.
+    This is distinct from crash recovery (forced_tool_mode_active).
+    """
+    if not runtime_db_conn or not run_id:
+        return False
+    try:
+        info = get_iteration_info(runtime_db_conn, run_id)
+        return bool(info.get("max_iterations"))
+    except Exception:
+        return False
+
 
 
 VALID_SIDE_EFFECT_CLASSES = {"external", "memory", "local", "read_only"}
@@ -5854,11 +5872,35 @@ async def main(args: argparse.Namespace):
                             f"   - You must NOT execute all tasks at once.\n"
                             f"   - The harness will enforce a Single-Threaded loop: Pick ONE task, mark it IN_PROGRESS, finish it, mark it COMPLETED, then pick the next.\n"
                             f"   - Plan your tasks as a logical dependency chain.\n\n"
-                            f"   **CRITICAL JSON RULES:**\n"
-                            f"   - ALL string values MUST be quoted: \"value\" not value\n"
-                            f"   - DO NOT include estimated_duration_hours or time estimates (unreliable)\n"
-                            f"   - Use string task IDs: \"topic_001\" not 1\n"
-                            f"   - Example: \"count\": \"20 reports\" NOT \"count\": 20 reports\n\n"
+                            f"   **CRITICAL JSON SYNTAX (FOLLOW EXACTLY):**\n"
+                            f"   Every value MUST be a properly quoted string. Common mistakes:\n"
+                            f"   ❌ WRONG: \"duration\": 8-12 hours\n"
+                            f"   ✅ RIGHT: \"duration\": \"8-12 hours\"\n"
+                            f"   ❌ WRONG: \"count\": 20 items per batch\n"  
+                            f"   ✅ RIGHT: \"count\": \"20 items per batch\"\n"
+                            f"   ❌ WRONG: \"output_artifacts\": report.pdf, summary.md\n"
+                            f"   ✅ RIGHT: \"output_artifacts\": [\"report.pdf\", \"summary.md\"]\n\n"
+                            f"   **COMPLETE VALID EXAMPLE:**\n"
+                            f"   ```json\n"
+                            f"   {{\n"
+                            f"     \"mission_root\": \"Research AI trends and create report\",\n"
+                            f"     \"status\": \"PLANNING\",\n"
+                            f"     \"clarifications\": {{}},\n"
+                            f"     \"tasks\": [\n"
+                            f"       {{\n"
+                            f"         \"id\": \"task_001\",\n"
+                            f"         \"description\": \"Search for AI news\",\n"
+                            f"         \"context\": \"Use Composio search tools\",\n"
+                            f"         \"use_case\": \"Find recent AI developments\",\n"
+                            f"         \"success_criteria\": \"At least 15 sources found\",\n"
+                            f"         \"output_artifacts\": [\"search_results/*.json\"],\n"
+                            f"         \"status\": \"PENDING\",\n"
+                            f"         \"depends_on\": []\n"
+                            f"       }}\n"
+                            f"     ]\n"
+                            f"   }}\n"
+                            f"   ```\n\n"
+
                             f"## Example Interview Questions (when needed):\n"
                             f"   - 'This topic is broad. Should I focus on [A], [B], or both?'\n"
                             f"   - 'Would you prefer a detailed report or a quick summary?'\n"
