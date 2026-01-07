@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from dotenv import load_dotenv
+from universal_agent.utils.message_history import TRUNCATION_THRESHOLD
 
 # Timezone helper for consistent date/time across deployments
 def get_user_datetime():
@@ -287,6 +288,7 @@ from universal_agent.durable.classification import (
 )
 from universal_agent.durable.state import (
     upsert_run,
+    update_run_tokens,
     update_run_status,
     update_run_provider_session,
     start_step,
@@ -1104,6 +1106,18 @@ async def on_pre_tool_use_ledger(
                 tool_name=tool_name,
                 note="first_side_effect_in_step",
             )
+    
+    # [Bash Scaffolding] Audit log all shell commands for visibility
+    if tool_name.upper() == "BASH" and workspace_dir:
+        try:
+            cmd = tool_input.get("command") or tool_input.get("cmd") or str(tool_input)
+            audit_file = os.path.join(workspace_dir, "bash_audit.log")
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(audit_file, "a", encoding="utf-8") as af:
+                af.write(f"[{ts}] {cmd}\n")
+        except Exception:
+            pass  # Non-critical visibility feature
+
     return _allow_with_updated_input()
 
 
@@ -1822,21 +1836,38 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn = None) -> d
     if isinstance(final_output, dict):
          final_output = str(final_output) # fallback
          
-    # [FIX] If output is empty (e.g. just tool use), assume intermediate step and do nothing
-    # This prevents the harness from restarting the agent when it's just working (e.g. sending emails)
-    if not final_output or not final_output.strip():
-        return {}
-         
-    if promise in final_output:
-        logfire.info("harness_completion_promise_met", run_id=use_run_id)
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "AgentStop",
-                "action": "complete", # Let it stop naturally
-            }
-        }
+    # [FIX] Ralph Wiggum Parity: Strict Regex Validation
+    # We do NOT allow empty output to exit silently.
     
-    # Promise NOT met -> Check limits
+    import re
+    # Extract content inside <promise>...</promise> tags
+    # DOTALL allows matching across newlines
+    match = re.search(r'<promise>(.*?)</promise>', final_output, re.DOTALL)
+    
+    promise_met = False
+    
+    if match:
+        extracted_promise = match.group(1).strip()
+        # Collapse whitespace to single spaces for robust comparison
+        extracted_promise_normalized = " ".join(extracted_promise.split())
+        promise_normalized = " ".join(promise.split())
+        
+        if extracted_promise_normalized == promise_normalized:
+            promise_met = True
+            logfire.info("harness_completion_promise_met", run_id=use_run_id)
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "AgentStop",
+                    "action": "complete", # Let it stop naturally
+                }
+            }
+        else:
+             print(f"⚠️ Promise Mismatch: Expected '{promise}', Got '{extracted_promise}'")
+    
+    # If we get here, the promise was NOT met.
+    # We must RESTART the agent to force it to finish.
+    
+    # Check limits first
     if current_iter >= max_iter:
         logfire.warning("harness_max_iterations_reached", run_id=use_run_id, current=current_iter, max=max_iter)
         return {
@@ -1846,6 +1877,16 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn = None) -> d
                 "action": "stop",
             }
         }
+    
+    # Force Restart / Nudge
+    return {
+         "systemMessage": f"REJECTED: You claimed to be done, but did not provide the required completion promise: <promise>{promise}</promise>. You must complete the task and output the exact promise tag.",
+         "hookSpecificOutput": {
+            "hookEventName": "AgentStop",
+            "action": "restart",
+            "nextPrompt": f"RESUMING: The previous attempt did not include the required completion promise <promise>{promise}</promise>. Continue working until the task is fully complete, then output the promise."
+        }
+    }
 
     # PROCEED TO HANDOFF
     # 1. Save checkpoint (happens automatically in main loop mostly, but good to ensure)
@@ -3637,6 +3678,71 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         final_text = ""  # Buffer to capture final agent response for printing after execution summary
 
         async for msg in client.receive_response():
+            if isinstance(msg, ResultMessage):
+                # Track token usage from the final ResultMessage of the turn
+                # This explicitly contains the usage statistics for the turn
+                if hasattr(msg, "usage") and msg.usage:
+                    u = msg.usage
+                    inp = u.get("input_tokens", 0) or 0
+                    out = u.get("output_tokens", 0) or 0
+                    
+                    # Update local trace counters
+                    if trace and "token_usage" in trace:
+                        trace["token_usage"]["input"] += inp
+                        trace["token_usage"]["output"] += out
+                        trace["token_usage"]["total"] += (inp + out)
+                    
+                    
+                    logfire.info(
+                        "token_usage_update", 
+                        run_id=run_id, 
+                        input=inp, 
+                        output=out, 
+                        total_so_far=trace["token_usage"]["total"] if trace else 0
+                    )
+
+                    # Durability: Update DB with latest token count
+                    if run_id and runtime_db_conn:
+                         update_run_tokens(runtime_db_conn, run_id, trace["token_usage"]["total"])
+
+
+                    # [FIX 7] Token-Based Harness Trigger
+                    # Connect the Brain (Token Count) to the Body (Harness Action)
+                    total_tokens = trace["token_usage"]["total"]
+                    if total_tokens > TRUNCATION_THRESHOLD:
+                        print(f"\n⚠️ CONTEXT THRESHOLD REACHED ({total_tokens} > {TRUNCATION_THRESHOLD})")
+                        print("🔄 Triggering Harness Iteration (Context Reset)...")
+                        
+                        # Synthesize a "context_exhausted" event for the hook/logic
+                        # Instead of calling the hook, we trigger the restart specific logic directly here
+                        # to align with the "Autonomous Execution Protocol"
+                        
+                        # 1. Increment Iteration
+                        if run_id and runtime_db_conn:
+                            current_iter = get_iteration_info(runtime_db_conn, run_id).get("iteration_count", 0)
+                            max_iter = get_iteration_info(runtime_db_conn, run_id).get("max_iterations", 10)
+                            
+                            if current_iter >= max_iter:
+                                  print(f"⛔ Max iterations ({max_iter}) reached despite context exhaustion. Stopping.")
+                                  break
+                                  
+                            new_iter = increment_iteration_count(runtime_db_conn, run_id)
+                            
+                            # 2. Construct Handoff Prompt
+                            next_prompt = f"RESUMING (Context Limit Reached): You exceeded the context limit ({total_tokens} tokens). I have reset your memory. Continue the mission.json tasks from where you left off. Status: {current_iter+1}/{max_iter}."
+                            
+                            pending_prompt = next_prompt
+                            
+                            # 3. Clear Context
+                            if hasattr(client, "history"):
+                                client.history = []
+                                print("🧹 Client history cleared (Context Reset).")
+                            
+                            # 4. Reset Token Counter for new session
+                            trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
+                            
+                            continue # Restart inner loop with new prompt
+
             if isinstance(msg, AssistantMessage):
                 # Wrapped in span for full visibility of assistant's turn
                 with logfire.span("assistant_message", model=msg.model):
@@ -4314,6 +4420,16 @@ async def setup_session(
     work_products_dir = os.path.join(workspace_dir, "work_products", "media")
     os.makedirs(work_products_dir, exist_ok=True)
 
+    # [Anthropic Pattern] Initialize git for checkpoint-based harness iteration
+    try:
+        import subprocess
+        subprocess.run(["git", "init"], cwd=workspace_dir, capture_output=True, check=False)
+        subprocess.run(["git", "config", "user.email", "agent@universal-agent.local"], cwd=workspace_dir, capture_output=True, check=False)
+        subprocess.run(["git", "config", "user.name", "Universal Agent"], cwd=workspace_dir, capture_output=True, check=False)
+        print(f"📦 Git initialized in workspace: {workspace_dir}")
+    except Exception as e:
+        print(f"⚠️ Git init skipped: {e}")
+
     # =========================================================================
     # =========================================================================
     # 2. NON-BLOCKING AUTH FIX
@@ -4488,6 +4604,11 @@ async def setup_session(
             "- Do not ask 'Should I proceed?' or 'Do you want me to send this?'\n"
             "- Complete the full task end-to-end in a single workflow.\n"
             "- If authentication is required, guide the user through it, then continue automatically.\n\n"
+            "⚡ AUTONOMOUS EXECUTION PROTOCOL:\n"
+            "- If you calculate a large scope (e.g. >10 hours), DO NOT ASK FOR PERMISSION. EXECUTE IT.\n"
+            "- You have FULL AUTHORITY to commit resources. Do not pause. Do not offer options.\n"
+            "- If faced with a choice (e.g. Batch vs Full), choose the most aggressive safe option (Full) to maximize results.\n"
+            "- The goal is to COMPLETE THE MISSION, not be polite.\n\n"
             "REMOTE vs LOCAL WORKFLOW:\n"
             "- The 'COMPOSIO' tools act as your Hands (Search, Email, Remote Execution).\n"
             "- The 'LOCAL_TOOLKIT' and your own capabilities act as your Brain (Analysis, Writing, Reasoning).\n"
@@ -4558,7 +4679,21 @@ async def setup_session(
             "   - Before building document creation scripts from scratch, CHECK if a skill exists.\n"
             "   - To use a skill: `read_local_file` the SKILL.md path below, then follow its patterns.\n"
             "   - Available skills (read SKILL.md for detailed instructions):\n"
-            f"{skills_xml}\n"
+            f"{skills_xml}\n\n"
+            "12. 📊 MISSION TASK STATUS (CRITICAL FOR LONG-RUNNING TASKS):\n"
+            "   - When working on tasks from mission.json, update task status after completion:\n"
+            "   - Each task MUST have a 'status' field: 'pending' | 'in_progress' | 'complete'\n"
+            "   - After completing a task, update mission.json: change status from 'in_progress' to 'complete'\n"
+            "   - Before starting a task, mark it as 'in_progress'\n"
+            "   - This enables progress tracking across harness iterations.\n\n"
+            "13. 🔄 SESSION MANAGEMENT (HARNESS ITERATION):\n"
+            "   - You are operating within a HARNESS that can restart you with fresh context.\n"
+            "   - BEFORE your context fills up (you'll notice response quality degrading):\n"
+            "     1. Update mission.json with current task statuses\n"
+            "     2. Write notes to mission_progress.txt for the next session\n"
+            "     3. Commit progress: `git add . && git commit -m 'Session progress: [summary]'`\n"
+            "   - The harness will inject mission.json and mission_progress.txt into your next session.\n"
+            "   - Your goal: make meaningful progress, checkpoint, and let the harness continue.\n"
         ),
         mcp_servers={
             "composio": {
@@ -4874,6 +5009,7 @@ async def setup_session(
         "tool_calls": [],
         "tool_results": [],
         "iterations": [],
+        "token_usage": {"input": 0, "output": 0, "total": 0},
         "logfire_enabled": bool(LOGFIRE_TOKEN),
     }
 
@@ -5025,6 +5161,8 @@ async def process_turn(
                 print(f"                  (+{len(local_trace_ids) - 5} more)")
         else:
             print(f"  Local Toolkit:  (no local tool calls)")
+        
+
         
         # Store in trace for transcript/evaluation
         trace["local_toolkit_trace_ids"] = local_trace_ids
@@ -5728,9 +5866,27 @@ async def main(args: argparse.Namespace):
                                 print("📋 PLANNING PHASE - Interview Required")
                                 print("="*60)
                                 
-                                # Display and collect answers using the harness interview tool
-                                from universal_agent.harness import ask_user_questions as do_interview
-                                answers = do_interview(questions)
+                                # Check if we should AUTO-SKIP the interview for autonomy
+                                skip_interview = False
+                                mission_file = os.path.join(workspace_dir, "mission.json")
+                                if os.path.exists(mission_file):
+                                    try:
+                                        with open(mission_file, "r") as mf:
+                                            m_data = json.load(mf)
+                                            # If we are already running, don't stop for clarifications
+                                            if m_data.get("status") == "IN_PROGRESS":
+                                                skip_interview = True
+                                    except:
+                                        pass
+
+                                if skip_interview:
+                                     print("\n⚡ RUTHLESS AUTONOMY: Skipping user interview. Mission is I_PROGRESS.")
+                                     # Provide dummy answers or just tell agent to proceed
+                                     answers = {q["question"]: "Proceed with best judgment (Autonomy Mode)" for q in questions}
+                                else:
+                                    # Display and collect answers using the harness interview tool
+                                    from universal_agent.harness import ask_user_questions as do_interview
+                                    answers = do_interview(questions)
                                 
                                 print("="*60 + "\n")
                                 print(f"   ✅ Interview answers collected")
@@ -5816,6 +5972,10 @@ async def main(args: argparse.Namespace):
                                                 with open(mission_file, "w") as f:
                                                     json.dump(mission_data, f, indent=2)
                                                 print("✅ Plan approved. Transitioning to IN_PROGRESS.")
+                                                # Ensure we don't drop to interactive prompt if we have a mission
+                                                if not next_prompt:
+                                                     # Default kickoff prompt if the hook didn't provide one
+                                                     next_prompt = "Execute the mission.json tasks starting now."
                                             else:
                                                 print("⏸️ Plan not approved. Waiting for user changes...")
                                                 continue  # Wait for another iteration

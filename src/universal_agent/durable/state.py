@@ -20,17 +20,24 @@ def upsert_run(
     iteration_count: int = 0,
     max_iterations: Optional[int] = None,
     completion_promise: Optional[str] = None,
+    total_tokens: int = 0,
     status: str = "running",
 ) -> None:
     print(f"DEBUG: Inside upsert_run for {run_id} path={conn}", flush=True)
     now = _now()
+    try:
+        # Attempt to add total_tokens column if it doesn't exist (Schema Migration)
+        conn.execute("ALTER TABLE runs ADD COLUMN total_tokens INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass # Column already exists
+
     conn.execute(
         """
         INSERT OR IGNORE INTO runs (
             run_id, created_at, updated_at, status, entrypoint, run_spec_json,
             run_mode, job_path, last_job_prompt, parent_run_id,
-            iteration_count, max_iterations, completion_promise
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            iteration_count, max_iterations, completion_promise, total_tokens
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             run_id,
@@ -46,6 +53,7 @@ def upsert_run(
             iteration_count,
             max_iterations,
             completion_promise,
+            total_tokens,
         ),
     )
     conn.execute(
@@ -60,7 +68,8 @@ def upsert_run(
             last_job_prompt = ?,
             parent_run_id = ?,
             max_iterations = COALESCE(?, max_iterations),
-            completion_promise = COALESCE(?, completion_promise)
+            completion_promise = COALESCE(?, completion_promise),
+            total_tokens = ?
         WHERE run_id = ?
         """,
         (
@@ -74,6 +83,7 @@ def upsert_run(
             parent_run_id,
             max_iterations,
             completion_promise,
+            total_tokens,
             run_id,
         ),
     )
@@ -104,6 +114,14 @@ def update_run_provider_session(
         WHERE run_id = ?
         """,
         (session_id, forked_from, _now(), _now(), run_id),
+    )
+    conn.commit()
+
+
+def update_run_tokens(conn: sqlite3.Connection, run_id: str, total_tokens: int) -> None:
+    conn.execute(
+        "UPDATE runs SET total_tokens = ?, updated_at = ? WHERE run_id = ?",
+        (total_tokens, _now(), run_id),
     )
     conn.commit()
 

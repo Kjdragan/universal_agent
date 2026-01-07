@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Iterable, Optional, Sequence
 
+from universal_agent.durable.tool_gateway import parse_tool_identity
+
 
 @dataclass(frozen=True)
 class ToolSchema:
@@ -166,7 +168,30 @@ async def pre_tool_use_schema_guardrail(
     tool_name = str(input_data.get("tool_name", "") or "")
     tool_input = input_data.get("tool_input", {}) or {}
 
-    is_valid, missing, schema = validate_tool_input(tool_name, tool_input)
+    # 1. Sanitize and Validate Tool Name
+    # If the tool name is malformed (e.g. contains XML or 'tools' suffix),
+    # we REJECT it immediately and tell the agent the correct name.
+    identity = parse_tool_identity(tool_name)
+    if identity.tool_name != tool_name and identity.tool_name != tool_name.split("__")[-1]:
+         # The parser had to clean it up significantly (beyond just stripping namespace)
+         # e.g. "COMPOSIO_MULTI_EXECUTE_TOOLtools..." -> "COMPOSIO_MULTI_EXECUTE_TOOL"
+         return {
+            "systemMessage": (
+                f"⚠️ Tool name '{tool_name}' appears malformed/hallucinated. "
+                f"Did you mean '{identity.tool_name}'? "
+                "Please retry with the correct tool name."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"Malformed tool name. Suggested: {identity.tool_name}",
+            },
+        }
+
+    # 2. Schema Validation
+    # Use the VALIDATED/CLEAN identity for schema matching, just in case
+    # (Though if we triggered above, we returned. If we didn't, name is likely fine-ish)
+    is_valid, missing, schema = validate_tool_input(identity.tool_name, tool_input)
     if is_valid:
         return {}
 
