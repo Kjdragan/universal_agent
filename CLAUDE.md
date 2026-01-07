@@ -58,7 +58,7 @@ Query Classification (SIMPLE vs COMPLEX) with _is_memory_intent() heuristic
     ↓
 Claude Agent SDK (Main Brain)
     ├─→ Composio MCP Server (500+ tools: SERP, Gmail, Slack, etc.)
-    ├─→ Local Toolkit MCP (crawl_parallel, write_local_file, upload_to_composio, finalize_research, read_research_files)
+    ├─→ Local Toolkit MCP (crawl_parallel, finalize_research, read_research_files, append_to_file)
     ├─→ External MCPs (edgartools, video_audio, youtube, zai_vision)
     ├─→ Skills (.claude/skills/: pdf, pptx, xlsx, docx, mcp-builder, skill-creator)
     └─→ Letta Memory System (persistent sub-agent memory)
@@ -91,7 +91,7 @@ AGENT_RUN_WORKSPACES/session_*/ (run.log, trace.json, search_results/, work_prod
 | File | Purpose |
 |------|---------|
 | `src/universal_agent/main.py` | Main agent (~5588 lines): ClaudeSDKClient, observers, AgentDefinition, query classification, hooks |
-| `src/mcp_server.py` | Custom MCP tools: crawl_parallel, write_local_file, upload_to_composio, finalize_research, read_research_files |
+| `src/mcp_server.py` | Custom MCP tools: crawl_parallel, finalize_research, read_research_files, append_to_file, generate_image |
 | `src/tools/workbench_bridge.py` | Local-Remote file transfer bridge using Composio SDK |
 | `src/universal_agent/observers/core.py` | 5 observer functions for async artifact processing |
 | `src/universal_agent/durable/` | State management: db.py, state.py, ledger.py, checkpointing.py, tool_gateway.py |

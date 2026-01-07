@@ -392,11 +392,14 @@ async def observe_and_save_work_products(
     This supplements the session workspace save - reports are saved to BOTH locations.
     """
     with logfire.span("observer_work_products", tool=tool_name):
-        if "write_local_file" not in tool_name.lower():
+        # Check for both native Write tool and legacy write_local_file
+        tool_lower = tool_name.lower()
+        is_write_tool = "write" in tool_lower and ("__write" in tool_lower or tool_lower.endswith("write"))
+        if not is_write_tool:
             return
 
         # Only process if this is a work_products file
-        file_path = tool_input.get("path", "")
+        file_path = tool_input.get("path", "") or tool_input.get("file_path", "")
         if "work_products" not in file_path:
             return
 

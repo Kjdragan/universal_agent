@@ -43,17 +43,15 @@ The local toolkit provides **10+ tools**:
 | Tool | Purpose |
 |------|---------|
 | `crawl_parallel` | Parallel web extraction using crawl4ai |
-| `write_local_file` | Write content to local files |
-| `read_local_file` | Read local file contents |
-| `list_directory` | List directory contents |
-| `workbench_download` | Download from remote workbench |
-| `workbench_upload` | Upload to remote workbench |
-| `upload_to_composio` | One-step S3 upload for attachments |
-| `execute_python_code` | Execute Python code locally |
-| `execute_bash_command` | Execute bash commands |
-| `search_local_files` | Search files by content |
 | `finalize_research` | Create research corpus (report workflow) |
 | `read_research_files` | Batch read research files |
+| `list_directory` | List directory contents |
+| `append_to_file` | Append content to files |
+| `upload_to_composio` | One-step S3 upload for attachments |
+| `generate_image` | Generate images using Gemini |
+| `describe_image` | Describe images using vision model |
+
+> **Note**: File Read/Write now uses **native Claude SDK tools** (`Read`, `Write`), not MCP tools.
 
 ---
 
@@ -166,8 +164,8 @@ mcp__<server_name>__<tool_name>
 **Examples**:
 | Server | Tool Call |
 |--------|-----------|
-| `local_toolkit` | `mcp__local_toolkit__write_local_file` |
 | `local_toolkit` | `mcp__local_toolkit__crawl_parallel` |
+| `local_toolkit` | `mcp__local_toolkit__finalize_research` |
 | `composio` | `mcp__composio__COMPOSIO_SEARCH_NEWS` |
 | `youtube` | `mcp__youtube__download_video` |
 

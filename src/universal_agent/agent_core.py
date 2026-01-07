@@ -40,7 +40,9 @@ from composio import Composio
 from universal_agent.durable.tool_gateway import is_malformed_tool_name, parse_malformed_tool_name
 from universal_agent.guardrails.tool_schema import validate_tool_input
 from universal_agent.prompt_assets import get_tool_knowledge_block
-# Local MCP server provides: crawl_parallel, read_local_file, write_local_file
+from universal_agent.utils.message_history import MessageHistory, TRUNCATION_THRESHOLD
+# Local MCP server provides: crawl_parallel, finalize_research, read_research_files, append_to_file, etc.
+# Note: File Read/Write now uses native Claude SDK tools
 
 
 # =============================================================================
@@ -83,16 +85,12 @@ LOGFIRE_TOKEN = (
     or os.getenv("LOGFIRE_API_KEY")
 )
 
-DISALLOWED_TOOLS = [
     "TaskOutput",
     "TaskResult",
     "taskoutput",
     "taskresult",
     "mcp__composio__TaskOutput",
     "mcp__composio__TaskResult",
-    # Force agent to use native Write tool for large report output
-    "mcp__local_toolkit__write_local_file",
-    "write_local_file",
 ]
 
 
@@ -170,12 +168,20 @@ async def malformed_tool_guardrail_hook(input_data: dict, tool_use_id: str, cont
     
     return {}
 
+# Track consecutive empty Write failures (module-level state)
+_EMPTY_WRITE_FAILURE_COUNT = 0
+_MAX_EMPTY_WRITE_RETRIES = 3
+
 async def tool_output_validator_hook(tool_output: dict, tool_use_id: str, context) -> dict:
     """
     Post-Tool hook to catch empty or failed tool executions (especially Write calls).
     If the tool failed with InputValidationError due to missing content/path (common in high load),
     we intervene to guide the agent to retry with correct arguments.
+    
+    Tracks consecutive failures and escalates guidance after MAX_RETRIES.
     """
+    global _EMPTY_WRITE_FAILURE_COUNT
+    
     # Check for Claude SDK's internal InputValidationError which appears in the output content
     # or empty outputs for critical tools like Write.
     
@@ -184,6 +190,8 @@ async def tool_output_validator_hook(tool_output: dict, tool_use_id: str, contex
     
     content_list = tool_output.get("content", [])
     if not content_list:
+        # Reset counter on success (no error content)
+        _EMPTY_WRITE_FAILURE_COUNT = 0
         return {}
         
     for block in content_list:
@@ -192,18 +200,41 @@ async def tool_output_validator_hook(tool_output: dict, tool_use_id: str, contex
             
             # Case 1: Detect InputValidationError (missing params)
             if "InputValidationError" in text and ("missing" in text or "required parameter" in text):
-                logfire.warning("post_tool_hook_caught_validation_error", tool_use_id=tool_use_id)
-                return {
-                    "systemMessage": (
-                        "⚠️ CRITICAL: Your last tool call failed because you did not provide any arguments (content/path). "
-                        "This often happens when context is full. "
-                        "PLEASE RETRY IMMEDIATELY, but attempt to write the content in smaller chunks if it is very large."
-                    )
-                }
+                _EMPTY_WRITE_FAILURE_COUNT += 1
+                logfire.warning(
+                    "post_tool_hook_caught_validation_error", 
+                    tool_use_id=tool_use_id,
+                    retry_count=_EMPTY_WRITE_FAILURE_COUNT,
+                )
+                
+                if _EMPTY_WRITE_FAILURE_COUNT >= _MAX_EMPTY_WRITE_RETRIES:
+                    # Reset and provide abort guidance
+                    _EMPTY_WRITE_FAILURE_COUNT = 0
+                    return {
+                        "systemMessage": (
+                            "❌ ABORT: You have failed to write content 3 times due to empty arguments. "
+                            "This indicates context exhaustion - your output buffer is empty. "
+                            "STOP TRYING TO WRITE THE FULL REPORT. Instead:\n"
+                            "1. Write a SHORT summary (under 5000 chars) of what you found.\n"
+                            "2. Save it as a 'partial_report.html' to work_products/.\n"
+                            "3. Tell the user the full report requires breaking into chunks due to content size.\n"
+                            "DO NOT attempt another empty Write call."
+                        )
+                    }
+                else:
+                    return {
+                        "systemMessage": (
+                            f"⚠️ RETRY {_EMPTY_WRITE_FAILURE_COUNT}/{_MAX_EMPTY_WRITE_RETRIES}: "
+                            "Your Write call failed - you provided no content/path. "
+                            "This happens when you try to write content too large for your context buffer. "
+                            "Try writing JUST THE FIRST SECTION of your report now (e.g., Executive Summary + first chapter). "
+                            "You can append more sections afterward using `append_to_file`."
+                        )
+                    }
             
-            # Case 2: Detect Empty Write (for native Write tool specifically)
-            # This is harder to detect from output alone unless we trace the input too, 
-            # but usually empty input -> InputValidationError.
+            # Case 2: Successful write or other tool - reset counter
+            elif not text.startswith("<tool_use_error>"):
+                _EMPTY_WRITE_FAILURE_COUNT = 0
             
     return {}
 
@@ -611,8 +642,18 @@ class UniversalAgent:
                     prompt=self._build_subagent_prompt(abs_workspace),
                     # Omit 'tools' so sub-agent inherits ALL tools including custom tools
                     model="inherit",
+                    # Sub-agent needs hooks too for Write validation
+                    hooks={
+                        "PreToolUse": [
+                            HookMatcher(matcher="*", hooks=[malformed_tool_guardrail_hook]),
+                        ],
+                        "PostToolUse": [
+                            HookMatcher(matcher="Write", hooks=[tool_output_validator_hook]),
+                        ],
+                    },
                 ),
             },
+
             hooks={
                 "PreToolUse": [
                     HookMatcher(matcher="*", hooks=[malformed_tool_guardrail_hook]),
@@ -645,6 +686,10 @@ class UniversalAgent:
         }
 
         self._initialized = True
+        
+        # Initialize MessageHistory for context management (Anthropic pattern)
+        self.history = MessageHistory(system_prompt_tokens=2000)
+        
         if LOGFIRE_TOKEN:
             logfire.set_baggage(run_id=self.run_id)
 
@@ -658,8 +703,6 @@ class UniversalAgent:
             "**Rule #1:** For ANY request involving 'report', 'research', 'analysis', or 'detailed summary':\n"
             "   -> You MUST delegate to `report-creation-expert` using the `Task` tool.\n"
             "   -> 🛑 **PROHIBITED:** You are FORBIDDEN from writing reports yourself. You DO NOT have the capability to create high-quality reports.\n"
-            "   -> 🛑 **PROHIBITED:** Do NOT use `write_local_file` to create markdown or HTML reports. If you try, the system will verify failure.\n"
-            "   -> **Even if you have search results:** Do NOT summarize them. Delegate to the expert to process them properly.\n"
             "   -> Instruct the sub-agent to: 'Call finalize_research, then use research_overview.md + filtered crawl files to write the report.'\n\n"
             "For SIMPLE factual queries (e.g., 'who won the game?', 'weather in Paris'):\n"
             "   -> Use search tools and answer directly.\n\n"
@@ -715,7 +758,7 @@ class UniversalAgent:
             "- Search result snippets (from COMPOSIO JSONs)\n"
             "- Filtered crawl files with paths and word counts\n\n"
             "⚠️ **STEP 2B IS MANDATORY - USE BATCH TOOL**\n"
-            "**THEN:** Use `read_research_files` (NOT individual read_local_file calls!):\n"
+            "**THEN:** Use `read_research_files` (NOT individual Read calls!):\n"
             "```\n"
             "read_research_files(file_paths=[\"path1.md\", \"path2.md\", ...])\n"
             "```\n"
@@ -726,7 +769,7 @@ class UniversalAgent:
             "✅ Also read the search JSONs for snippets if needed:\n"
             f"- `{workspace_path}/search_results/COMPOSIO_SEARCH_NEWS_*.json`\n"
             f"- `{workspace_path}/search_results/COMPOSIO_SEARCH_WEB_*.json`\n\n"
-            "❌ **DO NOT** call `read_local_file` multiple times for individual files\n"
+            "❌ **DO NOT** call `Read` multiple times for individual files\n"
             "✅ **DO** use `read_research_files` with a list of paths\n\n"
             "### Step 3: Report Creation (ADAPTIVE STYLING)\n"
             "Before writing, **analyze your source material** and consider:\n"
@@ -748,8 +791,9 @@ class UniversalAgent:
             "   Let the content dictate the structure.\n\n"
             "### Step 5: Save Work Product (HTML + PDF)\n"
             f"- ALWAYS save the HTML report to: {workspace_path}/work_products/\n"
-            "- ⚠️ **FOR HTML REPORTS:** Use the **native Write tool** (NOT `write_local_file`):\\n"
-            "  The native Write tool handles large content better and avoids MCP token limits.\\n"
+            "- **FOR LARGE FILES (>50KB):**\\n"
+            "  1. Use the native `Write` tool to create the file with the first chunk.\\n"
+            "  2. Use `append_to_file(path, content)` to add subsequent chunks.\\n"
             "- **PDF GENERATION:**\\n"
             "  - **For HTML reports:** Use Chrome Headless with these flags to avoid D-Bus errors:\\n"
             "    `google-chrome --headless --no-sandbox --disable-gpu --disable-software-rasterizer --disable-dev-shm-usage --print-to-pdf=/path/output.pdf /path/input.html`\\n"
@@ -767,8 +811,8 @@ class UniversalAgent:
             "  - Issue multiple `read_research_files` calls in the *same turn*.\\n"
             "  - Each call MUST contain exactly **5 files** (e.g. Call 1: files 1-5, Call 2: files 6-10, etc).\\n"
             "  - This optimizes speed while avoiding context overflow.\\n"
-            "- `read_local_file(path)` → Only for reading research_overview.md (single file)\\n"
-            "- `Write(file_path, content)` → **USE THIS** for ALL file writes (native tool)\\n"
+            "- `append_to_file(path, content)` → Append to existing large files (>50KB).\\n"
+            "- `Write(file_path, content)` → **USE THIS** for ALL file creations (native tool)\\n"
         )
         tool_knowledge = get_tool_knowledge_block()
         if tool_knowledge:
@@ -907,16 +951,46 @@ class UniversalAgent:
                     inp = getattr(u, "input_tokens", 0) or 0
                     out = getattr(u, "output_tokens", 0) or 0
                     
+                    # Update cumulative trace (for backwards compatibility)
                     self.trace["token_usage"]["input"] += inp
                     self.trace["token_usage"]["output"] += out
                     self.trace["token_usage"]["total"] += (inp + out)
+                    
+                    # Add to MessageHistory for per-message tracking (Anthropic pattern)
+                    self.history.add_message("assistant", "response", u)
+                    
+                    # Check for truncation and apply it
+                    if self.history.truncate():
+                        logfire.warning(
+                            "context_truncated_mid_session",
+                            run_id=self.run_id,
+                            stats=self.history.get_stats(),
+                        )
+                    
+                    # Check if we should trigger harness handoff
+                    if self.history.should_handoff():
+                        logfire.warning(
+                            "context_threshold_reached",
+                            run_id=self.run_id,
+                            total_tokens=self.history.total_tokens,
+                            threshold=TRUNCATION_THRESHOLD,
+                        )
+                        yield AgentEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "status": "CONTEXT_THRESHOLD",
+                                "tokens": self.history.total_tokens,
+                                "threshold": TRUNCATION_THRESHOLD,
+                            },
+                        )
                     
                     logfire.info(
                         "token_usage_update", 
                         run_id=self.run_id, 
                         input=inp, 
                         output=out, 
-                        total_so_far=self.trace["token_usage"]["total"]
+                        total_so_far=self.trace["token_usage"]["total"],
+                        history_tokens=self.history.total_tokens,
                     )
 
             elif isinstance(msg, (UserMessage, ToolResultBlock)):
@@ -987,9 +1061,11 @@ class UniversalAgent:
                                 )
                             )
 
-                            # Check for work_product events (write_local_file to work_products/)
-                            if "write_local_file" in tool_name.lower() and tool_input:
-                                file_path = tool_input.get("file_path", "")
+                            # Check for work_product events (Write tool to work_products/)
+                            tool_lower = tool_name.lower()
+                            is_write_tool = "write" in tool_lower and ("__write" in tool_lower or tool_lower.endswith("write"))
+                            if is_write_tool and tool_input:
+                                file_path = tool_input.get("file_path", "") or tool_input.get("path", "")
                                 if "work_products" in file_path and file_path.endswith(
                                     ".html"
                                 ):

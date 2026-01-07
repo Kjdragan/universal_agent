@@ -212,7 +212,7 @@ KNOWN_MCP_SIDE_EFFECTS = {
     "core_memory_replace": "memory",
     "core_memory_append": "memory",
     "archival_memory_insert": "memory",
-    "write_local_file": "local",
+    "append_to_file": "local",  # Replaced write_local_file
     "compress_files": "local",
     "finalize_research": "local",
     "generate_image": "local",

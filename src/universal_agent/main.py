@@ -301,7 +301,7 @@ from universal_agent.durable.state import (
     get_iteration_info,
 )
 from universal_agent.durable.checkpointing import save_checkpoint, load_last_checkpoint
-# Local MCP server provides: crawl_parallel, read_local_file, write_local_file
+# Local MCP server provides: crawl_parallel, finalize_research, read_research_files, append_to_file, etc.\n# Note: File Read/Write now uses native Claude SDK tools
 
 # Composio client - will be initialized in main() with file_download_dir
 composio = None
@@ -927,8 +927,8 @@ async def on_pre_tool_use_ledger(
         return {
             "systemMessage": (
                 "⚠️ Durable job mode: use the local toolkit file tools instead of "
-                f"{tool_name}. For example, use mcp__local_toolkit__read_local_file "
-                "or mcp__local_toolkit__write_local_file."
+                f"{tool_name}. For example, use the native `Read` tool "
+                "or native `Write` tool."
             ),
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -1779,13 +1779,13 @@ def check_harness_threshold(
     
     Conditions:
     1. Debug flag is set (UA_DEBUG_FORCE_HANDOFF)
-    2. Context usage is high (>75% approx 150k tokens) AND we are at a natural break
+    2. Context usage is high (>90% = 180k of 200k tokens) AND we are at a natural break
     """
     if force_debug or os.getenv("UA_DEBUG_FORCE_HANDOFF") == "1":
         return True
     
-    # Approx 75% of 200k context
-    TOKEN_THRESHOLD = 150000
+    # 90% of 200k context window (aligned with Anthropic pattern)
+    TOKEN_THRESHOLD = 180000
     if token_usage_approx > TOKEN_THRESHOLD:
         return True
         
@@ -4526,7 +4526,7 @@ async def setup_session(
             "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
             "   - TRIGGERS: Tables, summaries, analyses, code generated for user, extracted data.\n"
             "   - EXCEPTION: Do NOT use this for 'Reports'. Delegate Reports to the 'Report Creation Expert' (Rule 4).\n"
-            "   - HOW: Call `write_local_file` with:\n"
+            "   - HOW: Use the native `Write` tool with:\n"
             "     - `file_path`: CURRENT_SESSION_WORKSPACE + '/work_products/' + descriptive_name\n"
             "     - `content`: The full output you're about to show the user\n"
             "   - NAMING: `dependency_summary.md`, `calendar_events.txt`, `generated_script.py`\n"
@@ -4632,10 +4632,10 @@ async def setup_session(
                     "3. DO NOT read raw `search_results/crawl_*.md` files.\n"
                     "4. USE ONLY these specific tools for research:\n"
                     "   - `mcp__local_toolkit__finalize_research` - builds the filtered corpus\n"
-                    "   - `mcp__local_toolkit__read_local_file` - read research_overview.md and search JSONs\n"
+                    "   - `Read` (native) - read research_overview.md and individual files\n"
                     "   - `mcp__local_toolkit__read_research_files` - batch read filtered files only\n"
                     "   - `mcp__local_toolkit__list_directory` - list filtered corpus files\n"
-                    "   - `mcp__local_toolkit__write_local_file` - save report\n\n"
+                    "   - `Write` (native) - save report to work_products/\n\n"
                     "---\n\n"
                     "## PIPELINE: How to Generate Reports\n"
                     f"1. **RESEARCH**: Accumulate research using Composio tools. The tool `observe_and_save_search_results` detects this.\n"
@@ -4690,7 +4690,7 @@ async def setup_session(
                     "- It's okay to have distinct sections for unrelated developments\n"
                     "- Aim for thematic grouping where natural, standalone items where not\n\n"
                     "### Step 4: Save Report\n"
-                    f"Save as `.html` to `{workspace_dir}/work_products/` using `mcp__local_toolkit__write_local_file`.\n\n"
+                    f"Save as `.html` to `{workspace_dir}/work_products/` using the native `Write` tool.\n\n"
                     "🚨 START IMMEDIATELY: Call `mcp__local_toolkit__finalize_research`."
                     + tool_knowledge_suffix
                 ),
@@ -4715,7 +4715,7 @@ async def setup_session(
                     "1. Use `SLACK_LIST_CHANNELS` to find the channel ID by name\n"
                     "2. Use `SLACK_FETCH_CONVERSATION_HISTORY` with the channel ID and `limit` parameter\n"
                     "3. Extract key information: topics discussed, decisions made, action items\n"
-                    "4. Write a brief summary to the workspace using `mcp__local_toolkit__write_local_file`\n\n"
+                    "4. Write a brief summary to the workspace using the native `Write` tool\n\n"
                     "## WORKFLOW FOR POSTING\n"
                     "1. Use `SLACK_LIST_CHANNELS` to find the target channel ID\n"
                     "2. Format your message clearly with sections if needed\n"

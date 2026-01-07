@@ -16,15 +16,15 @@ except ImportError:
     Composio = None
 
 # Hardcoded definition of tools exposed by src/mcp_server.py
-# If mcp_server.py changes, this should be updated to reflect capabilities.
+# Note: File read/write now uses native Claude SDK tools (Read/Write), not MCP
 LOCAL_MCP_TOOLS = [
     "mcp__local_toolkit__crawl_parallel",
-    "mcp__local_toolkit__read_local_file",
-    "mcp__local_toolkit__write_local_file",
+    "mcp__local_toolkit__finalize_research",
+    "mcp__local_toolkit__read_research_files",
     "mcp__local_toolkit__list_directory",
     "mcp__local_toolkit__upload_to_composio",
-    "mcp__local_toolkit__workbench_download",
-    "mcp__local_toolkit__workbench_upload"
+    "mcp__local_toolkit__append_to_file",
+    "mcp__local_toolkit__generate_image",
 ]
 
 def get_local_tools() -> List[str]:
