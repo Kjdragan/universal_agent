@@ -176,6 +176,9 @@ DISALLOWED_TOOLS = [
     "taskresult",
     "mcp__composio__TaskOutput",
     "mcp__composio__TaskResult",
+    "WebSearch",
+    "web_search",
+    "mcp__composio__WebSearch",
 ]
 
 
@@ -624,6 +627,21 @@ async def on_pre_tool_use_ledger(
                 "permissionDecisionReason": "TaskOutput/TaskResult is not a tool call.",
             },
         }
+    
+    # Check for disallowed/hallucinated tools
+    if tool_name in DISALLOWED_TOOLS:
+        return {
+            "systemMessage": (
+                f"⚠️ Tool '{tool_name}' is not available or is a restricted native tool. "
+                "Use 'mcp__composio__COMPOSIO_SEARCH_WEB' or similar relevant tools instead."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"Tool '{tool_name}' is disallowed.",
+            },
+        }
+
     if is_malformed_tool_name(tool_name):
         base_name, arg_key, arg_value = parse_malformed_tool_name(tool_name)
         is_forced_replay = bool(forced_tool_queue or forced_tool_mode_active)
@@ -879,6 +897,17 @@ async def on_pre_tool_use_ledger(
                     },
                 }
             return _allow_with_updated_input()
+        
+        if tool_name in ("Task", "Bash") and _is_job_run():
+            print(f"DEBUG: Harness Override - Force enabling {tool_name}", flush=True)
+            return {
+                "hookSpecificOutput": {
+                     "hookEventName": "PreToolUse",
+                     "permissionDecision": "allow",
+                     "permissionDecisionReason": "Harness mode override enabled.",
+                }
+            }
+
         if tool_name in ("Write", "Edit", "MultiEdit"):
             if _forced_task_active():
                 return _allow_with_updated_input()
@@ -1884,7 +1913,12 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn = None) -> d
          "hookSpecificOutput": {
             "hookEventName": "AgentStop",
             "action": "restart",
-            "nextPrompt": f"RESUMING: The previous attempt did not include the required completion promise <promise>{promise}</promise>. Continue working until the task is fully complete, then output the promise."
+            "nextPrompt": (
+                f"RESUMING: The previous attempt did not include the required completion promise <promise>{promise}</promise>. "
+                "Continue working until the task is fully complete, then output the promise.\n\n"
+                "RUTHLESS AUTONOMY: Do NOT ask the user for guidance. Make reasonable decisions and continue. "
+                "You have full authority to proceed. Never output 'Would you like me to...' questions."
+            )
         }
     }
 
@@ -4330,6 +4364,11 @@ def parse_cli_args() -> argparse.Namespace:
         help="Override workspace directory.",
     )
     parser.add_argument(
+        "--harness",
+        dest="harness_objective",
+        help="Run in harness mode with the specified objective.",
+    )
+    parser.add_argument(
         "--explain-tool-policy",
         dest="explain_tool_policy",
         help="Explain resolved tool policy for a raw tool name.",
@@ -4679,21 +4718,7 @@ async def setup_session(
             "   - Before building document creation scripts from scratch, CHECK if a skill exists.\n"
             "   - To use a skill: `read_local_file` the SKILL.md path below, then follow its patterns.\n"
             "   - Available skills (read SKILL.md for detailed instructions):\n"
-            f"{skills_xml}\n\n"
-            "12. 📊 MISSION TASK STATUS (CRITICAL FOR LONG-RUNNING TASKS):\n"
-            "   - When working on tasks from mission.json, update task status after completion:\n"
-            "   - Each task MUST have a 'status' field: 'pending' | 'in_progress' | 'complete'\n"
-            "   - After completing a task, update mission.json: change status from 'in_progress' to 'complete'\n"
-            "   - Before starting a task, mark it as 'in_progress'\n"
-            "   - This enables progress tracking across harness iterations.\n\n"
-            "13. 🔄 SESSION MANAGEMENT (HARNESS ITERATION):\n"
-            "   - You are operating within a HARNESS that can restart you with fresh context.\n"
-            "   - BEFORE your context fills up (you'll notice response quality degrading):\n"
-            "     1. Update mission.json with current task statuses\n"
-            "     2. Write notes to mission_progress.txt for the next session\n"
-            "     3. Commit progress: `git add . && git commit -m 'Session progress: [summary]'`\n"
-            "   - The harness will inject mission.json and mission_progress.txt into your next session.\n"
-            "   - Your goal: make meaningful progress, checkpoint, and let the harness continue.\n"
+            f"{skills_xml}\n"
         ),
         mcp_servers={
             "composio": {
@@ -5535,9 +5560,12 @@ async def main(args: argparse.Namespace):
 
     async with ClaudeSDKClient(options) as client:
         run_failed = False
-        pending_prompt = (
-            job_prompt if job_prompt and not args.resume and not args.fork else None
-        )
+        if args.harness_objective:
+            pending_prompt = f"/harness {args.harness_objective}"
+        else:
+            pending_prompt = (
+                job_prompt if job_prompt and not args.resume and not args.fork else None
+            )
         try:
             if args.resume and run_mode == "job" and run_status in TERMINAL_STATUSES and run_id:
                 print("✅ Run already terminal. No resume needed.")
@@ -5695,8 +5723,25 @@ async def main(args: argparse.Namespace):
                         target_objective = parts[1]
                     else:
                         print("📝 Please enter the OBJECTIVE for this long-running task:")
-                        print("(e.g. 'Research quantum computing and write a report')")
-                        target_objective = input("Objective > ").strip()
+                        print("(Paste multi-line text, then press Enter twice to confirm)")
+                        lines = []
+                        consecutive_blanks = 0
+                        while True:
+                            try:
+                                line = input("Objective > " if not lines else "... ")
+                                if line.strip().upper() == "END":
+                                    break
+                                if not line.strip():
+                                    consecutive_blanks += 1
+                                    if consecutive_blanks >= 2:
+                                        break  # Two blank lines = done
+                                    lines.append(line)  # Keep single blank lines in content
+                                else:
+                                    consecutive_blanks = 0
+                                    lines.append(line)
+                            except EOFError:
+                                break
+                        target_objective = "\n".join(lines).strip()
                         
                     if not target_objective:
                         print("⚠️ No objective provided. Harness activation cancelled.")
@@ -5793,12 +5838,23 @@ async def main(args: argparse.Namespace):
                             f"   - ASK when: multiple valid interpretations, unknown preferences, high stakes\n"
                             f"   - DON'T ASK when: sensible default exists, request is specific, asking would be pedantic\n"
                             f"   - Limit to 2-4 essential questions maximum\n\n"
-                            f"### 5. CREATE MISSION MANIFEST (mission.json):\n"
+                            f"### 5. STRATEGIC DECOMPOSITION (Vertical vs. Horizontal):\n"
+                            f"   - FAVOR VERTICAL SLICES: Group sub-tasks by *Subject Matter* (e.g., Topic A: Research -> Report -> PDF).\n"
+                            f"   - AVOID HORIZONTAL LAYERS: Do NOT group by Activity (e.g., Research Everything -> Write Everything).\n"
+                            f"   - WHY? Vertical slices allow parallel execution, better context management, and isolation of failures.\n"
+                            f"   - Example: For 'Research X, Y, Z', create 3 separate tasks threads, where each task handles one topic end-to-end.\n"
+                            f"   - Use sub-agents for these vertical slices when possible.\n\n"
+                            f"### 6. CREATE MISSION MANIFEST (mission.json):\n"
                             f"   Write to your workspace with:\n"
                             f"   - mission_root: The overall goal\n"
                             f"   - status: 'PLANNING'\n"
                             f"   - clarifications: User answers (if any questions asked)\n"
                             f"   - tasks: Array of sub-tasks with id, description, context, use_case, success_criteria, output_artifacts\n\n"
+                            f"   **CRITICAL JSON RULES:**\n"
+                            f"   - ALL string values MUST be quoted: \"value\" not value\n"
+                            f"   - DO NOT include estimated_duration_hours or time estimates (unreliable)\n"
+                            f"   - Use string task IDs: \"topic_001\" not 1\n"
+                            f"   - Example: \"count\": \"20 reports\" NOT \"count\": 20 reports\n\n"
                             f"## Example Interview Questions (when needed):\n"
                             f"   - 'This topic is broad. Should I focus on [A], [B], or both?'\n"
                             f"   - 'Would you prefer a detailed report or a quick summary?'\n"
@@ -5896,14 +5952,36 @@ async def main(args: argparse.Namespace):
                                 with open(answers_file, "w") as f:
                                     json.dump(answers, f, indent=2)
                                 
+                                # Fix 1: Also update mission.json directly with answers
+                                if os.path.exists(mission_file):
+                                    try:
+                                        with open(mission_file, "r") as mf:
+                                            m_data = json.load(mf)
+                                        # Only update clarifications, preserve other keys
+                                        if "clarifications" in m_data:
+                                            if isinstance(m_data["clarifications"], dict):
+                                                 m_data["clarifications"].update(answers)
+                                            else:
+                                                 m_data["clarifications"] = answers
+                                        else:
+                                            m_data["clarifications"] = answers
+                                            
+                                        with open(mission_file, "w") as mf:
+                                            json.dump(m_data, mf, indent=2)
+                                        print(f"   ✅ Updated mission.json with clarifications")
+                                    except Exception as e:
+                                        print(f"   ⚠️ Failed to update mission.json with answers: {e}")
+                                
                                 # Set pending_prompt to inject answers into next iteration
                                 answers_summary = "\n".join([f"- {q}: {a}" for q, a in answers.items()])
                                 pending_prompt = (
                                     f"USER INTERVIEW ANSWERS:\n"
                                     f"The user has answered your clarifying questions:\n\n"
                                     f"{answers_summary}\n\n"
-                                    f"Now create the mission.json manifest with these clarifications and the detailed task breakdown. "
-                                    f"Set status to 'PLANNING' when complete."
+                                    f"IMPORTANT: You MUST now UPDATE the existing mission.json file. "
+                                    f"Replace all PENDING_USER_SELECTION values with the actual user selections above. "
+                                    f"Re-read mission.json, update the clarifications section with these answers, "
+                                    f"and write the updated file back. Keep status as 'PLANNING' until the plan is approved."
                                 )
                             
                             # Clean up the pending interview file
@@ -5963,8 +6041,82 @@ async def main(args: argparse.Namespace):
                                 if os.path.exists(mission_file):
                                     try:
                                         with open(mission_file, "r") as f:
-                                            mission_data = json.load(f)
-                                        if mission_data.get("status") == "PLANNING":
+                                            raw_content = f.read()
+                                        
+                                        # [JSON Validation] Multi-step repair chain
+                                        mission_data = None
+                                        
+                                        # Step 1: Try standard json
+                                        try:
+                                            mission_data = json.loads(raw_content)
+                                        except json.JSONDecodeError as je:
+                                            print(f"⚠️ Mission JSON has syntax error: {je}")
+                                            
+                                            # Step 2: Try json5 (handles trailing commas, comments, unquoted strings)
+                                            try:
+                                                import json5
+                                                mission_data = json5.loads(raw_content)
+                                                print("✅ JSON5 parsed successfully!")
+                                                # Save as valid JSON
+                                                with open(mission_file, "w") as f:
+                                                    json.dump(mission_data, f, indent=2)
+                                                print("📝 Saved repaired mission.json (via json5)")
+                                            except Exception as j5e:
+                                                print(f"⚠️ JSON5 also failed: {j5e}")
+                                                
+                                                # Step 3: Regex repair for common LLM errors
+                                                print("🔧 Attempting regex repair...")
+                                                import re
+                                                repaired = raw_content
+                                                
+                                                # Fix: values starting with digit but containing non-numeric chars
+                                                # e.g., "key": 8-12, -> "key": "8-12",
+                                                # Using lookahead to avoid consuming/mangling delimiters
+                                                repaired = re.sub(r':[ \t]*(\d+[\-–]\d+)(?=[ \t]*[,}\]\n])', r': "\1"', repaired)
+                                                
+                                                # Fix: unquoted values like  key: value" -> key: "value"
+                                                repaired = re.sub(r':\s*([^"\[\]{}\d][^,}\]]*)"', r': "\1"', repaired)
+                                                
+                                                # Fix: completely unquoted values like key: value, -> key: "value",
+                                                repaired = re.sub(r':\s*(\d+\s+[^,}\]]+)([,}\]])', r': "\1"\2', repaired)
+                                                
+                                                # Fix: trailing commas before } or ]
+                                                repaired = re.sub(r',(\s*[}\]])', r'\1', repaired)
+                                                
+                                                try:
+                                                    mission_data = json.loads(repaired)
+                                                    print("✅ Regex repair successful!")
+                                                    with open(mission_file, "w") as f:
+                                                        json.dump(mission_data, f, indent=2)
+                                                    print("📝 Saved repaired mission.json (via regex)")
+                                                except json.JSONDecodeError as je2:
+                                                    print(f"❌ All repair attempts failed: {je2}")
+                                                    print("🚫 BLOCKING execution - agent must regenerate mission.json")
+                                                    # Delete malformed file
+                                                    os.remove(mission_file)
+                                                    # BLOCK the restart - provide detailed error feedback
+                                                    next_prompt = (
+                                                        f"CRITICAL JSON ERROR: Your mission.json was INVALID and has been deleted.\n\n"
+                                                        f"SPECIFIC ERROR: {je}\n\n"
+                                                        f"COMMON MISTAKES TO AVOID:\n"
+                                                        f"- WRONG: \"duration\": 8-12 hours  (unquoted value)\n"
+                                                        f"- RIGHT: \"duration\": \"8-12 hours\"\n"
+                                                        f"- WRONG: \"count\": 5 items per batch\n"
+                                                        f"- RIGHT: \"count\": \"5 items per batch\"\n\n"
+                                                        f"REQUIRED STRUCTURE (all string values must be quoted):\n"
+                                                        f'{{\n'
+                                                        f'  "mission_root": "string description",\n'
+                                                        f'  "status": "PLANNING",\n'
+                                                        f'  "clarifications": {{"key": "value"}},\n'
+                                                        f'  "tasks": [\n'
+                                                        f'    {{"id": "topic_001", "description": "string", "use_case": "string", "success_criteria": "string"}}\n'
+                                                        f'  ]\n'
+                                                        f'}}\n\n'
+                                                        f"BE EXTREMELY CAREFUL with JSON syntax. Regenerate mission.json now with status: PLANNING"
+                                                    )
+                                                    mission_data = None
+                                        
+                                        if mission_data and mission_data.get("status") == "PLANNING":
                                             print("\n📋 Planning Phase Complete - Awaiting User Approval")
                                             approved = present_plan_summary(mission_data)
                                             if approved:
