@@ -50,6 +50,7 @@ dependencies = [
     "yt-dlp>=2025.01.0",
     "markdown>=3.10",
     "agentic-learning>=0.4.3",
+    "matplotlib>=3.10.8",
 ]
 
 

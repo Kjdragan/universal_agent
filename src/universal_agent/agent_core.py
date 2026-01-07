@@ -65,6 +65,17 @@ class EventType(str, Enum):
     WORK_PRODUCT = "work_product"  # HTML reports, files saved to work_products/
 
 
+class HarnessError(Exception):
+    """
+    Raised when the agent encounters an unrecoverable error state
+    that requires a full harness restart (e.g., infinite tool loops).
+    """
+
+    def __init__(self, message: str, context: Optional[dict] = None):
+        super().__init__(message)
+        self.context = context or {}
+
+
 @dataclass
 class AgentEvent:
     """An event emitted by the agent during execution."""
@@ -85,13 +96,7 @@ LOGFIRE_TOKEN = (
     or os.getenv("LOGFIRE_API_KEY")
 )
 
-    "TaskOutput",
-    "TaskResult",
-    "taskoutput",
-    "taskresult",
-    "mcp__composio__TaskOutput",
-    "mcp__composio__TaskResult",
-]
+
 
 
 # =============================================================================
@@ -583,6 +588,8 @@ class UniversalAgent:
         self.options: Optional[ClaudeAgentOptions] = None
         self.client: Optional[ClaudeSDKClient] = None
         self._initialized = False
+        # Track consecutive tool validation errors to detect loops
+        self.consecutive_tool_errors: int = 0
 
     def _create_workspace(self) -> str:
         """Create a new session workspace directory."""
@@ -698,6 +705,11 @@ class UniversalAgent:
         prompt = (
             f"The current date is: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             "You are a helpful assistant with access to external tools and specialized sub-agents.\n\n"
+            "## CRITICAL: TOOL USAGE DISTINCTION\n"
+            "⚠️ **TodoWrite** vs **Write**:\n"
+            "- Use `TodoWrite` ONLY for updating your PLAN (mission.json).\n"
+            "- Use `Write` ONLY for creating FILE CONTENT (reports, code, etc.).\n"
+            "- DO NOT confuse them. Sending content to TodoWrite will fail. Sending todos to Write will fail.\n\n"
             "## CRITICAL DELEGATION RULES (ABSOLUTE)\n\n"
             "You are a COORDINATOR/ROUTER Agent. Your job is to assess requests and DELEGATE heavy work.\n"
             "**Rule #1:** For ANY request involving 'report', 'research', 'analysis', or 'detailed summary':\n"
@@ -1018,6 +1030,35 @@ class UniversalAgent:
                             "content_size_bytes": len(content_str),
                         }
                         self.trace["tool_results"].append(result_record)
+
+                        # --- CONSECUTIVE ERROR TRACKING ---
+                        # Logic: If we see repeated schema validation errors, escalate and eventually abort.
+                        if is_error:
+                            error_text = str(block_content)
+                            # Only count validation/schema errors which indicate a loop
+                            if "validation" in error_text.lower() or "missing required" in error_text.lower():
+                                self.consecutive_tool_errors += 1
+                                logfire.warning("consecutive_tool_error", count=self.consecutive_tool_errors, error=error_text[:100])
+                                
+                                # Level 2: Escalated Nudge (3 errors)
+                                if self.consecutive_tool_errors == 3:
+                                    # We can't modify the PAST block, but we can potentially inject a steering message?
+                                    # Actually the most effective way is to let the result go through, 
+                                    # but if we could intercept... for now relies on the agent reading the error.
+                                    # We will implement the Escalated Nudge in the *next* user message or via system event if possible.
+                                    # For now, just logging.
+                                    pass
+
+                                # Level 3: Hard Stop (4 errors)
+                                if self.consecutive_tool_errors >= 4:
+                                    raise HarnessError(
+                                        f"Aborting iteration due to {self.consecutive_tool_errors} consecutive tool validation errors.",
+                                        context={"last_tool_error": error_text[:500]}
+                                    )
+                        else:
+                            # Reset on success
+                            self.consecutive_tool_errors = 0
+                        # ----------------------------------
 
                         yield AgentEvent(
                             type=EventType.TOOL_RESULT,

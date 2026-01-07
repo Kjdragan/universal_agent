@@ -1,4 +1,5 @@
 import hashlib
+import sqlite3
 import json
 import logging
 import os
@@ -193,49 +194,83 @@ class ToolCallLedger:
                         )
 
         now = self._now()
-        self.conn.execute(
-            """
-            INSERT INTO tool_calls (
-                tool_call_id,
-                run_id,
-                step_id,
-                created_at,
-                updated_at,
-                raw_tool_name,
-                tool_name,
-                tool_namespace,
-                side_effect_class,
-                replay_policy,
-                policy_matched,
-                policy_rule_id,
-                normalized_args_hash,
-                idempotency_key,
-                status,
-                attempt,
-                request_ref
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                tool_call_id,
-                run_id,
-                step_id,
-                now,
-                now,
-                raw_tool_name,
-                tool_name,
-                tool_namespace,
-                side_effect_class,
-                replay_policy,
-                policy_matched,
-                policy_rule_id,
-                normalized_args_hash,
-                idempotency_key,
-                "prepared",
-                1,
-                normalize_json(request_input),
-            ),
-        )
-        self.conn.commit()
+        try:
+            self.conn.execute(
+                """
+                INSERT INTO tool_calls (
+                    tool_call_id,
+                    run_id,
+                    step_id,
+                    created_at,
+                    updated_at,
+                    raw_tool_name,
+                    tool_name,
+                    tool_namespace,
+                    side_effect_class,
+                    replay_policy,
+                    policy_matched,
+                    policy_rule_id,
+                    normalized_args_hash,
+                    idempotency_key,
+                    status,
+                    attempt,
+                    request_ref
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tool_call_id,
+                    run_id,
+                    step_id,
+                    now,
+                    now,
+                    raw_tool_name,
+                    tool_name,
+                    tool_namespace,
+                    side_effect_class,
+                    replay_policy,
+                    policy_matched,
+                    policy_rule_id,
+                    normalized_args_hash,
+                    idempotency_key,
+                    "prepared",
+                    1,
+                    normalize_json(request_input),
+                ),
+            )
+            self.conn.commit()
+        except sqlite3.IntegrityError as e:
+            # Handle Race Condition (Unique Constraint): Fetch existing and return as valid receipt
+            if "unique" in str(e).lower():
+                existing = self.conn.execute(
+                    "SELECT * FROM tool_calls WHERE idempotency_key = ?",
+                    (idempotency_key,),
+                ).fetchone()
+                if existing:
+                    return (
+                        LedgerReceipt(
+                            tool_call_id=existing["tool_call_id"],
+                            idempotency_key=existing["idempotency_key"],
+                            status=existing["status"],
+                            response_ref=existing["response_ref"],
+                            external_correlation_id=existing["external_correlation_id"],
+                        ),
+                        idempotency_key,
+                    )
+            
+            # Handle Missing Parent (Foreign Key Constraint)
+            if "foreign key" in str(e).lower():
+                self.logger.error(
+                    "ledger_insert_failed_fk run_id=%s step_id=%s error=%s",
+                    run_id,
+                    step_id,
+                    str(e),
+                )
+                raise ValueError(
+                    f"Ledger Integrity Error: Parent run/step missing (run_id={run_id}, step_id={step_id})"
+                ) from e
+            
+            raise
+
         return (None, idempotency_key)
 
     def mark_running(self, tool_call_id: str) -> None:

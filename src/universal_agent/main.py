@@ -269,6 +269,7 @@ from composio import Composio
 # Durable runtime support
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
+from universal_agent.agent_core import UniversalAgent, EventType, AgentEvent, HarnessError
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.tool_gateway import (
     prepare_tool_call,
@@ -5682,7 +5683,37 @@ async def main(args: argparse.Namespace):
                     if _handle_cancel_request(runtime_db_conn, run_id, workspace_dir):
                         auto_resume_complete = True
                         break
-                    result = await process_turn(client, user_input, workspace_dir)
+
+                    try:
+                        result = await process_turn(client, user_input, workspace_dir)
+                    except HarnessError as he:
+                        # [Harness Error Recovery]
+                        # 1. Capture context
+                        failure_ctx = he.context
+                        last_error = failure_ctx.get("last_tool_error", "Unknown error")
+                        print(f"\n\n🔴 HARNESS ABORT: {str(he)}")
+                        
+                        # 2. Set alert for NEXT iteration
+                        failure_alert = (
+                            f"⚠️ SYSTEM ALERT (AUTOMATED RECOVERY):\n"
+                            f"The previous agent iteration was ABORTED due to a CRITICAL FAILURE.\n"
+                            f"REASON: {str(he)}\n"
+                            f"LAST ERROR: {last_error}\n"
+                            "You are a NEW AGENT instance spawned to recover from this failure.\n"
+                            "• Analyze the error to avoid the same mistake.\n"
+                            "• If the previous agent got stuck in a loop, try a different approach.\n"
+                            "• Check tool arguments carefully."
+                        )
+                        
+                        # 3. Trigger Restart via pending_prompt
+                        print("🔄 Harness triggering immediate restart with failure context...")
+                        pending_prompt = failure_alert
+                        
+                        # 4. Clear Client History (Force restart)
+                        client.history.clear_history()
+                        
+                        # 5. Continue loop (skips existing post-turn logic, goes to next iteration)
+                        continue
                     
                     # [Non-Blocking Interview] Check for pending interview after iteration
                     pending_interview_file = os.path.join(workspace_dir, "pending_interview.json")
