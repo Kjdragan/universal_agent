@@ -56,3 +56,9 @@ policies:
     replay_policy: REPLAY_IDEMPOTENT
     patterns:
       - "^TodoWrite$"
+  - name: bash_allow
+    tool_namespace: claude_code
+    side_effect_class: local
+    replay_policy: REPLAY_EXACT
+    patterns:
+      - "^Bash$"

@@ -15,16 +15,33 @@ class ToolIdentity:
 
 
 def parse_tool_identity(raw_name: str) -> ToolIdentity:
-    if raw_name.startswith("mcp__"):
-        parts = raw_name.split("__")
+    # 1. Sanitize XML/Garbage Suffixes
+    clean_name = raw_name
+    if is_malformed_tool_name(raw_name):
+        base, _, _ = parse_malformed_tool_name(raw_name)
+        if base:
+            clean_name = base
+
+    # 2. Heuristic: Strip 'tools' suffix if present (Common hallucination)
+    # e.g. COMPOSIO_MULTI_EXECUTE_TOOLtools -> COMPOSIO_MULTI_EXECUTE_TOOL
+    if clean_name.lower().endswith("tools") and not clean_name.lower().endswith("_tools"):
+         # Check if stripping 'tools' leaves a plausible name
+         candidate = clean_name[:-5]
+         # Only strip if it doesn't leave an empty proper name
+         if len(candidate) > 5:
+             clean_name = candidate
+
+    # 3. Standard Parsing
+    if clean_name.startswith("mcp__"):
+        parts = clean_name.split("__")
         # Format: mcp__server__tool_name
         if len(parts) >= 3:
             return ToolIdentity(tool_name=parts[-1], tool_namespace="mcp")
-    if raw_name.upper() == "BASH":
+    if clean_name.upper() == "BASH":
         return ToolIdentity(tool_name="bash", tool_namespace="claude_code")
-    if raw_name.upper() == "TASK":
+    if clean_name.upper() == "TASK":
         return ToolIdentity(tool_name="task", tool_namespace="claude_code")
-    return ToolIdentity(tool_name=raw_name, tool_namespace="composio")
+    return ToolIdentity(tool_name=clean_name, tool_namespace="composio")
 
 
 def is_malformed_tool_name(raw_name: str) -> bool:
