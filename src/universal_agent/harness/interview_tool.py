@@ -47,7 +47,18 @@ def ask_user_questions(questions: list[dict[str, Any]]) -> dict[str, str]:
         answers = ask_user_questions(questions)
         # answers = {"What date range should the research cover?": "Last 7 days"}
     """
+    import sys
+    import termios
+    import time
+    
     answers = {}
+    
+    # Flush stdin to clear any leftover characters from multi-line objective paste
+    try:
+        termios.tcflush(sys.stdin, termios.TCIFLUSH)
+        time.sleep(0.1)  # Small delay to ensure buffer is cleared
+    except Exception:
+        pass  # Ignore if not a TTY
     
     console.print(Panel.fit(
         "[bold cyan]📋 Planning Phase: Clarification Required[/bold cyan]\n"
@@ -75,30 +86,58 @@ def ask_user_questions(questions: list[dict[str, Any]]) -> dict[str, str]:
         
         console.print(table)
         
-        if multi_select:
-            console.print("[dim]Enter comma-separated numbers for multiple selections (e.g., 1,3)[/dim]")
-            selection = Prompt.ask("Your selection(s)")
-            selected_indices = [int(x.strip()) - 1 for x in selection.split(",") if x.strip().isdigit()]
-            selected_labels = []
-            for idx in selected_indices:
-                if 0 <= idx < len(options):
-                    selected_labels.append(options[idx]["label"])
-                elif idx == len(options):  # "Other"
-                    custom = Prompt.ask("Please specify")
-                    selected_labels.append(custom)
-            answers[question_text] = ", ".join(selected_labels)
-        else:
-            selection = Prompt.ask("Your selection (number)")
-            try:
-                idx = int(selection) - 1
-                if 0 <= idx < len(options):
-                    answers[question_text] = options[idx]["label"]
-                else:  # "Other"
-                    custom = Prompt.ask("Please specify")
-                    answers[question_text] = custom
-            except ValueError:
-                # Treat as custom input
-                answers[question_text] = selection
+        # Input validation loop - keep asking until we get valid input
+        while True:
+            if multi_select:
+                console.print("[dim]Enter comma-separated numbers for multiple selections (e.g., 1,3)[/dim]")
+                selection = Prompt.ask("Your selection(s)")
+                
+                # Validate input is not empty
+                if not selection or not selection.strip():
+                    console.print("[yellow]Please enter a valid selection.[/yellow]")
+                    continue
+                    
+                selected_indices = [int(x.strip()) - 1 for x in selection.split(",") if x.strip().isdigit()]
+                if not selected_indices:
+                    console.print("[yellow]Please enter valid number(s).[/yellow]")
+                    continue
+                    
+                selected_labels = []
+                for idx in selected_indices:
+                    if 0 <= idx < len(options):
+                        selected_labels.append(options[idx]["label"])
+                    elif idx == len(options):  # "Other"
+                        custom = Prompt.ask("Please specify")
+                        selected_labels.append(custom)
+                        
+                if selected_labels:
+                    answers[question_text] = ", ".join(selected_labels)
+                    break
+                else:
+                    console.print("[yellow]No valid options selected. Try again.[/yellow]")
+            else:
+                selection = Prompt.ask("Your selection (number)")
+                
+                # Validate input is not empty
+                if not selection or not selection.strip():
+                    console.print("[yellow]Please enter a valid selection.[/yellow]")
+                    continue
+                    
+                try:
+                    idx = int(selection) - 1
+                    if 0 <= idx < len(options):
+                        answers[question_text] = options[idx]["label"]
+                        break
+                    elif idx == len(options):  # "Other"
+                        custom = Prompt.ask("Please specify")
+                        answers[question_text] = custom
+                        break
+                    else:
+                        console.print(f"[yellow]Please enter a number between 1 and {len(options) + 1}.[/yellow]")
+                except ValueError:
+                    # Treat as custom input
+                    answers[question_text] = selection
+                    break
         
         console.print()
     
@@ -108,6 +147,7 @@ def ask_user_questions(questions: list[dict[str, Any]]) -> dict[str, str]:
     ))
     
     return answers
+
 
 
 def present_plan_summary(mission: dict[str, Any]) -> bool:

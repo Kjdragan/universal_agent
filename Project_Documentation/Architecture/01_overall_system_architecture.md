@@ -364,7 +364,7 @@ Query Classification (SIMPLE vs COMPLEX)
     ↓
 Claude Agent SDK (Main Brain)
     ├─→ Composio MCP Server (500+ tools)
-    ├─→ Local Toolkit MCP (crawl_parallel, write_local_file, etc.)
+    ├─→ Local Toolkit MCP (crawl_parallel, finalize_research, etc.)
     ├─→ External MCPs (edgartools, video_audio, youtube, zai_vision)
     └─→ Skills (.claude/skills/)
     ↓
