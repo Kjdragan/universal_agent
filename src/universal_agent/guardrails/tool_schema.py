@@ -72,6 +72,11 @@ _TOOL_SCHEMAS: dict[str, ToolSchema] = {
         example="Write(file_path='/path/to/file.html', content='<html>...</html>')",
         content_min_length={"content": 10},
     ),
+    # Planning tools
+    "todowrite": ToolSchema(
+        required=("todos",),
+        example="TodoWrite(todos=[{content: 'Research X', status: 'pending'}])",
+    ),
 }
 
 
@@ -79,9 +84,25 @@ def _match_schema(tool_name: str) -> Optional[ToolSchema]:
     if not tool_name:
         return None
     tool_name = tool_name.lower()
-    for key, schema in _TOOL_SCHEMAS.items():
-        if tool_name == key or tool_name.endswith(key):
-            return schema
+    
+    # 1. Try exact match first (Highest priority)
+    if tool_name in _TOOL_SCHEMAS:
+        return _TOOL_SCHEMAS[tool_name]
+        
+    # 2. Try suffix match, but be careful with commonly shared suffixes
+    # We sort by length descending to match longer keys first (e.g. 'write_local_file' before 'write')
+    sorted_keys = sorted(_TOOL_SCHEMAS.keys(), key=len, reverse=True)
+    
+    for key in sorted_keys:
+        if tool_name == key:
+            return _TOOL_SCHEMAS[key]
+        if tool_name.endswith(key):
+            # Special case: Don't match 'todowrite' with 'write'
+             # If we matched 'write', check if the full name indicates a different known tool suffix
+            if key == "write" and "todowrite" in tool_name:
+                continue
+            return _TOOL_SCHEMAS[key]
+            
     return None
 
 
