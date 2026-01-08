@@ -7,7 +7,8 @@ that block malformed tool calls while injecting an inline schema/example hint.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Optional, Sequence
+import json
+from typing import Callable, Iterable, Optional, Sequence
 
 from universal_agent.durable.tool_gateway import parse_tool_identity
 
@@ -46,11 +47,41 @@ _TOOL_SCHEMAS: dict[str, ToolSchema] = {
         required=("path",),
         example="list_directory({path: '/tmp'})",
     ),
+    "append_to_file": ToolSchema(
+        required=("path", "content"),
+        example="append_to_file({path: '/tmp/report.html', content: '<html>...</html>'})",
+        content_min_length={"content": 10},
+    ),
+    "read_research_files": ToolSchema(
+        required=("file_paths",),
+        example="read_research_files({file_paths: ['/tmp/tasks/ai_news/filtered_corpus/a.md']})",
+    ),
+    "finalize_research": ToolSchema(
+        required=("session_dir",),
+        example="finalize_research({session_dir: '/tmp/session_20260101_120000', task_name: 'ai_news'})",
+    ),
+    "crawl_parallel": ToolSchema(
+        required=("urls", "session_dir"),
+        example="crawl_parallel({urls: ['https://example.com'], session_dir: '/tmp/session_20260101_120000'})",
+    ),
+    "ask_user_questions": ToolSchema(
+        required=("questions",),
+        example=(
+            "ask_user_questions({questions: [{question: 'Timeframe?', header: 'Time', options: [{label: '7 days', description: 'Recent'}], multiSelect: false}]})"
+        ),
+    ),
     # Curated Composio tools (outer tool validation only)
     "composio_multi_execute_tool": ToolSchema(
         required=("tools",),
         example=(
             "COMPOSIO_MULTI_EXECUTE_TOOL({session_id: '...', tools: [{tool_slug: 'GMAIL_SEND_EMAIL', arguments: {...}}]})"
+        ),
+    ),
+    "composio_search_tools": ToolSchema(
+        required=("queries",),
+        example=(
+            "COMPOSIO_SEARCH_TOOLS({queries: [{use_case: 'search AI news', known_fields: 'timeframe: last 30 days'}], "
+            "session: {generate_id: true}})"
         ),
     ),
     "composio_search_news": ToolSchema(
@@ -146,6 +177,38 @@ def validate_tool_input(tool_name: str, tool_input: object) -> tuple[bool, list[
     return (not missing), missing, schema
 
 
+def _try_parse_json_list(raw_value: object) -> Optional[list]:
+    if not isinstance(raw_value, str):
+        return None
+    stripped = raw_value.strip()
+    if not stripped:
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def _normalize_tool_input(tool_name: str, tool_input: dict) -> Optional[dict]:
+    normalized_name = (tool_name or "").lower()
+    if normalized_name.endswith("composio_multi_execute_tool"):
+        tools_value = tool_input.get("tools")
+        parsed_tools = _try_parse_json_list(tools_value)
+        if parsed_tools is not None:
+            updated = dict(tool_input)
+            updated["tools"] = parsed_tools
+            return updated
+    if normalized_name.endswith("composio_search_tools"):
+        queries_value = tool_input.get("queries")
+        parsed_queries = _try_parse_json_list(queries_value)
+        if parsed_queries is not None:
+            updated = dict(tool_input)
+            updated["queries"] = parsed_queries
+            return updated
+    return None
+
+
 def _format_missing_fields(missing: Iterable[str]) -> str:
     normalized = []
     for field in missing:
@@ -156,12 +219,67 @@ def _format_missing_fields(missing: Iterable[str]) -> str:
     return ", ".join(normalized)
 
 
+def _example_value_from_property(prop: object) -> object:
+    if not isinstance(prop, dict):
+        return "..."
+    examples = prop.get("examples")
+    if isinstance(examples, list) and examples:
+        return examples[0]
+    enum = prop.get("enum")
+    if isinstance(enum, list) and enum:
+        return enum[0]
+    prop_type = prop.get("type")
+    if isinstance(prop_type, list) and prop_type:
+        prop_type = prop_type[0]
+    if prop_type == "integer":
+        return 1
+    if prop_type == "number":
+        return 1.0
+    if prop_type == "boolean":
+        return True
+    if prop_type == "array":
+        return []
+    if prop_type == "object":
+        return {}
+    return "..."
+
+
+def build_tool_schema_from_raw_composio(
+    raw_tool: dict, tool_name: str
+) -> Optional[ToolSchema]:
+    if not isinstance(raw_tool, dict):
+        return None
+    tool_block = raw_tool.get("function") if "function" in raw_tool else raw_tool
+    if not isinstance(tool_block, dict):
+        return None
+    params = tool_block.get("parameters")
+    if not isinstance(params, dict):
+        return None
+    required = params.get("required") or []
+    if not isinstance(required, list):
+        required = []
+    properties = params.get("properties") or {}
+    if not isinstance(properties, dict):
+        properties = {}
+
+    example_payload = {}
+    for field in required:
+        example_payload[field] = _example_value_from_property(properties.get(field))
+    example = f"{tool_name}({json.dumps(example_payload)})" if example_payload else ""
+
+    return ToolSchema(
+        required=tuple(required),
+        example=example,
+    )
+
+
 async def pre_tool_use_schema_guardrail(
     input_data: dict,
     run_id: Optional[str] = None,
     step_id: Optional[str] = None,
     logger: Optional[object] = None,
     skip_guardrail: bool = False,
+    schema_fetcher: Optional[Callable[[str], Optional[ToolSchema]]] = None,
 ) -> dict:
     if skip_guardrail:
         return {}
@@ -172,7 +290,12 @@ async def pre_tool_use_schema_guardrail(
     # If the tool name is malformed (e.g. contains XML or 'tools' suffix),
     # we REJECT it immediately and tell the agent the correct name.
     identity = parse_tool_identity(tool_name)
-    if identity.tool_name != tool_name and identity.tool_name != tool_name.split("__")[-1]:
+    base_name = tool_name.split("__")[-1] if tool_name else ""
+    normalized_names = {
+        tool_name.lower(),
+        base_name.lower(),
+    }
+    if identity.tool_name.lower() not in normalized_names:
          # The parser had to clean it up significantly (beyond just stripping namespace)
          # e.g. "COMPOSIO_MULTI_EXECUTE_TOOLtools..." -> "COMPOSIO_MULTI_EXECUTE_TOOL"
          return {
@@ -181,6 +304,7 @@ async def pre_tool_use_schema_guardrail(
                 f"Did you mean '{identity.tool_name}'? "
                 "Please retry with the correct tool name."
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -188,11 +312,102 @@ async def pre_tool_use_schema_guardrail(
             },
         }
 
+    normalized_name = identity.tool_name.lower()
+    if isinstance(tool_input, dict):
+        normalized_input = _normalize_tool_input(identity.tool_name, tool_input)
+        if normalized_input is not None:
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "updatedInput": normalized_input,
+                },
+            }
+
+        if normalized_name.endswith("composio_multi_execute_tool"):
+            tools_value = tool_input.get("tools")
+            if tools_value is not None and not isinstance(tools_value, list):
+                return {
+                    "systemMessage": (
+                        "⚠️ Invalid COMPOSIO_MULTI_EXECUTE_TOOL call. "
+                        "The `tools` field must be a JSON array of {tool_slug, arguments} objects."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "tools must be a list, not a string.",
+                    },
+                }
+            if isinstance(tools_value, list):
+                invalid_indices = []
+                for idx, item in enumerate(tools_value):
+                    if not isinstance(item, dict):
+                        invalid_indices.append(str(idx))
+                        continue
+                    if not item.get("tool_slug") or "arguments" not in item:
+                        invalid_indices.append(str(idx))
+                if invalid_indices:
+                    return {
+                        "systemMessage": (
+                            "⚠️ Invalid COMPOSIO_MULTI_EXECUTE_TOOL call. "
+                            "Each item in `tools` must include `tool_slug` and `arguments`."
+                            f" Fix entries at indices: {', '.join(invalid_indices)}."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "tools entries missing tool_slug or arguments.",
+                        },
+                    }
+        if normalized_name.endswith("composio_search_tools"):
+            queries_value = tool_input.get("queries")
+            if queries_value is not None and not isinstance(queries_value, list):
+                return {
+                    "systemMessage": (
+                        "⚠️ Invalid COMPOSIO_SEARCH_TOOLS call. "
+                        "The `queries` field must be a JSON array of {use_case, known_fields} objects."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "queries must be a list, not a string.",
+                    },
+                }
+            if isinstance(queries_value, list):
+                invalid_indices = []
+                for idx, item in enumerate(queries_value):
+                    if not isinstance(item, dict) or not item.get("use_case"):
+                        invalid_indices.append(str(idx))
+                if invalid_indices:
+                    return {
+                        "systemMessage": (
+                            "⚠️ Invalid COMPOSIO_SEARCH_TOOLS call. "
+                            "Each item in `queries` must include `use_case`."
+                            f" Fix entries at indices: {', '.join(invalid_indices)}."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "queries entries missing use_case.",
+                        },
+                    }
+
     # 2. Schema Validation
     # Use the VALIDATED/CLEAN identity for schema matching, just in case
     # (Though if we triggered above, we returned. If we didn't, name is likely fine-ish)
-    is_valid, missing, schema = validate_tool_input(identity.tool_name, tool_input)
-    if is_valid:
+    schema = _match_schema(identity.tool_name)
+    if schema is None and schema_fetcher:
+        schema = schema_fetcher(identity.tool_name)
+    if schema is None:
+        return {}
+    if not isinstance(tool_input, dict):
+        missing = list(schema.required) or ["tools"]
+    else:
+        missing = _missing_required(schema, tool_input)
+    if not missing:
         return {}
 
     if logger is not None:
@@ -213,6 +428,7 @@ async def pre_tool_use_schema_guardrail(
             f"⚠️ Invalid {tool_name} call. Missing required fields: {missing_fields}."
             f"{example_hint}"
         ),
+        "decision": "block",
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
@@ -241,7 +457,40 @@ async def post_tool_use_schema_nudge(
     if not is_error:
         return {}
 
-    if "validation error" not in error_detail.lower() and "field required" not in error_detail.lower():
+    lower_detail = error_detail.lower()
+    if any(
+        marker in lower_detail
+        for marker in (
+            "no such tool available",
+            "no such tool",
+            "tool not available",
+            "tool not found",
+        )
+    ):
+        identity = parse_tool_identity(tool_name)
+        schema = _match_schema(identity.tool_name) or _match_schema(tool_name)
+        example = schema.example if schema else ""
+        example_hint = f" Example: {example}" if example else ""
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": (
+                    "The last tool call failed because the tool name was invalid or malformed. "
+                    "Use the exact tool name and pass arguments as JSON fields (no XML fragments)."
+                    f"{example_hint}"
+                ),
+            },
+        }
+    if not any(
+        marker in lower_detail
+        for marker in (
+            "validation error",
+            "field required",
+            "inputvalidationerror",
+            "required parameter",
+            "missing required",
+        )
+    ):
         return {}
 
     schema = _match_schema(tool_name)

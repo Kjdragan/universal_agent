@@ -13,9 +13,10 @@ import time
 import json
 import re
 import uuid
+import inspect
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 from dotenv import load_dotenv
 from universal_agent.utils.message_history import TRUNCATION_THRESHOLD
 
@@ -186,11 +187,14 @@ DISALLOWED_TOOLS = [
 import logfire
 
 # Configure Logfire for tracing
-LOGFIRE_TOKEN = (
-    os.getenv("LOGFIRE_TOKEN")
-    or os.getenv("LOGFIRE_WRITE_TOKEN")
-    or os.getenv("LOGFIRE_API_KEY")
-)
+LOGFIRE_DISABLED = os.getenv("UA_DISABLE_LOGFIRE", "").lower() in {"1", "true", "yes"}
+LOGFIRE_TOKEN = None
+if not LOGFIRE_DISABLED:
+    LOGFIRE_TOKEN = (
+        os.getenv("LOGFIRE_TOKEN")
+        or os.getenv("LOGFIRE_WRITE_TOKEN")
+        or os.getenv("LOGFIRE_API_KEY")
+    )
 
 if LOGFIRE_TOKEN:
     # Custom scrubbing to prevent over-redaction of previews
@@ -249,7 +253,7 @@ if LOGFIRE_TOKEN:
         print(f"⚠️ Anthropic instrumentation not available: {e}")
 
     print("✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/")
-else:
+elif not LOGFIRE_DISABLED:
     print("⚠️ No LOGFIRE_TOKEN found - tracing disabled")
 
 from claude_agent_sdk.client import ClaudeSDKClient
@@ -317,7 +321,9 @@ composio = None
 # =============================================================================
 from Memory_System.manager import MemoryManager
 from Memory_System.tools import get_memory_tool_map
-from universal_agent.guardrails import (
+from universal_agent.guardrails.tool_schema import (
+    ToolSchema,
+    build_tool_schema_from_raw_composio,
     post_tool_use_schema_nudge,
     pre_tool_use_schema_guardrail,
 )
@@ -601,6 +607,7 @@ async def on_pre_tool_use_ledger(
                 "⚠️ Run cancellation requested. "
                 "Do not call any more tools; end the turn."
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -610,6 +617,26 @@ async def on_pre_tool_use_ledger(
 
     tool_name = input_data.get("tool_name", "")
     tool_call_id = str(tool_use_id or uuid.uuid4())
+    transcript_path = input_data.get("transcript_path", "")
+    session_id = input_data.get("session_id", "")
+    if transcript_path:
+        global _primary_transcript_path, _seen_transcript_paths
+        if _primary_transcript_path is None:
+            _primary_transcript_path = transcript_path
+        if transcript_path not in _seen_transcript_paths:
+            _seen_transcript_paths.add(transcript_path)
+            transcript_role = "primary"
+            if _primary_transcript_path and transcript_path != _primary_transcript_path:
+                transcript_role = "secondary"
+                print(f"🧭 Hook fired for secondary transcript: {tool_name}")
+            logfire.info(
+                "hook_transcript_path_seen",
+                tool_name=tool_name,
+                tool_use_id=tool_call_id,
+                session_id=session_id,
+                transcript_path=transcript_path,
+                transcript_role=transcript_role,
+            )
     if _is_task_output_name(tool_name):
         _mark_run_waiting_for_human(
             "task_output_tool_call",
@@ -621,6 +648,7 @@ async def on_pre_tool_use_ledger(
                 "⚠️ TaskOutput/TaskResult is not a callable tool. "
                 "Relaunch the subagent using the Task tool instead."
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -635,12 +663,55 @@ async def on_pre_tool_use_ledger(
                 f"⚠️ Tool '{tool_name}' is not available or is a restricted native tool. "
                 "Use 'mcp__composio__COMPOSIO_SEARCH_WEB' or similar relevant tools instead."
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": f"Tool '{tool_name}' is disallowed.",
             },
         }
+
+    # Block Write calls with empty/missing required params (context exhaustion symptom)
+    if tool_name == "Write":
+        tool_input = input_data.get("tool_input", {}) or {}
+        file_path = tool_input.get("file_path", "")
+        content = tool_input.get("content", "")
+        
+        missing_params = []
+        if not file_path:
+            missing_params.append("file_path")
+        if not content:
+            missing_params.append("content")
+        
+        if missing_params:
+            logfire.warning(
+                "empty_write_params_blocked",
+                tool_name=tool_name,
+                missing=missing_params,
+                run_id=run_id,
+                step_id=current_step_id,
+            )
+            workspace_hint = f"WORKSPACE: {OBSERVER_WORKSPACE_DIR}/work_products/\n" if OBSERVER_WORKSPACE_DIR else ""
+            return {
+                "systemMessage": (
+                    f"⚠️ BLOCKED: Write call missing required params: {', '.join(missing_params)}.\n\n"
+                    f"This often happens after reading large research content. Your context may be exhausted.\n\n"
+                    f"TO FIX:\n"
+                    f"1. Take a breath - don't just retry immediately\n"
+                    f"2. Write a SHORTER version first (executive summary only)\n"
+                    f"3. Use these exact params:\n"
+                    f"   - file_path: \"{OBSERVER_WORKSPACE_DIR or 'WORKSPACE'}/work_products/report.html\"\n"
+                    f"   - content: \"<html>...your report content...</html>\"\n\n"
+                    f"{workspace_hint}"
+                    f"Retry now with BOTH file_path AND content filled in."
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": f"Write missing params: {', '.join(missing_params)}",
+                },
+            }
 
     if is_malformed_tool_name(tool_name):
         base_name, arg_key, arg_value = parse_malformed_tool_name(tool_name)
@@ -679,6 +750,7 @@ async def on_pre_tool_use_ledger(
                 "concatenate XML-like arg_key/arg_value into the tool name."
                 + (repair_hint or f" Next required tool: {expected_tool} with input {expected_input}")
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -714,6 +786,7 @@ async def on_pre_tool_use_ledger(
                 "a valid tool name and JSON input."
                 + f" Next required tool: {expected_tool} with input {expected_input}"
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -750,6 +823,7 @@ async def on_pre_tool_use_ledger(
                 "Set UA_PRIMARY_EMAIL (and optional UA_SECONDARY_EMAILS) "
                 "or provide a full email address."
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -796,6 +870,7 @@ async def on_pre_tool_use_ledger(
                 "Set UA_PRIMARY_EMAIL/UA_SECONDARY_EMAILS or include the address "
                 "explicitly in the user request."
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -859,6 +934,7 @@ async def on_pre_tool_use_ledger(
                         "⚠️ Tool ledger missing prepared entry; refusing to execute tool. "
                         "Try again or end the turn."
                     ),
+                    "decision": "block",
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
@@ -900,6 +976,7 @@ async def on_pre_tool_use_ledger(
                         "⚠️ Tool ledger missing prepared entry; refusing to execute tool. "
                         "Try again or end the turn."
                     ),
+                    "decision": "block",
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
@@ -918,6 +995,7 @@ async def on_pre_tool_use_ledger(
                     "Recovery in progress: do not use file edit tools. "
                     "Re-run the exact in-flight tool call shown in the replay queue."
                 ),
+                "decision": "block",
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
@@ -932,12 +1010,13 @@ async def on_pre_tool_use_ledger(
                     "Recovery in progress: re-run the exact in-flight tool call. "
                     f"Next required tool: {expected_tool} with input {expected_input}"
                 ),
+                "decision": "block",
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                "permissionDecisionReason": "Forced in-flight replay active.",
-            },
-        }
+                    "permissionDecisionReason": "Forced in-flight replay active.",
+                },
+            }
 
     if _is_job_run() and tool_name in (
         "Write",
@@ -952,6 +1031,7 @@ async def on_pre_tool_use_ledger(
                     "⚠️ Durable job mode: COMPOSIO_REMOTE_WORKBENCH is disabled. "
                     "Use local toolkit tools or the allowed Composio tools instead."
                 ),
+                "decision": "block",
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
@@ -964,6 +1044,7 @@ async def on_pre_tool_use_ledger(
                 f"{tool_name}. For example, use the native `Read` tool "
                 "or native `Write` tool."
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -971,15 +1052,28 @@ async def on_pre_tool_use_ledger(
             },
         }
 
+    schema_input_data = dict(input_data)
+    schema_input_data["tool_input"] = tool_input
     schema_guardrail = await pre_tool_use_schema_guardrail(
-        input_data,
+        schema_input_data,
         run_id=run_id,
         step_id=current_step_id,
         logger=logfire,
         skip_guardrail=forced_tool_mode_active,
+        schema_fetcher=_fetch_composio_tool_schema,
     )
     if schema_guardrail:
-        return schema_guardrail
+        hook_output = schema_guardrail.get("hookSpecificOutput", {}) or {}
+        updated_input = hook_output.get("updatedInput")
+        if (
+            updated_input is not None
+            and schema_guardrail.get("decision") != "block"
+            and hook_output.get("permissionDecision") != "deny"
+        ):
+            updated_tool_input = updated_input
+            tool_input = updated_input
+        else:
+            return schema_guardrail
 
     side_effect_class = "unknown"
     try:
@@ -1016,6 +1110,7 @@ async def on_pre_tool_use_ledger(
                 "⚠️ Tool ledger prepare failed; refusing to execute tool without a "
                 "prepared ledger row. Try again or end the turn."
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -1051,6 +1146,7 @@ async def on_pre_tool_use_ledger(
                     "Skipping execution and using cached receipt."
                 ),
                 "reason": receipt_preview,
+                "decision": "block",
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
@@ -1089,6 +1185,7 @@ async def on_pre_tool_use_ledger(
                     "⚠️ Tool ledger prepare failed; refusing to execute tool without a "
                     "prepared ledger row. Try again or end the turn."
                 ),
+                "decision": "block",
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
@@ -1112,6 +1209,7 @@ async def on_pre_tool_use_ledger(
                 "⚠️ Tool ledger missing prepared entry; refusing to execute tool. "
                 "Try again or end the turn."
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -1843,7 +1941,8 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn = None) -> d
     Post-Run Hook: Checks for Harness Loop conditions.
     If completion promise is NOT met, restarts the agent with fresh context.
     """
-    
+    _emit_composio_schema_metrics()
+
     # Resolve dependencies (Args > Globals)
     use_run_id = run_id or globals().get('run_id')
     use_db = db_conn or globals().get('runtime_db_conn')
@@ -1999,6 +2098,8 @@ run_cancelled_by_operator = False
 FORCED_TOOL_MAX_ATTEMPTS = 2
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 WAITING_STATUSES = {"waiting_for_human"}
+_primary_transcript_path: Optional[str] = None
+_seen_transcript_paths: set[str] = set()
 
 
 def _mark_run_waiting_for_human(reason: str, *, tool_name: str = "", tool_call_id: str = "") -> None:
@@ -2161,6 +2262,112 @@ def _inject_provider_idempotency(
 def _looks_like_composio_tool(raw_tool_name: str) -> bool:
     upper = raw_tool_name.upper()
     return upper.startswith("COMPOSIO_") or upper.startswith("MCP__COMPOSIO__")
+
+
+_COMPOSIO_SCHEMA_CACHE: dict[str, ToolSchema] = {}
+_COMPOSIO_SCHEMA_ALLOWLIST: Optional[set[str]] = None
+_COMPOSIO_SCHEMA_METRICS = {
+    "fetches": 0,
+    "cache_hits": 0,
+    "total_ms": 0.0,
+    "max_ms": 0.0,
+    "reported": False,
+}
+
+
+def _get_composio_schema_allowlist() -> set[str]:
+    global _COMPOSIO_SCHEMA_ALLOWLIST
+    if _COMPOSIO_SCHEMA_ALLOWLIST is not None:
+        return _COMPOSIO_SCHEMA_ALLOWLIST
+    raw = os.getenv("UA_COMPOSIO_SCHEMA_ALLOWLIST", "")
+    allowlist = {item.strip().upper() for item in raw.split(",") if item.strip()}
+    _COMPOSIO_SCHEMA_ALLOWLIST = allowlist
+    return allowlist
+
+
+def _composio_schema_fetch_enabled() -> bool:
+    return os.getenv("UA_COMPOSIO_SCHEMA_FETCH", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def _fetch_composio_tool_schema(tool_name: str) -> Optional[ToolSchema]:
+    if not _composio_schema_fetch_enabled():
+        return None
+    if not _looks_like_composio_tool(tool_name):
+        return None
+
+    slug = tool_name.split("__")[-1].upper()
+    allowlist = _get_composio_schema_allowlist()
+    if allowlist and slug not in allowlist:
+        return None
+    if slug in _COMPOSIO_SCHEMA_CACHE:
+        _COMPOSIO_SCHEMA_METRICS["cache_hits"] += 1
+        if os.getenv("UA_COMPOSIO_SCHEMA_LOG", "").lower() in {"1", "true", "yes"}:
+            print(f"🧭 Composio schema cache hit: {slug}")
+        return _COMPOSIO_SCHEMA_CACHE[slug]
+    if composio is None:
+        return None
+
+    start = time.perf_counter()
+    try:
+        raw_tool = composio.tools.get_raw_composio_tool_by_slug(slug)
+    except Exception as exc:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logfire.warning(
+            "composio_schema_fetch_failed",
+            tool_name=slug,
+            duration_ms=round(duration_ms, 2),
+            error=str(exc),
+        )
+        return None
+
+    duration_ms = (time.perf_counter() - start) * 1000
+    _COMPOSIO_SCHEMA_METRICS["fetches"] += 1
+    _COMPOSIO_SCHEMA_METRICS["total_ms"] += duration_ms
+    _COMPOSIO_SCHEMA_METRICS["max_ms"] = max(_COMPOSIO_SCHEMA_METRICS["max_ms"], duration_ms)
+    logfire.info(
+        "composio_schema_fetch",
+        tool_name=slug,
+        duration_ms=round(duration_ms, 2),
+    )
+    if os.getenv("UA_COMPOSIO_SCHEMA_LOG", "").lower() in {"1", "true", "yes"}:
+        print(f"⏱️ Composio schema fetch {slug}: {duration_ms:.1f}ms")
+
+    schema = build_tool_schema_from_raw_composio(raw_tool, slug)
+    if schema:
+        if len(_COMPOSIO_SCHEMA_CACHE) > 200:
+            _COMPOSIO_SCHEMA_CACHE.clear()
+        _COMPOSIO_SCHEMA_CACHE[slug] = schema
+    return schema
+
+
+def _emit_composio_schema_metrics() -> None:
+    if _COMPOSIO_SCHEMA_METRICS.get("reported"):
+        return
+    fetches = int(_COMPOSIO_SCHEMA_METRICS.get("fetches") or 0)
+    cache_hits = int(_COMPOSIO_SCHEMA_METRICS.get("cache_hits") or 0)
+    total_lookups = fetches + cache_hits
+    if total_lookups == 0:
+        return
+    total_ms = float(_COMPOSIO_SCHEMA_METRICS.get("total_ms") or 0.0)
+    max_ms = float(_COMPOSIO_SCHEMA_METRICS.get("max_ms") or 0.0)
+    avg_ms = total_ms / fetches if fetches else 0.0
+    hit_rate = cache_hits / total_lookups if total_lookups else 0.0
+    _COMPOSIO_SCHEMA_METRICS["reported"] = True
+
+    logfire.info(
+        "composio_schema_summary",
+        fetches=fetches,
+        cache_hits=cache_hits,
+        total_lookups=total_lookups,
+        avg_ms=round(avg_ms, 2),
+        max_ms=round(max_ms, 2),
+        hit_rate=round(hit_rate, 4),
+    )
+    print(
+        "📊 Composio schema fetch summary: "
+        f"lookups={total_lookups} fetches={fetches} cache_hits={cache_hits} "
+        f"avg_ms={avg_ms:.1f} max_ms={max_ms:.1f} hit_rate={hit_rate:.0%}"
+    )
 
 
 def _should_inject_provider_idempotency(
@@ -2495,6 +2702,294 @@ def _is_harness_mode() -> bool:
     except Exception:
         return False
 
+
+def _agent_definition_supports_hooks() -> bool:
+    try:
+        return "hooks" in inspect.signature(AgentDefinition).parameters
+    except Exception:
+        return False
+
+
+def _warn_if_subagent_hooks_configured(agents: Optional[dict[str, Any]]) -> None:
+    if not agents or _agent_definition_supports_hooks():
+        return
+    for agent_name, agent_def in agents.items():
+        hooks_present = False
+        if isinstance(agent_def, dict):
+            hooks_present = "hooks" in agent_def
+        else:
+            hooks_present = hasattr(agent_def, "hooks") and getattr(agent_def, "hooks", None) is not None
+        if hooks_present:
+            print(
+                f"⚠️ Subagent hooks are not supported in the Python SDK. "
+                f"Remove 'hooks' from agent '{agent_name}'."
+            )
+            logfire.warning(
+                "subagent_hooks_not_supported",
+                agent_name=agent_name,
+            )
+
+
+_INTERVIEW_KEY_ALIASES = {
+    "date_range": "timeframe",
+    "date": "timeframe",
+    "time_range": "timeframe",
+    "time_period": "timeframe",
+    "timeframe": "timeframe",
+    "period": "timeframe",
+    "focus": "focus",
+    "topics": "focus",
+    "scope": "focus",
+    "depth": "depth",
+    "detail": "depth",
+    "level_of_detail": "depth",
+    "delivery": "delivery",
+    "delivery_method": "delivery",
+    "output": "delivery",
+    "format": "delivery",
+}
+
+
+def _slugify_interview_key(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", (value or "").lower()).strip("_")
+    return slug or "unknown"
+
+
+def _canonical_interview_key(value: str) -> str:
+    slug = _slugify_interview_key(value)
+    if slug in _INTERVIEW_KEY_ALIASES:
+        return _INTERVIEW_KEY_ALIASES[slug]
+    if "timeframe" in slug or ("time" in slug and ("range" in slug or "period" in slug or "window" in slug)):
+        return "timeframe"
+    if "focus" in slug or "topic" in slug or "scope" in slug:
+        return "focus"
+    if "depth" in slug or "detail" in slug or "level" in slug:
+        return "depth"
+    if "delivery" in slug or "output" in slug or "format" in slug or "receive" in slug:
+        return "delivery"
+    return slug
+
+
+def _build_interview_answers_payload(
+    questions: list[dict[str, Any]],
+    answers: dict[str, str],
+) -> dict[str, Any]:
+    answers_by_header: dict[str, str] = {}
+    for question in questions:
+        question_text = question.get("question", "")
+        answer = answers.get(question_text)
+        if not answer:
+            continue
+        header = question.get("header") or question_text
+        key = _canonical_interview_key(header)
+        answers_by_header[key] = answer
+    return {
+        "answers": answers,
+        "answers_by_header": answers_by_header,
+        "questions": questions,
+    }
+
+
+def _load_interview_answers_payload(workspace_dir: str) -> Optional[dict[str, Any]]:
+    answers_file = os.path.join(workspace_dir, "interview_answers.json")
+    if not os.path.exists(answers_file):
+        return None
+    try:
+        with open(answers_file, "r") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    if isinstance(data, dict) and "answers" in data:
+        return data
+    if isinstance(data, dict):
+        return {"answers": data}
+    return None
+
+
+def _is_placeholder_value(value: Any) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized in {
+        "awaiting user selection",
+        "awaiting selection",
+        "tbd",
+        "pending",
+        "unknown",
+        "n/a",
+        "na",
+    }
+
+
+def _normalize_clarifications(clarifications: Any) -> dict[str, Any]:
+    if isinstance(clarifications, list):
+        normalized: dict[str, Any] = {}
+        for item in clarifications:
+            if not isinstance(item, dict):
+                continue
+            key = item.get("question") or item.get("key")
+            value = item.get("answer") or item.get("value")
+            if key is not None:
+                normalized[str(key)] = value
+        clarifications = normalized
+    if not isinstance(clarifications, dict):
+        return {}
+
+    normalized: dict[str, Any] = {}
+    for key, value in clarifications.items():
+        canonical_key = _canonical_interview_key(str(key))
+        if canonical_key in normalized:
+            if _is_placeholder_value(normalized[canonical_key]) and not _is_placeholder_value(value):
+                normalized[canonical_key] = value
+            continue
+        normalized[canonical_key] = value
+    return normalized
+
+
+def _merge_interview_answers_into_mission(
+    mission_data: dict[str, Any],
+    interview_payload: dict[str, Any],
+) -> bool:
+    clarifications = _normalize_clarifications(mission_data.get("clarifications"))
+
+    answers_by_header = interview_payload.get("answers_by_header")
+    if not isinstance(answers_by_header, dict) or not answers_by_header:
+        answers = interview_payload.get("answers")
+        if isinstance(answers, dict):
+            answers_by_header = {
+                _canonical_interview_key(str(question)): answer
+                for question, answer in answers.items()
+                if answer is not None
+            }
+        else:
+            answers_by_header = {}
+
+    changed = False
+    for key, value in answers_by_header.items():
+        canonical_key = _canonical_interview_key(str(key))
+        if clarifications.get(canonical_key) != value:
+            clarifications[canonical_key] = value
+            changed = True
+
+    if changed:
+        mission_data["clarifications"] = clarifications
+    return changed
+
+
+def _apply_interview_answers_to_mission(
+    workspace_dir: str,
+    mission_data: Optional[dict[str, Any]] = None,
+) -> tuple[Optional[dict[str, Any]], bool]:
+    interview_payload = _load_interview_answers_payload(workspace_dir)
+    if not interview_payload:
+        return mission_data, False
+
+    mission_file = os.path.join(workspace_dir, "mission.json")
+    if mission_data is None:
+        if not os.path.exists(mission_file):
+            return None, False
+        try:
+            with open(mission_file, "r") as mf:
+                mission_data = json.load(mf)
+        except Exception:
+            return None, False
+
+    if not isinstance(mission_data, dict):
+        return mission_data, False
+    if mission_data.get("status") != "PLANNING":
+        return mission_data, False
+
+    changed = _merge_interview_answers_into_mission(mission_data, interview_payload)
+    if changed:
+        try:
+            with open(mission_file, "w") as mf:
+                json.dump(mission_data, mf, indent=2)
+        except Exception:
+            return mission_data, False
+    return mission_data, changed
+
+
+def _process_pending_interview(
+    workspace_dir: str,
+    ask_fn: Optional[Callable[[list[dict[str, Any]]], dict[str, str]]] = None,
+) -> Optional[str]:
+    pending_interview_file = os.path.join(workspace_dir, "pending_interview.json")
+    if not os.path.exists(pending_interview_file):
+        return None
+
+    try:
+        with open(pending_interview_file, "r") as f:
+            interview_data = json.load(f)
+        questions = interview_data.get("questions", [])
+
+        if not questions:
+            os.remove(pending_interview_file)
+            return None
+
+        print("\n" + "=" * 60)
+        print("📋 PLANNING PHASE - Interview Required")
+        print("=" * 60)
+
+        skip_interview = False
+        mission_file = os.path.join(workspace_dir, "mission.json")
+        if os.path.exists(mission_file):
+            try:
+                with open(mission_file, "r") as mf:
+                    m_data = json.load(mf)
+                    if m_data.get("status") == "IN_PROGRESS":
+                        skip_interview = True
+            except Exception:
+                pass
+
+        if skip_interview:
+            print("\n⚡ RUTHLESS AUTONOMY: Skipping user interview. Mission is I_PROGRESS.")
+            answers = {
+                q.get("question", f"Q{idx+1}"): "Proceed with best judgment (Autonomy Mode)"
+                for idx, q in enumerate(questions)
+            }
+        else:
+            if ask_fn is None:
+                from universal_agent.harness import ask_user_questions as do_interview
+                ask_fn = do_interview
+            answers = ask_fn(questions)
+
+        print("=" * 60 + "\n")
+        print("   ✅ Interview answers collected")
+
+        answers_payload = _build_interview_answers_payload(questions, answers)
+        answers_file = os.path.join(workspace_dir, "interview_answers.json")
+        with open(answers_file, "w") as f:
+            json.dump(answers_payload, f, indent=2)
+
+        if os.path.exists(mission_file):
+            try:
+                with open(mission_file, "r") as mf:
+                    m_data = json.load(mf)
+                if _merge_interview_answers_into_mission(m_data, answers_payload):
+                    with open(mission_file, "w") as mf:
+                        json.dump(m_data, mf, indent=2)
+                    print("   ✅ Updated mission.json with clarifications")
+            except Exception as e:
+                print(f"   ⚠️ Failed to update mission.json with answers: {e}")
+
+        summary_map = answers_payload.get("answers_by_header") or answers
+        answers_summary = "\n".join([f"- {q}: {a}" for q, a in summary_map.items()])
+        pending_prompt = (
+            "USER INTERVIEW ANSWERS:\n"
+            "The user has answered your clarifying questions:\n\n"
+            f"{answers_summary}\n\n"
+            "IMPORTANT: You MUST now UPDATE the existing mission.json file. "
+            "Re-read mission.json, update the clarifications section with these answers, "
+            "and write the updated file back. Keep status as 'PLANNING' until the plan is approved."
+        )
+
+        os.remove(pending_interview_file)
+        return pending_prompt
+    except Exception as e:
+        print(f"   ⚠️ Interview error: {e}")
+        return None
 
 
 VALID_SIDE_EFFECT_CLASSES = {"external", "memory", "local", "read_only"}
@@ -4873,7 +5368,15 @@ async def setup_session(
                     "🚨 START IMMEDIATELY: Call `mcp__local_toolkit__finalize_research`."
                     + tool_knowledge_suffix
                 ),
-                # Omit 'tools' so sub-agent inherits ALL tools including MCP tools
+                tools=[
+                    "Read",
+                    "Write",
+                    "Bash",
+                    "mcp__local_toolkit__finalize_research",
+                    "mcp__local_toolkit__read_research_files",
+                    "mcp__local_toolkit__list_directory",
+                    "mcp__local_toolkit__generate_image",
+                ],
                 model="inherit",
             ),
             "slack-expert": AgentDefinition(
@@ -5035,6 +5538,7 @@ async def setup_session(
         },
         permission_mode="bypassPermissions",
     )
+    _warn_if_subagent_hooks_configured(options.agents)
 
     # Initialize trace dict now that session is available (requires session.mcp.url)
     trace = {
@@ -5788,6 +6292,10 @@ async def main(args: argparse.Namespace):
                         try:
                             with open(planning_mission_file, "r") as f:
                                 mission_data = json.load(f)
+                            mission_data, _ = _apply_interview_answers_to_mission(
+                                workspace_dir,
+                                mission_data=mission_data,
+                            )
                             if mission_data.get("status") == "PLANNING":
                                 print("\n📋 Planning Phase Detected - Awaiting User Approval")
                                 approved = present_plan_summary(mission_data)
@@ -5956,84 +6464,9 @@ async def main(args: argparse.Namespace):
                         continue
                     
                     # [Non-Blocking Interview] Check for pending interview after iteration
-                    pending_interview_file = os.path.join(workspace_dir, "pending_interview.json")
-                    if os.path.exists(pending_interview_file):
-                        try:
-                            with open(pending_interview_file, "r") as f:
-                                interview_data = json.load(f)
-                            questions = interview_data.get("questions", [])
-                            
-                            if questions:
-                                print(f"\n" + "="*60)
-                                print("📋 PLANNING PHASE - Interview Required")
-                                print("="*60)
-                                
-                                # Check if we should AUTO-SKIP the interview for autonomy
-                                skip_interview = False
-                                mission_file = os.path.join(workspace_dir, "mission.json")
-                                if os.path.exists(mission_file):
-                                    try:
-                                        with open(mission_file, "r") as mf:
-                                            m_data = json.load(mf)
-                                            # If we are already running, don't stop for clarifications
-                                            if m_data.get("status") == "IN_PROGRESS":
-                                                skip_interview = True
-                                    except:
-                                        pass
-
-                                if skip_interview:
-                                     print("\n⚡ RUTHLESS AUTONOMY: Skipping user interview. Mission is I_PROGRESS.")
-                                     # Provide dummy answers or just tell agent to proceed
-                                     answers = {q["question"]: "Proceed with best judgment (Autonomy Mode)" for q in questions}
-                                else:
-                                    # Display and collect answers using the harness interview tool
-                                    from universal_agent.harness import ask_user_questions as do_interview
-                                    answers = do_interview(questions)
-                                
-                                print("="*60 + "\n")
-                                print(f"   ✅ Interview answers collected")
-                                
-                                # Save answers for next iteration
-                                answers_file = os.path.join(workspace_dir, "interview_answers.json")
-                                with open(answers_file, "w") as f:
-                                    json.dump(answers, f, indent=2)
-                                
-                                # Fix 1: Also update mission.json directly with answers
-                                if os.path.exists(mission_file):
-                                    try:
-                                        with open(mission_file, "r") as mf:
-                                            m_data = json.load(mf)
-                                        # Only update clarifications, preserve other keys
-                                        if "clarifications" in m_data:
-                                            if isinstance(m_data["clarifications"], dict):
-                                                 m_data["clarifications"].update(answers)
-                                            else:
-                                                 m_data["clarifications"] = answers
-                                        else:
-                                            m_data["clarifications"] = answers
-                                            
-                                        with open(mission_file, "w") as mf:
-                                            json.dump(m_data, mf, indent=2)
-                                        print(f"   ✅ Updated mission.json with clarifications")
-                                    except Exception as e:
-                                        print(f"   ⚠️ Failed to update mission.json with answers: {e}")
-                                
-                                # Set pending_prompt to inject answers into next iteration
-                                answers_summary = "\n".join([f"- {q}: {a}" for q, a in answers.items()])
-                                pending_prompt = (
-                                    f"USER INTERVIEW ANSWERS:\n"
-                                    f"The user has answered your clarifying questions:\n\n"
-                                    f"{answers_summary}\n\n"
-                                    f"IMPORTANT: You MUST now UPDATE the existing mission.json file. "
-                                    f"Replace all PENDING_USER_SELECTION values with the actual user selections above. "
-                                    f"Re-read mission.json, update the clarifications section with these answers, "
-                                    f"and write the updated file back. Keep status as 'PLANNING' until the plan is approved."
-                                )
-                            
-                            # Clean up the pending interview file
-                            os.remove(pending_interview_file)
-                        except Exception as e:
-                            print(f"   ⚠️ Interview error: {e}")
+                    interview_prompt = _process_pending_interview(workspace_dir)
+                    if interview_prompt:
+                        pending_prompt = interview_prompt
 
                     # HARNESS LOOP: Manual check (since AgentStop hook is unreliable)
                     if hasattr(result, "response_text"):
@@ -6162,6 +6595,11 @@ async def main(args: argparse.Namespace):
                                                     )
                                                     mission_data = None
                                         
+                                        if mission_data:
+                                            mission_data, _ = _apply_interview_answers_to_mission(
+                                                workspace_dir,
+                                                mission_data=mission_data,
+                                            )
                                         if mission_data and mission_data.get("status") == "PLANNING":
                                             print("\n📋 Planning Phase Complete - Awaiting User Approval")
                                             approved = present_plan_summary(mission_data)
@@ -6183,7 +6621,15 @@ async def main(args: argparse.Namespace):
                             if next_prompt:
                                 print(f"\n🔄 HARNESS RESTART TRIGGERED")
                                 print(f"Next Prompt: {next_prompt.splitlines()[0][:100]}...")
-                                pending_prompt = next_prompt
+                                # CRITICAL: Preserve interview answers if already set
+                                # Interview answers come from line 6064, don't overwrite them
+                                if pending_prompt and "USER INTERVIEW ANSWERS" in pending_prompt:
+                                    # Prepend interview answers to the hook's prompt
+                                    pending_prompt = pending_prompt + "\n\n" + next_prompt
+                                    print("📋 Interview answers preserved in restart prompt")
+                                else:
+                                    pending_prompt = next_prompt
+
                                 
                                 # Clear Client History
                                 if hasattr(client, "history"):

@@ -56,8 +56,52 @@
 }
 ```
 
+**Notes (Critical):**
+- `tools` MUST be a JSON array, not a quoted JSON string.
+- Each item MUST include `tool_slug` and `arguments` (object).
+- Use the tool name exactly as `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` (no XML fragments).
+
 **WRONG (causes tool_use_error):**
 ```
 mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOLtools</arg_key><arg_value>[...]
 ```
 This malformed XML-style concatenation will fail. Each parameter (`tools`, `session_id`, etc.) must be a separate JSON key.
+
+## COMPOSIO_SEARCH_TOOLS
+
+Use this to discover the best Composio search tools and get recommended steps.
+
+**Schema (minimal):**
+```json
+{
+  "queries": [
+    {"use_case": "Search AI news last 30 days", "known_fields": "timeframe: last 30 days, topics: AI news"}
+  ],
+  "session": {"generate_id": true}
+}
+```
+
+**Notes:**
+- `queries` MUST be a JSON array (not a quoted JSON string).
+- Each item should include `use_case` and `known_fields`.
+
+## COMPOSIO_SEARCH_NEWS
+
+**Schema:**
+```json
+{
+  "query": "artificial intelligence industry news",
+  "when": "m",
+  "gl": "us",
+  "hl": "en"
+}
+```
+
+## COMPOSIO_SEARCH_WEB
+
+**Schema:**
+```json
+{
+  "query": "AI policy regulation January 2026"
+}
+```

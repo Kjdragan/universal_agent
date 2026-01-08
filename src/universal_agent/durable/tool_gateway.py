@@ -25,11 +25,11 @@ def parse_tool_identity(raw_name: str) -> ToolIdentity:
     # 2. Heuristic: Strip 'tools' suffix if present (Common hallucination)
     # e.g. COMPOSIO_MULTI_EXECUTE_TOOLtools -> COMPOSIO_MULTI_EXECUTE_TOOL
     if clean_name.lower().endswith("tools") and not clean_name.lower().endswith("_tools"):
-         # Check if stripping 'tools' leaves a plausible name
-         candidate = clean_name[:-5]
-         # Only strip if it doesn't leave an empty proper name
-         if len(candidate) > 5:
-             clean_name = candidate
+        # Check if stripping 'tools' leaves a plausible name
+        candidate = clean_name[:-5]
+        # Only strip if it doesn't leave an empty proper name
+        if len(candidate) > 5:
+            clean_name = candidate
 
     # 3. Standard Parsing
     if clean_name.startswith("mcp__"):
