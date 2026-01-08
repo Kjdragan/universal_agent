@@ -1,7 +1,7 @@
 # Sub-Agent Architecture & Specialist Agents
 
-**Document Version**: 2.0  
-**Last Updated**: 2026-01-05  
+**Document Version**: 2.1  
+**Last Updated**: 2026-01-07  
 **Component**: Universal Agent  
 **Primary Files**: `src/universal_agent/main.py`, `.claude/agents/*.md`
 
@@ -22,14 +22,14 @@
 
 ## Overview
 
-The Universal Agent uses a **specialist delegation model** with persistent memory. The main agent acts as an orchestrator and router, while complex, domain-specific tasks are delegated to sub-agents. Each sub-agent is a "persona" with specialized system prompts, access to inherited tools, skill awareness, and persistent memory via Letta Learning SDK integration.
+The Universal Agent uses a **specialist delegation model** with persistent memory. The main agent acts as an orchestrator and router, while complex, domain-specific tasks are delegated to sub-agents. Each sub-agent is a "persona" with specialized system prompts, access to inherited or restricted tools, skill awareness, and persistent memory via Letta Learning SDK integration.
 
 ### Key Innovations
 
 1. **Persistent Memory**: Sub-agents retain context across sessions via Letta Learning SDK
-2. **Tool Inheritance**: Sub-agents inherit ALL parent tools when `tools` field is omitted
+2. **Tool Inheritance**: Sub-agents inherit parent tools by default; critical agents can use an explicit allowlist
 3. **Skill Awareness**: Sub-agents receive progressive skill loading hints before starting
-4. **Hook-Based Lifecycle**: Event-driven hooks inject guidance before/after sub-agent execution
+4. **Hook-Based Lifecycle**: Global hooks + `SubagentStop` guide execution and handoffs
 5. **Agent College Integration**: Sidecar service for memory sharing and learning
 
 ---
@@ -43,11 +43,11 @@ Sub-agents are configured in `ClaudeAgentOptions` using the `AgentDefinition` da
 class AgentDefinition:
     description: str           # Instructions for MAIN agent on WHEN to delegate
     prompt: str                # System prompt for the SUB-AGENT
-    tools: list[str] | None    # If omitted, inherits ALL tools from parent
+    tools: list[str] | None    # Optional allowlist; omit to inherit parent tools
     model: str | None          # "inherit", "claude-3-5-sonnet", etc.
 ```
 
-**Critical Design Decision**: **Omit `tools` field** to inherit ALL tools including MCP tools.
+**Current Design**: Inherit tools by default, but use explicit allowlists for safety‑critical subagents.
 
 **Location**: `src/universal_agent/main.py` lines 4477-4683
 
@@ -63,7 +63,16 @@ class AgentDefinition:
 
 **Primary Role**: Deep research, web crawling, and comprehensive HTML report generation.
 
-**Tool Inheritance**: Omits `tools` field → inherits ALL tools from parent
+**Tool Access**: Explicit allowlist (read/write + research tools only)
+
+Allowed tools:
+- `Read`
+- `Write`
+- `Bash`
+- `mcp__local_toolkit__finalize_research`
+- `mcp__local_toolkit__read_research_files`
+- `mcp__local_toolkit__list_directory`
+- `mcp__local_toolkit__generate_image`
 
 **Hard Constraints**:
 - **MANDATORY**: Call `finalize_research` BEFORE reading any content
@@ -104,7 +113,7 @@ class AgentDefinition:
 
 ## Sub-Agent Lifecycle & Hooks
 
-Sub-agents are managed through an **event-driven hook system**.
+Sub-agents are managed through **global hooks** and the `SubagentStop` event.
 
 ### Hook System Architecture
 
@@ -124,6 +133,8 @@ hooks={
     ],
 }
 ```
+
+**Note**: The Python SDK does not support per‑subagent hooks on `AgentDefinition`. All hooks are configured on `ClaudeAgentOptions` and fire for both main‑agent and subagent tool calls.
 
 ### SubagentStop Hook
 
@@ -214,7 +225,7 @@ For critical workflows like Reports, we use **Just-In-Time (JIT) Guide Rails** t
 | **Specify `tools=[]`** | **NO** tools (empty whitelist) |
 | **Specify `tools=["Read", "Bash"]`** | **ONLY** Read and Bash |
 
-**Current Implementation**: All sub-agents omit `tools` field to inherit ALL tools.
+**Current Implementation**: Most sub-agents inherit all tools, but `report-creation-expert` uses an explicit allowlist to reduce tool drift and enforce safety.
 
 ---
 

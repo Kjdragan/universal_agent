@@ -13,6 +13,7 @@ import time
 import json
 import uuid
 import re
+import inspect
 from datetime import datetime
 from typing import AsyncGenerator, Any, Callable, Optional
 from dataclasses import dataclass, field
@@ -90,12 +91,46 @@ class AgentEvent:
 # =============================================================================
 
 
-LOGFIRE_TOKEN = (
-    os.getenv("LOGFIRE_TOKEN")
-    or os.getenv("LOGFIRE_WRITE_TOKEN")
-    or os.getenv("LOGFIRE_API_KEY")
-)
+LOGFIRE_DISABLED = os.getenv("UA_DISABLE_LOGFIRE", "").lower() in {"1", "true", "yes"}
+LOGFIRE_TOKEN = None
+if not LOGFIRE_DISABLED:
+    LOGFIRE_TOKEN = (
+        os.getenv("LOGFIRE_TOKEN")
+        or os.getenv("LOGFIRE_WRITE_TOKEN")
+        or os.getenv("LOGFIRE_API_KEY")
+    )
 
+
+# -----------------------------------------------------------------------------
+# SDK compatibility helpers
+# -----------------------------------------------------------------------------
+
+
+def _agent_definition_supports_hooks() -> bool:
+    try:
+        return "hooks" in inspect.signature(AgentDefinition).parameters
+    except Exception:
+        return False
+
+
+def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
+    if not agents or _agent_definition_supports_hooks():
+        return
+    for agent_name, agent_def in agents.items():
+        hooks_present = False
+        if isinstance(agent_def, dict):
+            hooks_present = "hooks" in agent_def
+        else:
+            hooks_present = hasattr(agent_def, "hooks") and getattr(agent_def, "hooks", None) is not None
+        if hooks_present:
+            print(
+                f"⚠️ Subagent hooks are not supported in the Python SDK. "
+                f"Remove 'hooks' from agent '{agent_name}'."
+            )
+            logfire.warning(
+                "subagent_hooks_not_supported",
+                agent_name=agent_name,
+            )
 
 
 
@@ -138,6 +173,7 @@ async def malformed_tool_guardrail_hook(input_data: dict, tool_use_id: str, cont
                 "Use proper JSON arguments instead."
                 + repair_hint
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -164,6 +200,7 @@ async def malformed_tool_guardrail_hook(input_data: dict, tool_use_id: str, cont
                 f"Missing required fields: {', '.join(missing)}."
                 f"{example_hint}"
             ),
+            "decision": "block",
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -647,17 +684,16 @@ class UniversalAgent:
                         "DO NOT handle reports yourself - delegate here."
                     ),
                     prompt=self._build_subagent_prompt(abs_workspace),
-                    # Omit 'tools' so sub-agent inherits ALL tools including custom tools
+                    tools=[
+                        "Read",
+                        "Write",
+                        "Bash",
+                        "mcp__local_toolkit__finalize_research",
+                        "mcp__local_toolkit__read_research_files",
+                        "mcp__local_toolkit__list_directory",
+                        "mcp__local_toolkit__generate_image",
+                    ],
                     model="inherit",
-                    # Sub-agent needs hooks too for Write validation
-                    hooks={
-                        "PreToolUse": [
-                            HookMatcher(matcher="*", hooks=[malformed_tool_guardrail_hook]),
-                        ],
-                        "PostToolUse": [
-                            HookMatcher(matcher="Write", hooks=[tool_output_validator_hook]),
-                        ],
-                    },
                 ),
             },
 
@@ -671,6 +707,7 @@ class UniversalAgent:
             },
             permission_mode="bypassPermissions",
         )
+        _warn_if_subagent_hooks_configured(self.options.agents)
 
         # Initialize trace
         self.trace = {
