@@ -1237,10 +1237,11 @@ async def on_pre_tool_use_ledger(
             )
     
     # [Bash Scaffolding] Audit log all shell commands for visibility
-    if tool_name.upper() == "BASH" and workspace_dir:
+    bash_workspace = input_data.get("workspace_dir") or OBSERVER_WORKSPACE_DIR
+    if tool_name.upper() == "BASH" and bash_workspace:
         try:
             cmd = tool_input.get("command") or tool_input.get("cmd") or str(tool_input)
-            audit_file = os.path.join(workspace_dir, "bash_audit.log")
+            audit_file = os.path.join(bash_workspace, "bash_audit.log")
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(audit_file, "a", encoding="utf-8") as af:
                 af.write(f"[{ts}] {cmd}\n")
