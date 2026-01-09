@@ -58,6 +58,16 @@ After the tool returns, proceed directly to Step 2.
 - **CRITICAL:** Do NOT use individual `read_local_file` calls. Use the batch tool.
 - Proceed to Visual Planning.
 
+### Step 2.5: Large Corpus Mode (MANDATORY WHEN LARGE)
+
+Trigger this mode when the corpus is large (≥20 files), batch reads exceed ~60k chars, or truncation warnings appear.
+
+- Follow the **massive-report-writing** skill workflow (map → reduce → write).
+- Build an **evidence ledger** and **section outline** before drafting.
+- Use the templates in `/.claude/skills/massive-report-writing/references/massive_report_templates.md`.
+- If context pressure is high, write section-by-section (append) instead of a single write.
+- **Anti-summary-of-summary rule:** Final writing must cite ledger items directly. Batch summaries are navigation only.
+
 ### Step 3: 🎨 Visuals (OPTIONAL but RECOMMENDED)
 
 If the report would benefit from visuals (charts, infographics, maps) OR if explicitly requested:

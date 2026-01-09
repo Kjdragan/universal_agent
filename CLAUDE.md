@@ -42,7 +42,7 @@ python src/mcp_server.py
 | `ANTHROPIC_API_KEY` | Anthropic auth token |
 | `DEFAULT_USER_ID` | Composio user ID (format: `pg-test-xxx`) |
 | `LOGFIRE_TOKEN` | Logfire distributed tracing (optional) |
-| `MODEL_NAME` | `claude-sonnet-4-20250514` |
+| `MODEL_NAME` | `claude-sonnet-4-5-20250929` |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot authentication (for bot mode) |
 | `WEBHOOK_URL` | Telegram webhook URL (for bot mode) |
 | `ALLOWED_USER_IDS` | Comma-separated Telegram user IDs (for bot mode) |
@@ -237,4 +237,4 @@ Python 3.12+ (specified in `pyproject.toml`)
 From the user's global CLAUDE.md:
 - **Primary Path Philosophy**: Always work on primary path; fallbacks are considered failures and should be clearly indicated
 - **OpenAI Responses API**: For OpenAI LLMs, use Responses API (not in training data)
-- **RUBE Agent-First Discovery**: If working with Rube Framework, always let agents discover tools dynamically via `RUBE_SEARCH_TOOLS`, never hardcode tool slugs
+
