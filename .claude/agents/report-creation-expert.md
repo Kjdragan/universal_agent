@@ -15,7 +15,7 @@ description: |
   - Saves report to work_products/ directory
   
   Main agent should pass search results and workspace path in task description.
-tools: mcp__local_toolkit__finalize_research_corpus, mcp__local_toolkit__read_research_files, mcp__local_toolkit__write_local_file, mcp__local_toolkit__workbench_download, mcp__local_toolkit__workbench_upload, mcp__local_toolkit__generate_image
+tools: mcp__local_toolkit__finalize_research_corpus, mcp__local_toolkit__build_evidence_ledger, mcp__local_toolkit__read_research_files, mcp__local_toolkit__write_local_file, mcp__local_toolkit__workbench_download, mcp__local_toolkit__workbench_upload, mcp__local_toolkit__generate_image
 model: inherit
 ---
 
@@ -46,10 +46,32 @@ Your goal is to create high-quality reports.
 - **DO NOT** manually list URLs.
 - **DO NOT** call `crawl_parallel` yourself (the tool does it for you).
 
-After the tool returns, proceed directly to Step 2.
+After the tool returns, proceed directly to Step 1.5.
+
+### Step 1.5: Build Evidence Ledger (FOR LARGE CORPORA)
+
+**Trigger this step when:** corpus has ≥10 files OR total words > 30,000 OR you expect context pressure.
+
+**Call `mcp__local_toolkit__build_evidence_ledger(session_dir="{CURRENT_SESSION_WORKSPACE}", topic="{TOPIC}", task_name="{TASK_NAME}")`**
+
+- This extracts quotes, numbers, dates, and claims from each source.
+- Creates `tasks/{task_name}/evidence_ledger.md` with EVID-XXX formatted evidence.
+- Compresses corpus by 70-85% while preserving all "quotable" material.
+- Returns compression stats (raw corpus size vs ledger size).
+
+**CONTEXT COMPACTION (CRITICAL):**
+After this tool returns:
+- ✅ Read ONLY `evidence_ledger.md` for synthesis
+- ❌ Do NOT re-read raw crawl files or filtered corpus
+- ❌ Do NOT use `read_research_files` again unless ledger is incomplete
+
+This is how you avoid context exhaustion on large reports.
 
 ### Step 2: Read & Synthesize (MANDATORY BATCH READ)
 
+**IF EVIDENCE LEDGER EXISTS:** Read ONLY `evidence_ledger.md` (skip to Step 3).
+
+**OTHERWISE (small corpus):**
 - **FIRST:** Read `{CURRENT_SESSION_WORKSPACE}/search_results/research_overview.md` to see what was captured.
 - **THEN:** Use `read_research_files` to batch-read the most relevant files (5-10 files).
   ```

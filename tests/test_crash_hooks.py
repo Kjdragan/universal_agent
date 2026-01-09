@@ -66,7 +66,9 @@ def test_crash_matches_normalized_tool_name(monkeypatch):
 
 def test_crash_rejects_stage_mismatch(monkeypatch):
     monkeypatch.setenv("UA_TEST_CRASH_AFTER_TOOL", "gmail_send_email")
-    monkeypatch.setenv("UA_TEST_CRASH_STAGE", "after_ledger_mark_succeeded")
+    monkeypatch.setenv(
+        "UA_TEST_CRASH_AFTER_STAGE", "after_ledger_mark_succeeded"
+    )  # Different stage
 
     should_crash, _ = agent_main._should_trigger_test_crash(
         raw_tool_name="GMAIL_SEND_EMAIL",
