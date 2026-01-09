@@ -5069,6 +5069,14 @@ async def setup_session(
     skill_names = [s['name'] for s in discovered_skills]
     print(f"✅ Discovered Skills: {skill_names}")
     skills_xml = generate_skills_xml(discovered_skills)
+    templates_path = os.path.join(
+        src_dir,
+        ".claude",
+        "skills",
+        "massive-report-writing",
+        "references",
+        "massive_report_templates.md",
+    )
     tool_knowledge_content = get_tool_knowledge_content()
     tool_knowledge_block = get_tool_knowledge_block()
     tool_knowledge_suffix = f"\n\n{tool_knowledge_block}" if tool_knowledge_block else ""
@@ -5329,6 +5337,13 @@ async def setup_session(
                     f"   - **read_local_file** `tasks/YOUR_TASK_ID/research_overview.md` FIRST.\n"
                     f"   - Use the index in that file to choose which deep-dive files to read from `tasks/YOUR_TASK_ID/filtered_corpus/`.\n"
                     f"   - DO NOT read raw `search_results/crawl_*.md` files directly unless necessary.\n"
+                    f"\n"
+                    f"3B. **LARGE CORPUS MODE (MANDATORY WHEN LARGE)**:\n"
+                    f"   - Trigger when corpus >= 20 files, batch reads exceed ~60k chars, or truncation warnings appear.\n"
+                    f"   - Use map-reduce: build an evidence ledger + batch summaries, then consolidate into a section outline.\n"
+                    f"   - Use templates at: {templates_path}\n"
+                    f"   - Write section-by-section if needed (use `Write` for first chunk, then `mcp__local_toolkit__append_to_file`).\n"
+                    f"   - Anti-summary-of-summary rule: Final writing must cite ledger items directly. Batch summaries are navigation only.\n"
                     f"\n"
                     f"4. **WRITE REPORT**:\n"
                     f"   - Write the final report source (Markdown/HTML) to `work_products/`.\n"

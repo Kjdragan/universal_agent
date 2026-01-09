@@ -691,6 +691,7 @@ class UniversalAgent:
                         "mcp__local_toolkit__finalize_research",
                         "mcp__local_toolkit__read_research_files",
                         "mcp__local_toolkit__list_directory",
+                        "mcp__local_toolkit__append_to_file",
                         "mcp__local_toolkit__generate_image",
                     ],
                     model="inherit",
@@ -784,6 +785,15 @@ class UniversalAgent:
 
     def _build_subagent_prompt(self, workspace_path: str) -> str:
         """Build the report-creation-expert sub-agent prompt."""
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        templates_path = os.path.join(
+            repo_root,
+            ".claude",
+            "skills",
+            "massive-report-writing",
+            "references",
+            "massive_report_templates.md",
+        )
         prompt = (
             f"Report Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
@@ -820,6 +830,12 @@ class UniversalAgent:
             f"- `{workspace_path}/search_results/COMPOSIO_SEARCH_WEB_*.json`\n\n"
             "❌ **DO NOT** call `Read` multiple times for individual files\n"
             "✅ **DO** use `read_research_files` with a list of paths\n\n"
+            "### Step 2C: Large Corpus Mode (MANDATORY WHEN LARGE)\n"
+            "- Trigger when corpus >= 20 files, batch reads exceed ~60k chars, or truncation warnings appear.\n"
+            "- Use map-reduce: build an evidence ledger + batch summaries, then consolidate into a section outline.\n"
+            f"- Use templates at: {templates_path}\n"
+            "- Write section-by-section if needed (use `Write` for the first chunk, then `append_to_file`).\n\n"
+            "ANTI-SUMMARY-OF-SUMMARY RULE: Final writing must cite ledger items directly. Batch summaries are navigation only.\n\n"
             "### Step 3: Report Creation (ADAPTIVE STYLING)\n"
             "Before writing, **analyze your source material** and consider:\n"
             "- What is the nature of this information? (breaking news, scientific data, human interest, policy analysis)\n"
