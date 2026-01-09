@@ -38,12 +38,28 @@ from claude_agent_sdk.types import (
     HookMatcher,
 )
 from composio import Composio
-from universal_agent.durable.tool_gateway import is_malformed_tool_name, parse_malformed_tool_name
+from universal_agent.durable.tool_gateway import (
+    is_malformed_tool_name,
+    parse_malformed_tool_name,
+)
 from universal_agent.guardrails.tool_schema import validate_tool_input
 from universal_agent.prompt_assets import get_tool_knowledge_block
 from universal_agent.utils.message_history import MessageHistory, TRUNCATION_THRESHOLD
 # Local MCP server provides: crawl_parallel, finalize_research, read_research_files, append_to_file, etc.
 # Note: File Read/Write now uses native Claude SDK tools
+
+# Tools that should be blocked (legacy/problematic tools)
+DISALLOWED_TOOLS = [
+    "TaskOutput",
+    "TaskResult",
+    "taskoutput",
+    "taskresult",
+    "mcp__composio__TaskOutput",
+    "mcp__composio__TaskResult",
+    "WebSearch",
+    "web_search",
+    "mcp__composio__WebSearch",
+]
 
 
 # =============================================================================
@@ -121,7 +137,10 @@ def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
         if isinstance(agent_def, dict):
             hooks_present = "hooks" in agent_def
         else:
-            hooks_present = hasattr(agent_def, "hooks") and getattr(agent_def, "hooks", None) is not None
+            hooks_present = (
+                hasattr(agent_def, "hooks")
+                and getattr(agent_def, "hooks", None) is not None
+            )
         if hooks_present:
             print(
                 f"⚠️ Subagent hooks are not supported in the Python SDK. "
@@ -133,45 +152,46 @@ def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
             )
 
 
-
 # =============================================================================
 # PRE-TOOL-USE GUARDRAIL HOOK
 # =============================================================================
 
 
-async def malformed_tool_guardrail_hook(input_data: dict, tool_use_id: str, context) -> dict:
+async def malformed_tool_guardrail_hook(
+    input_data: dict, tool_use_id: str, context
+) -> dict:
     """
     Pre-tool-use hook that blocks malformed tool calls and injects schema guidance.
-    
+
     This catches the XML-concatenation bug where tool names include arg_key/arg_value,
     denies the call, and provides corrective guidance for faster recovery.
     """
     tool_name = str(input_data.get("tool_name", "") or "")
     tool_input = input_data.get("tool_input", {}) or {}
-    
+
     # Check for malformed tool name (XML fragments concatenated)
     if is_malformed_tool_name(tool_name):
         base_name, arg_key, arg_value = parse_malformed_tool_name(tool_name)
-        
+
         repair_hint = ""
         if base_name and arg_key and arg_value is not None:
             import json
+
             repaired_payload = json.dumps({arg_key: arg_value}, ensure_ascii=True)
             repair_hint = f" Reissue as {base_name} with input {repaired_payload}."
-        
+
         logfire.warning(
             "malformed_tool_guardrail_blocked",
             tool_name=tool_name,
             base_name=base_name,
             tool_use_id=tool_use_id,
         )
-        
+
         return {
             "systemMessage": (
                 "⚠️ BLOCKED: Malformed tool call. "
                 "Do NOT concatenate XML-like arg_key/arg_value into the tool name. "
-                "Use proper JSON arguments instead."
-                + repair_hint
+                "Use proper JSON arguments instead." + repair_hint
             ),
             "decision": "block",
             "hookSpecificOutput": {
@@ -180,20 +200,64 @@ async def malformed_tool_guardrail_hook(input_data: dict, tool_use_id: str, cont
                 "permissionDecisionReason": "Malformed tool name (XML-style args in name).",
             },
         }
-    
+
+    # Check for Bash commands trying to call Composio SDK directly (bypass MCP)
+    if tool_name.lower() == "bash" and isinstance(tool_input, dict):
+        command = str(tool_input.get("command", "") or "")
+        command_lower = command.lower()
+
+        # Detect Composio SDK usage patterns that should use MCP instead
+        composio_sdk_patterns = [
+            "from composio import",
+            "import composio",
+            "composio.composio",
+            "composiotoolset",
+            "composio_client",
+            "composio_toolset",
+            ".tools.execute(",
+            "execute_action(",
+            "gmail_send_email",  # Specific tool that should be MCP
+        ]
+
+        if any(pattern in command_lower for pattern in composio_sdk_patterns):
+            logfire.warning(
+                "bash_composio_sdk_blocked",
+                tool_name=tool_name,
+                command_preview=command[:200],
+                tool_use_id=tool_use_id,
+            )
+
+            return {
+                "systemMessage": (
+                    "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
+                    "**USE MCP TOOLS INSTEAD:**\n"
+                    "- For email: `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` with `tool_slug: 'GMAIL_SEND_EMAIL'`\n"
+                    "- For file upload: `mcp__local_toolkit__upload_to_composio`\n"
+                    "- For search: Use COMPOSIO_SEARCH_TOOLS to discover the correct MCP pattern\n\n"
+                    "The Composio SDK is not available in the Bash environment. "
+                    "All Composio interactions must go through MCP tools which handle auth automatically.\n\n"
+                    "If you're a sub-agent without Composio MCP access, RETURN CONTROL to the main agent."
+                ),
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Bash command attempts to call Composio SDK directly. Use MCP tools instead.",
+                },
+            }
+
     # Check for schema validation (empty required fields)
     is_valid, missing, schema = validate_tool_input(tool_name, tool_input)
     if not is_valid:
         example = schema.example if schema else ""
         example_hint = f" Example: {example}" if example else ""
-        
+
         logfire.warning(
             "schema_guardrail_blocked",
             tool_name=tool_name,
             missing_fields=missing,
             tool_use_id=tool_use_id,
         )
-        
+
         return {
             "systemMessage": (
                 f"⚠️ BLOCKED: Invalid {tool_name} call. "
@@ -207,48 +271,54 @@ async def malformed_tool_guardrail_hook(input_data: dict, tool_use_id: str, cont
                 "permissionDecisionReason": "Tool schema validation failed.",
             },
         }
-    
+
     return {}
+
 
 # Track consecutive empty Write failures (module-level state)
 _EMPTY_WRITE_FAILURE_COUNT = 0
 _MAX_EMPTY_WRITE_RETRIES = 3
 
-async def tool_output_validator_hook(tool_output: dict, tool_use_id: str, context) -> dict:
+
+async def tool_output_validator_hook(
+    tool_output: dict, tool_use_id: str, context
+) -> dict:
     """
     Post-Tool hook to catch empty or failed tool executions (especially Write calls).
     If the tool failed with InputValidationError due to missing content/path (common in high load),
     we intervene to guide the agent to retry with correct arguments.
-    
+
     Tracks consecutive failures and escalates guidance after MAX_RETRIES.
     """
     global _EMPTY_WRITE_FAILURE_COUNT
-    
+
     # Check for Claude SDK's internal InputValidationError which appears in the output content
     # or empty outputs for critical tools like Write.
-    
+
     # tool_output is a ToolResultBlock-like dict or just the result structure?
     # In the Claude SDK, hook receives the raw result block.
-    
+
     content_list = tool_output.get("content", [])
     if not content_list:
         # Reset counter on success (no error content)
         _EMPTY_WRITE_FAILURE_COUNT = 0
         return {}
-        
+
     for block in content_list:
         if block.get("type") == "text":
             text = block.get("text", "")
-            
+
             # Case 1: Detect InputValidationError (missing params)
-            if "InputValidationError" in text and ("missing" in text or "required parameter" in text):
+            if "InputValidationError" in text and (
+                "missing" in text or "required parameter" in text
+            ):
                 _EMPTY_WRITE_FAILURE_COUNT += 1
                 logfire.warning(
-                    "post_tool_hook_caught_validation_error", 
+                    "post_tool_hook_caught_validation_error",
                     tool_use_id=tool_use_id,
                     retry_count=_EMPTY_WRITE_FAILURE_COUNT,
                 )
-                
+
                 if _EMPTY_WRITE_FAILURE_COUNT >= _MAX_EMPTY_WRITE_RETRIES:
                     # Reset and provide abort guidance
                     _EMPTY_WRITE_FAILURE_COUNT = 0
@@ -273,12 +343,13 @@ async def tool_output_validator_hook(tool_output: dict, tool_use_id: str, contex
                             "You can append more sections afterward using `append_to_file`."
                         )
                     }
-            
+
             # Case 2: Successful write or other tool - reset counter
             elif not text.startswith("<tool_use_error>"):
                 _EMPTY_WRITE_FAILURE_COUNT = 0
-            
+
     return {}
+
 
 def configure_logfire():
     """Configure Logfire for tracing if token is available."""
@@ -355,9 +426,6 @@ def parse_relative_date(relative_str: str) -> str:
         }
         return (now - deltas.get(unit, timedelta())).strftime("%Y-%m-%d")
     return now.strftime("%Y-%m-%d")
-
-
-
 
 
 # =============================================================================
@@ -437,7 +505,7 @@ async def observe_and_save_search_results(
             search_data = payload
             if "results" in payload and isinstance(payload["results"], dict):
                 search_data = payload["results"]
-            
+
             def safe_get_list(data, key):
                 val = data.get(key, [])
                 if isinstance(val, dict):
@@ -481,7 +549,8 @@ async def observe_and_save_search_results(
                         {
                             "position": a.get("position") or (idx + 1),
                             "title": a.get("title"),
-                            "url": a.get("link") or a.get("url"),  # Normalize 'link' -> 'url'
+                            "url": a.get("link")
+                            or a.get("url"),  # Normalize 'link' -> 'url'
                             "snippet": a.get("snippet"),
                             "source": a.get("source", {}).get("name")
                             if isinstance(a.get("source"), dict)
@@ -599,9 +668,6 @@ async def observe_and_enrich_corpus(
     pass
 
 
-
-
-
 # =============================================================================
 # UNIVERSAL AGENT CLASS
 # =============================================================================
@@ -646,11 +712,10 @@ class UniversalAgent:
         self.composio = Composio(
             api_key=os.environ["COMPOSIO_API_KEY"], file_download_dir=downloads_dir
         )
-        
+
         # Create session (local tools exposed via local MCP server, not custom_tools)
         self.session = self.composio.create(
-            user_id=self.user_id,
-            toolkits={"disable": ["firecrawl", "exa"]}
+            user_id=self.user_id, toolkits={"disable": ["firecrawl", "exa"]}
         )
 
         # Build system prompt
@@ -671,7 +736,11 @@ class UniversalAgent:
                 "local_toolkit": {
                     "type": "stdio",
                     "command": sys.executable,
-                    "args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")],
+                    "args": [
+                        os.path.join(
+                            os.path.dirname(os.path.dirname(__file__)), "mcp_server.py"
+                        )
+                    ],
                 },
             },
             # Note: No allowed_tools restriction - main agent can use any tool for flexibility
@@ -693,11 +762,12 @@ class UniversalAgent:
                         "mcp__local_toolkit__list_directory",
                         "mcp__local_toolkit__append_to_file",
                         "mcp__local_toolkit__generate_image",
+                        "mcp__local_toolkit__workbench_download",
+                        "mcp__local_toolkit__workbench_upload",
                     ],
                     model="inherit",
                 ),
             },
-
             hooks={
                 "PreToolUse": [
                     HookMatcher(matcher="*", hooks=[malformed_tool_guardrail_hook]),
@@ -731,10 +801,10 @@ class UniversalAgent:
         }
 
         self._initialized = True
-        
+
         # Initialize MessageHistory for context management (Anthropic pattern)
         self.history = MessageHistory(system_prompt_tokens=2000)
-        
+
         if LOGFIRE_TOKEN:
             logfire.set_baggage(run_id=self.run_id)
 
@@ -743,6 +813,18 @@ class UniversalAgent:
         prompt = (
             f"The current date is: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             "You are a helpful assistant with access to external tools and specialized sub-agents.\n\n"
+            "## ARCHITECTURE (HOW YOU INTERACT WITH TOOLS)\n"
+            "🏗️ **You are an MCP-based agent.** You interact with external tools via MCP tool calls, "
+            "NOT by writing Python/Bash code that imports SDKs.\n\n"
+            "**Your tool namespaces:**\n"
+            "- `mcp__composio__*` - Composio tools (Gmail, Slack, Search, etc.) → Call these directly\n"
+            "- `mcp__local_toolkit__*` - Local tools (file I/O, research, image gen) → Call these directly\n"
+            "- Native SDK tools: `Read`, `Write`, `Bash`, `Task`, `TodoWrite`\n\n"
+            "🚫 **PROHIBITED:**\n"
+            "- Do NOT use `Bash` to run Python code that imports `composio`\n"
+            "- Do NOT try `from composio import ...` or `composio_client.tools.execute(...)`\n"
+            "- These will fail. The Composio SDK is not available in Bash environment.\n"
+            "- All Composio interactions go through MCP tools which handle auth automatically.\n\n"
             "## CRITICAL: TOOL USAGE DISTINCTION\n"
             "⚠️ **TodoWrite** vs **Write**:\n"
             "- Use `TodoWrite` ONLY for updating your PLAN (mission.json).\n"
@@ -799,6 +881,18 @@ class UniversalAgent:
             f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
             "You are a **Report Creation Expert** sub-agent. Your job is to create high-quality, "
             "professional HTML reports with real quotes and facts from sources.\n\n"
+            "## YOUR ROLE (REPORT CREATION ONLY)\n"
+            "🎯 **Your job:** Create reports and save them to `work_products/`\n"
+            "📧 **NOT your job:** Sending emails. The MAIN AGENT handles email after you finish.\n\n"
+            "**Your available tools (restricted set):**\n"
+            "- `Read`, `Write`, `Bash` (native SDK)\n"
+            "- `mcp__local_toolkit__finalize_research`, `mcp__local_toolkit__read_research_files`\n"
+            "- `mcp__local_toolkit__generate_image`, `mcp__local_toolkit__workbench_*`\n\n"
+            "🚫 **You do NOT have access to:**\n"
+            "- Composio tools (Gmail, Slack, external APIs) - these are main agent only\n"
+            "- Do NOT use Bash to import `composio` - it will fail\n\n"
+            "**When finished:** Return the report path. Say: 'Report saved to: [path]'\n"
+            "The main agent will handle any email delivery.\n\n"
             "## MANDATORY WORKFLOW\n\n"
             "### Step 1: Research Corpus Finalization (AUTOMATED)\n"
             "**Call `finalize_research(session_dir=...)` immediately.**\n"
@@ -819,7 +913,7 @@ class UniversalAgent:
             "⚠️ **STEP 2B IS MANDATORY - USE BATCH TOOL**\n"
             "**THEN:** Use `read_research_files` (NOT individual Read calls!):\n"
             "```\n"
-            "read_research_files(file_paths=[\"path1.md\", \"path2.md\", ...])\n"
+            'read_research_files(file_paths=["path1.md", "path2.md", ...])\n'
             "```\n"
             "- Pass a list of 5-10 most relevant **filtered** file paths from the overview\n"
             "- This reads ALL files in ONE tool call (efficient!)\n"
@@ -867,9 +961,18 @@ class UniversalAgent:
             f"- Save PDF to `{workspace_path}/work_products/`\\n"
             f"- **IMPORTANT:** When creating the python script (e.g. `create_pdf.py`), save it to `{workspace_path}/work_products/` and ALWAYS execute it using the **ABSOLUTE PATH**: `python {workspace_path}/work_products/create_pdf.py` to avoid file not found errors.\\n\\n"
             "### Step 6: Email Delivery (if requested)\\n"
-            "When asked to email the report:\\n"
-            "- Return control to the main agent with the saved file path\\n"
-            "- Instruct that the email should ATTACH the PDF file (preferred) or HTML file\\n\\n"
+            "🚨 **YOU CANNOT SEND EMAILS DIRECTLY** - You don't have access to email tools.\\n"
+            "When the task includes emailing the report:\\n"
+            "1. Save the PDF/HTML to work_products/\\n"
+            "2. **STOP AND RETURN** to the main agent with this message:\\n"
+            "   'Report saved to: [path]. Ready for email delivery.'\\n"
+            "3. The MAIN AGENT has GMAIL tools and will handle the email.\\n\\n"
+            "🚫 **PROHIBITED ACTIONS:**\\n"
+            "- ❌ Do NOT try `from composio import ...` in Python/Bash\\n"
+            "- ❌ Do NOT try `composio_client.tools.execute(...)` \\n"
+            "- ❌ Do NOT try to call GMAIL_SEND_EMAIL yourself\\n"
+            "- ❌ Do NOT use Bash to upload files to Composio\\n"
+            "These will ALL fail because you don't have Composio MCP access.\\n\\n"
             "## TOOLS AVAILABLE\\n"
             "- `crawl_parallel(urls, session_dir)` → Extract content from URLs, creates research_overview.md\\n"
             "- `read_research_files(file_paths)` → **USE PARALLEL BATCHING:**\\n"
@@ -972,7 +1075,7 @@ class UniversalAgent:
                             out = getattr(u, "output_tokens", 0) or 0
                             self.trace["token_usage"]["input"] += inp
                             self.trace["token_usage"]["output"] += out
-                            self.trace["token_usage"]["total"] += (inp + out)
+                            self.trace["token_usage"]["total"] += inp + out
 
                         yield AgentEvent(
                             type=EventType.TOOL_CALL,
@@ -1009,21 +1112,21 @@ class UniversalAgent:
             elif isinstance(msg, ResultMessage):
                 if msg.session_id:
                     self.trace["provider_session_id"] = msg.session_id
-                
+
                 # Check for usage info in ResultMessage (Anthropic often puts it here)
                 if hasattr(msg, "usage") and msg.usage:
                     u = msg.usage
                     inp = getattr(u, "input_tokens", 0) or 0
                     out = getattr(u, "output_tokens", 0) or 0
-                    
+
                     # Update cumulative trace (for backwards compatibility)
                     self.trace["token_usage"]["input"] += inp
                     self.trace["token_usage"]["output"] += out
-                    self.trace["token_usage"]["total"] += (inp + out)
-                    
+                    self.trace["token_usage"]["total"] += inp + out
+
                     # Add to MessageHistory for per-message tracking (Anthropic pattern)
                     self.history.add_message("assistant", "response", u)
-                    
+
                     # Check for truncation and apply it
                     if self.history.truncate():
                         logfire.warning(
@@ -1031,7 +1134,7 @@ class UniversalAgent:
                             run_id=self.run_id,
                             stats=self.history.get_stats(),
                         )
-                    
+
                     # Check if we should trigger harness handoff
                     if self.history.should_handoff():
                         logfire.warning(
@@ -1048,12 +1151,12 @@ class UniversalAgent:
                                 "threshold": TRUNCATION_THRESHOLD,
                             },
                         )
-                    
+
                     logfire.info(
-                        "token_usage_update", 
-                        run_id=self.run_id, 
-                        input=inp, 
-                        output=out, 
+                        "token_usage_update",
+                        run_id=self.run_id,
+                        input=inp,
+                        output=out,
                         total_so_far=self.trace["token_usage"]["total"],
                         history_tokens=self.history.total_tokens,
                     )
@@ -1089,14 +1192,21 @@ class UniversalAgent:
                         if is_error:
                             error_text = str(block_content)
                             # Only count validation/schema errors which indicate a loop
-                            if "validation" in error_text.lower() or "missing required" in error_text.lower():
+                            if (
+                                "validation" in error_text.lower()
+                                or "missing required" in error_text.lower()
+                            ):
                                 self.consecutive_tool_errors += 1
-                                logfire.warning("consecutive_tool_error", count=self.consecutive_tool_errors, error=error_text[:100])
-                                
+                                logfire.warning(
+                                    "consecutive_tool_error",
+                                    count=self.consecutive_tool_errors,
+                                    error=error_text[:100],
+                                )
+
                                 # Level 2: Escalated Nudge (3 errors)
                                 if self.consecutive_tool_errors == 3:
                                     # We can't modify the PAST block, but we can potentially inject a steering message?
-                                    # Actually the most effective way is to let the result go through, 
+                                    # Actually the most effective way is to let the result go through,
                                     # but if we could intercept... for now relies on the agent reading the error.
                                     # We will implement the Escalated Nudge in the *next* user message or via system event if possible.
                                     # For now, just logging.
@@ -1106,7 +1216,7 @@ class UniversalAgent:
                                 if self.consecutive_tool_errors >= 4:
                                     raise HarnessError(
                                         f"Aborting iteration due to {self.consecutive_tool_errors} consecutive tool validation errors.",
-                                        context={"last_tool_error": error_text[:500]}
+                                        context={"last_tool_error": error_text[:500]},
                                     )
                         else:
                             # Reset on success
@@ -1157,9 +1267,13 @@ class UniversalAgent:
 
                             # Check for work_product events (Write tool to work_products/)
                             tool_lower = tool_name.lower()
-                            is_write_tool = "write" in tool_lower and ("__write" in tool_lower or tool_lower.endswith("write"))
+                            is_write_tool = "write" in tool_lower and (
+                                "__write" in tool_lower or tool_lower.endswith("write")
+                            )
                             if is_write_tool and tool_input:
-                                file_path = tool_input.get("file_path", "") or tool_input.get("path", "")
+                                file_path = tool_input.get(
+                                    "file_path", ""
+                                ) or tool_input.get("path", "")
                                 if "work_products" in file_path and file_path.endswith(
                                     ".html"
                                 ):
