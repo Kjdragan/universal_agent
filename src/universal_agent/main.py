@@ -20,6 +20,7 @@ from typing import Any, Optional, Callable
 from dotenv import load_dotenv
 from universal_agent.utils.message_history import TRUNCATION_THRESHOLD
 
+
 # Timezone helper for consistent date/time across deployments
 def get_user_datetime():
     """
@@ -29,6 +30,7 @@ def get_user_datetime():
     # Try to use pytz if available, otherwise manual offset
     try:
         import pytz
+
         user_tz = pytz.timezone(os.getenv("USER_TIMEZONE", "America/Chicago"))
         return datetime.now(user_tz)
     except ImportError:
@@ -45,14 +47,20 @@ class ExecutionResult:
     Structured result from process_turn() for rich Telegram feedback.
     Contains all the data needed to display execution summary + agent response.
     """
-    response_text: str                           # Agent's final response
-    execution_time_seconds: float = 0.0          # Total execution time
-    tool_calls: int = 0                          # Number of tool calls
-    tool_breakdown: list = field(default_factory=list)  # [{name, time_offset, iteration}]
-    code_execution_used: bool = False            # Whether code exec tools were used
-    workspace_path: str = ""                     # Session workspace directory
-    trace_id: Optional[str] = None               # Logfire trace ID for deep linking
-    follow_up_suggestions: list = field(default_factory=list)  # Extracted follow-up options
+
+    response_text: str  # Agent's final response
+    execution_time_seconds: float = 0.0  # Total execution time
+    tool_calls: int = 0  # Number of tool calls
+    tool_breakdown: list = field(
+        default_factory=list
+    )  # [{name, time_offset, iteration}]
+    code_execution_used: bool = False  # Whether code exec tools were used
+    workspace_path: str = ""  # Session workspace directory
+    trace_id: Optional[str] = None  # Logfire trace ID for deep linking
+    follow_up_suggestions: list = field(
+        default_factory=list
+    )  # Extracted follow-up options
+
 
 from dotenv import load_dotenv
 
@@ -103,6 +111,7 @@ from universal_agent.observers import (
     verify_subagent_compliance,
 )
 
+
 class DualWriter:
     """Writes to both a file and the original stream (stdout/stderr)."""
 
@@ -130,15 +139,14 @@ class DualWriter:
 
 
 class BudgetExceeded(RuntimeError):
-    def __init__(self, budget_name: str, limit: float, current: float, detail: str = ""):
+    def __init__(
+        self, budget_name: str, limit: float, current: float, detail: str = ""
+    ):
         self.budget_name = budget_name
         self.limit = limit
         self.current = current
         self.detail = detail
-        message = (
-            f"Budget exceeded: {budget_name} "
-            f"(limit={limit}, current={current})"
-        )
+        message = f"Budget exceeded: {budget_name} (limit={limit}, current={current})"
         if detail:
             message = f"{message} - {detail}"
         super().__init__(message)
@@ -274,10 +282,16 @@ from claude_agent_sdk.types import (
 )
 from typing import Any
 from composio import Composio
+
 # Durable runtime support
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
-from universal_agent.agent_core import UniversalAgent, EventType, AgentEvent, HarnessError
+from universal_agent.agent_core import (
+    UniversalAgent,
+    EventType,
+    AgentEvent,
+    HarnessError,
+)
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.tool_gateway import (
     prepare_tool_call,
@@ -374,7 +388,11 @@ _LETTA_CONTEXT = None
 _LETTA_CONTEXT_READY = False
 _letta_client = None
 _letta_async_client = None
-_LETTA_SUBAGENT_ENABLED = os.getenv("UA_LETTA_SUBAGENT_MEMORY", "1").lower() not in {"0", "false", "no"}
+_LETTA_SUBAGENT_ENABLED = os.getenv("UA_LETTA_SUBAGENT_MEMORY", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
 
 try:
     from agentic_learning import learning, AgenticLearning, AsyncAgenticLearning
@@ -526,7 +544,9 @@ async def _capture_subagent_memory(
     if isinstance(tool_input, dict):
         prompt = tool_input.get("prompt") or tool_input.get("description") or ""
     if prompt:
-        subagent_type = tool_input.get("subagent_type") if isinstance(tool_input, dict) else None
+        subagent_type = (
+            tool_input.get("subagent_type") if isinstance(tool_input, dict) else None
+        )
         if subagent_type:
             prompt = f"[Subagent: {subagent_type}]\n{prompt}"
     request_messages = [{"role": "user", "content": prompt}] if prompt else []
@@ -540,6 +560,7 @@ async def _capture_subagent_memory(
         )
     except Exception:
         return
+
 
 # =============================================================================
 # OBSERVER SETUP - For processing tool results asynchronously
@@ -580,9 +601,6 @@ def parse_relative_date(relative_str: str) -> str:
 # =============================================================================
 
 
-
-
-
 # Document skills that trigger PreToolUse hints
 DOCUMENT_SKILL_TRIGGERS = {
     "pdf": ["pdf", "reportlab", "pypdf", "pdfplumber"],
@@ -598,7 +616,14 @@ async def on_pre_tool_use_ledger(
     """
     PreToolUse Hook: prepare tool call ledger entry and enforce idempotency.
     """
-    global tool_ledger, run_id, current_step_id, forced_tool_queue, forced_tool_active_ids, forced_tool_mode_active, runtime_db_conn
+    global \
+        tool_ledger, \
+        run_id, \
+        current_step_id, \
+        forced_tool_queue, \
+        forced_tool_active_ids, \
+        forced_tool_mode_active, \
+        runtime_db_conn
     if tool_ledger is None or run_id is None:
         return {}
     if runtime_db_conn and run_id and is_cancel_requested(runtime_db_conn, run_id):
@@ -655,7 +680,7 @@ async def on_pre_tool_use_ledger(
                 "permissionDecisionReason": "TaskOutput/TaskResult is not a tool call.",
             },
         }
-    
+
     # Check for disallowed/hallucinated tools
     if tool_name in DISALLOWED_TOOLS:
         return {
@@ -676,13 +701,13 @@ async def on_pre_tool_use_ledger(
         tool_input = input_data.get("tool_input", {}) or {}
         file_path = tool_input.get("file_path", "")
         content = tool_input.get("content", "")
-        
+
         missing_params = []
         if not file_path:
             missing_params.append("file_path")
         if not content:
             missing_params.append("content")
-        
+
         if missing_params:
             logfire.warning(
                 "empty_write_params_blocked",
@@ -691,7 +716,11 @@ async def on_pre_tool_use_ledger(
                 run_id=run_id,
                 step_id=current_step_id,
             )
-            workspace_hint = f"WORKSPACE: {OBSERVER_WORKSPACE_DIR}/work_products/\n" if OBSERVER_WORKSPACE_DIR else ""
+            workspace_hint = (
+                f"WORKSPACE: {OBSERVER_WORKSPACE_DIR}/work_products/\n"
+                if OBSERVER_WORKSPACE_DIR
+                else ""
+            )
             return {
                 "systemMessage": (
                     f"⚠️ BLOCKED: Write call missing required params: {', '.join(missing_params)}.\n\n"
@@ -700,8 +729,8 @@ async def on_pre_tool_use_ledger(
                     f"1. Take a breath - don't just retry immediately\n"
                     f"2. Write a SHORTER version first (executive summary only)\n"
                     f"3. Use these exact params:\n"
-                    f"   - file_path: \"{OBSERVER_WORKSPACE_DIR or 'WORKSPACE'}/work_products/report.html\"\n"
-                    f"   - content: \"<html>...your report content...</html>\"\n\n"
+                    f'   - file_path: "{OBSERVER_WORKSPACE_DIR or "WORKSPACE"}/work_products/report.html"\n'
+                    f'   - content: "<html>...your report content...</html>"\n\n'
                     f"{workspace_hint}"
                     f"Retry now with BOTH file_path AND content filled in."
                 ),
@@ -727,9 +756,7 @@ async def on_pre_tool_use_ledger(
         repair_hint = ""
         if base_name and arg_key and arg_value is not None:
             repaired_payload = json.dumps({arg_key: arg_value}, ensure_ascii=True)
-            repair_hint = (
-                f" Reissue as {base_name} with input {repaired_payload}."
-            )
+            repair_hint = f" Reissue as {base_name} with input {repaired_payload}."
         logfire.warning(
             "malformed_tool_name_guardrail",
             tool_name=tool_name,
@@ -748,7 +775,10 @@ async def on_pre_tool_use_ledger(
                 "⚠️ Malformed tool call name detected. "
                 "Reissue the tool call with proper JSON arguments and do NOT "
                 "concatenate XML-like arg_key/arg_value into the tool name."
-                + (repair_hint or f" Next required tool: {expected_tool} with input {expected_input}")
+                + (
+                    repair_hint
+                    or f" Next required tool: {expected_tool} with input {expected_input}"
+                )
             ),
             "decision": "block",
             "hookSpecificOutput": {
@@ -795,7 +825,11 @@ async def on_pre_tool_use_ledger(
         }
     tool_input = input_data.get("tool_input", {}) or {}
     updated_tool_input = None
-    if isinstance(tool_input, dict) and tool_name.lower() == "task" and "resume" in tool_input:
+    if (
+        isinstance(tool_input, dict)
+        and tool_name.lower() == "task"
+        and "resume" in tool_input
+    ):
         updated_tool_input = dict(tool_input)
         resume_key = updated_tool_input.pop("resume", None)
         if resume_key and not updated_tool_input.get("task_key"):
@@ -887,6 +921,7 @@ async def on_pre_tool_use_ledger(
                 "updatedInput": updated_tool_input,
             }
         }
+
     step_id = current_step_id or "unknown"
 
     if forced_tool_mode_active and not forced_tool_queue:
@@ -984,7 +1019,7 @@ async def on_pre_tool_use_ledger(
                     },
                 }
             return _allow_with_updated_input()
-        
+
         # Note: Task/Bash harness bypass moved to line ~820 (early bypass before forced_tool_queue)
 
         if tool_name in ("Write", "Edit", "MultiEdit"):
@@ -1102,7 +1137,9 @@ async def on_pre_tool_use_ledger(
         )
         side_effect_class = _normalize_side_effect_class(side_effect_class, tool_name)
         if _should_inject_provider_idempotency(tool_name, side_effect_class):
-            _inject_provider_idempotency(tool_name, tool_input, decision.idempotency_key)
+            _inject_provider_idempotency(
+                tool_name, tool_input, decision.idempotency_key
+            )
     except Exception as exc:
         logfire.warning("ledger_prepare_failed", tool_name=tool_name, error=str(exc))
         return {
@@ -1203,7 +1240,9 @@ async def on_pre_tool_use_ledger(
             step_id=step_id,
         )
     except Exception as exc:
-        logfire.warning("ledger_mark_running_failed", tool_use_id=tool_call_id, error=str(exc))
+        logfire.warning(
+            "ledger_mark_running_failed", tool_use_id=tool_call_id, error=str(exc)
+        )
         return {
             "systemMessage": (
                 "⚠️ Tool ledger missing prepared entry; refusing to execute tool. "
@@ -1235,7 +1274,7 @@ async def on_pre_tool_use_ledger(
                 tool_name=tool_name,
                 note="first_side_effect_in_step",
             )
-    
+
     # [Bash Scaffolding] Audit log all shell commands for visibility
     bash_workspace = input_data.get("workspace_dir") or OBSERVER_WORKSPACE_DIR
     if tool_name.upper() == "BASH" and bash_workspace:
@@ -1257,7 +1296,12 @@ async def on_post_tool_use_ledger(
     """
     PostToolUse Hook: persist tool response to the ledger.
     """
-    global tool_ledger, forced_tool_active_ids, forced_tool_queue, runtime_db_conn, run_id
+    global \
+        tool_ledger, \
+        forced_tool_active_ids, \
+        forced_tool_queue, \
+        runtime_db_conn, \
+        run_id
     if tool_ledger is None:
         return {}
 
@@ -1295,7 +1339,9 @@ async def on_post_tool_use_ledger(
     expected = None
     if tool_call_id in forced_tool_active_ids:
         expected = forced_tool_active_ids.pop(tool_call_id)
-    elif forced_tool_queue and _forced_tool_matches(raw_tool_name, tool_input, forced_tool_queue[0]):
+    elif forced_tool_queue and _forced_tool_matches(
+        raw_tool_name, tool_input, forced_tool_queue[0]
+    ):
         expected = forced_tool_queue[0]
         logfire.info(
             "replay_tool_use_id_missing",
@@ -1463,7 +1509,9 @@ async def on_post_tool_use_ledger(
                 external_correlation_id=external_id,
             )
     except Exception as exc:
-        logfire.warning("ledger_mark_result_failed", tool_use_id=tool_call_id, error=str(exc))
+        logfire.warning(
+            "ledger_mark_result_failed", tool_use_id=tool_call_id, error=str(exc)
+        )
 
     return {}
 
@@ -1481,6 +1529,7 @@ async def on_post_tool_use_validation(
         logger=logfire,
     )
 
+
 async def on_pre_bash_skill_hint(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
@@ -1490,15 +1539,22 @@ async def on_pre_bash_skill_hint(
     This is a BACKUP hook - fires after agent has already decided to use Bash.
     """
     command = input_data.get("command", "").lower()
-    
+
     for skill_name, triggers in DOCUMENT_SKILL_TRIGGERS.items():
         if any(trigger in command for trigger in triggers):
             skill_path = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                ".claude", "skills", skill_name, "SKILL.md"
+                ".claude",
+                "skills",
+                skill_name,
+                "SKILL.md",
             )
             if os.path.exists(skill_path):
-                logfire.info("skill_hint_backup_injected", skill=skill_name, command_preview=command[:100])
+                logfire.info(
+                    "skill_hint_backup_injected",
+                    skill=skill_name,
+                    command_preview=command[:100],
+                )
                 return {
                     "systemMessage": (
                         f"⚠️ SKILL REMINDER: You're about to create {skill_name.upper()} content. "
@@ -1506,7 +1562,62 @@ async def on_pre_bash_skill_hint(
                         f"Consider reading it FIRST to avoid common issues."
                     )
                 }
-    
+
+    return {}
+
+
+async def on_pre_bash_block_composio_sdk(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """
+    PreToolUse Hook: Block Bash commands that attempt to call Composio SDK directly.
+
+    This prevents agents from bypassing the MCP architecture by brute-forcing
+    Python/SDK calls through Bash. All Composio interactions should go through
+    MCP tools (mcp__composio__*) which handle auth and sessions properly.
+    """
+    command = str(input_data.get("command", "") or "")
+    command_lower = command.lower()
+
+    # Detect Composio SDK usage patterns that should use MCP instead
+    composio_sdk_patterns = [
+        "from composio import",
+        "import composio",
+        "composio.composio",
+        "composiotoolset",
+        "composio_client",
+        "composio_toolset",
+        ".tools.execute(",
+        "execute_action(",
+        "gmail_send_email",  # Specific tool that should be MCP
+        "slack_send_message",  # Other common Composio tools
+    ]
+
+    if any(pattern in command_lower for pattern in composio_sdk_patterns):
+        logfire.warning(
+            "bash_composio_sdk_blocked",
+            command_preview=command[:200],
+            tool_use_id=str(tool_use_id),
+        )
+
+        return {
+            "systemMessage": (
+                "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
+                "**USE MCP TOOLS INSTEAD:**\n"
+                "- For email: `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` with `tool_slug: 'GMAIL_SEND_EMAIL'`\n"
+                "- For file upload: `mcp__local_toolkit__upload_to_composio`\n"
+                "- For search: Use `COMPOSIO_SEARCH_TOOLS` to discover the correct MCP pattern\n\n"
+                "The Composio SDK is not available in the Bash environment. "
+                "All Composio interactions must go through MCP tools which handle auth automatically.\n\n"
+                "If you're a sub-agent without Composio MCP access, RETURN CONTROL to the main agent."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Bash command attempts to call Composio SDK directly. Use MCP tools instead.",
+            },
+        }
+
     return {}
 
 
@@ -1517,9 +1628,21 @@ SKILL_PROMPT_TRIGGERS_OVERRIDE = {
     # Format: "skill-name": ["keyword1", "keyword2", ...]
     # Leave empty to use auto-generated triggers from description
     "image-generation": [
-        "image", "generate image", "create image", "edit image",
-        "picture", "photo", "illustration", "graphic", "infographic",
-        "visual", "design", ".png", ".jpg", ".jpeg", ".webp"
+        "image",
+        "generate image",
+        "create image",
+        "edit image",
+        "picture",
+        "photo",
+        "illustration",
+        "graphic",
+        "infographic",
+        "visual",
+        "design",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
     ],
 }
 
@@ -1528,63 +1651,76 @@ def build_skill_prompt_triggers() -> dict[str, list[str]]:
     """
     Build skill prompt triggers automatically from skill descriptions.
     This ensures new skills work immediately without code changes.
-    
+
     Returns: {"skill-name": ["trigger1", "trigger2", ...]}
     """
     import yaml
     import re
-    
+
     triggers = {}
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     skills_dir = os.path.join(project_root, ".claude", "skills")
-    
+
     if not os.path.exists(skills_dir):
         return triggers
-    
+
     for skill_name in os.listdir(skills_dir):
         skill_path = os.path.join(skills_dir, skill_name)
         skill_md = os.path.join(skill_path, "SKILL.md")
-        
+
         if not os.path.isdir(skill_path) or not os.path.exists(skill_md):
             continue
-        
+
         # Check for override first
         if skill_name in SKILL_PROMPT_TRIGGERS_OVERRIDE:
             triggers[skill_name] = SKILL_PROMPT_TRIGGERS_OVERRIDE[skill_name]
             continue
-        
+
         try:
             with open(skill_md, "r", encoding="utf-8") as f:
                 content = f.read()
-            
+
             if content.startswith("---"):
                 parts = content.split("---", 2)
                 if len(parts) >= 3:
                     frontmatter = yaml.safe_load(parts[1])
                     if frontmatter and isinstance(frontmatter, dict):
                         description = frontmatter.get("description", "")
-                        
+
                         # Auto-generate triggers from skill name and description
                         trigger_set = set()
-                        
+
                         # Always include skill name
                         trigger_set.add(skill_name.lower())
-                        
+
                         # Extract key terms from description (lowercase, min 4 chars)
-                        words = re.findall(r'\b[a-zA-Z]{4,}\b', description.lower())
+                        words = re.findall(r"\b[a-zA-Z]{4,}\b", description.lower())
                         # Filter common words, keep domain-specific terms
-                        stop_words = {'this', 'that', 'with', 'from', 'have', 'when', 
-                                     'should', 'used', 'using', 'skill', 'create', 
-                                     'comprehensive', 'editing', 'creation'}
+                        stop_words = {
+                            "this",
+                            "that",
+                            "with",
+                            "from",
+                            "have",
+                            "when",
+                            "should",
+                            "used",
+                            "using",
+                            "skill",
+                            "create",
+                            "comprehensive",
+                            "editing",
+                            "creation",
+                        }
                         for word in words:
                             if word not in stop_words:
                                 trigger_set.add(word)
-                        
+
                         triggers[skill_name] = list(trigger_set)
         except Exception:
             # Fallback: just use skill name
             triggers[skill_name] = [skill_name.lower()]
-    
+
     return triggers
 
 
@@ -1596,43 +1732,48 @@ SKILL_PROMPT_TRIGGERS = build_skill_prompt_triggers()
 # SKILL AWARENESS REGISTRY - For injecting skill context into sub-agents
 # =============================================================================
 
+
 class SkillAwarenessRegistry:
     """
     Provides skill awareness context for sub-agents.
     Sub-agents receive YAML skill summaries when spawned, enabling them
     to progressively load full skill content when needed.
     """
-    
+
     _instance = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._initialized = False
         return cls._instance
-    
+
     def __init__(self):
         if self._initialized:
             return
         self._initialized = True
         self.skills = discover_skills()  # Reuse existing function
-        logfire.info("skill_awareness_registry_initialized", skill_count=len(self.skills))
-    
+        logfire.info(
+            "skill_awareness_registry_initialized", skill_count=len(self.skills)
+        )
+
     def get_awareness_context(self, expected_skills: list[str] = None) -> str:
         """
         Generate skill awareness injection for sub-agent.
-        
+
         Args:
             expected_skills: List of skill names this sub-agent is expected to use.
-        
+
         Returns:
             Formatted string with skill awareness guidance.
         """
         if not self.skills:
             return ""
-        
-        expected_str = ", ".join(expected_skills) if expected_skills else "none specified"
-        
+
+        expected_str = (
+            ", ".join(expected_skills) if expected_skills else "none specified"
+        )
+
         skill_lines = []
         for skill in self.skills:
             name = skill.get("name", "unknown")
@@ -1641,7 +1782,7 @@ class SkillAwarenessRegistry:
             if len(desc) > 150:
                 desc = desc[:150] + "..."
             skill_lines.append(f"- **{name}**: {desc}")
-        
+
         return f"""
 ## Inherited Skill Awareness
 
@@ -1689,10 +1830,10 @@ async def on_pre_task_skill_awareness(
     """
     tool_input = input_data.get("tool_input", {})
     subagent_type = tool_input.get("subagent_type", "unknown")
-    
+
     # Get expected skills for this sub-agent type
     expected_skills = SUBAGENT_EXPECTED_SKILLS.get(subagent_type, [])
-    
+
     # Get skill awareness context
     registry = get_skill_awareness_registry()
     awareness_context = registry.get_awareness_context(expected_skills)
@@ -1728,10 +1869,8 @@ async def on_pre_task_skill_awareness(
                 f"🧠 Injected Letta memory for sub-agent: {subagent_type or 'unknown'} "
                 f"({len(memory_context)} chars)"
             )
-        return {
-            "systemMessage": combined_context
-        }
-    
+        return {"systemMessage": combined_context}
+
     return {}
 
 
@@ -1763,30 +1902,32 @@ async def on_user_prompt_skill_awareness(
     UserPromptSubmit Hook: EARLY skill awareness injection.
     Fires when user submits their prompt, BEFORE agent starts planning.
     This guides the agent to consider skills during initial approach.
-    
+
     Note: Multiple skills may match a single prompt (e.g., "create PDF and Excel").
     All matching skills are listed to give agent full awareness.
-    
+
     UserPromptSubmit hooks return hookSpecificOutput with additionalContext,
     NOT systemMessage like other hooks.
     """
     try:
         import yaml
-        
+
         # Safely extract prompt from input_data
         if not input_data or not isinstance(input_data, dict):
             return {}
-        
+
         prompt = str(input_data.get("prompt", "") or "").lower()
         if not prompt:
             return {}
-        
+
         matched_skills = []
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        
+
         for skill_name, triggers in SKILL_PROMPT_TRIGGERS.items():
             if any(trigger in prompt for trigger in triggers):
-                skill_path = os.path.join(project_root, ".claude", "skills", skill_name, "SKILL.md")
+                skill_path = os.path.join(
+                    project_root, ".claude", "skills", skill_name, "SKILL.md"
+                )
                 if os.path.exists(skill_path):
                     # Read description from frontmatter for better context
                     description = "Best practices for this task"
@@ -1800,18 +1941,24 @@ async def on_user_prompt_skill_awareness(
                                 if frontmatter and isinstance(frontmatter, dict):
                                     desc = frontmatter.get("description", "")
                                     # Truncate long descriptions
-                                    description = desc[:100] + "..." if len(desc) > 100 else desc
+                                    description = (
+                                        desc[:100] + "..." if len(desc) > 100 else desc
+                                    )
                     except Exception:
                         pass
                     matched_skills.append((skill_name, skill_path, description))
-        
+
         if matched_skills:
-            skill_list = "\n".join([
-                f"  - {name}: {desc}\n    Path: {path}" 
-                for name, path, desc in matched_skills
-            ])
-            logfire.info("skill_awareness_early_injected", skills=[s[0] for s in matched_skills])
-            
+            skill_list = "\n".join(
+                [
+                    f"  - {name}: {desc}\n    Path: {path}"
+                    for name, path, desc in matched_skills
+                ]
+            )
+            logfire.info(
+                "skill_awareness_early_injected", skills=[s[0] for s in matched_skills]
+            )
+
             # UserPromptSubmit hooks use hookSpecificOutput with additionalContext
             return {
                 "hookSpecificOutput": {
@@ -1821,10 +1968,10 @@ async def on_user_prompt_skill_awareness(
                         f"BEFORE writing code, read the relevant skill(s) for proven patterns:\n"
                         f"{skill_list}\n"
                         f"Use read_local_file on the SKILL.md path to load full instructions."
-                    )
+                    ),
                 }
             }
-        
+
         return {}
     except Exception as e:
         # Log error but don't crash the hook
@@ -1836,6 +1983,7 @@ async def on_user_prompt_skill_awareness(
 # HOOK CALLBACKS - For sub-agent lifecycle events
 # =============================================================================
 
+
 async def on_subagent_stop(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
@@ -1844,13 +1992,13 @@ async def on_subagent_stop(
     Verifies artifacts were created and injects guidance for next steps.
     """
     logfire.info("subagent_stop_hook_fired", input_preview=str(input_data)[:500])
-    
+
     # Check if report was created in work_products/
     global OBSERVER_WORKSPACE_DIR
     if OBSERVER_WORKSPACE_DIR:
         work_products = os.path.join(OBSERVER_WORKSPACE_DIR, "work_products")
         search_results = os.path.join(OBSERVER_WORKSPACE_DIR, "search_results")
-        
+
         # Check for HTML report
         has_report = False
         report_file = None
@@ -1859,13 +2007,13 @@ async def on_subagent_stop(
             if html_files:
                 has_report = True
                 report_file = html_files[0]
-        
+
         # Check for extracted content
         has_extracted = False
         if os.path.exists(search_results):
             md_files = [f for f in os.listdir(search_results) if f.endswith(".md")]
             has_extracted = len(md_files) > 0
-        
+
         if has_report:
             logfire.info(
                 "subagent_report_created",
@@ -1903,7 +2051,7 @@ async def on_subagent_stop(
                     "Check if URLs were passed correctly and retry the task."
                 )
             }
-    
+
     # Stop the subagent
     return {
         "systemMessage": "Subagent completed task successfully.",
@@ -1912,6 +2060,8 @@ async def on_subagent_stop(
             "action": "stop",
         },
     }
+
+
 def check_harness_threshold(
     token_usage_approx: int,
     iteration: int,
@@ -1921,23 +2071,23 @@ def check_harness_threshold(
     """
     Hybrid Trigger for Harness Handoff.
     Returns True if we should force a restart.
-    
+
     Conditions:
     1. Debug flag is set (UA_DEBUG_FORCE_HANDOFF)
     2. Context usage is high (>90% = 180k of 200k tokens) AND we are at a natural break
     """
     if force_debug or os.getenv("UA_DEBUG_FORCE_HANDOFF") == "1":
         return True
-    
+
     # 90% of 200k context window (aligned with Anthropic pattern)
     TOKEN_THRESHOLD = 180000
     if token_usage_approx > TOKEN_THRESHOLD:
         return True
-        
+
     return False
 
 
-def on_agent_stop(context: HookContext, run_id: str = None, db_conn = None) -> dict:
+def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dict:
     """
     Post-Run Hook: Checks for Harness Loop conditions.
     If completion promise is NOT met, restarts the agent with fresh context.
@@ -1945,8 +2095,8 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn = None) -> d
     _emit_composio_schema_metrics()
 
     # Resolve dependencies (Args > Globals)
-    use_run_id = run_id or globals().get('run_id')
-    use_db = db_conn or globals().get('runtime_db_conn')
+    use_run_id = run_id or globals().get("run_id")
+    use_db = db_conn or globals().get("runtime_db_conn")
 
     if not use_run_id or not use_db:
         return {}
@@ -1960,59 +2110,67 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn = None) -> d
     if not promise:
         # Normal stop, no harness
         return {}
-        
+
     # Check if promise is fulfilled in output
     # context.output is expected to be the final agent text response
     final_output = context.output if hasattr(context, "output") else ""
     if isinstance(final_output, dict):
-         final_output = str(final_output) # fallback
-         
+        final_output = str(final_output)  # fallback
+
     # [FIX] Ralph Wiggum Parity: Strict Regex Validation
     # We do NOT allow empty output to exit silently.
-    
+
     import re
+
     # Extract content inside <promise>...</promise> tags
     # DOTALL allows matching across newlines
-    match = re.search(r'<promise>(.*?)</promise>', final_output, re.DOTALL)
-    
+    match = re.search(r"<promise>(.*?)</promise>", final_output, re.DOTALL)
+
     promise_met = False
-    
+
     if match:
         extracted_promise = match.group(1).strip()
         # Collapse whitespace to single spaces for robust comparison
         extracted_promise_normalized = " ".join(extracted_promise.split())
         promise_normalized = " ".join(promise.split())
-        
+
         if extracted_promise_normalized == promise_normalized:
             promise_met = True
             logfire.info("harness_completion_promise_met", run_id=use_run_id)
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "AgentStop",
-                    "action": "complete", # Let it stop naturally
+                    "action": "complete",  # Let it stop naturally
                 }
             }
         else:
-             print(f"⚠️ Promise Mismatch: Expected '{promise}', Got '{extracted_promise}'")
-    
+            print(
+                f"⚠️ Promise Mismatch: Expected '{promise}', Got '{extracted_promise}'"
+            )
+
     # If we get here, the promise was NOT met.
     # We must RESTART the agent to force it to finish.
-    
+
     # Check limits first
     if current_iter >= max_iter:
-        logfire.warning("harness_max_iterations_reached", run_id=use_run_id, current=current_iter, max=max_iter)
+        logfire.warning(
+            "harness_max_iterations_reached",
+            run_id=use_run_id,
+            current=current_iter,
+            max=max_iter,
+        )
         return {
-             "systemMessage": f"⚠️ Max iterations ({max_iter}) reached without completion promise '{promise}'. Stopping.",
-             "hookSpecificOutput": {
+            "systemMessage": f"⚠️ Max iterations ({max_iter}) reached without completion promise '{promise}'. Stopping.",
+            "hookSpecificOutput": {
                 "hookEventName": "AgentStop",
                 "action": "stop",
-            }
+            },
         }
-    
+
     # Force Restart / Nudge
     return {
-         "systemMessage": f"REJECTED: You claimed to be done, but did not provide the required completion promise: <promise>{promise}</promise>. You must complete the task and output the exact promise tag.",
-         "hookSpecificOutput": {
+        "systemMessage": f"REJECTED: You claimed to be done, but did not provide the required completion promise: <promise>{promise}</promise>. You must complete the task and output the exact promise tag.",
+        "hookSpecificOutput": {
             "hookEventName": "AgentStop",
             "action": "restart",
             "nextPrompt": (
@@ -2020,24 +2178,27 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn = None) -> d
                 "Continue working until the task is fully complete, then output the promise.\n\n"
                 "RUTHLESS AUTONOMY: Do NOT ask the user for guidance. Make reasonable decisions and continue. "
                 "You have full authority to proceed. Never output 'Would you like me to...' questions."
-            )
-        }
+            ),
+        },
     }
 
     # PROCEED TO HANDOFF
     # 1. Save checkpoint (happens automatically in main loop mostly, but good to ensure)
     # 2. Increment iteration
     new_iter = increment_iteration_count(use_db, use_run_id)
-    
+
     # 3. Construct Continuation Prompt
     import json
+
     run_spec_json = info.get("run_spec_json") or "{}"
     try:
         run_spec = json.loads(run_spec_json)
     except:
         run_spec = {}
-        
-    original_objective = run_spec.get("original_objective", "(See system prompt or previous context)")
+
+    original_objective = run_spec.get(
+        "original_objective", "(See system prompt or previous context)"
+    )
 
     continuation_prompt = f"""
 You are continuing a long-running task.
@@ -2061,11 +2222,11 @@ You have NOT output this yet, so you must continue.
         "systemMessage": continuation_prompt,
         "hookSpecificOutput": {
             "hookEventName": "AgentStop",
-            "action": "restart", # Signal to main loop to clear history and restart
-            "nextPrompt": continuation_prompt
-        }
+            "action": "restart",  # Signal to main loop to clear history and restart
+            "nextPrompt": continuation_prompt,
+        },
     }
-    
+
     return {}
 
 
@@ -2103,7 +2264,9 @@ _primary_transcript_path: Optional[str] = None
 _seen_transcript_paths: set[str] = set()
 
 
-def _mark_run_waiting_for_human(reason: str, *, tool_name: str = "", tool_call_id: str = "") -> None:
+def _mark_run_waiting_for_human(
+    reason: str, *, tool_name: str = "", tool_call_id: str = ""
+) -> None:
     if runtime_db_conn and run_id:
         update_run_status(runtime_db_conn, run_id, "waiting_for_human")
     logfire.warning(
@@ -2124,9 +2287,7 @@ def _maybe_mark_run_succeeded() -> None:
     update_run_status(runtime_db_conn, run_id, "succeeded")
 
 
-def _resolve_input_paths(
-    inputs: dict, workspace_dir: Optional[str]
-) -> dict:
+def _resolve_input_paths(inputs: dict, workspace_dir: Optional[str]) -> dict:
     if not workspace_dir:
         return inputs
     resolved: dict = {}
@@ -2163,7 +2324,9 @@ def build_job_prompt(run_spec: dict) -> Optional[str]:
         resolved_inputs = _resolve_input_paths(run_spec["inputs"], workspace_dir)
         job_prompt += "\n\nInputs:\n" + json.dumps(resolved_inputs, indent=2)
     if job_prompt and run_spec.get("constraints"):
-        job_prompt += "\n\nConstraints:\n" + json.dumps(run_spec["constraints"], indent=2)
+        job_prompt += "\n\nConstraints:\n" + json.dumps(
+            run_spec["constraints"], indent=2
+        )
     if job_prompt and workspace_dir:
         job_prompt += (
             "\n\nWorkspace:\n"
@@ -2287,7 +2450,11 @@ def _get_composio_schema_allowlist() -> set[str]:
 
 
 def _composio_schema_fetch_enabled() -> bool:
-    return os.getenv("UA_COMPOSIO_SCHEMA_FETCH", "1").strip().lower() not in {"0", "false", "no"}
+    return os.getenv("UA_COMPOSIO_SCHEMA_FETCH", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
 
 
 def _fetch_composio_tool_schema(tool_name: str) -> Optional[ToolSchema]:
@@ -2324,7 +2491,9 @@ def _fetch_composio_tool_schema(tool_name: str) -> Optional[ToolSchema]:
     duration_ms = (time.perf_counter() - start) * 1000
     _COMPOSIO_SCHEMA_METRICS["fetches"] += 1
     _COMPOSIO_SCHEMA_METRICS["total_ms"] += duration_ms
-    _COMPOSIO_SCHEMA_METRICS["max_ms"] = max(_COMPOSIO_SCHEMA_METRICS["max_ms"], duration_ms)
+    _COMPOSIO_SCHEMA_METRICS["max_ms"] = max(
+        _COMPOSIO_SCHEMA_METRICS["max_ms"], duration_ms
+    )
     logfire.info(
         "composio_schema_fetch",
         tool_name=slug,
@@ -2556,7 +2725,9 @@ def _should_trigger_test_crash(
         "crash_match": crash_match,
         "current_step_id": current_step_id,
         "current_phase": current_phase,
-        "normalized_tool_name": ",".join(sorted(normalized_candidates)) if normalized_candidates else "",
+        "normalized_tool_name": ",".join(sorted(normalized_candidates))
+        if normalized_candidates
+        else "",
     }
 
 
@@ -2719,7 +2890,10 @@ def _warn_if_subagent_hooks_configured(agents: Optional[dict[str, Any]]) -> None
         if isinstance(agent_def, dict):
             hooks_present = "hooks" in agent_def
         else:
-            hooks_present = hasattr(agent_def, "hooks") and getattr(agent_def, "hooks", None) is not None
+            hooks_present = (
+                hasattr(agent_def, "hooks")
+                and getattr(agent_def, "hooks", None) is not None
+            )
         if hooks_present:
             print(
                 f"⚠️ Subagent hooks are not supported in the Python SDK. "
@@ -2760,7 +2934,9 @@ def _canonical_interview_key(value: str) -> str:
     slug = _slugify_interview_key(value)
     if slug in _INTERVIEW_KEY_ALIASES:
         return _INTERVIEW_KEY_ALIASES[slug]
-    if "timeframe" in slug or ("time" in slug and ("range" in slug or "period" in slug or "window" in slug)):
+    if "timeframe" in slug or (
+        "time" in slug and ("range" in slug or "period" in slug or "window" in slug)
+    ):
         return "timeframe"
     if "focus" in slug or "topic" in slug or "scope" in slug:
         return "focus"
@@ -2842,7 +3018,9 @@ def _normalize_clarifications(clarifications: Any) -> dict[str, Any]:
     for key, value in clarifications.items():
         canonical_key = _canonical_interview_key(str(key))
         if canonical_key in normalized:
-            if _is_placeholder_value(normalized[canonical_key]) and not _is_placeholder_value(value):
+            if _is_placeholder_value(
+                normalized[canonical_key]
+            ) and not _is_placeholder_value(value):
                 normalized[canonical_key] = value
             continue
         normalized[canonical_key] = value
@@ -2945,14 +3123,19 @@ def _process_pending_interview(
                 pass
 
         if skip_interview:
-            print("\n⚡ RUTHLESS AUTONOMY: Skipping user interview. Mission is I_PROGRESS.")
+            print(
+                "\n⚡ RUTHLESS AUTONOMY: Skipping user interview. Mission is I_PROGRESS."
+            )
             answers = {
-                q.get("question", f"Q{idx+1}"): "Proceed with best judgment (Autonomy Mode)"
+                q.get(
+                    "question", f"Q{idx + 1}"
+                ): "Proceed with best judgment (Autonomy Mode)"
                 for idx, q in enumerate(questions)
             }
         else:
             if ask_fn is None:
                 from universal_agent.harness import ask_user_questions as do_interview
+
                 ask_fn = do_interview
             answers = ask_fn(questions)
 
@@ -3174,14 +3357,13 @@ def _parse_created_at(value: Any) -> Optional[datetime]:
 
 
 def _partition_inflight_for_relaunch(
-    inflight: list[dict[str, Any]]
+    inflight: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Skip in-flight tool calls that likely belong to a running RELAUNCH task."""
     relaunch_tasks = [
         item
         for item in inflight
-        if item.get("replay_policy") == "RELAUNCH"
-        and item.get("status") == "running"
+        if item.get("replay_policy") == "RELAUNCH" and item.get("status") == "running"
     ]
     if not relaunch_tasks:
         return inflight, []
@@ -3192,7 +3374,9 @@ def _partition_inflight_for_relaunch(
         if not step_id or not created_at:
             continue
         existing = cutoff_by_step.get(step_id)
-        cutoff_by_step[step_id] = created_at if existing is None else min(existing, created_at)
+        cutoff_by_step[step_id] = (
+            created_at if existing is None else min(existing, created_at)
+        )
     if not cutoff_by_step:
         return inflight, []
     replay: list[dict[str, Any]] = []
@@ -3215,10 +3399,9 @@ def _forced_tool_matches(
     raw_tool_name: str, tool_input: dict[str, Any], expected: dict[str, Any]
 ) -> bool:
     identity = parse_tool_identity(raw_tool_name or "")
-    if (
-        identity.tool_name != expected.get("tool_name")
-        or identity.tool_namespace != expected.get("tool_namespace")
-    ):
+    if identity.tool_name != expected.get(
+        "tool_name"
+    ) or identity.tool_namespace != expected.get("tool_namespace"):
         return False
     if identity.tool_name == "task":
         actual = _normalize_task_input(tool_input or {})
@@ -3232,8 +3415,7 @@ def _forced_tool_matches(
 
 def _forced_task_active() -> bool:
     return any(
-        item.get("tool_name") == "task"
-        and item.get("tool_namespace") == "claude_code"
+        item.get("tool_name") == "task" and item.get("tool_namespace") == "claude_code"
         for item in forced_tool_active_ids.values()
     )
 
@@ -3306,9 +3488,7 @@ def _build_forced_tool_prompt(queue: list[dict[str, Any]]) -> str:
     for idx, item in enumerate(queue, 1):
         raw_name = item.get("raw_tool_name") or item.get("tool_name")
         lines.append(f"{idx}) tool: {raw_name}")
-        lines.append(
-            f"   input: {json.dumps(item.get('tool_input') or {}, indent=2)}"
-        )
+        lines.append(f"   input: {json.dumps(item.get('tool_input') or {}, indent=2)}")
     return "\n".join(lines)
 
 
@@ -3383,7 +3563,11 @@ async def reconcile_inflight_tools(
     workspace_dir: str,
     max_turns: int = 3,
 ) -> bool:
-    global forced_tool_queue, forced_tool_active_ids, forced_tool_mode_active, runtime_db_conn
+    global \
+        forced_tool_queue, \
+        forced_tool_active_ids, \
+        forced_tool_mode_active, \
+        runtime_db_conn
     if not runtime_db_conn:
         return True
     inflight = _load_inflight_tool_calls(runtime_db_conn, run_id)
@@ -3409,9 +3593,7 @@ async def reconcile_inflight_tools(
     forced_tool_queue = []
     for item in inflight:
         if tool_ledger and tool_ledger.promote_pending_receipt(item["tool_call_id"]):
-            tool_ledger.mark_replay_status(
-                item["tool_call_id"], "succeeded_pending"
-            )
+            tool_ledger.mark_replay_status(item["tool_call_id"], "succeeded_pending")
             logfire.info(
                 "pending_receipt_promoted",
                 tool_call_id=item["tool_call_id"],
@@ -3421,7 +3603,11 @@ async def reconcile_inflight_tools(
         if item.get("replay_policy") == "RELAUNCH":
             relaunch_step_id = item.get("step_id") or current_step_id or "unknown"
             if tool_ledger and workspace_dir:
-                tool_input = item.get("tool_input") if isinstance(item.get("tool_input"), dict) else {}
+                tool_input = (
+                    item.get("tool_input")
+                    if isinstance(item.get("tool_input"), dict)
+                    else {}
+                )
                 _, task_key = _ensure_task_key(tool_input)
                 output_paths = _extract_task_output_paths(tool_input)
                 if output_paths:
@@ -3487,7 +3673,9 @@ async def reconcile_inflight_tools(
                 break
             prompt = _build_forced_tool_prompt(forced_tool_queue)
             try:
-                await process_turn(active_client, prompt, workspace_dir, force_complex=True)
+                await process_turn(
+                    active_client, prompt, workspace_dir, force_complex=True
+                )
             except BudgetExceeded:
                 raise
             except Exception as exc:
@@ -3886,7 +4074,9 @@ def print_job_completion_summary(
                 effects.add("email")
             if "UPLOAD_TO_COMPOSIO" in tool_name_upper:
                 effects.add("upload")
-            elif "upload_to_composio" in haystack or ("upload" in haystack and "composio" in haystack):
+            elif "upload_to_composio" in haystack or (
+                "upload" in haystack and "composio" in haystack
+            ):
                 effects.add("upload")
         return effects
 
@@ -4120,7 +4310,10 @@ async def continue_job_run(
                 try:
                     async with ClaudeSDKClient(options) as fallback_client:
                         result = await process_turn(
-                            fallback_client, user_input, workspace_dir, force_complex=True
+                            fallback_client,
+                            user_input,
+                            workspace_dir,
+                            force_complex=True,
                         )
                     final_response_text = result.response_text or ""
                     _maybe_mark_run_succeeded()
@@ -4138,8 +4331,7 @@ async def continue_job_run(
                 if runtime_db_conn and run_id:
                     update_run_status(runtime_db_conn, run_id, "waiting_for_human")
                 print(
-                    "\n⚠️ Repeated errors detected. "
-                    "Run status set to waiting_for_human."
+                    "\n⚠️ Repeated errors detected. Run status set to waiting_for_human."
                 )
                 return final_response_text
             print(
@@ -4150,7 +4342,15 @@ async def continue_job_run(
 
 async def run_conversation(client, query: str, start_ts: float, iteration: int = 1):
     """Run a single conversation turn with full tracing."""
-    global trace, run_id, budget_config, budget_state, runtime_db_conn, current_step_id, tool_ledger, provider_session_forked_from
+    global \
+        trace, \
+        run_id, \
+        budget_config, \
+        budget_state, \
+        runtime_db_conn, \
+        current_step_id, \
+        tool_ledger, \
+        provider_session_forked_from
     step_id = str(uuid.uuid4())
     current_step_id = step_id
     step_index = iteration
@@ -4166,7 +4366,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                 step_index=step_index,
             )
         except Exception as exc:
-            logfire.warning("runtime_step_insert_failed", step_id=step_id, error=str(exc))
+            logfire.warning(
+                "runtime_step_insert_failed", step_id=step_id, error=str(exc)
+            )
 
     if budget_state["start_ts"] is None:
         budget_state["start_ts"] = start_ts
@@ -4181,7 +4383,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
             detail="wallclock budget reached before starting next step",
         )
 
-    if budget_config.get("max_steps") and budget_state["steps"] >= budget_config["max_steps"]:
+    if (
+        budget_config.get("max_steps")
+        and budget_state["steps"] >= budget_config["max_steps"]
+    ):
         raise BudgetExceeded(
             "max_steps",
             budget_config["max_steps"],
@@ -4194,12 +4399,12 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
     if iteration == 1:
         logfire.set_baggage(agent="main")
         logfire.set_baggage(is_subagent="false")
-        logfire.set_baggage(step="planning") # Initial state
+        logfire.set_baggage(step="planning")  # Initial state
         logfire.set_baggage(loop="1")
     else:
         # Update loop count for main agent
         logfire.set_baggage(loop=str(iteration))
-        logfire.set_baggage(step="execution") # Default for subsequent turns
+        logfire.set_baggage(step="execution")  # Default for subsequent turns
     if run_id:
         logfire.set_baggage(run_id=run_id)
     logfire.set_baggage(step_id=step_id)
@@ -4233,63 +4438,73 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     u = msg.usage
                     inp = u.get("input_tokens", 0) or 0
                     out = u.get("output_tokens", 0) or 0
-                    
+
                     # Update local trace counters
                     if trace and "token_usage" in trace:
                         trace["token_usage"]["input"] += inp
                         trace["token_usage"]["output"] += out
-                        trace["token_usage"]["total"] += (inp + out)
-                    
-                    
+                        trace["token_usage"]["total"] += inp + out
+
                     logfire.info(
-                        "token_usage_update", 
-                        run_id=run_id, 
-                        input=inp, 
-                        output=out, 
-                        total_so_far=trace["token_usage"]["total"] if trace else 0
+                        "token_usage_update",
+                        run_id=run_id,
+                        input=inp,
+                        output=out,
+                        total_so_far=trace["token_usage"]["total"] if trace else 0,
                     )
 
                     # Durability: Update DB with latest token count
                     if run_id and runtime_db_conn:
-                         update_run_tokens(runtime_db_conn, run_id, trace["token_usage"]["total"])
-
+                        update_run_tokens(
+                            runtime_db_conn, run_id, trace["token_usage"]["total"]
+                        )
 
                     # [FIX 7] Token-Based Harness Trigger
                     # Connect the Brain (Token Count) to the Body (Harness Action)
                     total_tokens = trace["token_usage"]["total"]
                     if total_tokens > TRUNCATION_THRESHOLD:
-                        print(f"\n⚠️ CONTEXT THRESHOLD REACHED ({total_tokens} > {TRUNCATION_THRESHOLD})")
+                        print(
+                            f"\n⚠️ CONTEXT THRESHOLD REACHED ({total_tokens} > {TRUNCATION_THRESHOLD})"
+                        )
                         print("🔄 Triggering Harness Iteration (Context Reset)...")
-                        
+
                         # Synthesize a "context_exhausted" event for the hook/logic
                         # Instead of calling the hook, we trigger the restart specific logic directly here
                         # to align with the "Autonomous Execution Protocol"
-                        
+
                         # 1. Increment Iteration
                         if run_id and runtime_db_conn:
-                            current_iter = get_iteration_info(runtime_db_conn, run_id).get("iteration_count", 0)
-                            max_iter = get_iteration_info(runtime_db_conn, run_id).get("max_iterations", 10)
-                            
+                            current_iter = get_iteration_info(
+                                runtime_db_conn, run_id
+                            ).get("iteration_count", 0)
+                            max_iter = get_iteration_info(runtime_db_conn, run_id).get(
+                                "max_iterations", 10
+                            )
+
                             if current_iter >= max_iter:
-                                  print(f"⛔ Max iterations ({max_iter}) reached despite context exhaustion. Stopping.")
-                                  break
-                                  
-                            new_iter = increment_iteration_count(runtime_db_conn, run_id)
-                            
+                                print(
+                                    f"⛔ Max iterations ({max_iter}) reached despite context exhaustion. Stopping."
+                                )
+                                break
+
+                            new_iter = increment_iteration_count(
+                                runtime_db_conn, run_id
+                            )
+
                             # 2. Construct Handoff Prompt
-                            next_prompt = f"RESUMING (Context Limit Reached): You exceeded the context limit ({total_tokens} tokens). I have reset your memory. Continue the mission.json tasks from where you left off. Status: {current_iter+1}/{max_iter}."
-                            
+                            next_prompt = f"RESUMING (Context Limit Reached): You exceeded the context limit ({total_tokens} tokens). I have reset your memory. Continue the mission.json tasks from where you left off. Status: {current_iter + 1}/{max_iter}."
+
                             pending_prompt = next_prompt
-                            
+
                             # 3. Clear Context
                             if hasattr(client, "history"):
                                 client.history = []
                                 print("🧹 Client history cleared (Context Reset).")
-                            
+
                             # 4. Reset Token Counter for new session
                             trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
-                            
-                            continue # Restart inner loop with new prompt
+
+                            continue  # Restart inner loop with new prompt
 
             if isinstance(msg, AssistantMessage):
                 # Wrapped in span for full visibility of assistant's turn
@@ -4309,27 +4524,35 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     tool_call_id=str(block.id),
                                 )
                             # Nested tool_use span
-                            with logfire.span("tool_use", tool_name=block.name, tool_id=block.id):
+                            with logfire.span(
+                                "tool_use", tool_name=block.name, tool_id=block.id
+                            ):
                                 tool_record = {
                                     "run_id": run_id,
                                     "step_id": step_id,
                                     "iteration": iteration,
                                     "name": block.name,
                                     "id": block.id,
-                                    "time_offset_seconds": round(time.time() - start_ts, 3),
-                                    "input": block.input if hasattr(block, "input") else None,
+                                    "time_offset_seconds": round(
+                                        time.time() - start_ts, 3
+                                    ),
+                                    "input": block.input
+                                    if hasattr(block, "input")
+                                    else None,
                                     "input_size_bytes": len(json.dumps(block.input))
                                     if hasattr(block, "input") and block.input
                                     else 0,
                                 }
                                 if tool_ledger:
-                                    ledger_entry = tool_ledger.get_tool_call(str(block.id))
+                                    ledger_entry = tool_ledger.get_tool_call(
+                                        str(block.id)
+                                    )
                                     if ledger_entry:
-                                        tool_record["idempotency_key"] = ledger_entry.get(
-                                            "idempotency_key"
+                                        tool_record["idempotency_key"] = (
+                                            ledger_entry.get("idempotency_key")
                                         )
-                                        tool_record["side_effect_class"] = ledger_entry.get(
-                                            "side_effect_class"
+                                        tool_record["side_effect_class"] = (
+                                            ledger_entry.get("side_effect_class")
                                         )
                                         tool_record["replay_policy"] = ledger_entry.get(
                                             "replay_policy"
@@ -4340,7 +4563,11 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 trace["tool_calls"].append(tool_record)
                                 tool_calls_this_iter.append(tool_record)
                                 budget_state["tool_calls"] += 1
-                                if budget_config.get("max_tool_calls") and budget_state["tool_calls"] > budget_config["max_tool_calls"]:
+                                if (
+                                    budget_config.get("max_tool_calls")
+                                    and budget_state["tool_calls"]
+                                    > budget_config["max_tool_calls"]
+                                ):
                                     raise BudgetExceeded(
                                         "max_tool_calls",
                                         budget_config["max_tool_calls"],
@@ -4360,7 +4587,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     )
 
                                 # Check for sub-agent context (parent_tool_use_id indicates this call is from within a sub-agent)
-                                parent_tool_id = getattr(msg, "parent_tool_use_id", None)
+                                parent_tool_id = getattr(
+                                    msg, "parent_tool_use_id", None
+                                )
 
                                 logfire.info(
                                     "tool_input",
@@ -4373,16 +4602,22 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     run_id=run_id,
                                     step_id=step_id,
                                 )
-                                
+
                                 # Sub-agent tagging logic: Entering sub-agent
                                 if block.name == "Task":
                                     subagent_type = "unknown"
-                                    if hasattr(block, "input") and isinstance(block.input, dict):
-                                        subagent_type = block.input.get("subagent_type", "unknown")
-                                    
+                                    if hasattr(block, "input") and isinstance(
+                                        block.input, dict
+                                    ):
+                                        subagent_type = block.input.get(
+                                            "subagent_type", "unknown"
+                                        )
+
                                     logfire.set_baggage(agent=subagent_type)
                                     logfire.set_baggage(is_subagent="true")
-                                    logfire.set_baggage(loop="1") # Reset loop for the sub-agent
+                                    logfire.set_baggage(
+                                        loop="1"
+                                    )  # Reset loop for the sub-agent
 
                                 # Check for WORKBENCH or code execution tools
                                 is_code_exec = any(
@@ -4401,10 +4636,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 print(
                                     f"\n{marker} [{block.name}] +{tool_record['time_offset_seconds']}s"
                                 )
-                                print(f"   Input size: {tool_record['input_size_bytes']} bytes")
+                                print(
+                                    f"   Input size: {tool_record['input_size_bytes']} bytes"
+                                )
 
                                 if tool_record["input"]:
-                                    input_preview = json.dumps(tool_record["input"], indent=2)
+                                    input_preview = json.dumps(
+                                        tool_record["input"], indent=2
+                                    )
                                     max_len = 3000 if is_code_exec else 500
                                     if len(input_preview) > max_len:
                                         input_preview = input_preview[:max_len] + "..."
@@ -4423,10 +4662,16 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     needs_user_input = True
 
                             # Buffer final text to print AFTER execution summary (not printed here)
-                            final_text = block.text[:3000] + ("..." if len(block.text) > 3000 else "")
+                            final_text = block.text[:3000] + (
+                                "..." if len(block.text) > 3000 else ""
+                            )
 
                             # Log text block
-                            logfire.info("text_block", length=len(block.text), text_preview=block.text[:500])
+                            logfire.info(
+                                "text_block",
+                                length=len(block.text),
+                                text_preview=block.text[:500],
+                            )
 
                         elif isinstance(block, ThinkingBlock):
                             # Log extended thinking
@@ -4452,7 +4697,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                     if is_result:
                         tool_use_id = getattr(block, "tool_use_id", None)
-                        
+
                         # Nested tool_result span requires finding tool info first (if possible) or just ID
                         with logfire.span("tool_result", tool_use_id=tool_use_id):
                             is_error = getattr(block, "is_error", False)
@@ -4473,7 +4718,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 else content_str,
                             }
                             if tool_ledger and tool_use_id:
-                                ledger_entry = tool_ledger.get_tool_call(str(tool_use_id))
+                                ledger_entry = tool_ledger.get_tool_call(
+                                    str(tool_use_id)
+                                )
                                 if ledger_entry:
                                     result_record["idempotency_key"] = ledger_entry.get(
                                         "idempotency_key"
@@ -4505,45 +4752,64 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 print(
                                     f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 500 else ''}"
                                 )
-                            
+
                             # [Interview Tool Interception] Check if this is an interview request
                             # NON-BLOCKING: Save questions to file, let iteration complete,
                             # then display interview between iterations
                             try:
                                 full_result_content = content_str  # Use full content, not truncated preview
                                 if "__INTERVIEW_REQUEST__" in full_result_content:
-                                    print(f"\n   📋 Interview questions detected - will display after this iteration")
-                                    
+                                    print(
+                                        f"\n   📋 Interview questions detected - will display after this iteration"
+                                    )
+
                                     # Parse the outer wrapper (may be {"result": "..."})
                                     try:
                                         outer = json.loads(full_result_content)
-                                        inner_content = outer.get("result", full_result_content)
+                                        inner_content = outer.get(
+                                            "result", full_result_content
+                                        )
                                     except json.JSONDecodeError:
                                         inner_content = full_result_content
-                                    
+
                                     # Strip trace ID prefix if present (format: "[local-toolkit-trace-id: ...]\n{...")
-                                    if isinstance(inner_content, str) and inner_content.startswith("["):
+                                    if isinstance(
+                                        inner_content, str
+                                    ) and inner_content.startswith("["):
                                         json_start = inner_content.find("{")
                                         if json_start != -1:
                                             inner_content = inner_content[json_start:]
-                                    
-                                    # Parse the interview data 
-                                    interview_data = json.loads(inner_content) if isinstance(inner_content, str) else inner_content
-                                    
+
+                                    # Parse the interview data
+                                    interview_data = (
+                                        json.loads(inner_content)
+                                        if isinstance(inner_content, str)
+                                        else inner_content
+                                    )
+
                                     if interview_data.get("__INTERVIEW_REQUEST__"):
                                         questions = interview_data.get("questions", [])
                                         if questions and OBSERVER_WORKSPACE_DIR:
                                             # Save questions to workspace for post-iteration processing
-                                            pending_interview_file = os.path.join(OBSERVER_WORKSPACE_DIR, "pending_interview.json")
+                                            pending_interview_file = os.path.join(
+                                                OBSERVER_WORKSPACE_DIR,
+                                                "pending_interview.json",
+                                            )
                                             with open(pending_interview_file, "w") as f:
-                                                json.dump({"questions": questions}, f, indent=2)
-                                            
+                                                json.dump(
+                                                    {"questions": questions},
+                                                    f,
+                                                    indent=2,
+                                                )
+
                                             # Tell agent to wait for user answers
                                             waiting_msg = "Waiting for user to answer interview questions. Answers will be provided in the next message."
                                             # Only modify block_content if it has a content attribute
-                                            if hasattr(block_content, 'content'):
+                                            if hasattr(block_content, "content"):
                                                 block_content.content = waiting_msg
-                                            result_record["content_preview"] = waiting_msg
+                                            result_record["content_preview"] = (
+                                                waiting_msg
+                                            )
                             except (json.JSONDecodeError, Exception) as e:
                                 print(f"   ⚠️ Interview setup error: {e}")
 
@@ -4556,7 +4822,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     tool_name = tc.get("name")
                                     tool_input = tc.get("input", {})
                                     break
-                            
+
                             # Reset sub-agent tagging if Task returned (Back to Main)
                             if tool_name == "Task":
                                 logfire.set_baggage(agent="main")
@@ -4564,7 +4830,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 if not is_error and OBSERVER_WORKSPACE_DIR:
                                     paths = _persist_subagent_output(
                                         workspace_dir=OBSERVER_WORKSPACE_DIR,
-                                        tool_use_id=str(tool_use_id) if tool_use_id else None,
+                                        tool_use_id=str(tool_use_id)
+                                        if tool_use_id
+                                        else None,
                                         tool_input=tool_input or {},
                                         raw_tool_name=tool_name or "Task",
                                         output=block_content,
@@ -4578,9 +4846,11 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         )
                                 if not is_error:
                                     asyncio.create_task(
-                                        _capture_subagent_memory(tool_input or {}, content_str)
+                                        _capture_subagent_memory(
+                                            tool_input or {}, content_str
+                                        )
                                     )
-                                
+
                             if tool_name and OBSERVER_WORKSPACE_DIR:
                                 # Search results observer - pass typed content
                                 asyncio.create_task(
@@ -4616,7 +4886,6 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     )
                                 )
 
-
                                 # Post-subagent compliance verification (for Task results)
                                 compliance_error = verify_subagent_compliance(
                                     tool_name, content_str, OBSERVER_WORKSPACE_DIR
@@ -4628,13 +4897,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         "subagent_compliance_message_injected",
                                         error=compliance_error[:200],
                                     )
-                                    
+
             elif isinstance(msg, ResultMessage):
-                logfire.info("result_message",
+                logfire.info(
+                    "result_message",
                     duration_ms=msg.duration_ms,
                     total_cost_usd=msg.total_cost_usd,
                     num_turns=msg.num_turns,
-                    is_error=msg.is_error
+                    is_error=msg.is_error,
                 )
                 if msg.session_id:
                     _maybe_update_provider_session(
@@ -4699,7 +4969,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                     status="succeeded",
                 )
             except Exception as exc:
-                logfire.warning("checkpoint_save_failed", step_id=step_id, error=str(exc))
+                logfire.warning(
+                    "checkpoint_save_failed", step_id=step_id, error=str(exc)
+                )
         current_step_id = None
 
         return needs_user_input, auth_link, final_text
@@ -4794,7 +5066,11 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
 
     full_response = ""
     tool_use_detected = False
-    disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
+    disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     ignored_tool_names = set()
     if disable_local_memory:
         ignored_tool_names.update(
@@ -4826,10 +5102,12 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
         elif isinstance(msg, ResultMessage):
             pass  # stream end
 
-    print("\n" + "-" * 40) # separator
+    print("\n" + "-" * 40)  # separator
 
     if tool_use_detected:
-        print(f"\n⚠️  Model attempted tool use in Fast Path. Redirecting to Complex Path...")
+        print(
+            f"\n⚠️  Model attempted tool use in Fast Path. Redirecting to Complex Path..."
+        )
         print("=" * 80)
         if LOGFIRE_TOKEN:
             logfire.warn("fast_path_fallback", reason="tool_use_detected")
@@ -4924,7 +5202,6 @@ def _print_tool_policy_explain(raw_tool_name: str) -> None:
         print("- matched_policy: no")
 
 
-
 async def setup_session(
     run_id_override: Optional[str] = None,
     workspace_dir_override: Optional[str] = None,
@@ -4938,7 +5215,7 @@ async def setup_session(
 
     # Create main span for entire execution
     # with logfire.span("standalone_composio_test") as span: # Moved to caller
-    
+
     # Setup Session Workspace
     if workspace_dir_override:
         workspace_dir = workspace_dir_override
@@ -4953,8 +5230,16 @@ async def setup_session(
         else:
             # 2. Auto-Discovery (Local)
             # Try /app first (Docker), then project root (local), fallback to /tmp
-            for base_dir in ["/app", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "/tmp"]:
-                workspace_dir = os.path.join(base_dir, "AGENT_RUN_WORKSPACES", f"session_{timestamp}")
+            for base_dir in [
+                "/app",
+                os.path.dirname(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                ),
+                "/tmp",
+            ]:
+                workspace_dir = os.path.join(
+                    base_dir, "AGENT_RUN_WORKSPACES", f"session_{timestamp}"
+                )
                 try:
                     os.makedirs(workspace_dir, exist_ok=True)
                     break  # Success
@@ -4968,7 +5253,7 @@ async def setup_session(
     # Initialize Composio with automatic file downloads to this workspace
     downloads_dir = os.path.join(workspace_dir, "downloads")
     os.makedirs(downloads_dir, exist_ok=True)
-    
+
     # Pre-create standard work_products directories to avoid runtime interruptions
     work_products_dir = os.path.join(workspace_dir, "work_products", "media")
     os.makedirs(work_products_dir, exist_ok=True)
@@ -4976,9 +5261,22 @@ async def setup_session(
     # [Anthropic Pattern] Initialize git for checkpoint-based harness iteration
     try:
         import subprocess
-        subprocess.run(["git", "init"], cwd=workspace_dir, capture_output=True, check=False)
-        subprocess.run(["git", "config", "user.email", "agent@universal-agent.local"], cwd=workspace_dir, capture_output=True, check=False)
-        subprocess.run(["git", "config", "user.name", "Universal Agent"], cwd=workspace_dir, capture_output=True, check=False)
+
+        subprocess.run(
+            ["git", "init"], cwd=workspace_dir, capture_output=True, check=False
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "agent@universal-agent.local"],
+            cwd=workspace_dir,
+            capture_output=True,
+            check=False,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Universal Agent"],
+            cwd=workspace_dir,
+            capture_output=True,
+            check=False,
+        )
         print(f"📦 Git initialized in workspace: {workspace_dir}")
     except Exception as e:
         print(f"⚠️ Git init skipped: {e}")
@@ -4989,7 +5287,7 @@ async def setup_session(
     # (Removed to restore interactive input for /harness command)
     # =========================================================================
     import builtins
-    
+
     # original_input = builtins.input (Not needed, keeping standard input)
     # print("✅ Non-blocking input handler REMOVED (Interactive Mode)")
 
@@ -4999,16 +5297,20 @@ async def setup_session(
     # user_id = "user_123"  # Consolidated to the primary admin identity
     user_id = os.getenv("COMPOSIO_USER_ID") or os.getenv("DEFAULT_USER_ID")
     if not user_id:
-        print("⚠️  WARNING: No COMPOSIO_USER_ID or DEFAULT_USER_ID found, defaulting to 'unknown_user'")
+        print(
+            "⚠️  WARNING: No COMPOSIO_USER_ID or DEFAULT_USER_ID found, defaulting to 'unknown_user'"
+        )
         user_id = "unknown_user"
         # raise ValueError("COMPOSIO_USER_ID or DEFAULT_USER_ID must be set in .env")
-    
-    from universal_agent.utils.composio_discovery import discover_connected_toolkits, get_local_tools
+
+    from universal_agent.utils.composio_discovery import (
+        discover_connected_toolkits,
+        get_local_tools,
+    )
 
     # Initialize Client
     composio = Composio(
-        api_key=os.getenv("COMPOSIO_API_KEY"),
-        file_download_dir=downloads_dir
+        api_key=os.getenv("COMPOSIO_API_KEY"), file_download_dir=downloads_dir
     )
 
     # Register custom tools BEFORE session creation
@@ -5019,40 +5321,42 @@ async def setup_session(
     # IMPORTANT: Per 000_CURRENT_CONTEXT.md, we disable external crawlers to force use of
     # local crawl_parallel tool. This prevents COMPOSIO_SEARCH_TOOLS from recommending
     # firecrawl or exa web scrapers.
-    
+
     # --- PARALLEL STARTUP OPTIMIZATION ---
     # Launch blocking network calls in parallel threads to reduce cold start latency.
-    
+
     # Task 1: Create Session (CRITICAL - Needed for MCP URL)
     print("⏳ Starting Composio Session initialization...", flush=True)
     session_future = asyncio.to_thread(
-        composio.create,
-        user_id=user_id,
-        toolkits={"disable": ["firecrawl", "exa"]}
+        composio.create, user_id=user_id, toolkits={"disable": ["firecrawl", "exa"]}
     )
 
     # Task 2: dynamic Remote Discovery (INFORMATIONAL - Can happen in background)
     # Using client.connected_accounts.list(user_ids=[user_id]) for reliable persistent connection check
     print("⏳ Discovering connected apps...", flush=True)
-    discovery_future = asyncio.to_thread(
-        discover_connected_toolkits,
-        composio, 
-        user_id
-    )
+    discovery_future = asyncio.to_thread(discover_connected_toolkits, composio, user_id)
 
     # Await the Critical Path (Session) first
     session = await session_future
     print("✅ Composio Session Created")
 
     # Await Discovery (Informational)
-    # Ideally we'd let this run even longer, but we print it right here. 
+    # Ideally we'd let this run even longer, but we print it right here.
     # Even just overlapping the API calls saves ~1.5s.
     ALLOWED_APPS = await discovery_future
 
     if not ALLOWED_APPS:
         # Fallback if discovery completely fails or no apps connected
-        ALLOWED_APPS = ["gmail", "github", "codeinterpreter", "slack", "composio_search"]
-        print(f"⚠️ Discovery returned 0 apps (or only codeinterpreter). Using defaults: {ALLOWED_APPS}")
+        ALLOWED_APPS = [
+            "gmail",
+            "github",
+            "codeinterpreter",
+            "slack",
+            "composio_search",
+        ]
+        print(
+            f"⚠️ Discovery returned 0 apps (or only codeinterpreter). Using defaults: {ALLOWED_APPS}"
+        )
     else:
         print(f"✅ Discovered Active Composio Apps: {ALLOWED_APPS}")
 
@@ -5061,12 +5365,17 @@ async def setup_session(
     print(f"✅ Active Local MCP Tools: {local_tools}")
 
     # 3. External MCP Servers (registered in mcp_servers config)
-    external_mcps = ["edgartools", "video_audio", "youtube", "zai_vision"]  # List of external MCPs we've configured
+    external_mcps = [
+        "edgartools",
+        "video_audio",
+        "youtube",
+        "zai_vision",
+    ]  # List of external MCPs we've configured
     print(f"✅ External MCP Servers: {external_mcps}")
 
     # 4. Skill Discovery - Parse .claude/skills/ for progressive disclosure
     discovered_skills = discover_skills()
-    skill_names = [s['name'] for s in discovered_skills]
+    skill_names = [s["name"] for s in discovered_skills]
     print(f"✅ Discovered Skills: {skill_names}")
     skills_xml = generate_skills_xml(discovered_skills)
     templates_path = os.path.join(
@@ -5079,28 +5388,36 @@ async def setup_session(
     )
     tool_knowledge_content = get_tool_knowledge_content()
     tool_knowledge_block = get_tool_knowledge_block()
-    tool_knowledge_suffix = f"\n\n{tool_knowledge_block}" if tool_knowledge_block else ""
+    tool_knowledge_suffix = (
+        f"\n\n{tool_knowledge_block}" if tool_knowledge_block else ""
+    )
 
     # Create ClaudeAgentOptions now that session is available
     global options
 
     # --- MEMORY SYSTEM CONTEXT INJECTION ---
     memory_context_str = ""
-    disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
+    disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     if disable_local_memory:
         print("⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.")
     else:
         try:
             from Memory_System.manager import MemoryManager
             from universal_agent.agent_college.integration import setup_agent_college
-            
+
             # Initialize strictly for reading context (shared storage) - Use src_dir (Repo Root)
-            storage_path = os.getenv("PERSIST_DIRECTORY", os.path.join(src_dir, "Memory_System_Data"))
+            storage_path = os.getenv(
+                "PERSIST_DIRECTORY", os.path.join(src_dir, "Memory_System_Data")
+            )
             mem_mgr = MemoryManager(storage_dir=storage_path)
-            
+
             # Initialize Agent College (Sandbox)
             setup_agent_college(mem_mgr)
-            
+
             memory_context_str = mem_mgr.get_system_prompt_addition()
             print(f"🧠 Injected Core Memory Context ({len(memory_context_str)} chars)")
         except Exception as e:
@@ -5119,9 +5436,9 @@ async def setup_session(
 
     # Use timezone-aware datetime for consistent results across deployments
     user_now = get_user_datetime()
-    today_str = user_now.strftime('%A, %B %d, %Y')
-    tomorrow_str = (user_now + timedelta(days=1)).strftime('%A, %B %d, %Y')
-    
+    today_str = user_now.strftime("%A, %B %d, %Y")
+    tomorrow_str = (user_now + timedelta(days=1)).strftime("%A, %B %d, %Y")
+
     disallowed_tools = list(DISALLOWED_TOOLS)
     if disable_local_memory:
         disallowed_tools.extend(
@@ -5149,9 +5466,9 @@ async def setup_session(
             f"{memory_context_str}\n"
             "TEMPORAL CONSISTENCY WARNING: You are operating in a timeline where it is December 2025. "
             "If 'real-world' search tools return results dated 2024, explicitly note the date discrepancy. "
-                "Do NOT present 2024 news as 2025 news without qualification.\n\n"
-                "You are a helpful assistant with access to external tools. "
-                "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
+            "Do NOT present 2024 news as 2025 news without qualification.\n\n"
+            "You are a helpful assistant with access to external tools. "
+            "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
             "🔍 SEARCH TOOL PREFERENCE:\n"
             "- For web/news research, ALWAYS use Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
             "- Do NOT use native 'WebSearch' - it bypasses our artifact saving system.\n"
@@ -5251,7 +5568,11 @@ async def setup_session(
             "local_toolkit": {
                 "type": "stdio",
                 "command": sys.executable,
-                "args": [os.path.join(os.path.dirname(os.path.dirname(__file__)), "mcp_server.py")],
+                "args": [
+                    os.path.join(
+                        os.path.dirname(os.path.dirname(__file__)), "mcp_server.py"
+                    )
+                ],
                 # Pass Logfire token for observability
                 "env": {
                     "LOGFIRE_TOKEN": os.environ.get("LOGFIRE_TOKEN", ""),
@@ -5262,13 +5583,24 @@ async def setup_session(
                 "type": "stdio",
                 "command": sys.executable,
                 "args": ["-m", "edgar.ai"],
-                "env": {"EDGAR_IDENTITY": os.environ.get("EDGAR_IDENTITY", "Agent agent@example.com")},
+                "env": {
+                    "EDGAR_IDENTITY": os.environ.get(
+                        "EDGAR_IDENTITY", "Agent agent@example.com"
+                    )
+                },
             },
             # External MCP: Video & Audio editing via FFmpeg
             "video_audio": {
                 "type": "stdio",
                 "command": sys.executable,
-                "args": [os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "external_mcps", "video-audio-mcp", "server.py")],
+                "args": [
+                    os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                        "external_mcps",
+                        "video-audio-mcp",
+                        "server.py",
+                    )
+                ],
             },
             # External MCP: YouTube/video downloader via yt-dlp
             "youtube": {
@@ -5309,16 +5641,27 @@ async def setup_session(
                     f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
                     f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
                     "You are a **Report Creation Expert**.\n\n"
+                    "## YOUR ROLE (REPORT CREATION ONLY)\n"
+                    "🎯 **Your job:** Create reports and save them to `work_products/`\n"
+                    "📧 **NOT your job:** Sending emails. The MAIN AGENT handles email after you finish.\n\n"
+                    "**Your available tools (restricted set):**\n"
+                    "- `Read`, `Write`, `Bash` (native SDK)\n"
+                    "- `mcp__local_toolkit__finalize_research`, `mcp__local_toolkit__read_research_files`\n"
+                    "- `mcp__local_toolkit__generate_image`, `mcp__local_toolkit__workbench_*`\n\n"
+                    "🚫 **You do NOT have access to:**\n"
+                    "- Composio tools (Gmail, Slack, external APIs) - these are main agent only\n"
+                    "- Do NOT use Bash to import `composio` - it will fail\n\n"
+                    "**When finished:** Return the report path. Say: 'Report saved to: [path]'\n"
+                    "The main agent will handle any email delivery.\n\n"
                     "🚨 CRITICAL TOOL INSTRUCTIONS:\n"
                     "1. DO NOT use COMPOSIO_SEARCH_TOOLS - you already have the tools you need.\n"
                     "2. DO NOT use Firecrawl or any Composio crawling tools.\n"
                     "3. DO NOT read raw `search_results/crawl_*.md` files.\n"
-                    "4. USE ONLY these specific tools for research:\n"
+                    "4. DO NOT use Bash to import `composio` - it will fail.\n"
+                    "5. USE these tools for research:\n"
                     "   - `mcp__local_toolkit__finalize_research` - builds the filtered corpus\n"
                     "   - `Read` (native) - read research_overview.md and individual files\n"
-                    "   - `mcp__local_toolkit__read_research_files` - batch read filtered files only\n"
-                    "   - `mcp__local_toolkit__list_directory` - list filtered corpus files\n"
-                    "   - `Write` (native) - save report to work_products/\n\n"
+                    "   - `mcp__local_toolkit__read_research_files` - batch read filtered files\n\n"
                     "---\n\n"
                     "## PIPELINE: How to Generate Reports\n"
                     f"1. **RESEARCH**: Accumulate research using Composio tools. The tool `observe_and_save_search_results` detects this.\n"
@@ -5392,6 +5735,8 @@ async def setup_session(
                     "mcp__local_toolkit__read_research_files",
                     "mcp__local_toolkit__list_directory",
                     "mcp__local_toolkit__generate_image",
+                    "mcp__local_toolkit__workbench_download",
+                    "mcp__local_toolkit__workbench_upload",
                 ],
                 model="inherit",
             ),
@@ -5537,7 +5882,10 @@ async def setup_session(
             ],
             "PreToolUse": [
                 HookMatcher(matcher=None, hooks=[on_pre_tool_use_ledger]),
-                HookMatcher(matcher="Bash", hooks=[on_pre_bash_skill_hint]),
+                HookMatcher(
+                    matcher="Bash",
+                    hooks=[on_pre_bash_block_composio_sdk, on_pre_bash_skill_hint],
+                ),
                 HookMatcher(matcher="Task", hooks=[on_pre_task_skill_awareness]),
             ],
             "PostToolUse": [
@@ -5607,10 +5955,7 @@ async def setup_session(
             options.system_prompt = tool_knowledge_block
         print(f"✅ Injected Knowledge Base ({len(tool_knowledge_content)} chars)")
 
-
-
     return options, session, user_id, workspace_dir, trace
-
 
 
 async def process_turn(
@@ -5623,8 +5968,8 @@ async def process_turn(
     Process a single user query.
     Returns: ExecutionResult with rich feedback
     """
-    global trace, start_ts 
-    
+    global trace, start_ts
+
     trace["query"] = user_input
     trace["start_time"] = datetime.now().isoformat()
     start_ts = time.time()
@@ -5633,7 +5978,9 @@ async def process_turn(
         logfire.info("query_started", query=user_input)
 
     # 2. Determine Complexity
-    complexity = "COMPLEX" if force_complex else await classify_query(client, user_input)
+    complexity = (
+        "COMPLEX" if force_complex else await classify_query(client, user_input)
+    )
 
     # 3. Route Query
     is_simple = (complexity == "SIMPLE") and not force_complex
@@ -5667,10 +6014,8 @@ async def process_turn(
                 print(f"{'=' * 80}")
                 print(f"\nPlease open this link in your browser:\n")
                 print(f"  {auth_link}\n")
-                print(
-                    "After completing authentication, press Enter to continue..."
-                )
-                input() # Non-blocking mock in headless, real input in CLI
+                print("After completing authentication, press Enter to continue...")
+                input()  # Non-blocking mock in headless, real input in CLI
 
                 current_query = "I have completed the authentication. Please continue with the task."
                 iteration += 1
@@ -5681,38 +6026,56 @@ async def process_turn(
         # Per-request Execution Summary
         request_end_ts = time.time()
         request_duration = round(request_end_ts - request_start_ts, 3)
-        
+
         # Collect tool calls for this request
-        request_tool_calls = [tc for tc in trace["tool_calls"] if tc.get("time_offset_seconds", 0) >= (request_start_ts - start_ts)]
-        
+        request_tool_calls = [
+            tc
+            for tc in trace["tool_calls"]
+            if tc.get("time_offset_seconds", 0) >= (request_start_ts - start_ts)
+        ]
+
         print(f"\n{'=' * 80}")
         print("=== EXECUTION SUMMARY ===")
         print(f"{'=' * 80}")
         print(f"Execution Time: {request_duration} seconds")
         print(f"Tool Calls: {len(request_tool_calls)}")
-        
+
         # Check for code execution
         code_exec_used = any(
-            any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"])
+            any(
+                x in tc["name"].upper()
+                for x in ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"]
+            )
             for tc in request_tool_calls
         )
         if code_exec_used:
             print("🏭 Code execution was used")
-        
+
         # Tool breakdown
         tool_breakdown = []
         if request_tool_calls:
             print("\n=== TOOL CALL BREAKDOWN ===")
             for tc in request_tool_calls:
-                marker = "🏭" if any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]) else "  "
-                print(f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}")
-                tool_breakdown.append({
-                    "name": tc["name"],
-                    "time_offset": tc["time_offset_seconds"],
-                    "iteration": tc["iteration"],
-                    "marker": marker
-                })
-        
+                marker = (
+                    "🏭"
+                    if any(
+                        x in tc["name"].upper()
+                        for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]
+                    )
+                    else "  "
+                )
+                print(
+                    f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}"
+                )
+                tool_breakdown.append(
+                    {
+                        "name": tc["name"],
+                        "time_offset": tc["time_offset_seconds"],
+                        "iteration": tc["iteration"],
+                        "marker": marker,
+                    }
+                )
+
         # Collect and display all trace IDs for debugging
         local_trace_ids = _collect_local_tool_trace_ids(workspace_dir)
         print("\n=== TRACE IDS (for Logfire debugging) ===")
@@ -5724,14 +6087,12 @@ async def process_turn(
                 print(f"                  (+{len(local_trace_ids) - 5} more)")
         else:
             print(f"  Local Toolkit:  (no local tool calls)")
-        
 
-        
         # Store in trace for transcript/evaluation
         trace["local_toolkit_trace_ids"] = local_trace_ids
-        
+
         print(f"{'=' * 80}")
-        
+
         # Print agent's final response (with follow-up suggestions) AFTER execution summary
         if final_response_text:
             print(f"\n{final_response_text}")
@@ -5754,12 +6115,12 @@ async def process_turn(
         # NEW: Intermediate Transcript Save
         try:
             from universal_agent import transcript_builder
-            
+
             # Update stats for the snapshot
             current_ts = time.time()
             trace["end_time"] = datetime.now().isoformat()
             trace["total_duration_seconds"] = round(current_ts - start_ts, 3)
-            
+
             transcript_path = os.path.join(workspace_dir, "transcript.md")
             if transcript_builder.generate_transcript(trace, transcript_path):
                 print(f"\n🎬 Intermediate transcript saved to {transcript_path}")
@@ -5788,17 +6149,24 @@ async def process_turn(
         code_execution_used=code_exec_used if not is_simple else False,
         workspace_path=workspace_dir,
         trace_id=trace.get("trace_id"),
-        follow_up_suggestions=suggestions if not is_simple else []
+        follow_up_suggestions=suggestions if not is_simple else [],
     )
 
 
 async def main(args: argparse.Namespace):
-    global trace, run_id, budget_config, budget_state, runtime_db_conn, tool_ledger, provider_session_forked_from
+    global \
+        trace, \
+        run_id, \
+        budget_config, \
+        budget_state, \
+        runtime_db_conn, \
+        tool_ledger, \
+        provider_session_forked_from
 
     # Create main span for entire execution
     main_span = logfire.span("standalone_composio_test")
     span_ctx = main_span.__enter__()  # Start the span manually
-    
+
     # Extract trace ID for display
     main_trace_id_hex = "0" * 32
     if LOGFIRE_TOKEN:
@@ -5807,7 +6175,7 @@ async def main(args: argparse.Namespace):
             main_trace_id_hex = format(trace_id, "032x")
         except Exception as e:
             print(f"⚠️ Failed to extract main trace ID: {e}")
-    
+
     budget_config = load_budget_config()
     db_path = get_runtime_db_path()
     print(f"DEBUG: Connecting to DB at {db_path}", flush=True)
@@ -5950,21 +6318,21 @@ async def main(args: argparse.Namespace):
         logfire.info("durable_run_upserted", run_id=run_id, entrypoint="cli")
         if parent_run_id:
             trace["parent_run_id"] = parent_run_id
-    
+
     # Use the trace ID extracted earlier (now stored in main_trace_id_hex and env var)
     trace["trace_id"] = main_trace_id_hex
 
     # Extract timestamp from workspace_dir (e.g. "session_20251228_123456" -> "20251228_123456")
     timestamp = os.path.basename(workspace_dir).replace("session_", "")
-    
+
     # Display session info with both trace IDs prominently for debugging
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("         🔍 TRACING IDS (for Logfire debugging)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Main Agent Trace ID:    {main_trace_id_hex}")
     print(f"  Local Toolkit Trace ID: (shown in tool results)")
-    print(f"{'='*60}")
-    
+    print(f"{'=' * 60}")
+
     print(f"\n=== Composio Session Info ===")
     print(f"Session URL: {session.mcp.url}")
     print(f"User ID: {user_id}")
@@ -6006,10 +6374,12 @@ async def main(args: argparse.Namespace):
 
     # Configure prompt with history (persists across sessions) and better editing
     history_file = os.path.join(workspace_dir, ".prompt_history")
-    prompt_style = Style.from_dict({
-        'prompt': '#00aa00 bold',  # Green prompt
-    })
-    
+    prompt_style = Style.from_dict(
+        {
+            "prompt": "#00aa00 bold",  # Green prompt
+        }
+    )
+
     # Only use PromptSession if running in an interactive terminal
     if sys.stdin.isatty():
         prompt_session = PromptSession(
@@ -6105,7 +6475,12 @@ async def main(args: argparse.Namespace):
                 job_prompt if job_prompt and not args.resume and not args.fork else None
             )
         try:
-            if args.resume and run_mode == "job" and run_status in TERMINAL_STATUSES and run_id:
+            if (
+                args.resume
+                and run_mode == "job"
+                and run_status in TERMINAL_STATUSES
+                and run_id
+            ):
                 print("✅ Run already terminal. No resume needed.")
                 print_job_completion_summary(
                     runtime_db_conn,
@@ -6232,8 +6607,10 @@ async def main(args: argparse.Namespace):
                             # Non-interactive mode: read from stdin directly
                             try:
                                 # Run in executor to avoid blocking the event loop
-                                user_input = await asyncio.get_event_loop().run_in_executor(
-                                    None, sys.stdin.readline
+                                user_input = (
+                                    await asyncio.get_event_loop().run_in_executor(
+                                        None, sys.stdin.readline
+                                    )
                                 )
                                 if not user_input:  # EOF
                                     raise EOFError
@@ -6254,14 +6631,18 @@ async def main(args: argparse.Namespace):
 
                 if user_input.lower().strip().startswith("/harness"):
                     print("\n⚙️  Activating Universal Agent Harness...")
-                    
+
                     # Check if user provided an objective in the command
                     parts = user_input.strip().split(" ", 1)
                     if len(parts) > 1:
                         target_objective = parts[1]
                     else:
-                        print("📝 Please enter the OBJECTIVE for this long-running task:")
-                        print("(Paste multi-line text, then press Enter twice to confirm)")
+                        print(
+                            "📝 Please enter the OBJECTIVE for this long-running task:"
+                        )
+                        print(
+                            "(Paste multi-line text, then press Enter twice to confirm)"
+                        )
                         lines = []
                         consecutive_blanks = 0
                         while True:
@@ -6273,14 +6654,16 @@ async def main(args: argparse.Namespace):
                                     consecutive_blanks += 1
                                     if consecutive_blanks >= 2:
                                         break  # Two blank lines = done
-                                    lines.append(line)  # Keep single blank lines in content
+                                    lines.append(
+                                        line
+                                    )  # Keep single blank lines in content
                                 else:
                                     consecutive_blanks = 0
                                     lines.append(line)
                             except EOFError:
                                 break
                         target_objective = "\n".join(lines).strip()
-                        
+
                     if not target_objective:
                         print("⚠️ No objective provided. Harness activation cancelled.")
                         continue
@@ -6288,20 +6671,22 @@ async def main(args: argparse.Namespace):
                     # Update run_spec with objective
                     updated_spec = (run_spec or {}).copy()
                     updated_spec["original_objective"] = target_objective
-                    run_spec = updated_spec # Update local expectation
+                    run_spec = updated_spec  # Update local expectation
 
                     # Enable harness with objective in run_spec
                     upsert_run(
-                        runtime_db_conn, 
-                        run_id, 
-                        "cli", 
-                        updated_spec, 
-                        max_iterations=10, 
-                        completion_promise="TASK_COMPLETE"
+                        runtime_db_conn,
+                        run_id,
+                        "cli",
+                        updated_spec,
+                        max_iterations=10,
+                        completion_promise="TASK_COMPLETE",
                     )
-                    print(f"✅ Harness activated: max_iterations=10, completion_promise='TASK_COMPLETE'")
+                    print(
+                        f"✅ Harness activated: max_iterations=10, completion_promise='TASK_COMPLETE'"
+                    )
                     print(f"🎯 Objective: {target_objective}")
-                    
+
                     # [V2 Planning Phase] Check for mission.json with PLANNING status
                     planning_mission_file = os.path.join(workspace_dir, "mission.json")
                     if os.path.exists(planning_mission_file):
@@ -6313,21 +6698,27 @@ async def main(args: argparse.Namespace):
                                 mission_data=mission_data,
                             )
                             if mission_data.get("status") == "PLANNING":
-                                print("\n📋 Planning Phase Detected - Awaiting User Approval")
+                                print(
+                                    "\n📋 Planning Phase Detected - Awaiting User Approval"
+                                )
                                 approved = present_plan_summary(mission_data)
                                 if approved:
                                     mission_data["status"] = "IN_PROGRESS"
                                     with open(planning_mission_file, "w") as f:
                                         json.dump(mission_data, f, indent=2)
-                                    print("✅ Plan approved. Transitioning to IN_PROGRESS.")
+                                    print(
+                                        "✅ Plan approved. Transitioning to IN_PROGRESS."
+                                    )
                                 else:
-                                    print("⏸️ Plan not approved. Please edit mission.json and retry.")
+                                    print(
+                                        "⏸️ Plan not approved. Please edit mission.json and retry."
+                                    )
                                     continue  # Go back to prompt, don't start execution
                         except Exception as e:
                             print(f"⚠️ Failed to check mission.json: {e}")
-                    
+
                     print("Prompting agent to begin...")
-                    
+
                     # Synthesize the FIRST prompt for the agent
                     # Check if this is a Planning Phase (mission.json with PLANNING status was approved)
                     is_planning_complete = os.path.exists(planning_mission_file)
@@ -6335,10 +6726,12 @@ async def main(args: argparse.Namespace):
                         try:
                             with open(planning_mission_file, "r") as f:
                                 check_mission = json.load(f)
-                            is_planning_complete = check_mission.get("status") == "IN_PROGRESS"
+                            is_planning_complete = (
+                                check_mission.get("status") == "IN_PROGRESS"
+                            )
                         except Exception:
                             is_planning_complete = False
-                    
+
                     if is_planning_complete:
                         # Execution mode: Plan already approved
                         user_input = (
@@ -6398,33 +6791,32 @@ async def main(args: argparse.Namespace):
                             f"   - Plan your tasks as a logical dependency chain.\n\n"
                             f"   **CRITICAL JSON SYNTAX (FOLLOW EXACTLY):**\n"
                             f"   Every value MUST be a properly quoted string. Common mistakes:\n"
-                            f"   ❌ WRONG: \"duration\": 8-12 hours\n"
-                            f"   ✅ RIGHT: \"duration\": \"8-12 hours\"\n"
-                            f"   ❌ WRONG: \"count\": 20 items per batch\n"  
-                            f"   ✅ RIGHT: \"count\": \"20 items per batch\"\n"
-                            f"   ❌ WRONG: \"output_artifacts\": report.pdf, summary.md\n"
-                            f"   ✅ RIGHT: \"output_artifacts\": [\"report.pdf\", \"summary.md\"]\n\n"
+                            f'   ❌ WRONG: "duration": 8-12 hours\n'
+                            f'   ✅ RIGHT: "duration": "8-12 hours"\n'
+                            f'   ❌ WRONG: "count": 20 items per batch\n'
+                            f'   ✅ RIGHT: "count": "20 items per batch"\n'
+                            f'   ❌ WRONG: "output_artifacts": report.pdf, summary.md\n'
+                            f'   ✅ RIGHT: "output_artifacts": ["report.pdf", "summary.md"]\n\n'
                             f"   **COMPLETE VALID EXAMPLE:**\n"
                             f"   ```json\n"
                             f"   {{\n"
-                            f"     \"mission_root\": \"Research AI trends and create report\",\n"
-                            f"     \"status\": \"PLANNING\",\n"
-                            f"     \"clarifications\": {{}},\n"
-                            f"     \"tasks\": [\n"
+                            f'     "mission_root": "Research AI trends and create report",\n'
+                            f'     "status": "PLANNING",\n'
+                            f'     "clarifications": {{}},\n'
+                            f'     "tasks": [\n'
                             f"       {{\n"
-                            f"         \"id\": \"task_001\",\n"
-                            f"         \"description\": \"Search for AI news\",\n"
-                            f"         \"context\": \"Use Composio search tools\",\n"
-                            f"         \"use_case\": \"Find recent AI developments\",\n"
-                            f"         \"success_criteria\": \"At least 15 sources found\",\n"
-                            f"         \"output_artifacts\": [\"search_results/*.json\"],\n"
-                            f"         \"status\": \"PENDING\",\n"
-                            f"         \"depends_on\": []\n"
+                            f'         "id": "task_001",\n'
+                            f'         "description": "Search for AI news",\n'
+                            f'         "context": "Use Composio search tools",\n'
+                            f'         "use_case": "Find recent AI developments",\n'
+                            f'         "success_criteria": "At least 15 sources found",\n'
+                            f'         "output_artifacts": ["search_results/*.json"],\n'
+                            f'         "status": "PENDING",\n'
+                            f'         "depends_on": []\n'
                             f"       }}\n"
                             f"     ]\n"
                             f"   }}\n"
                             f"   ```\n\n"
-
                             f"## Example Interview Questions (when needed):\n"
                             f"   - 'This topic is broad. Should I focus on [A], [B], or both?'\n"
                             f"   - 'Would you prefer a detailed report or a quick summary?'\n"
@@ -6456,7 +6848,7 @@ async def main(args: argparse.Namespace):
                         failure_ctx = he.context
                         last_error = failure_ctx.get("last_tool_error", "Unknown error")
                         print(f"\n\n🔴 HARNESS ABORT: {str(he)}")
-                        
+
                         # 2. Set alert for NEXT iteration
                         failure_alert = (
                             f"⚠️ SYSTEM ALERT (AUTOMATED RECOVERY):\n"
@@ -6468,17 +6860,19 @@ async def main(args: argparse.Namespace):
                             "• If the previous agent got stuck in a loop, try a different approach.\n"
                             "• Check tool arguments carefully."
                         )
-                        
+
                         # 3. Trigger Restart via pending_prompt
-                        print("🔄 Harness triggering immediate restart with failure context...")
+                        print(
+                            "🔄 Harness triggering immediate restart with failure context..."
+                        )
                         pending_prompt = failure_alert
-                        
+
                         # 4. Clear Client History (Force restart)
                         client.history.clear_history()
-                        
+
                         # 5. Continue loop (skips existing post-turn logic, goes to next iteration)
                         continue
-                    
+
                     # [Non-Blocking Interview] Check for pending interview after iteration
                     interview_prompt = _process_pending_interview(workspace_dir)
                     if interview_prompt:
@@ -6488,31 +6882,43 @@ async def main(args: argparse.Namespace):
                     if hasattr(result, "response_text"):
                         # Synthesize context for the hook
                         h_ctx = HookContext(
-                            systemMessage="", 
-                            toolCalls=[], 
-                            toolResults=[], 
-                            output=result.response_text
+                            systemMessage="",
+                            toolCalls=[],
+                            toolResults=[],
+                            output=result.response_text,
                         )
-                        hook_res = on_agent_stop(h_ctx, run_id=run_id, db_conn=runtime_db_conn)
-                        
+                        hook_res = on_agent_stop(
+                            h_ctx, run_id=run_id, db_conn=runtime_db_conn
+                        )
+
                         hook_out = hook_res.get("hookSpecificOutput", {})
                         action = hook_out.get("action")
 
                         if action == "complete":
-                             print(f"\n✅ HARNESS: Completion promise met. Finishing run.")
-                             # Clear harness config to prevent future restarts if loop continues
-                             upsert_run(runtime_db_conn, run_id, "cli", run_spec or {}, completion_promise=None)
-                             # Optional: break if we want to stop the CLI entirely, but for now just don't restart
-                             pass
+                            print(
+                                f"\n✅ HARNESS: Completion promise met. Finishing run."
+                            )
+                            # Clear harness config to prevent future restarts if loop continues
+                            upsert_run(
+                                runtime_db_conn,
+                                run_id,
+                                "cli",
+                                run_spec or {},
+                                completion_promise=None,
+                            )
+                            # Optional: break if we want to stop the CLI entirely, but for now just don't restart
+                            pass
 
                         if action == "restart":
                             next_prompt = hook_out.get("nextPrompt")
-                            
+
                             # [Mission Manifest Injection]
                             # Detect strict handoff files and inject them into the system prompt
                             mission_file = os.path.join(workspace_dir, "mission.json")
-                            progress_file = os.path.join(workspace_dir, "mission_progress.txt")
-                            
+                            progress_file = os.path.join(
+                                workspace_dir, "mission_progress.txt"
+                            )
+
                             manifest_context = ""
                             if os.path.exists(mission_file):
                                 try:
@@ -6520,7 +6926,7 @@ async def main(args: argparse.Namespace):
                                         manifest_context += f"\n\n[RESUMING MISSION]\nHere is the official Mission Manifest (mission.json): \n```json\n{f.read()}\n```"
                                 except Exception as e:
                                     print(f"⚠️ Failed to read mission.json: {e}")
-                                    
+
                             if os.path.exists(progress_file):
                                 try:
                                     with open(progress_file, "r") as f:
@@ -6529,64 +6935,94 @@ async def main(args: argparse.Namespace):
                                     print(f"⚠️ Failed to read mission_progress.txt: {e}")
 
                             if manifest_context:
-                                print(f"📥 Injecting Mission Manifest context ({len(manifest_context)} chars)")
+                                print(
+                                    f"📥 Injecting Mission Manifest context ({len(manifest_context)} chars)"
+                                )
                                 next_prompt += manifest_context
-                                
+
                                 # [V2 Approval Gate] Check if mission is in PLANNING status
                                 if os.path.exists(mission_file):
                                     try:
                                         with open(mission_file, "r") as f:
                                             raw_content = f.read()
-                                        
+
                                         # [JSON Validation] Multi-step repair chain
                                         mission_data = None
-                                        
+
                                         # Step 1: Try standard json
                                         try:
                                             mission_data = json.loads(raw_content)
                                         except json.JSONDecodeError as je:
-                                            print(f"⚠️ Mission JSON has syntax error: {je}")
-                                            
+                                            print(
+                                                f"⚠️ Mission JSON has syntax error: {je}"
+                                            )
+
                                             # Step 2: Try json5 (handles trailing commas, comments, unquoted strings)
                                             try:
                                                 import json5
+
                                                 mission_data = json5.loads(raw_content)
                                                 print("✅ JSON5 parsed successfully!")
                                                 # Save as valid JSON
                                                 with open(mission_file, "w") as f:
                                                     json.dump(mission_data, f, indent=2)
-                                                print("📝 Saved repaired mission.json (via json5)")
+                                                print(
+                                                    "📝 Saved repaired mission.json (via json5)"
+                                                )
                                             except Exception as j5e:
                                                 print(f"⚠️ JSON5 also failed: {j5e}")
-                                                
+
                                                 # Step 3: Regex repair for common LLM errors
                                                 print("🔧 Attempting regex repair...")
                                                 import re
+
                                                 repaired = raw_content
-                                                
+
                                                 # Fix: values starting with digit but containing non-numeric chars
                                                 # e.g., "key": 8-12, -> "key": "8-12",
                                                 # Using lookahead to avoid consuming/mangling delimiters
-                                                repaired = re.sub(r':[ \t]*(\d+[\-–]\d+)(?=[ \t]*[,}\]\n])', r': "\1"', repaired)
-                                                
+                                                repaired = re.sub(
+                                                    r":[ \t]*(\d+[\-–]\d+)(?=[ \t]*[,}\]\n])",
+                                                    r': "\1"',
+                                                    repaired,
+                                                )
+
                                                 # Fix: unquoted values like  key: value" -> key: "value"
-                                                repaired = re.sub(r':\s*([^"\[\]{}\d][^,}\]]*)"', r': "\1"', repaired)
-                                                
+                                                repaired = re.sub(
+                                                    r':\s*([^"\[\]{}\d][^,}\]]*)"',
+                                                    r': "\1"',
+                                                    repaired,
+                                                )
+
                                                 # Fix: completely unquoted values like key: value, -> key: "value",
-                                                repaired = re.sub(r':\s*(\d+\s+[^,}\]]+)([,}\]])', r': "\1"\2', repaired)
-                                                
+                                                repaired = re.sub(
+                                                    r":\s*(\d+\s+[^,}\]]+)([,}\]])",
+                                                    r': "\1"\2',
+                                                    repaired,
+                                                )
+
                                                 # Fix: trailing commas before } or ]
-                                                repaired = re.sub(r',(\s*[}\]])', r'\1', repaired)
-                                                
+                                                repaired = re.sub(
+                                                    r",(\s*[}\]])", r"\1", repaired
+                                                )
+
                                                 try:
                                                     mission_data = json.loads(repaired)
                                                     print("✅ Regex repair successful!")
                                                     with open(mission_file, "w") as f:
-                                                        json.dump(mission_data, f, indent=2)
-                                                    print("📝 Saved repaired mission.json (via regex)")
+                                                        json.dump(
+                                                            mission_data, f, indent=2
+                                                        )
+                                                    print(
+                                                        "📝 Saved repaired mission.json (via regex)"
+                                                    )
                                                 except json.JSONDecodeError as je2:
-                                                    print(f"❌ All repair attempts failed: {je2}")
-                                                    print("🚫 BLOCKING execution - agent must regenerate mission.json")
+                                                    print(
+                                                        f"❌ All repair attempts failed: {je2}"
+                                                    )
+                                                    print(
+                                                        "🚫 BLOCKING execution - agent must regenerate mission.json"
+                                                    )
                                                     # Delete malformed file
                                                     os.remove(mission_file)
                                                     # BLOCK the restart - provide detailed error feedback
@@ -6594,77 +7030,101 @@ async def main(args: argparse.Namespace):
                                                         f"CRITICAL JSON ERROR: Your mission.json was INVALID and has been deleted.\n\n"
                                                         f"SPECIFIC ERROR: {je}\n\n"
                                                         f"COMMON MISTAKES TO AVOID:\n"
-                                                        f"- WRONG: \"duration\": 8-12 hours  (unquoted value)\n"
-                                                        f"- RIGHT: \"duration\": \"8-12 hours\"\n"
-                                                        f"- WRONG: \"count\": 5 items per batch\n"
-                                                        f"- RIGHT: \"count\": \"5 items per batch\"\n\n"
+                                                        f'- WRONG: "duration": 8-12 hours  (unquoted value)\n'
+                                                        f'- RIGHT: "duration": "8-12 hours"\n'
+                                                        f'- WRONG: "count": 5 items per batch\n'
+                                                        f'- RIGHT: "count": "5 items per batch"\n\n'
                                                         f"REQUIRED STRUCTURE (all string values must be quoted):\n"
-                                                        f'{{\n'
+                                                        f"{{\n"
                                                         f'  "mission_root": "string description",\n'
                                                         f'  "status": "PLANNING",\n'
                                                         f'  "clarifications": {{"key": "value"}},\n'
                                                         f'  "tasks": [\n'
                                                         f'    {{"id": "topic_001", "description": "string", "use_case": "string", "success_criteria": "string"}}\n'
-                                                        f'  ]\n'
-                                                        f'}}\n\n'
+                                                        f"  ]\n"
+                                                        f"}}\n\n"
                                                         f"BE EXTREMELY CAREFUL with JSON syntax. Regenerate mission.json now with status: PLANNING"
                                                     )
                                                     mission_data = None
-                                        
+
                                         if mission_data:
-                                            mission_data, _ = _apply_interview_answers_to_mission(
-                                                workspace_dir,
-                                                mission_data=mission_data,
+                                            mission_data, _ = (
+                                                _apply_interview_answers_to_mission(
+                                                    workspace_dir,
+                                                    mission_data=mission_data,
+                                                )
                                             )
-                                        if mission_data and mission_data.get("status") == "PLANNING":
-                                            print("\n📋 Planning Phase Complete - Awaiting User Approval")
-                                            approved = present_plan_summary(mission_data)
+                                        if (
+                                            mission_data
+                                            and mission_data.get("status") == "PLANNING"
+                                        ):
+                                            print(
+                                                "\n📋 Planning Phase Complete - Awaiting User Approval"
+                                            )
+                                            approved = present_plan_summary(
+                                                mission_data
+                                            )
                                             if approved:
                                                 mission_data["status"] = "IN_PROGRESS"
                                                 with open(mission_file, "w") as f:
                                                     json.dump(mission_data, f, indent=2)
-                                                print("✅ Plan approved. Transitioning to IN_PROGRESS.")
+                                                print(
+                                                    "✅ Plan approved. Transitioning to IN_PROGRESS."
+                                                )
                                                 # Ensure we don't drop to interactive prompt if we have a mission
                                                 if not next_prompt:
-                                                     # Default kickoff prompt if the hook didn't provide one
-                                                     next_prompt = "Execute the mission.json tasks starting now."
+                                                    # Default kickoff prompt if the hook didn't provide one
+                                                    next_prompt = "Execute the mission.json tasks starting now."
                                             else:
-                                                print("⏸️ Plan not approved. Waiting for user changes...")
+                                                print(
+                                                    "⏸️ Plan not approved. Waiting for user changes..."
+                                                )
                                                 continue  # Wait for another iteration
                                     except Exception as e:
                                         print(f"⚠️ Failed to check mission status: {e}")
 
                             if next_prompt:
                                 print(f"\n🔄 HARNESS RESTART TRIGGERED")
-                                print(f"Next Prompt: {next_prompt.splitlines()[0][:100]}...")
+                                print(
+                                    f"Next Prompt: {next_prompt.splitlines()[0][:100]}..."
+                                )
                                 # CRITICAL: Preserve interview answers if already set
                                 # Interview answers come from line 6064, don't overwrite them
-                                if pending_prompt and "USER INTERVIEW ANSWERS" in pending_prompt:
+                                if (
+                                    pending_prompt
+                                    and "USER INTERVIEW ANSWERS" in pending_prompt
+                                ):
                                     # Prepend interview answers to the hook's prompt
-                                    pending_prompt = pending_prompt + "\n\n" + next_prompt
-                                    print("📋 Interview answers preserved in restart prompt")
+                                    pending_prompt = (
+                                        pending_prompt + "\n\n" + next_prompt
+                                    )
+                                    print(
+                                        "📋 Interview answers preserved in restart prompt"
+                                    )
                                 else:
                                     pending_prompt = next_prompt
 
-                                
                                 # Clear Client History
                                 if hasattr(client, "history"):
                                     client.history = []
                                     print("🧹 Client history cleared.")
-                                
+
                                 continue
                         elif action == "complete":
-                             # Harness satisfied
-                             pass
-
+                            # Harness satisfied
+                            pass
 
                     if run_mode == "job" and args.job_path:
                         if runtime_db_conn and run_id:
-                            if _handle_cancel_request(runtime_db_conn, run_id, workspace_dir):
+                            if _handle_cancel_request(
+                                runtime_db_conn, run_id, workspace_dir
+                            ):
                                 auto_resume_complete = True
                                 break
                             _maybe_mark_run_succeeded()
-                            status = get_run_status(runtime_db_conn, run_id) or "succeeded"
+                            status = (
+                                get_run_status(runtime_db_conn, run_id) or "succeeded"
+                            )
                             print_job_completion_summary(
                                 runtime_db_conn,
                                 run_id,
@@ -6774,39 +7234,57 @@ async def main(args: argparse.Namespace):
                 f.write(f"Total Tool Calls: {len(trace['tool_calls'])}\n")
                 f.write(f"Total Tool Results: {len(trace['tool_results'])}\n")
                 f.write(f"Status: {trace.get('status', 'complete')}\n\n")
-                
+
                 # Code execution check
-                code_exec_tools = ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"]
+                code_exec_tools = [
+                    "WORKBENCH",
+                    "CODE",
+                    "EXECUTE",
+                    "PYTHON",
+                    "SANDBOX",
+                    "BASH",
+                ]
                 code_exec_used = any(
                     any(x in tc["name"].upper() for x in code_exec_tools)
                     for tc in trace["tool_calls"]
                 )
                 f.write(f"Code Execution Used: {'Yes' if code_exec_used else 'No'}\n\n")
-                
+
                 # Tool call breakdown
                 f.write("=" * 60 + "\n")
                 f.write("TOOL CALL BREAKDOWN\n")
                 f.write("=" * 60 + "\n")
                 for tc in trace["tool_calls"]:
-                    marker = "🏭 " if any(x in tc["name"].upper() for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]) else "   "
-                    f.write(f"{marker}Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}\n")
-                
+                    marker = (
+                        "🏭 "
+                        if any(
+                            x in tc["name"].upper()
+                            for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]
+                        )
+                        else "   "
+                    )
+                    f.write(
+                        f"{marker}Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}\n"
+                    )
+
                 # Logfire trace link
                 if LOGFIRE_TOKEN and "trace_id" in trace:
-                    project_slug = os.getenv("LOGFIRE_PROJECT_SLUG", "Kjdragan/composio-claudemultiagent")
+                    project_slug = os.getenv(
+                        "LOGFIRE_PROJECT_SLUG", "Kjdragan/composio-claudemultiagent"
+                    )
                     logfire_url = f"https://logfire.pydantic.dev/{project_slug}?q=trace_id%3D%27{trace['trace_id']}%27"
                     f.write(f"\nLogfire Trace: {logfire_url}\n")
-            
+
             print(f"📋 Session summary saved to {summary_path}")
 
             # NEW: Generate Rich Transcript
             from universal_agent import transcript_builder
+
             transcript_path = os.path.join(workspace_dir, "transcript.md")
             if transcript_builder.generate_transcript(trace, transcript_path):
                 print(f"🎬 Rich transcript saved to {transcript_path}")
             else:
                 print(f"⚠️ Failed to generate transcript")
-
 
             if LOGFIRE_TOKEN and "trace_id" in trace:
                 project_slug = os.getenv(
@@ -6820,12 +7298,18 @@ async def main(args: argparse.Namespace):
             print("\n" + "=" * 80)
             print("\n" + "=" * 80)
             print("Session ended. Thank you!")
-            if runtime_db_conn and run_id and not run_failed and not run_cancelled_by_operator:
+            if (
+                runtime_db_conn
+                and run_id
+                and not run_failed
+                and not run_cancelled_by_operator
+            ):
                 _maybe_mark_run_succeeded()
                 logfire.info("durable_run_completed", run_id=run_id)
 
     # Close the main span to ensure all nested spans are captured in trace
     main_span.__exit__(None, None, None)
+
 
 if __name__ == "__main__":
     print("\n" + "=" * 80)

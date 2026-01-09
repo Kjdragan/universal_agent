@@ -2,35 +2,58 @@
 
 ## GMAIL_SEND_EMAIL
 
-**Argument Names (CRITICAL)**:
-- Use `recipient_email` (or `to`), NOT `recipient`.
-- `recipient` is NOT a valid parameter and will cause a schema validation error.
+### HOW TO CALL (CRITICAL - READ FIRST)
+🚨 **NEVER use Python code or Bash to call Composio SDK directly.**
+🚨 **NEVER try `from composio import ...` or `composio_client.tools.execute(...)`**
 
-**Attachment format (CRITICAL)**:
-- `attachment` must be a **DICT**, not a list
-- Format: `{"name": str, "mimetype": str, "s3key": str}`
-- Get `s3key` from `upload_to_composio` first
+**Use ONE of these MCP tools:**
+1. `mcp__composio__GMAIL_SEND_EMAIL` - Direct MCP call (preferred)
+2. `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` - Wrapper with `tool_slug: "GMAIL_SEND_EMAIL"`
 
-**Correct Example:**
+**Full Call Example (via COMPOSIO_MULTI_EXECUTE_TOOL):**
 ```json
 {
-  "recipient_email": "user@example.com",  // ✅ Correct (or "to")
-  "subject": "Report",
-  "body": "See attached.",
-  "attachment": {
-    "name": "report.pdf",
-    "mimetype": "application/pdf",
-    "s3key": "215406/gmail/GMAIL_SEND_EMAIL/report.pdf"
-  }
+  "tools": [
+    {
+      "tool_slug": "GMAIL_SEND_EMAIL",
+      "arguments": {
+        "recipient_email": "user@example.com",
+        "subject": "Your Report",
+        "body": "Please find the report attached.",
+        "attachment": {
+          "name": "report.pdf",
+          "mimetype": "application/pdf",
+          "s3key": "<from upload_to_composio>"
+        }
+      }
+    }
+  ]
 }
 ```
 
-**Common Mistakes (WRONG):**
+### Argument Names (CRITICAL)
+- Use `recipient_email` (or `to`), NOT `recipient`.
+- `recipient` is NOT a valid parameter and will cause a schema validation error.
+
+### Attachment format (CRITICAL)
+- `attachment` must be a **DICT**, not a list
+- Format: `{"name": str, "mimetype": str, "s3key": str}`
+- Get `s3key` from `mcp__local_toolkit__upload_to_composio` first
+
+### Common Mistakes (WRONG)
 ```json
 {
   "recipient": "user@example.com",              // ❌ Wrong parameter name!
   "attachment": [{"name": "report.pdf", ...}]  // ❌ List format fails!
 }
+```
+
+🚫 **NEVER DO THIS:**
+```python
+# ❌ WRONG - This will fail! The agent cannot call Composio SDK directly.
+from composio import Composio
+client = Composio()
+client.tools.execute(slug="GMAIL_SEND_EMAIL", ...)  # FAILS!
 ```
 
 ## upload_to_composio
