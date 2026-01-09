@@ -1,0 +1,69 @@
+C:\Users\kevin\AppData\Roaming\Antigravity\User\settings.json
+
+
+{
+    // === EXISTING ANTIGRAVITY SETTINGS ===
+    "workbench.auxiliaryActivityBar.location": "default",
+    "git.confirmSync": false,
+    "liveServer.settings.donotShowInfoMsg": true,
+    "remote.autoForwardPortsSource": "hybrid",
+    // === THEME & ICONS ===
+    "workbench.colorTheme": "Gruvbox Dark Hard",
+    "workbench.iconTheme": "vscode-icons",
+    "workbench.preferredDarkColorTheme": "Gruvbox Dark Hard",
+    "workbench.preferredHighContrastColorTheme": "Gruvbox Dark Hard",
+    // === EDITOR FONTS ===
+    "editor.fontFamily": "'JetBrainsMono Nerd Font Mono'",
+    "editor.fontSize": 16,
+    "editor.lineHeight": 23,
+    "editor.letterSpacing": 0.5,
+    "editor.fontLigatures": true,
+    // === EDITOR APPEARANCE ===
+    "editor.cursorBlinking": "phase",
+    "editor.cursorSmoothCaretAnimation": "on",
+    "editor.smoothScrolling": true,
+    "editor.renderWhitespace": "boundary",
+    "editor.renderLineHighlight": "all",
+    "editor.bracketPairColorization.enabled": true,
+    "editor.bracketPairColorization.independentColorPoolPerBracketType": true,
+    "editor.guides.bracketPairs": "active",
+    "editor.guides.indentation": true,
+    "editor.minimap.autohide": "mouseover",
+    "editor.minimap.size": "fit",
+    "editor.stickyScroll.enabled": false,
+    "editor.scrollbar.verticalScrollbarSize": 12,
+    "editor.experimentalGpuAcceleration": "on",
+    // === TERMINAL APPEARANCE ===
+    "terminal.integrated.fontFamily": "'JetBrainsMono Nerd Font Mono', Consolas, monospace",
+    "terminal.integrated.fontSize": 16,
+    "terminal.integrated.lineHeight": 1.1,
+    "terminal.integrated.smoothScrolling": true,
+    "terminal.integrated.enableImages": true,
+    "terminal.integrated.fontLigatures.enabled": true,
+    // === WINDOW & UI ===
+    "window.zoomLevel": 1,
+    "workbench.list.smoothScrolling": true,
+    "workbench.panel.defaultLocation": "right",
+    "workbench.panel.showLabels": false,
+    "workbench.tree.renderIndentGuides": "always",
+    "workbench.tree.enableStickyScroll": false,
+    "workbench.editor.highlightModifiedTabs": true,
+    "workbench.hover.delay": 200,
+    "workbench.sash.hoverDelay": 200,
+    // === SCROLLING SENSITIVITY ===
+    "editor.mouseWheelScrollSensitivity": 1.5,
+    "workbench.list.mouseWheelScrollSensitivity": 1.5,
+    "terminal.integrated.mouseWheelScrollSensitivity": 1.5,
+    // === CHAT/AI PANEL FONTS ===
+    "chat.editor.fontSize": 16,
+    "chat.editor.lineHeight": 1.3,
+    "vsicons.dontShowNewVersionMessage": true,
+    "claudeCode.preferredLocation": "panel",
+    "claudeCode.selectedModel": "opus",
+    "chatgpt.runCodexInWindowsSubsystemForLinux": true,
+    "chatgpt.openOnStartup": true,
+    "breadcrumbs.enabled": false,
+    "terminal.integrated.enableMultiLinePasteWarning": "never",
+    "python.languageServer": "Default",
+    "editor.wordWrap": "on"
+}
