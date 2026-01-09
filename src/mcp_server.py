@@ -62,6 +62,7 @@ try:
         logfire.configure(
             service_name="local-toolkit",
             send_to_logfire="if-token-present",
+            inspect_arguments=False,  # Suppress InspectArgumentsFailedWarning
         )
         logfire.instrument_mcp()
         sys.stderr.write("[Local Toolkit] Logfire instrumentation enabled\n")
