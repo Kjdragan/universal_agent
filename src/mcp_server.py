@@ -1640,6 +1640,338 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
 
 
 # =============================================================================
+# EVIDENCE LEDGER TOOLS
+# =============================================================================
+
+
+def _extract_quotes(text: str) -> list[str]:
+    """Extract quoted text from content."""
+    import re
+
+    # Match "quoted text" or 'quoted text' or "smart quotes"
+    patterns = [
+        r'"([^"]{20,300})"',  # Standard double quotes
+        r"'([^']{20,300})'",  # Single quotes (avoid contractions with min length)
+        r"\u201c([^\u201d]{20,300})\u201d",  # Smart double quotes (curly)
+        r"\u2018([^\u2019]{20,300})\u2019",  # Smart single quotes (curly)
+    ]
+    quotes = []
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        quotes.extend(matches)
+    return quotes[:10]  # Limit to 10 most prominent quotes
+
+
+def _extract_numbers(text: str) -> list[dict]:
+    """Extract significant numbers with context."""
+    import re
+
+    numbers = []
+
+    # Patterns for significant numbers (with context)
+    patterns = [
+        # Percentages
+        (r"(\d+(?:\.\d+)?)\s*%", "percentage"),
+        # Dollar amounts
+        (
+            r"\$\s*(\d+(?:,\d{3})*(?:\.\d+)?)\s*(million|billion|trillion|M|B|T)?",
+            "currency",
+        ),
+        # Large numbers with units
+        (
+            r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*(million|billion|trillion|thousand)",
+            "quantity",
+        ),
+        # Parameter counts (AI-specific)
+        (r"(\d+(?:\.\d+)?)\s*[BM]\s*param", "parameters"),
+        # Token counts
+        (r"(\d+(?:\.\d+)?)\s*[BMT]?\s*tokens?", "tokens"),
+    ]
+
+    for pattern, num_type in patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            # Get surrounding context (40 chars each side)
+            start = max(0, match.start() - 40)
+            end = min(len(text), match.end() + 40)
+            context = text[start:end].strip()
+            numbers.append(
+                {"value": match.group(0), "type": num_type, "context": context}
+            )
+
+    return numbers[:15]  # Limit to 15 data points
+
+
+def _extract_dates(text: str) -> list[str]:
+    """Extract date references."""
+    import re
+
+    dates = []
+
+    patterns = [
+        # Month Day, Year
+        r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}",
+        # Day Month Year
+        r"\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4}",
+        # YYYY-MM-DD
+        r"20\d{2}-\d{2}-\d{2}",
+        # Quarter references
+        r"Q[1-4]\s+20\d{2}",
+    ]
+
+    for pattern in patterns:
+        matches = re.findall(pattern, text, re.IGNORECASE)
+        if isinstance(matches[0], tuple) if matches else False:
+            dates.extend([m[0] if isinstance(m, tuple) else m for m in matches])
+        else:
+            dates.extend(matches)
+
+    return list(set(dates))[:10]
+
+
+def _extract_key_claims(text: str, title: str = "") -> list[str]:
+    """Extract likely key claims using heuristics."""
+    import re
+
+    claims = []
+
+    # Sentences that start with claim indicators
+    claim_patterns = [
+        r"(?:^|\. )([A-Z][^.]*(?:announced|launched|released|introduced|achieved|reported|revealed|discovered|found|showed|demonstrated)[^.]*\.)",
+        r"(?:^|\. )([A-Z][^.]*(?:will|plans to|expects to|intends to)[^.]*\.)",
+        r"(?:^|\. )([A-Z][^.]*(?:first|largest|fastest|newest|leading|breakthrough)[^.]*\.)",
+        r"(?:^|\. )([A-Z][^.]*(?:According to|Based on|Research shows)[^.]*\.)",
+    ]
+
+    for pattern in claim_patterns:
+        matches = re.findall(pattern, text)
+        claims.extend(matches)
+
+    # Also grab first substantive sentence from each paragraph (often contains key info)
+    paragraphs = text.split("\n\n")
+    for para in paragraphs[:5]:  # First 5 paragraphs
+        sentences = re.split(r"(?<=[.!?])\s+", para.strip())
+        if sentences and len(sentences[0]) > 50:
+            claims.append(sentences[0])
+
+    # Deduplicate and limit
+    seen = set()
+    unique_claims = []
+    for claim in claims:
+        claim_clean = claim.strip()
+        if claim_clean not in seen and len(claim_clean) > 30:
+            seen.add(claim_clean)
+            unique_claims.append(claim_clean)
+
+    return unique_claims[:8]
+
+
+@mcp.tool()
+@trace_tool_output
+async def build_evidence_ledger(
+    session_dir: str, topic: str, task_name: str = "default"
+) -> str:
+    """
+    Build structured evidence ledger from research corpus for context-efficient synthesis.
+
+    Extracts from each source:
+    - Direct quotes with attribution
+    - Specific data points (numbers, percentages, dates)
+    - Key claims and findings
+    - Source metadata (title, URL, date)
+
+    The ledger compresses a large research corpus (~100KB+) into a smaller, high-signal
+    evidence file (~10-20KB) that preserves the "quotable" material needed for synthesis.
+
+    Use this AFTER finalize_research and BEFORE report synthesis for large corpora.
+
+    Args:
+        session_dir: Path to the current session workspace
+        topic: Research topic (for context and themes)
+        task_name: Task scope (should match finalize_research task_name)
+
+    Returns:
+        JSON with ledger path, extraction stats, and corpus size comparison
+    """
+    try:
+        task_dir = os.path.join(session_dir, "tasks", task_name)
+        filtered_dir = os.path.join(task_dir, "filtered_corpus")
+
+        if not os.path.exists(filtered_dir):
+            # Fallback to search_results_filtered_best if task-scoped corpus doesn't exist
+            filtered_dir = os.path.join(session_dir, "search_results_filtered_best")
+            if not os.path.exists(filtered_dir):
+                return json.dumps(
+                    {
+                        "error": "No filtered corpus found. Run finalize_research first.",
+                        "checked_paths": [
+                            os.path.join(task_dir, "filtered_corpus"),
+                            os.path.join(session_dir, "search_results_filtered_best"),
+                        ],
+                    }
+                )
+
+        # Collect all research files
+        research_files = [
+            f
+            for f in os.listdir(filtered_dir)
+            if f.endswith(".md") and not f.startswith("research_overview")
+        ]
+
+        if not research_files:
+            return json.dumps(
+                {
+                    "error": "No research files found in filtered corpus",
+                    "filtered_dir": filtered_dir,
+                }
+            )
+
+        raw_corpus_size = 0
+        evidence_entries = []
+        evidence_id = 1
+
+        for filename in sorted(research_files):
+            filepath = os.path.join(filtered_dir, filename)
+
+            with open(filepath, "r", encoding="utf-8") as f:
+                content = f.read()
+
+            raw_corpus_size += len(content)
+
+            # Parse YAML frontmatter
+            import yaml
+
+            metadata = {}
+            body = content
+
+            if content.startswith("---"):
+                fm_end = content.find("---", 4)
+                if fm_end != -1:
+                    fm_text = content[4:fm_end].strip()
+                    try:
+                        metadata = yaml.safe_load(fm_text) or {}
+                    except:
+                        pass
+                    body = content[fm_end + 4 :].strip()
+
+            # Extract evidence
+            quotes = _extract_quotes(body)
+            numbers = _extract_numbers(body)
+            dates = _extract_dates(body)
+            claims = _extract_key_claims(body, metadata.get("title", ""))
+
+            # Build entry
+            entry = {
+                "id": f"EVID-{evidence_id:03d}",
+                "title": metadata.get("title", "Untitled")[:80],
+                "url": metadata.get("source", ""),
+                "date": metadata.get("date", "unknown"),
+                "filename": filename,
+                "word_count": len(body.split()),
+                "quotes": quotes,
+                "data_points": numbers,
+                "dates_mentioned": dates,
+                "key_claims": claims,
+            }
+
+            evidence_entries.append(entry)
+            evidence_id += 1
+
+        # Build ledger markdown
+        ledger_lines = [
+            f"# Evidence Ledger: {topic}",
+            f"**Generated:** {datetime.utcnow().isoformat()}Z",
+            f"**Sources:** {len(evidence_entries)} files",
+            f"**Original Corpus:** {raw_corpus_size:,} chars",
+            "",
+            "---",
+            "",
+            "> Use EVID-XXX IDs when citing evidence in the report.",
+            "> This ledger preserves quotes, numbers, and claims for synthesis.",
+            "",
+        ]
+
+        for entry in evidence_entries:
+            ledger_lines.append(f"## {entry['id']}: {entry['title']}")
+            ledger_lines.append(f"- **Source:** [{entry['filename']}]({entry['url']})")
+            ledger_lines.append(f"- **Date:** {entry['date']}")
+            ledger_lines.append(f"- **Words:** {entry['word_count']:,}")
+            ledger_lines.append("")
+
+            if entry["key_claims"]:
+                ledger_lines.append("### Key Claims")
+                for claim in entry["key_claims"][:5]:
+                    ledger_lines.append(f"- {claim}")
+                ledger_lines.append("")
+
+            if entry["data_points"]:
+                ledger_lines.append("### Data Points")
+                for dp in entry["data_points"][:8]:
+                    ledger_lines.append(
+                        f"- **{dp['value']}** ({dp['type']}): {dp['context']}"
+                    )
+                ledger_lines.append("")
+
+            if entry["quotes"]:
+                ledger_lines.append("### Notable Quotes")
+                for quote in entry["quotes"][:5]:
+                    ledger_lines.append(f'- "{quote}"')
+                ledger_lines.append("")
+
+            if entry["dates_mentioned"]:
+                ledger_lines.append(
+                    f"### Dates Mentioned: {', '.join(entry['dates_mentioned'][:5])}"
+                )
+                ledger_lines.append("")
+
+            ledger_lines.append("---")
+            ledger_lines.append("")
+
+        # Calculate compression stats
+        ledger_content = "\n".join(ledger_lines)
+        ledger_size = len(ledger_content)
+        compression_ratio = (
+            round((1 - ledger_size / raw_corpus_size) * 100, 1)
+            if raw_corpus_size > 0
+            else 0
+        )
+
+        # Save ledger
+        ledger_path = os.path.join(task_dir, "evidence_ledger.md")
+        os.makedirs(task_dir, exist_ok=True)
+
+        with open(ledger_path, "w", encoding="utf-8") as f:
+            f.write(ledger_content)
+
+        return json.dumps(
+            {
+                "status": "Evidence ledger built successfully",
+                "ledger_path": ledger_path,
+                "sources_processed": len(evidence_entries),
+                "raw_corpus_chars": raw_corpus_size,
+                "ledger_chars": ledger_size,
+                "compression_ratio": f"{compression_ratio}%",
+                "total_quotes": sum(len(e["quotes"]) for e in evidence_entries),
+                "total_data_points": sum(
+                    len(e["data_points"]) for e in evidence_entries
+                ),
+                "total_claims": sum(len(e["key_claims"]) for e in evidence_entries),
+                "next_step": "Read ONLY evidence_ledger.md for report synthesis. Do NOT read raw corpus files.",
+            },
+            indent=2,
+        )
+
+    except Exception as e:
+        import traceback
+
+        return json.dumps(
+            {
+                "error": f"Evidence extraction failed: {str(e)}",
+                "traceback": traceback.format_exc(),
+            }
+        )
+
+
+# =============================================================================
 # IMAGE GENERATION TOOLS
 # =============================================================================
 

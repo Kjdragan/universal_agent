@@ -71,7 +71,10 @@ def test_forced_replay_allows_task_children():
             agent_main.on_pre_tool_use_ledger(
                 {
                     "tool_name": "mcp__local_toolkit__write_local_file",
-                    "tool_input": {"path": "work_products/out.txt", "content": "hi"},
+                    "tool_input": {
+                        "path": "work_products/out.txt",
+                        "content": "Test content here",
+                    },
                 },
                 "tool-use-write",
                 {},
@@ -83,7 +86,10 @@ def test_forced_replay_allows_task_children():
             agent_main.on_pre_tool_use_ledger(
                 {
                     "tool_name": "Write",
-                    "tool_input": {"file_path": "work_products/out.txt", "content": "hi"},
+                    "tool_input": {
+                        "file_path": "work_products/out.txt",
+                        "content": "Test content here for validation",
+                    },
                 },
                 "tool-use-write-claude",
                 {},

@@ -54,6 +54,9 @@ def test_resolve_me_in_multi_execute(monkeypatch):
 
 def test_unresolved_alias(monkeypatch):
     _reset_env(monkeypatch)
+    # Ensure we don't load from project root identity_registry.json
+    monkeypatch.setenv("UA_IDENTITY_REGISTRY_PATH", "/nonexistent/path.json")
+    clear_identity_registry_cache()  # Clear again after setting mock path
 
     tool_input = {"to": "me", "subject": "hello", "body": "test"}
     updated, errors, replacements = resolve_email_recipients(
