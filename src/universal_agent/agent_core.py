@@ -383,6 +383,7 @@ def configure_logfire():
         token=LOGFIRE_TOKEN,
         send_to_logfire="if-token-present",
         scrubbing=logfire.ScrubbingOptions(callback=scrubbing_callback),
+        inspect_arguments=False,  # Suppress InspectArgumentsFailedWarning
     )
 
     try:

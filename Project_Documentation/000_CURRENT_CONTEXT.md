@@ -4,7 +4,7 @@
 > **For New AI Agents**: Read this document first to understand the current state of the project.
 > This is a living document that tracks where we are and where we're going.
 
-**Last Updated**: 2026-01-02 21:39 CST
+**Last Updated**: 2026-01-09 01:15 CST
 
 ---
 
@@ -28,7 +28,252 @@
 
 ---
 
-## 📍 Current State (January 2, 2026)
+## 🔴 CURRENT FOCUS: Evidence Ledger + Context Compaction
+
+We're solving TWO problems with ONE architectural change:
+
+1. **Context Fatigue** - Large reports fail with 0 bytes written (context exhaustion)
+2. **Report Quality** - One-shot synthesis from raw research produces sterile "summary of summaries"
+
+### The Solution: Two-Phase Report Generation with Evidence Ledger
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  PHASE 1: EXTRACTION (Tool-heavy, minimal synthesis)                    │
+│                                                                         │
+│  finalize_research() → read_research_files() → BUILD EVIDENCE LEDGER   │
+│                                                                         │
+│  For each source, extract:                                              │
+│  • Direct quotes (with attribution)                                     │
+│  • Specific data points (numbers, dates, percentages)                   │
+│  • Key claims and findings                                              │
+│  • Contradictions or tensions between sources                           │
+│  • Notable voices and perspectives                                      │
+│                                                                         │
+│  Output: evidence_ledger.md (~10-20% size of raw corpus)               │
+│          Contains 100% of the "quotable" material                       │
+│                                                                         │
+│  ─────────────── CONTEXT COMPACTION HAPPENS HERE ───────────────        │
+│  Clear/summarize all messages from Phase 1                              │
+│  Agent now has fresh context for synthesis                              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│  PHASE 2: SYNTHESIS (Creative, full context available for writing)      │
+│                                                                         │
+│  Read ONLY evidence_ledger.md (compressed, high-signal)                 │
+│                                                                         │
+│  Generate report with:                                                  │
+│  • Full creative freedom on structure (NO templates)                    │
+│  • Rich detail from extracted quotes and data                           │
+│  • Organic flow based on thematic connections                           │
+│  • Topic-appropriate tone (science vs business vs culture)              │
+│                                                                         │
+│  Output: Full report with specifics, not sterile summaries              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why This Works
+
+| Problem | How Evidence Ledger Solves It |
+|---------|-------------------------------|
+| **Context exhaustion** | Ledger is 10-20% of raw corpus size; synthesis reads only ledger |
+| **Summary of summaries** | Ledger preserves exact quotes, numbers, dates - the "texture" |
+| **Sterile templates** | No structure imposed; agent organizes by thematic connections |
+| **Topic diversity** | Works for science, business, culture, AI - structure emerges from evidence |
+| **Lost specifics** | Extraction phase explicitly captures quotable material before discarding |
+
+### Evidence Ledger Format (Example)
+
+```markdown
+# Evidence Ledger: [Topic]
+Generated: 2026-01-09 | Sources: 8 files | ~15KB compressed from ~120KB raw
+
+---
+
+## Source: arxiv_transformer_scaling.md
+**Type**: Academic Paper | **Date**: 2025-11
+
+### Key Claims
+- "We observe a 70.7% accuracy on GDPval, representing a 12.3% improvement over the previous SOTA" (Section 4.2)
+- "Scaling beyond 400B parameters shows diminishing returns for reasoning tasks" (Abstract)
+
+### Data Points
+- Training: 2.1T tokens, 45 days on 2048 H100s
+- Inference: 0.8s latency at batch=1, 2.3s at batch=32
+- Cost: ~$4.2M training budget
+
+### Tensions
+- Contradicts Chen et al. (2024) claim that scaling continues linearly
+
+---
+
+## Source: hackernews_practitioner_thread.md
+**Type**: Community Discussion | **Date**: 2025-12
+
+### Notable Voices
+- @senior_ml_eng (claims Anthropic employee): "The benchmark methodology is fundamentally flawed for production use cases"
+- @startup_founder: "We switched from GPT-4 to Claude and saw 40% cost reduction with comparable quality"
+
+### Sentiment
+- Skepticism about benchmark validity (7 of 12 top comments)
+- Enthusiasm about cost/performance tradeoff (4 of 12)
+
+### Quotes
+- "Benchmarks are the new vanity metrics" - @ml_skeptic (847 upvotes)
+
+---
+
+## Source: company_blog_announcement.md
+**Type**: Corporate | **Date**: 2025-12
+
+### Key Claims
+- "Available to all API users starting January 15, 2026"
+- "Pricing: $15/M input, $75/M output tokens"
+
+### Marketing vs Reality Flags
+- Claim: "10x faster" - Note: Compared to their own previous model, not competitors
+- Claim: "Best in class" - Note: Only on 2 of 5 standard benchmarks
+
+---
+```
+
+### What Makes This Different from Templates
+
+**BAD (Template-driven)**:
+```
+1. Executive Summary
+2. Introduction
+3. Findings
+4. Analysis
+5. Conclusion
+```
+This produces formulaic reports regardless of topic.
+
+**GOOD (Evidence-driven)**:
+The agent sees the ledger and decides: "The tension between academic benchmarks and practitioner experience is the real story here. I'll structure around that conflict."
+
+Result: Organic structure that emerges from the evidence itself.
+
+---
+
+## 📋 IMPLEMENTATION PLAN
+
+### Phase 1: Build Evidence Ledger Tool
+
+**New MCP Tool**: `build_evidence_ledger`
+
+```python
+@mcp.tool()
+async def build_evidence_ledger(
+    session_dir: str,
+    topic: str,
+    source_files: list[str] | None = None  # If None, use all in search_results_filtered_best/
+) -> str:
+    """
+    Reads research files and extracts structured evidence into a ledger.
+
+    For each source, extracts:
+    - Direct quotes with attribution
+    - Specific data points (numbers, dates, stats)
+    - Key claims and findings
+    - Contradictions or tensions
+    - Notable voices/perspectives
+
+    Returns: Path to evidence_ledger.md
+    """
+```
+
+**Implementation Options**:
+1. **LLM-powered extraction** - Use Claude to read each file and extract evidence (higher quality)
+2. **Heuristic extraction** - Regex/rules for quotes, numbers, dates (faster, no API cost)
+3. **Hybrid** - Heuristics for data points, LLM for claims/tensions
+
+Recommend: **Option 1 (LLM-powered)** for quality, since this is a one-time cost per report.
+
+### Phase 2: Context Compaction Hook
+
+**Location**: After `build_evidence_ledger` completes, before synthesis begins
+
+**Mechanism**:
+```python
+# In report-creation-expert workflow or as hook
+if ledger_built:
+    # Option A: Clear message history
+    history.clear_except_system_prompt()
+
+    # Option B: Summarize and replace
+    summary = f"Phase 1 complete. Evidence ledger saved to {ledger_path}. Ready for synthesis."
+    history.replace_with_summary(summary)
+```
+
+### Phase 3: Update Report Sub-Agent Workflow
+
+**Modify**: `.claude/agents/report-creation-expert.md`
+
+```markdown
+## Updated Workflow
+
+### Step 1: Finalize Research (unchanged)
+Call: finalize_research(session_dir="{CURRENT_SESSION_WORKSPACE}")
+
+### Step 2: Build Evidence Ledger (NEW)
+Call: build_evidence_ledger(session_dir="{WORKSPACE}", topic="{TOPIC}")
+- Extracts quotes, data, claims, tensions from each source
+- Saves to: search_results/evidence_ledger.md
+
+### Step 3: Context Compaction (NEW - AUTOMATIC)
+- System clears Phase 1 messages
+- Fresh context available for synthesis
+
+### Step 4: Synthesize Report
+- Read ONLY: evidence_ledger.md
+- DO NOT read raw crawl files
+- Let structure emerge from evidence themes
+- Include specific quotes, numbers, dates from ledger
+- NO template structure - organize by thematic connections
+
+### Step 5: Save Report
+Write to work_products/{topic}_{date}.html
+```
+
+---
+
+## 🔬 Root Cause Analysis (For Context)
+
+### The 0 Bytes Problem
+
+When generating large reports, files are written with **0 bytes**:
+
+```
+🔧 [mcp__local_toolkit__write_local_file] +395.337s
+   Input size: 0 bytes          ← Content was truncated
+📦 Tool Result (30 bytes) +395.406s
+   Preview: Tool schema validation failed.
+```
+
+**Cause**: Context fatigue cascade
+1. Agent reads 5-10 files × 50KB = 250-500KB → ~60-100K tokens
+2. Agent synthesizes report → more tokens consumed
+3. Context hits 90%+ (180K of 200K limit)
+4. Claude SDK truncates `content` parameter → 0 bytes
+
+### Why Evidence Ledger Fixes This
+
+| Stage | Without Ledger | With Ledger |
+|-------|---------------|-------------|
+| Research read | 250KB raw | 250KB raw |
+| Context after read | ~100K tokens | ~100K tokens |
+| **Compaction** | ❌ None | ✅ Clear to ~5K tokens |
+| Synthesis input | 250KB in context | 25KB ledger only |
+| Context for write | ~180K (exhausted) | ~60K (plenty of room) |
+
+---
+
+## 📍 Current State (January 9, 2026)
 
 ### ✅ What's Working
 
@@ -36,212 +281,75 @@
 |---------|--------|-------|
 | **Railway Deployment** | ✅ Production | US West, Static IP, Pro plan |
 | **Telegram Bot** | ✅ Working | Webhook mode, FastAPI + PTB |
-| **Research & Report Generation** | ✅ Production-ready | JIT Delegation via Knowledge Base |
+| **Research & Report Generation** | ⚠️ Context issues | Works for small reports, fails on large |
 | **PDF/PPTX Creation** | ✅ Working | Skills-based, conditional routing |
 | **Email Delivery (Gmail)** | ✅ Working | Attachments via `upload_to_composio` |
-| **Image Generation** | ✅ Working | Gemini 2.5 Flash Image |
-| **Memory System** | ✅ Working | Core blocks, archival search |
-| **Logfire Tracing** | ✅ Working | Dual Trace (Main + Subprocess) |
-| **Durable Runs (Phase 0–3)** | ✅ Working | Run/step tracking, checkpoints, replay policy, RELAUNCH |
-| **Operator CLI + Worker Mode** | ✅ Working | Runs list/show/tail/cancel + lease-based worker |
-| **Policy Audit + Receipts** | ✅ Working | Tool policy audit + side-effect receipt export |
-| **Run-Wide Completion Summary** | ✅ Working | Aggregated tool/step summary across resumes |
-| **Filtered Research Corpus** | ✅ Working | `finalize_research` + filtered corpus + overview |
-| **Long-Running Harness** | ✅ Working | Ralph Wiggum Loop, Token/Promise triggers, Context Handoff |
-| **Research: Inbox Pattern** | ✅ Working | File-based handoff (Inbox -> Processed -> Task Artifacts) |
+| **Filtered Research Corpus** | ✅ Working | `finalize_research` + filtered corpus |
+| **MessageHistory class** | ✅ Exists | Has `truncate()`, `should_handoff()` |
 
-### 🆕 Recent Fixes (Jan 1–2, 2026)
+### 🔴 Current Issue → Solution In Progress
 
-1. **Durable Jobs Phase 0–3**: Runtime DB, tool-call ledger, idempotency, checkpoints, replay policy, RELAUNCH.
-2. **Recovery Hardening**: Forced replay queue prevents extra tool calls after recovery drains.
-3. **Tool Policies**: Config-driven policy map in `durable/tool_policies.yaml` plus TaskOutput/TaskResult guardrail.
-4. **Crash Hooks**: Deterministic crash injection at tool boundaries for idempotency testing.
-5. **Run-Wide Summaries**: Aggregated tool/step counts across resumes written to job completion + restart file.
-6. **Step Indexing**: Monotonic `step_index` across recovery + continuation for audit clarity.
-7. **Workspace Paths**: Job prompts resolve workspace-relative paths to absolute to avoid `$PWD` drift.
-8. **Filtered Research Pipeline**: `finalize_research` builds filtered corpus + `research_overview.md`.
-9. **Filter Tuning**: Looser drop thresholds; explicit filtered vs dropped tables in overview.
-10. **Report Prompt Unification**: Report sub-agent now uses filtered corpus only (no raw crawl reads).
-11. **MCP Server Fix**: Syntax/indent error fixed; Crawl4AI Cloud API handling stabilized.
-12. **Operator CLI**: `ua runs list/show/tail/cancel` + cancellation guardrails.
-13. **Worker Mode**: Lease/heartbeat worker entrypoint for background runs.
-14. **Policy Audit**: Unknown-tool detection + policy audit report (`ua policy audit`).
-15. **Receipts Export**: Side-effect receipt summary (`ua runs receipts`).
-16. **Durability Smoke Script**: One-command crash → resume → verify (`scripts/durability_smoke.py`).
-17. **Harness Implementation**: Full "Ralph Wiggum" loop with DB persistence and CLI/Slash activation.
-18. **Harness Robustness**: Fixed "Empty Output" bug; Verified "Happy Path" (single-turn completion).
-19. **Research Isolation**: Implemented "Inbox Pattern" to decouple research artifacts from chat history for cleaner handoffs.
+| Issue | Status | Solution |
+|-------|--------|----------|
+| **0 Bytes Write** | 🔴 Active | Evidence Ledger + Compaction |
+| **Summary of Summaries** | 🔴 Active | Evidence Ledger preserves texture |
 
 ---
 
-## 🚧 Known Issues & Next Steps
+## 🧭 New Coder Handoff (Quick Start)
 
-### 🚀 IMMEDIATE NEXT STEP: Submit Letta SDK Pull Request
-**Purpose**: Fix critical `UnboundLocalError` in upstream `letta-ai/learning-sdk` to remove our local monkey patch.
-**Artifacts for Submission**:
-*   **PR Draft Description**: [`Project_Documentation/PR_DRAFT_LETTA_MEMORY_FIX.md`](Project_Documentation/PR_DRAFT_LETTA_MEMORY_FIX.md)
-*   **Technical Context**: [`Project_Documentation/027_LETTA_INTEGRATION_TECHNICAL_NOTES.md`](Project_Documentation/027_LETTA_INTEGRATION_TECHNICAL_NOTES.md)
-*   **Source Code Reference**: `sitecustomize.py` (specifically `_patch_letta_memory_upsert`)
-**Action Required**:
-1.  Fork/Clone `letta-ai/learning-sdk`.
-2.  Apply the fix (typo correction in `client/memory/client.py`).
-3.  Submit PR using the text from the draft artifact.
+**Goal**: Implement Evidence Ledger + Context Compaction for report generation.
 
-### ✅ RESOLVED: Session Persistence After Task (Fixed Dec 31, 2025)
-**Fix**: Watchdog timeout + Worker health checks implemented in Bot.
+**What you need to implement**:
 
-### 🟡 Known Issues / In Progress
+1. **`build_evidence_ledger` MCP tool** in `src/mcp_server.py`
+   - Reads research files
+   - Extracts quotes, data, claims, tensions per source
+   - Saves structured ledger to `search_results/evidence_ledger.md`
 
-| Issue | Status | Notes |
-|-------|--------|-------|
-| Provider session_id only captured after ResultMessage | ⏳ Known | Early interrupts may lack provider_session_id; fallback works |
-| Headless Chrome DBus warnings | ⏳ Known | No functional failures observed; logs are noisy |
-| Multiple local-toolkit trace IDs | ⏳ Known | Local MCP uses multiple trace IDs per window |
-| Agent College not auto-triggered | ⏳ Pending | Requires manual invocation |
-| `/files` command not implemented | ⏳ Pending | Users can't download artifacts |
-| `/stop` command not implemented | ⏳ Pending | Can't cancel running tasks |
+2. **Context compaction mechanism**
+   - After ledger built, clear/summarize Phase 1 messages
+   - Options: `history.truncate()`, `history.clear()`, or summary replacement
+   - Location: Hook in main.py or instruction in sub-agent workflow
 
----
+3. **Update report-creation-expert.md**
+   - Add Step 2: `build_evidence_ledger`
+   - Add Step 3: Context compaction note
+   - Modify Step 4: Read only ledger, not raw files
 
-## 📌 Phase 4 Ticket Pack (Next Focus)
-Source of truth: `Project_Documentation/Long_Running_Agent_Design/Phase4_Ticket_Pack.md`
+**Key files to modify**:
+| File | Change |
+|------|--------|
+| `src/mcp_server.py` | Add `build_evidence_ledger` tool |
+| `.claude/agents/report-creation-expert.md` | Update workflow |
+| `src/universal_agent/main.py` | Add compaction hook (optional) |
+| `src/universal_agent/utils/message_history.py` | May need new methods |
 
-Planned work (in recommended sequence):
-1) **Operator CLI**: list/show/tail/cancel runs from the runtime DB. ✅ Implemented
-2) **Worker mode**: background execution with leasing + heartbeat. ✅ Implemented
-3) **Receipt summaries**: export side-effect receipts for auditability. ✅ Implemented
-4) **Policy audit**: unknown-tool detection + classification report. ✅ Implemented
-5) **Triggers**: cron/webhook scaffolding to queue runs. ⏳ Pending
-
-Requirement: **Create a numbered-prefix project doc for each ticket after completion** (tracking_development/NNN_*.md).
-
-## 🏗️ Architecture Overview
-
-### Railway Deployment
-
-```
-GitHub (git push main)
-        │
-        ▼
-Railway Auto-Deploy
-        │
-        ▼
-┌─────────────────────────────────────────┐
-│ Container (python:3.12-slim-bookworm)   │
-│                                         │
-│  start.sh → Bot (FastAPI + PTB)         │
-│           → Agent College (internal)    │
-│                                         │
-│  /app/data (Persistent Volume)          │
-│   └── memory/, workspaces/              │
-└─────────────────────────────────────────┘
-```
-
-**Production URL**: `https://web-production-3473.up.railway.app`
-
-### Telegram Bot Flow
-
-```
-Telegram Cloud
-    │
-    │ HTTPS POST /webhook
-    ▼
-FastAPI (Uvicorn)
-    │
-    ▼
-PTB Command Handlers
-    │
-    ▼
-TaskManager (Queue)
-    │
-    ▼
-AgentAdapter → Claude SDK
-```
-
----
-
-## 🧠 Agent College Architecture
-
-```
-Agent Runtime                    LogfireFetch Service
-     │                                  │
-     │ (errors/successes)               │
-     ▼                                  ▼
-  Logfire  ─────── polling ──────►  LogfireFetch
-     │                                  │
-     │                                  ▼
-     │                            Critic/Scribe
-     │                                  │
-     │                                  ▼
-     │                         [AGENT_COLLEGE_NOTES]
-     │                           (Sandbox Memory)
-     │                                  │
-     │◄──────────────── read ───────────┘
-     │
-     ▼
-  Professor (HITL Review)
-     │
-     ▼
-  Graduation (New Skill / Rule)
+**Test approach**:
+```bash
+./local_dev.sh
+# Ask: "Create a comprehensive report on [topic with 10+ search results]"
+# Verify:
+# 1. evidence_ledger.md created in search_results/
+# 2. Report includes specific quotes and numbers from ledger
+# 3. No 0-byte write errors
+# 4. Report structure is organic, not template-driven
 ```
 
 ---
 
 ## 🔧 Running the System
 
-### Production (Railway)
-Automatic on `git push main`. Monitor via Railway Dashboard.
-
 ### Local Development (CLI)
 ```bash
 cd /home/kjdragan/lrepos/universal_agent
-
-# Start Agent College + CLI
 ./local_dev.sh
 ```
 
-### Durable Test Run (CLI)
+### Check Recent Session Logs
 ```bash
-PYTHONPATH=src uv run python -m universal_agent.main --job /home/kjdragan/lrepos/universal_agent/src/universal_agent/durable_demo.json
-```
-
-Interrupt with Ctrl-C to save a checkpoint. Resume with:
-```bash
-PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
-```
-
-Latest resume command is written to:
-`Project_Documentation/Long_Running_Agent_Design/KevinRestartWithThis.md`
-
-### Quick Resume Test (CLI)
-```bash
-PYTHONPATH=src uv run python -m universal_agent.main --job /home/kjdragan/lrepos/universal_agent/tmp/quick_resume_job.json
-```
-Kill during the sleep step, then resume:
-```bash
-PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
-```
-
-### Relaunch Resume Test (Task + Side Effects)
-```bash
-export UA_TEST_EMAIL_TO="kevin.dragan@outlook.com"
-PYTHONPATH=src uv run python -m universal_agent.main --job /home/kjdragan/lrepos/universal_agent/tmp/relaunch_resume_job.json
-```
-Kill during the sleep step, then resume:
-```bash
-PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id <RUN_ID>
-```
-
-### Useful Commands
-```bash
-# Check webhook status
-curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
-
-# Force webhook registration
-curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<URL>&secret_token=<SECRET>"
-
-# Check health
-curl https://web-production-3473.up.railway.app/health
+ls -lt AGENT_RUN_WORKSPACES/ | head -5
+tail -200 AGENT_RUN_WORKSPACES/session_*/run.log
 ```
 
 ---
@@ -250,98 +358,50 @@ curl https://web-production-3473.up.railway.app/health
 
 | Priority | Document | Purpose |
 |----------|----------|---------|
-| 1 | `Telegram_Integration/` | Bot architecture & deployment |
-| 2 | `Architecture/11_railway_deployment_plan.md` | Railway setup |
-| 3 | `013_AGENT_COLLEGE_ARCHITECTURE.md` | Agent College overview |
-| 4 | `012_LETTA_MEMORY_SYSTEM_MANUAL.md` | Memory System design |
+| 1 | **This file** | Current focus and implementation plan |
+| 2 | `.claude/agents/report-creation-expert.md` | Report sub-agent workflow (to be updated) |
+| 3 | `src/mcp_server.py` | Where to add `build_evidence_ledger` |
+| 4 | `src/universal_agent/utils/message_history.py` | Context management |
 | 5 | `002_LESSONS_LEARNED.md` | Patterns and gotchas |
-| 6 | `Project_Documentation/Long_Running_Agent_Design/` | Durable Jobs v1 + tracking |
-| 7 | `Project_Documentation/Long_Running_Agent_Design/Phase4_Ticket_Pack.md` | Next-phase ticket pack (operator/worker/policy/receipts/triggers) |
-| 8 | `Project_Documentation/Long_Running_Agent_Design/Durable_Jobs_Next_Steps_Ticket_Pack.md` | Next steps (smoke test/runbook) |
-
-### Latest Durability Reports (Read These)
-| Doc | Purpose |
-|-----|---------|
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/006_provider_session_wiring_report.md` | Provider session resume/fork wiring + tests |
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/007_resume_continuity_evaluation_quick_job.md` | Latest resume evaluation (in-flight replay works) |
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/008_durable_runner_architecture.md` | Current durability architecture |
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/009_relaunch_resume_evaluation.md` | Relaunch resume evaluation (Task + side effects) |
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/011_relaunch_resume_evaluation_post_fix_v2.md` | Post-fix evaluation with run-wide summary |
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/010_phase4_ticket1_operator_cli.md` | Ticket 1 implementation (Operator CLI) |
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/012_phase4_ticket2_worker_mode.md` | Ticket 2 implementation (Worker mode) |
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/013_phase4_ticket4_receipts.md` | Ticket 4 implementation (Receipts) |
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/014_phase4_ticket3_policy_audit.md` | Ticket 3 implementation (Policy audit) |
-| `Project_Documentation/Long_Running_Agent_Design/tracking_development/015_durability_smoke_script.md` | Smoke test script runbook |
 
 ---
 
-## ✅ Recent Durability Updates (Jan 2, 2026)
-1) **Replay policy classification**: REPLAY_EXACT, REPLAY_IDEMPOTENT, RELAUNCH.
-2) **Relaunch semantics**: Task tool calls are abandoned on resume and deterministically relaunched.
-3) **TaskOutput guardrail**: TaskOutput/TaskResult forced to RELAUNCH (no direct replay).
-4) **Recovery hardening**: Forced replay queue prevents extra tool calls after recovery drains.
-5) **Run-wide summaries**: Aggregated across resumes in job completion and restart file.
-6) **Workspace path resolution**: Job prompts resolve workspace-relative paths to absolute.
-7) **Step index monotonicity**: Recovery and continuation share a single step_index sequence.
-8) **Crash hooks**: Deterministic crash injection for PREPARED→SUCCEEDED testing.
-9) **Provider session continuity**: Store `provider_session_id`; resume with continue_conversation when available.
-10) **Fork support**: `--fork --run-id <BASE>` creates new run with parent_run_id.
-11) **In-flight tool replay**: Prepared/running tools re-run before continuation.
-12) **SIGINT debounce**: Avoids multiple interrupt checkpoints.
-
----
-
-## 🧭 New Coder Handoff (Quick Start)
-**Goal**: Maintain durable jobs with no duplicate side effects across resume.
-
-**What’s implemented now**:
-1) Runtime DB + tool ledger + idempotency (Phases 1–3).
-2) Replay policy (EXACT/IDEMPOTENT/RELAUNCH) with Task/TaskOutput guardrails.
-3) Recovery-only tool execution during forced replay (no extra tool calls).
-4) Run-wide completion summary across resumes (job_completion + KevinRestartWithThis).
-5) Workspace path resolution to avoid $PWD drift in job prompts.
-
-**Primary tests**:
-1) `tmp/quick_resume_job.json` (sleep → resume).
-2) `tmp/relaunch_resume_job.json` (Task → PDF → sleep → email; verify no duplicate email).
-
-**Where to look**:
-1) Durable logic: `src/universal_agent/durable/` (ledger, tool_gateway, state).
-2) CLI entrypoint: `src/universal_agent/main.py`.
-3) Runtime DB: `AGENT_RUN_WORKSPACES/runtime_state.db`.
-4) Latest evals: `Project_Documentation/Long_Running_Agent_Design/tracking_development/009_relaunch_resume_evaluation.md`.
-
-**Next milestone**: Phase 4 ticket pack (operator CLI, worker mode, policy audit, receipts, triggers).
-
----
-
-## 🏗️ Project Structure
+## 🏗️ Project Structure (Relevant to Current Task)
 
 ```
 universal_agent/
 ├── src/
 │   ├── universal_agent/
-│   │   ├── main.py                 # Main agent
-│   │   ├── bot/                    # Telegram bot
-│   │   │   ├── main.py             # FastAPI + PTB
-│   │   │   ├── config.py           # Environment vars
-│   │   │   ├── telegram_handlers.py# Commands
-│   │   │   ├── task_manager.py     # Async queue
-│   │   │   └── agent_adapter.py    # Claude SDK bridge
-│   │   └── agent_college/          # Professor, Critic, Scribe
-│   └── mcp_server.py               # Local MCP tools
-├── AgentCollege/                   # FastAPI service
-├── Memory_System/                  # Letta-style memory
+│   │   ├── main.py                 # Main agent, hooks, harness
+│   │   ├── utils/
+│   │   │   └── message_history.py  # Context tracking, truncate()
+│   │   └── durable/                # State management
+│   └── mcp_server.py               # ADD build_evidence_ledger HERE
 ├── .claude/
-│   ├── skills/                     # Skill definitions
-│   └── knowledge/                  # Knowledge base
+│   └── agents/
+│       └── report-creation-expert.md  # UPDATE workflow HERE
 ├── Project_Documentation/
-│   ├── 000_CURRENT_CONTEXT.md      # This file
-│   └── Telegram_Integration/       # Bot docs
-├── Dockerfile                      # Container build
-├── start.sh                        # Container entrypoint
-└── AGENT_RUN_WORKSPACES/           # Session artifacts (local)
+│   └── 000_CURRENT_CONTEXT.md      # This file
+└── AGENT_RUN_WORKSPACES/
+    └── session_*/
+        └── search_results/
+            ├── evidence_ledger.md  # NEW - will be created here
+            └── research_overview.md
 ```
+
+---
+
+## 🎯 Success Criteria
+
+The implementation is complete when:
+
+1. ✅ `build_evidence_ledger` tool exists and produces structured output
+2. ✅ Evidence ledger preserves quotes, numbers, dates, tensions
+3. ✅ Context compaction happens after ledger is built
+4. ✅ Report synthesis reads only the ledger (not raw files)
+5. ✅ Large reports (10+ sources) complete without 0-byte errors
+6. ✅ Reports have organic structure (not template-driven)
+7. ✅ Reports include specific details from ledger (not vague summaries)
 
 ---
 
