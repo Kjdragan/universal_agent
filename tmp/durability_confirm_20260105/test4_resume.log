@@ -1,0 +1,138 @@
+✅ Logfire MCP instrumentation enabled
+✅ Logfire HTTPX instrumentation enabled
+✅ Logfire Anthropic instrumentation enabled
+✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/
+
+================================================================================
+Composio Agent - Claude SDK with Tool Router
+Logfire tracing enabled for observability.
+================================================================================
+
+🧠 Letta memory active for 'universal_agent'
+✅ Non-blocking input handler installed (Fix 1)
+⏳ Starting Composio Session initialization...
+⏳ Discovering connected apps...
+✅ Composio Session Created
+✅ Discovered Active Composio Apps: ['codeinterpreter', 'composio_search', 'filetool', 'gmail', 'google_maps', 'googlephotos', 'googlesheets', 'linear', 'slack', 'sqltool', 'twitter', 'youtube']
+✅ Active Local MCP Tools: ['mcp__local_toolkit__crawl_parallel', 'mcp__local_toolkit__read_local_file', 'mcp__local_toolkit__write_local_file', 'mcp__local_toolkit__list_directory', 'mcp__local_toolkit__upload_to_composio', 'mcp__local_toolkit__workbench_download', 'mcp__local_toolkit__workbench_upload']
+✅ External MCP Servers: ['edgartools', 'video_audio', 'youtube', 'zai_vision']
+✅ Discovered Skills: ['skill-creator', 'webapp-testing', 'docx', 'pptx', 'pdf', 'frontend-design', 'xlsx', 'image-generation', 'mcp-builder']
+⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.
+✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_111940
+✅ Injected Knowledge Base (7291 chars)
+✅ Using provider session resume: 78d19c10-33b3-4fdd-b856-e98dd51258c3
+
+============================================================
+         🔍 TRACING IDS (for Logfire debugging)
+============================================================
+  Main Agent Trace ID:    019b8f2e47f38bfe2fa5cc2b0ee45051
+  Local Toolkit Trace ID: (shown in tool results)
+============================================================
+
+=== Composio Session Info ===
+Session URL: https://backend.composio.dev/tool_router/trs_t3speHiLWZ8A/mcp
+User ID: pg-test-8c18facc-7f25-4693-918c-7252c15d36b2
+Run ID: d2a9013c-20f6-4493-bbcb-809d2ec5fe02
+Timestamp: 20260105_111940
+Trace ID: 019b8f2e47f38bfe2fa5cc2b0ee45051
+Resume Command: PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id d2a9013c-20f6-4493-bbcb-809d2ec5fe02
+============================
+
+================================================================================
+Composio Agent Ready
+================================================================================
+
+✅ Resume checkpoint loaded: bfd7b388-7650-4c08-bf7f-4a06c1ecacda
+✅ Resume packet constructed
+run_id: d2a9013c-20f6-4493-bbcb-809d2ec5fe02
+checkpoint_id: bfd7b388-7650-4c08-bf7f-4a06c1ecacda
+current_step: 1
+current_phase: pre_side_effect
+recent_tool_calls:
+- COMPOSIO_MULTI_EXECUTE_TOOL | running | 488bd1e067bb133b4826e922c5a4559364147b3e6008ec5b0607648e81e5e7d9
+- upload_to_composio | succeeded | bd2046b31c000e11311a495f102cfb0f3534bb43fe0037b16c094b95efb36fe7
+- COMPOSIO_SEARCH_TOOLS | succeeded | ba7946a6133d7ea59824e2f8a98fda73e2d8939d1864fba6c647ca9335efbe7f
+- bash | succeeded | abfbd9fcfe3d4bd01377e088559c6c16301d9b82ea960b547805f82254c752ae
+- bash | succeeded | c7aa311c85a366b40c256f5e6c744d6945fe4550231d6bc2cd51cdc223c9ccc1
+in_flight_tool_calls:
+- COMPOSIO_MULTI_EXECUTE_TOOL | running | 488bd1e067bb133b4826e922c5a4559364147b3e6008ec5b0607648e81e5e7d9
+🔁 Replaying in-flight tool calls before resume...
+
+================================================================================
+[ITERATION 1] Sending: Durability relaunch test (Task + side effects + auto-resume). Step 1: Call Task to spawn subagent_ty...
+================================================================================
+
+🏭 CODE EXECUTION [Bash] +10.255s
+   Input size: 183 bytes
+   Input: {
+  "command": "ls -lh /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_111940/work_products/relaunch_report.*",
+  "description": "Verify final artifacts exist"
+}
+
+📦 Tool Result (332 bytes) +11.181s
+   Preview: -rw-r--r-- 1 kjdragan kjdragan 3.4K Jan  5 11:20 /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_111940/work_products/relaunch_report.html
+-rw-r--r-- 1 kjdragan kjdragan 181K Jan  5 11:20 /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_111940/work_products/relaunch_report.pdf
+
+================================================================================
+=== EXECUTION SUMMARY ===
+================================================================================
+Execution Time: 14.767 seconds
+Tool Calls: 1
+🏭 Code execution was used
+
+=== TOOL CALL BREAKDOWN ===
+  🏭 Iter 1 | +  10.3s | Bash
+
+=== TRACE IDS (for Logfire debugging) ===
+  Main Agent:     019b8f2e47f38bfe2fa5cc2b0ee45051
+  Local Toolkit:  019b8f2c7e0afafba10b2256d0ee3edf, 019b8f2df28d010e5913657ebefec022
+================================================================================
+
+Perfect! Both artifacts exist. The workflow has been successfully completed:
+
+✅ **Step 1**: HTML report created by sub-agent (`relaunch_report.html` - 3.4K)  
+✅ **Step 2**: HTML converted to PDF via headless Chrome (`relaunch_report.pdf` - 181K)  
+✅ **Step 3**: Sleep 30 completed (auto-resume test point passed)  
+✅ **Step 4**: PDF uploaded to Composio S3 and email sent to `kevin.dragan@outlook.com`  
+✅ **Step 5**: Final verification complete
+
+**DONE**
+
+The durability relaunch test completed successfully with all side effects preserved across the resume.
+
+🎬 Intermediate transcript saved to /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_111940/transcript.md
+
+================================================================================
+=== JOB COMPLETE ===
+Run ID: d2a9013c-20f6-4493-bbcb-809d2ec5fe02
+Status: succeeded
+Main Trace ID: 019b8f2e47f38bfe2fa5cc2b0ee45051
+Related Trace IDs (local-toolkit):
+- 019b8f2c7e0afafba10b2256d0ee3edf
+- 019b8f2df28d010e5913657ebefec022
+Last side-effect receipts:
+- bash | succeeded | aab9c5e08f229c0e1805f5bbde2720ac571799801e45c8d89d698407e7d15486
+- COMPOSIO_MULTI_EXECUTE_TOOL | succeeded | 488bd1e067bb133b4826e922c5a4559364147b3e6008ec5b0607648e81e5e7d9
+- upload_to_composio | succeeded | bd2046b31c000e11311a495f102cfb0f3534bb43fe0037b16c094b95efb36fe7
+- COMPOSIO_SEARCH_TOOLS | succeeded | ba7946a6133d7ea59824e2f8a98fda73e2d8939d1864fba6c647ca9335efbe7f
+- bash | succeeded | abfbd9fcfe3d4bd01377e088559c6c16301d9b82ea960b547805f82254c752ae
+Replayed tools:
+- COMPOSIO_MULTI_EXECUTE_TOOL | succeeded_pending
+Summary:
+Perfect! Both artifacts exist. The workflow has been successfully completed: ✅ **Step 1**: HTML report created by sub-agent (`relaunch_report.html` - 3.4K) ✅ **Step 2**: HTML converted to PDF via headless Chrome (`relaunch_report.pdf` - 181K) ✅ **Step 3**: Sleep 30 completed (auto-resume test point passed) ✅ **Step 4**: PDF uploaded to Composio S3 and email sent to `kevin.dragan@outlook.com` ✅ **Step 5**: Final verification complete **DONE** The durability relaunch test completed successfully with all side effects preserved across the resume.
+Evidence summary (receipts only):
+- Email sent
+- Upload to Composio/S3
+Run-wide: 9 tools | 9 succeeded | 0 failed | 0 abandoned | 1 replayed | 2 steps
+Run-wide summary:
+Tool calls: 9 total | 9 succeeded | 0 failed | 0 abandoned | 1 replayed
+Steps: 2 total (min 1, max 2)
+Timeline: 2026-01-05T17:19:59.015176+00:00 → 2026-01-05T17:22:39.896918+00:00
+Top tools:
+- bash | 4
+- COMPOSIO_MULTI_EXECUTE_TOOL | 1
+- COMPOSIO_SEARCH_TOOLS | 1
+- task | 1
+- upload_to_composio | 1
+- write_local_file | 1
+================================================================================

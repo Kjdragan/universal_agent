@@ -1,0 +1,68 @@
+✅ Logfire MCP instrumentation enabled
+✅ Logfire HTTPX instrumentation enabled
+✅ Logfire Anthropic instrumentation enabled
+✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/
+
+================================================================================
+Composio Agent - Claude SDK with Tool Router
+Logfire tracing enabled for observability.
+================================================================================
+
+🧠 Letta memory active for 'universal_agent'
+✅ Non-blocking input handler installed (Fix 1)
+⏳ Starting Composio Session initialization...
+⏳ Discovering connected apps...
+✅ Composio Session Created
+✅ Discovered Active Composio Apps: ['codeinterpreter', 'composio_search', 'filetool', 'gmail', 'google_maps', 'googlephotos', 'googlesheets', 'linear', 'slack', 'sqltool', 'twitter', 'youtube']
+✅ Active Local MCP Tools: ['mcp__local_toolkit__crawl_parallel', 'mcp__local_toolkit__read_local_file', 'mcp__local_toolkit__write_local_file', 'mcp__local_toolkit__list_directory', 'mcp__local_toolkit__upload_to_composio', 'mcp__local_toolkit__workbench_download', 'mcp__local_toolkit__workbench_upload']
+✅ External MCP Servers: ['edgartools', 'video_audio', 'youtube', 'zai_vision']
+✅ Discovered Skills: ['skill-creator', 'webapp-testing', 'docx', 'pptx', 'pdf', 'frontend-design', 'xlsx', 'image-generation', 'mcp-builder']
+⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.
+✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_111418
+✅ Injected Knowledge Base (7291 chars)
+
+============================================================
+         🔍 TRACING IDS (for Logfire debugging)
+============================================================
+  Main Agent Trace ID:    019b8f2704e625c23252202288c314c5
+  Local Toolkit Trace ID: (shown in tool results)
+============================================================
+
+=== Composio Session Info ===
+Session URL: https://backend.composio.dev/tool_router/trs_t3speHiLWZ8A/mcp
+User ID: pg-test-8c18facc-7f25-4693-918c-7252c15d36b2
+Run ID: 79672d61-f786-42d2-9886-9576164ef992
+Timestamp: 20260105_111418
+Trace ID: 019b8f2704e625c23252202288c314c5
+Resume Command: PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id 79672d61-f786-42d2-9886-9576164ef992
+============================
+
+================================================================================
+Composio Agent Ready
+================================================================================
+
+
+================================================================================
+🤖 Auto-running job prompt from run spec...
+
+🤔 Query Classification: COMPLEX (Model logic: COMPLEX...)
+
+================================================================================
+[ITERATION 1] Sending: Durability relaunch test (Task + side effects + auto-resume). Step 1: Call Task to spawn subagent_ty...
+================================================================================
+
+🏭 CODE EXECUTION [Bash] +7.621s
+   Input size: 135 bytes
+   Input: {
+  "command": "echo \"UA_TEST_EMAIL_TO=${UA_TEST_EMAIL_TO:-'<not set>'}\"",
+  "description": "Check UA_TEST_EMAIL_TO environment variable"
+}
+
+🔧 [Task] +7.631s
+   Input size: 596 bytes
+   Input: {
+  "subagent_type": "report-creation-expert",
+  "description": "Create HTML relaunch report",
+  "prompt": "Create a small HTML report at the following path:\n/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_111418/work_products/relaunch_report.html\n\nThe report must include:\n- A title (e.g., \"Durability Relaunch Test Report\")\n- 2-3 short sections (e.g., \"Test Objective\", \"Test Steps\", \"Expected Outcome\")\n- A timestamp\n\nDo NOT call any external search too...
+
+💥 UA_TEST_CRASH_AFTER_TOOL triggered: Bash call_ffb8ed5e27204243a5156cbe (stage=after_tool_success_before_receipt step_id=a7ddc09f-fb64-4a2e-ad3b-0041f729cd14)

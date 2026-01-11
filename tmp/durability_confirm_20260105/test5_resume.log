@@ -1,0 +1,141 @@
+✅ Logfire MCP instrumentation enabled
+✅ Logfire HTTPX instrumentation enabled
+✅ Logfire Anthropic instrumentation enabled
+✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/
+
+================================================================================
+Composio Agent - Claude SDK with Tool Router
+Logfire tracing enabled for observability.
+================================================================================
+
+🧠 Letta memory active for 'universal_agent'
+✅ Non-blocking input handler installed (Fix 1)
+⏳ Starting Composio Session initialization...
+⏳ Discovering connected apps...
+✅ Composio Session Created
+✅ Discovered Active Composio Apps: ['codeinterpreter', 'composio_search', 'filetool', 'gmail', 'google_maps', 'googlephotos', 'googlesheets', 'linear', 'slack', 'sqltool', 'twitter', 'youtube']
+✅ Active Local MCP Tools: ['mcp__local_toolkit__crawl_parallel', 'mcp__local_toolkit__read_local_file', 'mcp__local_toolkit__write_local_file', 'mcp__local_toolkit__list_directory', 'mcp__local_toolkit__upload_to_composio', 'mcp__local_toolkit__workbench_download', 'mcp__local_toolkit__workbench_upload']
+✅ External MCP Servers: ['edgartools', 'video_audio', 'youtube', 'zai_vision']
+✅ Discovered Skills: ['skill-creator', 'webapp-testing', 'docx', 'pptx', 'pdf', 'frontend-design', 'xlsx', 'image-generation', 'mcp-builder']
+⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.
+✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112256
+✅ Injected Knowledge Base (7291 chars)
+✅ Using provider session resume: bad7ce3b-5aa0-456f-aa3f-b877bcd3c335
+
+============================================================
+         🔍 TRACING IDS (for Logfire debugging)
+============================================================
+  Main Agent Trace ID:    019b8f2f5b57b1c28e96721325bc46f4
+  Local Toolkit Trace ID: (shown in tool results)
+============================================================
+
+=== Composio Session Info ===
+Session URL: https://backend.composio.dev/tool_router/trs_t3speHiLWZ8A/mcp
+User ID: pg-test-8c18facc-7f25-4693-918c-7252c15d36b2
+Run ID: 190838b7-f888-4b68-bdb4-cc8057614ec2
+Timestamp: 20260105_112256
+Trace ID: 019b8f2f5b57b1c28e96721325bc46f4
+Resume Command: PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id 190838b7-f888-4b68-bdb4-cc8057614ec2
+============================
+
+================================================================================
+Composio Agent Ready
+================================================================================
+
+✅ Resume checkpoint loaded: c4eb9ac4-b93f-44dd-b0a8-b318f3dcea73
+✅ Resume packet constructed
+run_id: 190838b7-f888-4b68-bdb4-cc8057614ec2
+checkpoint_id: c4eb9ac4-b93f-44dd-b0a8-b318f3dcea73
+current_step: 1
+current_phase: pre_read_only
+recent_tool_calls:
+- list_directory | running | af19320ca86303072313902e14961e16f55d16adfbdae62aa64b5575bc60d6da
+in_flight_tool_calls:
+- list_directory | running | af19320ca86303072313902e14961e16f55d16adfbdae62aa64b5575bc60d6da
+🔁 Replaying in-flight tool calls before resume...
+
+================================================================================
+[ITERATION 1] Sending: Recovery mode: re-run the in-flight tool calls below in the exact order.
+Do NOT run any other tools....
+================================================================================
+
+🔧 [mcp__local_toolkit__list_directory] +2.927s
+   Input size: 94 bytes
+   Input: {
+  "path": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112256"
+}
+
+📦 Tool Result (194 bytes) +3.042s
+   Preview: {"result":"[local-toolkit-trace-id: 019b8f2f9ad0f4c7051ebff507ab9cc4]\n[\n  \"work_products\",\n  \"resume_packet_190838b7-f888-4b68-bdb4-cc8057614ec2.md\",\n  \"run.log\",\n  \"downloads\"\n]"}
+
+================================================================================
+=== EXECUTION SUMMARY ===
+================================================================================
+Execution Time: 5.066 seconds
+Tool Calls: 1
+
+=== TOOL CALL BREAKDOWN ===
+     Iter 1 | +   2.9s | mcp__local_toolkit__list_directory
+
+=== TRACE IDS (for Logfire debugging) ===
+  Main Agent:     019b8f2f5b57b1c28e96721325bc46f4
+  Local Toolkit:  019b8f2f9ad0f4c7051ebff507ab9cc4
+================================================================================
+
+DONE
+
+🎬 Intermediate transcript saved to /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112256/transcript.md
+
+================================================================================
+[ITERATION 1] Sending: Read-only durability test. Step 1: Call mcp__local_toolkit__list_directory on the current workspace....
+================================================================================
+
+🔧 [mcp__local_toolkit__read_local_file] +4.411s
+   Input size: 94 bytes
+   Input: {
+  "path": "/home/kjdragan/lrepos/universal_agent/Project_Documentation/000_CURRENT_CONTEXT.md"
+}
+
+📦 Tool Result (15554 bytes) +4.508s
+   Preview: {"result":"[local-toolkit-trace-id: 019b8f2fb49fac0117d9edf5898e530d]\n# 000: Current Project Context\n\n> [!IMPORTANT]\n> **For New AI Agents**: Read this document first to understand the current state of the project.\n> This is a living document that tracks where we are and where we're going.\n\n**Last Updated**: 2026-01-02 21:39 CST\n\n---\n\n## 🎯 Project Overview\n\n**Universal Agent** is a standalone agent using Claude Agent SDK with Composio Tool Router integration.\n\n**Core Capabilities*...
+
+================================================================================
+=== EXECUTION SUMMARY ===
+================================================================================
+Execution Time: 6.645 seconds
+Tool Calls: 2
+
+=== TOOL CALL BREAKDOWN ===
+     Iter 1 | +   2.9s | mcp__local_toolkit__list_directory
+     Iter 1 | +   4.4s | mcp__local_toolkit__read_local_file
+
+=== TRACE IDS (for Logfire debugging) ===
+  Main Agent:     019b8f2f5b57b1c28e96721325bc46f4
+  Local Toolkit:  019b8f2f9ad0f4c7051ebff507ab9cc4, 019b8f2fb49fac0117d9edf5898e530d
+================================================================================
+
+DONE
+
+🎬 Intermediate transcript saved to /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112256/transcript.md
+
+================================================================================
+=== JOB COMPLETE ===
+Run ID: 190838b7-f888-4b68-bdb4-cc8057614ec2
+Status: succeeded
+Main Trace ID: 019b8f2f5b57b1c28e96721325bc46f4
+Related Trace IDs (local-toolkit):
+- 019b8f2f9ad0f4c7051ebff507ab9cc4
+- 019b8f2fb49fac0117d9edf5898e530d
+Replayed tools:
+- list_directory | succeeded
+Summary:
+DONE
+Run-wide: 2 tools | 2 succeeded | 0 failed | 0 abandoned | 1 replayed | 3 steps
+Run-wide summary:
+Tool calls: 2 total | 2 succeeded | 0 failed | 0 abandoned | 1 replayed
+Steps: 3 total (min 1, max 3)
+Timeline: 2026-01-05T17:23:13.047841+00:00 → 2026-01-05T17:23:47.001432+00:00
+Top tools:
+- list_directory | 1
+- read_local_file | 1
+================================================================================

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Durability Relaunch Test Report</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+        }
+        .timestamp {
+            color: #7f8c8d;
+            font-style: italic;
+            margin-bottom: 30px;
+        }
+        .section {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 10px;
+            background: #27ae60;
+            color: white;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>Durability Relaunch Test Report</h1>
+    <p class="timestamp">Generated: Monday, January 05, 2026</p>
+
+    <div class="section">
+        <h2>Test Purpose</h2>
+        <p>This report validates the auto-resume functionality of the Universal Agent system following a relaunch event. The test confirms that:</p>
+        <ul>
+            <li>Session state persists correctly across agent restarts</li>
+            <li>Work products are accessible in the existing workspace</li>
+            <li>The agent maintains continuity of context and execution</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <h2>Test Execution</h2>
+        <p><strong>Session ID:</strong> session_20260105_091609</p>
+        <p><strong>Workspace Path:</strong> /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_091609</p>
+        <p><strong>Test Type:</strong> Auto-resume after agent relaunch</p>
+        <p><strong>Action:</strong> Created HTML report artifact to verify write capabilities and workspace access</p>
+    </div>
+
+    <div class="section">
+        <h2>Results</h2>
+        <p><span class="status">SUCCESS</span></p>
+        <p>The agent successfully resumed operation and created this test report. Workspace accessibility confirmed, and file write operations are functioning correctly.</p>
+        <p><strong>Output File:</strong> relaunch_report.html</p>
+        <p><strong>Location:</strong> work_products/ directory</p>
+    </div>
+</body>
+</html>

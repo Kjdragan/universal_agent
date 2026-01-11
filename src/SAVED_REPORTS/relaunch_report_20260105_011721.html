@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Durability Relaunch Test Report</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 3px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #555;
+            margin-top: 30px;
+            font-size: 1.3em;
+        }
+        .timestamp {
+            color: #666;
+            font-style: italic;
+            margin-bottom: 30px;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 12px;
+            background-color: #d4edda;
+            color: #155724;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        ul {
+            line-height: 1.8;
+        }
+        .footer {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            color: #777;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Durability Relaunch Test Report</h1>
+        <p class="timestamp">Generated on: 2026-01-05</p>
+
+        <section>
+            <h2>Test Overview</h2>
+            <p>This report validates the durability relaunch functionality for the universal agent system. The test verifies that:</p>
+            <ul>
+                <li>Agent sessions can be successfully resumed after interruption</li>
+                <li>Workspace state is preserved across relaunch events</li>
+                <li>Tool connections remain active after restart</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>System Status</h2>
+            <p><strong>Agent Status:</strong> <span class="status">OPERATIONAL</span></p>
+            <p><strong>Session ID:</strong> session_20260105_011553</p>
+            <p><strong>Workspace:</strong> /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_011553</p>
+            <p><strong>Git Branch:</strong> dev-refactor</p>
+        </section>
+
+        <section>
+            <h2>Next Steps</h2>
+            <ul>
+                <li>Verify HTML report generation pipeline</li>
+                <li>Test PDF conversion functionality</li>
+                <li>Validate email delivery with report attachment</li>
+                <li>Document relaunch performance metrics</li>
+            </ul>
+        </section>
+
+        <div class="footer">
+            <p>This is a test report generated for durability evaluation purposes.</p>
+        </div>
+    </div>
+</body>
+</html>

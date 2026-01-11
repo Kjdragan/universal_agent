@@ -1,0 +1,173 @@
+✅ Logfire MCP instrumentation enabled
+✅ Logfire HTTPX instrumentation enabled
+✅ Logfire Anthropic instrumentation enabled
+✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/
+
+================================================================================
+Composio Agent - Claude SDK with Tool Router
+Logfire tracing enabled for observability.
+================================================================================
+
+✅ Non-blocking input handler installed (Fix 1)
+⏳ Starting Composio Session initialization...
+⏳ Discovering connected apps...
+✅ Composio Session Created
+✅ Discovered Active Composio Apps: ['codeinterpreter', 'composio_search', 'filetool', 'gmail', 'google_maps', 'googlephotos', 'googlesheets', 'linear', 'slack', 'sqltool', 'twitter', 'youtube']
+✅ Active Local MCP Tools: ['mcp__local_toolkit__crawl_parallel', 'mcp__local_toolkit__read_local_file', 'mcp__local_toolkit__write_local_file', 'mcp__local_toolkit__list_directory', 'mcp__local_toolkit__upload_to_composio', 'mcp__local_toolkit__workbench_download', 'mcp__local_toolkit__workbench_upload']
+✅ External MCP Servers: ['edgartools', 'video_audio', 'youtube', 'zai_vision']
+✅ Discovered Skills: ['skill-creator', 'webapp-testing', 'docx', 'pptx', 'pdf', 'frontend-design', 'xlsx', 'image-generation', 'mcp-builder']
+🧠 Injected Core Memory Context (1033 chars)
+✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_110312
+✅ Injected Knowledge Base (6005 chars)
+
+=== Composio Session Info ===
+Session URL: https://backend.composio.dev/tool_router/trs_t3speHiLWZ8A/mcp
+User ID: pg-test-8c18facc-7f25-4693-918c-7252c15d36b2
+Run ID: ccf51e4b-1112-4b5f-821e-65caa4fba045
+Timestamp: 20260102_110312
+Trace ID: 019b7faa77ff5f4e73972eb409df5bf4
+Resume Command: uv run python src/universal_agent/main.py --resume --run-id ccf51e4b-1112-4b5f-821e-65caa4fba045
+============================
+
+================================================================================
+Composio Agent Ready
+================================================================================
+
+✅ Resume checkpoint loaded: dccbe94d-c8f4-472b-ae59-5800a38b6a44
+✅ Resume packet constructed
+run_id: ccf51e4b-1112-4b5f-821e-65caa4fba045
+checkpoint_id: dccbe94d-c8f4-472b-ae59-5800a38b6a44
+current_step: 1
+current_phase: unspecified
+recent_tool_calls:
+- bash | running | 865681a9b28ebdebc8aaa5446ceff1a60e3677e777fe744246b50bec989e8101
+in_flight_tool_calls:
+- bash | running | 865681a9b28ebdebc8aaa5446ceff1a60e3677e777fe744246b50bec989e8101
+🔁 Replaying in-flight tool calls before resume...
+
+🤔 Query Classification: COMPLEX (Model logic: COMPLEX...)
+
+================================================================================
+[ITERATION 1] Sending: Recovery mode: re-run the in-flight tool calls below in the exact order.
+Do NOT run any other tools....
+================================================================================
+
+🏭 CODE EXECUTION [Bash] +6.894s
+   Input size: 103 bytes
+   Input: {
+  "command": "sleep 30",
+  "description": "SLEEP 30s - interrupt now if testing resume",
+  "timeout": 35000
+}
+
+📦 Tool Result (0 bytes) +37.101s
+
+================================================================================
+=== EXECUTION SUMMARY ===
+================================================================================
+Execution Time: 35.173 seconds
+Tool Calls: 1
+🏭 Code execution was used
+
+=== TOOL CALL BREAKDOWN ===
+  🏭 Iter 1 | +   6.9s | Bash
+================================================================================
+
+Done. Recovery complete - the sleep 30 command executed successfully.
+
+🎬 Intermediate transcript saved to /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_110312/transcript.md
+
+🤔 Query Classification: COMPLEX (Model logic: COMPLEX...)
+
+================================================================================
+[ITERATION 1] Sending: Durability test with clear interrupt point. Step 1: Call the Bash/Code tool with command `sleep 30` ...
+================================================================================
+
+🏭 CODE EXECUTION [Bash] +8.374s
+   Input size: 103 bytes
+   Input: {
+  "command": "sleep 30",
+  "description": "SLEEP 30s - interrupt now if testing resume",
+  "timeout": 35000
+}
+
+📦 Tool Result (37 bytes) +8.411s
+   Preview: Hook PreToolUse:Bash denied this tool
+
+🏭 CODE EXECUTION [Bash] +11.406s
+   Input size: 360 bytes
+   Input: {
+  "command": "date -u +\"%Y-%m-%dT%H:%M:%SZ\" > /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_110312/work_products/resume_test.txt && echo \" resume_test\" >> /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_110312/work_products/resume_test.txt",
+  "description": "Write timestamp and resume_test to file"
+}
+
+📦 Tool Result (0 bytes) +11.525s
+
+🏭 CODE EXECUTION [Bash] +14.237s
+   Input size: 156 bytes
+   Input: {
+  "command": "ls -la /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_110312",
+  "description": "List workspace directory contents"
+}
+
+📦 Tool Result (516 bytes) +14.346s
+   Preview: total 36
+drwxr-xr-x 4 kjdragan kjdragan 4096 Jan  2 11:04 .
+drwxr-xr-x 7 kjdragan kjdragan 4096 Jan  2 11:03 ..
+drwxr-xr-x 2 kjdragan kjdragan 4096 Jan  2 11:03 downloads
+-rw-r--r-- 1 kjdragan kjdragan 1074 Jan  2 11:04 resume_packet_ccf51e4b-1112-4b5f-821e-65caa4fba045.md
+-rw-r--r-- 1 kjdragan kjdragan 7007 Jan  2 11:05 run.log
+-rw-r--r-- 1 kjdragan kjdragan 2470 Jan  2 11:04 trace.json
+-rw-r--r-- 1 kjdragan kjdragan 1284 Jan  2 11:04 transcript.md
+drwxr-xr-x 3 kjdragan kjdragan 4096 Jan  2 11:...
+
+🏭 CODE EXECUTION [Bash] +16.876s
+   Input size: 170 bytes
+   Input: {
+  "command": "cat /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_110312/work_products/resume_test.txt",
+  "description": "Verify file contents"
+}
+
+📦 Tool Result (33 bytes) +17.848s
+   Preview: 2026-01-02T17:05:00Z
+ resume_test
+
+================================================================================
+=== EXECUTION SUMMARY ===
+================================================================================
+Execution Time: 15.319 seconds
+Tool Calls: 5
+🏭 Code execution was used
+
+=== TOOL CALL BREAKDOWN ===
+  🏭 Iter 1 | +   6.9s | Bash
+  🏭 Iter 1 | +   8.4s | Bash
+  🏭 Iter 1 | +  11.4s | Bash
+  🏭 Iter 1 | +  14.2s | Bash
+  🏭 Iter 1 | +  16.9s | Bash
+================================================================================
+
+DONE
+
+**Summary:**
+- ✅ Step 1: Sleep 30 completed (was in-flight, resumed successfully)
+- ✅ Step 2: Created work_products/resume_test.txt with timestamp `2026-01-02T17:05:00Z` and text "resume_test"
+- ✅ Step 3: Listed workspace directory
+- ✅ Step 4: Confirmed completion
+
+The durability test completed successfully. The resume mechanism correctly preserved the in-flight sleep command and allowed continuation with subsequent steps.
+
+🎬 Intermediate transcript saved to /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_110312/transcript.md
+
+================================================================================
+=== JOB COMPLETE ===
+Run ID: ccf51e4b-1112-4b5f-821e-65caa4fba045
+Status: succeeded
+Last side-effect receipts:
+- bash | succeeded | 84c41fa9e88dd224cd8c7dfd6d735a28eaaba9a00f8ef791d5efc2e21f9e6d36
+- bash | succeeded | 216f5ad80a83fcdeaa117afbe73958c87d3a1808e22b8680f8d15e5db325b470
+- bash | succeeded | 993682b616e77218c4b8d90d2b9cc487b01945fc59b81573172e51cf5f998a78
+- bash | succeeded | 865681a9b28ebdebc8aaa5446ceff1a60e3677e777fe744246b50bec989e8101
+Summary:
+DONE **Summary:** - ✅ Step 1: Sleep 30 completed (was in-flight, resumed successfully) - ✅ Step 2: Created work_products/resume_test.txt with timestamp `2026-01-02T17:05:00Z` and text "resume_test" - ✅ Step 3: Listed workspace directory - ✅ Step 4: Confirmed completion The durability test completed successfully. The resume mechanism correctly preserved the in-flight sleep command and allowed continuation with subsequent steps.
+================================================================================

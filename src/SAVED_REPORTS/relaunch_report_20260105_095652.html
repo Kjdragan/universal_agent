@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Durability Relaunch Test Report</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+        }
+        .timestamp {
+            color: #7f8c8d;
+            font-size: 0.9em;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 25px;
+        }
+        ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        li {
+            margin: 8px 0;
+        }
+        .status {
+            display: inline-block;
+            padding: 5px 12px;
+            background-color: #27ae60;
+            color: white;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Durability Relaunch Test Report</h1>
+        <p class="timestamp">Generated: January 5, 2026 at 09:56 UTC</p>
+
+        <div class="section">
+            <h2>Test Overview</h2>
+            <p>This report documents the durability relaunch testing for the Universal Agent system. The test validates the agent's ability to recover from interruptions and resume operations using durable state management.</p>
+            <ul>
+                <li><strong>Test Type:</strong> Durability and Relaunch Verification</li>
+                <li><strong>Session ID:</strong> session_20260105_095611</li>
+                <li><strong>Workspace:</strong> /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_095611</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>Expected Behavior</h2>
+            <p>When an agent session is interrupted and relaunched, the following behaviors should be observed:</p>
+            <ul>
+                <li><strong>State Persistence:</strong> Agent state is preserved across restarts through the durable state management system</li>
+                <li><strong>Context Recovery:</strong> Previous conversation history and tool execution context are restored</li>
+                <li><strong>Tool Continuity:</strong> MCP server connections and tool schemas remain available after relaunch</li>
+                <li><strong>Observability:</strong> Logfire traces consolidate properly between main agent and MCP server</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>Current Status</h2>
+            <p><span class="status">ACTIVE</span></p>
+            <p>The durability system is operational with the following key components:</p>
+            <ul>
+                <li><strong>State Management:</strong> Implemented in <code>src/universal_agent/durable/state.py</code></li>
+                <li><strong>Tool Gateway:</strong> Available at <code>src/universal_agent/durable/tool_gateway.py</code></li>
+                <li><strong>Observer Pattern:</strong> Extracted into dedicated module for better organization</li>
+                <li><strong>Recent Fixes:</strong> Tool schema validation and malformed tool guardrail improvements</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

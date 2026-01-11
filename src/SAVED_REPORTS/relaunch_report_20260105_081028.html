@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Durability Relaunch Test Report</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            color: #333;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+        }
+        .timestamp {
+            color: #7f8c8d;
+            font-style: italic;
+            margin-bottom: 30px;
+        }
+        section {
+            margin-bottom: 25px;
+        }
+        ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        li {
+            margin: 8px 0;
+        }
+        .highlight {
+            background-color: #e8f4f8;
+            padding: 15px;
+            border-left: 4px solid #3498db;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Durability Relaunch Test Report</h1>
+        
+        <p class="timestamp">
+            Generated on: Monday, January 05, 2026
+        </p>
+
+        <section>
+            <h2>Purpose</h2>
+            <p>
+                This test validates the durability and auto-resume functionality of the Universal Agent system. 
+                The test simulates an interruption scenario and verifies that the agent can successfully recover 
+                its state and continue execution from where it left off.
+            </p>
+            <div class="highlight">
+                <strong>Key Objective:</strong> Ensure that long-running agent tasks can survive interruptions 
+                and automatically resume without manual intervention.
+            </div>
+        </section>
+
+        <section>
+            <h2>Test Steps</h2>
+            <ul>
+                <li><strong>Step 1:</strong> Initialize a long-running agent task with complex workflow requirements</li>
+                <li><strong>Step 2:</strong> Allow the agent to begin execution and establish its working state</li>
+                <li><strong>Step 3:</strong> Simulate an interruption (system restart, process termination, or forced stop)</li>
+                <li><strong>Step 4:</strong> Relaunch the agent system and observe auto-resume behavior</li>
+                <li><strong>Step 5:</strong> Verify that the agent correctly identifies and restores its previous session</li>
+                <li><strong>Step 6:</strong> Confirm that task execution continues from the point of interruption</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Expected Outcome</h2>
+            <ul>
+                <li>✓ Agent successfully detects existing session in workspace directory</li>
+                <li>✓ State is restored including context, task history, and intermediate results</li>
+                <li>✓ Tool execution resumes from the last completed step</li>
+                <li>✓ No duplicate work or data corruption occurs</li>
+                <li>✓ Final task completion is achieved successfully</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Technical Details</h2>
+            <p>
+                <strong>Session ID:</strong> session_20260105_080953<br>
+                <strong>Workspace:</strong> /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_080953<br>
+                <strong>Test Category:</strong> Durability & State Management
+            </p>
+        </section>
+    </div>
+</body>
+</html>

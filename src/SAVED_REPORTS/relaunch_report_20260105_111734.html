@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Durability Relaunch Test Report</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            line-height: 1.6;
+            color: #333;
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+        }
+        .timestamp {
+            color: #7f8c8d;
+            font-size: 0.9em;
+            margin-bottom: 30px;
+        }
+        .section {
+            margin-bottom: 25px;
+        }
+        code {
+            background-color: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Durability Relaunch Test Report</h1>
+    <p class="timestamp">Generated: 2026-01-05 11:17 UTC</p>
+
+    <div class="section">
+        <h2>Test Purpose</h2>
+        <p>
+            This report documents the durability relaunch testing for the universal agent system. 
+            The primary objective is to validate that the agent can successfully recover and continue 
+            execution after being interrupted and relaunched, maintaining state consistency throughout 
+            the lifecycle. This testing focuses on the durability mechanisms implemented in the 
+            <code>durable</code> module, including state persistence and recovery workflows.
+        </p>
+    </div>
+
+    <div class="section">
+        <h2>Test Steps</h2>
+        <p>
+            The testing process involves several key steps:
+        </p>
+        <ol>
+            <li><strong>Initial Execution:</strong> Launch the agent with a complex workflow and allow it to create state checkpoints.</li>
+            <li><strong>Interruption:</strong> Simulate failure or interrupt the agent during active execution.</li>
+            <li><strong>Relaunch:</strong> Restart the agent using the saved state from the previous session.</li>
+            <li><strong>Validation:</strong> Verify that the agent correctly resumes from the last checkpoint without duplicating work.</li>
+            <li><strong>Logging:</strong> Capture logs and metrics to analyze the recovery process.</li>
+        </ol>
+    </div>
+
+    <div class="section">
+        <h2>Expected Outcome</h2>
+        <p>
+            A successful durability relaunch test should demonstrate:
+        </p>
+        <ul>
+            <li>State persistence: All agent state is correctly saved to durable storage.</li>
+            <li>Seamless recovery: The agent resumes execution from the exact point of interruption.</li>
+            <li>No data loss: No intermediate results or context are missing after recovery.</li>
+            <li>Tool call integrity: Tool executions are properly tracked and not duplicated after relaunch.</li>
+            <li>Observer continuity: Observer patterns maintain consistent behavior across sessions.</li>
+        </ul>
+    </div>
+</body>
+</html>

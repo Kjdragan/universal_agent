@@ -1,0 +1,60 @@
+✅ Logfire MCP instrumentation enabled
+✅ Logfire HTTPX instrumentation enabled
+✅ Logfire Anthropic instrumentation enabled
+✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/
+
+================================================================================
+Composio Agent - Claude SDK with Tool Router
+Logfire tracing enabled for observability.
+================================================================================
+
+✅ Non-blocking input handler installed (Fix 1)
+⏳ Starting Composio Session initialization...
+⏳ Discovering connected apps...
+✅ Composio Session Created
+✅ Discovered Active Composio Apps: ['codeinterpreter', 'composio_search', 'filetool', 'gmail', 'google_maps', 'googlephotos', 'googlesheets', 'linear', 'slack', 'sqltool', 'twitter', 'youtube']
+✅ Active Local MCP Tools: ['mcp__local_toolkit__crawl_parallel', 'mcp__local_toolkit__read_local_file', 'mcp__local_toolkit__write_local_file', 'mcp__local_toolkit__list_directory', 'mcp__local_toolkit__upload_to_composio', 'mcp__local_toolkit__workbench_download', 'mcp__local_toolkit__workbench_upload']
+✅ External MCP Servers: ['edgartools', 'video_audio', 'youtube', 'zai_vision']
+✅ Discovered Skills: ['skill-creator', 'webapp-testing', 'docx', 'pptx', 'pdf', 'frontend-design', 'xlsx', 'image-generation', 'mcp-builder']
+🧠 Injected Core Memory Context (1033 chars)
+✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260102_105912
+✅ Injected Knowledge Base (6005 chars)
+
+=== Composio Session Info ===
+Session URL: https://backend.composio.dev/tool_router/trs_t3speHiLWZ8A/mcp
+User ID: pg-test-8c18facc-7f25-4693-918c-7252c15d36b2
+Run ID: 8fea68c3-3c4a-4313-a4db-4bbf08265884
+Timestamp: 20260102_105912
+Trace ID: 019b7fa6217e1a09ad012c5dfd75780d
+Resume Command: uv run python src/universal_agent/main.py --resume --run-id 8fea68c3-3c4a-4313-a4db-4bbf08265884
+============================
+
+================================================================================
+Composio Agent Ready
+================================================================================
+
+
+================================================================================
+🤖 Auto-running job prompt from run spec...
+
+🤔 Query Classification: COMPLEX (Model logic: COMPLEX...)
+
+================================================================================
+[ITERATION 1] Sending: Durability test with clear interrupt point. Step 1: Call the Bash/Code tool with command `sleep 30` ...
+================================================================================
+
+🏭 CODE EXECUTION [Bash] +9.274s
+   Input size: 85 bytes
+   Input: {
+  "command": "sleep 30",
+  "description": "SLEEP 30s - interrupt now if testing resume"
+}
+
+⚠️ Interrupted by user (SIGINT). Saving checkpoint...
+
+
+⚠️ Execution cancelled by user.
+
+⚠️ Interrupted by user (SIGINT). Saving checkpoint...
+
+⚠️ Interrupted by user (SIGINT). Saving checkpoint...
