@@ -1,0 +1,72 @@
+✅ Logfire MCP instrumentation enabled
+✅ Logfire HTTPX instrumentation enabled
+✅ Logfire Anthropic instrumentation enabled
+✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/
+
+================================================================================
+Composio Agent - Claude SDK with Tool Router
+Logfire tracing enabled for observability.
+================================================================================
+
+🧠 Letta memory active for 'universal_agent'
+✅ Non-blocking input handler installed (Fix 1)
+⏳ Starting Composio Session initialization...
+⏳ Discovering connected apps...
+✅ Composio Session Created
+✅ Discovered Active Composio Apps: ['codeinterpreter', 'composio_search', 'filetool', 'gmail', 'google_maps', 'googlephotos', 'googlesheets', 'linear', 'slack', 'sqltool', 'twitter', 'youtube']
+✅ Active Local MCP Tools: ['mcp__local_toolkit__crawl_parallel', 'mcp__local_toolkit__read_local_file', 'mcp__local_toolkit__write_local_file', 'mcp__local_toolkit__list_directory', 'mcp__local_toolkit__upload_to_composio', 'mcp__local_toolkit__workbench_download', 'mcp__local_toolkit__workbench_upload']
+✅ External MCP Servers: ['edgartools', 'video_audio', 'youtube', 'zai_vision']
+✅ Discovered Skills: ['skill-creator', 'webapp-testing', 'docx', 'pptx', 'pdf', 'frontend-design', 'xlsx', 'image-generation', 'mcp-builder']
+⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.
+✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_113316
+✅ Injected Knowledge Base (7291 chars)
+
+============================================================
+         🔍 TRACING IDS (for Logfire debugging)
+============================================================
+  Main Agent Trace ID:    019b8f3860aff21b52fe1c8ad5331b55
+  Local Toolkit Trace ID: (shown in tool results)
+============================================================
+
+=== Composio Session Info ===
+Session URL: https://backend.composio.dev/tool_router/trs_t3speHiLWZ8A/mcp
+User ID: pg-test-8c18facc-7f25-4693-918c-7252c15d36b2
+Run ID: bc7dbc5d-7406-49ca-b4b6-ea11e5b1fe3a
+Timestamp: 20260105_113316
+Trace ID: 019b8f3860aff21b52fe1c8ad5331b55
+Resume Command: PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id bc7dbc5d-7406-49ca-b4b6-ea11e5b1fe3a
+============================
+
+================================================================================
+Composio Agent Ready
+================================================================================
+
+
+================================================================================
+🤖 Auto-running job prompt from run spec...
+
+🤔 Query Classification: COMPLEX (Model logic: COMPLEX...)
+
+================================================================================
+[ITERATION 1] Sending: Durability relaunch test (Task + side effects + auto-resume). Step 1: Call Task to spawn subagent_ty...
+================================================================================
+
+🔧 [Task] +7.047s
+   Input size: 686 bytes
+   Input: {
+  "description": "Generate HTML relaunch report",
+  "prompt": "Create a small HTML report and save it to: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_113316/work_products/relaunch_report.html\n\nRequirements:\n- Include a title: \"Durability Relaunch Test Report\"\n- Add 2-3 short sections (e.g., \"Test Overview\", \"Procedure\", \"Status\")\n- Include a timestamp (use current date: 2026-01-05)\n- Use clean, professional HTML styling\n- Do NOT call any external ...
+🧠 Injected Letta memory for sub-agent: report-creation-expert (16248 chars)
+
+🔧 [mcp__local_toolkit__write_local_file] +34.339s
+   Input size: 4922 bytes
+   Input: {
+  "path": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_113316/work_products/relaunch_report.html",
+  "content": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Durability Relaunch Test Report</title>\n    <style>\n        * {\n            margin: 0;\n            padding: 0;\n            box-sizing: border-box;\n        }\n\n        body {\n     ...
+
+📦 Tool Result (223 bytes) +34.43s
+   Preview: {"result":"[local-toolkit-trace-id: 019b8f391052c02729f487ff81d11bae]\nSuccessfully wrote 4614 chars to /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_113316/work_products/relaunch_report.html"}
+
+📁 [OBSERVER] Saved to persistent: /home/kjdragan/lrepos/universal_agent/src/SAVED_REPORTS/relaunch_report_20260105_113400.html
+
+💥 UA_TEST_CRASH_AFTER_TOOL triggered: Task call_e31bf14b93d04f1893d3f7be (stage=after_tool_success_before_receipt step_id=0e74e35e-b4ff-4ff0-bf4c-26c75820d9ab)

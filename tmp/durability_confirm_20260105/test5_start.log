@@ -1,0 +1,66 @@
+✅ Logfire MCP instrumentation enabled
+✅ Logfire HTTPX instrumentation enabled
+✅ Logfire Anthropic instrumentation enabled
+✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/
+
+================================================================================
+Composio Agent - Claude SDK with Tool Router
+Logfire tracing enabled for observability.
+================================================================================
+
+🧠 Letta memory active for 'universal_agent'
+✅ Non-blocking input handler installed (Fix 1)
+⏳ Starting Composio Session initialization...
+⏳ Discovering connected apps...
+✅ Composio Session Created
+✅ Discovered Active Composio Apps: ['codeinterpreter', 'composio_search', 'filetool', 'gmail', 'google_maps', 'googlephotos', 'googlesheets', 'linear', 'slack', 'sqltool', 'twitter', 'youtube']
+✅ Active Local MCP Tools: ['mcp__local_toolkit__crawl_parallel', 'mcp__local_toolkit__read_local_file', 'mcp__local_toolkit__write_local_file', 'mcp__local_toolkit__list_directory', 'mcp__local_toolkit__upload_to_composio', 'mcp__local_toolkit__workbench_download', 'mcp__local_toolkit__workbench_upload']
+✅ External MCP Servers: ['edgartools', 'video_audio', 'youtube', 'zai_vision']
+✅ Discovered Skills: ['skill-creator', 'webapp-testing', 'docx', 'pptx', 'pdf', 'frontend-design', 'xlsx', 'image-generation', 'mcp-builder']
+⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.
+✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112256
+✅ Injected Knowledge Base (7291 chars)
+
+============================================================
+         🔍 TRACING IDS (for Logfire debugging)
+============================================================
+  Main Agent Trace ID:    019b8f2eebe3114f2b4bfe509682de02
+  Local Toolkit Trace ID: (shown in tool results)
+============================================================
+
+=== Composio Session Info ===
+Session URL: https://backend.composio.dev/tool_router/trs_t3speHiLWZ8A/mcp
+User ID: pg-test-8c18facc-7f25-4693-918c-7252c15d36b2
+Run ID: 190838b7-f888-4b68-bdb4-cc8057614ec2
+Timestamp: 20260105_112256
+Trace ID: 019b8f2eebe3114f2b4bfe509682de02
+Resume Command: PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id 190838b7-f888-4b68-bdb4-cc8057614ec2
+============================
+
+================================================================================
+Composio Agent Ready
+================================================================================
+
+
+================================================================================
+🤖 Auto-running job prompt from run spec...
+
+🤔 Query Classification: COMPLEX (Model logic: COMPLEX...)
+
+================================================================================
+[ITERATION 1] Sending: Read-only durability test. Step 1: Call mcp__local_toolkit__list_directory on the current workspace....
+================================================================================
+
+🔧 [mcp__local_toolkit__list_directory] +6.784s
+   Input size: 94 bytes
+   Input: {
+  "path": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112256"
+}
+
+🔧 [mcp__local_toolkit__read_local_file] +6.794s
+   Input size: 94 bytes
+   Input: {
+  "path": "/home/kjdragan/lrepos/universal_agent/Project_Documentation/000_CURRENT_CONTEXT.md"
+}
+
+💥 UA_TEST_CRASH_AFTER_TOOL triggered: mcp__local_toolkit__list_directory call_bd037f125b1e46139cf21bc9 (stage=after_tool_success_before_receipt step_id=bee930ef-6b2c-4b40-b011-c89adcf2a01f)

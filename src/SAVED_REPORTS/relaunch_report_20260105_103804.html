@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Durability Relaunch Test Report</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+        
+        h1 {
+            color: #667eea;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+        
+        h2 {
+            color: #764ba2;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            font-size: 1.8em;
+        }
+        
+        p {
+            margin-bottom: 15px;
+            text-align: justify;
+        }
+        
+        .status-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            text-align: center;
+            font-size: 1.2em;
+            font-weight: bold;
+        }
+        
+        ul {
+            margin-left: 30px;
+            margin-bottom: 15px;
+        }
+        
+        li {
+            margin-bottom: 10px;
+        }
+        
+        .timestamp {
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #ddd;
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Durability Relaunch Test Report</h1>
+        
+        <h2>Test Overview</h2>
+        <p>
+            This report documents the relaunch testing phase for the Universal Agent's durability system. 
+            The durability framework enables the agent to maintain state across interruptions, recover from failures, 
+            and continue long-running tasks without losing progress. This relaunch test validates the improvements 
+            made to the state management, tool gateway, and observer pattern implementation.
+        </p>
+        <p>
+            Key areas of focus include replay mechanisms, state persistence, and the agent's ability to resume 
+            execution after being interrupted or restarted. The testing framework has been enhanced to better 
+            simulate real-world interruption scenarios and validate recovery behavior.
+        </p>
+        
+        <h2>Execution Steps</h2>
+        <ul>
+            <li><strong>State Initialization:</strong> Verify that the agent correctly initializes its state from previous runs using the durable storage layer</li>
+            <li><strong>Tool Replay Validation:</strong> Test the forced replay mechanism to ensure tool calls are properly reconstructed and validated</li>
+            <li><strong>Observer Pattern Testing:</strong> Confirm that observers correctly track state changes and maintain accurate logs across restarts</li>
+            <li><strong>Recovery Scenarios:</strong> Simulate various interruption types (network failures, crashes, manual stops) and validate recovery</li>
+            <li><strong>Trace Consolidation:</strong> Verify Logfire trace consolidation between the main agent and MCP server connections</li>
+        </ul>
+        
+        <h2>Status</h2>
+        <div class="status-box">
+            ✓ Testing Framework Active - Ready for Validation
+        </div>
+        <p>
+            The durability system has undergone significant refactoring with improvements to error handling, 
+            state management, and tool schema validation. The observer pattern has been extracted into a dedicated 
+            module for better organization. Recent commits include enhancements to Logfire trace consolidation 
+            and improved research corpus output with explicit failed URL tracking.
+        </p>
+        
+        <div class="timestamp">
+            Report Generated: January 5, 2026 at 10:37 AM UTC<br>
+            Session: session_20260105_103700
+        </div>
+    </div>
+</body>
+</html>

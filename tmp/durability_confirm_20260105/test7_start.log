@@ -1,0 +1,115 @@
+✅ Logfire MCP instrumentation enabled
+✅ Logfire HTTPX instrumentation enabled
+✅ Logfire Anthropic instrumentation enabled
+✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/
+
+================================================================================
+Composio Agent - Claude SDK with Tool Router
+Logfire tracing enabled for observability.
+================================================================================
+
+🧠 Letta memory active for 'universal_agent'
+✅ Non-blocking input handler installed (Fix 1)
+⏳ Starting Composio Session initialization...
+⏳ Discovering connected apps...
+✅ Composio Session Created
+✅ Discovered Active Composio Apps: ['codeinterpreter', 'composio_search', 'filetool', 'gmail', 'google_maps', 'googlephotos', 'googlesheets', 'linear', 'slack', 'sqltool', 'twitter', 'youtube']
+✅ Active Local MCP Tools: ['mcp__local_toolkit__crawl_parallel', 'mcp__local_toolkit__read_local_file', 'mcp__local_toolkit__write_local_file', 'mcp__local_toolkit__list_directory', 'mcp__local_toolkit__upload_to_composio', 'mcp__local_toolkit__workbench_download', 'mcp__local_toolkit__workbench_upload']
+✅ External MCP Servers: ['edgartools', 'video_audio', 'youtube', 'zai_vision']
+✅ Discovered Skills: ['skill-creator', 'webapp-testing', 'docx', 'pptx', 'pdf', 'frontend-design', 'xlsx', 'image-generation', 'mcp-builder']
+⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.
+✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112644
+✅ Injected Knowledge Base (7291 chars)
+
+============================================================
+         🔍 TRACING IDS (for Logfire debugging)
+============================================================
+  Main Agent Trace ID:    019b8f3268191fc2ddf7b8d996e0af75
+  Local Toolkit Trace ID: (shown in tool results)
+============================================================
+
+=== Composio Session Info ===
+Session URL: https://backend.composio.dev/tool_router/trs_t3speHiLWZ8A/mcp
+User ID: pg-test-8c18facc-7f25-4693-918c-7252c15d36b2
+Run ID: 715f5baf-de78-40c5-9ba3-7a40e54f370b
+Timestamp: 20260105_112644
+Trace ID: 019b8f3268191fc2ddf7b8d996e0af75
+Resume Command: PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id 715f5baf-de78-40c5-9ba3-7a40e54f370b
+============================
+
+================================================================================
+Composio Agent Ready
+================================================================================
+
+
+================================================================================
+🤖 Auto-running job prompt from run spec...
+
+🤔 Query Classification: COMPLEX (Model logic: COMPLEX...)
+
+================================================================================
+[ITERATION 1] Sending: Durability relaunch test (Task + side effects + auto-resume). Step 1: Call Task to spawn subagent_ty...
+================================================================================
+
+🔧 [Task] +7.565s
+   Input size: 722 bytes
+   Input: {
+  "description": "Create HTML report",
+  "subagent_type": "report-creation-expert",
+  "prompt": "Create a small HTML report file at work_products/relaunch_report.html with:\n- A title: \"Durability Relaunch Test Report\"\n- 2-3 short sections (e.g., \"Test Purpose\", \"Execution Steps\", \"Expected Outcome\")\n- A timestamp showing when the report was generated\n- Professional but simple HTML styling\n\nDo NOT call any external search tools. Just create a self-contained HTML report directly.\n...
+🧠 Injected Letta memory for sub-agent: report-creation-expert (16248 chars)
+
+🔧 [mcp__local_toolkit__write_local_file] +16.87s
+   Input size: 3198 bytes
+   Input: {
+  "path": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112644/work_products/relaunch_report.html",
+  "content": "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n    <meta charset=\"UTF-8\">\n    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n    <title>Durability Relaunch Test Report</title>\n    <style>\n        body {\n            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;\...
+
+📦 Tool Result (223 bytes) +16.997s
+   Preview: {"result":"[local-toolkit-trace-id: 019b8f32d8958c01a72df2da88291d8a]\nSuccessfully wrote 2963 chars to /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112644/work_products/relaunch_report.html"}
+
+📁 [OBSERVER] Saved to persistent: /home/kjdragan/lrepos/universal_agent/src/SAVED_REPORTS/relaunch_report_20260105_112712.html
+
+📦 Tool Result (971 bytes) +22.653s
+   Preview: [{'type': 'text', 'text': 'Perfect! I\'ve created a clean, professional HTML report at:\n\n**`/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112644/work_products/relaunch_report.html`**\n\nThe report includes:\n\n- **Title:** "Durability Relaunch Test Report"\n- **Timestamp:** Monday, January 05, 2026\n- **Three sections:**\n  1. **Test Purpose** - Outlines the objectives for validating durability system recovery\n  2. **Execution Steps** - Lists the 5-phase testing ...
+
+🏭 CODE EXECUTION [Bash] +25.548s
+   Input size: 363 bytes
+   Input: {
+  "command": "google-chrome --headless --disable-gpu --print-to-pdf=/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112644/work_products/relaunch_report.pdf /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112644/work_products/relaunch_report.html",
+  "description": "Convert HTML to PDF using headless Chrome"
+}
+
+📦 Tool Result (5864 bytes) +28.421s
+   Preview: [29575:29602:0105/112722.752905:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socket: No such file or directory
+[29575:29602:0105/112722.776297:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Could not parse server address: Unknown address type (examples of valid types are "tcp" and on UNIX "unix")
+[29575:29602:0105/112722.776562:ERROR:dbus/bus.cc:408] Failed to connect to the bus: Failed to connect to socket /run/dbus/system_bus_socke...
+
+🏭 CODE EXECUTION [Bash] +31.245s
+   Input size: 101 bytes
+   Input: {
+  "command": "sleep 30",
+  "description": "AUTO_RESUME_TEST_SLEEP - interrupt here to test auto-resume"
+}
+
+📦 Tool Result (0 bytes) +61.368s
+
+🏭 CODE EXECUTION [Bash] +64.561s
+   Input size: 94 bytes
+   Input: {
+  "command": "echo $UA_TEST_EMAIL_TO",
+  "description": "Check for test email recipient address"
+}
+
+🔧 [mcp__local_toolkit__upload_to_composio] +64.566s
+   Input size: 186 bytes
+   Input: {
+  "path": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260105_112644/work_products/relaunch_report.pdf",
+  "tool_slug": "GMAIL_SEND_EMAIL",
+  "toolkit_slug": "gmail"
+}
+
+📦 Tool Result (24 bytes) +65.736s
+   Preview: kevin.dragan@outlook.com
+
+💥 UA_TEST_CRASH_AFTER_TOOL triggered: mcp__local_toolkit__upload_to_composio call_8a97b05a78b54c4aba0de5b4 (stage=after_tool_success_before_receipt step_id=e753146c-d2af-46ae-a4c4-7ca54b946e79)
