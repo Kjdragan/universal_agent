@@ -6138,6 +6138,7 @@ async def process_turn(
             is_simple = False  # Fallback to Complex Path
         else:
             final_response_text = fast_path_text
+            print(f"DEBUG: Fast Path completed. fast_path_text length: {len(fast_path_text)}, content: {fast_path_text[:200]!r}...")
 
     if not is_simple:
         # Complex Path (Tool Loop) - track per-request timing
@@ -6284,6 +6285,8 @@ async def process_turn(
     trace["end_time"] = datetime.now().isoformat()
     trace["total_duration_seconds"] = round(end_ts - start_ts, 3)
 
+    print(f"DEBUG: process_turn returning. is_simple={is_simple}, final_response_text length: {len(final_response_text)}, content: {final_response_text[:200]!r}...")
+    
     return ExecutionResult(
         response_text=final_response_text,
         execution_time_seconds=request_duration if not is_simple else 0.0,
