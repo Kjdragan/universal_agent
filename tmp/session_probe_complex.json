@@ -1,6 +1,0 @@
-{
-  "objective": "List the current workspace directory using available tools, then reply with the exact word DONE.",
-  "constraints": {
-    "must_use_tools": true
-  }
-}

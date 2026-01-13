@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Environments
+.env
+.env.local
+.env.*.local
+
+# IDEs
+.vscode/
+.idea/
+
+# Project specific
+AGENT_RUN_WORKSPACES/
+.agent/
+tmp/
+TMP
+TMP.txt
+*.log
+downloads/
+work_products/
+.uv-cache/
+
+# Temporary files
+input.txt
+input_v2.txt
+stress_test_input.txt
+temp.md
+temp_verify_scholar/

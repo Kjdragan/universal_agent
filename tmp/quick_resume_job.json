@@ -1,7 +1,0 @@
-{
-  "objective": "Durability test with clear interrupt point. Step 1: Call the Bash/Code tool with command `sleep 30` and description `SLEEP 30s - interrupt now if testing resume`. Step 2: After sleep completes, write a file at work_products/resume_test.txt containing the current ISO timestamp and the text 'resume_test'. Step 3: List the workspace directory with `ls -la`. Step 4: Reply with DONE.",
-  "constraints": {
-    "must_use_tools": true,
-    "no_external_network": true
-  }
-}
