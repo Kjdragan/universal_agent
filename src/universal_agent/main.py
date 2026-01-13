@@ -705,6 +705,33 @@ async def on_pre_tool_use_ledger(
         tool_input = input_data.get("tool_input", {}) or {}
         file_path = tool_input.get("file_path", "")
         content = tool_input.get("content", "")
+        
+        # Detect sub-agent context using multiple signals
+        # 1. parent_tool_use_id is set when running inside a sub-agent
+        parent_tool_use_id = input_data.get("parent_tool_use_id")
+        # 2. Secondary transcript path (different from first seen)
+        transcript_path = input_data.get("transcript_path", "")
+        is_secondary_transcript = (
+            _primary_transcript_path is not None 
+            and transcript_path 
+            and transcript_path != _primary_transcript_path
+        )
+        # Combined detection: either signal indicates sub-agent context
+        is_subagent_context = bool(parent_tool_use_id) or is_secondary_transcript
+        
+        content_len = len(content) if content else 0
+        
+        # Log all Write hook invocations for debugging
+        print(f"🔧 Write Hook: file_path={bool(file_path)}, content_len={content_len}, subagent={is_subagent_context}, parent_id={parent_tool_use_id}")
+        logfire.info(
+            "write_hook_fired",
+            tool_name=tool_name,
+            is_subagent_context=is_subagent_context,
+            parent_tool_use_id=parent_tool_use_id,
+            has_file_path=bool(file_path),
+            content_length=content_len,
+            transcript_path=transcript_path[:50] if transcript_path else None,
+        )
 
         missing_params = []
         if not file_path:
@@ -713,10 +740,14 @@ async def on_pre_tool_use_ledger(
             missing_params.append("content")
 
         if missing_params:
+            # Print to console for immediate visibility
+            print(f"🛡️ HOOK BLOCKED Write: missing {missing_params} (subagent={is_subagent_context}, parent_id={parent_tool_use_id})")
             logfire.warning(
                 "empty_write_params_blocked",
                 tool_name=tool_name,
                 missing=missing_params,
+                is_subagent_context=is_subagent_context,
+                parent_tool_use_id=parent_tool_use_id,
                 run_id=run_id,
                 step_id=current_step_id,
             )
@@ -1882,11 +1913,65 @@ async def on_post_task_guidance(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
     """
-    PostToolUse Hook: prevent TaskOutput usage by reinforcing relaunch-only guidance.
+    PostToolUse Hook for Task (sub-agent) calls.
+    
+    1. Prevent TaskOutput usage by reinforcing relaunch-only guidance
+    2. Detect sub-agent Write failures and provide recovery guidance
     """
     tool_name = str(input_data.get("tool_name", "") or "")
     if tool_name.lower() != "task":
         return {}
+    
+    # Check if the Task result contains error indicators
+    tool_result = input_data.get("tool_result", {})
+    result_content = ""
+    
+    # Extract result content (could be in various formats)
+    if isinstance(tool_result, dict):
+        content_list = tool_result.get("content", [])
+        for block in content_list:
+            if isinstance(block, dict) and block.get("type") == "text":
+                result_content += block.get("text", "")
+    elif isinstance(tool_result, str):
+        result_content = tool_result
+    
+    # Detect sub-agent Write failures
+    error_indicators = [
+        "InputValidationError",
+        "required parameter `file_path` is missing",
+        "required parameter `content` is missing",
+        "0 bytes",
+    ]
+    
+    sub_agent_write_failed = any(
+        indicator.lower() in result_content.lower() 
+        for indicator in error_indicators
+    )
+    
+    if sub_agent_write_failed:
+        logfire.warning(
+            "subagent_write_failure_detected",
+            tool_use_id=str(tool_use_id),
+        )
+        return {
+            "systemMessage": (
+                "⚠️ SUB-AGENT WRITE FAILURE DETECTED\n\n"
+                "The report-creation-expert sub-agent failed to write the report due to context overflow. "
+                "This happens when the report content is too large.\n\n"
+                "**Recovery Options:**\n"
+                "1. **Re-launch sub-agent** with explicit chunking instruction:\n"
+                "   'Write the report in chunks of under 5000 chars using append_to_file'\n"
+                "2. **Create partial report** yourself using the research notes\n"
+                "3. **Check work_products/** for any partial files the sub-agent created\n\n"
+                "DO NOT simply re-run the same Task call - it will fail again."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": "Sub-agent Write failure - retry with chunking.",
+            },
+        }
+    
+    # Standard guidance: prevent TaskOutput usage
     return {
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
@@ -3044,6 +3129,12 @@ def _agent_definition_supports_hooks() -> bool:
 
 
 def _warn_if_subagent_hooks_configured(agents: Optional[dict[str, Any]]) -> None:
+    """
+    Check if any sub-agent definitions have explicit hooks configured.
+    
+    NOTE: As of SDK 0.1.3+, hooks from the MAIN agent's ClaudeAgentOptions
+    automatically apply to all sub-agents. The hook system is "agent-agnostic".
+    """
     if not agents or _agent_definition_supports_hooks():
         return
     for agent_name, agent_def in agents.items():
@@ -3057,11 +3148,12 @@ def _warn_if_subagent_hooks_configured(agents: Optional[dict[str, Any]]) -> None
             )
         if hooks_present:
             print(
-                f"⚠️ Subagent hooks are not supported in the Python SDK. "
-                f"Remove 'hooks' from agent '{agent_name}'."
+                f"ℹ️ AgentDefinition for '{agent_name}' has hooks configured, "
+                f"but AgentDefinition doesn't accept hooks directly. "
+                f"Main agent hooks still apply to sub-agents."
             )
-            logfire.warning(
-                "subagent_hooks_not_supported",
+            logfire.info(
+                "subagent_hooks_in_definition_ignored",
                 agent_name=agent_name,
             )
 
@@ -6656,7 +6748,36 @@ async def main(args: argparse.Namespace):
 
     auto_resume_complete = False
 
-    async with ClaudeSDKClient(options) as client:
+    first_attempt_client = None
+    try:
+        first_attempt_client = ClaudeSDKClient(options)
+        await first_attempt_client.__aenter__()
+        client = first_attempt_client
+    except Exception as e:
+        error_msg = str(e)
+        # If we fail to connect AND we were trying to resume, assume the resume token is stale/invalid.
+        # This is safer than string matching specific error messages which might change.
+        should_fallback = options.resume is not None
+        
+        if should_fallback:
+            print(f"\n❌ Provider session resume failed: {error_msg} ({type(e).__name__})")
+            print("⚠️ Falling back to NEW provider session (local workspace artifacts preserved)...")
+            # Disable provider resume but keep local resume flow
+            options.resume = None
+            if first_attempt_client:
+                # Cleanup if partially initialized
+                try: 
+                    await first_attempt_client.__aexit__(None, None, None)
+                except: 
+                    pass
+            # Retry with clean options
+            client = ClaudeSDKClient(options)
+            await client.__aenter__()
+        else:
+            raise
+
+    # We use a try/finally to ensure __aexit__ is called since we manually called __aenter__
+    try:
         run_failed = False
         if args.harness_objective:
             pending_prompt = f"/harness {args.harness_objective}"
@@ -7551,6 +7672,14 @@ async def main(args: argparse.Namespace):
             ):
                 _maybe_mark_run_succeeded()
                 logfire.info("durable_run_completed", run_id=run_id)
+
+    finally:
+        # Ensure the client is closed since we manually called __aenter__
+        if 'client' in locals() and client:
+            try:
+                await client.__aexit__(None, None, None)
+            except Exception as e:
+                print(f"⚠️ Error closing client: {e}")
 
     # Close the main span to ensure all nested spans are captured in trace
     main_span.__exit__(None, None, None)
