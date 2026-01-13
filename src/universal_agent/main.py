@@ -283,6 +283,7 @@ from claude_agent_sdk.types import (
 )
 from typing import Any
 from composio import Composio
+from universal_agent.harness.verifier import TaskVerifier
 
 # Durable runtime support
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
@@ -4492,8 +4493,36 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 runtime_db_conn, run_id
                             )
 
-                            # 2. Construct Handoff Prompt
-                            next_prompt = f"RESUMING (Context Limit Reached): You exceeded the context limit ({total_tokens} tokens). I have reset your memory. Continue the mission.json tasks from where you left off. Status: {current_iter + 1}/{max_iter}."
+                            # 2. Construct Handoff Prompt (Ledger-Aware)
+                            # Check for handoff.json written by build_evidence_ledger
+                            handoff_path = os.path.join(workspace_dir, "handoff.json") if workspace_dir else None
+                            handoff_state = None
+                            
+                            if handoff_path and os.path.exists(handoff_path):
+                                try:
+                                    with open(handoff_path, "r") as hf:
+                                        handoff_state = json.load(hf)
+                                except Exception as e:
+                                    logfire.warning("handoff_json_read_error", error=str(e))
+                            
+                            if handoff_state and handoff_state.get("phase") == "ledger_complete":
+                                # Ledger-aware restart: guide agent to read only the ledger
+                                ledger_path = handoff_state.get("ledger_path", "")
+                                topic = handoff_state.get("topic", "the research topic")
+                                next_prompt = (
+                                    f"RESUMING (Phase: SYNTHESIS):\n"
+                                    f"Context was reset after {total_tokens} tokens.\n"
+                                    f"Evidence ledger is ready at: {ledger_path}\n\n"
+                                    f"INSTRUCTIONS:\n"
+                                    f"1. READ ONLY the evidence ledger file (do NOT re-read raw corpus)\n"
+                                    f"2. Use EVID-XXX references when citing evidence\n"
+                                    f"3. Write the report based on ledger evidence for: {topic}\n\n"
+                                    f"Status: Iteration {current_iter + 1}/{max_iter}"
+                                )
+                                logfire.info("harness_handoff_ledger_aware", ledger_path=ledger_path, topic=topic)
+                            else:
+                                # Generic restart: no ledger available
+                                next_prompt = f"RESUMING (Context Limit Reached): You exceeded the context limit ({total_tokens} tokens). I have reset your memory. Continue the mission.json tasks from where you left off. Status: {current_iter + 1}/{max_iter}."
 
                             pending_prompt = next_prompt
 
@@ -5455,11 +5484,10 @@ async def setup_session(
     options = ClaudeAgentOptions(
         model="claude-3-5-sonnet-20241022",
         disallowed_tools=disallowed_tools,
-        # Unlock GLM-4.7/Claude full potential with 128k output limit
+        # Read token limits from env vars (default 64K for good balance of capacity vs safety)
         env={
-            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32000",
-            # Also increase MCP output limit just in case
-            "MAX_MCP_OUTPUT_TOKENS": "32000",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.getenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000"),
+            "MAX_MCP_OUTPUT_TOKENS": os.getenv("MAX_MCP_OUTPUT_TOKENS", "64000"),
         },
         system_prompt=(
             f"Current Date: {today_str}\n"
@@ -5474,9 +5502,10 @@ async def setup_session(
             "- For web/news research, ALWAYS use Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
             "- Do NOT use native 'WebSearch' - it bypasses our artifact saving system.\n"
             "- Composio search results are auto-saved by the Observer for sub-agent access.\n\n"
-            "🔒 SEARCH HYGIENE:\n"
-            "- When using COMPOSIO_SEARCH_NEWS or COMPOSIO_SEARCH_WEB, append `-site:wikipedia.org` to the query by default to avoid wasting search slots.\n"
-            "- Only omit this if the user explicitly asks for Wikipedia.\n\n"
+            "🔒 SEARCH HYGIENE (MANDATORY):\n"
+            "- ALWAYS append `-site:wikipedia.org` to EVERY search query (COMPOSIO_SEARCH_NEWS, COMPOSIO_SEARCH_WEB, SERPAPI_SEARCH).\n"
+            "- This is MANDATORY, not optional. Wikipedia wastes search query slots.\n"
+            "- The only exception is if the user explicitly requests Wikipedia content.\n"
             "IMPORTANT EXECUTION GUIDELINES:\n"
             "- When the user requests an action (send email, upload file, execute code), proceed immediately without asking for confirmation.\n"
             "- The user has already authorized these actions by making the request.\n"
@@ -7112,7 +7141,56 @@ async def main(args: argparse.Namespace):
 
                                 continue
                         elif action == "complete":
-                            # Harness satisfied
+                            # Harness satisfied - Perform Verification
+                            print("🔍 performing final verification...")
+                            verifier = TaskVerifier(client=client)
+                            
+                            mission_path = os.path.join(workspace_dir, "mission.json")
+                            verification_passed = True
+                            failure_reason = ""
+                            
+                            if os.path.exists(mission_path):
+                                try:
+                                    with open(mission_path, "r") as f:
+                                        m_data = json.load(f)
+                                    
+                                    # Verify all completed tasks
+                                    for task in m_data.get("tasks", []):
+                                        if task.get("status") == "COMPLETED":
+                                            # Binary Check
+                                            v_ok, v_msg = verifier.verify_artifacts(task, workspace_dir)
+                                            if not v_ok:
+                                                verification_passed = False
+                                                failure_reason = f"Artifact Verification Failed for task '{task.get('id')}': {v_msg}"
+                                                break
+                                            
+                                            # Quality Check (LLM) - Optional for now, but enabled per plan
+                                            # q_ok, q_msg = await verifier.verify_quality(task, workspace_dir)
+                                            # if not q_ok:
+                                            #    verification_passed = False
+                                            #    failure_reason = f"Quality Verification Failed: {q_msg}"
+                                            #    break
+                                except Exception as ve:
+                                    print(f"⚠️ Verification System Error: {ve}")
+                                    # We don't block on system error, but we log it
+                            
+                            if not verification_passed:
+                                print(f"❌ VERIFICATION FAILED: {failure_reason}")
+                                action = "restart"
+                                next_prompt = (
+                                    f"⛔ SYSTEM VERIFICATION FAILED\n"
+                                    f"The task cannot be marked complete because of the following error:\n"
+                                    f"{failure_reason}\n\n"
+                                    f"You must FIX this issue before the mission is accepted.\n"
+                                    f"Restarting execution..."
+                                )
+                                # Continue to restart logic (handled below)
+                                pending_prompt = next_prompt
+                                if hasattr(client, "history"):
+                                    client.history = []
+                                continue
+                            
+                            print("✅ Verification Passed. Finishing run.")
                             pass
 
                     if run_mode == "job" and args.job_path:

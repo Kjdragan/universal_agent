@@ -1604,8 +1604,32 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
         with open(overview_path, "w", encoding="utf-8") as f:
             f.write("\n".join(overview_lines))
 
-        # 6. Return Summary
+        # 6. Calculate corpus size and recommend mode
         failed_urls = crawl_result.get("errors", [])
+        
+        # Calculate total corpus size (chars and words)
+        total_corpus_chars = 0
+        total_corpus_words = 0
+        for finfo in filtered_files:
+            # Approximate chars from word count (avg ~5 chars per word)
+            word_count = finfo.get("word_count", 0)
+            total_corpus_words += word_count
+            # Read actual file size for accurate char count
+            fpath = finfo.get("path")
+            if fpath and os.path.exists(fpath):
+                total_corpus_chars += os.path.getsize(fpath)
+        
+        # Determine recommended mode based on thresholds
+        file_count = len(filtered_files)
+        if total_corpus_chars >= 150000 or file_count >= 15:
+            recommended_mode = "HARNESS_REQUIRED"
+            mode_reason = f"Corpus too large for single context ({total_corpus_chars:,} chars, {file_count} files). Use /harness mode."
+        elif total_corpus_chars >= 100000 or file_count >= 8:
+            recommended_mode = "EVIDENCE_LEDGER"
+            mode_reason = f"Large corpus ({total_corpus_chars:,} chars, {file_count} files). Build evidence ledger before synthesis."
+        else:
+            recommended_mode = "STANDARD"
+            mode_reason = f"Small corpus ({total_corpus_chars:,} chars, {file_count} files). Direct read and synthesis."
 
         return json.dumps(
             {
@@ -1625,8 +1649,13 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
                     "filtered_dir": filtered_dir,
                     "kept_files": len(filtered_files),
                     "dropped_files": len(filtered_dropped),
+                    "total_chars": total_corpus_chars,
+                    "total_words": total_corpus_words,
                 },
                 "overview_path": overview_path,
+                # NEW: Mode recommendation for subagent
+                "recommended_mode": recommended_mode,
+                "mode_reason": mode_reason,
             },
             indent=2,
         )
@@ -1942,6 +1971,26 @@ async def build_evidence_ledger(
         with open(ledger_path, "w", encoding="utf-8") as f:
             f.write(ledger_content)
 
+        # Write handoff.json for harness integration
+        # This enables the harness to inject ledger-aware prompts on restart
+        handoff_path = os.path.join(session_dir, "handoff.json")
+        handoff_state = {
+            "phase": "ledger_complete",
+            "task_name": task_name,
+            "topic": topic,
+            "ledger_path": ledger_path,
+            "corpus_stats": {
+                "files": len(evidence_entries),
+                "raw_chars": raw_corpus_size,
+                "ledger_chars": ledger_size,
+                "compression_ratio": compression_ratio,
+            },
+            "next_action": "READ_LEDGER_AND_WRITE_REPORT",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        with open(handoff_path, "w", encoding="utf-8") as f:
+            json.dump(handoff_state, f, indent=2)
+
         return json.dumps(
             {
                 "status": "Evidence ledger built successfully",
@@ -1956,6 +2005,7 @@ async def build_evidence_ledger(
                 ),
                 "total_claims": sum(len(e["key_claims"]) for e in evidence_entries),
                 "next_step": "Read ONLY evidence_ledger.md for report synthesis. Do NOT read raw corpus files.",
+                "handoff_saved": handoff_path,
             },
             indent=2,
         )

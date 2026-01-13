@@ -272,6 +272,30 @@ async def malformed_tool_guardrail_hook(
             },
         }
 
+    # [NEW] Zero-Byte Guard: Block empty Write calls (prevents hangs/crashes)
+    if tool_name == "Write":
+        content = tool_input.get("content")
+        # Check if content is None or empty/whitespace
+        if content is None or (isinstance(content, str) and not content.strip()):
+             logfire.warning(
+                "zero_byte_write_blocked",
+                tool_name=tool_name,
+                tool_use_id=tool_use_id,
+            )
+             return {
+                "systemMessage": (
+                    "⚠️ BLOCKED: You attempted to write an empty file (0 bytes). "
+                    "This usually happens when you are trying to write too much and run out of context. "
+                    "Please write the file in smaller chunks or ensure you have generated the content first."
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Blocked 0-byte write (empty content).",
+                },
+            }
+
     return {}
 
 

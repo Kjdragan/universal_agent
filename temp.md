@@ -1,2 +1,0 @@
-temp.md
-/harness Research each of the 100 Fortune 100 companies and create a profile report for a potential investor to get up to speed on the company. Include: Business Overview, Key Financials, Growth Drivers, and Risks.ness Research 10 of the 100 Fortune 100 companies and create a profile report for a potential investor to get up to speed on the company. Include: Business Overview, Key Financials, Growth Drivers, and Risks.

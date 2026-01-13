@@ -1,4 +1,7 @@
-# Massive Report Templates
+
+> [!IMPORTANT]
+> **CRITICAL REQUIREMENT**: You **MUST** create an `evidence_ledger.md` (or similar) file containing the Evidence Ledger **BEFORE** beginning the report draft phase. 
+> This is a **BLOCKING** dependency. Do not attempt to write the report until the ledger exists.
 
 ## Evidence Ledger Template
 Use one entry per source or tightly related cluster.

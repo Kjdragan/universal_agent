@@ -1,7 +1,0 @@
-{
-  "objective": "Reply with: OK session probe",
-  "constraints": {
-    "format": "single line",
-    "no_tools": true
-  }
-}

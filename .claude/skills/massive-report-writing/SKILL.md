@@ -1,61 +1,108 @@
 ---
 name: massive-report-writing
-description: Multi-stage report writing for large research corpora using map-reduce batching, evidence ledgering, and chunked section writes. Use when reports must synthesize many sources (e.g., 20+ files, >150k chars, long research_overview) or when single-pass writing risks context overload or malformed tool calls.
+description: |
+  Context-efficient report synthesis for large research corpora using evidence ledgering and harness-based iteration.
+  
+  **USE WHEN:**
+  - Corpus has ≥8 files OR ≥100K characters
+  - `finalize_research` returns `recommended_mode: EVIDENCE_LEDGER`
+  - Prior runs show Write tool failures or truncation warnings
+  - Report scope is "comprehensive" or "deep dive"
+  
+  **THIS SKILL PROVIDES:**
+  - Evidence ledger extraction (compresses corpus 70-85%)
+  - Harness handoff patterns for multi-iteration synthesis
+  - Chunked write sequences for large outputs
 ---
 
 # Massive Report Writing
 
 ## Overview
-Use a map-reduce workflow to turn large research corpora into a coherent report without context collapse. Keep intermediate artifacts small and structured so the final write step relies on distilled evidence, not raw corpus text.
 
-## Trigger Heuristics
-- Corpus >= 20 files, or research_overview > ~30k chars.
-- Batch reads return >60k chars or frequent truncation warnings.
-- Prior runs show Write tool input missing/empty or malformed tool calls.
-- Report scope is "comprehensive", "deep dive", or >30-day horizon.
+Use evidence ledgering to compress large research corpora into structured, quotable material. For very large corpora, harness iteration handles multi-pass synthesis automatically.
 
-## Workflow (Map -> Reduce -> Write)
+## When to Use
 
-### 1) Normalize scope + budget
-- Confirm report format (HTML or Markdown), required sections, and output path.
-- Set batch size: 5-10 files per batch, target 60-75k chars per batch.
-- Decide a fixed section outline early (even provisional).
+| Condition | Threshold | Action |
+|-----------|-----------|--------|
+| Medium corpus | 100-150K chars, 8-15 files | Build evidence ledger, write in one pass |
+| Large corpus (harness mode) | >150K chars, >15 files | Ledger → harness restart → write from ledger |
+| Large corpus (non-harness) | >150K chars | Suggest user enable harness mode |
 
-### 2) Map: batch read + ledger extraction
-- Read research in batches using `read_research_files` only. Avoid single-file reads.
-- For each batch, extract evidence into a ledger and produce a short batch summary.
-- Keep each batch summary under ~500-800 words and include evidence IDs.
-- Treat batch summaries as navigation only, not source material for final writing.
-- If the ledger grows too large, compress older entries into a "prior evidence summary" that preserves quotes, numbers, and URLs.
+---
 
-### 3) Reduce: thematic consolidation
-- Group evidence into 4-8 themes.
-- Build a section outline and assign evidence IDs to each section.
-- Note contradictions or uncertainty in a dedicated "gaps and conflicts" list.
- - Use the ledger as the only source of truth. Do not write from summaries of summaries.
+## Workflow: Evidence Ledger Mode
 
-### 4) Write in sections (chunked)
-- Draft one section at a time from the ledger + outline only.
-- If context pressure is high, write section-by-section to disk (append) instead of a single giant write.
-- Verify each Write call includes `file_path` and `content` and uses plain JSON (no XML markup in tool names).
+### 1. Build Evidence Ledger
 
-### 5) Final pass
-- Add executive summary, table of contents, references, and visuals (if required).
-- Validate citations and dates against the ledger.
+Call `build_evidence_ledger(session_dir, topic, task_name)` after finalize_research.
 
-## Guardrails for Tool Calls
-- Keep tool inputs minimal and well-formed; avoid inline XML/HTML in tool calls.
-- When Write fails due to missing inputs, immediately re-issue with a minimal JSON payload.
-- If repeated failures occur, request a compaction or re-run with only the ledger + outline in context.
+The tool extracts from each source:
+- Direct quotes with attribution
+- Specific numbers (percentages, counts, costs)
+- Key dates and timelines
+- Claims and findings
 
-## Anti-Summary-of-Summary Rules
-- Every section draft must cite ledger items directly (facts, quotes, numbers, dates).
-- Batch summaries never replace ledger evidence; they only point back to it.
-- If a point cannot be traced to a ledger item, drop it or re-read the source batch.
+**Output:** `tasks/{task_name}/evidence_ledger.md` with EVID-XXX entries.
 
-## Reference Templates
-Use the templates in `references/massive_report_templates.md` for:
-- Evidence ledger entries
-- Batch summaries
-- Section outline
+### 2. Read Only the Ledger
+
+After ledger is built:
+- ✅ Read `evidence_ledger.md` for synthesis
+- ❌ Do NOT re-read raw corpus files
+- ❌ Do NOT use `read_research_files` again
+
+This is how you avoid context exhaustion.
+
+### 3. Write Report from Ledger
+
+Use EVID-XXX references when citing:
+```
+According to ISW (EVID-003), Russian forces gained 74 square miles...
+```
+
+---
+
+## Harness Integration
+
+When corpus exceeds safe limits AND harness mode is active:
+
+1. **Iteration 1:** finalize → build ledger → ledger saved to disk → context exhaustion
+2. **Harness restart:** Context cleared, handoff.json injected
+3. **Iteration 2:** Read ledger from disk → write report
+
+The harness handles multi-pass automatically. You don't need map-reduce orchestration.
+
+---
+
+## Chunked Write Sequence
+
+Use when single Write calls fail or output is >30KB:
+
+```
+1) Write header + CSS + title block
+2) Append executive summary
+3) Append Section 1 (cite EVID-XXX)
+4) Append Section 2
+... repeat ...
+N) Append references
+```
+
+Use `append_to_file` for sections 2-N.
+
+---
+
+## Templates
+
+See [references/massive_report_templates.md](references/massive_report_templates.md) for:
+- Evidence ledger entry format
+- Section outline template
 - Chunked write sequence
+
+---
+
+## Anti-Summary-of-Summary Rule
+
+- Every claim in the final report must trace to an EVID-XXX
+- If a point cannot be traced to a ledger item, drop it or re-read the source
+- Batch summaries (if used) are navigation only, not source material

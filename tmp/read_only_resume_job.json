@@ -1,7 +1,0 @@
-{
-  "objective": "Read-only durability test. Step 1: Call mcp__local_toolkit__list_directory on the current workspace. Step 2: Call mcp__local_toolkit__read_local_file on /home/kjdragan/lrepos/universal_agent/Project_Documentation/000_CURRENT_CONTEXT.md. Step 3: Reply with DONE.",
-  "constraints": {
-    "must_use_tools": true,
-    "no_external_network": true
-  }
-}
