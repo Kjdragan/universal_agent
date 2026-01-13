@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Russia-Ukraine War: Weekly Assessment Report</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f4f4f4;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 0;
+        }
+
+        header {
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            color: white;
+            padding: 40px 20px;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        header .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+            margin-bottom: 20px;
+        }
+
+        header .report-meta {
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+
+        .executive-summary {
+            background-color: #f8f9fa;
+            padding: 30px;
+            border-left: 5px solid #2a5298;
+            margin: 30px 20px;
+        }
+
+        .executive-summary h2 {
+            color: #1e3c72;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+        }
+
+        .executive-summary ul {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .executive-summary li {
+            padding: 12px 0;
+            padding-left: 30px;
+            position: relative;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .executive-summary li:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #2a5298;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+
+        .executive-summary li:last-child {
+            border-bottom: none;
+        }
+
+        .section {
+            padding: 40px 20px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .section h2 {
+            color: #1e3c72;
+            font-size: 2em;
+            margin-bottom: 25px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #2a5298;
+        }
+
+        .section h3 {
+            color: #2a5298;
+            font-size: 1.4em;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+
+        .content-block {
+            margin-bottom: 20px;
+            padding: 20px;
+            background-color: #f9f9f9;
+            border-radius: 5px;
+        }
+
+        .timeline {
+            position: relative;
+            padding-left: 30px;
+        }
+
+        .timeline-item {
+            position: relative;
+            padding-bottom: 30px;
+            border-left: 3px solid #2a5298;
+            padding-left: 30px;
+        }
+
+        .timeline-item:before {
+            content: "";
+            position: absolute;
+            left: -9px;
+            top: 0;
+            width: 15px;
+            height: 15px;
+            background-color: #2a5298;
+            border-radius: 50%;
+        }
+
+        .timeline-date {
+            font-weight: bold;
+            color: #1e3c72;
+            font-size: 1.1em;
+            margin-bottom: 10px;
+        }
+
+        .highlight-box {
+            background-color: #fff3cd;
+            border-left: 5px solid #ffc107;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .warning-box {
+            background-color: #f8d7da;
+            border-left: 5px solid #dc3545;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .info-box {
+            background-color: #d1ecf1;
+            border-left: 5px solid #17a2b8;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+
+        .stat-card h4 {
+            color: #2a5298;
+            font-size: 0.9em;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #1e3c72;
+        }
+
+        .source-link {
+            color: #2a5298;
+            text-decoration: none;
+            font-weight: 500;
+        }
+
+        .source-link:hover {
+            text-decoration: underline;
+        }
+
+        footer {
+            background-color: #1e3c72;
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+
+        footer p {
+            opacity: 0.8;
+        }
+
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 1.8em;
+            }
+
+            .section {
+                padding: 20px 15px;
+            }
+
+            .stat-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Russia-Ukraine War: Weekly Assessment</h1>
+            <div class="subtitle">Comprehensive Analysis of Frontline Updates, Diplomatic Developments, and Strategic Shifts</div>
+            <div class="report-meta">
+                Report Period: January 6-12, 2026 | Report Date: January 13, 2026
+            </div>
+        </header>
+
+        <div class="executive-summary">
+            <h2>Executive Summary</h2>
+            <ul>
+                <li><strong>Escalation Through Advanced Weapons:</strong> Russia deployed its Oreshnik intermediate-range ballistic missile (IRBM) for only the second time, striking western Ukraine and sending a clear warning to NATO allies amid diplomatic negotiations.</li>
+
+                <li><strong>Diplomatic Momentum Fragile:</strong> Western allies made "major progress" on security guarantees for Ukraine at the Paris summit, with plans for European troop deployments and a US-led ceasefire monitoring mechanism, though Moscow has rejected key elements.</li>
+
+                <li><strong>Frontline Pressure Mounts:</strong> Russian forces continue incremental advances around Pokrovsk, Kupyansk, and Kostiantynivka while Ukraine maintains drone fire control that constrains Russian resupply within 5-7 km of frontlines.</li>
+
+                <li><strong>Humanitarian Crisis Deepens:</strong> 2025 was the deadliest year for civilians in Ukraine since 2022, with massive Russian attacks on critical infrastructure leaving nearly 6,000 apartment buildings in Kyiv without heat during winter temperatures.</li>
+
+                <li><strong>Sanctions Regime Expands:</strong> Trump greenlights a bipartisan sanctions bill that would impose 500% tariffs on countries buying Russian oil, while EU continues importing Russian LNG despite pledges to phase it out by 2027.</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
