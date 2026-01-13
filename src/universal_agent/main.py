@@ -2091,6 +2091,39 @@ def check_harness_threshold(
     return False
 
 
+def _mark_tasks_for_retry(mission_path: str, task_ids: list) -> None:
+    """
+    Update mission.json to mark specific tasks for re-execution.
+    Changes status from 'COMPLETED' to 'RETRY' for failed tasks.
+    """
+    if not os.path.exists(mission_path):
+        return
+    
+    try:
+        with open(mission_path, "r") as f:
+            mission = json.load(f)
+        
+        def mark_retry(node):
+            if isinstance(node, dict):
+                if node.get("id") in task_ids:
+                    node["status"] = "RETRY"
+                for v in node.values():
+                    if isinstance(v, (dict, list)):
+                        mark_retry(v)
+            elif isinstance(node, list):
+                for item in node:
+                    mark_retry(item)
+        
+        mark_retry(mission)
+        
+        with open(mission_path, "w") as f:
+            json.dump(mission, f, indent=2)
+        
+        print(f"📝 Marked {len(task_ids)} tasks for retry: {task_ids}")
+    except Exception as e:
+        print(f"⚠️ Failed to mark tasks for retry: {e}")
+
+
 def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dict:
     """
     Post-Run Hook: Checks for Harness Loop conditions.
@@ -2159,84 +2192,97 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
     if intent_to_complete:
         print(f"🕵️ Completion Intent Detected. Candidates: {len(matches)}. Last: '{extracted_promise}'")
         
-        # [Step 1] Verification
-        # We need the task object. In this context, we assume the task is implicit or we load it.
-        # But `on_agent_stop` lacks direct access to the `task` object from the main loop scope.
-        # However, we can instantiate the Verifier.
+        # [Step 1] Tiered Verification
         from universal_agent.harness.verifier import TaskVerifier
         
-        # We need to reconstruct the task context or check all tasks.
-        # Since we are in the Harness, we usually have a `mission.json` in the workspace.
         workspace_dir = globals().get("workspace_dir")
         if not workspace_dir:
-             # Fallback: try to guess from run_id or env?
-             # For now, if we can't find workspace, we skip verification (fail safe).
-             print("⚠️ Harness: No workspace_dir global logic, skipping verification.")
-             pass
+            print("⚠️ Harness: No workspace_dir global, skipping verification.")
         else:
-             import json
-             import glob
-             mission_path = os.path.join(workspace_dir, "mission.json")
-             if os.path.exists(mission_path):
-                 try:
-                     with open(mission_path, "r") as f:
-                         mission_data = json.load(f)
-                     
-                     verifier = TaskVerifier(llm_client=None) # We might need a client for Quality check
-                     # We can get the client from globals if available or skip quality check here
-                     # Note: on_agent_stop might not have the client.
-                     # Let's focus on Binary Artifact Verification first.
-                     
-                     # Check ALL tasks claimed as COMPLETED
-                     failed_verifications = []
-                     
-                     # We might not know WHICH task is currently active without state tracking.
-                     # But we can verify strict success criteria for the *entire mission* if defined,
-                     # or check the `output_artifacts` of the mission root?
-                     # Let's verify the "Mission Root" if it has artifacts, or iterate all "COMPLETED" tasks.
-                     
-                     # Only check tasks that are marked COMPLETED in the manifest
-                     tasks_to_verify = []
-                     
-                     # recursive find
-                     def find_completed_tasks(node):
-                         if isinstance(node, dict):
-                             if node.get("status") == "COMPLETED" and node.get("output_artifacts"):
-                                 tasks_to_verify.append(node)
-                             for k, v in node.items():
-                                 if isinstance(v, (dict, list)):
-                                     find_completed_tasks(v)
-                         elif isinstance(node, list):
-                             for item in node:
-                                 find_completed_tasks(item)
-                                 
-                     find_completed_tasks(mission_data)
-                     
-                     print(f"🧪 Verifying {len(tasks_to_verify)} COMPLETED tasks...")
-                     
-                     for t in tasks_to_verify:
-                         res = verifier.verify_artifacts(t, workspace_dir)
-                         if not res["success"]:
-                             failed_verifications.append(f"Task dependency missing: {res['missing']}")
-                     
-                     if failed_verifications:
-                         # VERIFICATION FAILED
-                         # Force restart and tell agent.
-                         feedback = "\n".join(failed_verifications)
-                         print(f"❌ Verification Failed:\n{feedback}")
-                         
-                         return {
-                             "hookSpecificOutput": {
-                                 "hookEventName": "AgentStop",
-                                 "action": "restart",
-                                 "nextPrompt": f"STOP! Verification Failed. You claimed completion, but the following artifacts are missing:\n{feedback}\n\n[INSTRUCTION]\n1. CREATE the missing artifacts.\n2. Verify they exist.\n3. THEN output <promise>{promise}</promise>."
-                             }
-                         }
-                     
-                     print("✅ Binary Verification Passed.")
-                     
-                 except Exception as e:
-                     print(f"⚠️ Harness Verification Error: {e}")
+            import json as _json
+            import glob as _glob
+            mission_path = os.path.join(workspace_dir, "mission.json")
+            if os.path.exists(mission_path):
+                try:
+                    with open(mission_path, "r") as f:
+                        mission_data = _json.load(f)
+                    
+                    verifier = TaskVerifier(client=None)  # Tier 2 only (no LLM needed)
+                    
+                    # Find all COMPLETED tasks with output_artifacts
+                    tasks_to_verify = []
+                    def find_completed_tasks(node):
+                        if isinstance(node, dict):
+                            if node.get("status") == "COMPLETED" and node.get("output_artifacts"):
+                                tasks_to_verify.append(node)
+                            for v in node.values():
+                                if isinstance(v, (dict, list)):
+                                    find_completed_tasks(v)
+                        elif isinstance(node, list):
+                            for item in node:
+                                find_completed_tasks(item)
+                    
+                    find_completed_tasks(mission_data)
+                    
+                    print(f"🧪 Verifying {len(tasks_to_verify)} COMPLETED tasks (Tier 2: Binary + Format)...")
+                    
+                    failed_tasks = {}  # {task_id: failure_info}
+                    
+                    for t in tasks_to_verify:
+                        task_id = t.get("id", "unknown")
+                        # Use tiered verification (default Tier 2 = Binary + Format)
+                        passed, msg, failure_info = verifier.verify_task(t, workspace_dir, tier=2)
+                        if not passed:
+                            failed_tasks[task_id] = {
+                                "tier": failure_info.get("tier", "UNKNOWN"),
+                                "issue": failure_info.get("issue", msg),
+                                "description": t.get("description", ""),
+                            }
+                    
+                    if failed_tasks:
+                        # VERIFICATION FAILED - Inject specific feedback
+                        feedback_lines = []
+                        task_ids_to_retry = []
+                        
+                        for task_id, info in failed_tasks.items():
+                            tier = info.get("tier", "UNKNOWN")
+                            issue = info.get("issue", "unknown issue")
+                            desc = info.get("description", "")[:50]
+                            
+                            if tier == "BINARY":
+                                feedback_lines.append(f"• {task_id} ({desc}...): MISSING FILES - {issue}")
+                            elif tier == "FORMAT":
+                                feedback_lines.append(f"• {task_id} ({desc}...): FORMAT ERROR - {issue}")
+                            else:
+                                feedback_lines.append(f"• {task_id}: {issue}")
+                            
+                            task_ids_to_retry.append(task_id)
+                        
+                        # Mark tasks for retry in mission.json
+                        _mark_tasks_for_retry(mission_path, task_ids_to_retry)
+                        
+                        feedback = "\n".join(feedback_lines)
+                        print(f"❌ Verification Failed:\n{feedback}")
+                        
+                        return {
+                            "hookSpecificOutput": {
+                                "hookEventName": "AgentStop",
+                                "action": "restart",
+                                "nextPrompt": (
+                                    f"VERIFICATION FAILED. Do NOT output the completion promise yet.\n\n"
+                                    f"[ISSUES TO FIX]\n{feedback}\n\n"
+                                    f"[INSTRUCTION]\n"
+                                    f"1. Re-read mission.json - tasks marked 'RETRY' need work\n"
+                                    f"2. Execute ONLY the tasks marked as 'RETRY'\n"
+                                    f"3. Once fixed, output <promise>{promise}</promise>"
+                                )
+                            }
+                        }
+                    
+                    print("✅ Verification Passed (Tier 2: Binary + Format).")
+                    
+                except Exception as e:
+                    print(f"⚠️ Harness Verification Error: {e}")
 
     # [Step 2] Protocol Enforcement (Promise Check)
     if extracted_promise == promise_normalized:
@@ -6138,7 +6184,6 @@ async def process_turn(
             is_simple = False  # Fallback to Complex Path
         else:
             final_response_text = fast_path_text
-            print(f"DEBUG: Fast Path completed. fast_path_text length: {len(fast_path_text)}, content: {fast_path_text[:200]!r}...")
 
     if not is_simple:
         # Complex Path (Tool Loop) - track per-request timing
@@ -6285,8 +6330,7 @@ async def process_turn(
     trace["end_time"] = datetime.now().isoformat()
     trace["total_duration_seconds"] = round(end_ts - start_ts, 3)
 
-    print(f"DEBUG: process_turn returning. is_simple={is_simple}, final_response_text length: {len(final_response_text)}, content: {final_response_text[:200]!r}...")
-    
+
     return ExecutionResult(
         response_text=final_response_text,
         execution_time_seconds=request_duration if not is_simple else 0.0,
@@ -6987,7 +7031,13 @@ async def main(args: argparse.Namespace):
                         break
 
                     try:
-                        result = await process_turn(client, user_input, workspace_dir)
+                        # [Harness Mode] Force Complex Path to avoid Fast Path output capture bug
+                        harness_info = get_iteration_info(runtime_db_conn, run_id)
+                        force_complex_for_harness = bool(harness_info.get("completion_promise"))
+                        if force_complex_for_harness:
+                            print("📋 Harness mode active - forcing Complex Path")
+                        
+                        result = await process_turn(client, user_input, workspace_dir, force_complex=force_complex_for_harness)
                     except HarnessError as he:
                         # [Harness Error Recovery]
                         # 1. Capture context

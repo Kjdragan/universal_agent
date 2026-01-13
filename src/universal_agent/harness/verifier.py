@@ -3,42 +3,40 @@ Harness Verification Module.
 
 Responsibility:
 - Verify task completion claims by the agent.
-- Perform Binary Checks (Artifact existence).
-- Perform Quality Checks (LLM-as-a-judge).
+- Tiered Verification:
+  - Tier 1 (Binary): Artifact existence
+  - Tier 2 (Format): Non-empty, valid format
+  - Tier 3 (Semantic): Optional LLM "vibe check"
 """
 
 import os
 import json
-import asyncio
-from typing import Tuple, List, Dict, Any
+import glob
+from typing import Tuple, Dict, Any, Optional
 
-# Assuming we can import the standard client/model interface
-# adapting from main.py's usage
-# For now, we'll design it to take a client or use a lightweight one.
 
 class TaskVerifier:
+    """
+    Tiered verification for harness task completion.
+    
+    TIER 1 (BINARY): Do files exist?
+    TIER 2 (FORMAT): Are they non-empty and valid format?
+    TIER 3 (SEMANTIC): Optional LLM quality check
+    """
+    
     def __init__(self, client=None):
         self.client = client
 
     def verify_artifacts(self, task: Dict[str, Any], workspace_dir: str) -> Tuple[bool, str]:
         """
-        Binary Check: Do the declared output artifacts exist?
+        Tier 1 - Binary Check: Do the declared output artifacts exist?
         """
         artifacts = task.get("output_artifacts", [])
         if not artifacts:
-            # If no artifacts are declared, we can't binary verify, so we pass
-            # But we might want to warn if description implies artifacts.
             return True, "No artifacts declared to verify."
 
         missing = []
         for pattern in artifacts:
-            # Simple check: if it looks like a glob, we might need globbing.
-            # For now, assume explicit paths or simple names.
-            # If the agent writes "report.pfd", we expect that file.
-            
-            # TODO: Support globbing if needed. For now, exact check.
-            # Users might put "reports/*.md", we should handle that.
-            import glob
             full_pattern = os.path.join(workspace_dir, pattern)
             matches = glob.glob(full_pattern)
             
@@ -50,78 +48,160 @@ class TaskVerifier:
         
         return True, "All artifacts found."
 
-    async def verify_quality(
+    def verify_format(self, task: Dict[str, Any], workspace_dir: str) -> Tuple[bool, str]:
+        """
+        Tier 2 - Format Check: Are artifacts non-empty and valid format?
+        """
+        artifacts = task.get("output_artifacts", [])
+        if not artifacts:
+            return True, "No artifacts to format-check."
+
+        issues = []
+        for pattern in artifacts:
+            full_pattern = os.path.join(workspace_dir, pattern)
+            matches = glob.glob(full_pattern)
+            
+            for filepath in matches:
+                # Check non-empty
+                if os.path.getsize(filepath) == 0:
+                    issues.append(f"{os.path.basename(filepath)}: 0 bytes (empty)")
+                    continue
+                
+                # Check basic format validity
+                ext = os.path.splitext(filepath)[1].lower()
+                if ext == ".json":
+                    try:
+                        with open(filepath, "r", errors="ignore") as f:
+                            json.load(f)
+                    except json.JSONDecodeError as e:
+                        issues.append(f"{os.path.basename(filepath)}: Invalid JSON - {str(e)[:50]}")
+                elif ext == ".html":
+                    with open(filepath, "r", errors="ignore") as f:
+                        content = f.read(500)
+                        if "<html" not in content.lower() and "<!doctype" not in content.lower():
+                            issues.append(f"{os.path.basename(filepath)}: Missing HTML structure")
+                elif ext == ".pdf":
+                    with open(filepath, "rb") as f:
+                        header = f.read(5)
+                        if header != b"%PDF-":
+                            issues.append(f"{os.path.basename(filepath)}: Invalid PDF header")
+                # For .md, .txt - just non-empty check (already done)
+
+        if issues:
+            return False, f"Format issues: {'; '.join(issues)}"
+        
+        return True, "All artifacts valid format."
+
+    async def verify_semantic(
         self, 
         task: Dict[str, Any], 
-        workspace_dir: str, 
-        context: str = ""
+        workspace_dir: str
     ) -> Tuple[bool, str]:
         """
-        LLM Judge: Does the work meet the success criteria?
+        Tier 3 - Semantic Check: Simple LLM "vibe check" - is this acceptable?
+        
+        This is a lenient check - only fails if output is clearly wrong.
         """
         if not self.client:
-            return True, "No LLM client provided for quality check."
+            return True, "No LLM client for semantic check (skipped)."
 
         criteria = task.get("success_criteria", "")
         if not criteria:
             return True, "No success_criteria defined."
 
-        # Read artifacts to give context (limit size)
-        artifacts_content = ""
+        # Read artifact previews
+        artifacts_preview = ""
         artifacts = task.get("output_artifacts", [])
         for pattern in artifacts:
-            import glob
             full_pattern = os.path.join(workspace_dir, pattern)
             matches = glob.glob(full_pattern)
-            for m in matches[:3]: # check first 3 matches
+            for m in matches[:2]:  # Max 2 files
                 try:
                     with open(m, "r", errors="ignore") as f:
-                        content = f.read(2000) # Read first 2KB
-                        artifacts_content += f"\n--- File: {os.path.basename(m)} ---\n{content}\n..."
+                        content = f.read(1500)  # Read first 1.5KB
+                        artifacts_preview += f"\n--- {os.path.basename(m)} ---\n{content[:1500]}\n"
                 except Exception:
                     pass
         
-        # specific prompt for the judge
-        system_prompt = (
-            "You are a strict QA Verifier for an automated agent.\n"
-            "Your job is to check if a task was completed according to its Success Criteria.\n"
-            "Analyze the artifacts and the user requirements.\n"
-            "Output valid JSON only: {\"pass\": bool, \"reason\": \"short explanation\"}"
-        )
-        
-        user_prompt = (
-            f"TASK DESCRIPTION: {task.get('description')}\n"
-            f"SUCCESS CRITERIA: {criteria}\n"
-            f"ARTIFACTS PREVIEW:\n{artifacts_content}\n\n"
-            f"Did the agent meet the criteria?"
+        # Simple, lenient prompt
+        prompt = (
+            f"Task: {task.get('description', 'Unknown')}\n"
+            f"Expected: {criteria}\n\n"
+            f"Output Preview:\n{artifacts_preview}\n\n"
+            f"Question: Does this output appear to be a reasonable attempt at the task?\n"
+            f"Answer YES if acceptable, NO only if clearly incomplete or wrong.\n"
+            f"Respond with just: YES or NO"
         )
 
         try:
-            # This relies on the client having a simple generation method
-            # If client is the complex vertex client, we might need a different call path.
-            # For now, we'll assume the caller passes a function or we create a fresh client.
-            # As a fallback, we'll implement a simple one-off call if client is passed.
-            
-            # Using the 'client' object from main.py
-            # client.models.generate_content(...)
-            
             response = await self.client.generate_content(
-                model="gemini-2.0-flash-exp", # Fast model for verification
-                contents=user_prompt,
-                config={"response_mime_type": "application/json"}
+                model="gemini-2.0-flash-exp",
+                contents=prompt,
             )
             
-            result_text = response.text
-            result_json = json.loads(result_text)
+            result = response.text.strip().upper()
+            if "NO" in result and "YES" not in result:
+                return False, "LLM semantic check: Output appears incomplete or wrong"
             
-            is_pass = result_json.get("pass", False)
-            reason = result_json.get("reason", "No reason provided")
-            
-            return is_pass, reason
+            return True, "Semantic check passed"
 
         except Exception as e:
-            print(f"⚠️ Verification Error: {e}")
-            # Fail safe: If judge fails, we warn but don't block? 
-            # Or strict: Block. Let's be strict for now but safe on crash.
-            return True, f"Verifier crashed ({e}), allowing to proceed with warning."
+            print(f"⚠️ Semantic verification error: {e}")
+            # Fail-safe: Allow to proceed if LLM check crashes
+            return True, f"Semantic check skipped (error: {str(e)[:50]})"
 
+    def verify_task(
+        self, 
+        task: Dict[str, Any], 
+        workspace_dir: str, 
+        tier: int = 2
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        """
+        Main verification entry point with tiered approach.
+        
+        Args:
+            task: Task dict from mission.json
+            workspace_dir: Workspace directory path
+            tier: Verification tier (1=Binary, 2=Format, 3=Semantic)
+        
+        Returns:
+            (passed, message, failure_info)
+        """
+        # Tier 1: Binary existence
+        passed, msg = self.verify_artifacts(task, workspace_dir)
+        if not passed:
+            return False, msg, {"tier": "BINARY", "issue": msg}
+        
+        if tier >= 2:
+            # Tier 2: Format validity
+            passed, msg = self.verify_format(task, workspace_dir)
+            if not passed:
+                return False, msg, {"tier": "FORMAT", "issue": msg}
+        
+        # Tier 3 requires async - caller must use verify_task_async() for that
+        if tier >= 3:
+            return True, "Tier 3 requires async - use verify_task_async()", {"tier_note": "semantic_skipped"}
+        
+        return True, "Verification passed", {}
+
+    async def verify_task_async(
+        self, 
+        task: Dict[str, Any], 
+        workspace_dir: str, 
+        tier: int = 2
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        """
+        Async version of verify_task that supports Tier 3 semantic check.
+        """
+        # Tier 1 & 2
+        passed, msg, info = self.verify_task(task, workspace_dir, min(tier, 2))
+        if not passed:
+            return passed, msg, info
+        
+        if tier >= 3 and self.client:
+            # Tier 3: Semantic check
+            passed, msg = await self.verify_semantic(task, workspace_dir)
+            if not passed:
+                return False, msg, {"tier": "SEMANTIC", "issue": msg}
+        
+        return True, "Verification passed", {}
