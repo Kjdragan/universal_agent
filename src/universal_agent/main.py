@@ -4,10 +4,25 @@ A standalone agent using Claude Agent SDK with Composio MCP integration.
 Traces are sent to Logfire for observability.
 """
 
+import sys
+import os
+
+# Add 'src' to sys.path to allow imports from universal_agent package
+# This ensures functional imports regardless of invocation directory
+current_dir = os.path.dirname(os.path.abspath(__file__))
+src_dir = os.path.dirname(os.path.dirname(current_dir))  # Repo Root
+
+# Add 'src' for package imports
+if os.path.join(src_dir, "src") not in sys.path:
+    sys.path.append(os.path.join(src_dir, "src"))
+
+# Add Repo Root for 'Memory_System' imports
+if src_dir not in sys.path:
+    sys.path.append(src_dir)
+
 import asyncio
 import copy
 import signal
-import os
 import sqlite3
 import time
 import json
@@ -21,7 +36,7 @@ from dotenv import load_dotenv
 from universal_agent.utils.message_history import TRUNCATION_THRESHOLD
 import glob
 from universal_agent.harness.verifier import TaskVerifier
-
+from universal_agent.agent_core import UniversalAgent
 
 # Timezone helper for consistent date/time across deployments
 def get_user_datetime():
@@ -64,6 +79,7 @@ class ExecutionResult:
     )  # Extracted follow-up options
 
 
+
 from dotenv import load_dotenv
 
 # Load environment FIRST
@@ -71,25 +87,6 @@ load_dotenv()
 
 import sys
 import argparse
-
-# Add 'src' to sys.path to allow imports from universal_agent package
-# This ensures functional imports regardless of invocation directory
-current_dir = os.path.dirname(os.path.abspath(__file__))
-src_dir = os.path.dirname(os.path.dirname(current_dir))  # Repo Root
-
-# Add 'src' for package imports
-if os.path.join(src_dir, "src") not in sys.path:
-    sys.path.append(os.path.join(src_dir, "src"))
-
-# Add Repo Root for 'Memory_System' imports
-if src_dir not in sys.path:
-    sys.path.append(src_dir)
-
-# Apply local monkey patches (e.g., Letta SDK upsert bug) early.
-try:
-    import sitecustomize  # noqa: F401
-except Exception:
-    pass
 
 # prompt_toolkit for better terminal input (arrow keys, history, multiline)
 from prompt_toolkit import PromptSession
@@ -5732,6 +5729,7 @@ async def setup_session(
             ]
         )
 
+    agent = UniversalAgent(workspace_dir=workspace_dir)
     options = ClaudeAgentOptions(
         model="claude-3-5-sonnet-20241022",
         disallowed_tools=disallowed_tools,
@@ -5786,13 +5784,14 @@ async def setup_session(
             "   - 🚫 NEVER try to access local files from REMOTE_WORKBENCH - local paths don't exist there!\n"
             "4. 🚨 MANDATORY DELEGATION FOR REPORTS (HAND-OFF PROTOCOL):\n"
             "   - Role: You are the SCOUT. You find the information sources.\n"
-            "   - Sub-Agent Role: The EXPERT. They process and synthesize the sources.\n"
+            "   - Sub-Agent Role: The SPECIALISTS. They process and synthesize the sources.\n"
             "   - PROCEDURE:\n"
             "     1. COMPOSIO Search -> Results are **AUTO-SAVED** by Observer to `search_results/`. DO NOT save again.\n"
             "     2. DO NOT read these files or extract URLs yourself. You are not the Expert.\n"
-            "     3. DELEGATE immediately to 'report-creation-expert' using `Task`.\n"
-            "     4. HAND-OFF PROMPT (Use EXACTLY this string, do not add URLs):\n"
-            "        'Call finalize_research, then use research_overview.md + filtered crawl files to generate the report.'\n"
+            "     3. **STEP 1:** Delegate to `research-specialist` using `Task`.\n"
+            "        PROMPT: 'Run finalize_research for [topic] and stop.'\n"
+            "     4. **STEP 2:** When Step 1 completes, delegate to `report-writer` using `Task`.\n"
+            "        PROMPT: 'Read research_overview.md and write the full HTML report.'\n"
             "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject a system message with next steps.\n"
             "     Wait for this message before proceeding with upload/email.\n"
             "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
@@ -5905,119 +5904,34 @@ async def setup_session(
         # AND local_toolkit tools (crawl_parallel, read_local_file, etc.)
         # Sub-agents inherit all tools via model="inherit".
         agents={
-            "report-creation-expert": AgentDefinition(
+            "research-specialist": AgentDefinition(
                 description=(
-                    "🚨 MANDATORY DELEGATION TARGET for ALL report generation tasks. "
-                    "WHEN TO DELEGATE (REQUIRED): User asks for 'report', 'comprehensive', 'detailed', "
-                    "'in-depth', 'analysis', or 'summary'.\n"
-                    "🛑 STOP! DO NOT WRITE REPORTS YOURSELF. YOU WILL FAIL.\n"
-                    "You lack the ability to process full context. You MUST delegate to the 'Report Creation Expert'.\n"
-                    "REQUIRED DELEGATION PROMPT: 'Scan all JSON files in search_results/ directory using list_directory and generate report.'\n"
-                    "DO NOT pass URLs manually. Pass the directory instruction only."
-                    "PRIMARY AGENT MUST NOT: Generate reports directly. "
-                    "REQUIRED INPUT: Tell the sub-agent to 'Scan all JSON files in search_results/ directory'. DO NOT list individual URLs. "
-                    "THIS SUB-AGENT PROVIDES: Full article content extraction via crawl_parallel, professional report synthesis."
+                    "Specialist for GATHERING research data. "
+                    "DELEGATE when user asks to: 'research X', 'find info about Y', 'analyze findings'. "
+                    "This agent DOES NOT write the report. It only gathers data."
                 ),
-                prompt=(
-                    f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
-                    f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
-                    "You are a **Report Creation Expert**.\n\n"
-                    "## YOUR ROLE (REPORT CREATION ONLY)\n"
-                    "🎯 **Your job:** Create reports and save them to `work_products/`\n"
-                    "📧 **NOT your job:** Sending emails. The MAIN AGENT handles email after you finish.\n\n"
-                    "**Your available tools (restricted set):**\n"
-                    "- `Read`, `Write`, `Bash` (native SDK)\n"
-                    "- `mcp__local_toolkit__finalize_research`, `mcp__local_toolkit__read_research_files`\n"
-                    "- `mcp__local_toolkit__generate_image`, `mcp__local_toolkit__workbench_*`\n\n"
-                    "🚫 **You do NOT have access to:**\n"
-                    "- Composio tools (Gmail, Slack, external APIs) - these are main agent only\n"
-                    "- Do NOT use Bash to import `composio` - it will fail\n\n"
-                    "**When finished:** Return the report path. Say: 'Report saved to: [path]'\n"
-                    "The main agent will handle any email delivery.\n\n"
-                    "🚨 CRITICAL TOOL INSTRUCTIONS:\n"
-                    "1. DO NOT use COMPOSIO_SEARCH_TOOLS - you already have the tools you need.\n"
-                    "2. DO NOT use Firecrawl or any Composio crawling tools.\n"
-                    "3. DO NOT read raw `search_results/crawl_*.md` files.\n"
-                    "4. DO NOT use Bash to import `composio` - it will fail.\n"
-                    "5. USE these tools for research:\n"
-                    "   - `mcp__local_toolkit__finalize_research` - builds the filtered corpus\n"
-                    "   - `Read` (native) - read research_overview.md and individual files\n"
-                    "   - `mcp__local_toolkit__read_research_files` - batch read filtered files\n\n"
-                    "---\n\n"
-                    "## PIPELINE: How to Generate Reports\n"
-                    f"1. **RESEARCH**: Accumulate research using Composio tools. The tool `observe_and_save_search_results` detects this.\n"
-                    f"   - **Rule**: If you use search, ALWAYS output at least 2 distinct search tool calls to ensure breadth.\n"
-                    f"   - After a Composio search, the Observer AUTO-SAVES results to `search_results/` INBOX.\n"
-                    f"   - You will see: '📁 [OBSERVER] Saved: search_results/xxx.json'.\n"
-                    f"\n"
-                    f"2. **FINALIZE & CRAWL (Mandatory)**: Turn search results into reading material.\n"
-                    f"   - **Call `maximize_context_precision(session_dir='{workspace_dir}', task_name='YOUR_TASK_ID')`** (aliased as finalize_research).\n"
-                    f"   - `task_name` should be a short slug for your current report (e.g. '01_venezuela').\n"
-                    f"   - This tool moves processed inputs to `search_results/processed_json/` (Archive).\n"
-                    f"   - It creates `tasks/YOUR_TASK_ID/research_overview.md` and `tasks/YOUR_TASK_ID/filtered_corpus/`.\n"
-                    f"   - **CRITICAL**: Do NOT crawl manually. This tool does safe parallel crawling for you.\n"
-                    f"\n"
-                    f"3. **READ & SYNTHESIZE**:\n"
-                    f"   - **read_local_file** `tasks/YOUR_TASK_ID/research_overview.md` FIRST.\n"
-                    f"   - Use the index in that file to choose which deep-dive files to read from `tasks/YOUR_TASK_ID/filtered_corpus/`.\n"
-                    f"   - DO NOT read raw `search_results/crawl_*.md` files directly unless necessary.\n"
-                    f"\n"
-                    f"3B. **LARGE CORPUS MODE (MANDATORY WHEN LARGE)**:\n"
-                    f"   - Trigger when corpus >= 20 files, batch reads exceed ~60k chars, or truncation warnings appear.\n"
-                    f"   - Use map-reduce: build an evidence ledger + batch summaries, then consolidate into a section outline.\n"
-                    f"   - Use templates at: {templates_path}\n"
-                    f"   - Write section-by-section if needed (use `Write` for first chunk, then `mcp__local_toolkit__append_to_file`).\n"
-                    f"   - Anti-summary-of-summary rule: Final writing must cite ledger items directly. Batch summaries are navigation only.\n"
-                    f"\n"
-                    f"4. **WRITE REPORT**:\n"
-                    f"   - Write the final report source (Markdown/HTML) to `work_products/`.\n"
-                    f"   - Convert to PDF if requested.\n"
-                    "Evaluate your source material and design an appropriate structure for the content.\n\n"
-                    "**QUALITY PRINCIPLES:**\n"
-                    "- Use specific quotes, numbers, and named examples to support points\n"
-                    "- Avoid generic statements like 'experts say' or 'it's widely believed'\n"
-                    "- Include interesting findings even if they counter main themes - present what you found\n"
-                    "- Credit sources naturally inline (e.g., 'according to ISW...' or 'the BBC reports...')\n"
-                    "- List all sources at the end of the report\n"
-                    "- Professional HTML presentation appropriate to the content\n\n"
-                    "**DEPTH CALIBRATION:**\n"
-                    "- Match report depth to source richness\n"
-                    "- Brief sources (3-5 articles) → Focused, concise summary\n"
-                    "- Rich sources (10+ articles) → Comprehensive, multi-section analysis\n"
-                    "- Let the structure emerge from the material, not from a template\n\n"
-                    "**VISUALS & MEDIA:**\n"
-                    "- You have access to `mcp__local_toolkit__generate_image`.\n"
-                    "- **PRIORITIZE DATA**: Generate charts, graphs, and maps that clarify complex data. Avoid generic 'mood' images (e.g., 'robots thinking', 'abstract tech background').\n"
-                    "- **ASPECT RATIO**: Prefer landscape (16:9) for headers and charts.\n"
-                    "- **MANDATORY CSS**: When embedding images, YOU MUST use this exact style to prevent bleeding:\n"
-                    "  `<img src='media/filename.png' style='max-width: 100%; height: auto; display: block; margin: 20px auto;' alt='Description'>`\n"
-                    "- Save generated images to `work_products/media/`.\n"
-                    "- Embed in HTML using relative paths.\n\n"
-                    "**ERROR RECOVERY:**\n"
-                    "- If a Write call fails with 'missing parameter', retry with SMALLER content chunks.\n"
-                    "- Use the exact parameter names: `file_path`, `content` (not `path`, `file`, etc).\n"
-                    "- Ensure you provide BOTH parameters. Do not leave content empty.\n\n"
-                    "**SYNTHESIS & COHERENCE:**\n"
-                    "- Where sources discuss related topics, group and synthesize them into cohesive sections\n"
-                    "- BUT: News often covers genuinely disjointed events - don't force artificial connections\n"
-                    "- Prioritize completeness over flow - include all interesting facts even if standalone\n"
-                    "- It's okay to have distinct sections for unrelated developments\n"
-                    "- Aim for thematic grouping where natural, standalone items where not\n\n"
-                    "### Step 4: Save Report\n"
-                    f"Save as `.html` to `{workspace_dir}/work_products/` using the native `Write` tool.\n\n"
-                    "🚨 START IMMEDIATELY: Call `mcp__local_toolkit__finalize_research`."
-                    + tool_knowledge_suffix
-                ),
+                prompt=agent._build_research_specialist_prompt(workspace_dir),
                 tools=[
-                    "Read",
-                    "Write",
                     "Bash",
                     "mcp__local_toolkit__finalize_research",
-                    "mcp__local_toolkit__read_research_files",
+                    "mcp__local_toolkit__crawl_parallel",
                     "mcp__local_toolkit__list_directory",
-                    "mcp__local_toolkit__generate_image",
-                    "mcp__local_toolkit__workbench_download",
-                    "mcp__local_toolkit__workbench_upload",
+                ],
+                model="inherit",
+            ),
+            "report-writer": AgentDefinition(
+                description=(
+                    "Specialist for WRITING reports from existing research. "
+                    "DELEGATE when `research-specialist` has finished and you need to generate the HTML report. "
+                    "This agent starts with a FRESH context to avoid overflow."
+                ),
+                prompt=agent._build_report_writer_prompt(workspace_dir),
+                tools=[
+                    "Read",
+                    "Write",  # Native Write tool
+                    "mcp__local_toolkit__read_research_files",
+                    "mcp__local_toolkit__append_to_file",  # Critical for incremental writing
+                    "mcp__local_toolkit__list_directory",
                 ],
                 model="inherit",
             ),

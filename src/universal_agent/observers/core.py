@@ -308,7 +308,7 @@ async def observe_and_save_search_results(
             if saved_count > 0:
                 print(f"\n   ✅ {saved_count} Search Result File(s) Saved for Sub-Agent.")
                 print(
-                    "   ⚠️ Reminder: Delegate to 'report-creation-expert' for full analysis."
+                    "   ⚠️ Reminder: Delegate to 'research-specialist' for full analysis."
                 )
 
         except Exception as exc:
