@@ -9,7 +9,9 @@
 
 ## Overview
 
-This document explains how hooks work in the Claude Agent SDK (Python), how they apply to subagents, and the concrete patterns used in this codebase. The key takeaway: **hooks are configured globally on `ClaudeAgentOptions`**, and **subagent-specific hooks are not supported** in the Python SDK at the time of writing. To constrain subagent behavior, use the `AgentDefinition.tools` allowlist and enforce policy in global hooks.
+This document explains how hooks work in the Claude Agent SDK (Python), how they apply to subagents, and the concrete patterns used in this codebase. The key takeaway: **hooks are configured globally on `ClaudeAgentOptions`** and **automatically apply to all sub-agents**. The hook system is "agent-agnostic" - it operates at the CLI level and does not differentiate between main agent and sub-agent contexts.
+
+> **Important Update (2026-01)**: As of SDK version 0.1.3+, hooks from the main agent's `ClaudeAgentOptions` apply to sub-agent tool calls. This is a core feature, not a limitation.
 
 ---
 
@@ -51,9 +53,11 @@ Hooks return a dict that may include:
 - `systemMessage` for internal logging/instructions
 - `hookSpecificOutput` (SDK-specific or tool policy metadata)
 
-### Subagent hooks are NOT supported in Python
+### AgentDefinition does not accept hooks directly
 
-`AgentDefinition` supports only `description`, `prompt`, `tools`, and `model`. There is no `hooks` field for per-subagent hook configuration. All hooks must be defined globally on `ClaudeAgentOptions`.
+`AgentDefinition` supports `description`, `prompt`, `tools`, and `model`. There is no `hooks` field in `AgentDefinition` itself.
+
+**However**: Hooks defined on the main agent's `ClaudeAgentOptions` **automatically apply to all sub-agents**. The hook system is agent-agnostic and operates at the CLI level, intercepting tool calls from both main and sub-agents.
 
 ---
 
@@ -87,9 +91,15 @@ Key rules:
 
 ## How Hooks Apply to Subagents
 
-### Global hooks fire for subagent tool calls
+### ✅ Global hooks fire for ALL subagent tool calls
 
-All hooks defined on `ClaudeAgentOptions.hooks` execute for tool calls made by subagents as well as the main agent. The Python SDK does **not** expose a direct subagent identifier to hook callbacks.
+**All hooks** defined on `ClaudeAgentOptions.hooks` execute for tool calls made by subagents. This includes:
+
+- `PreToolUse` - can block dangerous tool calls from sub-agents
+- `PostToolUse` - can add context after sub-agent tool execution
+- `SubagentStop` - fires when a sub-agent completes
+
+The Python SDK does **not** expose a direct subagent identifier to hook callbacks, but hooks still intercept and can control sub-agent behavior.
 
 ### What you can infer
 
@@ -218,12 +228,13 @@ options = ClaudeAgentOptions(
 The Python and TypeScript SDKs are not feature‑parity. The differences below
 are the ones that materially impact hooks and subagents in this repo.
 
-### Python SDK (current behavior)
+### Python SDK (current behavior, v0.1.3+)
 
-- Hooks are **only** configured on `ClaudeAgentOptions.hooks`.
-- `query()` does **not** support hooks.
-- `AgentDefinition` does **not** support per‑subagent hooks.
-- Subagent detection inside hooks is limited; use `transcript_path` drift or
+- Hooks are configured on `ClaudeAgentOptions.hooks`.
+- **Hooks apply to ALL sub-agents** via inheritance from main agent options.
+- `query()` does **not** support hooks (use `ClaudeSDKClient`).
+- `AgentDefinition` does **not** accept a `hooks` field directly.
+- Subagent detection inside hooks: use `transcript_path` drift or
   message stream metadata (`parent_tool_use_id`) outside hooks.
 
 ### TypeScript SDK (not used here)

@@ -130,6 +130,17 @@ def _agent_definition_supports_hooks() -> bool:
 
 
 def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
+    """
+    Check if any sub-agent definitions have explicit hooks configured.
+    
+    NOTE: As of SDK 0.1.3+, hooks from the MAIN agent's ClaudeAgentOptions
+    automatically apply to all sub-agents. The hook system is "agent-agnostic"
+    and operates at the CLI level.
+    
+    This function warns if someone tries to configure hooks directly in 
+    AgentDefinition (which the class doesn't support), not that hooks don't
+    work for sub-agents (they do, via inheritance).
+    """
     if not agents or _agent_definition_supports_hooks():
         return
     for agent_name, agent_def in agents.items():
@@ -142,13 +153,17 @@ def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
                 and getattr(agent_def, "hooks", None) is not None
             )
         if hooks_present:
+            # NOTE: This is about AgentDefinition not accepting a hooks param,
+            # NOT about hooks not working for sub-agents (they do work via main agent)
             print(
-                f"⚠️ Subagent hooks are not supported in the Python SDK. "
-                f"Remove 'hooks' from agent '{agent_name}'."
+                f"ℹ️ AgentDefinition for '{agent_name}' has hooks configured, "
+                f"but AgentDefinition doesn't accept hooks directly. "
+                f"Hooks from the main agent's options will still apply to this sub-agent."
             )
-            logfire.warning(
-                "subagent_hooks_not_supported",
+            logfire.info(
+                "subagent_hooks_in_definition_ignored",
                 agent_name=agent_name,
+                note="Main agent hooks still apply to sub-agents",
             )
 
 
@@ -272,17 +287,45 @@ async def malformed_tool_guardrail_hook(
             },
         }
 
-    # [NEW] Zero-Byte Guard: Block empty Write calls (prevents hangs/crashes)
+    # [ENHANCED] Zero-Byte Guard: Block empty Write calls (prevents hangs/crashes)
     if tool_name == "Write":
+        file_path = tool_input.get("file_path")
         content = tool_input.get("content")
-        # Check if content is None or empty/whitespace
+        
+        # CRITICAL CASE: Both params missing = complete context overflow (truncated tool call)
+        if file_path is None and content is None:
+            logfire.error(
+                "critical_zero_param_write_blocked",
+                tool_name=tool_name,
+                tool_use_id=tool_use_id,
+            )
+            return {
+                "systemMessage": (
+                    "❌ CRITICAL ERROR: Your Write call had NO parameters at all. "
+                    "This indicates severe context exhaustion - your output was truncated mid-generation. "
+                    "STOP trying to write the full report. Instead:\n\n"
+                    "1. Write ONLY the Executive Summary section (under 3000 chars)\n"
+                    "2. Save it to work_products/partial_report_summary.html\n"
+                    "3. Use `append_to_file` tool to add remaining sections one at a time\n"
+                    "4. Each chunk should be under 5000 characters\n\n"
+                    "DO NOT attempt to write the entire report in one call again."
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Blocked zero-param Write (critical context overflow).",
+                },
+            }
+        
+        # STANDARD CASE: Content is None or empty/whitespace
         if content is None or (isinstance(content, str) and not content.strip()):
-             logfire.warning(
+            logfire.warning(
                 "zero_byte_write_blocked",
                 tool_name=tool_name,
                 tool_use_id=tool_use_id,
             )
-             return {
+            return {
                 "systemMessage": (
                     "⚠️ BLOCKED: You attempted to write an empty file (0 bytes). "
                     "This usually happens when you are trying to write too much and run out of context. "
@@ -1014,7 +1057,26 @@ class UniversalAgent:
             "  - Each call MUST contain exactly **5 files** (e.g. Call 1: files 1-5, Call 2: files 6-10, etc).\\n"
             "  - This optimizes speed while avoiding context overflow.\\n"
             "- `append_to_file(path, content)` → Append to existing large files (>50KB).\\n"
-            "- `Write(file_path, content)` → **USE THIS** for ALL file creations (native tool)\\n"
+            "- `Write(file_path, content)` → **USE THIS** for ALL file creations (native tool)\\n\\n"
+            "## ⚠️ CRITICAL: CONTEXT SIZE LIMITS & WRITE STRATEGY\\n\\n"
+            "When generating large reports, your output buffer can overflow, causing Write calls to fail.\\n\\n"
+            "**⚡ INCREMENTAL WRITE STRATEGY (MANDATORY for reports > 5000 chars):**\\n"
+            "1. **First Write:** Executive Summary + Table of Contents only (under 5000 chars)\\n"
+            "   → Save to `work_products/report.html`\\n"
+            "2. **Append Section 1:** Use `append_to_file` to add Section 1 (under 5000 chars)\\n"
+            "3. **Append Section 2:** Use `append_to_file` to add Section 2 (under 5000 chars)\\n"
+            "4. **Continue:** Repeat for each section until complete\\n\\n"
+            "❌ **NEVER** try to write the entire 15-25 page report in one Write call.\\n"
+            "✅ **ALWAYS** break large reports into chunks of under 5000 characters.\\n\\n"
+            "## 🚨 ERROR RECOVERY\\n\\n"
+            "If you see this error: `InputValidationError: Write failed - required parameter missing`\\n"
+            "→ **This means your context overflowed.** Your output was truncated mid-generation.\\n\\n"
+            "**Immediate Recovery Steps:**\\n"
+            "1. STOP trying to write the full content\\n"
+            "2. Write ONLY a partial summary (under 3000 chars) to `work_products/partial_report.html`\\n"
+            "3. Use `append_to_file` to add remaining sections one at a time\\n"
+            "4. Each chunk must be under 5000 characters\\n\\n"
+            "DO NOT attempt to write the entire report in one call again after seeing this error.\\n"
         )
         tool_knowledge = get_tool_knowledge_block()
         if tool_knowledge:
