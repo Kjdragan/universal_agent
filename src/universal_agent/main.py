@@ -19,6 +19,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Callable
 from dotenv import load_dotenv
 from universal_agent.utils.message_history import TRUNCATION_THRESHOLD
+import glob
+from universal_agent.harness.verifier import TaskVerifier
 
 
 # Timezone helper for consistent date/time across deployments
@@ -2092,7 +2094,9 @@ def check_harness_threshold(
 def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dict:
     """
     Post-Run Hook: Checks for Harness Loop conditions.
-    If completion promise is NOT met, restarts the agent with fresh context.
+    Prioritizes Verification (Artifacts -> Quality) BEFORE enforcing Protocol (Promise).
+    If verification fails, restarts with specific feedback.
+    If protocol triggers early, verifies first.
     """
     _emit_composio_schema_metrics()
 
@@ -2118,38 +2122,147 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
     final_output = context.output if hasattr(context, "output") else ""
     if isinstance(final_output, dict):
         final_output = str(final_output)  # fallback
+    
+    # Normalize output for logging/debugging
+    if len(final_output) > 500:
+        preview = final_output[:500] + "..."
+    else:
+        preview = final_output
+    print(f"🔍 Harness Checking Output (Length: {len(final_output)}): {preview!r}")
 
-    # [FIX] Ralph Wiggum Parity: Strict Regex Validation
-    # We do NOT allow empty output to exit silently.
-
+    # [Detection] Check for Promise Tag (Case Insensitive)
     import re
-
-    # Extract content inside <promise>...</promise> tags
-    # DOTALL allows matching across newlines
-    match = re.search(r"<promise>(.*?)</promise>", final_output, re.DOTALL)
-
-    promise_met = False
-
-    if match:
-        extracted_promise = match.group(1).strip()
-        # Collapse whitespace to single spaces for robust comparison
-        extracted_promise_normalized = " ".join(extracted_promise.split())
-        promise_normalized = " ".join(promise.split())
-
-        if extracted_promise_normalized == promise_normalized:
-            promise_met = True
-            logfire.info("harness_completion_promise_met", run_id=use_run_id)
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "AgentStop",
-                    "action": "complete",  # Let it stop naturally
-                }
-            }
+    # Look for last occurrence if possible, or just search. 
+    # Using case-insensitive (?i) and DOTALL.
+    # We use findall to get all candidates and check the last one to avoid "I will output..." preamble issues.
+    matches = re.findall(r"(?i)<promise>(.*?)</promise>", final_output, re.DOTALL)
+    
+    extracted_promise = None
+    if matches:
+        # Take the last one to avoid preamble mentions
+        extracted_promise = matches[-1].strip()
+        # Collapse whitespace
+        extracted_promise = " ".join(extracted_promise.split())
+    
+    promise_normalized = " ".join(promise.split())
+    
+    # Determine Intent to Complete
+    # 1. Explicit <promise> tag matches
+    # 2. Implicit signals (we could check for 'mission complete' but relying on the tag is safer for the protocol)
+    # The agent might think it's done but forgot the tag.
+    
+    # We run verification if the agent *claims* to be done via tag OR if we want to be proactive.
+    # For now, let's trigger verification if we found *any* promise tag (even mismatch) or if this is the last iteration.
+    
+    intent_to_complete = bool(matches)
+    
+    if intent_to_complete:
+        print(f"🕵️ Completion Intent Detected. Candidates: {len(matches)}. Last: '{extracted_promise}'")
+        
+        # [Step 1] Verification
+        # We need the task object. In this context, we assume the task is implicit or we load it.
+        # But `on_agent_stop` lacks direct access to the `task` object from the main loop scope.
+        # However, we can instantiate the Verifier.
+        from universal_agent.harness.verifier import TaskVerifier
+        
+        # We need to reconstruct the task context or check all tasks.
+        # Since we are in the Harness, we usually have a `mission.json` in the workspace.
+        workspace_dir = globals().get("workspace_dir")
+        if not workspace_dir:
+             # Fallback: try to guess from run_id or env?
+             # For now, if we can't find workspace, we skip verification (fail safe).
+             print("⚠️ Harness: No workspace_dir global logic, skipping verification.")
+             pass
         else:
-            print(
-                f"⚠️ Promise Mismatch: Expected '{promise}', Got '{extracted_promise}'"
-            )
+             import json
+             import glob
+             mission_path = os.path.join(workspace_dir, "mission.json")
+             if os.path.exists(mission_path):
+                 try:
+                     with open(mission_path, "r") as f:
+                         mission_data = json.load(f)
+                     
+                     verifier = TaskVerifier(llm_client=None) # We might need a client for Quality check
+                     # We can get the client from globals if available or skip quality check here
+                     # Note: on_agent_stop might not have the client.
+                     # Let's focus on Binary Artifact Verification first.
+                     
+                     # Check ALL tasks claimed as COMPLETED
+                     failed_verifications = []
+                     
+                     # We might not know WHICH task is currently active without state tracking.
+                     # But we can verify strict success criteria for the *entire mission* if defined,
+                     # or check the `output_artifacts` of the mission root?
+                     # Let's verify the "Mission Root" if it has artifacts, or iterate all "COMPLETED" tasks.
+                     
+                     # Only check tasks that are marked COMPLETED in the manifest
+                     tasks_to_verify = []
+                     
+                     # recursive find
+                     def find_completed_tasks(node):
+                         if isinstance(node, dict):
+                             if node.get("status") == "COMPLETED" and node.get("output_artifacts"):
+                                 tasks_to_verify.append(node)
+                             for k, v in node.items():
+                                 if isinstance(v, (dict, list)):
+                                     find_completed_tasks(v)
+                         elif isinstance(node, list):
+                             for item in node:
+                                 find_completed_tasks(item)
+                                 
+                     find_completed_tasks(mission_data)
+                     
+                     print(f"🧪 Verifying {len(tasks_to_verify)} COMPLETED tasks...")
+                     
+                     for t in tasks_to_verify:
+                         res = verifier.verify_artifacts(t, workspace_dir)
+                         if not res["success"]:
+                             failed_verifications.append(f"Task dependency missing: {res['missing']}")
+                     
+                     if failed_verifications:
+                         # VERIFICATION FAILED
+                         # Force restart and tell agent.
+                         feedback = "\n".join(failed_verifications)
+                         print(f"❌ Verification Failed:\n{feedback}")
+                         
+                         return {
+                             "hookSpecificOutput": {
+                                 "hookEventName": "AgentStop",
+                                 "action": "restart",
+                                 "nextPrompt": f"STOP! Verification Failed. You claimed completion, but the following artifacts are missing:\n{feedback}\n\n[INSTRUCTION]\n1. CREATE the missing artifacts.\n2. Verify they exist.\n3. THEN output <promise>{promise}</promise>."
+                             }
+                         }
+                     
+                     print("✅ Binary Verification Passed.")
+                     
+                 except Exception as e:
+                     print(f"⚠️ Harness Verification Error: {e}")
 
+    # [Step 2] Protocol Enforcement (Promise Check)
+    if extracted_promise == promise_normalized:
+        promise_met = True
+        logfire.info("harness_completion_promise_met", run_id=use_run_id)
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "AgentStop",
+                "action": "complete",  # Let it stop naturally
+            }
+        }
+    else:
+        # Determine feedback message
+        if intent_to_complete:
+            msg = f"Promise Mismatch: Expected '<promise>{promise}</promise>', Got '<promise>{extracted_promise}</promise>'"
+        else:
+            msg = f"The previous attempt did not include the required completion promise <promise>{promise}</promise>"
+            
+        print(f"⚠️ {msg}")
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "AgentStop",
+                "action": "restart",
+                "nextPrompt": f"RESUMING: {msg}\n\n[INSTRUCTION]\nIf you have completed the objective, you MUST output the EXACT promise tag:\n<promise>{promise}</promise>\n\nEnsure all artifacts are created before doing this."
+            }
+        }
     # If we get here, the promise was NOT met.
     # We must RESTART the agent to force it to finish.
 
