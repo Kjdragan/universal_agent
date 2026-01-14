@@ -27,9 +27,9 @@ The Composio SDK has had significant updates since December 15, 2025, including:
 |---------|------|-------------|
 | 0.10.1 | ~Dec 15 | Baseline (our current minimum) |
 | 0.10.4 | Dec 22-27 | Claude Agent SDK Provider, Tool Router improvements, deprecated toolkits |
-| 0.10.5 | Jan 6-9 | Tool Router session API, `auto_upload_download_files`, performance fixes |
+|
+ 0.10.5 | Jan 6-9 | Tool Router session API, `auto_upload_download_files`, performance fixes |
 | 0.10.6 | Jan 10-13 | Cloudflare Workers support, webhook verification, docs updates |
-
 ---
 
 ## Detailed Changes
@@ -319,9 +319,248 @@ print(session.mcp.url)  # Still works!
 
 ---
 
+## 🔮 Future Integration Ideas (Not Yet Implemented)
+
+This section documents potential uses of new Composio SDK features for future implementation.
+
+### 1. Response Modifiers for Token-Efficient Research Pipeline
+
+**Problem:** Search results return verbose JSON (50-100KB) that wastes context tokens.
+
+**Solution:** Use `after_execute_meta` modifiers to clean responses at Composio level.
+
+```python
+# === FUTURE INTEGRATION: Add to main.py when creating Composio session ===
+
+from composio.core.models._modifiers import after_execute_meta
+
+@after_execute_meta(toolkits=["composio_search", "serpapi"])
+def clean_search_response_modifier(tool, toolkit, session_id, response):
+    """
+    Clean search results before LLM sees them.
+    
+    BENEFITS:
+    - Reduces each search response from ~50KB to ~5KB
+    - Standardizes format across different search tools
+    - LLM gets clean, actionable data
+    """
+    if not response.successful:
+        return response
+    
+    data = response.data
+    cleaned = {"type": "search_results", "items": [], "tool": tool}
+    
+    # Handle news results
+    if "news_results" in data.get("data", data):
+        source_data = data.get("data", data)
+        for item in source_data.get("news_results", [])[:10]:
+            cleaned["items"].append({
+                "title": item.get("title"),
+                "source": item.get("source", {}).get("name") if isinstance(item.get("source"), dict) else item.get("source"),
+                "url": item.get("link"),
+                "snippet": item.get("snippet", "")[:300],
+                "date": item.get("date"),
+            })
+    
+    # Handle web results
+    elif "organic_results" in data.get("data", data):
+        source_data = data.get("data", data)
+        for item in source_data.get("organic_results", [])[:10]:
+            cleaned["items"].append({
+                "title": item.get("title"),
+                "url": item.get("link"),
+                "snippet": item.get("snippet", "")[:300],
+            })
+    
+    response.data = cleaned
+    return response
+
+
+@after_execute_meta(toolkits=["gmail"])
+def clean_email_response_modifier(tool, toolkit, session_id, response):
+    """
+    Clean email list responses to essential fields only.
+    """
+    if not response.successful:
+        return response
+    
+    data = response.data
+    if "messages" in data:
+        cleaned_messages = []
+        for msg in data.get("messages", [])[:20]:
+            cleaned_messages.append({
+                "id": msg.get("id"),
+                "from": msg.get("from"),
+                "subject": msg.get("subject"),
+                "date": msg.get("date"),
+                "snippet": msg.get("snippet", "")[:200],
+            })
+        response.data = {"messages": cleaned_messages, "count": len(cleaned_messages)}
+    
+    return response
+
+
+# === HOW TO INTEGRATE ===
+# In main.py, when creating the session:
+
+# session = composio.create(user_id=user_id, toolkits={"disable": ["firecrawl", "exa"]})
+#
+# # Get tools with modifiers applied
+# tools = session.tools(modifiers=[
+#     clean_search_response_modifier,
+#     clean_email_response_modifier,
+# ])
+```
+
+**When to implement:** When we tackle the long-running harness token optimization phase.
+
+---
+
+### 2. Schema Modifiers for Tool Description Optimization
+
+**Problem:** Tool descriptions shown to LLM might be verbose or unclear.
+
+**Solution:** Use `schema_modifier` to customize tool descriptions.
+
+```python
+from composio.core.models._modifiers import schema_modifier
+
+@schema_modifier(toolkits=["composio_search"])
+def optimize_search_tool_schema(tool, toolkit, schema):
+    """
+    Modify tool schema to give LLM clearer instructions.
+    
+    POTENTIAL USES:
+    - Shorten verbose descriptions
+    - Add our specific usage guidelines
+    - Customize parameter descriptions
+    """
+    if hasattr(schema, 'description'):
+        # Add our guidance to the description
+        schema.description = schema.description + (
+            "\n\nIMPORTANT: Always append '-site:wikipedia.org' to queries "
+            "unless user specifically requests Wikipedia."
+        )
+    return schema
+```
+
+---
+
+### 3. `wait_for_connections` for Harness Auth Flow
+
+**Problem:** In harness mode, if OAuth is needed mid-task, execution is uncertain.
+
+**Solution:** Use `wait_for_connections` to block until auth completes.
+
+```python
+# === FUTURE: Enhanced session creation for harness mode ===
+
+def create_composio_session_for_harness(composio, user_id, required_toolkits):
+    """
+    Create session that waits for auth if needed.
+    Used in harness mode where we want deterministic execution.
+    """
+    session = composio.create(
+        user_id=user_id,
+        toolkits={
+            "disable": ["firecrawl", "exa"],
+            "enable": required_toolkits,
+        },
+        manage_connections={
+            "enable": True,
+            "wait_for_connections": True,  # NEW: Block until OAuth complete
+            "callback_url": None,  # For CLI mode, no callback needed
+        }
+    )
+    return session
+```
+
+---
+
+## ⚠️ Clarification: Claude Agent SDK vs Composio Provider
+
+There is potential confusion between two different things:
+
+### What We Already Use: `claude-agent-sdk` (Anthropic)
+
+This is **Anthropic's SDK** for building agents with Claude. We've been using this from the start:
+
+```python
+# Our current setup in main.py
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
+
+options = ClaudeAgentOptions(
+    system_prompt=system_prompt,
+    mcp_servers={
+        "composio": {"type": "http", "url": session.mcp.url, ...},
+        "local_toolkit": {"type": "stdio", ...},
+    },
+)
+
+async with ClaudeSDKClient(options) as client:
+    await client.query(user_input)
+```
+
+### What's New: `composio-claude-agent-sdk` (Composio's Provider)
+
+This is **Composio's provider package** that integrates WITH the Claude Agent SDK:
+
+```python
+# NEW - Composio's provider pattern
+from composio import Composio
+from composio_claude_agent_sdk import ClaudeAgentSDKProvider
+
+# Initialize Composio with the provider
+composio = Composio(api_key=api_key, provider=ClaudeAgentSDKProvider())
+```
+
+### Should We Switch?
+
+**No immediate need.** Our current MCP-based integration works:
+- We use `session.mcp.url` to connect Claude Agent SDK to Composio tools
+- This pattern is proven and reliable
+- The provider pattern is an alternative, not a replacement
+
+**The provider might help if:**
+- We want tighter type integration between Composio and Claude SDK
+- Future Composio features require the provider pattern
+- We encounter issues with MCP HTTP approach
+
+---
+
+## 📋 What's Actually New in 0.10.5 and 0.10.6
+
+### v0.10.5 (Jan 6-9, 2026)
+
+| Feature | Description | Useful for Us? |
+|---------|-------------|----------------|
+| Tool Router Session API | Sessions fetch tools directly from session endpoint | ✅ Performance improvement (automatic) |
+| `auto_upload_download_files` | Flag for automatic file handling | ⚠️ Not exposed in current API |
+| Performance optimizations | Fewer API calls during execution | ✅ Automatic benefit |
+| Session modifiers | `before_execute_meta`, `after_execute_meta` | ✅ Useful for token optimization |
+
+### v0.10.6 (Jan 10-13, 2026)
+
+| Feature | Description | Useful for Us? |
+|---------|-------------|----------------|
+| Cloudflare Workers support | TypeScript SDK works in edge runtime | ❌ Not relevant (we use Python) |
+| Webhook verification (v1/v2/v3) | `composio.triggers.verifyWebhooks` | ⚠️ Only if we use webhooks |
+| Docs updates | Better documentation | ✅ Helpful for future research |
+| Python SDK bump | All packages aligned to 0.10.6 | ✅ Consistency |
+
+### Summary: What We Haven't Implemented Yet
+
+1. **Session Modifiers** - Documented above with pseudo code for future integration
+2. **`wait_for_connections`** - Documented above for harness mode
+3. **Provider Pattern** - Evaluated; not adopting yet (current MCP works fine)
+
+---
+
 ## References
 
 - [Composio Releases](https://github.com/ComposioHQ/composio/releases)
 - [PR #2285: Claude Code Agents Provider](https://github.com/ComposioHQ/composio/pull/2285)
 - [PR #2334: auto_upload_download_files](https://github.com/ComposioHQ/composio/pull/2334)
 - [v0.10.4...v0.10.6 Changelog](https://github.com/ComposioHQ/composio/compare/v0.10.4...v0.10.6)
+- [Modifier Prototype](file:///home/kjdragan/lrepos/universal_agent/scripts/composio_modifier_prototype.py)
+- [Regression Tests](file:///home/kjdragan/lrepos/universal_agent/tests/test_composio_regression.py)
