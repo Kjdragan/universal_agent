@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Russia-Ukraine War Weekly Report | January 7-14, 2026</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Georgia', 'Times New Roman', serif;
+            line-height: 1.8;
+            color: #2c3e50;
+            background: #f8f9fa;
+            font-size: 11pt;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 60px 50px;
+            background: white;
+            box-shadow: 0 0 30px rgba(0,0,0,0.1);
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+            padding-bottom: 30px;
+            border-bottom: 3px solid #3498db;
+        }
+
+        h1 {
+            font-size: 28pt;
+            color: #1a252f;
+            margin-bottom: 15px;
+            font-weight: 700;
+            line-height: 1.3;
+        }
+
+        .subtitle {
+            font-size: 14pt;
+            color: #7f8c8d;
+            font-style: italic;
+            margin-bottom: 20px;
+        }
+
+        .meta-info {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            font-size: 10pt;
+            color: #95a5a6;
+            flex-wrap: wrap;
+        }
+
+        .meta-info span {
+            display: flex;
+            align-items: center;
+        }
+
+        .meta-info::before {
+            content: "•";
+            margin-right: 8px;
+        }
+
+        h2 {
+            font-size: 18pt;
+            color: #2980b9;
+            margin-top: 40px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #ecf0f1;
+        }
+
+        h3 {
+            font-size: 14pt;
+            color: #34495e;
+            margin-top: 25px;
+            margin-bottom: 15px;
+        }
+
+        p {
+            margin-bottom: 15px;
+            text-align: justify;
+        }
+
+        .executive-summary {
+            background: #ecf0f1;
+            padding: 25px;
+            border-left: 5px solid #3498db;
+            margin: 30px 0;
+            border-radius: 5px;
+        }
+
+        .executive-summary h2 {
+            margin-top: 0;
+            border-bottom: none;
+            padding-bottom: 0;
+            color: #1a252f;
+        }
+
+        .key-stat {
+            background: #fff3cd;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 5px solid #ffc107;
+            border-radius: 5px;
+        }
+
+        .key-stat strong {
+            color: #856404;
+            display: block;
+            margin-bottom: 10px;
+            font-size: 12pt;
+        }
+
+        blockquote {
+            border-left: 4px solid #3498db;
+            padding-left: 20px;
+            margin: 20px 0;
+            font-style: italic;
+            color: #555;
+            background: #f8f9fa;
+            padding: 15px 20px;
+            border-radius: 0 5px 5px 0;
+        }
+
+        ul, ol {
+            margin-left: 30px;
+            margin-bottom: 20px;
+        }
+
+        li {
+            margin-bottom: 10px;
+        }
+
+        .source-ref {
+            color: #3498db;
+            font-size: 9pt;
+            vertical-align: super;
+            font-weight: bold;
+        }
+
+        .timeline {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 25px 0;
+        }
+
+        .timeline-item {
+            display: flex;
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .timeline-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .timeline-date {
+            font-weight: bold;
+            color: #2980b9;
+            min-width: 150px;
+        }
+
+        .timeline-content {
+            flex: 1;
+        }
+
+        .alert-box {
+            background: #ffebee;
+            border: 2px solid #ef5350;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 25px 0;
+        }
+
+        .alert-box h3 {
+            color: #c62828;
+            margin-top: 0;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 25px 0;
+            font-size: 10pt;
+        }
+
+        th, td {
+            border: 1px solid #dee2e6;
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background: #3498db;
+            color: white;
+            font-weight: 600;
+        }
+
+        tr:nth-child(even) {
+            background: #f8f9fa;
+        }
+
+        .toc {
+            background: #f8f9fa;
+            padding: 25px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            margin: 30px 0;
+        }
+
+        .toc h2 {
+            margin-top: 0;
+            border-bottom: none;
+            text-align: center;
+        }
+
+        .toc ul {
+            list-style: none;
+            margin: 0;
+        }
+
+        .toc li {
+            margin: 8px 0;
+        }
+
+        .toc a {
+            color: #2980b9;
+            text-decoration: none;
+            display: block;
+            padding: 5px 0;
+        }
+
+        .toc a:hover {
+            text-decoration: underline;
+        }
+
+        .highlight {
+            background: #fff9e6;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+
+        footer {
+            margin-top: 60px;
+            padding-top: 30px;
+            border-top: 2px solid #ecf0f1;
+            text-align: center;
+            color: #7f8c8d;
+            font-size: 10pt;
+        }
+
+        @media print {
+            body {
+                font-size: 10pt;
+            }
+            .container {
+                box-shadow: none;
+                padding: 40px;
+            }
+            h2 {
+                page-break-before: auto;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 30px 20px;
+            }
+            h1 {
+                font-size: 22pt;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Russia-Ukraine War: Weekly Intelligence Report</h1>
+            <p class="subtitle">Comprehensive Analysis of Military, Diplomatic, Humanitarian, and Economic Developments</p>
+            <div class="meta-info">
+                <span><strong>Coverage Period:</strong> January 7-14, 2026</span>
+                <span><strong>Report Date:</strong> January 14, 2026</span>
+                <span><strong>Sources Analyzed:</strong> 29 high-quality sources</span>
+            </div>
+        </header>
+
+        <div class="toc">
+            <h2>Table of Contents</h2>
+            <ul>
+                <li><a href="#executive-summary">Executive Summary</a></li>
+                <li><a href="#military-developments">Military Developments</a></li>
+                <li><a href="#diplomatic-updates">Diplomatic Updates</a></li>
+                <li><a href="#humanitarian-situation">Humanitarian Situation</a></li>
+                <li><a href="#economic-impact">Economic Impact</a></li>
+                <li><a href="#key-timeline">Key Timeline</a></li>
+            </ul>
+        </div>
+
+        <div class="executive-summary">
+            <h2>Executive Summary</h2>
+            <p>The period January 7-14, 2026, marked a significant escalation in the Russia-Ukraine war, characterized by unprecedented missile attacks, intensifying diplomatic maneuvering, and deepening humanitarian crises. Russian forces conducted multiple strikes using the new <span class="highlight">Oreshnik intermediate-range ballistic missile (IRBM)</span> against Ukrainian targets, including strikes on Lviv Oblast<span class="source-ref">[EVID-004]</span>. These attacks have caused significantly more civilian casualties in 2025 compared to previous years<span class="source-ref">[EVID-017]</span>.</p>
+
+            <p>Diplomatically, President Zelensky announced that negotiations have reached a "<span class="highlight">new milestone</span>" and suggested the war could end in the first half of 2026<span class="source-ref">[EVID-005]</span>. However, Russian officials have stated they will continue solving the problem by military means until Zelensky "<span class="highlight">comes to his senses</span>" and agrees to realistic conditions<span class="source-ref">[EVID-011]</span>. The Trump administration is actively pursuing peace negotiations while simultaneously accusing Russia of a "<span class="highlight">dangerous and inexplicable escalation</span>"<span class="source-ref">[EVID-011]</span>.</p>
+
+            <p>On the humanitarian front, the UN launched a <span class="highlight">$2.3 billion appeal</span> for 2026 to support 4.1 million people<span class="source-ref">[EVID-009]</span>. Energy infrastructure continues to be targeted, leaving hundreds of thousands of households in Kyiv without power as temperatures plummet well below freezing<span class="source-ref">[EVID-019]</span>. Economically, the EU unveiled a massive <span class="highlight">€90 billion loan</span> to Ukraine<span class="source-ref">[EVID-008]</span>, while sanctions pressure on Russia continues to intensify with new measures targeting countries purchasing Russian oil<span class="source-ref">[EVID-012]</span><span class="source-ref">[EVID-016]</span>.</p>
+        </div>
+
+        <h2 id="military-developments">Military Developments</h2>
+
+        <h3>Oreshnik IRBM Strikes</h3>
+        <p>The most significant military development this week was Russia's deployment of the <span class="highlight">Oreshnik intermediate-range ballistic missile</span>, a nuclear-capable system, against Ukrainian targets. Ukrainian and Russian officials confirmed strikes against Lviv Oblast<span class="source-ref">[EVID-004]</span>, with one attack specifically striking a Ukrainian defense industrial enterprise in Lviv City<span class="source-ref">[EVID-010]</span>. The use of this system represents a significant escalation in the conflict's technological dimension.</p>
+
+        <p>According to analysis by military experts, the Oreshnik strikes signal that Putin is "<span class="highlight">fearful and worried</span>" rather than confident of victory<span class="source-ref">[EVID-013]</span>. The missile attack on Lviv—a major Ukrainian city near the Polish border—using this nuclear-capable ballistic missile was described as "<span class="highlight">Putin's Explosive Message to Trump</span>"<span class="source-ref">[EVID-021]</span>.</p>
+
+        <h3>New Drone Warfare Systems</h3>
+        <p>Russian forces are reportedly fielding a new variant of long-range strike drones—the <span class="highlight">Geran-5</span>—derived from an Iranian interceptor drone design<span class="source-ref">[EVID-011]</span>. This development indicates continued evolution in unmanned warfare capabilities being deployed by Russian forces.</p>
+
+        <h3>Casualty Figures</h3>
+        <p>Ukrainian military sources report that Russian casualties are reaching unsustainable levels. In December 2025, <span class="highlight">35,000 Russian personnel were eliminated</span> according to Ukrainian figures, with 30,000 in November and 26,000 in October<span class="source-ref">[EVID-014]</span>. These figures represent only confirmed cases with video evidence, suggesting actual losses are higher.</p>
+
+        <div class="key-stat">
+            <strong>Casualty Trend (Ukrainian Estimates)</strong>
+            <ul>
+                <li>October 2025: 26,000 Russian personnel eliminated</li>
+                <li>November 2025: 30,000 Russian personnel eliminated</li>
+                <li>December 2025: 35,000 Russian personnel eliminated<span class="source-ref">[EVID-014]</span></li>
+            </ul>
+        </div>
+
+        <p>Ukrainian officials state that December was "<span class="highlight">the first month when the unmanned systems units of the Ukrainian Defence Forces neutralised approximately as many servicemen of the occupying army as Russia conscripted in a month</span>"<span class="source-ref">[EVID-014]</span>. This milestone suggests Ukrainian drone capabilities are achieving parity with Russian recruitment efforts.</p>
+
+        <h3>Energy Infrastructure Targeting</h3>
+        <p>Russian strikes have continued to systematically target Ukraine's energy infrastructure. A recent wave of attacks left "<span class="highlight">several hundred thousand households</span>" in the Kyiv region without power<span class="source-ref">[EVID-019]</span>. Emergency power cuts were introduced not only in Kyiv but also in the Chernihiv, Odesa, Kharkiv, Dnipropetrovsk, Zaporizhzhia, and Donetsk regions<span class="source-ref">[EVID-007]</span>.</p>
+
+        <blockquote>"The situation in the Kyiv region is not easy – several hundred thousand households are currently without power...Once again, the main target of the strike was our energy-generation facilities and substations."<span class="source-ref">[EVID-019]</span></blockquote>
+
+        <div class="alert-box">
+            <h3>⚠️ Humanitarian Alert</h3>
+            <p>Russian strikes caused <span class="highlight">significantly more civilian casualties in Ukraine in 2025 compared to previous years</span><span class="source-ref">[EVID-017]</span>. The targeting of energy infrastructure during severe winter conditions represents a particular threat to civilian populations.</p>
+        </div>
+
+        <h2 id="diplomatic-updates">Diplomatic Updates</h2>
+
+        <h3>Peace Negotiations Progress</h3>
+        <p>President Volodymyr Zelensky announced on January 7 that negotiations have reached a "<span class="highlight">new milestone</span>" and expressed belief that Russia's full-scale war against Ukraine "<span class="highlight">could be brought to an end in the first half of 2026</span>"<span class="source-ref">[EVID-005]</span>. This optimistic assessment comes amid intensive diplomatic activity involving the United States, European Union, and other international partners.</p>
+
+        <h3>Trump Administration Engagement</h3>
+        <p>The Trump administration has taken an active role in peace negotiations, with officials characterizing the current moment as having "<span class="highlight">tremendous potential</span>" due to President Trump's "<span class="highlight">unparalleled commitment to peace around the world</span>"<span class="source-ref">[EVID-011]</span>. However, the administration has also accused Russia of a "<span class="highlight">dangerous and inexplicable escalation</span>" of the war at precisely the time when peace efforts are advancing<span class="source-ref">[EVID-011]</span>.</p>
+
+        <p>Reports indicate that Trump envoys, including Witkoff and Kushner, may meet Putin in Moscow for peace talks<span class="source-ref">[EVID-029]</span>. This direct engagement reflects the administration's preference for bilateral negotiations.</p>
+
+        <h3>European Union Response</h3>
+        <p>European governments have expressed concern about being excluded from U.S.-Russia bilateral discussions. The EU is moving to create a "<span class="highlight">negotiator role</span>" to represent European interests on Ukraine, fearing the United States will "<span class="highlight">stitch up a deal with Russia behind their backs</span>"<span class="source-ref">[EVID-023]</span>.</p>
+
+        <blockquote>"There are some issues which cannot be discussed with [only] the U.S. when they have direct implications on our security as Europeans...The message to Washington is as important as [the message] to Moscow."<span class="source-ref">[EVID-023]</span></blockquote>
+
+        <h3>Russian Position</h3>
+        <p>Russian Ambassador Vassily Nebenzia stated at the UN Security Council that until President Zelensky "<span class="highlight">comes to his senses and agrees to realistic conditions for negotiations</span>, Russia will continue solving the problem by military means<span class="source-ref">[EVID-011]</span>. This hardline position suggests Moscow believes it has military advantages that can be leveraged in negotiations.</p>
+
+        <p>Analysis indicates that "<span class="highlight">Putin cannot accept any peace deal that secures Ukrainian statehood</span>" in a form that would guarantee Ukraine's independence and sovereignty<span class="source-ref">[EVID-027]</span>. The Kremlin continues to view escalation as necessary for regime survival and has no immediate plans to end the war<span class="source-ref">[EVID-027]</span>.</p>
+
+        <h3>Security Guarantees Framework</h3>
+        <p>Discussions are advancing on a framework for security guarantees that would be activated once a ceasefire enters into force. The proposed system involves "<span class="highlight">politically and legally binding guarantees</span>" that would supplement bilateral security agreements<span class="source-ref">[EVID-013]</span>. There is discussion of a potential "<span class="highlight">multinational force for Ukraine</span>" that would be "<span class="highlight">European-led, with the involvement also of non-European members of the Coalition, and the proposed support of the US</span>"<span class="source-ref">[EVID-013]</span>.</p>
+
+        <h2 id="humanitarian-situation">Humanitarian Situation</h2>
+
+        <h3>UN Humanitarian Appeal 2026</h3>
+        <p>The United Nations has launched a <span class="highlight">$2.3 billion humanitarian appeal for 2026</span> to support humanitarian operations in Ukraine<span class="source-ref">[EVID-009]</span>. This funding is critical to reach the most vulnerable populations amid ongoing attacks and worsening weather conditions.</p>
+
+        <div class="key-stat">
+            <strong>Humanitarian Needs Overview (2026)</strong>
+            <ul>
+                <li><strong>People in need:</strong> 10.8 million<span class="source-ref">[EVID-009]</span></li>
+                <li><strong>Target population for aid:</strong> 4.1 million most vulnerable<span class="source-ref">[EVID-009]</span></li>
+                <li><strong>Internally displaced persons (IDPs):</strong> 3.7 million<span class="source-ref">[EVID-009]</span></li>
+                <li><strong>UN appeal funding requirement:</strong> $2.3 billion<span class="source-ref">[EVID-009]</span></li>
+            </ul>
+        </div>
+
+        <h3>Energy Infrastructure and Winter Crisis</h3>
+        <p>The humanitarian situation is being exacerbated by systematic attacks on energy infrastructure. Russian strikes have left hundreds of thousands of households without power as Ukraine faces severe winter conditions<span class="source-ref">[EVID-019]</span>. A government-run humanitarian aid point in Kyiv provides residents with places to warm up, charge devices, and receive hot drinks and psychological support during blackouts<span class="source-ref">[EVID-019]</span>.</p>
+
+        <blockquote>"At 10pm, the lights came on for 15 minutes and haven't been on since. The battery-powered heaters barely provide any heat...We were prepared for the winter to be difficult, but this time, in addition to the power cuts caused by shelling, there has been a severe cold snap."<span class="source-ref">[EVID-019]</span></blockquote>
+
+        <h3>Long-term Humanitarian Impact</h3>
+        <p>The UN humanitarian assessment warns that "<span class="highlight">there are no signs that 2026 will be any safer</span>"<span class="source-ref">[EVID-009]</span>. The mental health consequences for adults and children, former combatants and their families, the loss of and damage to homes, the strain on health and education systems, and the fractures in social cohesion will shape Ukrainian society for years to come<span class="source-ref">[EVID-009]</span>.</p>
+
+        <p>Older people who cannot easily move, people with disabilities, single parents, vulnerable children and adolescents, people with chronic illnesses, and those already displaced are identified as "<span class="highlight">among the first to feel every shock and the last to recover</span>"<span class="source-ref">[EVID-009]</span>.</p>
+
+        <h2 id="economic-impact">Economic Impact</h2>
+
+        <h3>EU Financial Support Package</h3>
+        <p>The European Commission has unveiled a historic <span class="highlight">€90 billion loan</span> to Ukraine aimed at saving it from financial collapse<span class="source-ref">[EVID-008]</span>. The package includes:</p>
+        <ul>
+            <li><span class="highlight">€60 billion ($70 billion)</span> earmarked for defense<span class="source-ref">[EVID-005]</span><span class="source-ref">[EVID-008]</span></li>
+            <li><span class="highlight">€30 billion ($35 billion)</span> allocated to support Ukraine's budget<span class="source-ref">[EVID-005]</span><span class="source-ref">[EVID-008]</span></li>
+            <li>Funds to be paid out over the next two years<span class="source-ref">[EVID-008]</span></li>
+            <li>Repayment conditional on Ukraine receiving post-war reparations<span class="source-ref">[EVID-008]</span></li>
+        </ul>
+
+        <blockquote>"Supporting Ukraine is a litmus test for Europe. The outcome of Russia's brutal war of aggression against Ukraine will determine Europe's future."<span class="source-ref">[EVID-008]</span></blockquote>
+
+        <p>The EU has reserved the right to use cash balances from immobilized Russian assets held in the EU to repay the Ukraine Support Loan<span class="source-ref">[EVID-008]</span>.</p>
+
+        <h3>Sanctions Pressure on Russia</h3>
+        <p>Efforts to increase sanctions pressure on Russia are intensifying. The United States is advancing legislation to sanction countries that purchase Russian oil, specifically targeting China and India<span class="source-ref">[EVID-012]</span>. President Trump has backed this bipartisan bill<span class="source-ref">[EVID-012]</span>.</p>
+
+        <p>Similarly, the EU sanctions envoy has stated that Brussels must apply "<span class="highlight">maximum pressure</span>" on China and India to cease buying Russian energy<span class="source-ref">[EVID-016]</span>. This diplomatic pressure campaign aims to further reduce Russia's oil revenues.</p>
+
+        <div class="key-stat">
+            <strong>EU Energy Independence from Russia</strong>
+            <ul>
+                <li><strong>Russian gas imports:</strong> Down from 45% to 13% of total EU imports<span class="source-ref">[EVID-016]</span></li>
+                <li><strong>Russian oil imports:</strong> Down from 27% to just 2% of total EU imports<span class="source-ref">[EVID-016]</span></li>
+            </ul>
+        </div>
+
+        <h3>Russia's Economic Resilience</h3>
+        <p>Despite sanctions and oil price pressures, Russia's economy has shown unexpected resilience. The International Monetary Fund predicted growth of <span class="highlight">0.6% in 2025 and 1% in 2026</span><span class="source-ref">[EVID-003]</span>. Russia has compensated for lost oil revenue (which fell from 50% to 25% of state income) through higher taxes on households and businesses<span class="source-ref">[EVID-003]</span>.</p>
+
+        <p>Key economic indicators suggest stability:</p>
+        <ul>
+            <li>Unemployment has fallen to almost <span class="highlight">2%</span>, reflecting severe labor shortage due to military mobilization<span class="source-ref">[EVID-003]</span></li>
+            <li>Russia's debt-to-GDP ratio remains below <span class="highlight">20%</span><span class="source-ref">[EVID-003]</span></li>
+            <li>Annual spending deficit approximately <span class="highlight">3.5%</span> of GDP—modest by international standards<span class="source-ref">[EVID-003]</span></li>
+        </ul>
+
+        <blockquote>"The Kremlin has succeeded in selling the war, not as a battle with its near neighbour – its brothers and sisters in Ukraine – but as a war with the west...We are not near the economy being a decisive factor in the Kremlin's thinking about how to pursue the war."<span class="source-ref">[EVID-003]</span></blockquote>
+
+        <h3>Oil Market Dynamics</h3>
+        <p>Russia's main export blend (Urals) is currently selling at around <span class="highlight">$53 per barrel</span>, approximately a third lower than pre-war levels<span class="source-ref">[EVID-016]</span>. The benchmark Brent crude is selling at approximately <span class="highlight">$63 per barrel</span>, just over half of peak prices<span class="source-ref">[EVID-016]</span>. EU sanctions envoy David O'Sullivan noted that "<span class="highlight">there's probably even a glut of oil on the market. This is the moment to push even harder</span>"<span class="source-ref">[EVID-016]</span>.</p>
+
+        <h2 id="key-timeline">Key Timeline</h2>
+        <div class="timeline">
+            <div class="timeline-item">
+                <div class="timeline-date">January 7, 2026</div>
+                <div class="timeline-content">
+                    <strong>Zelensky Announces Negotiation Milestone:</strong> Ukrainian President states that negotiations have reached a "new milestone" and suggests the war could end in the first half of 2026<span class="source-ref">[EVID-005]</span>.
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-date">January 8, 2026</div>
+                <div class="timeline-content">
+                    <strong>First Oreshnik IRBM Strike Reported:</strong> Preliminary reports suggest Russian forces conducted an Oreshnik IRBM strike against Lviv Oblast<span class="source-ref">[EVID-004]</span>.
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-date">January 9-10, 2026</div>
+                <div class="timeline-content">
+                    <strong>Confirmed Oreshnik Strikes:</strong> Ukrainian and Russian officials confirm Russian Oreshnik IRBM strikes, including one hitting a Ukrainian defense industrial enterprise in Lviv City<span class="source-ref">[EVID-010]</span>.
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-date">January 11, 2026</div>
+                <div class="timeline-content">
+                    <strong>New Drone System Revealed:</strong> Reports indicate Russian forces are fielding the new Geran-5 long-range strike drone variant derived from an Iranian interceptor drone<span class="source-ref">[EVID-011]</span>.
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-date">January 12, 2026</div>
+                <div class="timeline-content">
+                    <strong>EU Unveils €90 Billion Loan:</strong> The European Commission announces the massive Ukraine Support Loan package to prevent financial collapse<span class="source-ref">[EVID-008]</span>.
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-date">January 13, 2026</div>
+                <div class="timeline-content">
+                    <strong>Massive Power Outages in Kyiv:</strong> Several hundred thousand households in Kyiv region left without power following Russian strikes on energy infrastructure<span class="source-ref">[EVID-019]</span>.
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-date">January 13, 2026</div>
+                <div class="timeline-content">
+                    <strong>UN Launches $2.3 Billion Appeal:</strong> The United Nations launches its 2026 humanitarian appeal to support 4.1 million vulnerable people in Ukraine<span class="source-ref">[EVID-009]</span>.
+                </div>
+            </div>
+            <div class="timeline-item">
+                <div class="timeline-date">January 14, 2026</div>
+                <div class="timeline-content">
+                    <strong>Estonia Announces Entry Ban:</strong> Estonia leads with entry ban on Russians who fought in Ukraine; Ukrainian foreign minister praises the move as a "necessary security measure"<span class="source-ref">[EVID-007]</span>. Estonia's interior ministry estimates as many as <span class="highlight">1.5 million Russians</span> have taken part in the invasion<span class="source-ref">[EVID-007]</span>.
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p><strong>Sources:</strong> This report is based on 29 high-quality sources including Institute for the Study of War assessments, major international news outlets (The Guardian, Al Jazeera, CNN, The Atlantic, etc.), official UN reports, and government statements.</p>
+            <p style="margin-top: 20px;"><em>Report generated by comprehensive research and analysis of open-source intelligence materials.</em></p>
+            <p style="margin-top: 30px; font-size: 9pt;">© 2026 | Weekly Intelligence Report | Russia-Ukraine Conflict Monitoring</p>
+        </footer>
+    </div>
+</body>
+</html>
