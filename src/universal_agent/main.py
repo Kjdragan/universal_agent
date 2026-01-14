@@ -2206,6 +2206,39 @@ def _mark_tasks_for_retry(mission_path: str, task_ids: list) -> None:
         print(f"⚠️ Failed to mark tasks for retry: {e}")
 
 
+def _extract_promise_from_log(workspace_dir: str, tail_lines: int = 100) -> str:
+    """
+    Fallback: Extract recent content from run.log if response_text is empty.
+    
+    This handles the race condition where the agent's output is printed
+    but not captured in the return value (the "harness stdout bug").
+    
+    Args:
+        workspace_dir: Path to the workspace directory containing run.log
+        tail_lines: Number of lines to read from the end of the log
+        
+    Returns:
+        The last N lines of run.log as a string, or empty string on failure
+    """
+    if not workspace_dir:
+        return ""
+    
+    run_log_path = os.path.join(workspace_dir, "run.log")
+    if not os.path.exists(run_log_path):
+        return ""
+    
+    try:
+        with open(run_log_path, "r", encoding="utf-8", errors="ignore") as f:
+            # Read last N lines for efficiency
+            lines = f.readlines()
+            tail = lines[-tail_lines:] if len(lines) > tail_lines else lines
+            content = "".join(tail)
+            return content
+    except Exception as e:
+        print(f"⚠️ Fallback log read failed: {e}")
+        return ""
+
+
 def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dict:
     """
     Post-Run Hook: Checks for Harness Loop conditions.
@@ -2237,6 +2270,18 @@ def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dic
     final_output = context.output if hasattr(context, "output") else ""
     if isinstance(final_output, dict):
         final_output = str(final_output)  # fallback
+    
+    # [FALLBACK] If output is empty, try reading from run.log
+    # This handles the race condition where the agent's output is printed
+    # but not captured in the return value (the "harness stdout bug")
+    if not final_output.strip() and promise:
+        workspace_dir = globals().get("workspace_dir")
+        if workspace_dir:
+            print("🔄 Primary output capture empty, checking run.log fallback...")
+            log_content = _extract_promise_from_log(workspace_dir)
+            if log_content:
+                final_output = log_content
+                print(f"📋 Fallback captured {len(final_output)} chars from run.log")
     
     # Normalize output for logging/debugging
     if len(final_output) > 500:
