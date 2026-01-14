@@ -5533,7 +5533,7 @@ async def setup_session(
     Initialize the agent session, tools, and options.
     Returns: (options, session, user_id, workspace_dir, trace)
     """
-    global trace, composio, user_id, session, options, OBSERVER_WORKSPACE_DIR, run_id
+    global trace, composio, user_id, session, options, OBSERVER_WORKSPACE_DIR, run_id, workspace_dir
     run_id = run_id_override or str(uuid.uuid4())
 
     # Create main span for entire execution
