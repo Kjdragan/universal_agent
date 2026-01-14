@@ -531,7 +531,7 @@ def verify_subagent_compliance(
     tool_name: str, tool_content: str, workspace_dir: str
 ) -> str | None:
     """
-    Verify that report-creation-expert sub-agent saved required artifacts.
+    Verify that report-writer sub-agent saved required artifacts.
     Returns an error message to inject if compliance failed, None if OK.
     """
     # Only check for Task (sub-agent) tool results

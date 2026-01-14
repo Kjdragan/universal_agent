@@ -182,7 +182,7 @@ def workbench_upload(local_path: str, remote_path: str, session_id: str = None) 
 BATCH_SAFE_THRESHOLD = 2500  # Files under this are "batch-safe" (auto-include)
 # BATCH_MAX_TOTAL: Stop batch reading when cumulative word count hits this limit
 # Set UA_BATCH_MAX_WORDS=100000 (or higher) for stress testing context limits
-BATCH_MAX_TOTAL = int(os.getenv("UA_BATCH_MAX_WORDS", "25000"))
+BATCH_MAX_TOTAL = int(os.getenv("UA_BATCH_MAX_WORDS", "50000"))
 LARGE_FILE_THRESHOLD = 5000  # Files over this marked as "read individually"
 
 # =============================================================================
@@ -294,9 +294,11 @@ def _remove_navigation_lines(body: str) -> tuple[str, int]:
             continue
         if (
             stripped.startswith("#")
-            or stripped.startswith("*")
             or stripped.startswith("!")
         ):
+            continue
+        # Only remove bullet points if they are likely navigation items (short)
+        if stripped.startswith("*") and len(stripped) < 60:
             continue
         if len(stripped) < 40:
             short_line_count += 1
@@ -1456,6 +1458,7 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
 
         filtered_files = []
         filtered_dropped = []
+        seen_content_hashes = set()
 
         for item in crawl_result.get("saved_files", []):
             path = item.get("path")
@@ -1467,6 +1470,15 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
             if not filtered_body:
                 filtered_dropped.append({"path": path, "status": status})
                 continue
+
+            # Dedupe by content hash
+            import hashlib
+            content_hash = hashlib.md5(filtered_body.encode()).hexdigest()
+            if content_hash in seen_content_hashes:
+                filtered_dropped.append({"path": path, "status": "duplicate_content"})
+                continue
+            seen_content_hashes.add(content_hash)
+
             frontmatter = f"---\n{meta_block}\n---\n\n" if meta_block else ""
             filename = os.path.basename(path)
             filtered_path = os.path.join(filtered_dir, filename)

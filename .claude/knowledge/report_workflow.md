@@ -11,26 +11,27 @@ These search results contain **incomplete snippets**, not full article content.
 
 ### Required Workflow
 
+### Required Workflow
+
 1. **Search Phase**: Use COMPOSIO_MULTI_EXECUTE_TOOL to search for relevant sources
-2. **Delegation Phase**: Call the `Task` tool with `subagent_type='report-creation-expert'`
-3. The sub-agent will:
-   - Read the saved search result files from `search_results/` directory
-   - Use `mcp__local_toolkit__crawl_parallel` to get **FULL article content** from URLs
-   - Generate a comprehensive HTML report with proper citations
-   - Convert to PDF using `google-chrome --headless` (NOT reportlab)
+2. **Research Phase**: Call the `Task` tool with `subagent_type='research-specialist'`
+   - Instruct it to "Finalize research for [topic]"
+   - It will crawl URLs and create `research_overview.md`
+3. **Writing Phase**: Call the `Task` tool with `subagent_type='report-writer'`
+   - Instruct it to "Write HTML report using research_overview.md"
+   - It will read the corpus and generate the report
 
 ### Why This Matters
 
-- Search snippets are 1-2 sentences per result - insufficient for quality reports
-- Full crawl extracts complete article text with context
-- Sub-agent has specialized report-creation skills and PDF knowledge
-- This workflow produces dramatically higher quality outputs
+- **Search snippets are insufficient**: You need full article text.
+- **Fresh Context**: Splitting Research and Writing ensures the Writer has maximum context space for the actual content.
 
 ### Correct Pattern
 
 ```
 1. COMPOSIO_MULTI_EXECUTE_TOOL → search results saved to search_results/
-2. Task(subagent_type="report-creation-expert", description="...", background="Search results saved in search_results/ directory. Read them, crawl URLs for full content, create HTML report, convert to PDF.")
+2. Task(subagent_type="research-specialist", description="Finalize research corpus")
+3. Task(subagent_type="report-writer", description="Write HTML report from research_overview.md")
 ```
 
 ---
