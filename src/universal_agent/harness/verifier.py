@@ -40,6 +40,16 @@ class TaskVerifier:
             full_pattern = os.path.join(workspace_dir, pattern)
             matches = glob.glob(full_pattern)
             
+            # Sub-directory Fallback Logic (e.g. Inbox Pattern)
+            # If search results were moved to processed_json/, check there.
+            if not matches and "search_results" in pattern and pattern.endswith(".json"):
+                fallback_pattern = pattern.replace("search_results", "search_results/processed_json")
+                fallback_full = os.path.join(workspace_dir, fallback_pattern)
+                fallback_matches = glob.glob(fallback_full)
+                if fallback_matches:
+                    print(f"✅ Verified via fallback: {pattern} -> {fallback_pattern}")
+                    matches = fallback_matches
+
             if not matches:
                 missing.append(pattern)
 

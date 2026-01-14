@@ -203,6 +203,12 @@ if not LOGFIRE_DISABLED:
         or os.getenv("LOGFIRE_API_KEY")
     )
 
+# TIMEOUT CONFIGURATION (Critical for Large Reports)
+# Default is 60s (60000ms), which fails for 30KB+ generation.
+# We set to 20 minutes (1200000ms) to allow "Deep Thinking".
+if "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT" not in os.environ:
+    os.environ["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = "1200000"
+
 if LOGFIRE_TOKEN:
     # Custom scrubbing to prevent over-redaction of previews
     def scrubbing_callback(m: logfire.ScrubMatch):
