@@ -112,7 +112,7 @@ mcp__local_toolkit__generate_image(
 
 | Agent | Collaboration |
 |-------|---------------|
-| **report-creation-expert** | Generate infographics, charts, and visual elements for reports |
+| **report-writer** | Generate infographics, charts, and visual elements for reports |
 | **video-creation-expert** | Create thumbnails, overlays, or still frames |
 | **mermaid-expert** | Convert diagrams to styled visual assets |
 

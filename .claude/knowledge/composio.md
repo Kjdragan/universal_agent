@@ -56,6 +56,29 @@ client = Composio()
 client.tools.execute(slug="GMAIL_SEND_EMAIL", ...)  # FAILS!
 ```
 
+## ⚠️ CRITICAL: DO NOT CONCATENATE ARGUMENTS INTO TOOL NAMES
+
+Claude sometimes hallucinates tool calls by concatenating arguments into the tool name using XML syntax.
+
+**WRONG (causes immediate rejection):**
+```
+mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOLtools</arg_key><arg_value>[...]
+mcp__composio__COMPOSIO_SEARCH_NEWSquery</arg_key><arg_value>Russia Ukraine
+```
+
+**RIGHT:**
+```json
+{
+  "tool_name": "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+  "tool_input": {
+    "tools": [...],
+    "session_id": "..."
+  }
+}
+```
+
+**The guardrail will BLOCK any tool name containing `</arg_key>`, `<arg_value>`, etc.**
+
 ## upload_to_composio
 
 - Returns the `s3key` needed for `GMAIL_SEND_EMAIL` attachments

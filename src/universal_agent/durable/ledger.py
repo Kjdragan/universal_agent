@@ -250,7 +250,8 @@ class ToolCallLedger:
                         LedgerReceipt(
                             tool_call_id=existing[0],
                             status=existing[14],
-                            result=None,  # We don't have result yet if we just prepared
+                            response_ref=None,
+                            external_correlation_id=None,
                             idempotency_key=existing[13],
                         ),
                         False,
@@ -265,7 +266,8 @@ class ToolCallLedger:
                      LedgerReceipt(
                          tool_call_id=tool_call_id,
                          status="phantom",
-                         result=None,
+                         response_ref=None,
+                         external_correlation_id=None,
                          idempotency_key=idempotency_key,
                      ),
                      True, # Treat as "new" so we execute it

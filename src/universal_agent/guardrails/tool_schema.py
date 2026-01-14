@@ -286,6 +286,33 @@ async def pre_tool_use_schema_guardrail(
     tool_name = str(input_data.get("tool_name", "") or "")
     tool_input = input_data.get("tool_input", {}) or {}
 
+    # 0. Detect XML-style argument concatenation in tool name
+    # Claude sometimes hallucinates tool calls like:
+    #   mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOLtools</arg_key><arg_value>[...]
+    # This is a model-level hallucination that we must block immediately.
+    xml_fragments = ["</arg_key>", "<arg_value>", "</arg_value>", "<arg_key>"]
+    if any(frag in tool_name for frag in xml_fragments):
+        # Extract the likely intended tool name (everything before the XML garbage)
+        import re
+        clean_match = re.match(r"^(mcp__[a-z_]+__[A-Z_]+)", tool_name)
+        clean_name = clean_match.group(1) if clean_match else tool_name.split("<")[0].split("</")[0]
+        
+        return {
+            "systemMessage": (
+                f"⚠️ MALFORMED TOOL CALL DETECTED.\n"
+                f"You concatenated arguments into the tool name using XML syntax.\n\n"
+                f"WRONG: `{tool_name[:100]}...`\n"
+                f"RIGHT: `{clean_name}` with arguments as a JSON object.\n\n"
+                f"**Fix**: Call `{clean_name}` and pass `tools`, `query`, etc. as JSON parameters, NOT as part of the tool name."
+            ),
+            "decision": "block",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"XML-style argument concatenation in tool name. Use: {clean_name}",
+            },
+        }
+
     # 1. Sanitize and Validate Tool Name
     # If the tool name is malformed (e.g. contains XML or 'tools' suffix),
     # we REJECT it immediately and tell the agent the correct name.
@@ -360,6 +387,48 @@ async def pre_tool_use_schema_guardrail(
                             "permissionDecisionReason": "tools entries missing tool_slug or arguments.",
                         },
                     }
+
+            # recursive validation of inner tools
+            if isinstance(tools_value, list):
+                invalid_inner_tools = []
+                schema_hints = []
+                for idx, item in enumerate(tools_value):
+                    if not isinstance(item, dict):
+                        continue
+                        
+                    inner_slug = item.get("tool_slug")
+                    inner_args = item.get("arguments") or {}
+                    
+                    # We can reuse the existing validation logic for the inner tool
+                    # Note: validate_tool_input is available in this module scope
+                    is_valid, missing, inner_schema = validate_tool_input(inner_slug, inner_args)
+                    
+                    if not is_valid:
+                        # Format the specific missing fields for this inner tool
+                        missing_str = _format_missing_fields(missing)
+                        invalid_inner_tools.append(f"Tool #{idx+1} '{inner_slug}' missing: {missing_str}")
+                        # Add the schema example if available
+                        if inner_schema and inner_schema.example:
+                            schema_hints.append(f"  {inner_slug}: {inner_schema.example}")
+
+                if invalid_inner_tools:
+                    bullet_errors = "\n".join(f"- {err}" for err in invalid_inner_tools)
+                    # Build the guidance section with schema examples
+                    guidance = "Please fix the arguments for these inner tools."
+                    if schema_hints:
+                        guidance += "\n\n**Correct schema examples:**\n" + "\n".join(schema_hints)
+                    return {
+                        "systemMessage": (
+                            f"⚠️ Invalid COMPOSIO_MULTI_EXECUTE_TOOL call. Inner tool validation failed:\n{bullet_errors}\n\n"
+                            f"{guidance}"
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": f"Inner tool schema validation failed: {'; '.join(invalid_inner_tools)}",
+                        },
+                    }
         if normalized_name.endswith("composio_search_tools"):
             queries_value = tool_input.get("queries")
             if queries_value is not None and not isinstance(queries_value, list):
@@ -394,6 +463,8 @@ async def pre_tool_use_schema_guardrail(
                             "permissionDecisionReason": "queries entries missing use_case.",
                         },
                     }
+            
+
 
     # 2. Schema Validation
     # Use the VALIDATED/CLEAN identity for schema matching, just in case
@@ -481,6 +552,28 @@ async def post_tool_use_schema_nudge(
                 ),
             },
         }
+
+
+    schema = _match_schema(tool_name)
+    example = schema.example if schema else ""
+    example_hint = f" Example: {example}" if example else ""
+
+    # NEW: Check for Composio-specific errors that masquerade as success
+    if "No such tool available" in error_detail or "tool_use_error" in error_detail:
+        # Try to extract the bad tool name if possible, or just default to current tool
+        # In a multi-execute scenario, the error details usually contain the bad XML/string
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": (
+                    f"⚠️ The component '{tool_name}' reported a tool selection error: '{error_detail[:200]}...'\n"
+                    "Validation Hint: Ensure you are using the correct tool name and passing arguments as a JSON object, not as XML/string concatenation.\n"
+                    f"{example_hint}"
+                ),
+            },
+        }
+
+    # Standard missing field validation logic
     if not any(
         marker in lower_detail
         for marker in (
