@@ -718,7 +718,7 @@ wheels = [
 
 [[package]]
 name = "composio"
-version = "0.10.3"
+version = "0.10.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "composio-client" },
@@ -727,27 +727,40 @@ dependencies = [
     { name = "pysher" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9f/2b/c246e90e86060dae8419834e70d25814e3f4a6f634ae602ca70e32e0deed/composio-0.10.3.tar.gz", hash = "sha256:3bafdac20f68d8d6a4e51610d57ac89da2feb85d73521a5024038653a0fcd7a7", size = 102679, upload-time = "2025-12-29T15:55:18.455Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6e/e0/5318904b267b1938887f93a8d725971729cc9f5d59a117a1a9deb9a0e5c2/composio-0.10.6.tar.gz", hash = "sha256:72f1142913fab8aae2d62045b9e94338cd99a066259457ae56cef58f52586087", size = 108974, upload-time = "2026-01-13T08:44:15.178Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a0/a2/9cf32d2ee2a6d1eccf7986a5751939cb1e6302e8d8bda4ff3a5a9088a0c0/composio-0.10.3-py3-none-any.whl", hash = "sha256:c3e9b31db249f205e35ffea5a8a5e56145cc4a3cd89d9d611cd545b726831bca", size = 81725, upload-time = "2025-12-24T11:15:34.127Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/1b/4ca1aa311a1c296868141d9c2e4c9cad2efe11be06ca213bdab4deaba185/composio-0.10.6-py3-none-any.whl", hash = "sha256:8ffaa8c95e818bf71d34c009e94eba27b55d5ed82886c9d4f8d45b66aa22a042", size = 85193, upload-time = "2026-01-13T08:44:00.407Z" },
 ]
 
 [[package]]
 name = "composio-anthropic"
-version = "0.10.3"
+version = "0.10.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anthropic" },
     { name = "composio" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/21/d8/767122679f586c4e764e5bfbca7b2425b2fc01dcf0edad7d04650d78c7e8/composio_anthropic-0.10.3.tar.gz", hash = "sha256:4c81848bee5b81816fdfe9e7f6723d0788d340bf3903a0e9594171dc5fcb48dd", size = 3414, upload-time = "2025-12-29T15:55:19.515Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/aa/a4bd736c185ab774d48446fcfd9b686073b393db1cace5e4b10776bf80b1/composio_anthropic-0.10.6.tar.gz", hash = "sha256:bf9eef17083698fe15afeb3dece1723a17b44f930ce850d510f6c846b113b976", size = 3436, upload-time = "2026-01-13T08:44:16.25Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/53/788e9d09ca5e61ccd5745ceb1044e5a0a127f08bb4d7bcc2be7f0a7f1bff/composio_anthropic-0.10.3-py3-none-any.whl", hash = "sha256:0d32f584f4eeb325e60adea379f2aa96fe289d920e17f16c530fb127765568b4", size = 3720, upload-time = "2025-12-29T15:55:05.393Z" },
+    { url = "https://files.pythonhosted.org/packages/af/3b/05a6b3be34a07fc2d5a7d3bf3f52b5b10714ca8899e0c7315567c2c29ad6/composio_anthropic-0.10.6-py3-none-any.whl", hash = "sha256:5baa3913790e22deae3f8d4cdceebfbaea0608c06e6766f75f5a15fdd4cde258", size = 3719, upload-time = "2026-01-13T08:44:01.83Z" },
+]
+
+[[package]]
+name = "composio-claude-agent-sdk"
+version = "0.10.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "claude-agent-sdk" },
+    { name = "composio" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/c2/f61dc1f53ed0271f4badfc91d1393ba265835d3a6b635e9f49bad034cc24/composio_claude_agent_sdk-0.10.6.tar.gz", hash = "sha256:e7cacd33958c3570140a363f87e41bd09c0ec8bf258da2141c59c3c0a14325b8", size = 5903, upload-time = "2026-01-13T08:44:18.446Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/62/db/720e4651b176a66a7bdb8f4f61c5f4e2236b3d06eb287a8df5810901e918/composio_claude_agent_sdk-0.10.6-py3-none-any.whl", hash = "sha256:11c252fb18e07e8155b5ea0322d383deabbe0d82ea3ee6169f55e6ed18d42294", size = 6869, upload-time = "2026-01-13T08:44:04.457Z" },
 ]
 
 [[package]]
 name = "composio-client"
-version = "1.23.0"
+version = "1.25.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -757,9 +770,9 @@ dependencies = [
     { name = "sniffio" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/71/02/3d1f8e8f780e9672ec806a341faa0eca1f0de0547d0d4b1e611541f389cc/composio_client-1.23.0.tar.gz", hash = "sha256:0094af7a82ad66eb87e6fd6176f43d5250df9b2a18af050726ceec21bc5c0051", size = 190000, upload-time = "2026-01-06T08:04:23.366Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c4/72/270a24236f4580d1eced2eb4b38c4a9bd399714ef2b76c74952729687276/composio_client-1.25.0.tar.gz", hash = "sha256:ae335bc90309b9d5f222c48c85a20a4c701afda5e3015cb3472245c01aa632bb", size = 190472, upload-time = "2026-01-12T11:33:03.812Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1a/c9/b056aeab27bcdfe6dfc9161feb98fc857b76c4bf258396dd9f0e6f4da984/composio_client-1.23.0-py3-none-any.whl", hash = "sha256:d7a774ea7aae44b5a57d4a148dfa758e66adefe24aad13cdaa2261fcfa5b38f5", size = 208811, upload-time = "2026-01-06T08:04:21.855Z" },
+    { url = "https://files.pythonhosted.org/packages/56/0b/9f92a8b2bce0a23f39c98e860fe14e58365d804c0dea8277ed6b4e5e66f4/composio_client-1.25.0-py3-none-any.whl", hash = "sha256:de6b05667f29692a4425b43d53349c7b31439012ffc3f93059ceacb5cc3fbe56", size = 209162, upload-time = "2026-01-12T11:33:02.14Z" },
 ]
 
 [[package]]
@@ -5399,6 +5412,7 @@ dependencies = [
     { name = "click" },
     { name = "composio" },
     { name = "composio-anthropic" },
+    { name = "composio-claude-agent-sdk" },
     { name = "composio-client" },
     { name = "crawl4ai" },
     { name = "defusedxml" },
@@ -5449,8 +5463,9 @@ requires-dist = [
     { name = "chromadb", specifier = ">=1.4.0" },
     { name = "claude-agent-sdk", specifier = ">=0.1.18" },
     { name = "click", specifier = ">=8.3.1" },
-    { name = "composio", specifier = ">=0.10.1,<1.0.0" },
-    { name = "composio-anthropic", specifier = ">=0.10.1,<1.0.0" },
+    { name = "composio", specifier = ">=0.10.6,<1.0.0" },
+    { name = "composio-anthropic", specifier = ">=0.10.6,<1.0.0" },
+    { name = "composio-claude-agent-sdk", specifier = ">=0.10.6,<1.0.0" },
     { name = "composio-client", specifier = ">=1.21.0" },
     { name = "crawl4ai", specifier = ">=0.3.7" },
     { name = "defusedxml", specifier = ">=0.7.1" },

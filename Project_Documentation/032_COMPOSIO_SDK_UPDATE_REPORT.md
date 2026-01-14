@@ -222,37 +222,100 @@ MCP endpoints now enforce API key authentication more strictly.
 
 ---
 
-## 🚀 NEW: `composio-claude-code-agents` Package
+## 🔧 Session Modifiers Deep Dive
+
+**Discovery:** Session modifiers CAN be used to clean/format Composio output before the LLM sees it!
+
+### Modifier Types
+
+| Modifier | When Called | Can Modify |
+|----------|-------------|------------|
+| `before_execute_meta` | Before tool runs | Input parameters |
+| `after_execute_meta` | After tool runs | Response data |
+| `schema_modifier` | When loading tools | Tool schema/description |
+
+### Import Path
+```python
+from composio.core.models._modifiers import (
+    after_execute_meta,
+    before_execute_meta,
+    schema_modifier,
+    AfterExecuteMeta,
+    BeforeExecuteMeta,
+    SchemaModifier,
+)
+```
+
+### AfterExecuteMeta - For Cleaning Output
+
+The key modifier for our use case. It receives:
+- `tool: str` - Tool name (e.g., "COMPOSIO_SEARCH_NEWS")
+- `toolkit: str` - Toolkit name (e.g., "composio_search")
+- `session_id: str` - Current session ID
+- `response: ToolExecutionResponse` - The response object
+
+The `ToolExecutionResponse` has:
+```python
+class ToolExecutionResponse:
+    data: Dict[str, Any]      # <-- THE FIELD WE CAN MODIFY
+    error: Optional[str]
+    successful: bool
+```
+
+### Usage Pattern
+```python
+@after_execute_meta(toolkits=["composio_search"])
+def clean_search_results(tool, toolkit, session_id, response):
+    """Clean search results before LLM sees them."""
+    if response.successful:
+        # Modify response.data to be cleaner/smaller
+        response.data = format_clean(response.data)
+    return response
+
+# Apply when getting tools
+tools = session.tools(modifiers=[clean_search_results])
+```
+
+### Benefits for Our Research Pipeline
+
+1. **Token Savings** - Remove verbose metadata before LLM processing
+2. **Consistent Format** - Normalize different tool outputs to standard format
+3. **Pre-Processing** - Aggregate/summarize at Composio level
+4. **Separation of Concerns** - Data cleaning separate from agent logic
+
+See: [composio_modifier_prototype.py](file:///home/kjdragan/lrepos/universal_agent/scripts/composio_modifier_prototype.py)
+
+---
+
+## 🚀 NEW: `composio-claude-agent-sdk` Package
 
 **Discovery:** There is now a **dedicated provider package** for Claude Code Agents!
 
 **Installation:**
 ```bash
-pip install composio-claude-code-agents==0.10.2
+pip install composio-claude-agent-sdk==0.10.6
 ```
 
 **New Provider Pattern:**
 ```python
 from composio import Composio
-from composio_claude_code_agents import ClaudeCodeAgentsProvider
+from composio_claude_agent_sdk import ClaudeAgentSDKProvider
 
-# Initialize with the Claude Code Agents Provider
-composio = Composio(provider=ClaudeCodeAgentsProvider())
+# Initialize with the Claude Agent SDK Provider
+composio = Composio(api_key=api_key, provider=ClaudeAgentSDKProvider())
 
-user_id = "user@acme.org"
-tools = composio.tools.get(user_id=user_id, toolkits=["HACKERNEWS"])
-
-# These tools integrate directly with Claude Code Agent SDK
+# Session still works - MCP URL still available!
+session = composio.create(user_id=user_id)
+print(session.mcp.url)  # Still works!
 ```
 
 > [!IMPORTANT]
-> This provider pattern significantly simplifies integration. Instead of manually setting up MCP HTTP servers, the provider handles the tool schema and execution natively.
+> The provider pattern **does NOT replace MCP** - you can use both! The session still provides `mcp.url` for our local_toolkit integration.
 
-**Impact on Our System:**
-- Could replace our manual MCP HTTP configuration
-- Native type safety for Claude Agent SDK
-- Better error handling at the SDK level
-- Potentially simpler hook integration
+**Key Finding:**
+- `ClaudeAgentSDKProvider` - correct class name (capital SDK)
+- MCP URL still available via `session.mcp.url`
+- Local MCP servers can coexist with provider pattern
 
 ---
 
