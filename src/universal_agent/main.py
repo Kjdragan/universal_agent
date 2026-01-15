@@ -395,10 +395,10 @@ _LETTA_CONTEXT = None
 _LETTA_CONTEXT_READY = False
 _letta_client = None
 _letta_async_client = None
-_LETTA_SUBAGENT_ENABLED = os.getenv("UA_LETTA_SUBAGENT_MEMORY", "1").lower() not in {
-    "0",
-    "false",
-    "no",
+_LETTA_SUBAGENT_ENABLED = os.getenv("UA_LETTA_SUBAGENT_MEMORY", "0").lower() in {
+    "1",
+    "true",
+    "yes",
 }
 
 try:
@@ -417,6 +417,12 @@ try:
             model="anthropic/claude-sonnet-4-20250514",
         )
         print(f"✅ Letta agent '{LETTA_AGENT_NAME}' created")
+    
+    # Log subagent memory status
+    if _LETTA_SUBAGENT_ENABLED:
+        print("🧠 Letta subagent memory: ENABLED (set UA_LETTA_SUBAGENT_MEMORY=0 to disable)")
+    else:
+        print("🧠 Letta subagent memory: DISABLED (set UA_LETTA_SUBAGENT_MEMORY=1 to enable)")
 
 except ImportError:
     LETTA_ENABLED = False
@@ -5072,6 +5078,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     if len(input_preview) > max_len:
                                         input_preview = input_preview[:max_len] + "..."
                                     print(f"   Input: {input_preview}")
+                                
+                                # Show what we're waiting for
+                                print(f"   ⏳ Waiting for {block.name} response...")
 
                         elif isinstance(block, TextBlock):
                             if "connect.composio.dev/link" in block.text:
@@ -5588,6 +5597,11 @@ def parse_cli_args() -> argparse.Namespace:
         "--explain-tool-policy",
         dest="explain_tool_policy",
         help="Explain resolved tool policy for a raw tool name.",
+    )
+    parser.add_argument(
+        "--reset-letta",
+        action="store_true",
+        help="Reset Letta memory for all agents (fresh start).",
     )
     return parser.parse_args()
 
@@ -6536,6 +6550,43 @@ async def main(args: argparse.Namespace):
 
     if args.explain_tool_policy:
         _print_tool_policy_explain(args.explain_tool_policy)
+        main_span.__exit__(None, None, None)
+        return
+    
+    # Handle --reset-letta: clear all Letta memory
+    if getattr(args, 'reset_letta', False) and LETTA_ENABLED and _letta_client:
+        print("🧹 Resetting Letta memory...")
+        try:
+            # Delete and recreate the main agent
+            try:
+                _letta_client.agents.delete(LETTA_AGENT_NAME)
+                print(f"   Deleted agent: {LETTA_AGENT_NAME}")
+            except Exception:
+                pass
+            _letta_client.agents.create(
+                agent=LETTA_AGENT_NAME,
+                memory=LETTA_MEMORY_BLOCKS,
+                model="anthropic/claude-sonnet-4-20250514",
+            )
+            print(f"   Recreated agent: {LETTA_AGENT_NAME}")
+            
+            # List and delete any subagent agents
+            try:
+                all_agents = _letta_client.agents.list()
+                for agent in all_agents:
+                    agent_name = getattr(agent, 'name', '') or getattr(agent, 'agent', '')
+                    if agent_name and agent_name != LETTA_AGENT_NAME:
+                        try:
+                            _letta_client.agents.delete(agent_name)
+                            print(f"   Deleted subagent: {agent_name}")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            
+            print("✅ Letta memory reset complete!")
+        except Exception as e:
+            print(f"⚠️ Letta reset error: {e}")
         main_span.__exit__(None, None, None)
         return
 
