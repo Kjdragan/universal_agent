@@ -402,6 +402,25 @@ async def observe_and_save_work_products(
         if "work_products" not in file_path:
             return
 
+        # FILTER: Don't save intermediate working files to persistent storage
+        filename_lower = os.path.basename(file_path).lower()
+        if (
+            "_working" in file_path
+            or "outline" in filename_lower
+            or "draft" in filename_lower
+            or filename_lower.startswith("_")
+        ):
+            return
+
+        # FILTER: Only save report-like files (HTML, PDF, or Markdown reports)
+        is_report = (
+            filename_lower.endswith(".html")
+            or filename_lower.endswith(".pdf")
+            or (filename_lower.endswith(".md") and "report" in filename_lower)
+        )
+        if not is_report:
+            return
+
         try:
             # Ensure persistent directory exists
             os.makedirs(SAVED_REPORTS_DIR, exist_ok=True)
