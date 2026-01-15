@@ -987,15 +987,13 @@ class UniversalAgent:
         prompt = (
             f"Report Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
-            "You are a **Report Writer**.\n\n"
-            "**Task:** Create a high-quality HTML report using a structured approach.\n\n"
+            "You are a **Report Writer** creating professional research reports.\n\n"
         )
         
         # If we have cached corpus, inject it directly to skip tool calls
         if cached_corpus:
             prompt += (
                 "## RESEARCH DATA (Pre-loaded)\n\n"
-                "The research corpus is provided below:\n\n"
                 f"```\n{cached_corpus}\n```\n\n"
                 "---\n\n"
             )
@@ -1006,21 +1004,28 @@ class UniversalAgent:
             )
         
         prompt += (
-            "## WORKFLOW\n\n"
-            "1. Read the refined_corpus.md\n"
-            "2. Plan your sections (mentally)\n"
-            "3. Write the full report\n"
-            "4. Review if needed\n\n"
-            "## ⚠️ WRITE TOOL FORMAT (CRITICAL)\n\n"
-            "The Write tool expects a SINGLE OBJECT, not an array:\n"
-            "```json\n"
-            '{"file_path": "/path/to/report.html", "content": "<!DOCTYPE html>..."}\n'
-            "```\n"
-            "**DO NOT pass an array like `[{...}]`**\n\n"
-            "## OUTPUT\n\n"
-            f"Write to: `{workspace_path}/work_products/report.html`\n\n"
-            "- Single HTML file with embedded CSS\n"
-            "- Include Sources section at the end\n"
+            "## UNDERSTAND YOUR CONTENT\n\n"
+            "Before writing, assess your content type:\n"
+            "- **Narrative content**: events with clear connections → weave stories, explain 'why'\n"
+            "- **News collection**: discrete events sharing topic → present clearly, don't force connections\n"
+            "Most reports are a mix - adapt per section.\n\n"
+            "## MULTI-PHASE PROCESS\n\n"
+            "**Phase 1: Deep Reading** - identify key quotes, human stories, statistics\n\n"
+            f"**Phase 2: Outline** - save to `{workspace_path}/work_products/report_outline.md`\n"
+            "   4-6 major sections with notes on key content\n\n"
+            f"**Phase 3: First Draft** - save to `{workspace_path}/work_products/report_draft.md`\n"
+            "   - Use specific details (numbers, names, dates)\n"
+            "   - Include direct quotes with attribution\n"
+            "   - For narratives: connect events, tell stories\n"
+            "   - For collections: organize clearly, provide context\n\n"
+            "**Phase 4: Review** - add missing details, strengthen weak sections\n\n"
+            f"**Phase 5: HTML** - save to `{workspace_path}/work_products/report.html`\n"
+            "   Professional CSS styling, clear hierarchy\n\n"
+            "## ⚠️ CRITICAL RULES\n\n"
+            '1. Write tool expects SINGLE OBJECT: `{"file_path": "...", "content": "..."}`\n'
+            "   DO NOT pass an array like `[{...}]`\n"
+            "2. Do NOT use skills (docx, pptx). Just use Write.\n"
+            "3. Use the richness of your source material - include key details.\n"
         )
         
         tool_knowledge = get_tool_knowledge_block()

@@ -297,6 +297,65 @@ async def extract_batch(
             }
 
 
+async def generate_report_outline(corpus_content: str, articles: list) -> str:
+    """
+    Generate a simple report outline identifying key themes and potential sections.
+    Uses one LLM call to analyze the extracted content.
+    """
+    # Truncate if too long (we just need themes, not full content)
+    content_preview = corpus_content[:30000] if len(corpus_content) > 30000 else corpus_content
+    
+    prompt = f"""Analyze the following research corpus and identify:
+1. Key themes (3-5 major topics covered)
+2. Potential report sections (5-8 logical groupings)
+
+Be concise. Just list the themes and sections with brief descriptions.
+Do NOT write the actual report - just identify the structure.
+
+CORPUS:
+{content_preview}
+
+OUTPUT FORMAT:
+## Key Themes
+- Theme 1: [brief description]
+- Theme 2: [brief description]
+...
+
+## Potential Sections
+1. [Section title] - [what it would cover]
+2. [Section title] - [what it would cover]
+...
+"""
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+        "x-api-key": AUTH_TOKEN,
+        "anthropic-version": "2023-06-01",
+    }
+    
+    payload = {
+        "model": FAST_MODEL,
+        "max_tokens": 1000,  # Outline is short
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{BASE_URL}/v1/messages",
+                headers=headers,
+                json=payload
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("content", [{}])[0].get("text", "## Key Themes\n- Unable to generate outline")
+            else:
+                return "## Key Themes\n- Outline generation failed"
+    except Exception as e:
+        return f"## Key Themes\n- Outline error: {str(e)[:100]}"
+
+
 async def refine_corpus(
     corpus_dir: Path,
     output_file: Path,
@@ -349,7 +408,8 @@ async def refine_corpus(
     print(f"Created {len(batches)} batches (size={BATCH_SIZE})")
     
     # 3. Process batches concurrently with rate limiting
-    print(f"\nProcessing with max {MAX_CONCURRENT} concurrent calls...")
+    print(f"\n⏳ Extracting key facts from {len(articles)} articles...")
+    print(f"   (Using {len(batches)} batches, max {MAX_CONCURRENT} concurrent)")
     semaphore = asyncio.Semaphore(MAX_CONCURRENT)
     
     start_time = time.perf_counter()
@@ -357,6 +417,7 @@ async def refine_corpus(
         tasks = [extract_batch(session, batch, semaphore, i) for i, batch in enumerate(batches)]
         results = await asyncio.gather(*tasks)
     total_time = time.perf_counter() - start_time
+    print(f"   ✅ Extraction complete in {total_time:.1f}s")
     
     # 4. Aggregate results
     successful_outputs = []
@@ -389,12 +450,18 @@ async def refine_corpus(
     # Combine all batch outputs
     combined_content = "\n\n".join(successful_outputs)
     
+    # 5. Generate report outline (one additional LLM call)
+    print(f"\n⏳ Generating report outline...")
+    outline = await generate_report_outline(combined_content, articles)
+    print(f"   ✅ Outline generated")
+    
     # Add sources list at the end
     sources_section = "\n\n---\n\n## Sources\n\n"
     for i, article in enumerate(articles, 1):
         sources_section += f"{i}. **{article.title}** — {article.source}, {article.date}\n"
     
-    full_output = header + combined_content + sources_section
+    # Structure: Outline first, then corpus, then sources
+    full_output = header + outline + "\n\n---\n\n" + combined_content + sources_section
     
     # Write output
     output_file.write_text(full_output, encoding="utf-8")
