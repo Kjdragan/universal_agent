@@ -22,6 +22,7 @@ sys.path.append(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )  # Repo Root
 from universal_agent.search_config import SEARCH_TOOL_CONFIG
+from universal_agent.tools.corpus_refiner import refine_corpus_programmatic
 from tools.workbench_bridge import WorkbenchBridge
 from composio import Composio
 
@@ -550,6 +551,8 @@ def upload_to_composio(
     """
     Upload a local file to Composio S3 for use as an email attachment or other tool input.
     Uses native Composio SDK FileUploadable.from_path() - the correct, supported method.
+    
+    Includes wait-retry logic for race conditions (e.g., file still being written).
 
     Args:
         path: Absolute path to the local file to upload
@@ -561,11 +564,51 @@ def upload_to_composio(
     - mimetype: Detected file type
     - name: Original filename
     """
+    import time
+    
+    MAX_RETRIES = 3
+    abs_path = os.path.abspath(path)
+    
+    # Wait-retry loop for file existence (handles race conditions)
+    for attempt in range(MAX_RETRIES):
+        if os.path.exists(abs_path):
+            break
+        wait_time = 2 ** attempt  # 1s, 2s, 4s
+        sys.stderr.write(
+            f"[upload_to_composio] File not found at {abs_path}, waiting {wait_time}s (attempt {attempt + 1}/{MAX_RETRIES})\n"
+        )
+        time.sleep(wait_time)
+    
+    # Final check after retries
+    if not os.path.exists(abs_path):
+        # Try common alternative locations before giving up
+        session_workspace = os.environ.get("CURRENT_SESSION_WORKSPACE", "")
+        cwd = os.getcwd()
+        basename = os.path.basename(path)
+        
+        alternatives = [
+            os.path.join(session_workspace, "work_products", basename),
+            os.path.join(cwd, basename),
+            os.path.join(cwd, "work_products", basename),
+        ]
+        
+        found_alt = None
+        for alt in alternatives:
+            if alt and os.path.exists(alt):
+                found_alt = alt
+                sys.stderr.write(f"[upload_to_composio] Found file at alternative path: {alt}\n")
+                break
+        
+        if found_alt:
+            abs_path = found_alt
+        else:
+            return json.dumps({
+                "error": f"File not found after {MAX_RETRIES} retries: {path}",
+                "tried_paths": [path] + [a for a in alternatives if a],
+                "suggestion": "Verify the file was created at the expected path. Check Chrome PDF output location."
+            })
+    
     try:
-        abs_path = os.path.abspath(path)
-        if not os.path.exists(abs_path):
-            return json.dumps({"error": f"File not found: {path}"})
-
         # Import native Composio file helper
         from composio.core.models._files import FileUploadable
 
@@ -574,7 +617,7 @@ def upload_to_composio(
 
         # Use native SDK method - this is the correct approach per Composio docs
         sys.stderr.write(
-            f"[upload_to_composio] Uploading {abs_path} via native FileUploadable.from_path()\\n"
+            f"[upload_to_composio] Uploading {abs_path} via native FileUploadable.from_path()\n"
         )
 
         result = FileUploadable.from_path(
@@ -616,13 +659,13 @@ def upload_to_composio(
             },
         }
 
-        sys.stderr.write(f"[upload_to_composio] SUCCESS: s3key={result.s3key}\\n")
+        sys.stderr.write(f"[upload_to_composio] SUCCESS: s3key={result.s3key}\n")
         return json.dumps(response, indent=2)
 
     except Exception as e:
         import traceback
 
-        sys.stderr.write(f"[upload_to_composio] ERROR: {traceback.format_exc()}\\n")
+        sys.stderr.write(f"[upload_to_composio] ERROR: {traceback.format_exc()}\n")
         return json.dumps({"error": str(e)})
 
 
@@ -1616,7 +1659,38 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
         with open(overview_path, "w", encoding="utf-8") as f:
             f.write("\n".join(overview_lines))
 
-        # 6. Calculate corpus size and recommend mode
+        # 6. Run corpus refinement (AUTOMATIC - deterministic Python)
+        # This replaces the legacy evidence_ledger approach with batched LLM extraction
+        # Always uses expanded mode for maximum detail; agent can override with accelerated if needed
+        refined_corpus_path = None
+        refiner_metrics = None
+        
+        if len(filtered_files) > 0:
+            try:
+                from pathlib import Path
+                
+                sys.stderr.write(
+                    f"[finalize] Running corpus refinement ({len(filtered_files)} files, mode=expanded)...\n"
+                )
+                
+                refiner_metrics = await refine_corpus_programmatic(
+                    corpus_dir=Path(filtered_dir),
+                    output_file=Path(task_dir) / "refined_corpus.md",
+                    accelerated=False,  # Always expanded for maximum detail
+                )
+                refined_corpus_path = refiner_metrics.get("output_file")
+                sys.stderr.write(
+                    f"[finalize] Corpus refinement complete: "
+                    f"{refiner_metrics.get('original_words', 0):,} words → "
+                    f"{refiner_metrics.get('output_words', 0):,} words "
+                    f"({refiner_metrics.get('compression_ratio', 0)}x) "
+                    f"in {refiner_metrics.get('total_time_ms', 0) / 1000:.1f}s\n"
+                )
+            except Exception as e:
+                sys.stderr.write(f"[finalize] Corpus refinement failed: {e}\n")
+                # Non-fatal - continue without refinement
+        
+        # 7. Calculate corpus size and recommend mode
         failed_urls = crawl_result.get("errors", [])
         
         # Calculate total corpus size (chars and words)
@@ -1631,14 +1705,17 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
             if fpath and os.path.exists(fpath):
                 total_corpus_chars += os.path.getsize(fpath)
         
-        # Determine recommended mode based on thresholds
+        # Simplified mode recommendation - we now have refined_corpus.md available
         file_count = len(filtered_files)
-        if total_corpus_chars >= 150000 or file_count >= 15:
+        if refined_corpus_path:
+            recommended_mode = "REFINED_CORPUS"
+            mode_reason = f"Refined corpus available ({refiner_metrics.get('output_words', 0):,} words). Read refined_corpus.md instead of individual files."
+        elif total_corpus_chars >= 150000 or file_count >= 15:
             recommended_mode = "HARNESS_REQUIRED"
             mode_reason = f"Corpus too large for single context ({total_corpus_chars:,} chars, {file_count} files). Use /harness mode."
         elif total_corpus_chars >= 100000 or file_count >= 8:
-            recommended_mode = "EVIDENCE_LEDGER"
-            mode_reason = f"Large corpus ({total_corpus_chars:,} chars, {file_count} files). Build evidence ledger before synthesis."
+            recommended_mode = "LARGE_CORPUS"
+            mode_reason = f"Large corpus ({total_corpus_chars:,} chars, {file_count} files). Consider using refined_corpus.md."
         else:
             recommended_mode = "STANDARD"
             mode_reason = f"Small corpus ({total_corpus_chars:,} chars, {file_count} files). Direct read and synthesis."
@@ -1664,8 +1741,16 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
                     "total_chars": total_corpus_chars,
                     "total_words": total_corpus_words,
                 },
+                # NEW: Refined corpus info
+                "refined_corpus": {
+                    "path": refined_corpus_path,
+                    "original_words": refiner_metrics.get("original_words") if refiner_metrics else None,
+                    "output_words": refiner_metrics.get("output_words") if refiner_metrics else None,
+                    "compression_ratio": refiner_metrics.get("compression_ratio") if refiner_metrics else None,
+                    "processing_time_ms": refiner_metrics.get("total_time_ms") if refiner_metrics else None,
+                } if refiner_metrics else None,
                 "overview_path": overview_path,
-                # NEW: Mode recommendation for subagent
+                # Updated mode recommendation
                 "recommended_mode": recommended_mode,
                 "mode_reason": mode_reason,
             },

@@ -899,21 +899,21 @@ class UniversalAgent:
             "- Use `Write` ONLY for creating FILE CONTENT (reports, code, etc.).\n"
             "- DO NOT confuse them. Sending content to TodoWrite will fail. Sending todos to Write will fail.\n\n"
             "## CRITICAL DELEGATION RULES (ABSOLUTE)\n\n"
-            "You are a COORDINATOR/ROUTER Agent. Your job is to assess requests and DELEGATE heavy work.\n"
+            "You are a COORDINATOR Agent. Your job is to assess requests and DELEGATE to specialists.\n"
             "**Rule #1:** For ANY request involving 'report', 'research', 'analysis', or 'detailed summary':\n"
-            "   -> **STEP 1:** Delegate to `research-specialist` (Task tool). Instruct it to 'Finalize research corpus for [topic]'.\n"
-            "   -> **STEP 2:** When Step 1 completes, delegate to `report-writer` (Task tool). Instruct it to 'Write the report using the research_overview.md'.\n"
-            "   -> 🛑 **PROHIBITED:** Do NOT ask `research-specialist` to write the report. It will refuse.\n"
+            "   -> **STEP 1:** Delegate to `research-specialist` (Task tool) IMMEDIATELY.\n"
+            "      PROMPT: 'Research [topic]: execute searches, crawl sources, finalize corpus.'\n"
+            "      (Research-specialist handles the ENTIRE research pipeline: search → crawl → filter → overview)\n"
+            "   -> **STEP 2:** When Step 1 completes, delegate to `report-writer` (Task tool).\n"
+            "      PROMPT: 'Write the full HTML report using research_overview.md.'\n"
+            "   -> 🛑 **PROHIBITED:** Do NOT perform web searches yourself. Delegate immediately.\n"
             "   -> 🛑 **PROHIBITED:** Do NOT write the report yourself.\n\n"
             "For SIMPLE factual queries (e.g., 'who won the game?', 'weather in Paris'):\n"
             "   -> Use search tools and answer directly.\n\n"
             "DO NOT attempt to create FULL HTML reports yourself. If a full report is needed, delegate.\n"
-            "**Delegation Instruction:**\n"
-            "   - Call `research-specialist` -> 'Run finalize_research for [topic] and stop.'\n"
-            "   - Call `report-writer` -> 'Read research_overview.md and write the full HTML report.'\n\n"
-            "## SEARCH HYGIENE\n"
-            "- When using COMPOSIO_SEARCH_NEWS or COMPOSIO_SEARCH_WEB, append `-site:wikipedia.org` to the query by default to avoid wasting search slots.\n"
-            "- Only omit this if the user explicitly asks for Wikipedia.\n\n"
+            "**Delegation Prompts:**\n"
+            "   - `research-specialist` -> 'Research [topic]: execute searches, crawl sources, finalize corpus.'\n"
+            "   - `report-writer` -> 'Write the full HTML report using research_overview.md.'\n\n"
             "## EMAIL REQUIREMENTS\n\n"
             "When sending reports via email:\n"
             "1. Delegate to `research-specialist` (gather data)\n"
@@ -934,54 +934,117 @@ class UniversalAgent:
         return prompt
 
     def _build_research_specialist_prompt(self, workspace_path: str) -> str:
-        """Build the research-specialist sub-agent prompt."""
+        """Build the research-specialist sub-agent prompt with full search pipeline."""
         prompt = (
             f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
             "You are a **Research Specialist** sub-agent.\n"
-            "**Goal:** Gather, filter, and organize research data into a clean corpus.\n"
-            "**You do NOT write reports.** You prepare the data for the Writer agent.\n\n"
-            "## MANDATORY WORKFLOW\n"
-            "1. **Call `mcp__local_toolkit__finalize_research`** immediately.\n"
-            "   - `session_dir`: {workspace_path}\n"
-            "   - `task_name`: (derive from user request, e.g., 'russia_ukraine')\n"
-            "2. **Verify Output**:\n"
-            "   - Tool will create `{workspace_path}/search_results/research_overview.md`\n"
-            "   - It will organize crawled files into `filtered_corpus/`\n"
-            "3. **STOP**:\n"
-            "   - Once the tool returns success, say: 'Research finalized. Overview ready at [path]. Returning to main agent.'\n"
-            "   - DO NOT attempt to read the files. DO NOT write a report.\n\n"
-            "## AVAILABLE TOOLS\n"
-            "- `finalize_research`: The ONLY tool you usually need. It scans search results, crawls URLs, and creates the overview.\n"
-            "- `crawl_parallel`: Use only if you need to fetch specific extra URLs manually.\n"
+            "**Goal:** Execute the COMPLETE research pipeline from web search to corpus finalization.\n"
+            "**You do NOT write reports.** You gather and organize data for the Writer agent.\n\n"
+            "## MANDATORY WORKFLOW (2 Steps ONLY)\n\n"
+            "### Step 1: Search & Discovery\n"
+            "Execute searches using `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL`:\n"
+            "   - Use `COMPOSIO_SEARCH_NEWS` for recent news\n"
+            "   - Use `COMPOSIO_SEARCH_WEB` for general web content\n"
+            "   - Execute 3-5 diverse searches to get 15-20+ sources\n\n"
+            "**CRITICAL:** ALWAYS append `-site:wikipedia.org` to EVERY search query.\n\n"
+            "The Observer automatically saves results to `search_results/*.json`.\n\n"
+            "### Step 2: Finalize Research (ONE TOOL CALL)\n"
+            "**IMMEDIATELY** call `mcp__local_toolkit__finalize_research`:\n"
+            f"   - `session_dir`: {workspace_path}\n"
+            "   - `task_name`: (derive from research topic, e.g., 'russia_ukraine_war')\n\n"
+            "**What this tool does AUTOMATICALLY (you do NOT need to do these manually):**\n"
+            "  1. ✅ Reads all `search_results/*.json` files\n"
+            "  2. ✅ Extracts ALL URLs programmatically (Python code, not Bash)\n"
+            "  3. ✅ Crawls ALL URLs in parallel\n"
+            "  4. ✅ Filters and deduplicates content\n"
+            "  5. ✅ Creates `tasks/{task_name}/research_overview.md`\n\n"
+            "🚫 **PROHIBITED ACTIONS (DO NOT DO THESE):**\n"
+            "  - ❌ Do NOT use Bash/grep/jq to extract URLs from JSON files\n"
+            "  - ❌ Do NOT manually call `crawl_parallel` after searches\n"
+            "  - ❌ Do NOT read or inspect the JSON files yourself\n"
+            "  - ❌ Do NOT write any Python scripts to process search results\n"
+            "  Just call `finalize_research` - it handles EVERYTHING.\n\n"
+            "### After finalize_research completes:\n"
+            "1. Verify `research_overview.md` exists\n"
+            "2. Report: 'Research complete. [N] sources, [M] files. Overview at [path]. Returning.'\n"
+            "3. **STOP immediately**\n\n"
+            "## TOOLS\n"
+            "- `COMPOSIO_MULTI_EXECUTE_TOOL`: Execute parallel searches\n"
+            "- `finalize_research`: Process ALL search results → crawl → filter → overview\n"
         )
         tool_knowledge = get_tool_knowledge_block()
         if tool_knowledge:
             prompt += f"\n\n{tool_knowledge}"
         return prompt
 
-    def _build_report_writer_prompt(self, workspace_path: str) -> str:
-        """Build the report-writer sub-agent prompt."""
+    def _build_report_writer_prompt(self, workspace_path: str, cached_corpus: str = None) -> str:
+        """Build the report-writer sub-agent prompt.
+        
+        Args:
+            workspace_path: Path to the session workspace
+            cached_corpus: Optional pre-loaded corpus text from checkpoint cache
+        """
         prompt = (
             f"Report Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
             "You are a **Report Writer** sub-agent.\n"
             "**Goal:** Read the prepared research corpus and write a professional HTML report.\n"
             "**Context:** You are starting FRESH. The research has already been gathered by the Specialist.\n\n"
-            "## INPUT DATA\n"
-            f"1. **Primary Index:** `{workspace_path}/search_results/research_overview.md`\n"
-            "   - Contains list of filtered files and top snippets.\n"
-            "   - **START HERE.** Read this file first.\n"
-            f"2. **Corpus Files:** `{workspace_path}/tasks/[task_name]/filtered_corpus/*.md`\n"
-            "   - Full content of relevant articles.\n\n"
+        )
+        
+        # If we have cached corpus, inject it directly to skip tool calls
+        if cached_corpus:
+            prompt += (
+                "## ✅ PRE-LOADED RESEARCH CORPUS (FROM CHECKPOINT CACHE)\n"
+                "The research corpus has been loaded from a previous checkpoint. "
+                "You do NOT need to call `read_research_files`. The data is below:\n\n"
+                f"```\n{cached_corpus}\n```\n\n"
+                "---\n\n"
+            )
+        else:
+            prompt += (
+                "## INPUT DATA\n"
+                f"1. **Primary Index:** `{workspace_path}/search_results/research_overview.md`\n"
+                "   - Contains list of filtered files and top snippets.\n"
+                "   - **START HERE.** Read this file first.\n"
+                f"2. **Corpus Files:** `{workspace_path}/tasks/[task_name]/filtered_corpus/*.md`\n"
+                "   - Full content of relevant articles.\n\n"
+            )
+        
+        prompt += (
             "## WRITING WORKFLOW (One-Shot)\n"
-            "1. **Read Overview**: Read `research_overview.md` to map out your sections.\n"
-            "2. **Read ALL Data**: Call `read_research_files` with ALL relevant file paths to load the full context.\n"
-            "   - You have a large context window. Load everything you need.\n"
+        )
+        
+        if not cached_corpus:
+            prompt += (
+                "1. **Read Overview**: Read `research_overview.md` to map out your sections.\n"
+                "2. **Read ALL Data**: Call `read_research_files` with ALL relevant file paths to load the full context.\n"
+                "   - You have a large context window. Load everything you need.\n"
+                "   - **BATCHING**: If the tool truncates due to size limits, it will output:\n"
+                "     `👇 TO CONTINUE, CALL TOOL AGAIN WITH THESE FILES: [...]`\n"
+                "   - **IMPORTANT**: Use EXACTLY the file list provided. Do NOT include files you already read.\n"
+                "   - **NEVER re-read a file** you already received content for.\n"
+            )
+        
+        prompt += (
             "3. **Write FULL Report**: Call `Write` to create the complete `work_products/report.html` file in one shot.\n"
             "   - **Structure**: Single-page HTML with CSS for a magazine-style layout.\n"
             "   - **Detailed**: Be exhaustive. Use specific quotes, dates, and numbers.\n"
             "   - **Do NOT** use `append_to_file` explicitly unless you hit output token limits (very rare).\n\n"
+            "## ⚠️ WRITE TOOL SCHEMA (CRITICAL - READ CAREFULLY)\n"
+            "When calling the `Write` tool, you MUST use this EXACT JSON format:\n"
+            "```json\n"
+            "{\n"
+            '  "file_path": "/absolute/path/to/report.html",\n'
+            '  "content": "<entire HTML document as a single string>"\n'
+            "}\n"
+            "```\n"
+            "**RULES:**\n"
+            "- Pass a SINGLE OBJECT, not an array.\n"
+            "- The `content` field must be ONE string containing the entire HTML.\n"
+            "- Do NOT split CSS rules into separate JSON objects.\n"
+            "- The HTML content should include embedded `<style>` tags, not separate CSS objects.\n\n"
             "## CRITICAL: ONE-SHOT GENERATION\n"
             "- **Strategy**: Ingest all data -> Synthesize -> Write entire file.\n"
             "- **Goal**: Create a cohesive narrative flow that isn't fragmented by section-based writing.\n"

@@ -204,10 +204,10 @@ if not LOGFIRE_DISABLED:
     )
 
 # TIMEOUT CONFIGURATION (Critical for Large Reports)
-# Default is 60s (60000ms), which fails for 30KB+ generation.
-# We set to 20 minutes (1200000ms) to allow "Deep Thinking".
+# Default is 60s (60000ms).
+# We set to 60 minutes (3600000ms) to allow "Deep Thinking" and long tool loops.
 if "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT" not in os.environ:
-    os.environ["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = "1200000"
+    os.environ["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = "3600000"
 
 if LOGFIRE_TOKEN:
     # Custom scrubbing to prevent over-redaction of previews
@@ -331,7 +331,7 @@ from universal_agent.durable.state import (
     increment_iteration_count,
     get_iteration_info,
 )
-from universal_agent.durable.checkpointing import save_checkpoint, load_last_checkpoint
+from universal_agent.durable.checkpointing import save_checkpoint, load_last_checkpoint, load_corpus_cache
 # Local MCP server provides: crawl_parallel, finalize_research, read_research_files, append_to_file, etc.\n# Note: File Read/Write now uses native Claude SDK tools
 
 # Composio client - will be initialized in main() with file_download_dir
@@ -1566,6 +1566,101 @@ async def on_post_tool_use_validation(
         step_id=current_step_id,
         logger=logfire,
     )
+
+
+async def on_post_research_finalized_cache(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """
+    PostToolUse Hook: Cache refined_corpus.md for sub-agent context restoration.
+    
+    When finalize_research completes successfully, save the refined corpus to the
+    checkpoints table. This is THE canonical research checkpoint - if the harness
+    restarts after research but before report generation, this is all we need.
+    
+    The refined_corpus.md is:
+    - Token-efficient (~10K tokens vs ~50K raw)
+    - Citation-preserving (sources, dates, URLs)
+    - LLM-ready (extracted facts, quotes, statistics)
+    """
+    global run_id, current_step_id, runtime_db_conn
+    
+    # Only process finalize_research tool results
+    tool_name = context.get("tool_name", "") or input_data.get("tool_name", "")
+    if "finalize_research" not in tool_name:
+        return {}
+    
+    # Extract the result to find the refined corpus path
+    result = input_data.get("tool_result", "") or input_data.get("result", "")
+    if not result:
+        return {}
+    
+    # Parse the JSON result to get refined_corpus path
+    refined_corpus_path = None
+    try:
+        import json
+        if isinstance(result, str):
+            data = json.loads(result)
+        elif isinstance(result, dict):
+            data = result
+        else:
+            return {}
+        
+        # Extract path from the refined_corpus section
+        if isinstance(data, dict):
+            refined_info = data.get("refined_corpus", {})
+            if refined_info:
+                refined_corpus_path = refined_info.get("path")
+    except (json.JSONDecodeError, KeyError):
+        return {}
+    
+    if not refined_corpus_path:
+        return {}
+    
+    # Read the refined corpus content
+    try:
+        if os.path.exists(refined_corpus_path):
+            with open(refined_corpus_path, "r", encoding="utf-8") as f:
+                corpus_text = f.read()
+        else:
+            logfire.warning("refined_corpus_not_found", path=refined_corpus_path)
+            return {}
+    except Exception as exc:
+        logfire.warning("refined_corpus_read_failed", error=str(exc))
+        return {}
+    
+    # Only cache if we have substantial content
+    if len(corpus_text) < 500:
+        logfire.warning("refined_corpus_too_small", chars=len(corpus_text))
+        return {}
+    
+    # Save to checkpoint database - this is THE canonical research checkpoint
+    try:
+        if runtime_db_conn and run_id and current_step_id:
+            save_checkpoint(
+                runtime_db_conn,
+                run_id=run_id,
+                step_id=current_step_id,
+                checkpoint_type="refined_corpus_cache",
+                state_snapshot={
+                    "source": "refined_corpus.md",
+                    "path": refined_corpus_path,
+                    "chars": len(corpus_text),
+                    "words": len(corpus_text.split()),
+                },
+                corpus_data=corpus_text,
+            )
+            logfire.info(
+                "refined_corpus_cached",
+                run_id=run_id,
+                corpus_chars=len(corpus_text),
+                path=refined_corpus_path,
+            )
+            print(f"\n✅ Research checkpoint saved: refined_corpus.md ({len(corpus_text):,} chars)")
+    except Exception as exc:
+        logfire.warning("refined_corpus_cache_failed", error=str(exc))
+    
+    return {}
 
 
 async def on_pre_bash_skill_hint(
@@ -5833,17 +5928,16 @@ async def setup_session(
             "   - DO NOT use it as a text editor or file buffer for small data. Do that LOCALLY.\n"
             "   - 🚫 NEVER use REMOTE_WORKBENCH to save search results. The Observer already saves them automatically.\n"
             "   - 🚫 NEVER try to access local files from REMOTE_WORKBENCH - local paths don't exist there!\n"
-            "4. 🚨 MANDATORY DELEGATION FOR REPORTS (HAND-OFF PROTOCOL):\n"
-            "   - Role: You are the SCOUT. You find the information sources.\n"
-            "   - Sub-Agent Role: The SPECIALISTS. They process and synthesize the sources.\n"
+            "4. 🚨 MANDATORY DELEGATION FOR RESEARCH & REPORTS:\n"
+            "   - Role: You are the COORDINATOR. You delegate work to specialists.\n"
+            "   - DO NOT perform web searches yourself. Delegate to `research-specialist`.\n"
             "   - PROCEDURE:\n"
-            "     1. COMPOSIO Search -> Results are **AUTO-SAVED** by Observer to `search_results/`. DO NOT save again.\n"
-            "     2. DO NOT read these files or extract URLs yourself. You are not the Expert.\n"
-            "     3. **STEP 1:** Delegate to `research-specialist` using `Task`.\n"
-            "        PROMPT: 'Run finalize_research for [topic] and stop.'\n"
-            "     4. **STEP 2:** When Step 1 completes, delegate to `report-writer` using `Task`.\n"
-            "        PROMPT: 'Read research_overview.md and write the full HTML report.'\n"
-            "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject a system message with next steps.\n"
+            "     1. **STEP 1:** Delegate to `research-specialist` using `Task` IMMEDIATELY.\n"
+            "        PROMPT: 'Research [topic]: execute searches, crawl sources, finalize corpus.'\n"
+            "        (The research-specialist handles: COMPOSIO search → crawl → filter → overview)\n"
+            "     2. **STEP 2:** When Step 1 completes, delegate to `report-writer` using `Task`.\n"
+            "        PROMPT: 'Write the full HTML report using research_overview.md.'\n"
+            "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject next steps.\n"
             "     Wait for this message before proceeding with upload/email.\n"
             "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
             "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', session_id='xxx')`\n"
@@ -5957,13 +6051,16 @@ async def setup_session(
         agents={
             "research-specialist": AgentDefinition(
                 description=(
-                    "Specialist for GATHERING research data. "
+                    "Specialist for the COMPLETE research pipeline: search → crawl → filter. "
                     "DELEGATE when user asks to: 'research X', 'find info about Y', 'analyze findings'. "
-                    "This agent DOES NOT write the report. It only gathers data."
+                    "This agent handles web searches, URL crawling, and corpus creation. "
+                    "It DOES NOT write the final report."
                 ),
                 prompt=agent._build_research_specialist_prompt(workspace_dir),
                 tools=[
                     "Bash",
+                    "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+                    "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
                     "mcp__local_toolkit__finalize_research",
                     "mcp__local_toolkit__crawl_parallel",
                     "mcp__local_toolkit__list_directory",
@@ -6137,6 +6234,7 @@ async def setup_session(
             "PostToolUse": [
                 HookMatcher(matcher=None, hooks=[on_post_tool_use_ledger]),
                 HookMatcher(matcher=None, hooks=[on_post_tool_use_validation]),
+                HookMatcher(matcher=None, hooks=[on_post_research_finalized_cache]),  # Cache refined_corpus.md on finalize
                 HookMatcher(matcher="Task", hooks=[on_post_task_guidance]),
             ],
             # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
@@ -7016,6 +7114,7 @@ async def main(args: argparse.Namespace):
                             f"A Mission Manifest (mission.json) exists in your workspace with status=IN_PROGRESS.\n"
                             f"Read it, identify the next PENDING task, execute it fully, then mark it COMPLETE.\n"
                             f"Update mission_progress.txt with notes for future iterations.\n"
+                            f"CRITICAL: Before marking any task 'COMPLETED' or sending 'TASK_COMPLETE', you MUST append a '## Completion Rationale' section to `mission_progress.txt` explaining exactly WHY you believe the work is finished and verifying the artifacts exist.\n"
                             f"When ALL tasks are complete, output 'TASK_COMPLETE'.\n"
                             f"If you cannot complete a phase in this iteration, output a clear stopping point.\n"
                             f"Begin execution now."
@@ -7154,6 +7253,37 @@ async def main(args: argparse.Namespace):
 
                         # 5. Continue loop (skips existing post-turn logic, goes to next iteration)
                         continue
+
+                    # [PLANNING PHASE CHECK] After each iteration, check if agent created mission.json with PLANNING status
+                    # This catches the case where the agent creates a plan on the FIRST iteration
+                    planning_mission_file = os.path.join(workspace_dir, "mission.json")
+                    if os.path.exists(planning_mission_file):
+                        try:
+                            with open(planning_mission_file, "r") as f:
+                                mission_check = json.load(f)
+                            if mission_check.get("status") == "PLANNING":
+                                print(
+                                    "\n📋 Planning Phase Complete - Awaiting User Approval"
+                                )
+                                approved = present_plan_summary(mission_check)
+                                if approved:
+                                    mission_check["status"] = "IN_PROGRESS"
+                                    with open(planning_mission_file, "w") as f:
+                                        json.dump(mission_check, f, indent=2)
+                                    print(
+                                        "✅ Plan approved. Transitioning to IN_PROGRESS."
+                                    )
+                                    # Set next prompt to kick off execution
+                                    pending_prompt = "Execute the mission.json tasks starting now."
+                                else:
+                                    print(
+                                        "⏸️ Plan not approved. Please edit mission.json and restart."
+                                    )
+                                    # Wait for user changes - continue to next prompt
+                                    pending_prompt = None
+                                    continue
+                        except Exception as e:
+                            print(f"⚠️ Failed to check mission.json for PLANNING status: {e}")
 
                     # [Non-Blocking Interview] Check for pending interview after iteration
                     interview_prompt = _process_pending_interview(workspace_dir)
@@ -7406,44 +7536,95 @@ async def main(args: argparse.Namespace):
                                     with open(mission_path, "r") as f:
                                         m_data = json.load(f)
                                     
+                                    # [Mission Completeness Check]
+                                    # Ensure ALL tasks are COMPLETED before accepting termination
+                                    incomplete_tasks = [
+                                        t.get("id") for t in m_data.get("tasks", [])
+                                        if t.get("status") not in ("COMPLETED", "SKIPPED")
+                                    ]
+                                    if incomplete_tasks:
+                                        verification_passed = False
+                                        # Construct a directive prompt for the FRESH agent
+                                        next_task = incomplete_tasks[0]
+                                        failure_reason = (
+                                            f"Mission Incomplete: The following tasks are still pending: {', '.join(incomplete_tasks)}.\n"
+                                            f"You cannot finish until these are COMPLETED."
+                                        )
+                                        
+                                        # Smart Restart: Tell the new agent exactly what to do
+                                        action = "restart"
+                                        
+                                        # [Context Injection] Why did the previous agent think it was done?
+                                        rationale_context = ""
+                                        progress_path = os.path.join(workspace_dir, "mission_progress.txt")
+                                        if os.path.exists(progress_path):
+                                            try:
+                                                with open(progress_path, "r") as pf:
+                                                    rationale_context = f"\n📄 PREVIOUS COMPLETION RATIONALE (from mission_progress.txt):\n```text\n{pf.read()[-2000:]}\n```\n(The above rationale was REJECTED because tasks are still pending.)"
+                                            except Exception:
+                                                pass
+
+                                        next_prompt = (
+                                            f"⛔ MISSION INCOMPLETE (HALLUCINATION DETECTED)\n"
+                                            f"The previous agent attempted to finish, but tasks remain pending: {', '.join(incomplete_tasks)}.\n"
+                                            f"{rationale_context}\n\n"
+                                            f"⚡ ACTION REQUIRED (FRESH CONTEXT):\n"
+                                            f"You are a new agent instance with a fresh context window.\n"
+                                            f"1. Read `mission.json` to get the full details for Task '{next_task}'.\n"
+                                            f"2. EXECUTE Task '{next_task}' IMMEDIATELY.\n"
+                                            f"   - Do not ask for permission.\n"
+                                            f"   - Do not re-plan.\n"
+                                            f"   - Just do the work.\n\n"
+                                            f"Restarting execution to finish Task '{next_task}'..."
+                                        )
+                                        # Trigger restart
+                                        pending_prompt = next_prompt
+                                        if hasattr(client, "history"):
+                                            client.history = []
+                                        continue
+
                                     # Verify all completed tasks
-                                    for task in m_data.get("tasks", []):
-                                        if task.get("status") == "COMPLETED":
-                                            # Binary Check
-                                            v_ok, v_msg = verifier.verify_artifacts(task, workspace_dir)
-                                            if not v_ok:
-                                                verification_passed = False
-                                                failure_reason = f"Artifact Verification Failed for task '{task.get('id')}': {v_msg}"
-                                                break
-                                            
-                                            # Quality Check (LLM) - Optional for now, but enabled per plan
-                                            # q_ok, q_msg = await verifier.verify_quality(task, workspace_dir)
-                                            # if not q_ok:
-                                            #    verification_passed = False
-                                            #    failure_reason = f"Quality Verification Failed: {q_msg}"
-                                            #    break
+                                    if verification_passed:
+                                        for task in m_data.get("tasks", []):
+                                            if task.get("status") == "COMPLETED":
+                                                # Binary Check
+                                                v_ok, v_msg = verifier.verify_artifacts(task, workspace_dir)
+                                                if not v_ok:
+                                                    verification_passed = False
+                                                    failure_reason = f"Artifact Verification Failed for task '{task.get('id')}': {v_msg}"
+                                                    break
                                 except Exception as ve:
                                     print(f"⚠️ Verification System Error: {ve}")
                                     # We don't block on system error, but we log it
-                            
-                            if not verification_passed:
-                                print(f"❌ VERIFICATION FAILED: {failure_reason}")
-                                action = "restart"
-                                next_prompt = (
-                                    f"⛔ SYSTEM VERIFICATION FAILED\n"
-                                    f"The task cannot be marked complete because of the following error:\n"
-                                    f"{failure_reason}\n\n"
-                                    f"You must FIX this issue before the mission is accepted.\n"
-                                    f"Restarting execution..."
-                                )
-                                # Continue to restart logic (handled below)
-                                pending_prompt = next_prompt
-                                if hasattr(client, "history"):
-                                    client.history = []
-                                continue
-                            
-                            print("✅ Verification Passed. Finishing run.")
-                            pass
+
+                                if not verification_passed:
+                                    print(f"❌ VERIFICATION FAILED: {failure_reason}")
+                                    action = "restart"
+                                    
+                                    # [Context Injection] Why did the previous agent think it was done?
+                                    rationale_context = ""
+                                    progress_path = os.path.join(workspace_dir, "mission_progress.txt")
+                                    if os.path.exists(progress_path):
+                                        try:
+                                            with open(progress_path, "r") as pf:
+                                                rationale_context = f"\n📄 PREVIOUS COMPLETION RATIONALE (from mission_progress.txt):\n```text\n{pf.read()[-2000:]}\n```\n(The above rationale was REJECTED because tasks are still pending.)"
+                                        except Exception:
+                                            pass
+
+                                    next_prompt = (
+                                        f"⛔ SYSTEM VERIFICATION FAILED\n"
+                                        f"The task cannot be marked complete because of the following error:\n"
+                                        f"{failure_reason}\n\n"
+                                        f"You must FIX this issue before the mission is accepted.\n"
+                                        f"Restarting execution..."
+                                    )
+                                    # Continue to restart logic (handled below)
+                                    pending_prompt = next_prompt
+                                    if hasattr(client, "history"):
+                                        client.history = []
+                                    continue
+                                
+                                print("✅ Verification Passed. Finishing run.")
 
                     if run_mode == "job" and args.job_path:
                         if runtime_db_conn and run_id:
