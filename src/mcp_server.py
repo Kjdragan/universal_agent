@@ -1473,7 +1473,11 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
                 {
                     "status": "No URLs found",
                     "scanned_files": scanned_files,
-                    "note": "Ensure search results are regular JSON files with 'results' or 'articles' lists.",
+                    "error": (
+                        "NO SEARCH RESULTS FOUND. The search tool may have failed silently or found nothing. "
+                        "ACTION REQUIRED: Retry the search using 'mcp__composio__COMPOSIO_SEARCH_TOOLS' with a **modified query** "
+                        "(e.g., change word order or add 'latest') to ensure you get fresh results."
+                    ),
                 }
             )
 

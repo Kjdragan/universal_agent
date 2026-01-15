@@ -383,6 +383,25 @@ async def pre_tool_use_schema_guardrail(
                             "permissionDecisionReason": "tools entries missing tool_slug or arguments.",
                         },
                     }
+                
+                # [MAX PARALLEL SEARCHES GUARDRAIL]
+                # Composio's backend times out when too many parallel searches are executed.
+                # Limit to 4 tools per call to prevent None responses.
+                MAX_PARALLEL_TOOLS = 4
+                if len(tools_value) > MAX_PARALLEL_TOOLS:
+                    return {
+                        "systemMessage": (
+                            f"⚠️ TOO MANY PARALLEL TOOLS: You requested {len(tools_value)} tools, but the limit is {MAX_PARALLEL_TOOLS} per call.\n\n"
+                            f"**SOLUTION**: Split your request into multiple `COMPOSIO_MULTI_EXECUTE_TOOL` calls, each with at most {MAX_PARALLEL_TOOLS} tools.\n"
+                            f"Example: If you need 8 searches, make 2 separate calls with 4 tools each."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": f"Too many parallel tools ({len(tools_value)} > {MAX_PARALLEL_TOOLS}). Split into multiple calls.",
+                        },
+                    }
 
             # recursive validation of inner tools
             if isinstance(tools_value, list):

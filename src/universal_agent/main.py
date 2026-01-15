@@ -1212,28 +1212,45 @@ async def on_pre_tool_use_ledger(
         else:
             should_dedupe = side_effect_class in ("external", "memory", "local")
         if should_dedupe:
-            logfire.warning(
-                "tool_deduped",
-                tool_name=tool_name,
-                tool_use_id=tool_call_id,
-                idempotency_key=decision.idempotency_key,
+            # [ENHANCED IDEMPOTENCY]
+            # If the previous result was None, empty, or an error, we SHOULD allow the retry.
+            # This handles cases where a tool timed out or failed silently (common with search)
+            # and the agent wants to try again with the exact same arguments.
+            cached_response = decision.receipt.response_ref or ""
+            is_valid_cache = (
+                cached_response 
+                and str(cached_response).strip() 
+                and str(cached_response).strip().lower() != "none"
+                and "error" not in str(cached_response).lower()[:50]
             )
-            receipt_preview = ""
-            if decision.receipt.response_ref:
-                receipt_preview = decision.receipt.response_ref[:500]
-            return {
-                "systemMessage": (
-                    "⚠️ Idempotency guard: tool call already succeeded. "
-                    "Skipping execution and using cached receipt."
-                ),
-                "reason": receipt_preview,
-                "decision": "block",
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "Idempotent tool call detected.",
-                },
-            }
+            
+            if is_valid_cache:
+                logfire.warning(
+                    "tool_deduped",
+                    tool_name=tool_name,
+                    tool_use_id=tool_call_id,
+                    idempotency_key=decision.idempotency_key,
+                )
+                receipt_preview = cached_response[:500]
+                return {
+                    "systemMessage": (
+                        "⚠️ Idempotency guard: tool call already succeeded. "
+                        "Skipping execution and using cached receipt."
+                    ),
+                    "reason": receipt_preview,
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Idempotent tool call detected.",
+                    },
+                }
+            else:
+                logfire.info(
+                    "idempotency_bypass_retry", 
+                    tool_name=tool_name,
+                    reason="Cached result was empty/error - allowing retry"
+                )
         try:
             duplicate_decision = prepare_tool_call(
                 tool_ledger,
@@ -5180,10 +5197,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 f"\n📦 Tool Result ({result_record['content_size_bytes']} bytes) +{result_record['time_offset_seconds']}s"
                             )
                             # Always show a preview of the result content
-                            preview = result_record.get("content_preview", "")[:500]
+                            preview = result_record.get("content_preview", "")[:2000]
                             if preview:
                                 print(
-                                    f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 500 else ''}"
+                                    f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 2000 else ''}"
                                 )
 
                             # [Interview Tool Interception] Check if this is an interview request

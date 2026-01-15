@@ -942,13 +942,17 @@ class UniversalAgent:
             "**You do NOT write reports.** You gather and organize data for the Writer agent.\n\n"
             "## MANDATORY WORKFLOW (2 Steps ONLY)\n\n"
             "### Step 1: Search & Discovery\n"
-            "Make ONE call to `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` with 5-8 inner searches:\n"
+            "Make `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` calls with **MAX 4 tools per call**:\n"
             "   - Mix of `COMPOSIO_SEARCH_NEWS` and `COMPOSIO_SEARCH_WEB`\n"
-            "   - Different query angles for comprehensive coverage\n\n"
-            "**CRITICAL:** ONE call is sufficient. Do NOT call it multiple times.\n"
+            "   - Different query angles for comprehensive coverage\n"
+            "   - If you need 8 searches, split into 2 calls (4 tools each)\n\n"
+            "**CRITICAL:** The limit is 4 tools per call to avoid timeouts. Split larger batches.\n"
             "ALWAYS append `-site:wikipedia.org` to every query.\n\n"
             "The Observer automatically saves results to `search_results/*.json`.\n\n"
-            "### Step 2: Finalize Research (ONE TOOL CALL)\n"
+            "⚠️ **SYNCHRONIZATION RULE:** Complete ALL search calls BEFORE proceeding to Step 2.\n"
+            "   - If you split into 2 batches, wait for BOTH to return before calling finalize_research.\n"
+            "   - The finalize_research tool reads all JSON files at once - missing files = missing results.\n\n"
+            "### Step 2: Finalize Research (ONE TOOL CALL - AFTER ALL SEARCHES COMPLETE)\n"
             "**IMMEDIATELY** call `mcp__local_toolkit__finalize_research`:\n"
             f"   - `session_dir`: {workspace_path}\n"
             "   - `task_name`: (derive from research topic, e.g., 'russia_ukraine_war')\n\n"
@@ -1274,7 +1278,7 @@ class UniversalAgent:
                             data={
                                 "tool_use_id": tool_use_id,
                                 "is_error": is_error,
-                                "content_preview": content_str[:500],
+                                "content_preview": content_str[:2000],
                                 "content_size": len(content_str),
                             },
                         )
