@@ -304,12 +304,11 @@ async def observe_and_save_search_results(
                             path=filename if "filename" in locals() else "unknown",
                         )
 
-            # === JIT DELEGATION GUIDE RAIL (console output for logging) ===
+            # === SEARCH RESULTS SAVED ===
+            # Note: Research delegation is handled at the primary agent level.
+            # The research-specialist sub-agent runs search → finalize → refine as atomic unit.
             if saved_count > 0:
-                print(f"\n   ✅ {saved_count} Search Result File(s) Saved for Sub-Agent.")
-                print(
-                    "   ⚠️ Reminder: Delegate to 'research-specialist' for full analysis."
-                )
+                print(f"\n   ✅ {saved_count} Search Result File(s) Saved to Inbox.")
 
         except Exception as exc:
             print(f"\n❌ [OBSERVER] Parse error: {exc}")

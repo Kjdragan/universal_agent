@@ -1,73 +1,51 @@
 # Report Creation Workflow
 
-## Critical: Web Search Results Require Delegation
+## Critical: Immediate Delegation for Research
 
-When you receive web search results from COMPOSIO_SEARCH_WEB, COMPOSIO_SEARCH_NEWS, or similar search tools:
+When the user requests research or a report:
 
-⚠️ **DO NOT** summarize the search snippets and write a report yourself.
-⚠️ **DO NOT** begin generating report content based on search snippets alone.
+⚠️ **DO NOT** perform web searches yourself as the primary agent.
+⚠️ **DO NOT** summarize search snippets and write a report yourself.
 
-These search results contain **incomplete snippets**, not full article content.
+### Required Workflow (2 Delegations)
 
-### Required Workflow
+1. **Research Phase**: Delegate to `research-specialist` IMMEDIATELY
+   - Call `Task` tool with `subagent_type='research-specialist'`
+   - Prompt: "Research [topic]: execute searches, finalize corpus."
+   - The specialist handles: COMPOSIO search → crawl → filter → **refine**
+   - Output: `tasks/{topic}/refined_corpus.md` (token-efficient extraction)
 
-### Required Workflow
-
-1. **Search Phase**: Use COMPOSIO_MULTI_EXECUTE_TOOL to search for relevant sources
-2. **Research Phase**: Call the `Task` tool with `subagent_type='research-specialist'`
-   - Instruct it to "Finalize research for [topic]"
-   - It will crawl URLs and create `research_overview.md`
-3. **Writing Phase**: Call the `Task` tool with `subagent_type='report-writer'`
-   - Instruct it to "Write HTML report using research_overview.md"
-   - It will read the corpus and generate the report
+2. **Writing Phase**: After research completes, delegate to `report-writer`
+   - Call `Task` tool with `subagent_type='report-writer'`
+   - Prompt: "Write the full HTML report using refined_corpus.md"
+   - The writer reads the refined corpus and generates the report
 
 ### Why This Matters
 
-- **Search snippets are insufficient**: You need full article text.
-- **Fresh Context**: Splitting Research and Writing ensures the Writer has maximum context space for the actual content.
+- **Clean Primary Context**: You don't accumulate search results.
+- **Token Efficient**: Refined corpus is ~10K tokens vs ~50K raw.
+- **Quality Preserved**: Extraction keeps quotes, stats, citations.
 
 ### Correct Pattern
 
 ```
-1. COMPOSIO_MULTI_EXECUTE_TOOL → search results saved to search_results/
-2. Task(subagent_type="research-specialist", description="Finalize research corpus")
-3. Task(subagent_type="report-writer", description="Write HTML report from research_overview.md")
+1. Task(subagent_type="research-specialist", description="Research [topic]")
+2. Task(subagent_type="report-writer", description="Write HTML report from refined_corpus.md")
 ```
 
 ---
 
-## Critical: Batch File Reading
+## Report Writer Input: refined_corpus.md
 
-After `crawl_parallel` creates multiple `crawl_*.md` files:
+The report writer reads ONE file: `refined_corpus.md`
 
-⚠️ **DO NOT** call `read_local_file` individually for each crawled file.
-✅ **DO** use `mcp__local_toolkit__read_research_files` to read all files at once.
+This file contains:
+- Key facts and statistics (extracted from each source)
+- Direct quotes with speaker attribution
+- Source metadata (title, date, URL)
+- Thematic groupings
 
-### Required Pattern for Reading Crawled Content
+**No need to read individual crawl files or research_overview.md.**
 
-```python
-# WRONG (slow, 30+ tool calls):
-read_local_file(path="search_results/crawl_abc123.md")
-read_local_file(path="search_results/crawl_def456.md")
-# ... 30 more calls
-
-# CORRECT (fast, 1 tool call):
-read_research_files(file_paths=[
-    "search_results/crawl_abc123.md",
-    "search_results/crawl_def456.md",
-    # ... all files
-])
-```
-
-### How to Get File List
-
-1. After `crawl_parallel` completes, call `list_directory(path="search_results/")`
-2. Collect all `crawl_*.md` file paths
-3. Pass entire list to `read_research_files(file_paths=[...])`
-
-### Context Overflow Protection
-
-`read_research_files` has built-in protection:
-- Stops at 25,000 words to prevent context overflow
-- Returns list of skipped files that exceed limit
-- For skipped files only, use `read_local_file` individually
+The refined corpus is pre-compressed by the research pipeline using LLM extraction,
+delivering the "essence" of 30+ articles in a single, citation-rich document.

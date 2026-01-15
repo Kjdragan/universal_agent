@@ -133,4 +133,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "runs", "iteration_count", "INTEGER DEFAULT 0")
     _add_column_if_missing(conn, "runs", "max_iterations", "INTEGER")
     _add_column_if_missing(conn, "runs", "completion_promise", "TEXT")
+    # Corpus cache for sub-agent context restoration
+    _add_column_if_missing(conn, "checkpoints", "corpus_data", "TEXT")
     conn.commit()
