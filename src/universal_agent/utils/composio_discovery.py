@@ -17,10 +17,10 @@ except ImportError:
 
 # Hardcoded definition of tools exposed by src/mcp_server.py
 # Note: File read/write now uses native Claude SDK tools (Read/Write), not MCP
+# Note: read_research_files removed - use refined_corpus.md from finalize_research instead
 LOCAL_MCP_TOOLS = [
     "mcp__local_toolkit__crawl_parallel",
     "mcp__local_toolkit__finalize_research",
-    "mcp__local_toolkit__read_research_files",
     "mcp__local_toolkit__list_directory",
     "mcp__local_toolkit__upload_to_composio",
     "mcp__local_toolkit__append_to_file",

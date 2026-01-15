@@ -52,10 +52,6 @@ _TOOL_SCHEMAS: dict[str, ToolSchema] = {
         example="append_to_file({path: '/tmp/report.html', content: '<html>...</html>'})",
         content_min_length={"content": 10},
     ),
-    "read_research_files": ToolSchema(
-        required=("file_paths",),
-        example="read_research_files({file_paths: ['/tmp/tasks/ai_news/filtered_corpus/a.md']})",
-    ),
     "finalize_research": ToolSchema(
         required=("session_dir",),
         example="finalize_research({session_dir: '/tmp/session_20260101_120000', task_name: 'ai_news'})",

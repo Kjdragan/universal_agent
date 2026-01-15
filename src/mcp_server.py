@@ -328,15 +328,13 @@ def _filter_crawl_content(raw_text: str) -> tuple[str | None, str, dict, str]:
 @trace_tool_output
 def read_research_files(file_paths: list[str]) -> str:
     """
-    Read ALL research files in a single batch call. Returns complete corpus content.
-
-    Use this after reviewing research_overview.md to efficiently read
-    the full content of selected source files for quotes and facts.
-
-    OVERFLOW HANDLING (automatic):
-    - If output exceeds Claude's 25K token limit, it will be saved to a temp file
-    - You'll receive instructions to read the temp file in chunks using offset/limit
-    - This is the expected behavior for large research corpora - follow the instructions
+    DEPRECATED: Use refined_corpus.md from finalize_research instead.
+    
+    This function is no longer used in the standard workflow. The corpus refiner
+    integrated into finalize_research creates a pre-extracted, token-efficient
+    refined_corpus.md that report-writer reads directly.
+    
+    Kept for backwards compatibility only.
 
     Args:
         file_paths: List of file paths to read (from research_overview.md listing)
@@ -869,7 +867,10 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
     if crawl4ai_api_key:
         # Cloud API mode: Use crawl4ai-cloud.com synchronous /query endpoint
         cloud_endpoint = "https://www.crawl4ai-cloud.com/query"
+        print(f"\n🌐 [Crawl4AI] Starting cloud crawl of {len(urls)} URLs...")
         sys.stderr.write(f"[crawl_core] Using Cloud API for {len(urls)} URLs\\n")
+        if logfire:
+            logfire.info("crawl4ai_started", url_count=len(urls), mode="cloud")
 
         try:
             import asyncio
@@ -1020,9 +1021,20 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
             async with aiohttp.ClientSession() as session:
                 tasks = [crawl_single_url(session, url) for url in urls]
                 crawl_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Console visibility
+            success_count = sum(1 for r in crawl_results if isinstance(r, dict) and r.get("success"))
+            print(f"   ✅ Crawl complete: {success_count}/{len(urls)} successful")
             sys.stderr.write(
                 f"[crawl_core] Cloud API returned {len(crawl_results)} results\\n"
             )
+            if logfire:
+                logfire.info(
+                    "crawl4ai_complete",
+                    total_urls=len(urls),
+                    success_count=success_count,
+                    failed_count=len(urls) - success_count,
+                )
 
             # Process results
             for result in crawl_results:
