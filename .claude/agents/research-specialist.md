@@ -23,15 +23,25 @@ You are a **Research Specialist** sub-agent.
 
 ### Step 1: Search & Discovery
 
-Execute searches using `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL`:
-- Use `COMPOSIO_SEARCH_NEWS` for recent news
-- Use `COMPOSIO_SEARCH_WEB` for general web content
-- Execute 3-5 diverse searches to get 15-20+ sources
+**Make ONE call to `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` with 5-8 inner searches:**
+- Mix of `COMPOSIO_SEARCH_NEWS` and `COMPOSIO_SEARCH_WEB`
+- Different query angles for comprehensive coverage
 
-**CRITICAL RULES:**
-- ALWAYS append `-site:wikipedia.org` to EVERY search query
+**Example (ONE tool call, multiple inner searches):**
+```json
+{
+  "tools": [
+    {"tool_slug": "COMPOSIO_SEARCH_NEWS", "arguments": {"query": "topic recent news"}},
+    {"tool_slug": "COMPOSIO_SEARCH_NEWS", "arguments": {"query": "topic developments"}},
+    {"tool_slug": "COMPOSIO_SEARCH_WEB", "arguments": {"query": "topic analysis"}}
+  ]
+}
+```
 
-**The Observer automatically saves results to `search_results/*.json`.**
+**CRITICAL:**
+- ONE call to MULTI_EXECUTE_TOOL is sufficient
+- Do NOT call it multiple times
+- ALWAYS append `-site:wikipedia.org` to queries
 
 ### Step 2: Finalize Research (ONE TOOL CALL)
 

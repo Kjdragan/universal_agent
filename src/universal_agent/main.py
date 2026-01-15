@@ -5936,7 +5936,7 @@ async def setup_session(
             "        PROMPT: 'Research [topic]: execute searches, crawl sources, finalize corpus.'\n"
             "        (The research-specialist handles: COMPOSIO search → crawl → filter → overview)\n"
             "     2. **STEP 2:** When Step 1 completes, delegate to `report-writer` using `Task`.\n"
-            "        PROMPT: 'Write the full HTML report using research_overview.md.'\n"
+            "        PROMPT: 'Write the full HTML report using refined_corpus.md.'\n"
             "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject next steps.\n"
             "     Wait for this message before proceeding with upload/email.\n"
             "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
@@ -5968,7 +5968,7 @@ async def setup_session(
             "   - After a Composio search, the Observer AUTO-SAVES results to `search_results/` directory.\n"
             "   - You will see: '📁 [OBSERVER] Saved: search_results/xxx.json'.\n"
             "   - DO NOT write the report yourself. DO NOT call `crawl_parallel` yourself.\n"
-            "   - IMMEDIATELY delegate to 'report-creation-expert' with: 'Call finalize_research, then use research_overview.md + filtered crawl files to generate the report.'\n"
+            "   - IMMEDIATELY delegate to 'report-creation-expert' with: 'Call finalize_research, then use refined_corpus.md to generate the report.'\n"
             "   - WHY: The sub-agent will scrape ALL URLs for full article content. Your search only has snippets.\n"
             "   - WITHOUT DELEGATION: Your report will be shallow (snippets only). WITH DELEGATION: Deep research (full articles).\n"
             "   - Trust the Observer. Trust the sub-agent. Your job is to search and delegate.\n\n"
@@ -6077,7 +6077,6 @@ async def setup_session(
                 tools=[
                     "Read",
                     "Write",  # Native Write tool
-                    "mcp__local_toolkit__read_research_files",
                     "mcp__local_toolkit__append_to_file",  # Critical for incremental writing
                     "mcp__local_toolkit__list_directory",
                 ],

@@ -127,8 +127,9 @@ Preserve specificity - if the article says "5.2 million", write "5.2 million", n
 # Select prompt based on detail level
 EXTRACTION_PROMPT = EXTRACTION_PROMPTS.get(DETAIL_LEVEL, EXTRACTION_PROMPTS["expanded"]) + "\n\nNow extract from these articles:\n\n"
 
-# Max tokens by detail level
-MAX_TOKENS_BY_LEVEL = {"accelerated": 2000, "expanded": 3500}
+# Max tokens by detail level (output tokens per batch)
+# Increased to allow for richer extraction - each batch has 5 articles
+MAX_TOKENS_BY_LEVEL = {"accelerated": 4000, "expanded": 8000}
 
 
 @dataclass
@@ -144,9 +145,13 @@ class ArticleMetadata:
     def to_extraction_block(self) -> str:
         """Format for inclusion in extraction prompt."""
         # Truncate very long content to avoid overwhelming the model
+        # Increased limit to allow more context per article
+        # TODO: Revisit this limit for accuracy - currently we may miss content at end
+        # of very long articles (>50K chars / ~12K tokens). Monitor latency impact.
+        # Each batch has 5 articles, so max ~60K tokens input per batch.
         content = self.content
-        if len(content) > 6000:
-            content = content[:6000] + "\n[...truncated...]"
+        if len(content) > 50000:
+            content = content[:50000] + "\n[...truncated...]"
         
         return f"""---
 **Article:** {self.title}
