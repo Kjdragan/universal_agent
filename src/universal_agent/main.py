@@ -5669,14 +5669,22 @@ async def _run_urw_from_cli(args: argparse.Namespace) -> None:
     from universal_agent.urw import URWConfig, URWOrchestrator
     from universal_agent.urw.integration import MockAgentAdapter, UniversalAgentAdapter
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        or os.getenv("ZAI_API_KEY")
+    )
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is required for URW mode")
 
     workspace_path = Path(args.workspace or "./urw_workspace").expanduser().resolve()
     workspace_path.mkdir(parents=True, exist_ok=True)
 
-    llm_client = Anthropic(api_key=api_key)
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    client_kwargs = {"api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    llm_client = Anthropic(**client_kwargs)
 
     if args.urw_mock:
         adapter = MockAgentAdapter({"success_rate": 0.9, "produce_artifacts": True})

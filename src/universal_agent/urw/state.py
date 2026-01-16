@@ -405,6 +405,34 @@ class URWStateManager:
     def set_original_request(self, request: str) -> None:
         self.set_plan_metadata("original_request", request)
 
+    def mark_active_tasks_failed(self, reason: str) -> int:
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*) as count FROM tasks
+            WHERE status NOT IN ('complete', 'failed')
+            """
+        ).fetchone()
+        count = row["count"] if row else 0
+        if count == 0:
+            return 0
+
+        self.conn.execute(
+            """
+            UPDATE tasks
+            SET status = ?
+            WHERE status NOT IN ('complete', 'failed')
+            """,
+            (TaskStatus.FAILED.value,),
+        )
+        self.conn.commit()
+        self.set_plan_metadata(
+            "plan_superseded",
+            {"reason": reason, "timestamp": datetime.utcnow().isoformat() + "Z"},
+        )
+        self._update_task_plan_file()
+        self._update_progress_file()
+        return count
+
     def create_task(self, task: Task) -> str:
         with self.transaction():
             self.conn.execute(

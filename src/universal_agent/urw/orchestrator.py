@@ -7,6 +7,8 @@ Outer loop that orchestrates long-running task execution.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -48,6 +50,12 @@ class URWConfig:
 
     pause_on_blockers: bool = True
     auto_decompose_failed_tasks: bool = True
+
+    llm_model: str = field(
+        default_factory=lambda: os.getenv(
+            "ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-4-20250514"
+        )
+    )
 
     verbose: bool = True
 
@@ -126,9 +134,16 @@ class URWOrchestrator:
         self.callbacks = callbacks or URWCallbacks()
 
         self.state_manager = URWStateManager(self.workspace_path)
-        self.decomposer = decomposer or HybridDecomposer(llm_client)
+        self.decomposer = decomposer or HybridDecomposer(
+            llm_client,
+            model=self.config.llm_model,
+        )
         self.plan_manager = PlanManager(self.state_manager, self.decomposer)
-        self.evaluator = CompositeEvaluator(llm_client=llm_client, state_manager=self.state_manager)
+        self.evaluator = CompositeEvaluator(
+            llm_client=llm_client,
+            state_manager=self.state_manager,
+            model=self.config.llm_model,
+        )
 
         self.status = OrchestratorStatus.IDLE
         self.current_task: Optional[Task] = None
@@ -379,6 +394,11 @@ class URWOrchestrator:
 
         if evaluation.is_complete:
             await self._handle_task_complete(task, evaluation)
+        else:
+            if outcome == "failed":
+                await self._handle_task_failure(task, "Iteration failed")
+            else:
+                self.state_manager.update_task_status(task.id, TaskStatus.PENDING)
 
         return result
 

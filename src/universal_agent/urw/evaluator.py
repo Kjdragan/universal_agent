@@ -263,13 +263,43 @@ class LLMJudgeEvaluator(Evaluator):
         )
 
     def _parse_response(self, response_text: str) -> Tuple[float, str]:
+        cleaned = response_text.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.split("\n")
+            cleaned = "\n".join(lines[1:-1]).strip()
+
+        def _coerce_score(val: object) -> float:
+            try:
+                score_val = float(val)
+            except (TypeError, ValueError):
+                return 0.0
+            return max(0.0, min(1.0, score_val))
+
         try:
-            parsed = json.loads(response_text)
-            score = float(parsed.get("score", 0.0))
+            parsed = json.loads(cleaned)
+            score = _coerce_score(parsed.get("score", 0.0))
             reasoning = str(parsed.get("reasoning", ""))
             return score, reasoning
         except Exception:
-            return 0.0, "Failed to parse evaluator response"
+            pass
+
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                parsed = json.loads(cleaned[start : end + 1])
+                score = _coerce_score(parsed.get("score", 0.0))
+                reasoning = str(parsed.get("reasoning", ""))
+                return score, reasoning
+            except Exception:
+                pass
+
+        match = re.search(r"score\s*[:=]\s*([01](?:\.\d+)?)", cleaned, re.IGNORECASE)
+        if match:
+            score = _coerce_score(match.group(1))
+            return score, cleaned
+
+        return 0.0, "Failed to parse evaluator response"
 
     def _score_to_confidence(self, score: float) -> CompletionConfidence:
         if score >= 0.85:
@@ -284,10 +314,10 @@ class LLMJudgeEvaluator(Evaluator):
 class CompositeEvaluator(Evaluator):
     """Combines binary, constraint, and LLM evaluation."""
 
-    def __init__(self, llm_client: Any, state_manager=None):
+    def __init__(self, llm_client: Any, state_manager=None, model: str = "claude-sonnet-4-20250514"):
         self.binary = BinaryCheckEvaluator(state_manager)
         self.constraints = ConstraintEvaluator()
-        self.qualitative = LLMJudgeEvaluator(llm_client)
+        self.qualitative = LLMJudgeEvaluator(llm_client, model=model)
 
     def evaluate(
         self, task: Task, artifacts: List[Artifact], agent_output: str, workspace_path: Path
@@ -333,10 +363,21 @@ class CompositeEvaluator(Evaluator):
         )
 
 
-def create_default_evaluator(llm_client: Any, state_manager=None) -> CompositeEvaluator:
-    return CompositeEvaluator(llm_client, state_manager)
+def create_default_evaluator(
+    llm_client: Any,
+    state_manager=None,
+    model: str = "claude-sonnet-4-20250514",
+) -> CompositeEvaluator:
+    return CompositeEvaluator(llm_client, state_manager, model=model)
 
 
-def quick_evaluate(task: Task, artifacts: List[Artifact], agent_output: str, workspace_path: Path, llm_client: Any) -> EvaluationResult:
-    evaluator = CompositeEvaluator(llm_client)
+def quick_evaluate(
+    task: Task,
+    artifacts: List[Artifact],
+    agent_output: str,
+    workspace_path: Path,
+    llm_client: Any,
+    model: str = "claude-sonnet-4-20250514",
+) -> EvaluationResult:
+    evaluator = CompositeEvaluator(llm_client, model=model)
     return evaluator.evaluate(task, artifacts, agent_output, workspace_path)

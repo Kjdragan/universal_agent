@@ -73,11 +73,19 @@ async def run() -> None:
     workspace_path = Path(args.workspace).expanduser().resolve()
     workspace_path.mkdir(parents=True, exist_ok=True)
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = (
+        os.getenv("ANTHROPIC_API_KEY")
+        or os.getenv("ANTHROPIC_AUTH_TOKEN")
+        or os.getenv("ZAI_API_KEY")
+    )
     if not api_key:
         raise SystemExit("ANTHROPIC_API_KEY is required to run URW")
 
-    llm_client = Anthropic(api_key=api_key)
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    client_kwargs = {"api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    llm_client = Anthropic(**client_kwargs)
 
     adapter: object
     if args.mock:
@@ -91,6 +99,7 @@ async def run() -> None:
         iteration_timeout=args.iteration_timeout,
         task_timeout=args.task_timeout,
         verbose=args.verbose,
+        llm_model=args.model,
     )
 
     orchestrator = URWOrchestrator(
