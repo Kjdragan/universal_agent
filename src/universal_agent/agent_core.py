@@ -790,6 +790,10 @@ class UniversalAgent:
         import sys
 
         abs_workspace = os.path.abspath(self.workspace_dir)
+        
+        # Set workspace in environment so MCP server subprocess can access it
+        os.environ["CURRENT_SESSION_WORKSPACE"] = abs_workspace
+        
         system_prompt = self._build_system_prompt(abs_workspace)
 
         self.options = ClaudeAgentOptions(
@@ -809,6 +813,9 @@ class UniversalAgent:
                             os.path.dirname(os.path.dirname(__file__)), "mcp_server.py"
                         )
                     ],
+                    "env": {
+                        "CURRENT_SESSION_WORKSPACE": abs_workspace
+                    },
                 },
             },
             # Note: No allowed_tools restriction - main agent can use any tool for flexibility
@@ -832,6 +839,7 @@ class UniversalAgent:
                         "mcp__local_toolkit__workbench_download",
                         "mcp__local_toolkit__workbench_upload",
                         "mcp__local_toolkit__draft_report_parallel",
+                        "mcp__local_toolkit__compile_report",
                     ],
                     model="inherit",
                 ),
@@ -994,9 +1002,11 @@ class UniversalAgent:
             cached_corpus: Optional pre-loaded corpus text from checkpoint cache
         """
         prompt = (
-            f"Report Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
-            f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
-            "You are a **Report Writer** creating professional research reports.\n\n"
+            f"**Report Date:** {datetime.now().strftime('%A, %B %d, %Y')}\n"
+            f"**Workspace:** `{workspace_path}`\n\n"
+            "---\n\n"
+            "# 📝 REPORT WRITER AGENT\n\n"
+            "You create professional HTML research reports using a deterministic 3-phase workflow.\n\n"
         )
         
         # If we have cached corpus, inject it directly to skip tool calls
@@ -1008,23 +1018,51 @@ class UniversalAgent:
             )
         else:
             prompt += (
-                "## INPUT\n\n"
-                f"Read: `{workspace_path}/tasks/[task_name]/refined_corpus.md`\n\n"
+                "## RESEARCH DATA\n\n"
+                f"Read the corpus: `{workspace_path}/tasks/[task_name]/refined_corpus.md`\n\n"
             )
         
         prompt += (
-            "## ASSIGNMENT\n"
-            "Execute the **Multi-Phase Report Workflow** defined in your system instructions.\n\n"
-            "**Goal:** Create a professional HTML report from the research corpus.\n\n"
-            "## CONTEXT\n"
-            f"**Workspace:** `{workspace_path}`\n"
-            f"**Corpus Path:** `{workspace_path}/tasks/[task_name]/refined_corpus.md`\n"
-            f"**Output Dir:** `{workspace_path}/work_products/`\n\n"
-            "## PROTOCOL REMINDERS\n"
-            "1. **Phase 1 (Planning):** Create `_working/outline.json` first.\n"
-            "2. **Phase 2 (Drafting):** Write `parallel_draft.py` to generate ALL sections concurrently (Map-Reduce).\n"
-            "3. **Phase 3 (Integration):** Use Python script to assemble `report.html`. DO NOT WRITE IT MANUALLY.\n\n"
-            "👉 **START PHASE 1 IMMEDIATELY.**\n"
+            "## 🔄 MANDATORY WORKFLOW\n\n"
+            "Execute these phases **in order**. Each phase has a specific MCP tool.\n\n"
+            "### Phase 1: PLANNING\n"
+            "1. Read the research corpus to understand the content\n"
+            "2. Create an outline with 5-8 sections\n"
+            "3. **Write** the outline to: `work_products/_working/outline.json`\n"
+            "   ```json\n"
+            "   {\n"
+            '     "title": "Report Title",\n'
+            '     "sections": [\n'
+            '       {"id": "executive_summary", "title": "Executive Summary", "description": "..."},\n'
+            '       {"id": "section_2", "title": "...", "description": "..."}\n'
+            "     ]\n"
+            "   }\n"
+            "   ```\n\n"
+            "### Phase 2: DRAFTING\n"
+            "After outline.json exists, call:\n"
+            "```\n"
+            "mcp__local_toolkit__draft_report_parallel()\n"
+            "```\n"
+            "- Tool reads outline.json and generates all sections in parallel\n"
+            "- Sections saved to `work_products/_working/sections/`\n"
+            "- ⚠️ **Do NOT write sections manually** - the tool handles this\n\n"
+            "### Phase 3: ASSEMBLY\n"
+            "After sections are generated, call:\n"
+            "```\n"
+            "mcp__local_toolkit__compile_report(theme=\"modern\")\n"
+            "```\n"
+            "- Tool compiles all sections into final HTML\n"
+            "- Output: `work_products/report.html`\n"
+            "- ⚠️ **NEVER manually Write the final report** - context limits make this impossible\n\n"
+            "### Phase 4: COMPLETION\n"
+            "Return a success message with the report location.\n\n"
+            "---\n\n"
+            "## ⚠️ CRITICAL RULES\n\n"
+            "1. **Always call draft_report_parallel** - never write sections manually\n"
+            "2. **Always call compile_report** - never assemble HTML manually\n"
+            "3. Section order is determined by outline.json - list most important first\n"
+            "4. The tools handle all file I/O - you focus on planning and coordination\n\n"
+            "**👉 START NOW: Read corpus → Create outline → Call draft_report_parallel → Call compile_report**\n"
         )
         
         tool_knowledge = get_tool_knowledge_block()

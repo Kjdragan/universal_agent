@@ -470,6 +470,9 @@ def draft_report_parallel() -> str:
     """
     import subprocess
     
+    # Define PROJECT_ROOT
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
     script_path = os.path.join(
         PROJECT_ROOT, 
         "src", "universal_agent", "scripts", "parallel_draft.py"
@@ -482,12 +485,22 @@ def draft_report_parallel() -> str:
     try:
         sys.stderr.write(f"[Local Toolkit] Launching parallel drafter: {script_path}\n")
         
-        # Run the script and capture output
+        # Get workspace - MUST be set in environment by agent_core
+        workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+        if not workspace:
+            return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
+        
+        if not os.path.exists(workspace):
+            return f"Error: Workspace does not exist: {workspace}"
+            
+        sys.stderr.write(f"[Local Toolkit] Using workspace: {workspace}\n")
+        
+        # Run the script with workspace as argument
         result = subprocess.run(
-            [sys.executable, script_path],
+            [sys.executable, script_path, workspace],
             capture_output=True,
             text=True,
-            timeout=300 # 5 minute safety timeout for launching (execution is async)
+            timeout=300
         )
         
         if result.returncode == 0:
@@ -506,6 +519,62 @@ def draft_report_parallel() -> str:
         return "Error: Script execution timed out after 5 minutes."
     except Exception as e:
         return f"Error running parallel draft script: {str(e)}"
+
+
+@mcp.tool()
+@trace_tool_output
+def compile_report(theme: str = "modern", custom_css: str = None) -> str:
+    """
+    Compile all section markdown files into a single professional HTML report.
+    This tool handles:
+    1. Concatenation of sections
+    2. Markdown -> HTML conversion
+    3. CSS Styling (via theme or custom_css)
+    4. Saving to `work_products/report.html`
+    
+    Args:
+        theme: "modern", "financial", or "creative" (default: "modern")
+        custom_css: Optional raw CSS string to override/extend styles.
+    """
+    import subprocess
+    
+    # Define PROJECT_ROOT
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    script_path = os.path.join(
+        PROJECT_ROOT, 
+        "src", "universal_agent", "scripts", "compile_report.py"
+    )
+    
+    # Locate workspace - MUST be set in environment
+    workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+    if not workspace:
+        return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
+        
+    if not os.path.exists(workspace):
+        return f"Error: Workspace does not exist: {workspace}"
+        
+    cmd = [sys.executable, script_path, "--work-dir", workspace, "--theme", theme]
+    if custom_css:
+        cmd.extend(["--custom-css", custom_css])
+        
+    try:
+        sys.stderr.write(f"[Local Toolkit] Compiling report with theme='{theme}' via {script_path}\n")
+        
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        
+        if result.returncode == 0:
+            return f"✅ Report Compiled Successfully.\nPath: {workspace}/work_products/report.html"
+        else:
+            return f"❌ Compilation Failed:\n{result.stderr}"
+            
+    except Exception as e:
+        return f"Error executing compile script: {str(e)}"
 
 
 @mcp.tool()

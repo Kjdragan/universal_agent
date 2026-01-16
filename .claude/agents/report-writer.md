@@ -47,10 +47,18 @@ Your PRIMARY source is the Refined Corpus: `{CURRENT_SESSION_WORKSPACE}/tasks/{t
 
 **RULE:** Do NOT generate report manually.
 
-1. Write `work_products/_working/assemble.py` to:
-   - Concatenate all `sections/*.md`.
-   - Convert to HTML.
-   - Save `work_products/report.html`.
-2. Run script.
+1. **Action:** Call `mcp__local_toolkit__compile_report(theme="modern")`.
+   - **Parameters:**
+     - `theme`: "modern", "financial", or "creative".
+     - `custom_css`: (Optional) Inject custom styling if needed.
+   
+   *Note: This tool deterministically merges sections and generates the HTML.*
 
+   *Note: This tool deterministically merges sections and generates the HTML.*
+
+--- PHASE 3 CHECKPOINT ---
+✅ SELF-CHECK: Does `work_products/report.html` exist?
+👉 ACTION: Report success to parent agent.
+   - Message: "Report generation complete. Final report available at: [Absolute Path]"
+   - **STOP** (Return control to Primary Agent)
 ---

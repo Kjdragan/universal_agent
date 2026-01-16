@@ -5704,6 +5704,9 @@ async def setup_session(
                 raise RuntimeError("Cannot create workspace directory in any location")
 
     os.makedirs(workspace_dir, exist_ok=True)
+    
+    # Set workspace in environment EARLY so MCP server subprocess inherits it
+    os.environ["CURRENT_SESSION_WORKSPACE"] = workspace_dir
 
     # Initialize Composio with automatic file downloads to this workspace
     downloads_dir = os.path.join(workspace_dir, "downloads")
@@ -6110,6 +6113,8 @@ async def setup_session(
                     "Write",  # Native Write tool
                     "mcp__local_toolkit__append_to_file",  # Critical for incremental writing
                     "mcp__local_toolkit__list_directory",
+                    "mcp__local_toolkit__draft_report_parallel",
+                    "mcp__local_toolkit__compile_report",
                 ],
                 model="inherit",
             ),
