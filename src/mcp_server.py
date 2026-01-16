@@ -3,8 +3,10 @@ from dotenv import load_dotenv
 import os
 import sys
 import json
+import re
 import logging
 import inspect
+from collections import Counter
 from datetime import datetime
 from functools import wraps
 from typing import Optional, List, Dict, Any
@@ -213,6 +215,7 @@ FILTER_TITLE_SKIP_TOKENS = (
     "newsletter",
     "podcast",
     "video",
+    "youtube",
     "watch",
     "listen",
     "most read",
@@ -241,6 +244,52 @@ FILTER_URL_ALLOW_PATTERNS = (
     "understandingwar.org/research/russia-ukraine/",
 )
 
+TOPIC_TERM_STOPWORDS = {
+    "latest",
+    "news",
+    "update",
+    "live",
+    "report",
+    "reports",
+    "analysis",
+    "assessment",
+    "briefing",
+    "watch",
+    "listen",
+    "video",
+    "podcast",
+    "blog",
+    "today",
+    "yesterday",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+}
+TOPIC_TERM_MIN_LEN = 4
+TOPIC_MAX_TERMS = 24
+TOPIC_MIN_TERMS = 3
+TOPIC_MIN_WORDS = 300
+TOPIC_MAX_WORDS = 1800
+TOPIC_MIN_NARRATIVE_RATIO = 0.12
+TOPIC_MIN_HIT_RATE = 0.7
+
+LINK_MARKERS = ("http://", "https://", "](", "<http", "www.")
+MARKDOWN_LINK_RE = re.compile(r"\[[^\]]*\]\([^)]*\)")
+URL_RE = re.compile(r"https?://\S+")
+HEADLINE_TIME_RE = re.compile(
+    r"\b(?:mins?|minutes?|hrs?|hours?)\s+ago\b", re.IGNORECASE
+)
+HEADLINE_NUMBER_RE = re.compile(r"^\s*\d+[\.)]\s+")
+
 
 def _split_front_matter(raw_text: str) -> tuple[dict, str, str]:
     if raw_text.startswith("---"):
@@ -257,6 +306,21 @@ def _split_front_matter(raw_text: str) -> tuple[dict, str, str]:
     return {}, "", raw_text.strip()
 
 
+def _load_task_config(task_dir: str) -> dict:
+    for filename in ("task_config.json", "task_metadata.json"):
+        path = os.path.join(task_dir, filename)
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except Exception as e:
+            logger.warning(f"Failed to load task config {path}: {e}")
+    return {}
+
+
 def _is_promotional(text: str) -> bool:
     lowered = text.lower()
     hits = sum(lowered.count(token) for token in FILTER_PROMO_TOKENS)
@@ -265,6 +329,164 @@ def _is_promotional(text: str) -> bool:
 
 def _word_count(text: str) -> int:
     return len(text.split())
+
+
+def _line_has_link(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker in lowered for marker in LINK_MARKERS)
+
+
+def _line_is_link_only(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    without_md = MARKDOWN_LINK_RE.sub("", stripped)
+    without_urls = URL_RE.sub("", without_md)
+    compact = re.sub(r"[^A-Za-z0-9]+", "", without_urls)
+    return len(compact) < 4
+
+
+def _line_is_headline_item(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if HEADLINE_TIME_RE.search(stripped):
+        return True
+    if HEADLINE_NUMBER_RE.match(stripped):
+        return True
+    if stripped.startswith(("*", "•")) and len(stripped) > 40:
+        return True
+    return False
+
+
+def _line_is_narrative(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if _line_is_link_only(stripped) or _line_is_headline_item(stripped):
+        return False
+    words = stripped.split()
+    return len(words) >= 12
+
+
+def _normalize_topic_terms(terms: list[str]) -> list[str]:
+    normalized = []
+    for term in terms:
+        if not isinstance(term, str):
+            continue
+        cleaned = re.sub(r"[^a-z0-9]+", " ", term.lower()).strip()
+        if not cleaned:
+            continue
+        if cleaned in TOPIC_TERM_STOPWORDS:
+            continue
+        if cleaned not in normalized:
+            normalized.append(cleaned)
+    return normalized
+
+
+def _extract_topic_terms_from_texts(texts: list[str]) -> list[str]:
+    counts: Counter[str] = Counter()
+    for text in texts:
+        if not isinstance(text, str):
+            continue
+        tokens = re.findall(r"[a-z0-9][a-z0-9'\-]{2,}", text.lower())
+        for token in tokens:
+            token = token.strip("-'")
+            if len(token) < TOPIC_TERM_MIN_LEN:
+                continue
+            if token in TOPIC_TERM_STOPWORDS:
+                continue
+            counts[token] += 1
+    if not counts:
+        return []
+    return [term for term, _ in counts.most_common(TOPIC_MAX_TERMS)]
+
+
+def _build_topic_terms(search_texts: list[str], topic_keywords: list[str]) -> list[str]:
+    normalized_keywords = _normalize_topic_terms(topic_keywords)
+    extracted_terms = _extract_topic_terms_from_texts(search_texts)
+    combined = []
+    for term in normalized_keywords + extracted_terms:
+        if term not in combined:
+            combined.append(term)
+    return combined
+
+
+def _compile_topic_terms(terms: list[str]) -> list[tuple[str, re.Pattern | None]]:
+    compiled = []
+    for term in terms:
+        if " " in term:
+            compiled.append((term, None))
+        else:
+            compiled.append((term, re.compile(rf"\b{re.escape(term)}\b")))
+    return compiled
+
+
+def _collect_search_texts(data: dict, config: dict | None) -> list[str]:
+    texts: list[str] = []
+    for key in ("query", "search_query", "answer"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            texts.append(value)
+    if config:
+        items = data.get(config["list_key"], [])
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                for field in ("title", "snippet", "source"):
+                    value = item.get(field)
+                    if isinstance(value, str) and value:
+                        texts.append(value)
+    return texts
+
+
+def _line_has_topic(text: str, topic_terms: list[tuple[str, re.Pattern | None]]) -> bool:
+    lowered = text.lower()
+    for term, pattern in topic_terms:
+        if pattern:
+            if pattern.search(lowered):
+                return True
+        elif term in lowered:
+            return True
+    return False
+
+
+def _topic_relevance_stats(
+    text: str, topic_terms: list[tuple[str, re.Pattern | None]]
+) -> dict:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    total_lines = len(lines)
+    line_hits = 0
+    narrative_lines = 0
+    narrative_hits = 0
+    for line in lines:
+        if _line_has_topic(line, topic_terms):
+            line_hits += 1
+        if _line_is_narrative(line):
+            narrative_lines += 1
+            if _line_has_topic(line, topic_terms):
+                narrative_hits += 1
+    lowered = text.lower()
+    total_hits = 0
+    for term, pattern in topic_terms:
+        if pattern:
+            total_hits += len(pattern.findall(lowered))
+        else:
+            total_hits += lowered.count(term)
+    word_count = _word_count(text)
+    return {
+        "total_lines": total_lines,
+        "line_hits": line_hits,
+        "line_ratio": line_hits / total_lines if total_lines else 0,
+        "narrative_lines": narrative_lines,
+        "narrative_hits": narrative_hits,
+        "narrative_ratio": (
+            narrative_hits / narrative_lines if narrative_lines else 0
+        ),
+        "total_hits": total_hits,
+        "hit_rate": (total_hits / word_count) * 100 if word_count else 0,
+    }
 
 
 def _url_is_blacklisted(url: str) -> bool:
@@ -286,13 +508,29 @@ def _url_title_gate(meta: dict) -> tuple[bool, str]:
     return True, "ok"
 
 
-def _remove_navigation_lines(body: str) -> tuple[str, int]:
+def _remove_navigation_lines(body: str) -> tuple[str, dict]:
     lines = []
-    short_line_count = 0
+    stats = {
+        "total_lines": 0,
+        "short_lines": 0,
+        "link_lines": 0,
+        "link_only_lines": 0,
+        "headline_lines": 0,
+        "narrative_lines": 0,
+    }
     for line in body.splitlines():
         stripped = line.strip()
         if not stripped:
             continue
+        stats["total_lines"] += 1
+        if _line_has_link(stripped):
+            stats["link_lines"] += 1
+        if _line_is_link_only(stripped):
+            stats["link_only_lines"] += 1
+        if _line_is_headline_item(stripped):
+            stats["headline_lines"] += 1
+        if _line_is_narrative(stripped):
+            stats["narrative_lines"] += 1
         if (
             stripped.startswith("#")
             or stripped.startswith("!")
@@ -302,25 +540,59 @@ def _remove_navigation_lines(body: str) -> tuple[str, int]:
         if stripped.startswith("*") and len(stripped) < 60:
             continue
         if len(stripped) < 40:
-            short_line_count += 1
+            stats["short_lines"] += 1
             continue
         lines.append(stripped)
-    return "\n".join(lines).strip(), short_line_count
+    return "\n".join(lines).strip(), stats
 
 
-def _filter_crawl_content(raw_text: str) -> tuple[str | None, str, dict, str]:
+def _filter_crawl_content(
+    raw_text: str,
+    topic_terms: list[tuple[str, re.Pattern | None]] | None = None,
+    enable_topic_filter: bool = True,
+) -> tuple[str | None, str, dict, str]:
     meta, meta_block, body = _split_front_matter(raw_text)
     ok, reason = _url_title_gate(meta)
     if not ok:
         return None, reason, meta, meta_block
 
-    cleaned, short_line_count = _remove_navigation_lines(body)
-    if _word_count(cleaned) < 225:
+    cleaned, stats = _remove_navigation_lines(body)
+    word_count = _word_count(cleaned)
+    if word_count < 225:
         return None, "too_short", meta, meta_block
-    if _word_count(cleaned) < 300 and _is_promotional(cleaned):
+    if word_count < 300 and _is_promotional(cleaned):
         return None, "promo_short", meta, meta_block
-    if short_line_count > 300 and _word_count(cleaned) < 800:
+    if stats["short_lines"] > 300 and word_count < 800:
         return None, "nav_heavy", meta, meta_block
+    if stats["total_lines"]:
+        link_only_ratio = stats["link_only_lines"] / stats["total_lines"]
+        link_ratio = stats["link_lines"] / stats["total_lines"]
+        headline_ratio = stats["headline_lines"] / stats["total_lines"]
+        narrative_ratio = stats["narrative_lines"] / stats["total_lines"]
+    else:
+        link_only_ratio = 0
+        link_ratio = 0
+        headline_ratio = 0
+        narrative_ratio = 0
+    if link_only_ratio >= 0.25 and word_count < 1200:
+        return None, "link_list", meta, meta_block
+    if link_ratio >= 0.45 and narrative_ratio < 0.2 and word_count < 1500:
+        return None, "link_dense", meta, meta_block
+    if headline_ratio >= 0.35 and narrative_ratio < 0.25 and word_count < 1600:
+        return None, "headline_list", meta, meta_block
+    if narrative_ratio < 0.12 and word_count < 600:
+        return None, "low_narrative", meta, meta_block
+    topic_terms = topic_terms or []
+    if enable_topic_filter and len(topic_terms) >= TOPIC_MIN_TERMS:
+        topic_stats = _topic_relevance_stats(cleaned, topic_terms)
+        if (
+            word_count >= TOPIC_MIN_WORDS
+            and word_count <= TOPIC_MAX_WORDS
+            and topic_stats["narrative_lines"] >= 3
+            and topic_stats["narrative_ratio"] < TOPIC_MIN_NARRATIVE_RATIO
+            and topic_stats["hit_rate"] < TOPIC_MIN_HIT_RATE
+        ):
+            return None, "topic_low", meta, meta_block
     return cleaned, "ok", meta, meta_block
 
 
@@ -575,6 +847,63 @@ def compile_report(theme: str = "modern", custom_css: str = None) -> str:
             
     except Exception as e:
         return f"Error executing compile script: {str(e)}"
+
+
+@mcp.tool()
+@trace_tool_output
+def cleanup_report() -> str:
+    """
+    Run a cleanup pass over drafted report sections to normalize headings,
+    remove duplicated content, and fix formatting inconsistencies.
+
+    This tool:
+    1. Reads all section markdown files in `work_products/_working/sections`
+    2. Applies deterministic heading normalization
+    3. Uses an LLM to propose targeted edits only for inconsistent/duplicated sections
+    4. Writes updated section files in place
+    """
+    import subprocess
+
+    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    script_path = os.path.join(
+        PROJECT_ROOT,
+        "src",
+        "universal_agent",
+        "scripts",
+        "cleanup_report.py",
+    )
+
+    if not os.path.exists(script_path):
+        return f"Error: Cleanup script not found at {script_path}"
+
+    workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+    if not workspace:
+        return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
+
+    if not os.path.exists(workspace):
+        return f"Error: Workspace does not exist: {workspace}"
+
+    try:
+        sys.stderr.write(f"[Local Toolkit] Running cleanup pass via {script_path}\n")
+        result = subprocess.run(
+            [sys.executable, script_path, workspace],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return "Error: Cleanup script execution timed out after 5 minutes."
+    except Exception as e:
+        return f"Error running cleanup script: {str(e)}"
+
+    if result.returncode == 0:
+        return f"✅ Report cleanup complete.\n\n{result.stdout}"
+
+    return (
+        "❌ Cleanup failed.\n\n"
+        f"Error Output:\n{result.stderr}\n\n"
+        f"Standard Output:\n{result.stdout}"
+    )
 
 
 @mcp.tool()
@@ -1478,7 +1807,11 @@ async def crawl_parallel(urls: list[str], session_dir: str) -> str:
 
 @mcp.tool()
 @trace_tool_output
-async def finalize_research(session_dir: str, task_name: str = "default") -> str:
+async def finalize_research(
+    session_dir: str,
+    task_name: str = "default",
+    enable_topic_filter: bool = True,
+) -> str:
     """
     AUTOMATED RESEARCH PIPELINE (Inbox Pattern):
     1. Scans 'search_results/' INBOX for NEW JSON search outputs.
@@ -1501,6 +1834,15 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
         # Task-specific context directory
         task_dir = os.path.join(session_dir, "tasks", task_name)
         os.makedirs(task_dir, exist_ok=True)
+        task_config = _load_task_config(task_dir)
+        config_enable_topic = task_config.get("enable_topic_filter")
+        if isinstance(config_enable_topic, bool):
+            enable_topic_filter = config_enable_topic
+        topic_keywords = task_config.get("topic_keywords", [])
+        if isinstance(topic_keywords, str):
+            topic_keywords = [term.strip() for term in topic_keywords.split(",")]
+        if not isinstance(topic_keywords, list):
+            topic_keywords = []
 
         if not os.path.exists(search_results_dir):
             return json.dumps(
@@ -1623,6 +1965,34 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
             shutil.move(src, dst)
             logger.info(f"Archived verified search input: {filename}")
 
+        search_texts: list[str] = []
+        for filename in processed_files_list:
+            path = os.path.join(processed_dir, filename)
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                tool_name = data.get("tool", "")
+                config = SEARCH_TOOL_CONFIG.get(tool_name)
+                search_texts.extend(_collect_search_texts(data, config))
+            except Exception as e:
+                logger.warning(f"Error reading archived {filename}: {e}")
+
+        topic_terms_raw = _build_topic_terms(search_texts, topic_keywords)
+        compiled_topic_terms = _compile_topic_terms(topic_terms_raw)
+        if enable_topic_filter and compiled_topic_terms:
+            preview_terms = ", ".join(topic_terms_raw[:12])
+            preview_suffix = "" if len(topic_terms_raw) <= 12 else "..."
+            logger.info(
+                "Topic filter enabled (%d terms). Preview: %s%s",
+                len(compiled_topic_terms),
+                preview_terms,
+                preview_suffix,
+            )
+        elif enable_topic_filter:
+            logger.info("Topic filter enabled but no topic terms found.")
+
         # 3. Execute Crawl (Saves to Global Cache in search_results/)
         sys.stderr.write(
             f"[finalize] Found {len(url_list)} unique URLs from {scanned_files} files "
@@ -1648,8 +2018,14 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
                 continue
             with open(path, "r", encoding="utf-8") as f:
                 raw_text = f.read()
-            filtered_body, status, meta, meta_block = _filter_crawl_content(raw_text)
+            filtered_body, status, meta, meta_block = _filter_crawl_content(
+                raw_text,
+                topic_terms=compiled_topic_terms,
+                enable_topic_filter=enable_topic_filter,
+            )
             if not filtered_body:
+                if status.startswith("topic_"):
+                    logger.info("Topic filter drop: %s (%s)", path, status)
                 filtered_dropped.append({"path": path, "status": status})
                 continue
 
@@ -1748,6 +2124,16 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
         overview_lines.append(
             f"**Search Inputs:** {scanned_files} files (Archived to `processed_json/`)"
         )
+        if enable_topic_filter and compiled_topic_terms:
+            preview_terms = ", ".join(topic_terms_raw[:12])
+            preview_suffix = "" if len(topic_terms_raw) <= 12 else "..."
+            overview_lines.append(
+                f"**Topic filter:** enabled ({len(topic_terms_raw)} terms) {preview_terms}{preview_suffix}"
+            )
+        elif enable_topic_filter:
+            overview_lines.append("**Topic filter:** enabled (no terms found)")
+        else:
+            overview_lines.append("**Topic filter:** disabled")
         overview_lines.append(f"**Search Results URLs:** {len(url_list)}")
         overview_lines.append(f"**Filtered Corpus Files:** {len(filtered_files)}")
         overview_lines.append("")
@@ -1789,8 +2175,14 @@ async def finalize_research(session_dir: str, task_name: str = "default") -> str
             overview_lines.append("| # | File | Reason |")
             overview_lines.append("|---|------|--------|")
             for idx, dropped in enumerate(filtered_dropped, 1):
+                status = dropped["status"]
+                display_status = f"{status}*" if status.startswith("topic_") else status
                 overview_lines.append(
-                    f"| {idx} | `{os.path.basename(dropped['path'])}` | {dropped['status']} |"
+                    f"| {idx} | `{os.path.basename(dropped['path'])}` | {display_status} |"
+                )
+            if any(item["status"].startswith("topic_") for item in filtered_dropped):
+                overview_lines.append(
+                    "\n*Topic filter removed the item due to low topical relevance."
                 )
 
         # SAVE OVERVIEW TO TASK DIRECTORY

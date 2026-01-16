@@ -22,13 +22,26 @@ async def write_section(sem, client, section, corpus_text, order):
         print(f"Drafting {section['title']}...")
         
         # Construct Prompt
+        title = section.get("title", "").strip()
+        section_id = section.get("id", "").strip().lower()
+        is_executive = section_id == "executive_summary" or "executive summary" in title.lower()
+        heading_line = "# Executive Summary" if is_executive else f"## {title}"
+        format_rules = (
+            "Provide 5-7 concise bullets. Avoid deep dives or repeating stats."
+            if is_executive
+            else "Start with the heading line exactly as shown. Use '###' for subheads as needed."
+        )
+
         prompt = f"""You are a professional report writer.
-        
-        SECTION TITLE: {section['title']}
+
+        REQUIRED HEADING (first line):
+        {heading_line}
+
+        SECTION TITLE: {title}
         CONTEXT:
-        {corpus_text[:20000]} 
-        
-        INSTRUCTION: Write a detailed, fact-based section for this report. Use markdown."""
+        {corpus_text[:20000]}
+
+        INSTRUCTION: Write a detailed, fact-based section for this report. Use markdown only (no code fences). {format_rules} Focus on this section's topic and avoid repeating statistics central to other sections unless needed for context."""
 
         try:
             resp = await client.messages.create(

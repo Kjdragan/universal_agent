@@ -30,6 +30,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Clarify the research questions, boundaries, and success criteria for the investigation.",
                 "verification_type": "qualitative",
                 "evaluation_rubric": "Are the research questions clear, specific, and answerable?",
+                "minimum_acceptable_score": 0.6,
             },
             {
                 "id_suffix": "gather",
@@ -47,6 +48,7 @@ DECOMPOSITION_TEMPLATES = {
                 "depends_on": ["gather"],
                 "verification_type": "qualitative",
                 "evaluation_rubric": "Does the analysis identify clear patterns and provide actionable insights?",
+                "minimum_acceptable_score": 0.6,
             },
             {
                 "id_suffix": "report",
@@ -78,6 +80,7 @@ DECOMPOSITION_TEMPLATES = {
                 "depends_on": ["targets"],
                 "verification_type": "qualitative",
                 "evaluation_rubric": "Is the template professional, clear, and personalizable?",
+                "minimum_acceptable_score": 0.6,
             },
             {
                 "id_suffix": "personalize",
@@ -115,6 +118,7 @@ DECOMPOSITION_TEMPLATES = {
                 "depends_on": ["ingest"],
                 "verification_type": "qualitative",
                 "evaluation_rubric": "Does the analysis address all requested aspects?",
+                "minimum_acceptable_score": 0.6,
             },
             {
                 "id_suffix": "output",
@@ -152,6 +156,7 @@ DECOMPOSITION_TEMPLATES = {
                 "depends_on": ["transform"],
                 "verification_type": "qualitative",
                 "evaluation_rubric": "Does the output data meet all specified requirements?",
+                "minimum_acceptable_score": 0.6,
             },
         ],
     },
@@ -165,6 +170,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Develop a structured outline for the content piece.",
                 "verification_type": "qualitative",
                 "evaluation_rubric": "Does the outline have a clear structure and cover all required topics?",
+                "minimum_acceptable_score": 0.6,
             },
             {
                 "id_suffix": "draft",
@@ -255,6 +261,7 @@ class TemplateDecomposer(Decomposer):
                 binary_checks=task_def.get("binary_checks", []),
                 constraints=task_def.get("constraints", []),
                 evaluation_rubric=task_def.get("evaluation_rubric"),
+                minimum_acceptable_score=task_def.get("minimum_acceptable_score", 0.7),
                 max_iterations=task_def.get("max_iterations", 10),
             )
             tasks.append(task)
@@ -348,15 +355,20 @@ Return ONLY the JSON array, no additional text."""
 
         tasks: List[Task] = []
         for td in task_dicts:
+            verification_type = td.get("verification_type", "composite")
+            minimum_score = td.get("minimum_acceptable_score")
+            if minimum_score is None:
+                minimum_score = 0.6 if verification_type == "qualitative" else 0.7
             task = Task(
                 id=td.get("id", f"task_{uuid.uuid4().hex[:8]}"),
                 title=td.get("title", "Untitled task"),
                 description=td.get("description", ""),
                 depends_on=td.get("depends_on", []),
-                verification_type=td.get("verification_type", "composite"),
+                verification_type=verification_type,
                 binary_checks=td.get("binary_checks", []),
                 constraints=td.get("constraints", []),
                 evaluation_rubric=td.get("evaluation_rubric"),
+                minimum_acceptable_score=minimum_score,
                 max_iterations=td.get("max_iterations", 10),
             )
             tasks.append(task)
@@ -391,23 +403,25 @@ class PlanManager:
 
     def create_plan(self, request: str, context: Optional[Dict] = None) -> List[Task]:
         self.state_manager.set_original_request(request)
+        superseded = self.state_manager.mark_active_tasks_failed("New plan created")
         tasks = self.decomposer.decompose(request, context)
         self.state_manager.create_tasks_batch(tasks)
         self.state_manager.checkpointer.checkpoint(
             message=f"Plan created with {len(tasks)} tasks",
             iteration=0,
-            metadata={"task_count": len(tasks)},
+            metadata={"task_count": len(tasks), "superseded_tasks": superseded},
         )
         return tasks
 
     def revise_plan(self, reason: str, context: Optional[Dict] = None) -> List[Task]:
         self.state_manager.checkpointer.create_branch(f"replan_{uuid.uuid4().hex[:6]}")
+        superseded = self.state_manager.mark_active_tasks_failed(reason)
         tasks = self.decomposer.decompose(reason, context)
         self.state_manager.create_tasks_batch(tasks)
         self.state_manager.checkpointer.checkpoint(
             message=f"Plan revised: {reason}",
             iteration=0,
-            metadata={"reason": reason},
+            metadata={"reason": reason, "superseded_tasks": superseded},
         )
         return tasks
 

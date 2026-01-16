@@ -1,0 +1,16 @@
+{
+  "topic": "Russia-Ukraine war: latest developments from the last seven days",
+  "report_title": "Russia-Ukraine War: Last 7 Days of Developments",
+  "corpus_dir": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260116_141413/tasks/russia_ukraine_war_january_2026/filtered_corpus",
+  "output_dir": "RLM_Exploration/work_products",
+  "model": "claude-sonnet-4-20250514",
+  "planner_max_tokens": 1200,
+  "explorer_max_tokens": 1200,
+  "section_max_tokens": 1600,
+  "summary_max_tokens": 700,
+  "explorer_max_steps": 8,
+  "max_search_results": 6,
+  "max_read_chars": 8000,
+  "snippet_window": 400,
+  "index_preview_items": 25
+}
