@@ -90,6 +90,25 @@ ngrok http 8080
 PYTHONPATH=src uv run uvicorn universal_agent.bot.main:app --host 0.0.0.0 --port 8080
 ```
 
+## 🧭 URW (Opt-In Long-Running Wrapper)
+
+URW is an **opt-in** outer-loop harness for multi-hour tasks. The default CLI path remains the fast, direct multi-agent execution.
+
+**Run URW via CLI flags:**
+```bash
+PYTHONPATH=src uv run python -m universal_agent.main --urw "Research X and email report"
+```
+
+**Mock mode (no real tools):**
+```bash
+PYTHONPATH=src uv run python -m universal_agent.main --urw "Test task" --urw-mock
+```
+
+**Standalone runner script:**
+```bash
+PYTHONPATH=src uv run python scripts/run_urw.py "Research X and email report"
+```
+
 ## 🚢 Deployment (Railway)
 
 The project is optimized for **Railway** deployment via Docker.

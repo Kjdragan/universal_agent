@@ -135,3 +135,4 @@ Fields:
 - Implement Phase 0 adapter baseline.
 - Define evidence DB schema + verification artifact format.
 - Draft decomposition templates for top 3 request types.
+- Run URW smoke check: `PYTHONPATH=src uv run python scripts/urw_smoke.py`
