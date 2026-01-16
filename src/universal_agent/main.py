@@ -5620,7 +5620,86 @@ def parse_cli_args() -> argparse.Namespace:
         action="store_true",
         help="Reset Letta memory for all agents (fresh start).",
     )
+    parser.add_argument(
+        "--urw",
+        dest="urw_request",
+        help="Run URW orchestrator for the provided request (opt-in).",
+    )
+    parser.add_argument(
+        "--urw-mock",
+        action="store_true",
+        help="Use mock adapter instead of Universal Agent for URW.",
+    )
+    parser.add_argument(
+        "--urw-max-iterations-per-task",
+        type=int,
+        default=15,
+        help="Max iterations per URW task.",
+    )
+    parser.add_argument(
+        "--urw-max-total-iterations",
+        type=int,
+        default=200,
+        help="Max total URW iterations.",
+    )
+    parser.add_argument(
+        "--urw-iteration-timeout",
+        type=int,
+        default=600,
+        help="URW iteration timeout in seconds.",
+    )
+    parser.add_argument(
+        "--urw-task-timeout",
+        type=int,
+        default=3600,
+        help="URW task timeout in seconds.",
+    )
+    parser.add_argument(
+        "--urw-verbose",
+        action="store_true",
+        help="Enable verbose URW logging.",
+    )
     return parser.parse_args()
+
+
+async def _run_urw_from_cli(args: argparse.Namespace) -> None:
+    from pathlib import Path
+    from anthropic import Anthropic
+
+    from universal_agent.urw import URWConfig, URWOrchestrator
+    from universal_agent.urw.integration import MockAgentAdapter, UniversalAgentAdapter
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY is required for URW mode")
+
+    workspace_path = Path(args.workspace or "./urw_workspace").expanduser().resolve()
+    workspace_path.mkdir(parents=True, exist_ok=True)
+
+    llm_client = Anthropic(api_key=api_key)
+
+    if args.urw_mock:
+        adapter = MockAgentAdapter({"success_rate": 0.9, "produce_artifacts": True})
+    else:
+        adapter = UniversalAgentAdapter({})
+
+    config = URWConfig(
+        max_iterations_per_task=args.urw_max_iterations_per_task,
+        max_total_iterations=args.urw_max_total_iterations,
+        iteration_timeout=args.urw_iteration_timeout,
+        task_timeout=args.urw_task_timeout,
+        verbose=args.urw_verbose,
+    )
+
+    orchestrator = URWOrchestrator(
+        agent_loop=adapter,
+        llm_client=llm_client,
+        workspace_path=workspace_path,
+        config=config,
+    )
+
+    result = await orchestrator.run(args.urw_request)
+    print(json.dumps(result, indent=2))
 
 
 def _print_tool_policy_explain(raw_tool_name: str) -> None:
@@ -6609,6 +6688,11 @@ async def main(args: argparse.Namespace):
             print("✅ Letta memory reset complete!")
         except Exception as e:
             print(f"⚠️ Letta reset error: {e}")
+        main_span.__exit__(None, None, None)
+        return
+
+    if args.urw_request:
+        await _run_urw_from_cli(args)
         main_span.__exit__(None, None, None)
         return
 
