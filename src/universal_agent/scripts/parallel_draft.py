@@ -10,9 +10,11 @@ API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 MODEL = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-4.7")
 
-async def write_section(sem, client, section, corpus_text):
+async def write_section(sem, client, section, corpus_text, order):
+    """Write a single section. order is used to prefix filename for correct ordering."""
     async with sem:
-        out_path = Path(f"work_products/_working/sections/{section['id']}.md")
+        # Prefix with order number for correct assembly order
+        out_path = Path(f"work_products/_working/sections/{order:02d}_{section['id']}.md")
         if out_path.exists():
             print(f"Skipping {section['id']} (Exists)")
             return
@@ -42,21 +44,36 @@ async def write_section(sem, client, section, corpus_text):
             print(f"❌ Error {section['id']}: {e}")
 
 async def main():
+    # 0. Change to workspace directory if passed
+    workspace = None
+    if len(sys.argv) > 1:
+        workspace = Path(sys.argv[1]).resolve()  # Use absolute path
+        if workspace.exists() and workspace.is_dir():
+            os.chdir(workspace)
+            print(f"Working from: {workspace}")
+        else:
+            print(f"Error: Workspace not found or not a directory: {workspace}")
+            return
+    else:
+        print("Error: No workspace path provided")
+        return
+    
     # 1. Locate Resources
     outline_path = Path("work_products/_working/outline.json")
     if not outline_path.exists():
-        print("Error: outline.json not found")
+        print(f"Error: outline.json not found at {outline_path.absolute()}")
+        print(f"Current directory: {os.getcwd()}")
         return
 
-    # 2. Locate Corpus (Try passed arg or specific task path)
-    if len(sys.argv) > 1:
-        corpus_path = Path(sys.argv[1])
-    else:
-        # Fallback: finding refined_corpus in tasks dir
-        corpus_path = next(Path("tasks").glob("*/refined_corpus.md"), None)
+    # 2. Locate Corpus (Try finding in tasks dir)
+    corpus_path = next(Path("tasks").glob("*/refined_corpus.md"), None)
     
     if not corpus_path or not corpus_path.exists():
-        print("Error: refined_corpus.md not found")
+        print(f"Error: refined_corpus.md not found in tasks/")
+        print(f"Current directory: {os.getcwd()}")
+        print(f"Tasks directory exists: {Path('tasks').exists()}")
+        if Path('tasks').exists():
+            print(f"Tasks subdirectories: {list(Path('tasks').iterdir())}")
         return
 
     print(f"Using Corpus: {corpus_path}")
@@ -70,8 +87,8 @@ async def main():
     client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL)
     sem = asyncio.Semaphore(5) # Max 5 concurrent requests
 
-    # 4. Run Parallel
-    tasks = [write_section(sem, client, s, corpus_text) for s in sections]
+    # 4. Run Parallel - pass order index for filename ordering
+    tasks = [write_section(sem, client, s, corpus_text, i+1) for i, s in enumerate(sections)]
     await asyncio.gather(*tasks)
 
 if __name__ == "__main__":
