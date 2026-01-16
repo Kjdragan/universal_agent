@@ -456,6 +456,60 @@ def read_research_files(file_paths: list[str]) -> str:
 
 @mcp.tool()
 @trace_tool_output
+def draft_report_parallel() -> str:
+    """
+    Execute the Python-based parallel drafting system to generate report sections concurrently.
+    
+    This tool:
+    1. Reads `work_products/_working/outline.json`
+    2. Reads `tasks/[task_name]/refined_corpus.md`
+    3. Spawns 5 concurrent LLM workers (AsyncAnthropic) to write sections
+    4. Saves output to `work_products/_working/sections/*.md`
+    
+    Use this immediately after creating the outline.
+    """
+    import subprocess
+    
+    script_path = os.path.join(
+        PROJECT_ROOT, 
+        "src", "universal_agent", "scripts", "parallel_draft.py"
+    )
+    
+    # Ensure script exists
+    if not os.path.exists(script_path):
+        return f"Error: Parallel draft script not found at {script_path}"
+        
+    try:
+        sys.stderr.write(f"[Local Toolkit] Launching parallel drafter: {script_path}\n")
+        
+        # Run the script and capture output
+        result = subprocess.run(
+            [sys.executable, script_path],
+            capture_output=True,
+            text=True,
+            timeout=300 # 5 minute safety timeout for launching (execution is async)
+        )
+        
+        if result.returncode == 0:
+            return (
+                f"✅ Parallel Drafting Complete.\n\n"
+                f"Output:\n{result.stdout}\n"
+            )
+        else:
+            return (
+                f"❌ Parallel Drafting Failed (Exit Code {result.returncode})\n\n"
+                f"Error Output:\n{result.stderr}\n\n"
+                f"Standard Output:\n{result.stdout}"
+            )
+            
+    except subprocess.TimeoutExpired:
+        return "Error: Script execution timed out after 5 minutes."
+    except Exception as e:
+        return f"Error running parallel draft script: {str(e)}"
+
+
+@mcp.tool()
+@trace_tool_output
 def append_to_file(path: str, content: str) -> str:
     """
     Append content to an existing file in the Local Workspace.

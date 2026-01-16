@@ -831,6 +831,7 @@ class UniversalAgent:
                         "mcp__local_toolkit__generate_image",
                         "mcp__local_toolkit__workbench_download",
                         "mcp__local_toolkit__workbench_upload",
+                        "mcp__local_toolkit__draft_report_parallel",
                     ],
                     model="inherit",
                 ),

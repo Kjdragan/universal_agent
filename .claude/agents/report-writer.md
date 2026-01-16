@@ -33,52 +33,10 @@ Your PRIMARY source is the Refined Corpus: `{CURRENT_SESSION_WORKSPACE}/tasks/{t
 **RULE:** Do NOT write sections manually. Use the script below.
 
 1. **Install:** `uv pip install anthropic httpx` (if needed).
-2. **Write Script:** Create `work_products/_working/parallel_draft.py` using this logic:
-
-```python
-import os
-import asyncio
-import json
-from pathlib import Path
-from anthropic import AsyncAnthropic
-
-# CONFIG
-API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN")
-BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
-MODEL = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-4.7")
-
-async def write_section(sem, client, section, corpus):
-    async with sem:
-        out_path = Path(f"work_products/_working/sections/{section['id']}.md")
-        if out_path.exists(): return # Durability: Skip existing
-
-        print(f"Drafting {section['title']}...")
-        prompt = f"Write a detailed section '{section['title']}' based on this corpus:\n\n{corpus[:20000]}..."
-        
-        try:
-            resp = await client.messages.create(
-                model=MODEL, max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(resp.content[0].text)
-        except Exception as e:
-            print(f"Error {section['id']}: {e}")
-
-async def main():
-    with open("work_products/_working/outline.json") as f:
-        sections = json.load(f)["sections"]
-    corpus = Path("tasks/[TASK]/refined_corpus.md").read_text() # Adjust path dynamically
-    
-    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL)
-    sem = asyncio.Semaphore(5) # max 5 concurrent
-    
-    await asyncio.gather(*[write_section(sem, client, s, corpus) for s in sections])
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-3. **Run:** `python3 work_products/_working/parallel_draft.py`.
+2. **Execute Draft:**
+   **ACTION:** Call `mcp__local_toolkit__draft_report_parallel()`.
+   
+   *Note: The tool automatically runs the python script to generate all sections.*
 
 --- PHASE 2 CHECKPOINT ---
 ✅ SELF-CHECK: Do section files exist?
