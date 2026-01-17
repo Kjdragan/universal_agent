@@ -249,6 +249,7 @@ class TemplateDecomposer(Decomposer):
         if not template_name:
             return []
         template = self.templates[template_name]
+        template_policy = template.get("evaluation_policy") or {}
         plan_id = uuid.uuid4().hex[:8]
         tasks: List[Task] = []
 
@@ -260,6 +261,7 @@ class TemplateDecomposer(Decomposer):
         for task_def in template["tasks"]:
             task_id = id_map[task_def["id_suffix"]]
             depends_on = [id_map[dep] for dep in task_def.get("depends_on", []) if dep in id_map]
+            task_policy = {**template_policy, **task_def.get("evaluation_policy", {})}
             task = Task(
                 id=task_id,
                 title=task_def["title"],
@@ -271,6 +273,7 @@ class TemplateDecomposer(Decomposer):
                 constraints=task_def.get("constraints", []),
                 evaluation_rubric=task_def.get("evaluation_rubric"),
                 minimum_acceptable_score=task_def.get("minimum_acceptable_score", 0.7),
+                evaluation_policy=task_policy or None,
                 max_iterations=task_def.get("max_iterations", 10),
             )
             tasks.append(task)
@@ -334,6 +337,7 @@ Return a JSON array of task objects. Each task should have:
 - `binary_checks`: Array of binary checks like "file_exists:output.md" (must include "file_exists:handoff.json")
 - `constraints`: Array of constraint objects like {{"type": "min_length", "value": 1000}} (optional)
 - `evaluation_rubric`: Qualitative criteria for LLM evaluation (optional)
+- `evaluation_policy`: Optional overrides for evaluation thresholds/requirements (e.g., {"require_qualitative": false, "qualitative_min_score": 0.7})
 - `max_iterations`: Maximum attempts for this task (default: 10)
 
 **Guidelines:**
@@ -379,6 +383,7 @@ Return ONLY the JSON array, no additional text."""
                 constraints=td.get("constraints", []),
                 evaluation_rubric=td.get("evaluation_rubric"),
                 minimum_acceptable_score=minimum_score,
+                evaluation_policy=td.get("evaluation_policy"),
                 max_iterations=td.get("max_iterations", 10),
             )
             tasks.append(task)

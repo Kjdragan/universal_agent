@@ -68,6 +68,7 @@ class Task:
     constraints: List[Dict[str, Any]] = field(default_factory=list)
     evaluation_rubric: Optional[str] = None
     minimum_acceptable_score: float = 0.7
+    evaluation_policy: Optional[Dict[str, Any]] = None
 
     max_iterations: int = 10
     requires_tools: List[str] = field(default_factory=list)
@@ -91,6 +92,7 @@ class Task:
             "constraints": self.constraints,
             "evaluation_rubric": self.evaluation_rubric,
             "minimum_acceptable_score": self.minimum_acceptable_score,
+            "evaluation_policy": self.evaluation_policy,
             "max_iterations": self.max_iterations,
             "requires_tools": self.requires_tools,
         }
@@ -244,6 +246,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     constraints JSON,
     evaluation_rubric TEXT,
     minimum_acceptable_score REAL DEFAULT 0.7,
+    evaluation_policy JSON,
     max_iterations INTEGER DEFAULT 10,
     requires_tools JSON,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -375,9 +378,38 @@ class URWStateManager:
             )
             (self.urw_dir / "task_plan.json").write_text("[]")
         else:
+            self.artifacts_dir.mkdir(exist_ok=True)
+            self.iterations_dir.mkdir(exist_ok=True)
             self.verification_dir.mkdir(exist_ok=True)
 
+            db_missing = not self.db_path.exists() or self.db_path.stat().st_size == 0
+            if db_missing:
+                conn = sqlite3.connect(self.db_path)
+                conn.executescript(SCHEMA)
+                conn.close()
+
+            progress_path = self.urw_dir / "progress.md"
+            if not progress_path.exists():
+                progress_path.write_text("# Progress\n\nNo work started yet.\n")
+            guardrails_path = self.urw_dir / "guardrails.md"
+            if not guardrails_path.exists():
+                guardrails_path.write_text("# Guardrails\n\nNo failed approaches recorded yet.\n")
+            task_plan_path = self.urw_dir / "task_plan.json"
+            if not task_plan_path.exists():
+                task_plan_path.write_text("[]")
+
     def _ensure_schema_migrations(self) -> None:
+        has_verification = (
+            self.conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='verification_findings'"
+            ).fetchone()
+            is not None
+        )
+        if not has_verification:
+            self.conn.executescript(SCHEMA)
+            self.conn.commit()
+            return
+
         columns = {
             row["name"]
             for row in self.conn.execute("PRAGMA table_info(verification_findings)").fetchall()
@@ -394,6 +426,17 @@ class URWStateManager:
                     f"ALTER TABLE verification_findings ADD COLUMN {name} {col_type}"
                 )
         self.conn.commit()
+
+        task_columns = {
+            row["name"] for row in self.conn.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        if "evaluation_policy" not in task_columns:
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN evaluation_policy JSON")
+            self.conn.commit()
+
+    def _get_task_title(self, task_id: str) -> str:
+        task = self.get_task(task_id)
+        return task.title if task else task_id
 
     @contextmanager
     def transaction(self):
@@ -463,10 +506,10 @@ class URWStateManager:
                 INSERT INTO tasks (
                     id, title, description, status, parent_task_id,
                     verification_type, binary_checks, constraints,
-                    evaluation_rubric, minimum_acceptable_score,
+                    evaluation_rubric, minimum_acceptable_score, evaluation_policy,
                     max_iterations, requires_tools
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.id,
@@ -479,6 +522,9 @@ class URWStateManager:
                     json.dumps(task.constraints),
                     task.evaluation_rubric,
                     task.minimum_acceptable_score,
+                    json.dumps(task.evaluation_policy)
+                    if task.evaluation_policy is not None
+                    else None,
                     task.max_iterations,
                     json.dumps(task.requires_tools),
                 ),
@@ -502,10 +548,10 @@ class URWStateManager:
                     INSERT INTO tasks (
                         id, title, description, status, parent_task_id,
                         verification_type, binary_checks, constraints,
-                        evaluation_rubric, minimum_acceptable_score,
+                        evaluation_rubric, minimum_acceptable_score, evaluation_policy,
                         max_iterations, requires_tools
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task.id,
@@ -518,6 +564,9 @@ class URWStateManager:
                         json.dumps(task.constraints),
                         task.evaluation_rubric,
                         task.minimum_acceptable_score,
+                        json.dumps(task.evaluation_policy)
+                        if task.evaluation_policy is not None
+                        else None,
                         task.max_iterations,
                         json.dumps(task.requires_tools),
                     ),
@@ -764,11 +813,13 @@ class URWStateManager:
         self.conn.commit()
         iteration = cursor.lastrowid
         iteration_file = self.iterations_dir / f"{iteration:03d}_started.json"
+        task_title = self._get_task_title(task_id)
         iteration_file.write_text(
             json.dumps(
                 {
                     "iteration": iteration,
                     "task_id": task_id,
+                    "task_title": task_title,
                     "started_at": datetime.utcnow().isoformat() + "Z",
                     "status": "started",
                 },
@@ -810,14 +861,16 @@ class URWStateManager:
                 failure["why_failed"],
                 task_id=result.task_id,
                 iteration=result.iteration,
-            )
+        )
 
         iteration_file = self.iterations_dir / f"{result.iteration:03d}_complete.json"
+        task_title = self._get_task_title(result.task_id)
         iteration_file.write_text(
             json.dumps(
                 {
                     "iteration": result.iteration,
                     "task_id": result.task_id,
+                    "task_title": task_title,
                     "completed_at": datetime.utcnow().isoformat() + "Z",
                     "outcome": result.outcome,
                     "completion_confidence": result.completion_confidence.value,
@@ -1294,6 +1347,9 @@ class URWStateManager:
             constraints=json.loads(row["constraints"] or "[]"),
             evaluation_rubric=row["evaluation_rubric"],
             minimum_acceptable_score=row["minimum_acceptable_score"] or 0.7,
+            evaluation_policy=json.loads(row["evaluation_policy"])
+            if row["evaluation_policy"]
+            else None,
             max_iterations=row["max_iterations"] or 10,
             requires_tools=json.loads(row["requires_tools"] or "[]"),
             iteration_started=row["iteration_started"],
