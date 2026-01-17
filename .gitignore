@@ -29,6 +29,8 @@ TMP.txt
 downloads/
 work_products/
 .uv-cache/
+urw_smoke_workspace/
+urw_smoke_workspace_run*/
 
 # Temporary files
 input.txt

@@ -11,7 +11,7 @@ import json
 import os
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -347,9 +347,36 @@ class URWOrchestrator:
             )
 
         artifacts = self.state_manager.get_task_artifacts(task.id)
-        evaluation = self.evaluator.evaluate(task, artifacts, agent_result.output, self.workspace_path)
+        handoff_check = "file_exists:handoff.json"
+        eval_task = task
+        if handoff_check in task.binary_checks:
+            filtered_checks = [check for check in task.binary_checks if check != handoff_check]
+            eval_task = replace(task, binary_checks=filtered_checks)
 
-        if evaluation.is_complete and evaluation.confidence.value in {"definitive", "high", "medium"}:
+        evaluation = self.evaluator.evaluate(eval_task, artifacts, agent_result.output, self.workspace_path)
+        handoff_failed = False
+        completion_ok: Optional[bool] = None
+
+        if evaluation.is_complete:
+            completion_ok = await self._handle_task_complete(task, evaluation)
+            if not completion_ok:
+                evaluation.is_complete = False
+                evaluation.confidence = CompletionConfidence.LOW
+            elif handoff_check in task.binary_checks:
+                handoff_exists = self.state_manager.get_latest_handoff_path() is not None
+                evaluation.binary_results[handoff_check] = handoff_exists
+                if not handoff_exists:
+                    evaluation.missing_elements.append("handoff.json not written")
+                    evaluation.suggested_actions.append("Write handoff.json checkpoint")
+                    evaluation.is_complete = False
+                    evaluation.confidence = CompletionConfidence.FAILED
+                    handoff_failed = True
+
+        if completion_ok is False:
+            outcome = "failed"
+        elif handoff_failed:
+            outcome = "failed"
+        elif evaluation.is_complete and evaluation.confidence.value in {"definitive", "high", "medium"}:
             outcome = "success"
         elif agent_result.success and evaluation.overall_score >= 0.4:
             outcome = "partial"
@@ -374,7 +401,14 @@ class URWOrchestrator:
         commit_sha = self.state_manager.complete_iteration(result)
         result.commit_sha = commit_sha
 
-        evidence_type, evidence_refs = self._summarize_evidence(task, artifacts)
+        if not evaluation.is_complete and not handoff_failed and completion_ok is not False:
+            if outcome == "failed":
+                await self._handle_task_failure(task, "Iteration failed")
+            else:
+                self.state_manager.update_task_status(task.id, TaskStatus.PENDING)
+
+        updated_artifacts = self.state_manager.get_task_artifacts(task.id)
+        evidence_type, evidence_refs = self._summarize_evidence(task, updated_artifacts)
         task_type = task.id.split("_")[-1] if "_" in task.id else task.title
         notes = evaluation.qualitative_reasoning if evaluation.qualitative_reasoning else None
         self.state_manager.write_verification_finding(
@@ -396,29 +430,37 @@ class URWOrchestrator:
         if self.callbacks.on_iteration_end:
             self.callbacks.on_iteration_end(iteration, result)
 
-        if evaluation.is_complete:
-            await self._handle_task_complete(task, evaluation)
-        else:
-            if outcome == "failed":
-                await self._handle_task_failure(task, "Iteration failed")
-            else:
-                self.state_manager.update_task_status(task.id, TaskStatus.PENDING)
-
         return result
 
-    async def _handle_task_complete(self, task: Task, evaluation: EvaluationResult) -> None:
+    async def _handle_task_complete(self, task: Task, evaluation: EvaluationResult) -> bool:
         if task.verification_type == "human":
             if self.callbacks.on_human_review_required:
                 approved = self.callbacks.on_human_review_required(task, evaluation)
                 if not approved:
                     self._log(f"Task '{task.title}' pending human approval")
                     self.state_manager.update_task_status(task.id, TaskStatus.NEEDS_REVIEW)
-                    return
+                    return False
 
         self.state_manager.update_task_status(task.id, TaskStatus.COMPLETE, self.current_iteration)
+        next_task = self.state_manager.get_next_task()
+        try:
+            self.state_manager.write_handoff_checkpoint(
+                task=task,
+                iteration=self.current_iteration,
+                evaluation_summary=evaluation.to_dict(),
+                next_task=next_task,
+            )
+        except Exception as exc:
+            self._log(f"Task '{task.title}' failed: handoff checkpoint error ({exc})")
+            self.state_manager.update_task_status(task.id, TaskStatus.FAILED, self.current_iteration)
+            if self.callbacks.on_task_failed:
+                self.callbacks.on_task_failed(task, f"handoff checkpoint error: {exc}")
+            return False
+
         self._log(f"Task '{task.title}' completed!")
         if self.callbacks.on_task_complete:
             self.callbacks.on_task_complete(task, evaluation)
+        return True
 
     async def _handle_task_failure(self, task: Task, reason: str) -> None:
         self._log(f"Task '{task.title}' failed: {reason}")
