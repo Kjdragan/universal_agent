@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .state import Task, Artifact, CompletionConfidence, ArtifactType
+from .evaluation_policy import resolve_evaluation_policy, get_policy_summary
 
 
 @dataclass
@@ -327,38 +328,12 @@ class CompositeEvaluator(Evaluator):
         self.evaluation_policy = evaluation_policy or {}
 
     def _resolve_policy(self, task: Task) -> Dict[str, Any]:
-        policy: Dict[str, Any] = dict(self.evaluation_policy)
-        if task.evaluation_policy:
-            policy.update(task.evaluation_policy)
-
-        verification_type = task.verification_type or "composite"
-        if verification_type == "binary":
-            defaults = {
-                "require_binary": True,
-                "require_constraints": False,
-                "require_qualitative": False,
-            }
-        elif verification_type == "constraint":
-            defaults = {
-                "require_binary": False,
-                "require_constraints": True,
-                "require_qualitative": False,
-            }
-        else:
-            defaults = {
-                "require_binary": bool(task.binary_checks),
-                "require_constraints": bool(task.constraints),
-                "require_qualitative": bool(task.evaluation_rubric),
-            }
-
-        for key, default in defaults.items():
-            if policy.get(key) is None:
-                policy[key] = default
-
-        if policy.get("qualitative_min_score") is None:
-            policy["qualitative_min_score"] = task.minimum_acceptable_score or 0.7
-
-        return policy
+        """Resolve evaluation policy using centralized resolver."""
+        return resolve_evaluation_policy(
+            task=task,
+            global_policy=self.evaluation_policy,
+            template_name=None,  # Could be passed from orchestrator in future
+        )
 
     def evaluate(
         self, task: Task, artifacts: List[Artifact], agent_output: str, workspace_path: Path

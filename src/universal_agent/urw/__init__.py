@@ -51,6 +51,14 @@ from .integration import (
     MockAgentAdapter,
     create_adapter_for_system,
 )
+from .evaluation_policy import (
+    EvaluationPolicySchema,
+    DEFAULT_EVALUATION_POLICY,
+    VERIFICATION_TYPE_DEFAULTS,
+    TEMPLATE_EVALUATION_POLICIES,
+    resolve_evaluation_policy,
+    get_policy_summary,
+)
 
 __all__ = [
     "Task",
@@ -89,4 +97,11 @@ __all__ = [
     "UniversalAgentAdapter",
     "MockAgentAdapter",
     "create_adapter_for_system",
+    # Evaluation policy
+    "EvaluationPolicySchema",
+    "DEFAULT_EVALUATION_POLICY",
+    "VERIFICATION_TYPE_DEFAULTS",
+    "TEMPLATE_EVALUATION_POLICIES",
+    "resolve_evaluation_policy",
+    "get_policy_summary",
 ]
