@@ -40,3 +40,8 @@ input_v2.txt
 stress_test_input.txt
 temp.md
 temp_verify_scholar/
+
+# URW session workspaces (contain nested git repos for checkpointing)
+urw_sessions/
+urw_phase*_workspace/
+
