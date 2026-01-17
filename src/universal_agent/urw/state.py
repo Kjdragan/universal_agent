@@ -324,6 +324,10 @@ CREATE TABLE IF NOT EXISTS verification_findings (
     evidence_type TEXT,
     evidence_refs JSON,
     summary JSON,
+    task_type TEXT,
+    verifier_version TEXT,
+    verification_timestamp TEXT,
+    notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (task_id) REFERENCES tasks(id)
 );
@@ -351,6 +355,7 @@ class URWStateManager:
         self._ensure_initialized()
         self.conn = sqlite3.connect(self.db_path)
         self.conn.row_factory = sqlite3.Row
+        self._ensure_schema_migrations()
         self.checkpointer = GitCheckpointer(self.workspace)
 
     def _ensure_initialized(self) -> None:
@@ -371,6 +376,24 @@ class URWStateManager:
             (self.urw_dir / "task_plan.json").write_text("[]")
         else:
             self.verification_dir.mkdir(exist_ok=True)
+
+    def _ensure_schema_migrations(self) -> None:
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(verification_findings)").fetchall()
+        }
+        additions = {
+            "task_type": "TEXT",
+            "verifier_version": "TEXT",
+            "verification_timestamp": "TEXT",
+            "notes": "TEXT",
+        }
+        for name, col_type in additions.items():
+            if name not in columns:
+                self.conn.execute(
+                    f"ALTER TABLE verification_findings ADD COLUMN {name} {col_type}"
+                )
+        self.conn.commit()
 
     @contextmanager
     def transaction(self):
@@ -679,7 +702,42 @@ class URWStateManager:
             ),
         )
         self.conn.commit()
+        self._write_receipt_confirmation(
+            effect_id=effect_id,
+            task_id=task_id,
+            effect_type=effect_type,
+            idempotency_key=idempotency_key,
+            details=details,
+            iteration=iteration,
+        )
         return True
+
+    def _write_receipt_confirmation(
+        self,
+        effect_id: str,
+        task_id: str,
+        effect_type: str,
+        idempotency_key: str,
+        details: Dict[str, Any],
+        iteration: int,
+    ) -> None:
+        provider_id = (
+            details.get("message_id")
+            or details.get("id")
+            or details.get("messageId")
+            or idempotency_key
+        )
+        record = {
+            "task_id": task_id,
+            "tool_name": details.get("tool"),
+            "provider_id": provider_id,
+            "effect_type": effect_type,
+            "evidence_type": "receipt",
+            "iteration": iteration,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+        path = self.verification_dir / f"receipt_{effect_id}.json"
+        path.write_text(json.dumps(record, indent=2))
 
     def was_side_effect_executed(self, idempotency_key: str) -> bool:
         row = self.conn.execute(
@@ -968,17 +1026,25 @@ class URWStateManager:
         evidence_type: str,
         evidence_refs: List[str],
         summary: Dict[str, Any],
+        task_type: Optional[str] = None,
+        verifier_version: str = "urw_v1",
+        notes: Optional[str] = None,
     ) -> Path:
         finding_id = f"verify_{task_id}_{iteration}"
+        timestamp = datetime.utcnow().isoformat() + "Z"
         record = {
             "verification_id": finding_id,
             "task_id": task_id,
+            "task_type": task_type,
             "iteration": iteration,
             "status": status,
             "evidence_type": evidence_type,
             "evidence_refs": evidence_refs,
+            "verifier_version": verifier_version,
+            "verification_timestamp": timestamp,
+            "notes": notes,
             "summary": summary,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": timestamp,
         }
         path = self.verification_dir / f"{finding_id}.json"
         path.write_text(json.dumps(record, indent=2))
@@ -986,8 +1052,9 @@ class URWStateManager:
         self.conn.execute(
             """
             INSERT OR REPLACE INTO verification_findings
-            (id, task_id, iteration, status, evidence_type, evidence_refs, summary)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, task_id, iteration, status, evidence_type, evidence_refs, summary,
+             task_type, verifier_version, verification_timestamp, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 finding_id,
@@ -997,6 +1064,10 @@ class URWStateManager:
                 evidence_type,
                 json.dumps(evidence_refs),
                 json.dumps(summary),
+                task_type,
+                verifier_version,
+                timestamp,
+                notes,
             ),
         )
         self.conn.commit()

@@ -375,6 +375,8 @@ class URWOrchestrator:
         result.commit_sha = commit_sha
 
         evidence_type, evidence_refs = self._summarize_evidence(task, artifacts)
+        task_type = task.id.split("_")[-1] if "_" in task.id else task.title
+        notes = evaluation.qualitative_reasoning if evaluation.qualitative_reasoning else None
         self.state_manager.write_verification_finding(
             task_id=task.id,
             iteration=iteration,
@@ -386,6 +388,8 @@ class URWOrchestrator:
                 "outcome": outcome,
                 "execution_time_seconds": execution_time,
             },
+            task_type=task_type,
+            notes=notes,
         )
 
         self._log(f"[Iteration {iteration}] Outcome: {outcome} (score: {evaluation.overall_score:.2f})")

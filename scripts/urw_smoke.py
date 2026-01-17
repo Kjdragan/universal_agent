@@ -75,7 +75,12 @@ async def run() -> None:
         agent_loop=adapter,
         llm_client=llm_client,
         workspace_path=workspace_path,
-        config=URWConfig(verbose=True, llm_model=args.llm_model),
+        config=URWConfig(
+            verbose=True,
+            llm_model=args.llm_model,
+            max_total_iterations=15,
+            max_iterations_per_task=5,
+        ),
     )
 
     result = await orchestrator.run(args.request)
