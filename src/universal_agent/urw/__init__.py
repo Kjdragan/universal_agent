@@ -104,4 +104,16 @@ __all__ = [
     "TEMPLATE_EVALUATION_POLICIES",
     "resolve_evaluation_policy",
     "get_policy_summary",
+    # Context summarization
+    "ContextCheckpoint",
+    "ContextSummarizer",
+    "pre_compact_checkpoint_hook",
 ]
+
+# Context summarization (lazy import to avoid circular deps)
+from .context_summarizer import (
+    ContextCheckpoint,
+    ContextSummarizer,
+    pre_compact_checkpoint_hook,
+)
+
