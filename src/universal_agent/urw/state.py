@@ -606,6 +606,23 @@ class URWStateManager:
         ).fetchone()
         return self._row_to_task(row) if row else None
 
+    def get_all_executable_tasks(self) -> List[Task]:
+        """Get all pending tasks that have their dependencies satisfied."""
+        rows = self.conn.execute(
+            """
+            SELECT t.* FROM tasks t
+            WHERE t.status = 'pending'
+            AND NOT EXISTS (
+                SELECT 1 FROM task_dependencies td
+                JOIN tasks dep ON td.depends_on_task_id = dep.id
+                WHERE td.task_id = t.id
+                AND dep.status != 'complete'
+            )
+            ORDER BY t.created_at
+            """
+        ).fetchall()
+        return [self._row_to_task(row) for row in rows]
+
     def get_tasks_by_status(self, status: TaskStatus) -> List[Task]:
         rows = self.conn.execute(
             "SELECT * FROM tasks WHERE status = ? ORDER BY created_at",
