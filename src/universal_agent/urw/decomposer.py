@@ -22,7 +22,7 @@ from .state import Task, TaskStatus
 DECOMPOSITION_TEMPLATES = {
     "research_report": {
         "description": "Research a topic and produce a comprehensive report",
-        "keywords": ["research", "report", "investigate", "analyze", "study"],
+        "keywords": ["research", "report", "summary", "status report", "investigate", "analyze", "study"],
         "tasks": [
             {
                 "id_suffix": "scope",
@@ -64,7 +64,7 @@ DECOMPOSITION_TEMPLATES = {
     },
     "email_outreach": {
         "description": "Draft and send personalized email outreach",
-        "keywords": ["email", "outreach", "contact", "reach out", "message"],
+        "keywords": ["email", "outreach", "contact", "reach out"],
         "tasks": [
             {
                 "id_suffix": "targets",
@@ -96,7 +96,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Send the personalized emails to each recipient.",
                 "depends_on": ["personalize"],
                 "verification_type": "binary",
-                "binary_checks": ["side_effect:emails_sent"],
+                "binary_checks": ["side_effect:email_sent"],
             },
         ],
     },
@@ -401,10 +401,33 @@ class PlanManager:
     state_manager: Any
     decomposer: Decomposer
 
+    def _ensure_unique_ids(self, tasks: List[Task]) -> List[Task]:
+        existing_ids = {task.id for task in self.state_manager.get_all_tasks()}
+        assigned_ids = set(existing_ids)
+        remap: Dict[str, str] = {}
+
+        for task in tasks:
+            candidate = task.id
+            if candidate in assigned_ids:
+                new_id = f"{candidate}_{uuid.uuid4().hex[:6]}"
+                if candidate not in remap:
+                    remap[candidate] = new_id
+                task.id = new_id
+            assigned_ids.add(task.id)
+
+        if remap:
+            for task in tasks:
+                task.depends_on = [remap.get(dep, dep) for dep in task.depends_on]
+                if task.parent_task_id in remap:
+                    task.parent_task_id = remap[task.parent_task_id]
+
+        return tasks
+
     def create_plan(self, request: str, context: Optional[Dict] = None) -> List[Task]:
         self.state_manager.set_original_request(request)
         superseded = self.state_manager.mark_active_tasks_failed("New plan created")
         tasks = self.decomposer.decompose(request, context)
+        tasks = self._ensure_unique_ids(tasks)
         self.state_manager.create_tasks_batch(tasks)
         self.state_manager.checkpointer.checkpoint(
             message=f"Plan created with {len(tasks)} tasks",
@@ -417,6 +440,7 @@ class PlanManager:
         self.state_manager.checkpointer.create_branch(f"replan_{uuid.uuid4().hex[:6]}")
         superseded = self.state_manager.mark_active_tasks_failed(reason)
         tasks = self.decomposer.decompose(reason, context)
+        tasks = self._ensure_unique_ids(tasks)
         self.state_manager.create_tasks_batch(tasks)
         self.state_manager.checkpointer.checkpoint(
             message=f"Plan revised: {reason}",
@@ -433,6 +457,7 @@ class PlanManager:
         new_tasks = self.decomposer.decompose(task.description, context)
         for t in new_tasks:
             t.parent_task_id = task.id
+        new_tasks = self._ensure_unique_ids(new_tasks)
         self.state_manager.create_tasks_batch(new_tasks)
         return new_tasks
 

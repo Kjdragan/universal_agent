@@ -941,6 +941,10 @@ class UniversalAgent:
             prompt += f"\n\n{tool_knowledge}"
         return prompt
 
+    def _build_subagent_prompt(self, workspace_path: str) -> str:
+        """Backward-compatible subagent prompt builder."""
+        return self._build_report_writer_prompt(workspace_path)
+
     def _build_research_specialist_prompt(self, workspace_path: str) -> str:
         """Build the research-specialist sub-agent prompt with full search pipeline."""
         prompt = (

@@ -331,7 +331,9 @@ class CompositeEvaluator(Evaluator):
             return constraint_res
 
         qualitative_res = None
-        if task.verification_type in {"qualitative", "composite"}:
+        if task.verification_type == "qualitative":
+            qualitative_res = self.qualitative.evaluate(task, artifacts, agent_output, workspace_path)
+        elif task.verification_type == "composite" and task.evaluation_rubric:
             qualitative_res = self.qualitative.evaluate(task, artifacts, agent_output, workspace_path)
 
         scores = [binary_res.overall_score, constraint_res.overall_score]
