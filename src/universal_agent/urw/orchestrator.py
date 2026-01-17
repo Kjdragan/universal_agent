@@ -48,6 +48,10 @@ class URWConfig:
     task_timeout: Optional[int] = 3600
     iteration_timeout: Optional[int] = 600
 
+    heartbeat_interval_seconds: Optional[int] = 30
+
+    evaluation_policy: Dict[str, Any] = field(default_factory=dict)
+
     pause_on_blockers: bool = True
     auto_decompose_failed_tasks: bool = True
 
@@ -143,6 +147,7 @@ class URWOrchestrator:
             llm_client=llm_client,
             state_manager=self.state_manager,
             model=self.config.llm_model,
+            evaluation_policy=self.config.evaluation_policy,
         )
 
         self.status = OrchestratorStatus.IDLE
@@ -299,9 +304,29 @@ class URWOrchestrator:
             self.callbacks.on_task_start(task, iteration)
 
         context = self.state_manager.generate_agent_context(task)
+        self._log(f"[Iteration {iteration}] Context size: {len(context)} chars")
 
         start_time = time.time()
+        heartbeat_event = asyncio.Event()
+        heartbeat_task: Optional[asyncio.Task] = None
+
+        async def heartbeat() -> None:
+            interval = self.config.heartbeat_interval_seconds
+            if not interval:
+                return
+            while True:
+                try:
+                    await asyncio.wait_for(heartbeat_event.wait(), timeout=interval)
+                    break
+                except asyncio.TimeoutError:
+                    elapsed = time.time() - start_time
+                    self._log(
+                        f"[Iteration {iteration}] Heartbeat: agent running for {elapsed:.1f}s"
+                    )
+
         try:
+            if self.config.heartbeat_interval_seconds:
+                heartbeat_task = asyncio.create_task(heartbeat())
             if self.config.iteration_timeout:
                 agent_result = await asyncio.wait_for(
                     self.agent_loop.execute_task(task, context, self.workspace_path),
@@ -316,9 +341,34 @@ class URWOrchestrator:
                 error="Timeout",
                 execution_time_seconds=time.time() - start_time,
             )
+        finally:
+            if heartbeat_task:
+                heartbeat_event.set()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
 
         execution_time = time.time() - start_time
         agent_result.execution_time_seconds = execution_time
+
+        self._log(f"[Iteration {iteration}] Agent execution time: {execution_time:.2f}s")
+        if agent_result.error:
+            self._log(f"[Iteration {iteration}] Agent error: {agent_result.error}")
+        output_length = len(agent_result.output or "")
+        self._log(f"[Iteration {iteration}] Agent output length: {output_length} chars")
+
+        tools_invoked = agent_result.tools_invoked or []
+        tools_label = ", ".join(tools_invoked) if tools_invoked else "none"
+        self._log(f"[Iteration {iteration}] Tools invoked: {tools_label}")
+
+        file_writes = [
+            art.get("path")
+            for art in agent_result.artifacts_produced
+            if isinstance(art, dict) and art.get("path")
+        ]
+        file_writes_label = ", ".join(file_writes) if file_writes else "none"
+        self._log(f"[Iteration {iteration}] File writes: {file_writes_label}")
 
         artifact_ids: List[str] = []
         for art_data in agent_result.artifacts_produced:

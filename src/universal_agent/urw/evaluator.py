@@ -312,28 +312,64 @@ class LLMJudgeEvaluator(Evaluator):
 
 
 class CompositeEvaluator(Evaluator):
-    """Combines binary, constraint, and LLM evaluation."""
+    """Combines binary, constraint, and LLM evaluation with policy overrides."""
 
-    def __init__(self, llm_client: Any, state_manager=None, model: str = "claude-sonnet-4-20250514"):
+    def __init__(
+        self,
+        llm_client: Any,
+        state_manager=None,
+        model: str = "claude-sonnet-4-20250514",
+        evaluation_policy: Optional[Dict[str, Any]] = None,
+    ):
         self.binary = BinaryCheckEvaluator(state_manager)
         self.constraints = ConstraintEvaluator()
         self.qualitative = LLMJudgeEvaluator(llm_client, model=model)
+        self.evaluation_policy = evaluation_policy or {}
+
+    def _resolve_policy(self, task: Task) -> Dict[str, Any]:
+        policy: Dict[str, Any] = dict(self.evaluation_policy)
+        if task.evaluation_policy:
+            policy.update(task.evaluation_policy)
+
+        verification_type = task.verification_type or "composite"
+        if verification_type == "binary":
+            defaults = {
+                "require_binary": True,
+                "require_constraints": False,
+                "require_qualitative": False,
+            }
+        elif verification_type == "constraint":
+            defaults = {
+                "require_binary": False,
+                "require_constraints": True,
+                "require_qualitative": False,
+            }
+        else:
+            defaults = {
+                "require_binary": bool(task.binary_checks),
+                "require_constraints": bool(task.constraints),
+                "require_qualitative": bool(task.evaluation_rubric),
+            }
+
+        for key, default in defaults.items():
+            if policy.get(key) is None:
+                policy[key] = default
+
+        if policy.get("qualitative_min_score") is None:
+            policy["qualitative_min_score"] = task.minimum_acceptable_score or 0.7
+
+        return policy
 
     def evaluate(
         self, task: Task, artifacts: List[Artifact], agent_output: str, workspace_path: Path
     ) -> EvaluationResult:
-        binary_res = self.binary.evaluate(task, artifacts, agent_output, workspace_path)
-        if task.verification_type == "binary":
-            return binary_res
+        policy = self._resolve_policy(task)
 
+        binary_res = self.binary.evaluate(task, artifacts, agent_output, workspace_path)
         constraint_res = self.constraints.evaluate(task, artifacts, agent_output, workspace_path)
-        if task.verification_type == "constraint":
-            return constraint_res
 
         qualitative_res = None
-        if task.verification_type == "qualitative":
-            qualitative_res = self.qualitative.evaluate(task, artifacts, agent_output, workspace_path)
-        elif task.verification_type == "composite" and task.evaluation_rubric:
+        if task.evaluation_rubric and policy.get("require_qualitative"):
             qualitative_res = self.qualitative.evaluate(task, artifacts, agent_output, workspace_path)
 
         scores = [binary_res.overall_score, constraint_res.overall_score]
@@ -341,16 +377,37 @@ class CompositeEvaluator(Evaluator):
             scores.append(qualitative_res.overall_score)
 
         overall = sum(scores) / len(scores) if scores else 0.0
-        is_complete = all(
-            res.is_complete
-            for res in [binary_res, constraint_res, qualitative_res]
-            if res is not None
-        )
+        overall_min = policy.get("overall_min_score")
+
+        binary_ok = (not policy.get("require_binary")) or binary_res.is_complete
+        constraints_ok = (not policy.get("require_constraints")) or constraint_res.is_complete
+
+        qual_ok = True
+        if policy.get("require_qualitative"):
+            if qualitative_res:
+                qual_min = float(policy.get("qualitative_min_score") or 0.0)
+                qual_ok = qualitative_res.overall_score >= qual_min
+                qualitative_res.is_complete = qual_ok
+            else:
+                qual_ok = False
+
+        is_complete = binary_ok and constraints_ok and qual_ok
+        if overall_min is not None:
+            is_complete = is_complete and overall >= float(overall_min)
 
         confidence = qualitative_res.confidence if qualitative_res else binary_res.confidence
 
-        missing = binary_res.missing_elements + constraint_res.missing_elements
-        suggested = binary_res.suggested_actions + constraint_res.suggested_actions
+        missing = []
+        suggested = []
+        if policy.get("require_binary"):
+            missing.extend(binary_res.missing_elements)
+            suggested.extend(binary_res.suggested_actions)
+        if policy.get("require_constraints"):
+            missing.extend(constraint_res.missing_elements)
+            suggested.extend(constraint_res.suggested_actions)
+        if policy.get("require_qualitative") and not qualitative_res:
+            missing.append("Qualitative rubric missing")
+            suggested.append("Add evaluation rubric or disable qualitative requirement")
 
         return EvaluationResult(
             is_complete=is_complete,
@@ -369,8 +426,11 @@ def create_default_evaluator(
     llm_client: Any,
     state_manager=None,
     model: str = "claude-sonnet-4-20250514",
+    evaluation_policy: Optional[Dict[str, Any]] = None,
 ) -> CompositeEvaluator:
-    return CompositeEvaluator(llm_client, state_manager, model=model)
+    return CompositeEvaluator(
+        llm_client, state_manager, model=model, evaluation_policy=evaluation_policy
+    )
 
 
 def quick_evaluate(
@@ -380,6 +440,7 @@ def quick_evaluate(
     workspace_path: Path,
     llm_client: Any,
     model: str = "claude-sonnet-4-20250514",
+    evaluation_policy: Optional[Dict[str, Any]] = None,
 ) -> EvaluationResult:
-    evaluator = CompositeEvaluator(llm_client, model=model)
+    evaluator = CompositeEvaluator(llm_client, model=model, evaluation_policy=evaluation_policy)
     return evaluator.evaluate(task, artifacts, agent_output, workspace_path)
