@@ -851,6 +851,64 @@ class URWStateManager:
 
         return commit_sha
 
+    def write_handoff_checkpoint(
+        self,
+        *,
+        task: Task,
+        iteration: int,
+        evaluation_summary: Dict[str, Any],
+        artifacts: Optional[List[Artifact]] = None,
+        next_task: Optional[Task] = None,
+    ) -> Path:
+        dependency_inputs: List[str] = []
+        for dep_id in task.depends_on:
+            for art in self.get_task_artifacts(dep_id):
+                if art.file_path:
+                    dependency_inputs.append(art.file_path)
+
+        resolved_artifacts = artifacts or self.get_task_artifacts(task.id)
+        output_files = [art.file_path for art in resolved_artifacts if art.file_path]
+        handoff_filename = self._handoff_filename(task.id)
+        latest_filename = self._handoff_latest_filename()
+        for filename in (handoff_filename, latest_filename):
+            if filename not in output_files:
+                output_files.append(filename)
+
+        record = {
+            "phase_id": task.id,
+            "task_title": task.title,
+            "status": "completed",
+            "iteration": iteration,
+            "inputs": dependency_inputs,
+            "outputs": output_files,
+            "checks": {
+                "binary": evaluation_summary.get("binary_results", {}),
+                "constraints": evaluation_summary.get("constraint_results", {}),
+            },
+            "evaluation": {
+                "is_complete": evaluation_summary.get("is_complete"),
+                "confidence": evaluation_summary.get("confidence"),
+                "overall_score": evaluation_summary.get("overall_score"),
+                "qualitative_reasoning": evaluation_summary.get("qualitative_reasoning"),
+            },
+            "notes": evaluation_summary.get("qualitative_reasoning"),
+            "next_phase": next_task.id if next_task else None,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        }
+
+        artifact = Artifact(
+            id=f"handoff_{task.id}_{iteration}",
+            task_id=task.id,
+            artifact_type=ArtifactType.METADATA,
+            file_path=handoff_filename,
+            metadata={"iteration": iteration, "type": "handoff"},
+        )
+        handoff_payload = json.dumps(record, indent=2)
+        self.register_artifact(artifact, handoff_payload)
+        latest_path = self.artifacts_dir / latest_filename
+        latest_path.write_text(handoff_payload)
+        return self.artifacts_dir / handoff_filename
+
     def get_iteration(self, iteration: int) -> Optional[Dict[str, Any]]:
         row = self.conn.execute(
             "SELECT * FROM iterations WHERE iteration = ?",
@@ -888,7 +946,7 @@ class URWStateManager:
         self.conn.commit()
         self._update_guardrails_file()
 
-    def get_failed_approaches(self, task_id: Optional[str] = None, limit: int = 20) -> List[Dict[str, Any]]:
+    def get_failed_approaches(self, task_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
         if task_id:
             rows = self.conn.execute(
                 """
@@ -909,6 +967,38 @@ class URWStateManager:
                 (limit,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def _handoff_filename(self, task_id: str) -> str:
+        return f"handoff_{task_id}.json"
+
+    def _handoff_latest_filename(self) -> str:
+        return "handoff.json"
+
+    def get_handoff_path(self, task_id: str) -> Optional[Path]:
+        path = self.artifacts_dir / self._handoff_filename(task_id)
+        return path if path.exists() else None
+
+    def get_latest_handoff_path(self) -> Optional[Path]:
+        path = self.artifacts_dir / self._handoff_latest_filename()
+        return path if path.exists() else None
+
+    def read_handoff(self, task_id: str) -> Optional[str]:
+        path = self.get_handoff_path(task_id)
+        if not path:
+            return None
+        try:
+            return path.read_text()
+        except OSError:
+            return None
+
+    def read_latest_handoff(self) -> Optional[str]:
+        path = self.get_latest_handoff_path()
+        if not path:
+            return None
+        try:
+            return path.read_text()
+        except OSError:
+            return None
 
     def generate_agent_context(self, task: Task, max_tokens: int = 4000) -> str:
         sections: List[str] = []
@@ -960,6 +1050,24 @@ class URWStateManager:
                 """## Available Inputs (from completed tasks)
 {artifacts}
 """.format(artifacts="\n".join(dep_artifacts))
+            )
+
+        handoff_content = self.read_latest_handoff()
+        handoff_source = "latest"
+        if not handoff_content:
+            handoff_content = self.read_handoff(task.id)
+            handoff_source = task.id
+        if not handoff_content:
+            for dep_id in reversed(task.depends_on):
+                handoff_content = self.read_handoff(dep_id)
+                if handoff_content:
+                    handoff_source = dep_id
+                    break
+        if handoff_content:
+            sections.append(
+                """## Latest Phase Checkpoint (from {source})
+{handoff}
+""".format(source=handoff_source, handoff=handoff_content)
             )
 
         learnings_rows = self.conn.execute(

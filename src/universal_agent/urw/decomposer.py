@@ -29,7 +29,7 @@ DECOMPOSITION_TEMPLATES = {
                 "title": "Define research scope and questions",
                 "description": "Clarify the research questions, boundaries, and success criteria for the investigation.",
                 "verification_type": "qualitative",
-                "binary_checks": ["file_exists:research_scope.md"],
+                "binary_checks": ["file_exists:research_scope.md", "file_exists:handoff.json"],
                 "constraints": [{"type": "min_length", "value": 500}],
                 "evaluation_rubric": "Are the research questions clear, specific, and answerable?",
                 "minimum_acceptable_score": 0.6,
@@ -40,7 +40,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Search for and collect relevant information from authoritative sources.",
                 "depends_on": ["scope"],
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:research_notes.md"],
+                "binary_checks": ["file_exists:research_notes.md", "file_exists:handoff.json"],
                 "constraints": [{"type": "min_length", "value": 2000}],
             },
             {
@@ -49,7 +49,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Analyze the gathered information, identify patterns, and synthesize key insights.",
                 "depends_on": ["gather"],
                 "verification_type": "qualitative",
-                "binary_checks": ["file_exists:analysis_notes.md"],
+                "binary_checks": ["file_exists:analysis_notes.md", "file_exists:handoff.json"],
                 "constraints": [{"type": "min_length", "value": 1200}],
                 "evaluation_rubric": "Does the analysis identify clear patterns and provide actionable insights?",
                 "minimum_acceptable_score": 0.6,
@@ -60,7 +60,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Write a comprehensive report with executive summary, findings, and recommendations.",
                 "depends_on": ["analyze"],
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:final_report.md"],
+                "binary_checks": ["file_exists:final_report.md", "file_exists:handoff.json"],
                 "constraints": [{"type": "min_length", "value": 3000}],
                 "evaluation_rubric": "Is the report well-structured, comprehensive, and actionable?",
             },
@@ -75,7 +75,7 @@ DECOMPOSITION_TEMPLATES = {
                 "title": "Identify and research targets",
                 "description": "Identify the recipients and gather relevant context about each.",
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:targets.json"],
+                "binary_checks": ["file_exists:targets.json", "file_exists:handoff.json"],
             },
             {
                 "id_suffix": "template",
@@ -83,7 +83,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Draft an email template that can be personalized for each recipient.",
                 "depends_on": ["targets"],
                 "verification_type": "qualitative",
-                "binary_checks": ["file_exists:email_template.md"],
+                "binary_checks": ["file_exists:email_template.md", "file_exists:handoff.json"],
                 "evaluation_rubric": "Is the template professional, clear, and personalizable?",
                 "minimum_acceptable_score": 0.6,
             },
@@ -93,7 +93,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Create personalized versions of the email for each target recipient.",
                 "depends_on": ["template"],
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:personalized_emails.json"],
+                "binary_checks": ["file_exists:personalized_emails.json", "file_exists:handoff.json"],
             },
             {
                 "id_suffix": "send",
@@ -101,7 +101,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Send the personalized emails to each recipient.",
                 "depends_on": ["personalize"],
                 "verification_type": "binary",
-                "binary_checks": ["side_effect:email_sent"],
+                "binary_checks": ["side_effect:email_sent", "file_exists:handoff.json"],
             },
         ],
     },
@@ -114,7 +114,7 @@ DECOMPOSITION_TEMPLATES = {
                 "title": "Ingest and parse documents",
                 "description": "Read and parse the input documents into a workable format.",
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:parsed_content.md"],
+                "binary_checks": ["file_exists:parsed_content.md", "file_exists:handoff.json"],
             },
             {
                 "id_suffix": "analyze",
@@ -122,7 +122,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Analyze the parsed content according to the specified criteria.",
                 "depends_on": ["ingest"],
                 "verification_type": "qualitative",
-                "binary_checks": ["file_exists:analysis_notes.md"],
+                "binary_checks": ["file_exists:analysis_notes.md", "file_exists:handoff.json"],
                 "constraints": [{"type": "min_length", "value": 800}],
                 "evaluation_rubric": "Does the analysis address all requested aspects?",
                 "minimum_acceptable_score": 0.6,
@@ -133,7 +133,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Format the analysis results in the requested output format.",
                 "depends_on": ["analyze"],
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:analysis_output.md"],
+                "binary_checks": ["file_exists:analysis_output.md", "file_exists:handoff.json"],
             },
         ],
     },
@@ -146,7 +146,7 @@ DECOMPOSITION_TEMPLATES = {
                 "title": "Validate input data",
                 "description": "Check input data for completeness, format, and quality issues.",
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:validation_report.json"],
+                "binary_checks": ["file_exists:validation_report.json", "file_exists:handoff.json"],
             },
             {
                 "id_suffix": "transform",
@@ -154,7 +154,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Apply the required transformations to the validated data.",
                 "depends_on": ["validate"],
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:processed_data.json"],
+                "binary_checks": ["file_exists:processed_data.json", "file_exists:handoff.json"],
             },
             {
                 "id_suffix": "verify",
@@ -162,7 +162,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Verify the processed data meets quality and completeness requirements.",
                 "depends_on": ["transform"],
                 "verification_type": "qualitative",
-                "binary_checks": ["file_exists:quality_report.md"],
+                "binary_checks": ["file_exists:quality_report.md", "file_exists:handoff.json"],
                 "evaluation_rubric": "Does the output data meet all specified requirements?",
                 "minimum_acceptable_score": 0.6,
             },
@@ -177,7 +177,7 @@ DECOMPOSITION_TEMPLATES = {
                 "title": "Create content outline",
                 "description": "Develop a structured outline for the content piece.",
                 "verification_type": "qualitative",
-                "binary_checks": ["file_exists:outline.md"],
+                "binary_checks": ["file_exists:outline.md", "file_exists:handoff.json"],
                 "evaluation_rubric": "Does the outline have a clear structure and cover all required topics?",
                 "minimum_acceptable_score": 0.6,
             },
@@ -187,7 +187,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Write the first complete draft following the outline.",
                 "depends_on": ["outline"],
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:draft.md"],
+                "binary_checks": ["file_exists:draft.md", "file_exists:handoff.json"],
                 "constraints": [{"type": "min_length", "value": 1500}],
             },
             {
@@ -196,7 +196,7 @@ DECOMPOSITION_TEMPLATES = {
                 "description": "Review, revise, and polish the draft into a final version.",
                 "depends_on": ["draft"],
                 "verification_type": "composite",
-                "binary_checks": ["file_exists:final_content.md"],
+                "binary_checks": ["file_exists:final_content.md", "file_exists:handoff.json"],
                 "evaluation_rubric": "Is the content well-written, engaging, and error-free?",
             },
         ],
@@ -322,6 +322,7 @@ class LLMDecomposer(Decomposer):
 2. **Verifiable**: Each task should have clear completion criteria
 3. **Independent**: Once dependencies are met, a task can be executed without additional context
 4. **Artifact-producing**: Each task should produce a tangible output (file, data, action confirmation)
+5. **Handoff-ready**: Each task must include a binary check for `file_exists:handoff.json`
 
 **Output Format:**
 Return a JSON array of task objects. Each task should have:
@@ -330,7 +331,7 @@ Return a JSON array of task objects. Each task should have:
 - `description`: Detailed description of what needs to be done
 - `depends_on`: Array of task IDs this task depends on (empty array if none)
 - `verification_type`: One of "binary", "constraint", "qualitative", "composite"
-- `binary_checks`: Array of binary checks like "file_exists:output.md" (optional)
+- `binary_checks`: Array of binary checks like "file_exists:output.md" (must include "file_exists:handoff.json")
 - `constraints`: Array of constraint objects like {{"type": "min_length", "value": 1000}} (optional)
 - `evaluation_rubric`: Qualitative criteria for LLM evaluation (optional)
 - `max_iterations`: Maximum attempts for this task (default: 10)
