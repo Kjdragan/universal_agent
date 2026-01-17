@@ -28,6 +28,7 @@ from .state import (
 )
 from .decomposer import Decomposer, HybridDecomposer, PlanManager
 from .evaluator import CompositeEvaluator, EvaluationResult
+from .phase_planner import Phase, PhasePlanner, PhaseStatus
 
 
 @dataclass
@@ -149,7 +150,12 @@ class URWOrchestrator:
             model=self.config.llm_model,
             evaluation_policy=self.config.evaluation_policy,
         )
-
+        
+        self.phase_planner = PhasePlanner(
+            llm_client=llm_client,
+            llm_model=self.config.llm_model,
+        )
+        
         self.status = OrchestratorStatus.IDLE
         self.current_task: Optional[Task] = None
         self.current_iteration: int = 0
@@ -219,8 +225,11 @@ class URWOrchestrator:
         while not self._should_exit():
             await self._pause_event.wait()
 
-            task = self.state_manager.get_next_task()
-            if task is None:
+            # 1. Phase Planning
+            # Get all immediately executable tasks
+            pending_tasks = self.state_manager.get_all_executable_tasks()
+            
+            if not pending_tasks:
                 if self.state_manager.is_plan_complete():
                     self._log("Plan complete!")
                     self.status = OrchestratorStatus.COMPLETE
@@ -241,16 +250,23 @@ class URWOrchestrator:
                 self.status = OrchestratorStatus.FAILED
                 break
 
-            self.current_task = task
+            # Plan phases for pending tasks
+            phases = self.phase_planner.plan_phases(pending_tasks)
+            current_phase = phases[0]
+            
+            # 2. Execute Phase
+            # We track limits against the primary task for now
+            primary_task = self.state_manager.get_task(current_phase.task_ids[0])
+            self.current_task = primary_task
 
-            task_iterations = self.state_manager.get_task_iteration_count(task.id)
-            if task_iterations >= task.max_iterations:
-                await self._handle_task_failure(task, "Exceeded maximum iterations")
+            task_iterations = self.state_manager.get_task_iteration_count(primary_task.id)
+            if task_iterations >= primary_task.max_iterations:
+                await self._handle_task_failure(primary_task, "Exceeded maximum iterations")
                 consecutive_failures += 1
                 if consecutive_failures >= self.config.max_consecutive_failures:
                     if self.config.enable_dynamic_replanning:
                         await self._trigger_replan(
-                            f"Too many consecutive failures on task '{task.title}'"
+                            f"Too many consecutive failures on task '{primary_task.title}'"
                         )
                         consecutive_failures = 0
                     else:
@@ -260,17 +276,26 @@ class URWOrchestrator:
                 continue
 
             try:
-                result = await self._execute_iteration(task)
-                consecutive_failures = 0 if result.outcome in {"success", "partial"} else consecutive_failures + 1
+                result = await self._execute_phase(current_phase)
+                
+                # Consolidate failures
+                if result.outcome == "success":
+                    consecutive_failures = 0
+                elif result.outcome == "partial":
+                    # Partial success is still progress
+                    consecutive_failures = 0 
+                else:
+                    consecutive_failures += 1
+                    
             except asyncio.TimeoutError:
-                self._log(f"Iteration timeout on task '{task.title}'")
+                self._log(f"Iteration timeout on phase '{current_phase.name}'")
                 consecutive_failures += 1
             except Exception as exc:
                 self._log(f"Iteration error: {exc}")
                 traceback.print_exc()
                 consecutive_failures += 1
                 if self.callbacks.on_error:
-                    self.callbacks.on_error(exc, task)
+                    self.callbacks.on_error(exc, primary_task)
 
             if consecutive_failures >= self.config.max_consecutive_failures:
                 if self.config.enable_dynamic_replanning:
@@ -289,6 +314,168 @@ class URWOrchestrator:
                 break
 
         return self._generate_summary()
+
+    def _generate_phase_context(self, phase: Phase) -> str:
+        """
+        Generate context for a phase execution.
+        
+        Combines:
+        1. Phase overview and task list
+        2. Context from previous phases (artifacts, learnings)
+        3. Specific inputs for tasks in this phase
+        4. Global plan status
+        """
+        tasks = []
+        for tid in phase.task_ids:
+            t = self.state_manager.get_task(tid)
+            if t:
+                tasks.append(t)
+        
+        if not tasks:
+            return f"Error: No tasks found for phase {phase.name}"
+            
+        # 1. Phase Overview
+        sections = [
+            f"# Phase Execution: {phase.name}",
+            f"Description: {phase.description}",
+            "\n## Goals (Execute in order)",
+        ]
+        
+        for i, t in enumerate(tasks):
+            sections.append(f"{i+1}. {t.title}")
+            if t.description:
+                sections.append(f"   {t.description}")
+            
+            # Include verification criteria
+            criteria = []
+            if t.binary_checks:
+                for check in t.binary_checks:
+                    criteria.append(f"[ ] {check}")
+            if t.constraints:
+                for c in t.constraints:
+                    criteria.append(f"Constraint: {c.get('type')} {c.get('value', '')}")
+            
+            if criteria:
+                sections.append("   Success Criteria:")
+                for c in criteria:
+                    sections.append(f"   - {c}")
+        
+        # 2. Global Context (Reuse state manager logic roughly)
+        # We use the FIRST task to pull relevant context if strict filtering is used,
+        # but for now we pull all available context.
+        context_base = self.state_manager.generate_agent_context(tasks[0])
+        
+        # We need to inject our Phase section instead of the single Task section
+        # The base context has "## Current Task". We want to replace it or append.
+        # Simple hack: Prepend Phase info.
+        
+        return "\n\n".join(sections) + "\n\n" + context_base
+
+        return "\n\n".join(sections) + "\n\n" + context_base
+
+    async def _execute_phase(self, phase: Phase) -> IterationResult:
+        """Execute a phase (multiple tasks) in a single agent iteration."""
+        self.total_iterations += 1
+        
+        # 1. Start Iteration (Virtual, using first task ID)
+        primary_task = self.state_manager.get_task(phase.task_ids[0])
+        iteration_id = self.state_manager.start_iteration(primary_task.id)
+        self.current_iteration = iteration_id
+        
+        phase.mark_started()
+        self._log(f"[Iteration {iteration_id}] Starting Phase: {phase.name} ({len(phase.task_ids)} tasks)")
+        
+        # 2. Update Statuses
+        for tid in phase.task_ids:
+             self.state_manager.update_task_status(tid, TaskStatus.IN_PROGRESS, iteration_id)
+        
+        # 3. Generate Context
+        context = self._generate_phase_context(phase)
+        
+        # 4. Virtual Task for Adapter
+        # We clone the primary task but update title/desc for the agent's view
+        virtual_task = replace(primary_task)
+        virtual_task.title = f"[PHASE] {phase.name}"
+        virtual_task.description = phase.description
+        # Clear specific criteria as they are detailed in the phase context prompt
+        virtual_task.binary_checks = []
+        virtual_task.constraints = []
+        virtual_task.evaluation_rubric = None
+        
+        # 5. Execute
+        try:
+             result = await self.agent_loop.execute_task(virtual_task, context, self.workspace_path)
+             
+             # Process Side Effects
+             for effect in result.side_effects:
+                self.state_manager.record_side_effect(
+                    task_id=primary_task.id,
+                    effect_type=effect["type"],
+                    idempotency_key=effect["key"],
+                    details=effect.get("details", {}),
+                    iteration=iteration_id,
+                )
+
+             # Process Artifacts
+             artifact_ids: List[str] = []
+             phase_artifacts: List[Artifact] = []
+             for art_data in result.artifacts_produced:
+                art_type = art_data.get("type", "file")
+                try:
+                    artifact_type = ArtifactType(art_type)
+                except ValueError:
+                    artifact_type = ArtifactType.FILE
+                
+                artifact = Artifact(
+                    id=f"art_{iteration_id}_{len(artifact_ids)}",
+                    task_id=primary_task.id, # Associated with primary task of phase
+                    artifact_type=artifact_type,
+                    file_path=art_data.get("path"),
+                    metadata=art_data.get("metadata"),
+                )
+                self.state_manager.register_artifact(artifact)
+                artifact_ids.append(artifact.id)
+                phase_artifacts.append(artifact)
+             
+             # 6. Evaluate Completion for EACH task in phase
+             completed_ids = []
+             failed_ids = []
+             
+             for tid in phase.task_ids:
+                 t = self.state_manager.get_task(tid)
+                 # Evaluate task verification
+                 # Note: evaluate is synchronous
+                 eval_res = self.evaluator.evaluate(t, phase_artifacts, result.output, self.workspace_path)
+                 
+                 if eval_res.is_complete:
+                     self.state_manager.update_task_status(tid, TaskStatus.COMPLETE, iteration_id)
+                     completed_ids.append(tid)
+                     self._log(f"✅ Task completed: {t.title}")
+                 else:
+                     self._log(f"⏳ Task pending: {t.title}")
+             
+             phase.mark_complete(completed_ids, failed_ids)
+             
+             # 7. Record Iteration
+             iteration_result = IterationResult(
+                 iteration=iteration_id,
+                 task_id=primary_task.id,
+                 outcome="success" if phase.is_complete else "partial",
+                 completion_confidence=CompletionConfidence.HIGH if phase.is_complete else CompletionConfidence.LOW,
+                 context_tokens_used=result.context_tokens_used,
+                 tools_invoked=result.tools_invoked,
+                 learnings=result.learnings,
+                 artifacts_produced=[str(a) for a in result.artifacts_produced], 
+                 failed_approaches=result.failed_approaches,
+                 agent_output=result.output
+             )
+             
+             self.state_manager.complete_iteration(iteration_result)
+             return iteration_result
+
+        except Exception as e:
+            self._log(f"Phase execution error: {e}")
+            raise e
 
     async def _execute_iteration(self, task: Task) -> IterationResult:
         self.total_iterations += 1

@@ -108,6 +108,10 @@ __all__ = [
     "ContextCheckpoint",
     "ContextSummarizer",
     "pre_compact_checkpoint_hook",
+    # Phase planning
+    "Phase",
+    "PhaseStatus",
+    "PhasePlanner",
 ]
 
 # Context summarization (lazy import to avoid circular deps)
@@ -117,3 +121,9 @@ from .context_summarizer import (
     pre_compact_checkpoint_hook,
 )
 
+# Phase planning
+from .phase_planner import (
+    Phase,
+    PhaseStatus,
+    PhasePlanner,
+)

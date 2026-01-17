@@ -1,0 +1,14 @@
+---
+title: "IBM Technology Atlas"
+source: https://www.ibm.com/roadmaps/quantum/2025
+date: unknown
+description: ""
+word_count: 36
+---
+
+# IBMTechnologyAtlas
+We are writing the next chapter in Computing with six technology roadmaps that will bring a new era of performance and efficiency to information technology and business.
+202420252026202720292030...[](https://www.ibm.com/roadmaps/quantum/</roadmaps/security/2026/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/security/2029/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/security/2025/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/security/2030+/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/security/2027/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/security/2024/>)Security[](https://www.ibm.com/roadmaps/quantum/</roadmaps/quantum/2026/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/quantum/2029/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/quantum/2025/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/quantum/2033+/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/quantum/2027/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/quantum/2024/>)Quantum[](https://www.ibm.com/roadmaps/quantum/</roadmaps/hybrid-cloud/2026/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/hybrid-cloud/2029/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/hybrid-cloud/2025/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/hybrid-cloud/2030+/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/hybrid-cloud/2027/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/hybrid-cloud/2024/>)Hybrid Cloud[](https://www.ibm.com/roadmaps/quantum/</roadmaps/data/2026/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/data/2029/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/data/2025/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/data/2030+/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/data/2027/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/data/2024/>)Data[](https://www.ibm.com/roadmaps/quantum/</roadmaps/automation/2026/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/automation/2029/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/automation/2025/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/automation/2030+/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/automation/2027/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/automation/2024/>)Automation[](https://www.ibm.com/roadmaps/quantum/</roadmaps/ai/2026/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/ai/2030/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/ai/2025/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/ai/2030+/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/ai/2028/>)[](https://www.ibm.com/roadmaps/quantum/</roadmaps/ai/2024/>)AI
+AutomationDataHybrid CloudQuantumSecurityAI
+
+IBM Technology Atlas

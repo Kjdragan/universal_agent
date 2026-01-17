@@ -418,6 +418,87 @@ async def tool_output_validator_hook(
     return {}
 
 
+# =============================================================================
+# PRE-COMPACT HOOK - Capture context before compaction
+# =============================================================================
+
+# Module-level state for compaction tracking
+_COMPACTION_COUNT = 0
+_COMPACTION_LOG: list = []
+
+
+async def pre_compact_context_capture_hook(
+    input_data: dict, context
+) -> dict:
+    """
+    PreCompact hook that captures context state before Claude compacts.
+    
+    This helps us:
+    1. Log when compaction occurs (auto vs manual)
+    2. Capture state for later comparison
+    3. Optionally inject our own summary
+    
+    NOTE: This hook is called BEFORE compaction happens.
+    We cannot prevent compaction, but we can observe and supplement.
+    """
+    global _COMPACTION_COUNT
+    _COMPACTION_COUNT += 1
+    
+    trigger = input_data.get("trigger", "unknown")  # "auto" or "manual"
+    session_id = input_data.get("session_id", "unknown")
+    transcript_path = input_data.get("transcript_path", "")
+    
+    # Log the compaction event
+    compaction_event = {
+        "count": _COMPACTION_COUNT,
+        "trigger": trigger,
+        "session_id": session_id,
+        "transcript_path": transcript_path,
+        "timestamp": datetime.now().isoformat(),
+    }
+    _COMPACTION_LOG.append(compaction_event)
+    
+    print(f"\n{'='*60}")
+    print(f"📦 COMPACTION TRIGGERED (#{_COMPACTION_COUNT})")
+    print(f"   Trigger: {trigger}")
+    print(f"   Session: {session_id}")
+    print(f"   Transcript: {transcript_path}")
+    print(f"{'='*60}\n")
+    
+    logfire.info(
+        "pre_compact_triggered",
+        compaction_count=_COMPACTION_COUNT,
+        trigger=trigger,
+        session_id=session_id,
+    )
+    
+    # Try to capture transcript size before compaction
+    if transcript_path:
+        try:
+            import os
+            if os.path.exists(transcript_path):
+                size = os.path.getsize(transcript_path)
+                print(f"   Transcript size: {size:,} bytes")
+                compaction_event["transcript_size_bytes"] = size
+        except Exception:
+            pass
+    
+    # Return continue signal - let compaction proceed
+    # We could inject a systemMessage here if we wanted to influence
+    # Claude's compaction with our own context summary
+    return {"continue_": True}
+
+
+def get_compaction_stats() -> dict:
+    """Return compaction statistics for analysis."""
+    return {
+        "total_compactions": _COMPACTION_COUNT,
+        "compaction_log": _COMPACTION_LOG.copy(),
+    }
+
+
+
+
 def configure_logfire():
     """Configure Logfire for tracing if token is available."""
     if not LOGFIRE_TOKEN:
@@ -850,6 +931,9 @@ class UniversalAgent:
                 ],
                 "PostToolUse": [
                     HookMatcher(matcher="Write", hooks=[tool_output_validator_hook]),
+                ],
+                "PreCompact": [
+                    HookMatcher(matcher="*", hooks=[pre_compact_context_capture_hook]),
                 ],
             },
             permission_mode="bypassPermissions",

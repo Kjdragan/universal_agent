@@ -1327,13 +1327,13 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
         try:
             import asyncio
 
-            # Concurrency limit: max 25 parallel requests to avoid overwhelming API
-            CONCURRENCY_LIMIT = 25
+            # Concurrency limit: max 5 parallel requests to avoid overwhelming API/System
+            CONCURRENCY_LIMIT = 5
             semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
 
             # Retry settings
-            MAX_RETRIES = 3
-            RETRY_BACKOFF = [1, 3, 5]  # seconds between retries
+            MAX_RETRIES = 2
+            RETRY_BACKOFF = [1, 3]  # seconds between retries
 
             async def crawl_single_url(session, url):
                 """Crawl a single URL using Cloud API with retry logic"""
