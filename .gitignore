@@ -31,6 +31,8 @@ work_products/
 .uv-cache/
 urw_smoke_workspace/
 urw_smoke_workspace_run*/
+urw_phase*_workspace_run*/
+urw_real_workspace_run*/
 
 # Temporary files
 input.txt
