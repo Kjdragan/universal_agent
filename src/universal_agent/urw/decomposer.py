@@ -17,12 +17,14 @@ from typing import Any, Dict, List, Optional
 from abc import ABC, abstractmethod
 
 from .state import Task, TaskStatus
+from .evaluation_policy import TEMPLATE_EVALUATION_POLICIES
 
 
 DECOMPOSITION_TEMPLATES = {
     "research_report": {
         "description": "Research a topic and produce a comprehensive report",
         "keywords": ["research", "report", "summary", "status report", "investigate", "analyze", "study"],
+        "evaluation_policy": TEMPLATE_EVALUATION_POLICIES.get("research_report", {}),
         "tasks": [
             {
                 "id_suffix": "scope",
@@ -69,6 +71,7 @@ DECOMPOSITION_TEMPLATES = {
     "email_outreach": {
         "description": "Draft and send personalized email outreach",
         "keywords": ["email", "outreach", "contact", "reach out"],
+        "evaluation_policy": TEMPLATE_EVALUATION_POLICIES.get("email_outreach", {}),
         "tasks": [
             {
                 "id_suffix": "targets",
@@ -108,6 +111,7 @@ DECOMPOSITION_TEMPLATES = {
     "document_analysis": {
         "description": "Analyze one or more documents and extract insights",
         "keywords": ["analyze document", "review", "extract", "summarize document"],
+        "evaluation_policy": TEMPLATE_EVALUATION_POLICIES.get("document_analysis", {}),
         "tasks": [
             {
                 "id_suffix": "ingest",
@@ -140,6 +144,7 @@ DECOMPOSITION_TEMPLATES = {
     "data_processing": {
         "description": "Process, transform, or aggregate data",
         "keywords": ["process data", "transform", "aggregate", "clean data", "ETL"],
+        "evaluation_policy": TEMPLATE_EVALUATION_POLICIES.get("data_processing", {}),
         "tasks": [
             {
                 "id_suffix": "validate",
@@ -171,6 +176,7 @@ DECOMPOSITION_TEMPLATES = {
     "content_creation": {
         "description": "Create written content (blog post, article, documentation)",
         "keywords": ["write", "create content", "draft", "blog", "article", "documentation"],
+        "evaluation_policy": TEMPLATE_EVALUATION_POLICIES.get("content_creation", {}),
         "tasks": [
             {
                 "id_suffix": "outline",
