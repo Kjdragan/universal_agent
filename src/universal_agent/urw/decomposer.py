@@ -415,6 +415,165 @@ class HybridDecomposer(Decomposer):
         return self.llm_decomposer.decompose(request, context)
 
 
+class SubAgentDecomposer(Decomposer):
+    """Decomposer that uses the task-decomposer sub-agent.
+    
+    This delegates decomposition to the task-decomposer sub-agent which
+    has more nuanced understanding of available sub-agents and can create
+    better phased plans.
+    """
+
+    def __init__(self, agent_adapter: Any, workspace_path: Any, fallback_decomposer: Optional[Decomposer] = None):
+        """
+        Args:
+            agent_adapter: UniversalAgentAdapter with invoke_subagent() method
+            workspace_path: Path to workspace for file operations
+            fallback_decomposer: Optional fallback if sub-agent fails
+        """
+        from pathlib import Path
+        self.agent_adapter = agent_adapter
+        self.workspace_path = Path(workspace_path)
+        self.fallback_decomposer = fallback_decomposer
+
+    def can_handle(self, request: str) -> bool:
+        return True
+
+    def decompose(self, request: str, context: Optional[Dict] = None) -> List[Task]:
+        """Decompose using sub-agent, with fallback to existing decomposer."""
+        import asyncio
+        try:
+            # Try to run async decomposition
+            try:
+                loop = asyncio.get_running_loop()
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(
+                        asyncio.run,
+                        self._decompose_async(request, context)
+                    )
+                    return future.result()
+            except RuntimeError:
+                return asyncio.run(self._decompose_async(request, context))
+        except Exception as e:
+            print(f"[SubAgentDecomposer] Sub-agent failed: {e}, using fallback")
+            if self.fallback_decomposer:
+                return self.fallback_decomposer.decompose(request, context)
+            # Create a single catch-all task
+            return [
+                Task(
+                    id=f"task_{uuid.uuid4().hex[:8]}",
+                    title="Execute user request",
+                    description=request,
+                    verification_type="qualitative",
+                    evaluation_rubric="Has the user's request been fulfilled?",
+                )
+            ]
+
+    async def _decompose_async(self, request: str, context: Optional[Dict] = None) -> List[Task]:
+        """Async decomposition using sub-agent."""
+        prompt = self._build_decomposition_prompt(request, context)
+        
+        result = await self.agent_adapter.invoke_subagent(
+            agent_type="task-decomposer",
+            prompt=prompt,
+            workspace_path=self.workspace_path,
+        )
+        
+        # Check for macro_tasks.json
+        macro_tasks = result.get("macro_tasks")
+        if macro_tasks:
+            return self._parse_macro_tasks(macro_tasks, request)
+        
+        # Fallback
+        if self.fallback_decomposer:
+            return self.fallback_decomposer.decompose(request, context)
+        
+        return [
+            Task(
+                id=f"task_{uuid.uuid4().hex[:8]}",
+                title="Execute user request",
+                description=request,
+                verification_type="qualitative",
+                evaluation_rubric="Has the user's request been fulfilled?",
+            )
+        ]
+
+    def _build_decomposition_prompt(self, request: str, context: Optional[Dict] = None) -> str:
+        """Build prompt for task-decomposer sub-agent."""
+        context_section = ""
+        if context:
+            if context.get("learnings"):
+                context_section += "\n**Prior Learnings:**\n"
+                context_section += "\n".join(f"- {l}" for l in context["learnings"])
+            if context.get("constraints"):
+                context_section += "\n**Constraints:**\n"
+                context_section += "\n".join(f"- {c}" for c in context["constraints"])
+        
+        return f"""# Decomposition Request
+
+## User Request
+{request}
+{context_section}
+
+## Workspace
+{self.workspace_path}
+
+## Instructions
+Create `macro_tasks.json` with phases and tasks for this request.
+Consider available sub-agents: research-specialist, report-writer.
+"""
+
+    def _parse_macro_tasks(self, macro_tasks: Dict[str, Any], original_request: str) -> List[Task]:
+        """Parse macro_tasks.json into Task objects."""
+        tasks: List[Task] = []
+        plan_id = uuid.uuid4().hex[:8]
+        
+        phases = macro_tasks.get("phases", [])
+        for phase in phases:
+            phase_id = phase.get("phase_id", 1)
+            phase_tasks = phase.get("tasks", [])
+            
+            for task_def in phase_tasks:
+                task_id = task_def.get("task_id", f"{plan_id}_p{phase_id}")
+                
+                # Parse success criteria into binary checks and constraints
+                binary_checks = []
+                constraints = []
+                for criterion in task_def.get("success_criteria", []):
+                    if "file" in criterion.lower() or "exists" in criterion.lower():
+                        # Extract file path if mentioned
+                        binary_checks.append(f"contains:{criterion[:50]}")
+                    else:
+                        constraints.append({"type": "contains", "value": criterion[:50]})
+                
+                # Add expected artifacts as binary checks
+                for artifact in task_def.get("expected_artifacts", []):
+                    binary_checks.append(f"file_exists:{artifact}")
+                
+                task = Task(
+                    id=task_id,
+                    title=task_def.get("title", "Untitled task"),
+                    description=f"{task_def.get('description', '')}\n\n**Original Request:** {original_request}",
+                    status=TaskStatus.PENDING,
+                    verification_type="composite",
+                    binary_checks=binary_checks or ["file_exists:handoff.json"],
+                    constraints=constraints,
+                    evaluation_rubric=task_def.get("description"),
+                    minimum_acceptable_score=0.7,
+                )
+                tasks.append(task)
+        
+        return tasks if tasks else [
+            Task(
+                id=f"task_{uuid.uuid4().hex[:8]}",
+                title="Execute user request",
+                description=original_request,
+                verification_type="qualitative",
+                evaluation_rubric="Has the user's request been fulfilled?",
+            )
+        ]
+
+
 @dataclass
 class PlanManager:
     """Manages the task plan lifecycle."""

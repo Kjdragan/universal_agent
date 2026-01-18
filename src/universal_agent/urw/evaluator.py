@@ -316,6 +316,136 @@ class LLMJudgeEvaluator(Evaluator):
         return CompletionConfidence.UNCERTAIN
 
 
+class SubAgentEvaluator(Evaluator):
+    """Uses evaluation-judge sub-agent for qualitative assessment.
+    
+    This evaluator delegates evaluation to the evaluation-judge sub-agent
+    which has tool access (Read, Grep, list_directory) to inspect artifacts.
+    """
+
+    def __init__(self, agent_adapter: Any, workspace_path: Path):
+        """
+        Args:
+            agent_adapter: UniversalAgentAdapter with invoke_subagent() method
+            workspace_path: Workspace path for file operations
+        """
+        self.agent_adapter = agent_adapter
+        self.workspace_path = workspace_path
+
+    async def evaluate_async(
+        self, task: Task, artifacts: List[Artifact], agent_output: str, workspace_path: Path
+    ) -> EvaluationResult:
+        """Async evaluation using sub-agent."""
+        prompt = self._build_evaluation_prompt(task, artifacts, agent_output)
+        
+        result = await self.agent_adapter.invoke_subagent(
+            agent_type="evaluation-judge",
+            prompt=prompt,
+            workspace_path=workspace_path,
+        )
+        
+        return self._parse_verdict(result, task)
+
+    def evaluate(
+        self, task: Task, artifacts: List[Artifact], agent_output: str, workspace_path: Path
+    ) -> EvaluationResult:
+        """Sync wrapper - runs async evaluation in event loop."""
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            # If there's already a running loop, create a task
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(
+                    asyncio.run,
+                    self.evaluate_async(task, artifacts, agent_output, workspace_path)
+                )
+                return future.result()
+        except RuntimeError:
+            # No running loop, we can just run it
+            return asyncio.run(
+                self.evaluate_async(task, artifacts, agent_output, workspace_path)
+            )
+
+    def _build_evaluation_prompt(
+        self, task: Task, artifacts: List[Artifact], agent_output: str
+    ) -> str:
+        """Build prompt for evaluation-judge sub-agent."""
+        artifact_paths = [a.file_path for a in artifacts if a.file_path]
+        
+        criteria = []
+        if task.binary_checks:
+            criteria.extend([f"Binary: {c}" for c in task.binary_checks])
+        if task.constraints:
+            criteria.extend([f"Constraint: {c['type']}={c.get('value', '')}" for c in task.constraints])
+        if task.evaluation_rubric:
+            criteria.append(f"Qualitative: {task.evaluation_rubric}")
+        
+        return f"""# Task Evaluation Request
+
+## Task Details
+- **Title:** {task.title}
+- **Description:** {task.description}
+
+## Success Criteria
+{chr(10).join(f"- {c}" for c in criteria) if criteria else "- Task should be completed as described"}
+
+## Expected Artifacts
+{chr(10).join(f"- {p}" for p in artifact_paths) if artifact_paths else "- Check workspace for relevant outputs"}
+
+## Workspace Path
+{self.workspace_path}
+
+## Agent Output Summary
+{agent_output[:2000] if agent_output else "(No text output)"}
+
+---
+
+**Instructions:**
+1. Use `list_directory` to check what files exist
+2. Use `Read` to inspect file contents where needed
+3. Evaluate against the success criteria above
+4. Return your verdict as structured JSON
+"""
+
+    def _parse_verdict(self, result: Dict[str, Any], task: Task) -> EvaluationResult:
+        """Parse sub-agent verdict into EvaluationResult."""
+        verdict = result.get("verdict") or {}
+        
+        is_complete = verdict.get("is_complete", False)
+        confidence_val = verdict.get("confidence", 0.5)
+        reasoning = verdict.get("reasoning", "")
+        
+        # Map confidence float to enum
+        if confidence_val >= 0.85:
+            confidence = CompletionConfidence.HIGH
+        elif confidence_val >= 0.6:
+            confidence = CompletionConfidence.MEDIUM
+        elif confidence_val >= 0.4:
+            confidence = CompletionConfidence.LOW
+        else:
+            confidence = CompletionConfidence.UNCERTAIN
+        
+        # Extract check results if available
+        checks = verdict.get("checks_performed", [])
+        binary_results = {}
+        for check in checks:
+            check_name = check.get("check", "")
+            passed = check.get("passed", False)
+            binary_results[check_name] = passed
+        
+        return EvaluationResult(
+            is_complete=is_complete,
+            confidence=confidence,
+            overall_score=confidence_val,
+            binary_results=binary_results,
+            qualitative_score=confidence_val,
+            qualitative_reasoning=reasoning,
+            missing_elements=verdict.get("missing_elements", []),
+            suggested_actions=verdict.get("suggested_actions", []),
+        )
+
+
 class CompositeEvaluator(Evaluator):
     """Combines binary, constraint, and LLM evaluation with policy overrides."""
 

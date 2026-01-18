@@ -390,6 +390,106 @@ class UniversalAgentAdapter(BaseAgentAdapter):
     def _estimate_tokens(self, prompt: str, output: str) -> int:
         return int((len(prompt) + len(output)) / 4)
 
+    async def invoke_subagent(
+        self,
+        agent_type: str,
+        prompt: str,
+        workspace_path: Path,
+    ) -> Dict[str, Any]:
+        """
+        Invoke a sub-agent (e.g., 'task-decomposer', 'evaluation-judge') for harness use.
+        
+        Args:
+            agent_type: Name of the sub-agent to invoke ('task-decomposer', 'evaluation-judge')
+            prompt: The task/prompt to send to the sub-agent
+            workspace_path: Workspace path for file operations
+            
+        Returns:
+            Dict with sub-agent results, including any files created
+        """
+        # Build delegation prompt that triggers sub-agent invocation
+        delegation_prompt = f"""# Sub-Agent Delegation
+
+You MUST delegate this task to the **{agent_type}** sub-agent.
+
+## Task for {agent_type}
+
+{prompt}
+
+## Instructions
+
+1. Call the {agent_type} sub-agent with the task above
+2. Wait for the sub-agent to complete
+3. Return the sub-agent's output
+
+DELEGATE NOW. Do not attempt to do this yourself.
+"""
+        
+        # Run through the standard agent infrastructure
+        result = await self._run_agent(None, delegation_prompt, workspace_path)
+        
+        # Parse sub-agent output based on type
+        return self._parse_subagent_result(result, agent_type, workspace_path)
+
+    def _parse_subagent_result(
+        self,
+        result: AgentExecutionResult,
+        agent_type: str,
+        workspace_path: Path,
+    ) -> Dict[str, Any]:
+        """Parse sub-agent result based on the agent type."""
+        parsed = {
+            "success": result.success,
+            "output": result.output,
+            "artifacts": result.artifacts_produced,
+        }
+        
+        if agent_type == "task-decomposer":
+            # Look for macro_tasks.json
+            tasks_file = workspace_path / "macro_tasks.json"
+            if tasks_file.exists():
+                try:
+                    parsed["macro_tasks"] = json.loads(tasks_file.read_text())
+                except json.JSONDecodeError:
+                    parsed["macro_tasks"] = None
+                    
+        elif agent_type == "evaluation-judge":
+            # Parse structured verdict from output
+            parsed["verdict"] = self._extract_json_from_output(result.output)
+            
+        return parsed
+
+    def _extract_json_from_output(self, output: str) -> Optional[Dict[str, Any]]:
+        """Extract JSON object from agent output text."""
+        if not output:
+            return None
+        
+        # Look for JSON block in output
+        json_match = re.search(r'```json\s*(.*?)\s*```', output, re.DOTALL)
+        if json_match:
+            try:
+                return json.loads(json_match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # Try direct JSON parsing
+        first_brace = output.find('{')
+        if first_brace != -1:
+            # Find matching closing brace
+            brace_count = 0
+            for i, char in enumerate(output[first_brace:], first_brace):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        try:
+                            return json.loads(output[first_brace:i+1])
+                        except json.JSONDecodeError:
+                            break
+        
+        return None
+
 
 class MockAgentAdapter(BaseAgentAdapter):
     """Mock adapter for testing URW without a real agent system."""
