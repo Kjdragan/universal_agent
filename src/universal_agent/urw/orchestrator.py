@@ -193,6 +193,11 @@ class URWOrchestrator:
         if checkpoint_sha:
             self.state_manager.checkpointer.rollback_to(checkpoint_sha)
 
+        # Reset any tasks that were interrupted (stuck in IN_PROGRESS)
+        restored = self.state_manager.reset_interrupted_tasks()
+        if restored > 0:
+            self._log(f"Restored {restored} interrupted tasks to PENDING status")
+
         try:
             result = await self._main_loop()
             return result
