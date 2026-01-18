@@ -113,6 +113,10 @@ class BinaryCheckEvaluator(Evaluator):
                 return True, ""
             if (workspace_path / filename).exists():
                 return True, ""
+            if (workspace_path / "workspace_artifacts" / filename).exists():
+                return True, ""
+            if (workspace_path / "work_products" / filename).exists():
+                return True, ""
             for art in artifacts:
                 if art.file_path and art.file_path.endswith(filename):
                     return True, ""

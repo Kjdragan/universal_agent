@@ -343,7 +343,7 @@ Return a JSON array of task objects. Each task should have:
 - `binary_checks`: Array of binary checks like "file_exists:output.md" (must include "file_exists:handoff.json")
 - `constraints`: Array of constraint objects like {{"type": "min_length", "value": 1000}} (optional)
 - `evaluation_rubric`: Qualitative criteria for LLM evaluation (optional)
-- `evaluation_policy`: Optional overrides for evaluation thresholds/requirements (e.g., {"require_qualitative": false, "qualitative_min_score": 0.7})
+- `evaluation_policy`: Optional overrides for evaluation thresholds/requirements (e.g., {{"require_qualitative": false, "qualitative_min_score": 0.7}})
 - `max_iterations`: Maximum attempts for this task (default: 10)
 
 **Guidelines:**
