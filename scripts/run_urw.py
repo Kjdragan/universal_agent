@@ -146,15 +146,16 @@ async def run() -> None:
     original_stdout = sys.stdout
     original_stderr = sys.stderr
     try:
-        if args.log_file:
-            log_path = Path(args.log_file)
-            if not log_path.is_absolute():
-                log_path = (workspace_path / log_path).resolve()
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_handle = log_path.open("a", encoding="utf-8")
-            sys.stdout = Tee(original_stdout, log_handle)
-            sys.stderr = Tee(original_stderr, log_handle)
-            print(f"[URW] Logging to {log_path}")
+        # Default to saving output to session's .urw directory
+        log_file = args.log_file or str(workspace_path / ".urw" / "execution.log")
+        log_path = Path(log_file)
+        if not log_path.is_absolute():
+            log_path = (workspace_path / log_path).resolve()
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = log_path.open("a", encoding="utf-8")
+        sys.stdout = Tee(original_stdout, log_handle)
+        sys.stderr = Tee(original_stderr, log_handle)
+        print(f"[URW] Logging to {log_path}")
 
         api_key = (
             os.getenv("ANTHROPIC_API_KEY")
@@ -174,7 +175,7 @@ async def run() -> None:
         if args.mock:
             adapter = MockAgentAdapter({"success_rate": 0.9, "produce_artifacts": True})
         else:
-            adapter = UniversalAgentAdapter({"model": args.model})
+            adapter = UniversalAgentAdapter({"model": args.model, "verbose": args.verbose})
 
         evaluation_policy = {}
         if args.require_binary is not None:
