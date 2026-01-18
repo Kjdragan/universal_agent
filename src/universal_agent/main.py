@@ -5812,28 +5812,8 @@ async def setup_session(
     work_products_dir = os.path.join(workspace_dir, "work_products", "media")
     os.makedirs(work_products_dir, exist_ok=True)
 
-    # [Anthropic Pattern] Initialize git for checkpoint-based harness iteration
-    try:
-        import subprocess
-
-        subprocess.run(
-            ["git", "init"], cwd=workspace_dir, capture_output=True, check=False
-        )
-        subprocess.run(
-            ["git", "config", "user.email", "agent@universal-agent.local"],
-            cwd=workspace_dir,
-            capture_output=True,
-            check=False,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Universal Agent"],
-            cwd=workspace_dir,
-            capture_output=True,
-            check=False,
-        )
-        print(f"📦 Git initialized in workspace: {workspace_dir}")
-    except Exception as e:
-        print(f"⚠️ Git init skipped: {e}")
+    # NOTE: Git checkpoint pattern removed - causes nested repo issues
+    # File-based state (macro_tasks.json, session_progress.md) used instead
 
     # =========================================================================
     # =========================================================================
