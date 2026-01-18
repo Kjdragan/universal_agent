@@ -129,6 +129,9 @@ class UniversalAgentAdapter(BaseAgentAdapter):
         auth_required = False
 
         async for event in agent.run_query(prompt):
+            if self.config.get("verbose"):
+                print(f"[DEBUG EVENT] {event.type} Data: {str(event.data)[:200]}", flush=True)
+
             if event.type == EventType.TEXT:
                 text = event.data.get("text")
                 if text:

@@ -457,7 +457,11 @@ class URWOrchestrator:
                      completed_ids.append(tid)
                      self._log(f"✅ Task completed: {t.title}")
                  else:
-                     self._log(f"⏳ Task pending: {t.title}")
+                     # Reset to PENDING so it can be retried in the next iteration
+                     # This prevents the "deadlock" where tasks stuck in IN_PROGRESS
+                     # are not picked up by get_all_executable_tasks()
+                     self.state_manager.update_task_status(tid, TaskStatus.PENDING, iteration_id)
+                     self._log(f"⏳ Task pending (will retry): {t.title}")
              
              phase.mark_complete(completed_ids, failed_ids)
              
