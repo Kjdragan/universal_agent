@@ -499,6 +499,25 @@ class URWStateManager:
         self._update_progress_file()
         return count
 
+    def reset_interrupted_tasks(self) -> int:
+        """Reset any IN_PROGRESS tasks to PENDING so they can be picked up again."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) as count FROM tasks WHERE status = ?",
+            (TaskStatus.IN_PROGRESS.value,),
+        ).fetchone()
+        count = row["count"] if row else 0
+        if count == 0:
+            return 0
+
+        self.conn.execute(
+            "UPDATE tasks SET status = ? WHERE status = ?",
+            (TaskStatus.PENDING.value, TaskStatus.IN_PROGRESS.value),
+        )
+        self.conn.commit()
+        self._update_task_plan_file()
+        self._update_progress_file()
+        return count
+
     def create_task(self, task: Task) -> str:
         with self.transaction():
             self.conn.execute(

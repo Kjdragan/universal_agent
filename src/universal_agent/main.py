@@ -5677,7 +5677,16 @@ async def _run_urw_from_cli(args: argparse.Namespace) -> None:
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is required for URW mode")
 
-    workspace_path = Path(args.workspace or "./urw_workspace").expanduser().resolve()
+    if args.workspace:
+        workspace_path = Path(args.workspace).expanduser().resolve()
+    else:
+        import datetime
+        import uuid
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_uuid = str(uuid.uuid4())[:8]
+        workspace_path = Path(f"./urw_sessions/session_{ts}_{run_uuid}").expanduser().resolve()
+        
+    print(f"[URW] Workspace initialized at: {workspace_path}")
     workspace_path.mkdir(parents=True, exist_ok=True)
 
     base_url = os.getenv("ANTHROPIC_BASE_URL")

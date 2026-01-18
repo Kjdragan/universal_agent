@@ -42,8 +42,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("request", help="User request to execute")
     parser.add_argument(
         "--workspace",
-        default="./urw_workspace",
-        help="Workspace directory for URW state",
+        default=None,
+        help="Workspace directory for URW state (defaults to new session in urw_sessions/)",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume execution from existing workspace state",
     )
     parser.add_argument(
         "--mock",
@@ -125,7 +130,16 @@ def parse_args() -> argparse.Namespace:
 async def run() -> None:
     args = parse_args()
 
-    workspace_path = Path(args.workspace).expanduser().resolve()
+    if args.workspace:
+        workspace_path = Path(args.workspace).expanduser().resolve()
+    else:
+        import datetime
+        import uuid
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_uuid = str(uuid.uuid4())[:8]
+        workspace_path = Path(f"./urw_sessions/session_{ts}_{run_uuid}").expanduser().resolve()
+
+    print(f"[URW] Workspace initialized at: {workspace_path}")
     workspace_path.mkdir(parents=True, exist_ok=True)
 
     log_handle = None
@@ -191,7 +205,13 @@ async def run() -> None:
             config=config,
         )
 
-        result = await orchestrator.run(args.request)
+        if args.resume:
+            print(f"[URW] Resuming execution in {workspace_path}")
+            result = await orchestrator.resume()
+        else:
+            print(f"[URW] Starting new execution in {workspace_path}")
+            result = await orchestrator.run(args.request)
+
         print(json.dumps(result, indent=2))
     finally:
         if log_handle:
