@@ -1,0 +1,156 @@
+"""
+URW Harness Helpers
+
+Helper functions for managing agent context and session transitions during harness execution.
+"""
+
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+
+def toggle_session(
+    harness_dir: Path,
+    phase_num: int,
+) -> str:
+    """
+    Create a new session directory for the next phase and update globals.
+    
+    Args:
+        harness_dir: Path to the harness directory
+        phase_num: Phase number (1-indexed)
+        
+    Returns:
+        Path string to the new session directory
+    """
+    session_name = f"session_phase_{phase_num}"
+    session_path = harness_dir / session_name
+    session_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create standard subdirectories
+    (session_path / "work_products" / "media").mkdir(parents=True, exist_ok=True)
+    (session_path / "downloads").mkdir(parents=True, exist_ok=True)
+    (session_path / "search_results").mkdir(parents=True, exist_ok=True)
+    
+    new_workspace = str(session_path)
+    
+    # Update environment variable so MCP servers pick it up
+    os.environ["CURRENT_SESSION_WORKSPACE"] = new_workspace
+    
+    return new_workspace
+
+
+def compact_agent_context(client: Any, force_new_client: bool = False) -> dict:
+    """
+    Manage agent context compaction for phase transitions.
+    
+    Based on Claude Agent SDK / Claude Code research:
+    - `/compact` command is REPL-only, no SDK method to trigger it
+    - Auto-compaction triggers at ~80% context window usage
+    - PreCompact hook exists for custom logic before compaction
+    - Creating new ClaudeSDKClient = completely fresh context (no memory)
+    
+    Strategy for harness:
+    1. KEEP same client to preserve agent's summarized memory via auto-compaction
+    2. Toggle to new SESSION DIRECTORY (separate from client lifecycle)
+    3. Only create new client if explicitly requested (force_new_client=True)
+    
+    Args:
+        client: The ClaudeSDKClient instance
+        force_new_client: If True, signals caller should create entirely new client
+        
+    Returns:
+        dict with:
+        - keep_client: True if current client should be kept
+        - notes: explanation of action taken
+    """
+    if force_new_client:
+        # Full reset - caller will create new ClaudeSDKClient
+        return {
+            "keep_client": False,
+            "notes": "Hard reset - new client will be created (loses all memory)"
+        }
+    
+    # Default: Keep the client, let auto-compaction preserve summarized memory
+    # The session directory toggle is handled separately by toggle_session()
+    return {
+        "keep_client": True,
+        "notes": "Soft reset - keeping client for memory continuity via auto-compaction"
+    }
+
+
+def build_harness_context_injection(
+    phase_num: int,
+    total_phases: int,
+    phase_title: str,
+    phase_instructions: str,
+    prior_session_paths: list[str],
+    expected_artifacts: list[str],
+) -> str:
+    """
+    Build the context injection for a new phase.
+    
+    Follows the minimal + perspective approach:
+    - Give perspective that this is part of a larger project
+    - Reference prior sessions (paths only, not content)
+    - Focus on the current phase task
+    
+    Args:
+        phase_num: Current phase number (1-indexed)
+        total_phases: Total number of phases
+        phase_title: Title of this phase
+        phase_instructions: Detailed instructions for this phase
+        prior_session_paths: List of paths to prior session directories
+        expected_artifacts: List of expected output artifacts
+        
+    Returns:
+        Formatted prompt string ready to be fed to the multi-agent system
+    """
+    prior_section = ""
+    if prior_session_paths:
+        paths_list = "\n".join(f"- {p}" for p in prior_session_paths)
+        prior_section = f"""**Prior work:** Sessions at paths:
+{paths_list}
+(Consult ONLY if needed for continuity)
+
+"""
+    
+    artifacts_section = "\n".join(f"- {a}" for a in expected_artifacts) if expected_artifacts else "- Complete the phase successfully"
+    
+    return f"""# Phase {phase_num} of {total_phases}: {phase_title}
+
+You are working through a larger multi-phase project. Your current phase is this one.
+Complete this phase excellently so the system can continue to subsequent phases.
+
+{prior_section}## Your Task
+{phase_instructions}
+
+## Expected Outputs
+{artifacts_section}
+"""
+
+
+def create_harness_workspace(
+    workspaces_root: Path,
+    harness_id: Optional[str] = None,
+) -> Path:
+    """
+    Create a harness workspace directory structure.
+    
+    Args:
+        workspaces_root: Root directory for all workspaces (AGENT_RUN_WORKSPACES)
+        harness_id: Optional ID, defaults to timestamp
+        
+    Returns:
+        Path to the created harness directory
+    """
+    if not harness_id:
+        harness_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    harness_dir = workspaces_root / f"harness_{harness_id}"
+    harness_dir.mkdir(parents=True, exist_ok=True)
+    
+    return harness_dir
