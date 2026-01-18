@@ -119,21 +119,21 @@ class PhasePlanner:
     }
     
     # Maximum tasks per phase (soft limit, can be exceeded for dependencies)
-    DEFAULT_MAX_TASKS_PER_PHASE = 4
+    DEFAULT_MAX_TASKS_PER_PHASE = 24
     
-    # Token budget estimation (conservative)
-    CONTEXT_BUDGET_TOKENS = 80000  # ~80K tokens for safety margin
+    # Token budget estimation (Sonnet 200k support)
+    CONTEXT_BUDGET_TOKENS = 160000
     
     # Estimated tokens per task type
     TASK_TOKEN_ESTIMATES = {
-        "research": 15000,   # Research generates lots of output
-        "search": 12000,     # Search results
-        "gather": 10000,     # Gathering data
-        "analyze": 8000,     # Analysis consumes but produces less
+        "research": 10000,   # Research generates lots of output
+        "search": 8000,     # Search results
+        "gather": 5000,     # Gathering data
+        "analyze": 5000,     # Analysis consumes but produces less
         "synthesize": 6000,  # Synthesis is more focused
         "report": 10000,     # Reports can be large
-        "email": 3000,       # Emails are small
-        "default": 8000,     # Default estimate
+        "email": 2000,       # Emails are small
+        "default": 5000,     # Default estimate
     }
     
     def __init__(

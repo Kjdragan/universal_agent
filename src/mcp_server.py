@@ -1,5 +1,9 @@
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+
+# Load params from .env immediately
+load_dotenv()
+
 import os
 import sys
 import json
@@ -1858,12 +1862,12 @@ async def finalize_research(
 
         # 1. Scan Inbox (Root only) and Extract
         # Strict filter: ONLY .json files in the root (ignore directories)
-        candidates = [
+        candidates = sorted([
             f
             for f in os.listdir(search_results_dir)
             if f.endswith(".json")
             and os.path.isfile(os.path.join(search_results_dir, f))
-        ]
+        ])
 
         for filename in candidates:
             path = os.path.join(search_results_dir, filename)
@@ -2901,6 +2905,96 @@ def preview_image(image_path: str, port: int = 7860) -> str:
 # =============================================================================
 # MAIN - Start stdio server when run as a script
 # =============================================================================
+
+@mcp.tool()
+@trace_tool_output
+def batch_tool_execute(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Execute multiple tool calls in a batch (sequentially).
+    Supports both Composio tools and Local Toolkit tools.
+    
+    Args:
+        tool_calls: List of dicts, each with 'tool' (str) and 'input' (dict).
+        
+    Returns:
+        List of results in the same order.
+    """
+    results = []
+    
+    # Initialize Composio client
+    try:
+        bridge = get_bridge()
+        client = bridge.composio_client
+    except Exception as e:
+        return [{"error": f"Failed to initialize Composio client: {e}"}]
+    
+    import time
+    
+    # GUARDRAIL: Limit batch size to prevent resource exhaustion
+    MAX_BATCH_SIZE = 10
+    if len(tool_calls) > MAX_BATCH_SIZE:
+         return [{"error": f"Batch size of {len(tool_calls)} exceeds maximum limit of {MAX_BATCH_SIZE}. Please split into smaller batches."}]
+
+    sys.stderr.write(f"[Local Toolkit] Batch executing {len(tool_calls)} calls\\n")
+    sys.stderr.flush()
+
+    for i, call in enumerate(tool_calls):
+        name = call.get("tool", "")
+        args = call.get("input", {})
+        result_item = {"index": i, "tool": name, "status": "pending"}
+        
+        try:
+            # Throttle to prevent resource exhaustion (e.g. brower contexts)
+            if i > 0:
+                time.sleep(0.5)
+
+            # 1. Composio Tools
+            if "mcp__composio__" in name:
+                action_name = name.split("mcp__composio__")[1]
+                resp = client.action(action_name).execute(args)
+                
+                # Truncate large results to avoid OOM/Serialization issues
+                resp_str = str(resp)
+                if len(resp_str) > 5000:
+                    result_item["result"] = resp_str[:5000] + "... [TRUNCATED]"
+                    result_item["truncated"] = True
+                else:
+                    result_item["result"] = resp
+                
+                result_item["status"] = "success"
+
+            # 2. Local Tools (Self-Call)
+            elif "mcp__local_toolkit__" in name:
+                local_name = name.split("mcp__local_toolkit__")[1]
+                func = globals().get(local_name)
+                if not func:
+                     raise ValueError(f"Local tool '{local_name}' not found")
+
+                res = func(**args)
+                
+                # Truncate large results
+                res_str = str(res)
+                if len(res_str) > 5000:
+                    result_item["result"] = res_str[:5000] + "... [TRUNCATED]"
+                    result_item["truncated"] = True
+                else:
+                    result_item["result"] = res
+                    
+                result_item["status"] = "success"
+                
+            else:
+                 raise ValueError(f"Tool '{name}' not supported in batch. Must start with mcp__composio__ or mcp__local_toolkit__")
+
+        except Exception as e:
+            result_item["status"] = "error"
+            result_item["error"] = str(e)
+            sys.stderr.write(f"[Local Toolkit] Batch sub-call {i} failed: {e}\\n")
+            sys.stderr.flush()
+            
+        results.append(result_item)
+        
+    return results
+
 
 if __name__ == "__main__":
     # Run the MCP server using stdio transport
