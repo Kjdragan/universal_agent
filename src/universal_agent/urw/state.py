@@ -156,33 +156,22 @@ class IterationResult:
 
 
 class GitCheckpointer:
-    """Deterministic checkpointing via Git commits."""
+    """
+    DEPRECATED: Git checkpointing disabled to avoid nested repo issues.
+    This class is now a no-op stub that maintains API compatibility.
+    File-based state (macro_tasks.json, session_progress.md) is used instead.
+    """
 
     def __init__(self, workspace_path: Path):
         self.workspace = workspace_path
-        self._ensure_git_initialized()
+        # NOTE: git init removed - causes nested repo conflicts
 
     def _ensure_git_initialized(self) -> None:
-        git_dir = self.workspace / ".git"
-        if not git_dir.exists():
-            subprocess.run(["git", "init"], cwd=self.workspace, capture_output=True, check=True)
-            subprocess.run(
-                ["git", "add", "-A"], cwd=self.workspace, capture_output=True, check=False
-            )
-            subprocess.run(
-                ["git", "commit", "-m", "[URW] Initialize workspace", "--allow-empty"],
-                cwd=self.workspace,
-                capture_output=True,
-                check=False,
-            )
+        pass  # No-op
 
     def _run_git(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["git", *args],
-            cwd=self.workspace,
-            capture_output=True,
-            text=True,
-        )
+        # Return a fake successful result
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     def checkpoint(
         self,
@@ -191,47 +180,26 @@ class GitCheckpointer:
         task_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
-        self._run_git("add", "-A")
-        full_message = (
-            f"[URW] {message}\n\n"
-            f"iteration: {iteration}\n"
-            f"task_id: {task_id or 'N/A'}\n"
-            f"timestamp: {datetime.utcnow().isoformat()}Z\n"
-            f"metadata: {json.dumps(metadata or {})}\n"
-        )
-        self._run_git("commit", "-m", full_message, "--allow-empty")
-        sha_result = self._run_git("rev-parse", "HEAD")
-        return sha_result.stdout.strip()
+        # Return a fake SHA - actual state is in JSON/MD files
+        return f"no-op-{iteration}"
 
     def rollback_to(self, commit_sha: str) -> bool:
-        result = self._run_git("checkout", commit_sha, "--", ".urw/")
-        return result.returncode == 0
+        return True  # No-op
 
     def get_checkpoint_history(self, limit: int = 20) -> List[Dict[str, Any]]:
-        result = self._run_git("log", f"--max-count={limit}", "--format=%H|%s|%ai", "--grep=[URW]")
-        checkpoints = []
-        for line in result.stdout.strip().split("\n"):
-            if line and "|" in line:
-                parts = line.split("|")
-                if len(parts) >= 3:
-                    checkpoints.append({"sha": parts[0], "message": parts[1], "timestamp": parts[2]})
-        return checkpoints
+        return []  # No history
 
     def diff_from_checkpoint(self, commit_sha: str) -> str:
-        result = self._run_git("diff", commit_sha, "--", ".urw/")
-        return result.stdout
+        return ""  # No diff
 
     def create_branch(self, branch_name: str) -> bool:
-        result = self._run_git("checkout", "-b", branch_name)
-        return result.returncode == 0
+        return True  # No-op
 
     def merge_branch(self, branch_name: str) -> bool:
-        result = self._run_git("merge", branch_name, "--no-ff")
-        return result.returncode == 0
+        return True  # No-op
 
     def get_current_sha(self) -> str:
-        result = self._run_git("rev-parse", "HEAD")
-        return result.stdout.strip()
+        return "no-op"
 
 
 SCHEMA = """
