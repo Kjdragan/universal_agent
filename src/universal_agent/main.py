@@ -6432,6 +6432,46 @@ async def process_turn(
     if LOGFIRE_TOKEN:
         logfire.info("query_started", query=user_input)
 
+    # 1a. Check for /harness command (massive request handler)
+    if user_input.strip().startswith("/harness "):
+        from .urw.harness_orchestrator import run_harness
+        
+        massive_request = user_input.strip()[9:]  # Strip "/harness " prefix
+        print(f"\n{'=' * 60}")
+        print("🎯 HARNESS MODE ACTIVATED")
+        print(f"{'=' * 60}")
+        print(f"Request: {massive_request[:100]}...")
+        
+        workspaces_root = Path(workspace_dir).parent
+        
+        try:
+            result = await run_harness(
+                massive_request=massive_request,
+                workspaces_root=workspaces_root,
+                process_turn=process_turn,
+                client=client,
+            )
+            
+            summary = f"Harness complete: {result.get('phases_completed', 0)} phases completed"
+            return ExecutionResult(
+                success=result.get("status") == "complete",
+                final_output=summary,
+                query=user_input,
+                time_taken=time.time() - start_ts,
+                error=result.get("error"),
+            )
+        except Exception as e:
+            print(f"\n❌ Harness error: {e}")
+            import traceback
+            traceback.print_exc()
+            return ExecutionResult(
+                success=False,
+                final_output="",
+                query=user_input,
+                time_taken=time.time() - start_ts,
+                error=str(e),
+            )
+
     # 2. Determine Complexity
     complexity = (
         "COMPLEX" if force_complex else await classify_query(client, user_input)
@@ -7156,8 +7196,82 @@ async def main(args: argparse.Namespace):
                 if not user_input or user_input.lower() in ("quit", "exit"):
                     break
 
+                # [DEBUG] Skip interview and use sample plan for testing
+                if user_input.lower().strip().startswith("/harness-test"):
+                    print("\n⚙️  Activating Universal Agent Harness (TEST MODE - Skip Interview)...")
+                    
+                    try:
+                        from pathlib import Path
+                        from .urw.harness_orchestrator import run_harness
+                        
+                        workspaces_root = Path(workspace_dir).parent
+                        
+                        # Use sample plan path
+                        sample_plan_path = Path(__file__).parent / "urw" / "sample_plan.json"
+                        print(f"📋 Loading sample plan: {sample_plan_path}")
+                        
+                        result = await run_harness(
+                            massive_request="[TEST] Solar energy benefits report",
+                            workspaces_root=workspaces_root,
+                            process_turn=process_turn,
+                            client=client,
+                            skip_interview=True,
+                            plan_file=sample_plan_path,
+                        )
+                        
+                        print(f"\n{'=' * 60}")
+                        print("🏁 HARNESS TEST COMPLETE")
+                        print(f"{'=' * 60}")
+                        print(f"Status: {result.get('status', 'unknown')}")
+                        print(f"Phases completed: {result.get('phases_completed', 0)}")
+                        if result.get('harness_dir'):
+                            print(f"Work products: {result.get('harness_dir')}")
+                        
+                    except Exception as e:
+                        print(f"\n❌ Harness test error: {e}")
+                        import traceback
+                        traceback.print_exc()
+                    
+                    continue
+
+                # [DEBUG] Skip interview and generate plan from template (sample_interview.json)
+                if user_input.lower().strip().startswith("/harness-template"):
+                    print("\n⚙️  Activating Universal Agent Harness (TEMPLATE MODE - Generate Plan)...")
+                    
+                    try:
+                        from pathlib import Path
+                        from .urw.harness_orchestrator import run_harness
+                        
+                        workspaces_root = Path(workspace_dir).parent
+                        
+                        # Use sample interview transcript
+                        template_path = Path(__file__).parent / "urw" / "sample_interview.json"
+                        print(f"📋 Loading interview template: {template_path}")
+                        
+                        result = await run_harness(
+                            massive_request="[TEMPLATE] Solar energy benefits report",
+                            workspaces_root=workspaces_root,
+                            process_turn=process_turn,
+                            client=client,
+                            template_file=template_path,
+                        )
+                        
+                        print(f"\n{'=' * 60}")
+                        print("🏁 HARNESS TEMPLATE TEST COMPLETE")
+                        print(f"{'=' * 60}")
+                        print(f"Status: {result.get('status', 'unknown')}")
+                        if result.get('harness_dir'):
+                            print(f"Work products: {result.get('harness_dir')}")
+                        
+                    except Exception as e:
+                        print(f"\n❌ Harness template error: {e}")
+                        import traceback
+                        traceback.print_exc()
+                    
+                    continue
+
                 if user_input.lower().strip().startswith("/harness"):
-                    print("\n⚙️  Activating Universal Agent Harness...")
+                    print("\n⚙️  Activating Universal Agent Harness (Phase-Based)...")
 
                     # Check if user provided an objective in the command
                     parts = user_input.strip().split(" ", 1)
@@ -7195,166 +7309,36 @@ async def main(args: argparse.Namespace):
                         print("⚠️ No objective provided. Harness activation cancelled.")
                         continue
 
-                    # Update run_spec with objective
-                    updated_spec = (run_spec or {}).copy()
-                    updated_spec["original_objective"] = target_objective
-                    run_spec = updated_spec  # Update local expectation
-
-                    # Enable harness with objective in run_spec
-                    upsert_run(
-                        runtime_db_conn,
-                        run_id,
-                        "cli",
-                        updated_spec,
-                        max_iterations=10,
-                        completion_promise="TASK_COMPLETE",
-                    )
-                    print(
-                        f"✅ Harness activated: max_iterations=10, completion_promise='TASK_COMPLETE'"
-                    )
                     print(f"🎯 Objective: {target_objective}")
 
-                    # [V2 Planning Phase] Check for mission.json with PLANNING status
-                    planning_mission_file = os.path.join(workspace_dir, "mission.json")
-                    if os.path.exists(planning_mission_file):
-                        try:
-                            with open(planning_mission_file, "r") as f:
-                                mission_data = json.load(f)
-                            mission_data, _ = _apply_interview_answers_to_mission(
-                                workspace_dir,
-                                mission_data=mission_data,
-                            )
-                            if mission_data.get("status") == "PLANNING":
-                                print(
-                                    "\n📋 Planning Phase Detected - Awaiting User Approval"
-                                )
-                                approved = present_plan_summary(mission_data)
-                                if approved:
-                                    mission_data["status"] = "IN_PROGRESS"
-                                    with open(planning_mission_file, "w") as f:
-                                        json.dump(mission_data, f, indent=2)
-                                    print(
-                                        "✅ Plan approved. Transitioning to IN_PROGRESS."
-                                    )
-                                else:
-                                    print(
-                                        "⏸️ Plan not approved. Please edit mission.json and retry."
-                                    )
-                                    continue  # Go back to prompt, don't start execution
-                        except Exception as e:
-                            print(f"⚠️ Failed to check mission.json: {e}")
-
-                    print("Prompting agent to begin...")
-
-                    # Synthesize the FIRST prompt for the agent
-                    # Check if this is a Planning Phase (mission.json with PLANNING status was approved)
-                    is_planning_complete = os.path.exists(planning_mission_file)
-                    if is_planning_complete:
-                        try:
-                            with open(planning_mission_file, "r") as f:
-                                check_mission = json.load(f)
-                            is_planning_complete = (
-                                check_mission.get("status") == "IN_PROGRESS"
-                            )
-                        except Exception:
-                            is_planning_complete = False
-
-                    if is_planning_complete:
-                        # Execution mode: Plan already approved
-                        user_input = (
-                            f"HARNESS MODE ACTIVATED - EXECUTION PHASE\n"
-                            f"OBJECTIVE: {target_objective}\n\n"
-                            f"A Mission Manifest (mission.json) exists in your workspace with status=IN_PROGRESS.\n"
-                            f"Read it, identify the next PENDING task, execute it fully, then mark it COMPLETE.\n"
-                            f"Update mission_progress.txt with notes for future iterations.\n"
-                            f"CRITICAL: Before marking any task 'COMPLETED' or sending 'TASK_COMPLETE', you MUST append a '## Completion Rationale' section to `mission_progress.txt` explaining exactly WHY you believe the work is finished and verifying the artifacts exist.\n"
-                            f"When ALL tasks are complete, output 'TASK_COMPLETE'.\n"
-                            f"If you cannot complete a phase in this iteration, output a clear stopping point.\n"
-                            f"Begin execution now."
+                    # Route to HarnessOrchestrator for phase-based execution
+                    try:
+                        from pathlib import Path
+                        from .urw.harness_orchestrator import run_harness
+                        
+                        workspaces_root = Path(workspace_dir).parent
+                        
+                        result = await run_harness(
+                            massive_request=target_objective,
+                            workspaces_root=workspaces_root,
+                            process_turn=process_turn,
+                            client=client,
                         )
-                    else:
-                        # Planning mode: Need to decompose and clarify
-                        user_input = (
-                            f"HARNESS MODE ACTIVATED - PLANNING PHASE\n"
-                            f"OBJECTIVE: {target_objective}\n\n"
-                            f"You are starting a LONG-RUNNING multi-phase task that may run for hours unattended.\n"
-                            f"This is a planning phase - do NOT start execution yet.\n\n"
-                            f"## Your Responsibility: PROACTIVE PLANNING\n"
-                            f"Users often submit vague requests without thinking through what they actually need.\n"
-                            f"YOUR JOB is to think through everything required for a complete, high-quality output:\n\n"
-                            f"### 1. TASK COMPLETION: What does this task *actually* need?\n"
-                            f"   - What are the concrete deliverables?\n"
-                            f"   - What research/data is required?\n"
-                            f"   - What format makes the output most useful?\n"
-                            f"   - How should the user receive/access the results?\n\n"
-                            f"### 2. NATURAL EXTENSIONS: What would make this better?\n"
-                            f"   - Are there related topics the user should know about?\n"
-                            f"   - Would visualizations, summaries, or executive briefs add value?\n"
-                            f"   - Should this be emailed, saved, or sent to Slack?\n\n"
-                            f"### 3. SENSIBLE DEFAULTS (Apply these unless user specifies otherwise):\n"
-                            f"   - Research tasks → Markdown report with executive summary\n"
-                            f"   - Long-running tasks → Email notification on completion\n"
-                            f"   - 'Recent' or 'latest' → Last 7 days\n"
-                            f"   - No date specified → Last 30 days\n"
-                            f"   - Moderate depth unless 'deep dive' or 'quick' specified\n\n"
-                            f"### 4. WHEN TO ASK (use mcp__local_toolkit__ask_user_questions tool):\n"
-                            f"   - ASK when: multiple valid interpretations, unknown preferences, high stakes\n"
-                            f"   - DON'T ASK when: sensible default exists, request is specific, asking would be pedantic\n"
-                            f"   - Limit to 2-4 essential questions maximum\n\n"
-                            f"### 5. STRATEGIC DECOMPOSITION (Vertical vs. Horizontal):\n"
-                            f"   - FAVOR VERTICAL SLICES: Group sub-tasks by *Subject Matter* (e.g., Topic A: Research -> Report -> PDF).\n"
-                            f"   - AVOID HORIZONTAL LAYERS: Do NOT group by Activity (e.g., Research Everything -> Write Everything).\n"
-                            f"   - WHY? Vertical slices allow parallel execution, better context management, and isolation of failures.\n"
-                            f"   - Example: For 'Research X, Y, Z', create 3 separate tasks threads, where each task handles one topic end-to-end.\n"
-                            f"   - Use sub-agents for these vertical slices when possible.\n\n"
-                            f"### 6. CREATE MISSION MANIFEST (mission.json):\n"
-                            f"   Write to your workspace with:\n"
-                            f"   - mission_root: The overall goal\n"
-                            f"   - status: 'PLANNING'\n"
-                            f"   - clarifications: User answers (if any questions asked)\n"
-                            f"   - tasks: Array of sub-tasks with id, description, context, use_case, success_criteria, output_artifacts, AND 'status': 'PENDING'\n\n"
-                            f"   **CRITICAL SEQUENTIAL EXECUTION PROTOCOL:**\n"
-                            f"   - You must NOT execute all tasks at once.\n"
-                            f"   - The harness will enforce a Single-Threaded loop: Pick ONE task, mark it IN_PROGRESS, finish it, mark it COMPLETED, then pick the next.\n"
-                            f"   - Plan your tasks as a logical dependency chain.\n\n"
-                            f"   **CRITICAL JSON SYNTAX (FOLLOW EXACTLY):**\n"
-                            f"   Every value MUST be a properly quoted string. Common mistakes:\n"
-                            f'   ❌ WRONG: "duration": 8-12 hours\n'
-                            f'   ✅ RIGHT: "duration": "8-12 hours"\n'
-                            f'   ❌ WRONG: "count": 20 items per batch\n'
-                            f'   ✅ RIGHT: "count": "20 items per batch"\n'
-                            f'   ❌ WRONG: "output_artifacts": report.pdf, summary.md\n'
-                            f'   ✅ RIGHT: "output_artifacts": ["report.pdf", "summary.md"]\n\n'
-                            f"   **COMPLETE VALID EXAMPLE:**\n"
-                            f"   ```json\n"
-                            f"   {{\n"
-                            f'     "mission_root": "Research AI trends and create report",\n'
-                            f'     "status": "PLANNING",\n'
-                            f'     "clarifications": {{}},\n'
-                            f'     "tasks": [\n'
-                            f"       {{\n"
-                            f'         "id": "task_001",\n'
-                            f'         "description": "Search for AI news",\n'
-                            f'         "context": "Use Composio search tools",\n'
-                            f'         "use_case": "Find recent AI developments",\n'
-                            f'         "success_criteria": "At least 15 sources found",\n'
-                            f'         "output_artifacts": ["search_results/*.json"],\n'
-                            f'         "status": "PENDING",\n'
-                            f'         "depends_on": []\n'
-                            f"       }}\n"
-                            f"     ]\n"
-                            f"   }}\n"
-                            f"   ```\n\n"
-                            f"## Example Interview Questions (when needed):\n"
-                            f"   - 'This topic is broad. Should I focus on [A], [B], or both?'\n"
-                            f"   - 'Would you prefer a detailed report or a quick summary?'\n"
-                            f"   - 'Since this will take a while, would you like me to email you when done?'\n"
-                            f"   - 'I noticed [related topic] is relevant. Should I include that too?'\n\n"
-                            f"Once you have created mission.json with status='PLANNING', output:\n"
-                            f"'PLANNING PHASE COMPLETE - Awaiting approval'\n"
-                            f"The harness will then present the plan to the user for approval."
-                        )
-                    # Fall through to process_turn
+                        
+                        print(f"\n{'=' * 60}")
+                        print("🏁 HARNESS COMPLETE")
+                        print(f"{'=' * 60}")
+                        print(f"Status: {result.get('status', 'unknown')}")
+                        print(f"Phases completed: {result.get('phases_completed', 0)}")
+                        if result.get('harness_dir'):
+                            print(f"Work products: {result.get('harness_dir')}")
+                        
+                    except Exception as e:
+                        print(f"\n❌ Harness error: {e}")
+                        import traceback
+                        traceback.print_exc()
+                    
+                    continue  # Return to prompt after harness completes
 
                 last_user_input = user_input
                 # Call process_turn which handles:
