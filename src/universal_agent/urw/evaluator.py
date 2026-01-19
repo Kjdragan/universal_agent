@@ -191,12 +191,18 @@ class ConstraintEvaluator(Evaluator):
     ) -> Optional[str]:
         for artifact in artifacts:
             if artifact.artifact_type == ArtifactType.FILE and artifact.file_path:
-                file_path = workspace_path / ".urw" / "artifacts" / artifact.file_path
-                if file_path.exists():
-                    try:
-                        return file_path.read_text()
-                    except Exception:
-                        continue
+                # Check .urw/artifacts first (legacy/state-managed)
+                paths_to_check = [
+                    workspace_path / ".urw" / "artifacts" / artifact.file_path,
+                    workspace_path / artifact.file_path
+                ]
+                
+                for file_path in paths_to_check:
+                    if file_path.exists():
+                        try:
+                            return file_path.read_text()
+                        except Exception:
+                            continue
         return None
 
     def _evaluate_constraint(self, constraint: Dict[str, Any], content: str) -> Tuple[bool, str]:
@@ -236,11 +242,47 @@ class LLMJudgeEvaluator(Evaluator):
         rubric = task.evaluation_rubric or "Is the task complete and acceptable?"
         prompt = self._build_prompt(task, agent_output, rubric)
 
-        response = self.llm_client.messages.create(
-            model=self.model,
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        # Helper to get raw Anthropic client from wrapper
+        anthropic = self.llm_client
+        if hasattr(self.llm_client, "client"):
+            anthropic = self.llm_client.client
+        elif hasattr(self.llm_client, "_client"):
+            anthropic = self.llm_client._client
+            
+        try:
+            # Check if we have a raw client (AsyncAnthropic) or need to use wrapper methods
+            if hasattr(anthropic, "messages") and hasattr(anthropic.messages, "create"):
+                response = await anthropic.messages.create(
+                    model=self.model,
+                    max_tokens=4000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+            else:
+                # If we still can't find .messages.create, maybe it's the SDK client itself
+                # usage: client.make_request(...) or similar. 
+                # For now, let's assume if it has no messages.create, we can't use it easily in this raw way.
+                # BUT, let's try to see if it's the ClaudeSDKClient which might have a different interface.
+                # Actually, the error was "AttributeError: 'ClaudeSDKClient' object has no attribute 'messages'"
+                # So we failed to unwrap it.
+                # Let's try to access the underlying client via the 'tool_executor' or similar if it exists?
+                # Or just construct a new AsyncAnthropic client from env vars if all else fails?
+                
+                # FALLBACK: Create a fresh client from env vars (Safest fallback)
+                import os
+                from anthropic import AsyncAnthropic
+                api_key = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
+                if not api_key:
+                    raise ValueError("Evaluator cannot find API key to create fallback client.")
+                
+                fallback_client = AsyncAnthropic(api_key=api_key, base_url=os.getenv("ANTHROPIC_BASE_URL"))
+                response = await fallback_client.messages.create(
+                    model=self.model,
+                    max_tokens=4000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+
+        except Exception as e:
+             raise ValueError(f"Evaluator LLM failure: {e}")
         response_text = response.content[0].text
         score, reasoning = self._parse_response(response_text)
 

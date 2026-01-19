@@ -28,6 +28,10 @@ from .harness_helpers import (
     build_harness_context_injection,
 )
 from .interview import run_planning_interview, run_planning_from_template
+from .evaluator import CompositeEvaluator, EvaluationResult, create_default_evaluator
+from .adapter import HarnessAdapter
+from .state import Artifact, ArtifactType, Task as StateTask
+import uuid
 
 
 class HarnessStatus(Enum):
@@ -195,16 +199,89 @@ class HarnessOrchestrator:
         # 3. Execute each phase
         self.status = HarnessStatus.EXECUTING
         
+        # 3. Execute each phase
+        self.status = HarnessStatus.EXECUTING
+        
         for phase in self.plan.phases:
-            result = await self._execute_phase(phase, process_turn, client)
-            self.phase_results.append(result)
+            # Check if using resume and phase is already done
+            if phase.status == "completed":
+                self._log(f"Skipping completed phase: {phase.name}")
+                # Re-populate result for summary
+                self.phase_results.append(PhaseResult(
+                    phase_id=str(phase.id),
+                    phase_name=phase.name,
+                    success=True,
+                    session_path=phase.session_path or "restored_from_plan",
+                    evaluation_notes="Skipped (Already Complete)"
+                ))
+                continue
+
+            # Check if resuming interrupt
+            is_resuming = (phase.status == PlanTaskStatus.IN_PROGRESS)
             
-            if result.success:
+            # Mark as IN_PROGRESS
+            if phase.status != PlanTaskStatus.IN_PROGRESS:
+                phase.status = PlanTaskStatus.IN_PROGRESS
+                self._persist_plan()
+
+            # --- Verification Loop (Ralph Loop) ---
+            phase_success = False
+            phase_result = None
+            retry_count = 0
+            feedback = None
+            
+            while retry_count <= self.config.max_retry_per_phase:
+                if retry_count > 0:
+                    self._log(f"Retry {retry_count}/{self.config.max_retry_per_phase} for Phase {phase.name}")
+                
+                # Execute
+                result = await self._execute_phase(phase, process_turn, client, feedback=feedback, is_resuming=is_resuming)
+                
+                # Only "resuming" on the very first try of the phase. 
+                # If we loop (retry), it's not "resuming" anymore, it's "retrying".
+                is_resuming = False
+                
+                # Evaluate
+                eval_result = await self._evaluate_phase(phase, result.session_path, client, result.artifacts_produced)
+                
+                # Check Completion
+                if eval_result.is_complete:
+                    self._log(f"Phase {phase.name} PASSED verification! Score: {eval_result.overall_score:.2f}")
+                    result.success = True
+                    result.evaluation_notes = f"Passed with score {eval_result.overall_score:.2f}"
+                    phase_success = True
+                    phase_result = result
+                    break
+                else:
+                    self._log(f"Phase {phase.name} FAILED verification. Score: {eval_result.overall_score:.2f}")
+                    self._log(f"Missing: {eval_result.missing_elements}")
+                    
+                    # Prepare feedback for next iteration
+                    retry_count += 1
+                    feedback = f"""
+PREVIOUS RETRY FAILED VERIFICATION.
+ISSUES TO FIX:
+{chr(10).join(f"- {m}" for m in eval_result.missing_elements)}
+
+SUGGESTED ACTIONS:
+{chr(10).join(f"- {s}" for s in eval_result.suggested_actions)}
+
+PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
+"""
+                    result.success = False
+                    result.error = f"Verification failed: {eval_result.missing_elements}"
+                    phase_result = result # Keep last result
+            
+            # End Loop
+            
+            self.phase_results.append(phase_result)
+            
+            if phase_success:
                 self.plan.mark_phase_complete(phase.id)
                 self._persist_plan()
             else:
-                self._log(f"Phase {phase.name} failed: {result.error}")
-                if not await self._handle_phase_failure(phase, result):
+                self._log(f"Phase {phase.name} failed after {retry_count} attempts.")
+                if not await self._handle_phase_failure(phase, phase_result):
                     self.status = HarnessStatus.FAILED
                     break
         
@@ -220,20 +297,66 @@ class HarnessOrchestrator:
         phase: Phase,
         process_turn: ProcessTurnInterface,
         client: Any,
+        feedback: Optional[str] = None,
+        is_resuming: bool = False,
     ) -> PhaseResult:
-        """Execute a single phase."""
+        """
+        Execute a single phase of the plan.
+        """
         self._log(f"=== Phase {phase.order + 1}: {phase.name} ===")
         
         # 1. Toggle to new session directory
         session_path = self.session_manager.next_phase_session()
         phase.session_path = session_path
+        
+        # CRITICAL: Update env var so MCP tools (mcp_server.py) write to the correct phase dir
+        import os
+        os.environ["CURRENT_SESSION_WORKSPACE"] = str(session_path)
+        
+        # EFFICIENCY: Pre-create standard directories to prevent agent 404s
+        (session_path / "work_products").mkdir(exist_ok=True)
+        (session_path / "tasks").mkdir(exist_ok=True)
+        
         self._log(f"Session: {session_path}")
         
-        # 2. Check compaction strategy
+        # 2. Check compaction strategy (if applicable context needs carryover)
+        from universal_agent.urw.harness_helpers import compact_agent_context
         compact_result = compact_agent_context(client, self.config.force_new_client_between_phases)
         self._log(f"Context: {compact_result['notes']}")
         
-        # 3. Build phase prompt
+        # --- Heuristic Context Injection ---
+        # "Prod" the agent to use specialists if the task description matches known capabilities.
+        # This complements the dynamic registry in agent_core.py.
+        context_hints = []
+        phase_text = (phase.name + " " + " ".join([t.description or "" for t in phase.tasks])).lower()
+        
+        if any(kw in phase_text for kw in ["report", "html", "summary", "document", "write"]):
+            context_hints.append(
+                "💡 **Collaboration Hint**: This phase appears to involve report generation. "
+                "Remember to delegate to the `report-writer` sub-agent for drafting and refined HTML output."
+            )
+        
+        if any(kw in phase_text for kw in ["research", "investigate", "find", "search", "gather"]):
+            context_hints.append(
+                "💡 **Collaboration Hint**: This phase appears to involve research. "
+                "Delegate deep searches to the `research-specialist` sub-agent."
+            )
+            
+        hint_block = ""
+        if context_hints:
+            hint_block = "\n\n" + "\n".join(context_hints)
+        
+        # Build prompt
+        task_list = "\n".join([f"- {t.name}: {t.description}" for t in phase.tasks])
+        prompt = (
+            f"# Phase {phase.order} of {len(self.plan.phases)}: {phase.name}\n\n"
+            f"You are working through a larger multi-phase project. Your goal for this session is to complete Phase {phase.order}.\n\n"
+            f"## Phase Objectives\n{task_list}\n\n"
+            f"## Instructions\n"
+            f"1. execute the tasks for this phase sequentially.\n"
+            f"2. Use the `Task` tool to delegate sub-components to specialists (see Available Specialists).{hint_block}\n"
+            f"3. When finished, call `notify_user` to signal completion.\n"
+        )
         prior_sessions = self.session_manager.get_prior_session_paths()
         phase_prompt = build_harness_context_injection(
             phase_num=phase.order + 1,  # If order is 0-indexed in schema but 1-indexed from inputs.. wait use session manager
@@ -245,6 +368,23 @@ class HarnessOrchestrator:
             tasks=phase.tasks,
             current_session_path=session_path,
         )
+        
+        if is_resuming:
+            self._log(f"Resuming phase {phase.name} (was IN_PROGRESS)")
+            phase_prompt = (
+                f"# 🔄 RESUMING INTERRUPTED PHASE {phase.order + 1}: {phase.name}\n\n"
+                f"**IMPORTANT**: You were working on this phase but the system was interrupted/restarted.\n"
+                f"Your previous work products are preserved in: `{session_path}`\n\n"
+                f"**INSTRUCTIONS:**\n"
+                f"1. Check the workspace files to see what you have already finished.\n"
+                f"2. DO NOT redo work that is already complete (e.g. do not re-write files if they exist).\n"
+                f"3. Continue from where you left off to complete the remaining tasks.\n\n"
+                f"--- Original Phase Context below ---\n\n"
+                f"{phase_prompt}"
+            )
+        
+        if feedback:
+            phase_prompt += f"\n\n# ⚠️ CRITICAL FEEDBACK FROM PREVIOUS ATTEMPT\n{feedback}\nYou must address these issues in this attempt."
         
         # 4. Execute via multi-agent system
         try:
@@ -287,6 +427,76 @@ class HarnessOrchestrator:
                     artifacts.append(str(f.relative_to(session_path)))
         
         return artifacts
+
+    async def _evaluate_phase(
+        self,
+        phase: Phase,
+        session_path: str,
+        client: Any,
+        artifact_paths: List[str]
+    ) -> EvaluationResult:
+        """Evaluate a phase's completion using CompositeEvaluator."""
+        self._log("Running verification...")
+        
+        # 1. Setup Evaluator
+        evaluator = create_default_evaluator(client)
+        
+        # 2. Convert Artifacts
+        artifacts = []
+        for path_str in artifact_paths:
+             artifacts.append(Artifact(
+                 id=path_str, # Use path as ID for simplicity
+                 task_id="unknown",
+                 artifact_type=ArtifactType.FILE,
+                 file_path=path_str
+             ))
+             
+        # 3. Evaluate each Atomic Task
+        # We aggregate results: All atomic tasks must pass
+        
+        failures = []
+        suggestions = []
+        total_score = 0
+        task_count = 0
+        
+        # Special case: If no tasks defined, pass (Interview phase checks happen elsewhere)
+        if not phase.tasks:
+            return EvaluationResult(True, "high", 1.0)
+            
+        for atomic_task in phase.tasks:
+            # Adapt to State Task
+            state_task = HarnessAdapter.atomic_task_to_state_task(atomic_task)
+            
+            # Evaluate
+            # output is shared across phase, so we pass empty string or assume artifacts cover it
+            result = evaluator.evaluate(
+                task=state_task,
+                artifacts=artifacts,
+                agent_output="", # We rely on artifacts mostly
+                workspace_path=Path(session_path)
+            )
+            
+            task_count += 1
+            total_score += result.overall_score
+            
+            if not result.is_complete:
+                failures.append(f"Task '{atomic_task.name}': {', '.join(result.missing_elements)}")
+                suggestions.extend(result.suggested_actions)
+                self._log(f"  ❌ Task '{atomic_task.name}' failed: {result.missing_elements}")
+            else:
+                self._log(f"  ✅ Task '{atomic_task.name}' passed")
+                
+        # Aggregate
+        is_success = len(failures) == 0
+        avg_score = total_score / task_count if task_count else 0.0
+        
+        return EvaluationResult(
+            is_complete=is_success,
+            confidence="high", # Placeholder
+            overall_score=avg_score,
+            missing_elements=failures,
+            suggested_actions=suggestions
+        )
     
     async def _handle_phase_failure(self, phase: Phase, result: PhaseResult) -> bool:
         """Handle a failed phase. Returns True if should continue."""

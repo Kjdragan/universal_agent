@@ -40,24 +40,77 @@ def compile_report(work_dir, theme_name="modern", custom_css=None):
     """
     Compile markdown sections into a single HTML report.
     """
+    # 1. Gather Sections
     sections_dir = Path(work_dir) / "work_products" / "_working" / "sections"
     output_path = Path(work_dir) / "work_products" / "report.html"
+    outline_path = Path(work_dir) / "work_products" / "_working" / "outline.json"
     
-    if not sections_dir.exists():
-        print(f"Error: Sections directory not found at {sections_dir}")
-        sys.exit(1)
-        
-    # 1. Gather Sections
-    md_files = sorted(sections_dir.glob("*.md"))
+    md_files = []
+    
+    # Text-based identifier for fallback
+    import re
+    def natural_sort_key(path):
+        return [int(text) if text.isdigit() else text.lower() 
+                for text in re.split(r'(\d+)', path.name)]
+
+    if outline_path.exists():
+        import json
+        try:
+            print(f"Loading outline from {outline_path}")
+            data = json.loads(outline_path.read_text())
+            
+            # --- STRICT ORDERING ALGORITHM ---
+            # We strictly respect the order in outline.json.
+            # For each section ID, we look for a matching file in sections_dir
+            # Strategies:
+            # 1. Exact Name: {id}.md
+            # 2. Numbered Prefix: {NN}_{id}.md (e.g. 01_executive_summary.md)
+            # 3. Fuzzy ID match: *{id}*.md (fallback)
+
+            processed_sections = set()
+            available_files = {f.name: f for f in sections_dir.glob("*.md")}
+            
+            for section in data.get("sections", []):
+                sec_id = section.get("id")
+                processed_sections.add(sec_id)
+                
+                # Check 1: Exact
+                fname_exact = f"{sec_id}.md"
+                if fname_exact in available_files:
+                    md_files.append(available_files[fname_exact])
+                    print(f"  [+] Added {sec_id} (Exact: {fname_exact})")
+                    continue
+                
+                # Check 2: Numbered Prefix (Most likely due to parallel_draft.py)
+                # We look for files ending with _{sec_id}.md
+                match = None
+                for fname, fpath in available_files.items():
+                    # Check for pattern like "01_executive_summary.md"
+                    if fname.endswith(f"_{sec_id}.md"):
+                        match = fpath
+                        break
+                
+                if match:
+                    md_files.append(match)
+                    print(f"  [+] Added {sec_id} (Prefix: {match.name})")
+                    continue
+                    
+                print(f"  [!] Warning: Section file for '{sec_id}' not found.")
+            
+        except Exception as e:
+            print(f"Error reading outline: {e}. Falling back to natural sort.")
+            md_files = sorted(sections_dir.glob("*.md"), key=natural_sort_key)
+    else:
+        print("No outline found. Using natural filename sort.")
+        md_files = sorted(sections_dir.glob("*.md"), key=natural_sort_key)
+
     if not md_files:
         print("Error: No section files found.")
         sys.exit(1)
         
     full_md = ""
     for md_file in md_files:
-        # Extract title from filename (e.g. "1_Executive_Summary.md" -> "Executive Summary")
-        # Assuming filenames might be sorted like 1.md or section_1.md
-        # For simplicity, we just concatenate content
+        # Append content
         content = md_file.read_text(encoding="utf-8")
         full_md += f"\n\n{content}\n"
         

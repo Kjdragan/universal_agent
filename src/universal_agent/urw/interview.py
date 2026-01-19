@@ -25,6 +25,7 @@ from claude_agent_sdk import (
     TextBlock,
 )
 
+from universal_agent.prompt_assets import discover_skills
 from .plan_schema import Plan, Phase, AtomicTask, TaskStatus
 
 
@@ -138,6 +139,11 @@ PLANNING_SYSTEM_PROMPT = """You are a planning agent conducting a requirements i
 4. Once sufficient requirements are gathered, ask a final open-ended question: "Is there anything else you would like to add or clarify before I create the plan?"
 5. After receiving the final answer, generate a structured Plan
 
+## AVAILABLE SPECIALISTS (Context Injection):
+The system has the following specialized sub-agents. When creating your Plan, if a task matches these capabilities, you should explicitly set the `use_case` or description to favor their use.
+- **report-writer**: Specialist for creating professional HTML reports from research. (Capabilities: HTML generation, comprehensive summaries, ordering sections).
+- **research-specialist**: Specialist for deep web research and data gathering. (Capabilities: Web search, crawling, filtering, corpus creation).
+
 ## Question Guidelines:
 - Be specific and actionable
 - Don't ask open-ended questions that lead to rambling answers
@@ -172,6 +178,7 @@ The Plan must include:
           "name": "Task Name",
           "description": "High level description",
           "use_case": "Detailed subatomic instructions (e.g. 'Search for X with time filter Y')",
+          "subagent_type": "report-writer",  // OPTIONAL: Suggest a specialist if applicable
           "success_criteria": ["Criteria 1", "Criteria 2"]
         }
       ]
@@ -208,9 +215,26 @@ class InterviewConductor:
                 "type": "json_schema",
                 "schema": Plan.model_json_schema()
             },
-            system_prompt=PLANNING_SYSTEM_PROMPT,
+            system_prompt=self.build_planning_prompt(),
             max_turns=30
         )
+    
+    def build_planning_prompt(self) -> str:
+        """Build the dynamic planning system prompt with injected skills."""
+        
+        # 1. Discover Skills (Progressive Disclosure)
+        skills = discover_skills()
+        skill_block = ""
+        if skills:
+            skill_block = "## AVAILABLE SKILLS (Progressive Disclosure)\n"
+            skill_block += "The system has the following skills. If a task requires one, mention it in the task description.\n"
+            skill_block += "If you need to understand a skill's full capabilities, use the `Read` tool on its path.\n\n"
+            for s in skills:
+                skill_block += f"- **{s['name']}**: {s['description']}\n"
+                skill_block += f"  (Path: {s['path']})\n"
+        
+        # 2. Inject into base prompt
+        return PLANNING_SYSTEM_PROMPT + "\n\n" + skill_block
     
     def _normalize_plan_data(self, data: Any) -> Any:
         """Recursively normalize JSON keys to match Plan schema."""
