@@ -236,7 +236,7 @@ class LLMJudgeEvaluator(Evaluator):
         self.llm_client = llm_client
         self.model = model
 
-    def evaluate(
+    async def evaluate_async(
         self, task: Task, artifacts: List[Artifact], agent_output: str, workspace_path: Path
     ) -> EvaluationResult:
         rubric = task.evaluation_rubric or "Is the task complete and acceptable?"
@@ -289,14 +289,40 @@ class LLMJudgeEvaluator(Evaluator):
         confidence = self._score_to_confidence(score)
         is_complete = score >= task.minimum_acceptable_score
 
+        missing_elements = []
+        if not is_complete and reasoning:
+            missing_elements.append(f"Judge Reasoning: {reasoning}")
+
         return EvaluationResult(
             is_complete=is_complete,
             confidence=confidence,
             overall_score=score,
             qualitative_score=score,
             qualitative_reasoning=reasoning,
+            missing_elements=missing_elements,
             suggested_actions=["Improve output to satisfy rubric"] if not is_complete else [],
         )
+
+    def evaluate(
+        self, task: Task, artifacts: List[Artifact], agent_output: str, workspace_path: Path
+    ) -> EvaluationResult:
+        """Sync wrapper - runs async evaluation in event loop."""
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            # If there's already a running loop, create a task
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = pool.submit(
+                    asyncio.run,
+                    self.evaluate_async(task, artifacts, agent_output, workspace_path)
+                )
+                return future.result()
+        except RuntimeError:
+            # No running loop, we can just run it
+            return asyncio.run(
+                self.evaluate_async(task, artifacts, agent_output, workspace_path)
+            )
 
     def _build_prompt(self, task: Task, agent_output: str, rubric: str) -> str:
         return (
