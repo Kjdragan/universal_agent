@@ -1,0 +1,25 @@
+{
+    "massive_request": "Write a brief report about solar energy benefits",
+    "questions_and_answers": [
+        {
+            "question": "What is the primary purpose and target audience for this report?",
+            "answer": "General educational article for the general public."
+        },
+        {
+            "question": "What specific aspects of solar energy benefits should be covered? (e.g. Environmental, Economic, Grid Independence)",
+            "answer": "Cover Environmental (emissions), Economic (cost savings), and Social benefits."
+        },
+        {
+            "question": "What is the desired format for the final output?",
+            "answer": "A professional HTML report, also converted to PDF and emailed to me."
+        },
+        {
+            "question": "How deep should the research be?",
+            "answer": "Brief overview, high-level statistics, 5-10 credible sources."
+        },
+        {
+            "question": "Is there anything else you would like to add or clarify before I create the plan?",
+            "answer": "No, that covers it."
+        }
+    ]
+}

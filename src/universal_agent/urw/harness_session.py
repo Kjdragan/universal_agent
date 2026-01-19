@@ -113,6 +113,7 @@ class HarnessSessionManager:
         phase_title: str,
         phase_instructions: str,
         expected_artifacts: List[str],
+        tasks: List[Any],  # List[AtomicTask]
     ) -> str:
         """Build phase prompt with minimal context + perspective."""
         prior_paths = self.get_prior_session_paths()
@@ -124,14 +125,29 @@ class HarnessSessionManager:
 
 """
         
+        # Format atomic tasks
+        tasks_section = ""
+        if tasks:
+            tasks_section = "## Atomic Tasks to Execute\n"
+            for t in tasks:
+                tasks_section += f"- **{t.name}**: {t.description}\n"
+                if t.use_case:
+                    tasks_section += f"  - *Use Case/Review:* {t.use_case}\n"
+                if t.success_criteria:
+                    tasks_section += f"  - *Success Criteria:* {'; '.join(t.success_criteria)}\n"
+            tasks_section += "\n"
+
         artifacts_section = "\n".join(f"- {a}" for a in expected_artifacts)
         
         return f"""# Phase {phase_num} of {self._total_phases}: {phase_title}
 
 You are working through a larger multi-phase project. Your current phase is this one.
-Complete this phase excellently so the system can continue to subsequent phases.
+Complete this phase by executing the atomic tasks below.
 
-{prior_section}## Your Task
+{prior_section}
+{tasks_section}
+
+## Phase Instructions
 {phase_instructions}
 
 ## Expected Outputs

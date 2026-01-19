@@ -89,6 +89,8 @@ def build_harness_context_injection(
     phase_instructions: str,
     prior_session_paths: list[str],
     expected_artifacts: list[str],
+    tasks: Optional[list[Any]] = None,
+    current_session_path: Optional[str] = None,
 ) -> str:
     """
     Build the context injection for a new phase.
@@ -97,6 +99,7 @@ def build_harness_context_injection(
     - Give perspective that this is part of a larger project
     - Reference prior sessions (paths only, not content)
     - Focus on the current phase task
+    - Provide explicit workspace path for file operations
     
     Args:
         phase_num: Current phase number (1-indexed)
@@ -105,6 +108,8 @@ def build_harness_context_injection(
         phase_instructions: Detailed instructions for this phase
         prior_session_paths: List of paths to prior session directories
         expected_artifacts: List of expected output artifacts
+        tasks: Optional list of AtomicTask objects
+        current_session_path: Absolute path to the current phase session directory
         
     Returns:
         Formatted prompt string ready to be fed to the multi-agent system
@@ -118,14 +123,37 @@ def build_harness_context_injection(
 
 """
     
+    # Format atomic tasks
+    tasks_section = ""
+    if tasks:
+        tasks_section = "## Atomic Tasks to Execute\n"
+        for t in tasks:
+            tasks_section += f"- **{t.name}**: {t.description}\n"
+            if t.use_case:
+                tasks_section += f"  - *Use Case/Review:* {t.use_case}\n"
+            if t.success_criteria:
+                tasks_section += f"  - *Success Criteria:* {'; '.join(t.success_criteria)}\n"
+        tasks_section += "\n"
+    
     artifacts_section = "\n".join(f"- {a}" for a in expected_artifacts) if expected_artifacts else "- Complete the phase successfully"
     
+    config_section = ""
+    if current_session_path:
+        config_section = f"""
+## Configuration
+**CURRENT WORKSPACE**: `{current_session_path}`
+IMPORTANT: You MUST use absolute paths starting with this workspace for all file operations (reading, writing, researching).
+"""
+
     return f"""# Phase {phase_num} of {total_phases}: {phase_title}
 
 You are working through a larger multi-phase project. Your current phase is this one.
-Complete this phase excellently so the system can continue to subsequent phases.
+Complete this phase by executing the atomic tasks below.
+{config_section}
+{prior_section}
+{tasks_section}
 
-{prior_section}## Your Task
+## Phase Instructions
 {phase_instructions}
 
 ## Expected Outputs

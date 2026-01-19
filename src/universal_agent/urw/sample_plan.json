@@ -1,0 +1,82 @@
+{
+    "id": "sample-debug-plan-001",
+    "name": "Solar Energy Benefits Report",
+    "description": "A brief report about solar energy benefits",
+    "status": "pending",
+    "massive_request": "Write a brief report about solar energy benefits",
+    "harness_id": "debug_test",
+    "created_at": "2026-01-18T17:45:00Z",
+    "interview_data": {
+        "purpose": "General educational article",
+        "audience": "General public",
+        "format": "PDF report with executive summary"
+    },
+    "phases": [
+        {
+            "order": 0,
+            "name": "Research Phase",
+            "prompt": "Research solar energy benefits: environmental, economic, and social. Find 5-10 credible sources. Save findings to research_notes.md in your workspace.",
+            "session_path": null,
+            "tasks": [
+                {
+                    "name": "Web Research",
+                    "description": "Search for recent information about solar energy benefits (environmental, economic, social)",
+                    "status": "pending",
+                    "priority": "high",
+                    "estimated_duration": "10 minutes",
+                    "context": {
+                        "use_case": "Find credible sources on solar energy",
+                        "success_criteria": "At least 5 high-quality sources identified",
+                        "output_artifacts": [
+                            "research_notes.md"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "order": 1,
+            "name": "Report Writing Phase",
+            "prompt": "Based on research_notes.md, write a brief HTML report about solar energy benefits. Include: executive summary, environmental benefits, economic benefits, conclusion. Save as solar_report.html.",
+            "session_path": null,
+            "tasks": [
+                {
+                    "name": "Write Report",
+                    "description": "Generate professional HTML report from research findings",
+                    "status": "pending",
+                    "priority": "high",
+                    "estimated_duration": "15 minutes",
+                    "context": {
+                        "use_case": "Create comprehensive report",
+                        "success_criteria": "Complete HTML report with all sections",
+                        "output_artifacts": [
+                            "solar_report.html"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "order": 2,
+            "name": "Delivery Phase",
+            "prompt": "Convert solar_report.html to PDF and email to user at their registered email address.",
+            "session_path": null,
+            "tasks": [
+                {
+                    "name": "Convert and Email",
+                    "description": "Convert report to PDF and email to user",
+                    "status": "pending",
+                    "priority": "medium",
+                    "estimated_duration": "5 minutes",
+                    "context": {
+                        "use_case": "Deliver final report",
+                        "success_criteria": "PDF sent via email",
+                        "output_artifacts": [
+                            "solar_report.pdf"
+                        ]
+                    }
+                }
+            ]
+        }
+    ]
+}
