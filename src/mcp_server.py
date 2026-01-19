@@ -732,7 +732,7 @@ def read_research_files(file_paths: list[str]) -> str:
 
 @mcp.tool()
 @trace_tool_output
-def draft_report_parallel() -> str:
+def draft_report_parallel(retry_id: str = "") -> str:
     """
     Execute the Python-based parallel drafting system to generate report sections concurrently.
     
@@ -743,6 +743,9 @@ def draft_report_parallel() -> str:
     4. Saves output to `work_products/_working/sections/*.md`
     
     Use this immediately after creating the outline.
+    
+    Args:
+        retry_id: Optional string (e.g., timestamp) to force re-execution if previous call failed/was blocked.
     """
     import subprocess
     
@@ -1998,14 +2001,19 @@ async def finalize_research(
             logger.info("Topic filter enabled but no topic terms found.")
 
         # 3. Execute Crawl (Saves to Global Cache in search_results/)
+        # 3. Execute Crawl (Saves to Global Cache in search_results/)
         sys.stderr.write(
-            f"[finalize] Found {len(url_list)} unique URLs from {scanned_files} files "
-            f"({len(filtered_urls)} after blacklist). Starting crawl...\\n"
+            f"[finalize] ⏳ Found {len(url_list)} unique URLs from {scanned_files} files "
+            f"({len(filtered_urls)} after blacklist). Starting crawl (this may take 30-60s)...\n"
         )
 
         # Call Core Logic
         crawl_result_json = await _crawl_core(filtered_urls, session_dir)
         crawl_result = json.loads(crawl_result_json)
+        
+        sys.stderr.write(
+            f"[finalize] ✅ Crawl complete. Successful: {crawl_result.get('successful', 0)}, Failed: {crawl_result.get('failed', 0)}. Processing filtering...\n"
+        )
 
         # 4. Build Filtered Corpus (SCOPED to Task Directory)
         # Instead of search_results_filtered_best, we put cleaned files in tasks/{task_name}/filtered_corpus
@@ -2205,7 +2213,7 @@ async def finalize_research(
                 from pathlib import Path
                 
                 sys.stderr.write(
-                    f"[finalize] Running corpus refinement ({len(filtered_files)} files, mode=expanded)...\n"
+                    f"[finalize] ⏳ Running corpus refinement ({len(filtered_files)} files, mode=expanded). This leverages LLMs and may take ~1-2 minutes...\n"
                 )
                 
                 refiner_metrics = await refine_corpus_programmatic(

@@ -867,15 +867,57 @@ class UniversalAgent:
             user_id=self.user_id, toolkits={"disable": ["firecrawl", "exa"]}
         )
 
-        # Build system prompt
-        import sys
-
+        # Define sub-agents first so we can reference them in system prompt
         abs_workspace = os.path.abspath(self.workspace_dir)
+        
+        self.sub_agents = {
+            "report-writer": AgentDefinition(
+                description=(
+                    "Specialist for creating professional HTML reports from research. "
+                    "Use when task involves: report, summary, comprehensive output, detailed analysis, html generation."
+                ),
+                prompt=self._build_report_writer_prompt(abs_workspace),
+                tools=[
+                    "Read",
+                    "Write",
+                    "Bash",
+                    "mcp__local_toolkit__finalize_research",
+                    "mcp__local_toolkit__list_directory",
+                    "mcp__local_toolkit__append_to_file",
+                    "mcp__local_toolkit__generate_image",
+                    "mcp__local_toolkit__workbench_download",
+                    "mcp__local_toolkit__workbench_upload",
+                    "mcp__local_toolkit__draft_report_parallel",
+                    "mcp__local_toolkit__compile_report",
+                ],
+                model="inherit",
+            ),
+             "research-specialist": AgentDefinition(
+                description=(
+                    "Specialist for deep web research and data gathering. "
+                    "Use when task involves: finding information, searching web, gathering data, investigating topics."
+                ),
+                prompt=self._build_research_specialist_prompt(abs_workspace),
+                tools=[
+                    "Read",
+                    "Write",
+                    "Bash",
+                    "mcp__local_toolkit__finalize_research",
+                    "mcp__composio__COMPOSIO_SEARCH_WEB", 
+                    "mcp__composio__COMPOSIO_SEARCH_NEWS",
+                    "mcp__local_toolkit__crawl_parallel",
+                ],
+                 model="inherit",
+            ),
+        }
+
+        # Build system prompt with dynamic agent awareness
+        import sys
         
         # Set workspace in environment so MCP server subprocess can access it
         os.environ["CURRENT_SESSION_WORKSPACE"] = abs_workspace
         
-        system_prompt = self._build_system_prompt(abs_workspace)
+        system_prompt = self._build_system_prompt(abs_workspace, agents=self.sub_agents)
 
         self.options = ClaudeAgentOptions(
             system_prompt=system_prompt,
@@ -900,31 +942,7 @@ class UniversalAgent:
                 },
             },
             # Note: No allowed_tools restriction - main agent can use any tool for flexibility
-            agents={
-                "report-creation-expert": AgentDefinition(
-                    description=(
-                        "MANDATORY SUB-AGENT for ALL research and report tasks. "
-                        "ALWAYS delegate when user requests: report, analysis, research, summary, comprehensive, detailed. "
-                        "This sub-agent extracts content from URLs, creates professional HTML reports, and saves to work_products/. "
-                        "DO NOT handle reports yourself - delegate here."
-                    ),
-                    prompt=self._build_subagent_prompt(abs_workspace),
-                    tools=[
-                        "Read",
-                        "Write",
-                        "Bash",
-                        "mcp__local_toolkit__finalize_research",
-                        "mcp__local_toolkit__list_directory",
-                        "mcp__local_toolkit__append_to_file",
-                        "mcp__local_toolkit__generate_image",
-                        "mcp__local_toolkit__workbench_download",
-                        "mcp__local_toolkit__workbench_upload",
-                        "mcp__local_toolkit__draft_report_parallel",
-                        "mcp__local_toolkit__compile_report",
-                    ],
-                    model="inherit",
-                ),
-            },
+            agents=self.sub_agents,
             hooks={
                 "PreToolUse": [
                     HookMatcher(matcher="*", hooks=[malformed_tool_guardrail_hook]),
@@ -968,8 +986,17 @@ class UniversalAgent:
         if LOGFIRE_TOKEN:
             logfire.set_baggage(run_id=self.run_id)
 
-    def _build_system_prompt(self, workspace_path: str) -> str:
+    def _build_system_prompt(self, workspace_path: str, agents: Optional[dict] = None) -> str:
         """Build the main system prompt."""
+        
+        # Dynamic Agent List
+        available_agents_block = ""
+        if agents:
+            available_agents_block = "## AVAILABLE SPECIALISTS (SUB-AGENTS)\n"
+            available_agents_block += "You have access to the following specialized sub-agents via the `Task` tool. DELEGATE work to them whenever a task matches their capabilities.\n\n"
+            for name, definition in agents.items():
+                available_agents_block += f"- **{name}**: {definition.description}\n"
+                available_agents_block += f"  -> To use: Call `Task(subagent_type='{name}', ...)`\n\n"
         prompt = (
             f"The current date is: {datetime.now().strftime('%A, %B %d, %Y')}\n"
             "You are a helpful assistant with access to external tools and specialized sub-agents.\n\n"
@@ -993,29 +1020,23 @@ class UniversalAgent:
             "- Use `TodoWrite` ONLY for updating your PLAN (mission.json).\n"
             "- Use `Write` ONLY for creating FILE CONTENT (reports, code, etc.).\n"
             "- DO NOT confuse them. Sending content to TodoWrite will fail. Sending todos to Write will fail.\n\n"
-            "## CRITICAL DELEGATION RULES (ABSOLUTE)\n\n"
-            "You are a COORDINATOR Agent. Your job is to assess requests and DELEGATE to specialists.\n"
-            "**Rule #1:** For ANY request involving 'report', 'research', 'analysis', or 'detailed summary':\n"
-            "   -> **STEP 1:** Delegate to `research-specialist` (Task tool) IMMEDIATELY.\n"
-            "      PROMPT: 'Research [topic]: execute searches, crawl sources, finalize corpus.'\n"
-            "      (Research-specialist handles the ENTIRE research pipeline: search → crawl → filter → overview)\n"
-            "   -> **STEP 2:** When Step 1 completes, delegate to `report-writer` (Task tool).\n"
-            "      PROMPT: 'Write the full HTML report using refined_corpus.md.'\n"
-            "   -> 🛑 **PROHIBITED:** Do NOT perform web searches yourself. Delegate immediately.\n"
-            "   -> 🛑 **PROHIBITED:** Do NOT write the report yourself.\n\n"
-            "For SIMPLE factual queries (e.g., 'who won the game?', 'weather in Paris'):\n"
-            "   -> Use search tools and answer directly.\n\n"
-            "DO NOT attempt to create FULL HTML reports yourself. If a full report is needed, delegate.\n"
-            "**Delegation Prompts:**\n"
-            "   - `research-specialist` -> 'Research [topic]: execute searches, crawl sources, finalize corpus.'\n"
-            "   - `report-writer` -> 'Write the full HTML report using refined_corpus.md.'\n\n"
+            "You are a COORDINATOR Agent. Your job is to assess requests and DELEGATE to specialists.\n\n"
+            f"{available_agents_block}"
+            "## DELEGATION STRATEGY\n"
+            "1. **Analyze the Request**: Identify key tasks (e.g., 'Research', 'Write Report', 'Codegen').\n"
+            "2. **Match with Specialist**: Check the AVAILABLE SPECIALISTS list above.\n"
+            "3. **Delegate**: Use the `Task` tool with `subagent_type='[specialist_name]'`.\n"
+            "   - Example: For a reporting task, found 'report-writer'? Delegate to it.\n"
+            "   - Example: For a research task, found 'research-specialist'? Delegate to it.\n"
+            "4. **No Match?**: Only then perform the task yourself using available tools.\n\n"
+            "🛑 **PROHIBITED:** Do NOT attempt to do work yourself if a specialist exists. CONSTANTLY DELEGATE.\n"
+            "**Key Requirement:** When calling `Task`, you **MUST** provide `subagent_type` matching the specialist name exactly.\n\n"
             "## EMAIL REQUIREMENTS\n\n"
             "When sending reports via email:\n"
-            "1. Delegate to `research-specialist` (gather data)\n"
-            "2. Delegate to `report-writer` (create HTML)\n"
-            "3. Use GMAIL_SEND_EMAIL_WITH_ATTACHMENT to ATTACH the HTML file\n"
-            "4. Do NOT inject full HTML into the email body - attach it instead\n"
-            "5. Email body should be a brief summary (1-2 paragraphs) + 'See attached report'\n\n"
+            "1. Delegate to research/report specialists first to generate the file\n"
+            "2. Use GMAIL_SEND_EMAIL_WITH_ATTACHMENT to ATTACH the HTML file\n"
+            "3. Do NOT inject full HTML into the email body - attach it instead\n"
+            "4. Email body should be a brief summary (1-2 paragraphs) + 'See attached report'\n\n"
             "## EXECUTION GUIDELINES\n"
             "- When the user requests an action, proceed immediately without asking for confirmation.\n"
             "- Complete the full task end-to-end in a single workflow.\n"
