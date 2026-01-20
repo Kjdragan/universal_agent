@@ -9,14 +9,36 @@ Ensure your `.env` has a valid token:
 LOGFIRE_TOKEN=your_token_here
 ```
 
-### What You Will See
-1.  **Spans**:
-    *   `UniversalAgent.run`: The top-level session.
-    *   `ClaudeSDKClient.create_message`: The raw API call to Anthropic.
-    *   `ToolExecution`: The specific function call (e.g., `subprocess.run`).
-2.  **Attributes**:
-    *   `input_tokens` / `output_tokens`: Cost tracking.
-    *   `tool_name`: Which tool was called.
+### Essential Logfire Queries (SQL)
+To debug effectively, use these SQL patterns in the Logfire UI:
+
+**1. Find a Run by ID:**
+```sql
+SELECT * FROM records 
+WHERE run_id = 'YOUR_RUN_ID' 
+ORDER BY start_timestamp ASC
+```
+
+**2. See All Tool Calls (Filtered):**
+```sql
+SELECT span_name, attributes->>'tool_name' as tool, message 
+FROM records 
+WHERE trace_id = 'YOUR_TRACE_ID' 
+  AND (span_name = 'ToolExecution' OR attributes ? 'tool_name')
+ORDER BY start_timestamp ASC
+```
+
+**3. Debug Context Exhaustion (Empty Writes):**
+```sql
+SELECT * FROM records 
+WHERE message LIKE '%zero-param Write%' 
+   OR attributes->>'tool_name' = 'Write'
+```
+
+### Visibility Gaps & Troubleshooting
+*   **Missing Tool Names?** Ensure `logfire.instrument_mcp()` is active.
+*   **Scrubbed Data?** Logfire automatically scrubs fields that look like auth tokens. If your tool input JSON contains keys like `password` or `Authorization`, the values will be hidden.
+*   **Orphaned Traces?** Sub-agents running in their own process (like Agent College) have their own Trace IDs. Look for `system_link` attributes to find the parent.
 
 ## Common Issues & Fixes
 
