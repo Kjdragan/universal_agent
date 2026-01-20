@@ -53,59 +53,67 @@ def compile_report(work_dir, theme_name="modern", custom_css=None):
         return [int(text) if text.isdigit() else text.lower() 
                 for text in re.split(r'(\d+)', path.name)]
 
-    if outline_path.exists():
-        import json
-        try:
-            print(f"Loading outline from {outline_path}")
-            data = json.loads(outline_path.read_text())
-            
-            # --- STRICT ORDERING ALGORITHM ---
-            # We strictly respect the order in outline.json.
-            # For each section ID, we look for a matching file in sections_dir
-            # Strategies:
-            # 1. Exact Name: {id}.md
-            # 2. Numbered Prefix: {NN}_{id}.md (e.g. 01_executive_summary.md)
-            # 3. Fuzzy ID match: *{id}*.md (fallback)
+    try:
+        if not sections_dir.exists():
+            sys.stderr.write(f"Error: Sections directory not found at {sections_dir}\n")
+            sys.exit(1)
 
-            processed_sections = set()
-            available_files = {f.name: f for f in sections_dir.glob("*.md")}
+        available_files = {f.name: f for f in sections_dir.glob("*.md")}
+        if not available_files:
+            sys.stderr.write(f"Error: No .md files found in {sections_dir}\n")
+            sys.exit(1)
             
-            for section in data.get("sections", []):
-                sec_id = section.get("id")
-                processed_sections.add(sec_id)
+        print(f"DEBUG: Found {len(available_files)} files in {sections_dir}")
+        for f in available_files:
+            print(f" - {f}")
+
+        if outline_path.exists():
+            import json
+            try:
+                print(f"Loading outline from {outline_path}")
+                data = json.loads(outline_path.read_text())
                 
-                # Check 1: Exact
-                fname_exact = f"{sec_id}.md"
-                if fname_exact in available_files:
-                    md_files.append(available_files[fname_exact])
-                    print(f"  [+] Added {sec_id} (Exact: {fname_exact})")
-                    continue
+                # --- STRICT ORDERING ALGORITHM ---
+                processed_sections = set()
                 
-                # Check 2: Numbered Prefix (Most likely due to parallel_draft.py)
-                # We look for files ending with _{sec_id}.md
-                match = None
-                for fname, fpath in available_files.items():
-                    # Check for pattern like "01_executive_summary.md"
-                    if fname.endswith(f"_{sec_id}.md"):
-                        match = fpath
-                        break
-                
-                if match:
-                    md_files.append(match)
-                    print(f"  [+] Added {sec_id} (Prefix: {match.name})")
-                    continue
+                for section in data.get("sections", []):
+                    sec_id = section.get("id")
+                    processed_sections.add(sec_id)
                     
-                print(f"  [!] Warning: Section file for '{sec_id}' not found.")
-            
-        except Exception as e:
-            print(f"Error reading outline: {e}. Falling back to natural sort.")
+                    # Check 1: Exact
+                    fname_exact = f"{sec_id}.md"
+                    if fname_exact in available_files:
+                        md_files.append(available_files[fname_exact])
+                        print(f"  [+] Added {sec_id} (Exact: {fname_exact})")
+                        continue
+                    
+                    # Check 2: Numbered Prefix
+                    match = None
+                    for fname, fpath in available_files.items():
+                        if fname.endswith(f"_{sec_id}.md"):
+                            match = fpath
+                            break
+                    
+                    if match:
+                        md_files.append(match)
+                        print(f"  [+] Added {sec_id} (Prefix: {match.name})")
+                        continue
+                        
+                    sys.stderr.write(f"  [!] Warning: Section file for '{sec_id}' not found in {list(available_files.keys())}.\n")
+                
+            except Exception as e:
+                sys.stderr.write(f"Error reading outline: {e}. Falling back to natural sort.\n")
+                md_files = sorted(sections_dir.glob("*.md"), key=natural_sort_key)
+        else:
+            print("No outline found. Using natural filename sort.")
             md_files = sorted(sections_dir.glob("*.md"), key=natural_sort_key)
-    else:
-        print("No outline found. Using natural filename sort.")
-        md_files = sorted(sections_dir.glob("*.md"), key=natural_sort_key)
 
-    if not md_files:
-        print("Error: No section files found.")
+        if not md_files:
+            sys.stderr.write("Error: No section files matched outline or glob.\n")
+            sys.exit(1)
+
+    except Exception as e:
+        sys.stderr.write(f"Critical Error in compile_report: {e}\n")
         sys.exit(1)
         
     full_md = ""

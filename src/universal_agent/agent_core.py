@@ -997,8 +997,9 @@ class UniversalAgent:
             for name, definition in agents.items():
                 available_agents_block += f"- **{name}**: {definition.description}\n"
                 available_agents_block += f"  -> To use: Call `Task(subagent_type='{name}', ...)`\n\n"
+        temporal_line = self._get_temporal_context_line()
         prompt = (
-            f"The current date is: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+            f"{temporal_line}\n"
             "You are a helpful assistant with access to external tools and specialized sub-agents.\n\n"
             "## ARCHITECTURE (HOW YOU INTERACT WITH TOOLS)\n"
             "🏗️ **You are an MCP-based agent.** You interact with external tools via MCP tool calls, "
@@ -1034,9 +1035,8 @@ class UniversalAgent:
             "## EMAIL REQUIREMENTS\n\n"
             "When sending reports via email:\n"
             "1. Delegate to research/report specialists first to generate the file\n"
-            "2. Use GMAIL_SEND_EMAIL_WITH_ATTACHMENT to ATTACH the HTML file\n"
-            "3. Do NOT inject full HTML into the email body - attach it instead\n"
-            "4. Email body should be a brief summary (1-2 paragraphs) + 'See attached report'\n\n"
+            "2. Attach only the files requested in the task (do not embed full HTML in the body)\n"
+            "3. Email body should be a brief summary (1-2 paragraphs) + 'See attached report'\n\n"
             "## EXECUTION GUIDELINES\n"
             "- When the user requests an action, proceed immediately without asking for confirmation.\n"
             "- Complete the full task end-to-end in a single workflow.\n"
@@ -1049,14 +1049,32 @@ class UniversalAgent:
             prompt += f"\n\n{tool_knowledge}"
         return prompt
 
+    def _get_temporal_context_line(self) -> str:
+        tz_name = os.getenv("USER_TIMEZONE", "America/Chicago")
+        try:
+            import pytz
+
+            now = datetime.now(pytz.timezone(tz_name))
+            tz_label = now.tzname() or tz_name
+        except Exception:
+            now = datetime.now()
+            tz_label = tz_name
+
+        return (
+            "Current date/time: "
+            f"{now.strftime('%A, %B %d, %Y %H:%M')} ({tz_label}). "
+            "Use this as the authoritative current date; do not treat post-training dates as hallucinations if sourced."
+        )
+
     def _build_subagent_prompt(self, workspace_path: str) -> str:
         """Backward-compatible subagent prompt builder."""
         return self._build_report_writer_prompt(workspace_path)
 
     def _build_research_specialist_prompt(self, workspace_path: str) -> str:
         """Build the research-specialist sub-agent prompt with full search pipeline."""
+        temporal_line = self._get_temporal_context_line()
         prompt = (
-            f"Result Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+            f"{temporal_line}\n"
             f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n\n"
             "You are a **Research Specialist** sub-agent.\n"
             "**Goal:** Execute the COMPLETE research pipeline from web search to corpus finalization.\n"
@@ -1113,8 +1131,9 @@ class UniversalAgent:
             workspace_path: Path to the session workspace
             cached_corpus: Optional pre-loaded corpus text from checkpoint cache
         """
+        temporal_line = self._get_temporal_context_line()
         prompt = (
-            f"**Report Date:** {datetime.now().strftime('%A, %B %d, %Y')}\n"
+            f"{temporal_line}\n"
             f"**Workspace:** `{workspace_path}`\n\n"
             "---\n\n"
             "# 📝 REPORT WRITER AGENT\n\n"
@@ -1156,8 +1175,9 @@ class UniversalAgent:
             "mcp__local_toolkit__draft_report_parallel()\n"
             "```\n"
             "- Tool reads outline.json and generates all sections in parallel\n"
-            "- Sections saved to `work_products/_working/sections/`\n"
-            "- ⚠️ **Do NOT write sections manually** - the tool handles this\n\n"
+            "- Sections saved to `work_products/_working/sections/` with correct ordering prefixes\n"
+            "- 🛑 **STRICT PROHIBITION**: You are FORBIDDEN from using the `Write` tool for report sections.\n"
+            "- You MUST use only `draft_report_parallel` for drafting. Manual writing leads to incorrect ordering.\n\n"
             "### Phase 3: CLEANUP\n"
             "After sections are generated, call:\n"
             "```\n"

@@ -411,42 +411,106 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         if feedback:
             phase_prompt += f"\n\n# ⚠️ CRITICAL FEEDBACK FROM PREVIOUS ATTEMPT\n{feedback}\nYou must address these issues in this attempt."
         
-        # 4. Execute via multi-agent system
-        try:
-            result = await process_turn(
-                client,
-                phase_prompt,
-                session_path,
-            )
+        # 4. Execution Loop (Initial + Repairs)
+        max_repairs = 3
+        current_prompt = phase_prompt
+        
+        for attempt in range(max_repairs + 1):
+            is_repair = attempt > 0
+            if is_repair:
+                self._log(f"🔧 Starting In-Session Repair Attempt {attempt}/{max_repairs}")
             
-            # 5. Evaluate (simplified - just check for artifacts in session)
-            artifacts = self._scan_session_artifacts(session_path)
-            success = len(artifacts) > 0 or result is not None
+            try:
+                # Execute Turn
+                result = await process_turn(
+                    client,
+                    current_prompt,
+                    session_path,
+                )
+                
+                # Capture output
+                agent_output = ""
+                if hasattr(result, "response_text"):
+                    agent_output = result.response_text or ""
+                elif isinstance(result, dict):
+                    agent_output = str(result.get("response_text") or "")
 
-            agent_output = ""
-            if hasattr(result, "response_text"):
-                agent_output = result.response_text or ""
-            elif isinstance(result, dict):
-                agent_output = str(result.get("response_text") or "")
-            
-            return PhaseResult(
-                phase_id=str(phase.id),
-                phase_name=phase.name,
-                success=success,
-                session_path=session_path,
-                artifacts_produced=artifacts,
-                agent_output=agent_output,
-            )
-            
-        except Exception as e:
-            self._log(f"Phase execution error: {e}")
-            return PhaseResult(
-                phase_id=str(phase.id),
-                phase_name=phase.name,
-                success=False,
-                session_path=session_path,
-                error=str(e),
-            )
+                # Internal Verification
+                artifacts_list = self._scan_session_artifacts(session_path)
+                
+                # Check for "soft" success (files exist)
+                has_artifacts = len(artifacts_list) > 0
+                
+                # Run Proper Evaluation
+                self._log(f"running internal verification for attempt {attempt}...")
+                eval_result = await self._evaluate_phase(
+                    phase,
+                    session_path,
+                    client,
+                    artifacts_list,
+                    agent_output
+                )
+                
+                if eval_result.is_complete:
+                    self._log("✅ Internal Verification Passed.")
+                    return PhaseResult(
+                        phase_id=str(phase.id),
+                        phase_name=phase.name,
+                        success=True,
+                        session_path=session_path,
+                        artifacts_produced=artifacts_list,
+                        agent_output=agent_output,
+                        evaluation_notes=f"Passed on attempt {attempt}"
+                    )
+                
+                # If Failed: Prepare Repair Prompt
+                if attempt < max_repairs:
+                    missing = "\n".join([f"- {m}" for m in eval_result.missing_elements])
+                    current_prompt = (
+                        f"User: 🛑 Verification Failed.\n\n"
+                        f"The System verification found the following missing elements:\n{missing}\n\n"
+                        f"SUGGESTIONS:\n{chr(10).join([f'- {s}' for s in eval_result.suggested_actions])}\n\n"
+                        f"INSTRUCTIONS:\n"
+                        f"1. Review the feedback above.\n"
+                        f"2. Fix the issues in the artifacts.\n"
+                        f"3. When done, call notify_user again."
+                    )
+                    self._log(f"❌ Verification Failed. Triggering repair loop.")
+                    continue
+                
+                # If max attempts reached, return failure
+                self._log("❌ Max in-session repairs reached. Returning failure.")
+                return PhaseResult(
+                    phase_id=str(phase.id),
+                    phase_name=phase.name,
+                    success=False,
+                    session_path=session_path,
+                    artifacts_produced=artifacts_list,
+                    error=f"Failed after {attempt} repairs. Missing: {eval_result.missing_elements}",
+                    agent_output=agent_output,
+                )
+
+            except Exception as e:
+                self._log(f"Phase execution error on attempt {attempt}: {e}")
+                # If critical error, we might stop or try to repair?
+                # For now, treat exception as fatal for this attempt, but maybe retry?
+                # safest is to return failure and let outer loop handle 'crash' retries
+                return PhaseResult(
+                    phase_id=str(phase.id),
+                    phase_name=phase.name,
+                    success=False,
+                    session_path=session_path,
+                    error=str(e),
+                )
+        
+        # Fallback (should be unreachable due to return in loop)
+        return PhaseResult(
+            phase_id=str(phase.id),
+            phase_name=phase.name,
+            success=False,
+            session_path=session_path,
+            error="Loop exhausted",
+        )
     
     def _scan_session_artifacts(self, session_path: str) -> List[str]:
         """Scan session directory for produced artifacts."""
@@ -599,7 +663,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
             parts.append("AGENT OUTPUT:\n" + agent_output)
 
         combined = "\n\n".join([p for p in parts if p])
-        return combined[:4000]
+        return combined[:35000]
 
     def _build_html_headings(self, session_path: str, artifacts: List[Artifact]) -> str:
         session_root = Path(session_path)
@@ -676,8 +740,8 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         self,
         session_path: str,
         artifacts: List[Artifact],
-        max_total_chars: int = 2500,
-        per_file_chars: int = 800,
+        max_total_chars: int = 30000,
+        per_file_chars: int = 5000,
     ) -> str:
         if not artifacts:
             return ""

@@ -137,12 +137,24 @@ def build_harness_context_injection(
     
     artifacts_section = "\n".join(f"- {a}" for a in expected_artifacts) if expected_artifacts else "- Complete the phase successfully"
     
+    tz_name = os.getenv("USER_TIMEZONE", "America/Chicago")
+    try:
+        import pytz
+
+        now = datetime.now(pytz.timezone(tz_name))
+        tz_label = now.tzname() or tz_name
+    except Exception:
+        now = datetime.now()
+        tz_label = tz_name
+
     config_section = ""
     if current_session_path:
         config_section = f"""
 ## Configuration
 **CURRENT WORKSPACE**: `{current_session_path}`
+**CURRENT DATE/TIME**: {now.strftime('%A, %B %d, %Y %H:%M')} ({tz_label})
 IMPORTANT: You MUST use absolute paths starting with this workspace for all file operations (reading, writing, researching).
+Use the current date/time above as authoritative; do not treat post-training dates as hallucinations if sourced.
 """
 
     return f"""# Phase {phase_num} of {total_phases}: {phase_title}

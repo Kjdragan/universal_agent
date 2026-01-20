@@ -143,9 +143,8 @@ def _resolve_workspace(preferred: str | None = None) -> str | None:
     candidates = []
     if preferred:
         candidates.append(preferred)
-    env_workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
-    if env_workspace:
-        candidates.append(env_workspace)
+        
+    # Priority 2: Marker File (Dynamic, updated by harness)
     marker_path = os.getenv("CURRENT_SESSION_WORKSPACE_FILE") or os.path.join(
         PROJECT_ROOT, "AGENT_RUN_WORKSPACES", ".current_session_workspace"
     )
@@ -154,6 +153,11 @@ def _resolve_workspace(preferred: str | None = None) -> str | None:
             candidates.append(Path(marker_path).read_text().strip())
         except Exception:
             pass
+
+    # Priority 3: Env Var (Static, often stale in long-running processes)
+    env_workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+    if env_workspace:
+        candidates.append(env_workspace)
 
     for candidate in candidates:
         if not candidate:
@@ -865,7 +869,7 @@ def compile_report(theme: str = "modern", custom_css: str = None) -> str:
         if result.returncode == 0:
             return f"✅ Report Compiled Successfully.\nPath: {workspace}/work_products/report.html"
         else:
-            return f"❌ Compilation Failed:\n{result.stderr}"
+            return f"❌ Compilation Failed:\n{result.stderr}\n\nOutput:\n{result.stdout}"
             
     except Exception as e:
         return f"Error executing compile script: {str(e)}"
