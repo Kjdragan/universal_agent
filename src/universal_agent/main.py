@@ -2066,6 +2066,7 @@ SUBAGENT_EXPECTED_SKILLS = {
     "report-creation-expert": ["pdf", "image-generation"],
     "image-expert": ["image-generation"],
     "video-creation-expert": [],  # Uses MCP tools, not skills
+    "browserbase": [],  # Uses Composio MCP tools, not skills
 }
 
 
@@ -6417,6 +6418,61 @@ async def setup_session(
                     "🚨 START IMMEDIATELY: Check if files exist, then process."
                     + tool_knowledge_suffix
                 ),
+                model="inherit",
+            ),
+            "browserbase": AgentDefinition(
+                description=(
+                    "Expert for browser automation using Browserbase cloud infrastructure. "
+                    "DELEGATE when user needs: 'scrape website', 'take screenshot', 'fill form', "
+                    "'interact with web page', 'test website', 'automate browser'. "
+                    "Uses headless Chrome in the cloud for reliable automation."
+                ),
+                prompt=(
+                    f"Current Date: {datetime.now().strftime('%A, %B %d, %Y')}\n"
+                    f"CURRENT_SESSION_WORKSPACE: {workspace_dir}\n\n"
+                    "You are a **Browser Automation Expert** using Browserbase cloud infrastructure.\n\n"
+                    "## AVAILABLE TOOLS\n\n"
+                    "**Session Management:**\n"
+                    "- `BROWSERBASE_CREATE_SESSION` - Create new browser session\n"
+                    "- `BROWSERBASE_GET_SESSION_DEBUG_URLS` - Get debug connection URLs\n"
+                    "- `BROWSERBASE_GET_SESSION_DOWNLOADS` - Get session artifacts\n\n"
+                    "**Page Interaction (Prefer for complex tasks):**\n"
+                    "- `BROWSER_TOOL_AI_AGENT_WEB_INTERACTIONS` - Autonomous multi-step browsing\n"
+                    "  - Max 50 steps per call; break complex tasks into multiple calls\n"
+                    "  - Best for: unknown selectors, dynamic content, visual workflows\n\n"
+                    "**Low-Level Actions (For precise control):**\n"
+                    "- `BROWSER_TOOL_MOUSE_CLICK` - Click by CSS selector\n"
+                    "- `BROWSER_TOOL_TYPE_TEXT` - Type into input fields\n"
+                    "- `BROWSER_TOOL_SCROLL` - Scroll page\n"
+                    "- `BROWSER_TOOL_TAKE_SCREENSHOT` - Capture page screenshot\n"
+                    "- `BROWSER_TOOL_GET_PAGE_CONTENT` - Get rendered HTML/text\n\n"
+                    "## WORKFLOW\n"
+                    "1. **Create session** if needed (for isolated context)\n"
+                    "2. **Use ai_agent_web_interactions** for complex multi-step tasks\n"
+                    "3. **Use low-level tools** for precise single actions\n"
+                    "4. **Take screenshot** to document results\n"
+                    "5. **Save artifacts** to work_products/browser/\n\n"
+                    "## PRO TIPS\n"
+                    "- AI agent tool handles navigation + interaction in one call\n"
+                    "- For forms: describe the task in plain English to ai_agent\n"
+                    "- Screenshots auto-save as base64; decode and save to file\n"
+                    "- Use `get_page_content` to extract text for processing\n\n"
+                    f"OUTPUT DIRECTORY: {workspace_dir}/work_products/browser/"
+                    + tool_knowledge_suffix
+                ),
+                tools=[
+                    "mcp__composio__BROWSERBASE_CREATE_SESSION",
+                    "mcp__composio__BROWSERBASE_GET_SESSION_DEBUG_URLS",
+                    "mcp__composio__BROWSERBASE_GET_SESSION_DOWNLOADS",
+                    "mcp__composio__BROWSER_TOOL_AI_AGENT_WEB_INTERACTIONS",
+                    "mcp__composio__BROWSER_TOOL_MOUSE_CLICK",
+                    "mcp__composio__BROWSER_TOOL_TYPE_TEXT",
+                    "mcp__composio__BROWSER_TOOL_SCROLL",
+                    "mcp__composio__BROWSER_TOOL_TAKE_SCREENSHOT",
+                    "mcp__composio__BROWSER_TOOL_GET_PAGE_CONTENT",
+                    "Write",
+                    "Bash",
+                ],
                 model="inherit",
             ),
         },
