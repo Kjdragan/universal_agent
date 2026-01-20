@@ -100,7 +100,7 @@ DEFAULT_EVALUATION_POLICY: Dict[str, Any] = {
     "require_qualitative": None,
     
     # Default minimum scores
-    "qualitative_min_score": 0.6,
+    "qualitative_min_score": 0.65,
     "overall_min_score": None,  # Disabled by default
     
     # Pass ratios (reserved for future)
@@ -125,7 +125,7 @@ VERIFICATION_TYPE_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "require_binary": False,
         "require_constraints": False,
         "require_qualitative": True,
-        "qualitative_min_score": 0.6,
+        "qualitative_min_score": 0.65,
     },
     "composite": {
         # Auto-detect from task definition
@@ -143,7 +143,7 @@ VERIFICATION_TYPE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 TEMPLATE_EVALUATION_POLICIES: Dict[str, Dict[str, Any]] = {
     "research_report": {
         # Research is exploratory - be lenient on qualitative
-        "qualitative_min_score": 0.55,
+        "qualitative_min_score": 0.65,
         "require_qualitative": True,
     },
     "email_outreach": {
@@ -153,7 +153,7 @@ TEMPLATE_EVALUATION_POLICIES: Dict[str, Dict[str, Any]] = {
     },
     "document_analysis": {
         # Analysis should be thorough
-        "qualitative_min_score": 0.6,
+        "qualitative_min_score": 0.65,
         "require_qualitative": True,
     },
     "data_processing": {
@@ -164,7 +164,7 @@ TEMPLATE_EVALUATION_POLICIES: Dict[str, Dict[str, Any]] = {
     },
     "content_creation": {
         # Content needs both structure and quality
-        "qualitative_min_score": 0.6,
+        "qualitative_min_score": 0.65,
         "require_qualitative": True,
     },
 }
@@ -176,12 +176,12 @@ TEMPLATE_EVALUATION_POLICIES: Dict[str, Dict[str, Any]] = {
 
 TASK_POLICY_OVERRIDES: Dict[str, Dict[str, Any]] = {
     # Research tasks that are exploratory
-    "scope": {"qualitative_min_score": 0.5},  # Early planning is flexible
+    "scope": {"qualitative_min_score": 0.65},  # Early planning is flexible
     "gather": {"require_qualitative": False},  # Gathering is more mechanical
     
     # Final output tasks need higher quality
     "report": {"qualitative_min_score": 0.65},
-    "output": {"qualitative_min_score": 0.6},
+    "output": {"qualitative_min_score": 0.65},
     
     # Side-effect tasks are binary
     "send": {"require_binary": True, "require_qualitative": False},
@@ -258,7 +258,7 @@ def resolve_evaluation_policy(
     
     # Ensure qualitative_min_score has a fallback
     if policy.get("qualitative_min_score") is None:
-        policy["qualitative_min_score"] = task.minimum_acceptable_score or 0.6
+        policy["qualitative_min_score"] = task.minimum_acceptable_score or 0.65
     
     return policy
 
@@ -272,7 +272,7 @@ def get_policy_summary(policy: Dict[str, Any]) -> str:
     if policy.get("require_constraints"):
         parts.append("constraints=required")
     if policy.get("require_qualitative"):
-        qual_min = policy.get("qualitative_min_score", 0.6)
+        qual_min = policy.get("qualitative_min_score", 0.65)
         parts.append(f"qualitative≥{qual_min:.0%}")
     if policy.get("overall_min_score"):
         parts.append(f"overall≥{policy['overall_min_score']:.0%}")

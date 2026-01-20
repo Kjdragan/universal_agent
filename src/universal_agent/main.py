@@ -1686,6 +1686,98 @@ async def on_post_research_finalized_cache(
     return {}
 
 
+async def on_post_email_send_artifact(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """PostToolUse Hook: persist Gmail send evidence to workspace artifacts."""
+    tool_name = context.get("tool_name", "") or input_data.get("tool_name", "")
+    tool_input = input_data.get("tool_input", {}) or {}
+    tool_response = input_data.get("tool_response") or input_data.get("tool_result")
+
+    if not OBSERVER_WORKSPACE_DIR:
+        return {}
+
+    def _load_json_payload(payload):
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            try:
+                return json.loads(payload)
+            except json.JSONDecodeError:
+                return None
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict) and "text" in item:
+                    try:
+                        return json.loads(item.get("text") or "")
+                    except json.JSONDecodeError:
+                        continue
+        return None
+
+    def _write_artifact(records):
+        if not records:
+            return
+        base_dir = os.path.join(
+            OBSERVER_WORKSPACE_DIR, "work_products", "email_verification"
+        )
+        os.makedirs(base_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_path = os.path.join(base_dir, f"email_send_{ts}.json")
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump({"emails": records}, f, indent=2)
+        except Exception:
+            return
+
+    records = []
+
+    if "COMPOSIO_MULTI_EXECUTE_TOOL" in tool_name:
+        tools = tool_input.get("tools") if isinstance(tool_input, dict) else None
+        payload = _load_json_payload(tool_response)
+        results = []
+        if isinstance(payload, dict):
+            results = payload.get("data", {}).get("results", [])
+        if isinstance(tools, list):
+            for idx, tool in enumerate(tools):
+                if tool.get("tool_slug") != "GMAIL_SEND_EMAIL":
+                    continue
+                args = tool.get("arguments", {}) or {}
+                response = None
+                for res in results:
+                    if res.get("index") == idx:
+                        response = res.get("response", {}).get("data", {})
+                        break
+                records.append(
+                    {
+                        "tool": "GMAIL_SEND_EMAIL",
+                        "recipient_email": args.get("recipient_email"),
+                        "subject": args.get("subject"),
+                        "body_preview": (args.get("body") or "")[:2000],
+                        "attachment": args.get("attachment"),
+                        "response": response,
+                    }
+                )
+    elif "GMAIL_SEND_EMAIL" in tool_name:
+        payload = _load_json_payload(tool_response)
+        response = None
+        if isinstance(payload, dict):
+            response = payload.get("data") or payload
+        if isinstance(tool_input, dict):
+            records.append(
+                {
+                    "tool": "GMAIL_SEND_EMAIL",
+                    "recipient_email": tool_input.get("recipient_email"),
+                    "subject": tool_input.get("subject"),
+                    "body_preview": (tool_input.get("body") or "")[:2000],
+                    "attachment": tool_input.get("attachment"),
+                    "response": response,
+                }
+            )
+
+    _write_artifact(records)
+    return {}
+
+
 async def on_pre_bash_skill_hint(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
@@ -6346,6 +6438,7 @@ async def setup_session(
                 HookMatcher(matcher=None, hooks=[on_post_tool_use_ledger]),
                 HookMatcher(matcher=None, hooks=[on_post_tool_use_validation]),
                 HookMatcher(matcher=None, hooks=[on_post_research_finalized_cache]),  # Cache refined_corpus.md on finalize
+                HookMatcher(matcher=None, hooks=[on_post_email_send_artifact]),
                 HookMatcher(matcher="Task", hooks=[on_post_task_guidance]),
             ],
             # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
@@ -6424,6 +6517,11 @@ async def process_turn(
     Returns: ExecutionResult with rich feedback
     """
     global trace, start_ts
+
+    abs_workspace_dir = os.path.abspath(workspace_dir)
+    os.environ["CURRENT_SESSION_WORKSPACE"] = abs_workspace_dir
+    global OBSERVER_WORKSPACE_DIR
+    OBSERVER_WORKSPACE_DIR = abs_workspace_dir
 
     trace["query"] = user_input
     trace["start_time"] = datetime.now().isoformat()

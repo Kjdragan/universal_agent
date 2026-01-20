@@ -542,11 +542,23 @@ class CompositeEvaluator(Evaluator):
     ) -> EvaluationResult:
         policy = self._resolve_policy(task)
 
+        require_binary = policy.get("require_binary")
+        if require_binary is None:
+            require_binary = bool(task.binary_checks)
+
+        require_constraints = policy.get("require_constraints")
+        if require_constraints is None:
+            require_constraints = bool(task.constraints)
+
+        require_qualitative = policy.get("require_qualitative")
+        if require_qualitative is None:
+            require_qualitative = bool(task.evaluation_rubric)
+
         binary_res = self.binary.evaluate(task, artifacts, agent_output, workspace_path)
         constraint_res = self.constraints.evaluate(task, artifacts, agent_output, workspace_path)
 
         qualitative_res = None
-        if task.evaluation_rubric and policy.get("require_qualitative"):
+        if task.evaluation_rubric and require_qualitative:
             qualitative_res = self.qualitative.evaluate(task, artifacts, agent_output, workspace_path)
 
         scores = [binary_res.overall_score, constraint_res.overall_score]
@@ -556,11 +568,11 @@ class CompositeEvaluator(Evaluator):
         overall = sum(scores) / len(scores) if scores else 0.0
         overall_min = policy.get("overall_min_score")
 
-        binary_ok = (not policy.get("require_binary")) or binary_res.is_complete
-        constraints_ok = (not policy.get("require_constraints")) or constraint_res.is_complete
+        binary_ok = (not require_binary) or binary_res.is_complete
+        constraints_ok = (not require_constraints) or constraint_res.is_complete
 
         qual_ok = True
-        if policy.get("require_qualitative"):
+        if require_qualitative:
             if qualitative_res:
                 qual_min = float(policy.get("qualitative_min_score") or 0.0)
                 qual_ok = qualitative_res.overall_score >= qual_min
@@ -576,15 +588,23 @@ class CompositeEvaluator(Evaluator):
 
         missing = []
         suggested = []
-        if policy.get("require_binary"):
+        if require_binary:
             missing.extend(binary_res.missing_elements)
             suggested.extend(binary_res.suggested_actions)
-        if policy.get("require_constraints"):
+        if require_constraints:
             missing.extend(constraint_res.missing_elements)
             suggested.extend(constraint_res.suggested_actions)
-        if policy.get("require_qualitative") and not qualitative_res:
-            missing.append("Qualitative rubric missing")
-            suggested.append("Add evaluation rubric or disable qualitative requirement")
+        if require_qualitative:
+            if not qualitative_res:
+                missing.append("Qualitative rubric missing")
+                suggested.append("Add evaluation rubric or disable qualitative requirement")
+            else:
+                if not qualitative_res.is_complete and not qualitative_res.missing_elements:
+                    missing.append(
+                        f"Qualitative score {qualitative_res.overall_score:.2f} below threshold"
+                    )
+                missing.extend(qualitative_res.missing_elements)
+                suggested.extend(qualitative_res.suggested_actions)
 
         return EvaluationResult(
             is_complete=is_complete,
