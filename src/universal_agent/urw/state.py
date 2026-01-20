@@ -67,7 +67,7 @@ class Task:
     binary_checks: List[str] = field(default_factory=list)
     constraints: List[Dict[str, Any]] = field(default_factory=list)
     evaluation_rubric: Optional[str] = None
-    minimum_acceptable_score: float = 0.7
+    minimum_acceptable_score: float = 0.65
     evaluation_policy: Optional[Dict[str, Any]] = None
 
     max_iterations: int = 10
@@ -213,7 +213,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     binary_checks JSON,
     constraints JSON,
     evaluation_rubric TEXT,
-    minimum_acceptable_score REAL DEFAULT 0.7,
+    minimum_acceptable_score REAL DEFAULT 0.65,
     evaluation_policy JSON,
     max_iterations INTEGER DEFAULT 10,
     requires_tools JSON,

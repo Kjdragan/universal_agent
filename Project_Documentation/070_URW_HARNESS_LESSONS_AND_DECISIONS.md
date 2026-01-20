@@ -60,7 +60,34 @@
 
 ---
 
-## 6) References
+## 6) Robustness: Idempotency & Directory Mismatches (2026-01-19)
+
+### The Issue: Idempotency Blocking Retries
+**Observation:**
+The agent failed to execute `finalize_research` correctly (due to directory issues) but was blocked from retrying the tool call.
+- The system correctly flagged the second attempt as **Idempotent** (duplicate call) because `finalize_research` is classified as a Side-Effect tool (`local`) with `REPLAY_EXACT` policy.
+- This prevented the agent from correcting its mistake (e.g., pointing to the right directory) if it used the same arguments, or simply re-running it after fixing the environment.
+
+**Solution: Add `retry_id` Argument**
+- **Action:** Modify `finalize_research` (and underlying `refine_corpus_programmatic`) to accept an optional `retry_id: str` argument.
+- **Why:** This allows the agent to intentionally bypass the `REPLAY_EXACT` lock by providing a unique value (e.g., current timestamp or "retry_1"), making the tool call distinct in the ledger.
+- **Status:** Recommended for next sprint.
+
+### The Issue: Search Tool Directory Mismatches
+**Observation:**
+The agent improvised (hallucinated) the `refined_corpus.md` content because it couldn't find the raw search results.
+- `COMPOSIO_SEARCH` (or equivalent) saved files to a generic `Main Session` directory.
+- `finalize_research` expected files in a task-specific directory (likely `Phase 1`).
+- The agent lacked the usage of plumbing to move files or direct the search tool to the correct output path.
+
+**Solution: Explicit Output Paths & Robust Discovery**
+- **Action 1:** Update `search_web` / `composio` tool wrappers to accept an explicit `output_dir` or `workspace_path` argument to force saving in the correct context.
+- **Action 2:** Improve `finalize_research` to accept a flexible input path or perform a recursive search for compatible files if the default path is empty.
+- **Status:** Recommended for next sprint.
+
+---
+
+## 7) References
 - `Project_Documentation/069_URW_HARNESS_COMPLETION_PLAN.md`
 - `Project_Documentation/031_LONG_RUNNING_HARNESS_ARCHITECTURE.md`
 - `Project_Documentation/062_CONTEXT_STORAGE_DURABILITY_SUMMARY.md`

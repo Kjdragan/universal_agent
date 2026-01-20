@@ -584,7 +584,8 @@ async def main():
 async def refine_corpus_programmatic(
     corpus_dir: Path,
     output_file: Path = None,
-    accelerated: bool = False
+    accelerated: bool = False,
+    retry_id: str = None,
 ) -> dict:
     """
     Programmatic interface for agents to call the corpus refiner.
@@ -593,6 +594,7 @@ async def refine_corpus_programmatic(
         corpus_dir: Path to directory containing markdown files
         output_file: Optional output path (default: corpus_dir/../refined_corpus.md)
         accelerated: If True, use faster extraction with less detail
+        retry_id: Optional identifier to bypass idempotency checks
         
     Returns:
         Metrics dict with compression stats, latency, etc.

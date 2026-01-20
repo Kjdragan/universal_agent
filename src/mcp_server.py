@@ -13,6 +13,7 @@ import inspect
 from collections import Counter
 from datetime import datetime
 from functools import wraps
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, ValidationError
 
@@ -134,6 +135,33 @@ try:
     mcp = FastMCP("Local Intelligence Toolkit")
 except Exception:
     raise
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _resolve_workspace(preferred: str | None = None) -> str | None:
+    candidates = []
+    if preferred:
+        candidates.append(preferred)
+    env_workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+    if env_workspace:
+        candidates.append(env_workspace)
+    marker_path = os.getenv("CURRENT_SESSION_WORKSPACE_FILE") or os.path.join(
+        PROJECT_ROOT, "AGENT_RUN_WORKSPACES", ".current_session_workspace"
+    )
+    if os.path.exists(marker_path):
+        try:
+            candidates.append(Path(marker_path).read_text().strip())
+        except Exception:
+            pass
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        resolved = fix_path_typos(candidate)
+        if os.path.exists(resolved):
+            return resolved
+    return None
 
 
 def get_bridge():
@@ -749,9 +777,6 @@ def draft_report_parallel(retry_id: str = "") -> str:
     """
     import subprocess
     
-    # Define PROJECT_ROOT
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
     script_path = os.path.join(
         PROJECT_ROOT, 
         "src", "universal_agent", "scripts", "parallel_draft.py"
@@ -764,13 +789,9 @@ def draft_report_parallel(retry_id: str = "") -> str:
     try:
         sys.stderr.write(f"[Local Toolkit] Launching parallel drafter: {script_path}\n")
         
-        # Get workspace - MUST be set in environment by agent_core
-        workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+        workspace = _resolve_workspace()
         if not workspace:
             return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
-        
-        if not os.path.exists(workspace):
-            return f"Error: Workspace does not exist: {workspace}"
             
         sys.stderr.write(f"[Local Toolkit] Using workspace: {workspace}\n")
         
@@ -817,21 +838,15 @@ def compile_report(theme: str = "modern", custom_css: str = None) -> str:
     """
     import subprocess
     
-    # Define PROJECT_ROOT
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
     script_path = os.path.join(
         PROJECT_ROOT, 
         "src", "universal_agent", "scripts", "compile_report.py"
     )
     
     # Locate workspace - MUST be set in environment
-    workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+    workspace = _resolve_workspace()
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
-        
-    if not os.path.exists(workspace):
-        return f"Error: Workspace does not exist: {workspace}"
         
     cmd = [sys.executable, script_path, "--work-dir", workspace, "--theme", theme]
     if custom_css:
@@ -871,7 +886,6 @@ def cleanup_report() -> str:
     """
     import subprocess
 
-    PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     script_path = os.path.join(
         PROJECT_ROOT,
         "src",
@@ -883,12 +897,9 @@ def cleanup_report() -> str:
     if not os.path.exists(script_path):
         return f"Error: Cleanup script not found at {script_path}"
 
-    workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+    workspace = _resolve_workspace()
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
-
-    if not os.path.exists(workspace):
-        return f"Error: Workspace does not exist: {workspace}"
 
     try:
         sys.stderr.write(f"[Local Toolkit] Running cleanup pass via {script_path}\n")
@@ -1039,7 +1050,7 @@ def upload_to_composio(
     # Final check after retries
     if not os.path.exists(abs_path):
         # Try common alternative locations before giving up
-        session_workspace = os.environ.get("CURRENT_SESSION_WORKSPACE", "")
+        session_workspace = _resolve_workspace() or ""
         cwd = os.getcwd()
         basename = os.path.basename(path)
         
@@ -1818,6 +1829,7 @@ async def finalize_research(
     session_dir: str,
     task_name: str = "default",
     enable_topic_filter: bool = True,
+    retry_id: str = None,
 ) -> str:
     """
     AUTOMATED RESEARCH PIPELINE (Inbox Pattern):
@@ -1830,15 +1842,46 @@ async def finalize_research(
         session_dir: Path to the current session workspace.
         task_name: Name of the current task/iteration (e.g., "01_venezuela").
                    Used to isolate context in 'tasks/{task_name}/'.
+        retry_id: Optional identifier to bypass idempotency checks (e.g., timestamp).
 
     Returns:
         Summary of operation: URLs found, crawl success/fail, and path to scoped overview.
     """
     try:
+        session_dir = fix_path_typos(session_dir)
+        # Robustness: Check for search_results directory
         search_results_dir = os.path.join(session_dir, "search_results")
-        processed_dir = os.path.join(search_results_dir, "processed_json")
+        
+        # If standard path missing, check if session_dir IS the search results dir (fallback)
+        if not os.path.exists(search_results_dir):
+            if os.path.basename(session_dir.rstrip("/\\")) == "search_results" and os.path.exists(session_dir):
+                 search_results_dir = session_dir
+                 # Adjust session_dir up one level for task output
+                 session_dir = os.path.dirname(session_dir.rstrip("/\\"))
+            else:
+                 # Last ditch: check if there are JSONs directly in session_dir (agent passed root)
+                 root_jsons = [f for f in os.listdir(session_dir) if f.endswith(".json")]
+                 if root_jsons and "search_results" not in os.listdir(session_dir):
+                     search_results_dir = session_dir
+                 else:
+                     # Fallback: use resolved workspace if it has search_results
+                     fallback_workspace = _resolve_workspace()
+                     fallback_search = (
+                         os.path.join(fallback_workspace, "search_results")
+                         if fallback_workspace
+                         else ""
+                     )
+                     if fallback_workspace and os.path.exists(fallback_search):
+                         search_results_dir = fallback_search
+                         session_dir = fallback_workspace
+                     else:
+                         return json.dumps(
+                             {"error": f"Search results directory not found at {search_results_dir} or {session_dir}"}
+                         )
 
-        # Task-specific context directory
+        processed_dir = os.path.join(search_results_dir, "processed_json")
+        
+        # Task-specific context directory (using potentially adjusted session_dir)
         task_dir = os.path.join(session_dir, "tasks", task_name)
         os.makedirs(task_dir, exist_ok=True)
         task_config = _load_task_config(task_dir)
@@ -1850,11 +1893,6 @@ async def finalize_research(
             topic_keywords = [term.strip() for term in topic_keywords.split(",")]
         if not isinstance(topic_keywords, list):
             topic_keywords = []
-
-        if not os.path.exists(search_results_dir):
-            return json.dumps(
-                {"error": f"Search results directory not found: {search_results_dir}"}
-            )
 
         # Ensure archive dir exists
         os.makedirs(processed_dir, exist_ok=True)

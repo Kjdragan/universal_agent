@@ -1,47 +1,55 @@
-# Handoff Context: Harness Debugging & Context Verification
+# Context Handoff: Universal Agent (URW Harness Stability Sprint)
+**Date:** January 19, 2026
+**Previous Session Focus:** Debugging Harness Execution, Fixing Evaluator, & Optimizing Report Generation.
 
-## 1. Project Status
-We have **Solved** the critical "Context Exhaustion" (Zero-Byte Write) issue by implementing a **Two-Phase Sub-Agent Architecture** ("Context Refresh").
-The system can now successfully generate comprehensive reports from large-scale research.
+## 🚀 Current Status
+We have just completed a "Stability Sprint" to fix several critical bugs that were causing the Harness verification loop to fail or run inefficiently. The code is committed (`dev-harness1` branch), but **end-to-end verification is the immediate next step.**
 
-Our CURRENT BLOCKER is the **Harness Verification System**. While the agent logic works perfectly, the harness tooling has race conditions and buffering issues that cause false negatives (restart loops).
+## 🛠️ Key Components & Changes
 
-## 2. Recent Accomplishments
-1.  **Context Refresh Strategy**: Implemented `research-specialist` (Gatherer) and `report-writer` (Author) sub-agents.
-    *   Result: Zero-byte writes eliminated. 30KB+ reports generated successfully.
-2.  **Double Session Bug Fix**: Fixed a bug in `main.py` where `UniversalAgent()` was instantiated without arguments, creating a duplicate "ghost" session directory.
-3.  **Harness Verification**: Confirmed via `run.log` that the agent outputs `<promise>TASK_COMPLETE</promise>`, but the harness tooling reads an empty string and restarts.
+### 1. Harness Orchestration (`src/universal_agent/urw/harness_orchestrator.py`)
+- **Status:** **FIXED**
+- **Change:** Added explicit `os.environ["CURRENT_SESSION_WORKSPACE"] = str(session_path)` update in the phase execution loop.
+- **Why:** Previous runs failed because tools (like `draft_report_parallel`) were writing to the *root* session dir instead of the *phase* dir, causing "File not found" errors downstream.
+- **Also:** Added pre-creation of `work_products/` and `tasks/` directories to prevent panic 404s.
 
----
+### 2. Evaluator (`src/universal_agent/urw/evaluator.py`)
+- **Status:** **FIXED**
+- **Change:** Patched `authenticate()` to safely unwrap `ClaudeSDKClient` or fallback to creating a fresh `AsyncAnthropic` client from env vars.
+- **Why:** The previous run crashed with `ValueError` because it couldn't access the raw `.messages.create` method on the wrapped client.
 
-## 3. Priority A: ✅ FIXED - Harness Tooling Race Conditions
-**The Issue**: The `verifier.py` or stdout capture mechanism reads the output stream too early, missing the completion tag.
-**The Symptoms**:
-*   Agent log: `<promise>TASK_COMPLETE</promise>`
-*   Harness log: `Checking Output (Length: 0): ''`
-*   Result: Infinite restart loop despite success.
+### 3. MCP Tools (`src/mcp_server.py`)
+- **Status:** **UPDATED**
+- **Change:**
+    - `draft_report_parallel`: Added `retry_id: str` argument. This allows the Agent to bypass Composio's idempotency block by passing a nonce (e.g., "retry_1") if it needs to re-run the tool.
+    - `finalize_research`: Added real-time `sys.stderr` progress bars to close the 3-minute visibility gap during crawling/refining.
 
-**The Fix (2026-01-13)**:
-Implemented a fallback mechanism in `on_agent_stop()` that reads from `run.log` when `result.response_text` is empty.
-*   Added `_extract_promise_from_log()` helper function
-*   Integrated fallback into harness output checking
-*   When fallback triggers, logs show: `🔄 Primary output capture empty, checking run.log fallback...`
+### 4. Report Assembly (`src/universal_agent/scripts/compile_report.py`)
+- **Status:** **REFACTORED**
+- **Change:** Switched from file-glob sorting to **strict `outline.json` based ordering**.
+- **Why:** Agents were producing files like `01_summary.md` or just `summary.md`. The new script robustly maps `outline.json` IDs to filenames, ensuring the report is assembled in the exact intended order, enabling "Pythonic Assembly" (no manual copy-paste loop needed).
 
-## 4. Priority B: Sequential Execution & "The Dump"
-**The Issue**: The agent sees all tasks in `mission.json` and tries to do them all at once.
-**The Solution**: Refactor the harness loop to strict **Sequential Execution**:
-1.  Inject *only* the current PENDING task into the context.
-2.  Hide future tasks or mark them clearly as "LOCKED".
+## 📋 Resume/Next Steps
 
----
+### 1. Verification Run (Priority #1)
+The system is now theoretically stable. You should run a full verification test:
+```bash
+/harness-template
+```
+(Or your preferred test plan). Watch for:
+- **Speed:** `draft_report_parallel` should work on the first try (writing to correct dir).
+- **Correctness:** Report sections should be assembling automatically via `mcp__local_toolkit__compile_report`.
+- **Completion:** The Evaluator should now successfully grade the output without crashing.
 
-## 5. Key Artifacts
-*   `030_CONTEXT_EXHAUSTION_FIX_SUMMARY.md`: Details of the recently fixed architecture.
-*   `src/universal_agent/main.py`: Core entry point (recently modified).
-*   `.claude/agents/`: Definitions for `research-specialist` and `report-writer`.
-*   `AGENT_RUN_WORKSPACES/session_20260113_161008/run.log`: The "Golden Run" proving the fix and exposing the harness bug.
+### 2. Verification Loop Logic
+Once the Agent *can* finish a run, we need to verify the **Ralph Loop** logic in `harness_orchestrator.py`:
+- Does it correctly interpret `EvaluationResult.is_complete`?
+- Does it toggle back to `EXECUTION` mode if the score is low?
+- Does it pass the `feedback` correctly to the agent?
 
-## 6. Next Steps for New Agent
-1.  Start a new chat with `000_CURRENT_CONTEXT.md` and `000_CHAT_CONTEXT_HANDOFF.md`.
-2.  **IMMEDIATE GOAL**: Fix the Harness stdout capture race condition.
-3.  **SECONDARY GOAL**: Implement strict sequential task injection in `process_harness_phase`.
+### 3. Resume Logic
+We skipped testing resume functionality in this sprint to focus on stability. Verify that `--resume` still works if the harness is interrupted.
+
+## 📂 Relevant Artifacts
+- `tasks.md`: Updated with all recent fixes marked complete.
+- `Project_Documentation/01_run_analysis_20260119.md`: Detailed breakdown of the previous failed run.

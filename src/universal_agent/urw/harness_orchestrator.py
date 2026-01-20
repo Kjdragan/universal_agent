@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -61,6 +63,7 @@ class PhaseResult:
     success: bool
     session_path: str
     artifacts_produced: List[str] = field(default_factory=list)
+    agent_output: str = ""
     error: Optional[str] = None
     evaluation_notes: Optional[str] = None
 
@@ -235,14 +238,28 @@ class HarnessOrchestrator:
                     self._log(f"Retry {retry_count}/{self.config.max_retry_per_phase} for Phase {phase.name}")
                 
                 # Execute
-                result = await self._execute_phase(phase, process_turn, client, feedback=feedback, is_resuming=is_resuming)
+                prior_session_path = phase_result.session_path if phase_result else None
+                result = await self._execute_phase(
+                    phase,
+                    process_turn,
+                    client,
+                    feedback=feedback,
+                    is_resuming=is_resuming,
+                    prior_session_path=prior_session_path,
+                )
                 
                 # Only "resuming" on the very first try of the phase. 
                 # If we loop (retry), it's not "resuming" anymore, it's "retrying".
                 is_resuming = False
                 
                 # Evaluate
-                eval_result = await self._evaluate_phase(phase, result.session_path, client, result.artifacts_produced)
+                eval_result = await self._evaluate_phase(
+                    phase,
+                    result.session_path,
+                    client,
+                    result.artifacts_produced,
+                    result.agent_output,
+                )
                 
                 # Check Completion
                 if eval_result.is_complete:
@@ -299,6 +316,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         client: Any,
         feedback: Optional[str] = None,
         is_resuming: bool = False,
+        prior_session_path: Optional[str] = None,
     ) -> PhaseResult:
         """
         Execute a single phase of the plan.
@@ -312,10 +330,17 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         # CRITICAL: Update env var so MCP tools (mcp_server.py) write to the correct phase dir
         import os
         os.environ["CURRENT_SESSION_WORKSPACE"] = str(session_path)
-        
+
         # EFFICIENCY: Pre-create standard directories to prevent agent 404s
         (session_path / "work_products").mkdir(exist_ok=True)
         (session_path / "tasks").mkdir(exist_ok=True)
+        (session_path / "search_results").mkdir(exist_ok=True)
+        (session_path / "downloads").mkdir(exist_ok=True)
+        self._persist_current_workspace(session_path)
+
+        if prior_session_path:
+            self._log(f"Bootstrapping retry workspace from: {prior_session_path}")
+            self._bootstrap_retry_workspace(Path(prior_session_path), session_path)
         
         self._log(f"Session: {session_path}")
         
@@ -397,6 +422,12 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
             # 5. Evaluate (simplified - just check for artifacts in session)
             artifacts = self._scan_session_artifacts(session_path)
             success = len(artifacts) > 0 or result is not None
+
+            agent_output = ""
+            if hasattr(result, "response_text"):
+                agent_output = result.response_text or ""
+            elif isinstance(result, dict):
+                agent_output = str(result.get("response_text") or "")
             
             return PhaseResult(
                 phase_id=str(phase.id),
@@ -404,6 +435,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
                 success=success,
                 session_path=session_path,
                 artifacts_produced=artifacts,
+                agent_output=agent_output,
             )
             
         except Exception as e:
@@ -419,21 +451,56 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
     def _scan_session_artifacts(self, session_path: str) -> List[str]:
         """Scan session directory for produced artifacts."""
         artifacts = []
-        work_products = Path(session_path) / "work_products"
+        session_root = Path(session_path)
+        work_products = session_root / "work_products"
+        tasks_root = session_root / "tasks"
         
         if work_products.exists():
             for f in work_products.rglob("*"):
                 if f.is_file():
                     artifacts.append(str(f.relative_to(session_path)))
+
+        # Include top-level task outputs (avoid deep filtered corpora)
+        if tasks_root.exists():
+            for task_dir in tasks_root.iterdir():
+                if not task_dir.is_dir():
+                    continue
+                for f in task_dir.iterdir():
+                    if f.is_file():
+                        artifacts.append(str(f.relative_to(session_path)))
         
         return artifacts
+
+    def _bootstrap_retry_workspace(self, previous_path: Path, session_path: Path) -> None:
+        """Copy prior attempt artifacts to avoid redoing completed work."""
+        if not previous_path.exists():
+            return
+
+        for subdir in ("work_products", "tasks", "search_results"):
+            src = previous_path / subdir
+            dst = session_path / subdir
+            if not src.exists():
+                continue
+            try:
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            except Exception as exc:
+                self._log(f"⚠️ Failed to copy {subdir}: {exc}")
+
+    def _persist_current_workspace(self, session_path: Path) -> None:
+        """Persist current phase workspace for tools that cannot see env updates."""
+        try:
+            marker_path = self.workspaces_root / ".current_session_workspace"
+            marker_path.write_text(str(session_path))
+        except Exception as exc:
+            self._log(f"⚠️ Failed to persist current workspace: {exc}")
 
     async def _evaluate_phase(
         self,
         phase: Phase,
         session_path: str,
         client: Any,
-        artifact_paths: List[str]
+        artifact_paths: List[str],
+        agent_output: str,
     ) -> EvaluationResult:
         """Evaluate a phase's completion using CompositeEvaluator."""
         self._log("Running verification...")
@@ -469,10 +536,16 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
             
             # Evaluate
             # output is shared across phase, so we pass empty string or assume artifacts cover it
+            eval_context = self._build_eval_context(
+                session_path=session_path,
+                artifacts=artifacts,
+                agent_output=agent_output,
+            )
+
             result = evaluator.evaluate(
                 task=state_task,
                 artifacts=artifacts,
-                agent_output="", # We rely on artifacts mostly
+                agent_output=eval_context,
                 workspace_path=Path(session_path)
             )
             
@@ -497,6 +570,173 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
             missing_elements=failures,
             suggested_actions=suggestions
         )
+
+    def _build_eval_context(
+        self,
+        session_path: str,
+        artifacts: List[Artifact],
+        agent_output: str,
+    ) -> str:
+        summary_lines = ["ARTIFACTS SUMMARY:"]
+        if artifacts:
+            for art in artifacts:
+                if art.file_path:
+                    summary_lines.append(f"- {art.file_path}")
+        else:
+            summary_lines.append("- (none)")
+
+        headings = self._build_html_headings(session_path, artifacts)
+        snippets = self._build_html_section_snippets(session_path, artifacts)
+        preview = self._build_artifact_previews(session_path, artifacts)
+
+        parts = [
+            "\n".join(summary_lines),
+            headings,
+            snippets,
+            preview,
+        ]
+        if agent_output:
+            parts.append("AGENT OUTPUT:\n" + agent_output)
+
+        combined = "\n\n".join([p for p in parts if p])
+        return combined[:4000]
+
+    def _build_html_headings(self, session_path: str, artifacts: List[Artifact]) -> str:
+        session_root = Path(session_path)
+        headings_blocks: List[str] = []
+
+        for art in artifacts:
+            if not art.file_path or not art.file_path.lower().endswith(".html"):
+                continue
+            file_path = session_root / art.file_path
+            if not file_path.exists():
+                continue
+            try:
+                content = file_path.read_text(errors="ignore")
+            except Exception:
+                continue
+            headings = re.findall(r"<h[1-3][^>]*>(.*?)</h[1-3]>", content, flags=re.IGNORECASE)
+            cleaned = []
+            for h in headings:
+                text = re.sub(r"<[^>]+>", " ", h)
+                text = re.sub(r"\s+", " ", text).strip()
+                if text:
+                    cleaned.append(text)
+            if cleaned:
+                headings_blocks.append(
+                    f"HTML HEADINGS ({art.file_path}):\n- " + "\n- ".join(cleaned[:30])
+                )
+
+        return "\n\n".join(headings_blocks)
+
+    def _build_html_section_snippets(self, session_path: str, artifacts: List[Artifact]) -> str:
+        session_root = Path(session_path)
+        html_paths = [
+            session_root / art.file_path
+            for art in artifacts
+            if art.file_path and art.file_path.lower().endswith(".html")
+        ]
+        if not html_paths:
+            return ""
+
+        try:
+            content = html_paths[0].read_text(errors="ignore")
+        except Exception:
+            return ""
+
+        targets = [
+            "Executive Summary",
+            "Environmental",
+            "Economic",
+            "Social",
+            "References",
+        ]
+        snippets: List[str] = ["HTML SECTION SNIPPETS:"]
+
+        for target in targets:
+            pattern = re.compile(
+                rf"<h[1-3][^>]*>[^<]*{re.escape(target)}[^<]*</h[1-3]>",
+                flags=re.IGNORECASE,
+            )
+            match = pattern.search(content)
+            if not match:
+                continue
+            start = match.end()
+            next_heading = re.search(r"<h[1-3][^>]*>", content[start:], flags=re.IGNORECASE)
+            end = start + (next_heading.start() if next_heading else 1200)
+            chunk = content[start:end]
+            text = re.sub(r"<[^>]+>", " ", chunk)
+            text = re.sub(r"\s+", " ", text).strip()
+            if text:
+                snippets.append(f"- {target}: {text[:300]}")
+
+        return "\n".join(snippets) if len(snippets) > 1 else ""
+
+    def _build_artifact_previews(
+        self,
+        session_path: str,
+        artifacts: List[Artifact],
+        max_total_chars: int = 2500,
+        per_file_chars: int = 800,
+    ) -> str:
+        if not artifacts:
+            return ""
+
+        session_root = Path(session_path)
+        text_exts = {".md", ".txt", ".html", ".json"}
+
+        def _priority(path: str) -> int:
+            lower = path.lower()
+            if lower.endswith("refined_corpus.md"):
+                return 0
+            if lower.endswith(".html"):
+                return 1
+            if lower.endswith(".md"):
+                return 2
+            if lower.endswith(".json"):
+                return 3
+            return 9
+
+        snippets: List[str] = ["ARTIFACT PREVIEWS:"]
+        used = 0
+
+        for art in sorted(artifacts, key=lambda a: _priority(a.file_path or "")):
+            if not art.file_path:
+                continue
+            file_path = session_root / art.file_path
+            if not file_path.exists():
+                continue
+            if file_path.suffix.lower() not in text_exts:
+                continue
+
+            try:
+                content = file_path.read_text(errors="ignore")
+            except Exception:
+                continue
+
+            if file_path.suffix.lower() == ".html":
+                content = re.sub(
+                    r"<(script|style)[\s\S]*?</\1>",
+                    " ",
+                    content,
+                    flags=re.IGNORECASE,
+                )
+                content = re.sub(r"<[^>]+>", " ", content)
+                content = re.sub(r"\s+", " ", content)
+
+            snippet = content[:per_file_chars].strip()
+            if not snippet:
+                continue
+
+            block = f"--- {art.file_path} ---\n{snippet}"
+            if used + len(block) > max_total_chars:
+                break
+            snippets.append(block)
+            used += len(block)
+
+        if len(snippets) == 1:
+            return ""
+        return "\n\n".join(snippets)
     
     async def _handle_phase_failure(self, phase: Phase, result: PhaseResult) -> bool:
         """Handle a failed phase. Returns True if should continue."""

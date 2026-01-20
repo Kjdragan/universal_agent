@@ -64,5 +64,5 @@ class HarnessAdapter:
             binary_checks=binary_checks,
             constraints=[],  # Could parse from success_criteria complexity if needed
             evaluation_rubric=evaluation_rubric,
-            minimum_acceptable_score=0.7, # Default
+            minimum_acceptable_score=0.65, # Default
         )

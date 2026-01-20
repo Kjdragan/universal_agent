@@ -11,7 +11,7 @@
         },
         {
             "question": "What is the desired format for the final output?",
-            "answer": "A professional HTML report, also converted to PDF and emailed to me."
+            "answer": "Create a professional HTML report, convert it to PDF, and email ONLY the PDF to me (no separate HTML email or attachment)."
         },
         {
             "question": "How deep should the research be?",
@@ -19,7 +19,7 @@
         },
         {
             "question": "Is there anything else you would like to add or clarify before I create the plan?",
-            "answer": "No, that covers it."
+            "answer": "Email a single PDF only. Do not send or attach the HTML."
         }
     ]
 }
