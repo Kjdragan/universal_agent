@@ -764,14 +764,14 @@ def read_research_files(file_paths: list[str]) -> str:
 
 @mcp.tool()
 @trace_tool_output
-def draft_report_parallel(retry_id: str = "") -> str:
+async def draft_report_parallel(retry_id: str = "") -> str:
     """
     Execute the Python-based parallel drafting system to generate report sections concurrently.
     
     This tool:
     1. Reads `work_products/_working/outline.json`
     2. Reads `tasks/[task_name]/refined_corpus.md`
-    3. Spawns 5 concurrent LLM workers (AsyncAnthropic) to write sections
+    3. Spawns concurrent LLM workers (AsyncAnthropic) to write sections
     4. Saves output to `work_products/_working/sections/*.md`
     
     Use this immediately after creating the outline.
@@ -779,50 +779,26 @@ def draft_report_parallel(retry_id: str = "") -> str:
     Args:
         retry_id: Optional string (e.g., timestamp) to force re-execution if previous call failed/was blocked.
     """
-    import subprocess
     
-    script_path = os.path.join(
-        PROJECT_ROOT, 
-        "src", "universal_agent", "scripts", "parallel_draft.py"
-    )
-    
-    # Ensure script exists
-    if not os.path.exists(script_path):
-        return f"Error: Parallel draft script not found at {script_path}"
-        
+    # Lazy import to avoid circular dependencies or top-level errors
     try:
-        sys.stderr.write(f"[Local Toolkit] Launching parallel drafter: {script_path}\n")
+        from universal_agent.scripts.parallel_draft import draft_report_async
+    except ImportError:
+        return "Error: Could not import draft_report_async. Check python path."
+
+    workspace = _resolve_workspace()
+    if not workspace:
+        return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
         
-        workspace = _resolve_workspace()
-        if not workspace:
-            return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
-            
-        sys.stderr.write(f"[Local Toolkit] Using workspace: {workspace}\n")
-        
-        # Run the script with workspace as argument
-        result = subprocess.run(
-            [sys.executable, script_path, workspace],
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
-        
-        if result.returncode == 0:
-            return (
-                f"✅ Parallel Drafting Complete.\n\n"
-                f"Output:\n{result.stdout}\n"
-            )
-        else:
-            return (
-                f"❌ Parallel Drafting Failed (Exit Code {result.returncode})\n\n"
-                f"Error Output:\n{result.stderr}\n\n"
-                f"Standard Output:\n{result.stdout}"
-            )
-            
-    except subprocess.TimeoutExpired:
-        return "Error: Script execution timed out after 5 minutes."
+    sys.stderr.write(f"[Local Toolkit] Starting parallel drafter in-process for: {workspace}\n")
+    
+    try:
+        # Run the async drafting process directly
+        result = await draft_report_async(Path(workspace))
+        return result
     except Exception as e:
-        return f"Error running parallel draft script: {str(e)}"
+        logger.error(f"Error in draft_report_parallel: {e}", exc_info=True)
+        return f"Error running in-process drafter: {e}"
 
 
 @mcp.tool()
@@ -877,55 +853,37 @@ def compile_report(theme: str = "modern", custom_css: str = None) -> str:
 
 @mcp.tool()
 @trace_tool_output
-def cleanup_report() -> str:
+async def cleanup_report() -> str:
     """
     Run a cleanup pass over drafted report sections to normalize headings,
     remove duplicated content, and fix formatting inconsistencies.
 
     This tool:
-    1. Reads all section markdown files in `work_products/_working/sections`
-    2. Applies deterministic heading normalization
-    3. Uses an LLM to propose targeted edits only for inconsistent/duplicated sections
-    4. Writes updated section files in place
+    1. Reads all markdown sections in `work_products/_working/sections`
+    2. Uses an LLM to check for coherence, duplicated stats, and formatting consistency
+    3. Rewrites sections that need improvement
+    4. Validates for placeholder text like [INSERT STATS]
+    
+    Use this BEFORE compiling the report.
     """
-    import subprocess
-
-    script_path = os.path.join(
-        PROJECT_ROOT,
-        "src",
-        "universal_agent",
-        "scripts",
-        "cleanup_report.py",
-    )
-
-    if not os.path.exists(script_path):
-        return f"Error: Cleanup script not found at {script_path}"
+    # Lazy import
+    try:
+        from universal_agent.scripts.cleanup_report import cleanup_report_async
+    except ImportError:
+        return "Error: Could not import cleanup_report_async."
 
     workspace = _resolve_workspace()
     if not workspace:
-        return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
+        return "Error: CURRENT_SESSION_WORKSPACE not set."
 
+    sys.stderr.write(f"[Local Toolkit] Running cleanup in-process for: {workspace}\n")
+    
     try:
-        sys.stderr.write(f"[Local Toolkit] Running cleanup pass via {script_path}\n")
-        result = subprocess.run(
-            [sys.executable, script_path, workspace],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-    except subprocess.TimeoutExpired:
-        return "Error: Cleanup script execution timed out after 5 minutes."
+        result = await cleanup_report_async(Path(workspace))
+        return result
     except Exception as e:
-        return f"Error running cleanup script: {str(e)}"
-
-    if result.returncode == 0:
-        return f"✅ Report cleanup complete.\n\n{result.stdout}"
-
-    return (
-        "❌ Cleanup failed.\n\n"
-        f"Error Output:\n{result.stderr}\n\n"
-        f"Standard Output:\n{result.stdout}"
-    )
+        logger.error(f"Error in cleanup_report: {e}", exc_info=True)
+        return f"Error running cleanup: {e}"
 
 
 @mcp.tool()

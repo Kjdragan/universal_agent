@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import sys
+import re
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -78,17 +79,19 @@ def build_cleanup_prompt(sections: Dict[str, str]) -> str:
         )
 
     return (
-        "You are a report editor. Review the full report sections and fix formatting "
-        "inconsistencies and duplicated content across sections. Make targeted edits "
-        "only; do not rewrite the entire report.\n\n"
-        "Rules:\n"
-        "- Do not add new facts.\n"
-        "- Remove or condense repeated stats across sections; keep detailed numbers "
-        "in the most relevant section and keep the executive summary high-level.\n"
-        "- Ensure heading hierarchy: Executive Summary uses '# Executive Summary'. "
-        "All other sections start with '## <Section Title>' and use '###' for subheads.\n"
-        "- Do not wrap output in code fences.\n"
-        "- Only return updates for sections that need changes.\n\n"
+        "You are a professional report editor. Your goal is to maximize flow and remove redundancy.\n"
+        "Review the full report sections and fix duplicated content across sections.\n\n"
+        "CRITICAL RULES:\n"
+        "1.  **Executive Summary Rewrite (MANDATORY)**: COMPLETELY REWRITE the 'Executive Summary' section. Do not use the provided draft. Instead, write a new summary that accurately synthesizes the key findings from the *other* sections you are reviewing. This ensures the summary matches the final report details.\n"
+        "2.  **De-Duplication**: Remove statistics or facts that are repeated verbatim in multiple sections. Keep the detailed version in the most relevant section.\n"
+        "3.  **Meta-Commentary Removal**: DELETE phrases like \"As mentioned in the previous section\", \"As noted above\", or \"In this section we will discuss\". The report should read as one continuous narrative.\n"
+        "4.  **Acronyms**: Ensure acronyms are defined on first use (e.g., 'United Nations (UN)') and used consistently thereafter.\n"
+        "5.  **Date Anchoring**: Replace relative time terms like 'yesterday' or 'last week' with specific dates (e.g., 'Jan 19') to ensure the report remains accurate over time.\n"
+        "6.  **Transitions**: Add smooth transition sentences between abrupt topic shifts to improve flow.\n"
+        "7.  **Placeholder Check**: If you see usage of \"[Insert ...]\" or \"TODO\", attempt to fix it or remove the sentence if no data is available.\n"
+        "8.  **No Code Fences**: Do not wrap your output in markdown code blocks.\n"
+        "9.  **Output Format**: Only return updates for sections that change.\n"
+        "\n"
         "Return JSON only in this schema:\n"
         "{\"updates\": {\"filename.md\": \"<updated markdown>\"}, \"notes\": {\"filename.md\": [\"change summary\"]}}\n\n"
         "Sections:\n\n"
@@ -129,27 +132,34 @@ def write_updates(
     return normalized_updates, llm_updates
 
 
-async def main() -> int:
+def check_placeholders(text: str) -> List[str]:
+    """Scan text for common placeholder patterns."""
+    warnings = []
+    # Patterns: [INSERT...], [TODO...], [STATS...], <INSERT...>
+    regex = r"\[(INSERT|TODO|STATS|NOTE).*?\]|\[\s*\.\.\.\s*\]"
+    matches = re.finditer(regex, text, re.IGNORECASE)
+    for m in matches:
+        warnings.append(f"Found placeholder: '{m.group(0)}'")
+    return warnings
+
+
+async def cleanup_report_async(workspace_path: Path) -> str:
+    """
+    Async entry point for cleaning up report sections.
+    """
     if not API_KEY:
-        print("Error: ANTHROPIC_AUTH_TOKEN not set")
-        return 1
+        return "Error: ANTHROPIC_AUTH_TOKEN/ZAI_API_KEY not set"
 
-    workspace = None
-    if len(sys.argv) > 1:
-        workspace = Path(sys.argv[1]).resolve()
-    if not workspace or not workspace.exists():
-        print("Error: Workspace not found or not a directory")
-        return 1
+    if not workspace_path or not workspace_path.exists():
+        return f"Error: Workspace not found at {workspace_path}"
 
-    sections_dir = workspace / "work_products" / "_working" / "sections"
+    sections_dir = workspace_path / "work_products" / "_working" / "sections"
     if not sections_dir.exists():
-        print(f"Error: Sections directory not found at {sections_dir}")
-        return 1
+        return f"Error: Sections directory not found at {sections_dir}"
 
     original_sections = load_sections(sections_dir)
     if not original_sections:
-        print("Error: No sections found to clean")
-        return 1
+        return "Error: No sections found to clean"
 
     preprocessed_sections = preprocess_sections(original_sections)
 
@@ -159,12 +169,11 @@ async def main() -> int:
     try:
         resp = await client.messages.create(
             model=MODEL,
-            max_tokens=3000,
+            max_tokens=4000, # Increased for safety
             messages=[{"role": "user", "content": prompt}],
         )
     except Exception as exc:
-        print(f"Error during cleanup model call: {exc}")
-        return 1
+        return f"Error during cleanup model call: {exc}"
 
     response_text = resp.content[0].text if resp.content else ""
     updates_payload: Dict[str, str] = {}
@@ -176,35 +185,74 @@ async def main() -> int:
             updates_payload = parsed.get("updates", {}) or {}
             notes_payload = parsed.get("notes", {}) or {}
         except Exception as exc:
-            print(f"Error parsing cleanup response JSON: {exc}")
-            return 1
+            return f"Error parsing cleanup response JSON: {exc}. Response preview: {response_text[:200]}"
 
     final_sections = dict(preprocessed_sections)
     updated_files: List[str] = []
+    all_warnings: Dict[str, List[str]] = {}
+
+    # Helper for fuzzy matching filenames
+    def match_filename(target: str, available: List[str]) -> Optional[str]:
+        if target in available:
+            return target
+        # Try finding a single match that ends with the target
+        matches = [f for f in available if f.endswith(target) or target.endswith(f)]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     for filename, content in updates_payload.items():
-        if filename not in final_sections:
+        matched_name = match_filename(filename, list(final_sections.keys()))
+        if not matched_name:
+            print(f"Warning: Could not match LLM file update '{filename}' to any local file. Skipping.")
             continue
-        is_executive = "executive_summary" in filename
+            
+        is_executive = "executive_summary" in matched_name
         cleaned = strip_wrapping_code_fence(content)
         cleaned = normalize_headings(cleaned, is_executive)
-        final_sections[filename] = cleaned
-        updated_files.append(filename)
+        
+        # Validation
+        warnings = check_placeholders(cleaned)
+        if warnings:
+            all_warnings[matched_name] = warnings
+
+        final_sections[matched_name] = cleaned
+        updated_files.append(matched_name)
 
     normalized_updates, _ = write_updates(
         sections_dir, original_sections, final_sections
     )
 
-    summary_lines = ["Cleanup complete."]
+    summary_lines = ["✅ Cleanup complete."]
     if normalized_updates:
         summary_lines.append(f"Updated sections: {', '.join(sorted(normalized_updates))}.")
+    
     if notes_payload:
-        summary_lines.append("Notes:")
+        summary_lines.append("\nChange Notes:")
         for filename, notes in notes_payload.items():
             joined = "; ".join(notes)
             summary_lines.append(f"- {filename}: {joined}")
+            
+    if all_warnings:
+        summary_lines.append("\n⚠️ VALIDATION WARNINGS:")
+        for filename, warnings in all_warnings.items():
+            joined = ", ".join(warnings)
+            summary_lines.append(f"- {filename}: {joined}")
 
-    print("\n".join(summary_lines))
+    return "\n".join(summary_lines)
+
+
+async def main() -> int:
+    # CLI Wrapper
+    workspace = None
+    if len(sys.argv) > 1:
+        workspace = Path(sys.argv[1]).resolve()
+    else:
+        print("Error: No workspace path provided")
+        return 1
+    
+    result = await cleanup_report_async(workspace)
+    print(result)
     return 0
 
 

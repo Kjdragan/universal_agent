@@ -137,11 +137,20 @@ Use this to discover the best Composio search tools and get recommended steps.
 ```json
 {
   "query": "artificial intelligence industry news",
-  "when": "m",
+  "when": "d",
   "gl": "us",
   "hl": "en"
 }
 ```
+
+**Parameters:**
+- `when`: Time window.
+  - `h`: Last hour
+  - `d`: Last 24 hours (Use for "today/yesterday" requests)
+  - `w`: Last week (Default if unspecified)
+  - `m`: Last month
+  - `y`: Last year
+  - Note: Tighter windows (d or w) reduce noise and crawl time. Use `d` for breaking news.
 
 ## COMPOSIO_SEARCH_WEB
 
