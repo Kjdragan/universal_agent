@@ -6282,6 +6282,7 @@ async def setup_session(
                     "mcp__local_toolkit__append_to_file",  # Critical for incremental writing
                     "mcp__local_toolkit__list_directory",
                     "mcp__local_toolkit__draft_report_parallel",
+                    "mcp__local_toolkit__cleanup_report",
                     "mcp__local_toolkit__compile_report",
                 ],
                 model="inherit",

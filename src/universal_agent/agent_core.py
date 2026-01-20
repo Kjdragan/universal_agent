@@ -888,6 +888,7 @@ class UniversalAgent:
                     "mcp__local_toolkit__workbench_download",
                     "mcp__local_toolkit__workbench_upload",
                     "mcp__local_toolkit__draft_report_parallel",
+                    "mcp__local_toolkit__cleanup_report",
                     "mcp__local_toolkit__compile_report",
                 ],
                 model="inherit",
@@ -1183,8 +1184,10 @@ class UniversalAgent:
             "```\n"
             "mcp__local_toolkit__cleanup_report()\n"
             "```\n"
-            "- Tool reads all drafted sections and fixes formatting inconsistencies\n"
-            "- Removes duplicated content across sections via targeted edits\n"
+            "- Tool reads all drafted sections and applies a light, selective pass\n"
+            "- Reduces duplicate info between sections while preserving each section's focus\n"
+            "- Normalizes headings/formatting so output is consistent across runs\n"
+            "- Introduces light cohesion across sections without rewriting everything\n"
             "- ⚠️ **Do NOT rewrite the entire report** - only targeted edits\n\n"
             "### Phase 4: ASSEMBLY\n"
             "After cleanup completes, call:\n"
@@ -1199,7 +1202,7 @@ class UniversalAgent:
             "---\n\n"
             "## ⚠️ CRITICAL RULES\n\n"
             "1. **Always call draft_report_parallel** - never write sections manually\n"
-            "2. **Always call cleanup_report** - never rewrite the full report in one go\n"
+            "2. **Always call cleanup_report** - selective edits only, never rewrite the full report\n"
             "3. **Always call compile_report** - never assemble HTML manually\n"
             "4. Section order is determined by outline.json - list most important first\n"
             "5. The tools handle all file I/O - you focus on planning and coordination\n\n"
