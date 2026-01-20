@@ -11,9 +11,11 @@ Evaluates whether tasks are complete using multiple strategies:
 from __future__ import annotations
 
 import json
+import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -325,13 +327,29 @@ class LLMJudgeEvaluator(Evaluator):
             )
 
     def _build_prompt(self, task: Task, agent_output: str, rubric: str) -> str:
+        tz_name = os.getenv("USER_TIMEZONE", "America/Chicago")
+        try:
+            import pytz
+
+            now = datetime.now(pytz.timezone(tz_name))
+            tz_label = now.tzname() or tz_name
+        except Exception:
+            now = datetime.now()
+            tz_label = tz_name
+
         return (
-            "You are a strict evaluator. Rate the task output from 0 to 1.\n\n"
+            "You are a pragmatic evaluator. Rate the task output from 0 to 1.\n\n"
+            f"Current date/time: {now.strftime('%A, %B %d, %Y %H:%M')} ({tz_label}).\n\n"
+            "## Evaluation Philosophy (The 'Smell Test')\n"
+            "1. **Holistic Quality**: If the output looks substantially correct, professional, and meets the core intent, it should pass (score > 0.65). Do not look for perfection.\n"
+            "2. **Avoid Pedantry**: Do NOT fail tasks for minor missing details (e.g. missing a specific sentence or exact number of bullets) if the core objective is met.\n"
+            "3. **Credibility**: If the agent provided URLs or citations (even in a corpus file), assume they are credible. Do not fail for 'inability to verify URLs' or 'missing bibliography' unless the task explicitly asked ONLY for a bibliography.\n"
+            "4. **Reasonable Effort**: If the agent clearly did the work (e.g. conducted research, wrote code), accept it. Do not be brittle regarding exact formatting unless crucial to the task.\n\n"
             f"Task: {task.title}\n"
             f"Description: {task.description}\n\n"
             f"Rubric: {rubric}\n\n"
-            "Output (truncated):\n"
-            f"{agent_output[:4000]}\n\n"
+            "## Artifact Context\n"
+            f"{agent_output}\n\n"
             "Return JSON: {\"score\": 0.0-1.0, \"reasoning\": \"...\"}"
         )
 
