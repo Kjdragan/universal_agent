@@ -50,3 +50,10 @@ AGENT_RUN_WORKSPACES/
 search_results/
 Memory_System_Data/
 src/SAVED_REPORTS/
+
+# Run Artifacts
+hello.txt
+RUSSIA_UKRAINE_WAR_*.md
+russia_ukraine_war_*.json
+russia_ukraine_war_*.md
+tasks/
