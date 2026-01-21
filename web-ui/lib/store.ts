@@ -83,6 +83,10 @@ interface AgentStore {
   lastError: string | null;
   setLastError: (error: string | null) => void;
 
+  // UI Viewing State
+  viewingFile: { name: string; path: string; content?: string; type: string } | null;
+  setViewingFile: (file: { name: string; path: string; content?: string; type: string } | null) => void;
+
   // Reset
   reset: () => void;
 }
@@ -196,6 +200,10 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   lastError: null,
   setLastError: (error) => set({ lastError: error }),
 
+  // UI Viewing State
+  viewingFile: null,
+  setViewingFile: (file) => set({ viewingFile: file }),
+
   // Reset
   reset: () => set({
     messages: [],
@@ -208,6 +216,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     toolCallCount: 0,
     iterationCount: 0,
     lastError: null,
+    viewingFile: null,
   }),
 }));
 
