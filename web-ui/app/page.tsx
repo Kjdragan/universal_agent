@@ -31,12 +31,73 @@ const ICONS = {
   clear: "🗑️",
   send: "➤",
   refresh: "🔄",
+  close: "✕",
+  download: "⬇️",
 };
 
 
 // =============================================================================
 // Components
 // =============================================================================
+
+function FileViewer() {
+  const viewingFile = useAgentStore((s) => s.viewingFile);
+  const setViewingFile = useAgentStore((s) => s.setViewingFile);
+
+  if (!viewingFile) return null;
+
+  const isHtml = viewingFile.name.endsWith(".html");
+  const isPdf = viewingFile.name.endsWith(".pdf");
+  const isImage = viewingFile.name.match(/\.(png|jpg|jpeg|gif|webp)$/i);
+
+  // For PDF/HTML, we use the server's get_file endpoint.
+  // Endpoint: /api/files/{session_id}/{file_path}
+  const currentSession = useAgentStore.getState().currentSession;
+  const fileUrl = `${API_BASE}/api/files/${currentSession?.session_id}/${viewingFile.path}`;
+
+  return (
+    <div className="flex flex-col h-full bg-background animate-in fade-in zoom-in-95 duration-200">
+      <div className="h-10 border-b border-border/50 flex items-center justify-between px-4 bg-secondary/10">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">{ICONS.file}</span>
+          <span className="font-semibold text-sm">{viewingFile.name}</span>
+          <span className="text-xs text-muted-foreground ml-2 opacity-50">{viewingFile.path}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => window.open(fileUrl, '_blank')}
+            className="p-1 hover:bg-black/10 rounded text-muted-foreground hover:text-foreground transition-colors"
+            title="Download/Open External"
+          >
+            {ICONS.download}
+          </button>
+          <button
+            onClick={() => setViewingFile(null)}
+            className="p-1 hover:bg-red-500/10 rounded text-muted-foreground hover:text-red-500 transition-colors"
+            title="Close Preview"
+          >
+            {ICONS.close}
+          </button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-hidden relative bg-white/5">
+        {isHtml || isPdf || isImage ? (
+          <iframe
+            src={fileUrl}
+            className="w-full h-full border-0 block"
+            title={viewingFile.name}
+          />
+        ) : (
+          <div className="h-full overflow-auto p-4 scrollbar-thin">
+            <pre className="text-xs font-mono whitespace-pre-wrap text-muted-foreground">
+              {viewingFile.content || "Loading or Binary Content..."}
+            </pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function TaskPanel() {
   const toolCalls = useAgentStore((s) => s.toolCalls);
@@ -102,6 +163,7 @@ const API_BASE = "http://localhost:8001";
 
 function FileExplorer() {
   const currentSession = useAgentStore((s) => s.currentSession);
+  const setViewingFile = useAgentStore((s) => s.setViewingFile);
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -121,7 +183,12 @@ function FileExplorer() {
   }, [currentSession?.session_id, path]);
 
   const handleNavigate = (itemName: string, isDir: boolean) => {
-    if (!isDir) return; // File preview logic can go here later
+    if (!isDir) {
+      // Open file preview
+      const fullPath = path ? `${path}/${itemName}` : itemName;
+      setViewingFile({ name: itemName, path: fullPath, type: 'file' });
+      return;
+    }
     setPath(prev => prev ? `${prev}/${itemName}` : itemName);
   };
 
@@ -214,7 +281,20 @@ function HeaderMetrics() {
   const startTime = useAgentStore((s) => s.startTime);
   const iterationCount = useAgentStore((s) => s.iterationCount);
 
-  const duration = startTime ? (Date.now() - startTime) / 1000 : 0;
+  // Use 0 if no start time, preventing hydration mismatch of "NaN" or large negative numbers
+  // Calculate only on client in useEffect, or just render "0s" if null.
+  const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+    if (!startTime) {
+      setDuration(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setDuration((Date.now() - startTime) / 1000);
+    }, 1000); // Update every second
+    return () => clearInterval(interval);
+  }, [startTime]);
 
   return (
     <div className="hidden md:flex items-center gap-3 mr-6 bg-secondary/20 px-3 py-1.5 rounded-md border border-border/50">
@@ -352,6 +432,7 @@ function ChatMessage({ message }: { message: any }) {
 function ChatInterface() {
   const messages = useAgentStore((s) => s.messages);
   const currentStreamingMessage = useAgentStore((s) => s.currentStreamingMessage);
+  const setStartTime = useAgentStore((s) => s.setStartTime);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
@@ -363,6 +444,11 @@ function ChatInterface() {
     setIsSending(true);
     const query = input;
     setInput("");
+
+    // Set Start Time if not already set (new run)
+    if (!useAgentStore.getState().startTime) {
+      setStartTime(Date.now());
+    }
 
     // Add user message to store
     useAgentStore.getState().addMessage({
@@ -538,8 +624,39 @@ function ActivityFeed() {
 
 function WorkProductViewer() {
   const workProducts = useAgentStore((s) => s.workProducts);
-  const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const currentSession = useAgentStore((s) => s.currentSession);
+  const setViewingFile = useAgentStore((s) => s.setViewingFile);
+  const [keyFiles, setKeyFiles] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+
+  // Fetch key files (transcript, runs, report) from actual FS
+  useEffect(() => {
+    if (!currentSession?.session_id) return;
+
+    const fetchKeyFiles = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/files?session_id=${currentSession.session_id}&path=.`);
+        const data = await res.json();
+        const files = data.files || [];
+
+        // Filter for interesting files
+        const interesting = files.filter((f: any) =>
+          f.name === 'run.log' ||
+          f.name === 'transcript.md' ||
+          f.name.startsWith('report') ||
+          f.name.endsWith('.pdf')
+        );
+        setKeyFiles(interesting);
+      } catch (e) {
+        console.error("Failed to fetch key files", e);
+      }
+    };
+
+    // Refresh periodically or just once? Once + on workProducts update might be good.
+    // For now just once + manual dependency on workProducts length?
+    fetchKeyFiles();
+  }, [currentSession?.session_id, workProducts.length]);
 
   return (
     <div className={`flex flex-col ${isCollapsed ? '' : 'h-64'} transition-all duration-300`}>
@@ -548,8 +665,8 @@ function WorkProductViewer() {
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
         <h3 className="text-sm font-semibold flex items-center gap-2">
-          {ICONS.file} Work Products
-          <span className="text-xs text-muted-foreground font-normal">({workProducts.length})</span>
+          {ICONS.file} Key Work Products
+          <span className="text-xs text-muted-foreground font-normal">({keyFiles.length})</span>
         </h3>
         <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
           ▼
@@ -557,46 +674,25 @@ function WorkProductViewer() {
       </div>
 
       {!isCollapsed && (
-        workProducts.length === 0 ? (
-          <div className="flex-1 flex items-center justify-center text-muted-foreground bg-secondary/5">
-            <div className="text-center">
-              <div className="text-sm">No work products yet</div>
-            </div>
-          </div>
-        ) : (
-          <div className="flex-1 flex overflow-hidden">
-            {/* List */}
-            <div className="w-48 border-r border-border/50 overflow-y-auto scrollbar-thin bg-secondary/5">
-              {workProducts.map((wp) => (
-                <button
-                  key={wp.id}
-                  onClick={() => setSelectedProduct(wp)}
-                  className={`w-full text-left px-3 py-2 text-xs hover:bg-accent/50 transition-colors border-b border-border/10 ${selectedProduct?.id === wp.id ? "bg-accent text-accent-foreground" : ""
-                    }`}
-                >
-                  <div className="truncate font-medium">{wp.filename}</div>
-                  <div className="text-[9px] text-muted-foreground mt-0.5 opacity-70">
-                    {new Date(wp.timestamp).toLocaleTimeString()}
-                  </div>
-                </button>
-              ))}
-            </div>
-            {/* Preview */}
-            <div className="flex-1 overflow-hidden bg-background">
-              {selectedProduct ? (
-                <iframe
-                  srcDoc={selectedProduct.content}
-                  className="w-full h-full border-0"
-                  title={selectedProduct.filename}
-                />
-              ) : (
-                <div className="h-full flex items-center justify-center text-muted-foreground text-xs">
-                  Select a work product to view
+        <div className="flex-1 overflow-y-auto scrollbar-thin bg-secondary/5 p-2 space-y-1">
+          {keyFiles.length === 0 ? (
+            <div className="text-xs text-muted-foreground text-center py-4">No key files found</div>
+          ) : (
+            keyFiles.map((file, i) => (
+              <button
+                key={i}
+                onClick={() => setViewingFile({ name: file.name, path: file.name, type: 'file' })}
+                className="w-full text-left px-3 py-2 text-xs rounded hover:bg-black/20 transition-colors flex items-center gap-2"
+              >
+                <span className="text-lg">{file.name.endsWith('pdf') ? '📕' : file.name.endsWith('html') ? '🌐' : '📄'}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="truncate font-medium">{file.name}</div>
+                  <div className="text-[9px] text-muted-foreground opacity-70">{formatFileSize(file.size)}</div>
                 </div>
-              )}
-            </div>
-          </div>
-        )
+              </button>
+            ))
+          )}
+        </div>
       )}
     </div>
   );
@@ -608,6 +704,7 @@ function WorkProductViewer() {
 
 export default function HomePage() {
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
+  const viewingFile = useAgentStore((s) => s.viewingFile); // Sub to viewing state
   const ws = getWebSocket();
 
   // Layout State
@@ -725,14 +822,18 @@ export default function HomePage() {
           />
         </aside>
 
-        {/* Center - Chat Interface */}
-        <main className="flex-1 border-r border-border/50 min-w-0">
-          <ChatInterface />
+        {/* Center - Chat Interface OR File Viewer */}
+        <main className="flex-1 border-r border-border/50 min-w-0 bg-background/50">
+          {viewingFile ? (
+            <FileViewer />
+          ) : (
+            <ChatInterface />
+          )}
         </main>
 
         {/* Right Sidebar - Monitoring & Workspace */}
         <aside
-          className="shrink-0 flex flex-col relative bg-background/30 backdrop-blur-sm"
+          className="shrink-0 flex flex-col h-full overflow-hidden relative bg-background/30 backdrop-blur-sm"
           style={{ width: rightWidth }}
         >
           {/* Resizer */}
@@ -743,7 +844,8 @@ export default function HomePage() {
 
 
           {/* Activity Feed */}
-          <div className="flex-1 border-b border-border/50 overflow-hidden">
+          <div className="flex-1 min-h-0 border-b border-border/50 flex flex-col overflow-hidden">
+            {/* Using flex-1 on container and flex-col ensures child overflow-y-auto works */}
             <ActivityFeed />
           </div>
 

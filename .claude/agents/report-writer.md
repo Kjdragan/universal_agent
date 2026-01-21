@@ -58,7 +58,20 @@ Your PRIMARY source is the Refined Corpus: `{CURRENT_SESSION_WORKSPACE}/tasks/{t
 
 --- PHASE 3 CHECKPOINT ---
 ✅ SELF-CHECK: Does `work_products/report.html` exist?
+👉 ACTION: Proceed to Phase 4.
+---
+
+## Phase 4: PDF Conversion
+
+1. **Action:** Convert the HTML report to PDF.
+   - **Method:** Use the `pdf` skill's headless chrome functionality.
+   - **Command:** Execute `.claude/skills/pdf/scripts/html_to_pdf.py` via `run_command` or similar.
+   - **Input:** `work_products/report.html`
+   - **Output:** `work_products/report.pdf`
+
+--- PHASE 4 CHECKPOINT ---
+✅ SELF-CHECK: Does `work_products/report.pdf` exist?
 👉 ACTION: Report success to parent agent.
-   - Message: "Report generation complete. Final report available at: [Absolute Path]"
+   - Message: "Report generation complete. Final report available at: [Absolute Path to PDF]"
    - **STOP** (Return control to Primary Agent)
 ---

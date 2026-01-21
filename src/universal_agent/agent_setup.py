@@ -159,11 +159,17 @@ class AgentSetup:
 
         # Await discovery
         self._discovered_apps = await discovery_future
-        if self._discovered_apps:
-            self._log(f"✅ Discovered Active Composio Apps: {self._discovered_apps}")
-        else:
-            self._discovered_apps = ["gmail", "github", "codeinterpreter", "slack", "composio_search"]
-            self._log(f"⚠️ Using default apps: {self._discovered_apps}")
+        
+        # Ensure core apps are always available
+        core_apps = ["gmail", "composio_search", "browserbase", "github", "codeinterpreter"]
+        if not self._discovered_apps:
+            self._discovered_apps = []
+            
+        for app in core_apps:
+            if app not in self._discovered_apps:
+                self._discovered_apps.append(app)
+                
+        self._log(f"✅ Active Apps (Discovered + Core): {self._discovered_apps}")
 
         # Discover skills
         if self.enable_skills:
