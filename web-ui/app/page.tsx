@@ -186,7 +186,7 @@ function ConnectionIndicator() {
   );
 }
 
-function MetricsPanel() {
+function HeaderMetrics() {
   const tokenUsage = useAgentStore((s) => s.tokenUsage);
   const toolCallCount = useAgentStore((s) => s.toolCallCount);
   const startTime = useAgentStore((s) => s.startTime);
@@ -195,27 +195,25 @@ function MetricsPanel() {
   const duration = startTime ? (Date.now() - startTime) / 1000 : 0;
 
   return (
-    <div className="glass rounded-lg p-3 space-y-2">
-      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-        Metrics
-      </h3>
-      <div className="grid grid-cols-2 gap-2 text-sm">
-        <div>
-          <span className="text-muted-foreground">Tokens:</span>{" "}
-          <span className="font-mono">{tokenUsage.total.toLocaleString()}</span>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Tools:</span>{" "}
-          <span className="font-mono">{toolCallCount}</span>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Duration:</span>{" "}
-          <span className="font-mono">{formatDuration(duration)}</span>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Iterations:</span>{" "}
-          <span className="font-mono">{iterationCount}</span>
-        </div>
+    <div className="hidden md:flex items-center gap-3 mr-6 bg-secondary/20 px-3 py-1.5 rounded-md border border-border/50">
+      <div className="flex items-center gap-2 text-[10px] tracking-wide">
+        <span className="text-muted-foreground font-semibold">TOKENS</span>
+        <span className="font-mono">{tokenUsage.total.toLocaleString()}</span>
+      </div>
+      <div className="w-px h-3 bg-border/50" />
+      <div className="flex items-center gap-2 text-[10px] tracking-wide">
+        <span className="text-muted-foreground font-semibold">TOOLS</span>
+        <span className="font-mono">{toolCallCount}</span>
+      </div>
+      <div className="w-px h-3 bg-border/50" />
+      <div className="flex items-center gap-2 text-[10px] tracking-wide">
+        <span className="text-muted-foreground font-semibold">TIME</span>
+        <span className="font-mono">{formatDuration(duration)}</span>
+      </div>
+      <div className="w-px h-3 bg-border/50" />
+      <div className="flex items-center gap-2 text-[10px] tracking-wide">
+        <span className="text-muted-foreground font-semibold">ITERS</span>
+        <span className="font-mono">{iterationCount}</span>
       </div>
     </div>
   );
@@ -486,11 +484,13 @@ function ActivityFeed() {
   ].sort((a, b) => a.time - b.time);
 
   return (
-    <div className="space-y-2">
-      <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-        {ICONS.activity} Activity
-      </h3>
-      <div className="space-y-1 max-h-64 overflow-y-auto scrollbar-thin">
+    <div className="h-full flex flex-col">
+      <div className="p-3 border-b border-border/50">
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          {ICONS.activity} Activity
+        </h3>
+      </div>
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">
         {activities.length === 0 ? (
           <div className="text-xs text-muted-foreground text-center py-4">
             No activity yet
@@ -508,49 +508,64 @@ function ActivityFeed() {
 function WorkProductViewer() {
   const workProducts = useAgentStore((s) => s.workProducts);
   const [selectedProduct, setSelectedProduct] = useState<any>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="p-3 border-b border-border/50">
-        <h3 className="text-sm font-semibold">Work Products</h3>
+    <div className={`flex flex-col ${isCollapsed ? '' : 'h-64'} transition-all duration-300`}>
+      <div
+        className="p-3 border-b border-border/50 flex items-center justify-between cursor-pointer hover:bg-secondary/10"
+        onClick={() => setIsCollapsed(!isCollapsed)}
+      >
+        <h3 className="text-sm font-semibold flex items-center gap-2">
+          {ICONS.file} Work Products
+          <span className="text-xs text-muted-foreground font-normal">({workProducts.length})</span>
+        </h3>
+        <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
+          ▼
+        </span>
       </div>
-      {workProducts.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-muted-foreground">
-          <div className="text-center">
-            <div className="text-2xl mb-2">{ICONS.file}</div>
-            <div className="text-sm">No work products yet</div>
+
+      {!isCollapsed && (
+        workProducts.length === 0 ? (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground bg-secondary/5">
+            <div className="text-center">
+              <div className="text-sm">No work products yet</div>
+            </div>
           </div>
-        </div>
-      ) : (
-        <div className="flex-1 flex overflow-hidden">
-          {/* List */}
-          <div className="w-48 border-r border-border/50 overflow-y-auto scrollbar-thin">
-            {workProducts.map((wp) => (
-              <button
-                key={wp.id}
-                onClick={() => setSelectedProduct(wp)}
-                className={`w-full text-left px-3 py-2 text-sm hover:bg-accent/50 transition-colors ${selectedProduct?.id === wp.id ? "bg-accent" : ""
-                  }`}
-              >
-                <div className="truncate">{wp.filename}</div>
-              </button>
-            ))}
+        ) : (
+          <div className="flex-1 flex overflow-hidden">
+            {/* List */}
+            <div className="w-48 border-r border-border/50 overflow-y-auto scrollbar-thin bg-secondary/5">
+              {workProducts.map((wp) => (
+                <button
+                  key={wp.id}
+                  onClick={() => setSelectedProduct(wp)}
+                  className={`w-full text-left px-3 py-2 text-xs hover:bg-accent/50 transition-colors border-b border-border/10 ${selectedProduct?.id === wp.id ? "bg-accent text-accent-foreground" : ""
+                    }`}
+                >
+                  <div className="truncate font-medium">{wp.filename}</div>
+                  <div className="text-[9px] text-muted-foreground mt-0.5 opacity-70">
+                    {new Date(wp.timestamp).toLocaleTimeString()}
+                  </div>
+                </button>
+              ))}
+            </div>
+            {/* Preview */}
+            <div className="flex-1 overflow-hidden bg-background">
+              {selectedProduct ? (
+                <iframe
+                  srcDoc={selectedProduct.content}
+                  className="w-full h-full border-0"
+                  title={selectedProduct.filename}
+                />
+              ) : (
+                <div className="h-full flex items-center justify-center text-muted-foreground text-xs">
+                  Select a work product to view
+                </div>
+              )}
+            </div>
           </div>
-          {/* Preview */}
-          <div className="flex-1 overflow-hidden">
-            {selectedProduct ? (
-              <iframe
-                srcDoc={selectedProduct.content}
-                className="w-full h-full border-0"
-                title={selectedProduct.filename}
-              />
-            ) : (
-              <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-                Select a work product to view
-              </div>
-            )}
-          </div>
-        </div>
+        )
       )}
     </div>
   );
@@ -563,6 +578,37 @@ function WorkProductViewer() {
 export default function HomePage() {
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
+
+  // Layout State
+  const [leftWidth, setLeftWidth] = useState(260);
+  const [rightWidth, setRightWidth] = useState(400); // Wider default as requested
+
+  // Resizing Logic
+  const startResizing = (direction: 'left' | 'right') => (mouseDownEvent: React.MouseEvent) => {
+    mouseDownEvent.preventDefault();
+    const startX = mouseDownEvent.clientX;
+    const startWidth = direction === 'left' ? leftWidth : rightWidth;
+
+    const onMouseMove = (mouseMoveEvent: MouseEvent) => {
+      const delta = mouseMoveEvent.clientX - startX;
+      const newWidth = direction === 'left'
+        ? Math.max(200, Math.min(600, startWidth + delta))
+        : Math.max(300, Math.min(800, startWidth - delta));
+
+      if (direction === 'left') setLeftWidth(newWidth);
+      else setRightWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      document.body.style.cursor = 'default';
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  };
 
   // Approval modal hook
   const { pendingApproval, handleApprove, handleReject } = useApprovalModal();
@@ -619,57 +665,59 @@ export default function HomePage() {
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
       {/* Header */}
-      <header className="h-14 border-b border-border/50 glass-strong flex items-center justify-between px-4">
+      <header className="h-14 border-b border-border/50 glass-strong flex items-center justify-between px-4 shrink-0 z-10 relative">
         <div className="flex items-center gap-3">
           <h1 className="text-lg font-bold gradient-text">Universal Agent</h1>
           <span className="text-xs text-muted-foreground px-2 py-1 rounded bg-muted">
-            v2.0
+            v2.1
           </span>
         </div>
         <div className="flex items-center gap-4">
+          <HeaderMetrics />
           <ConnectionIndicator />
         </div>
       </header>
 
       {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex overflow-hidden relative">
         {/* Left Sidebar - Sessions & Tasks */}
-        <aside className="w-64 border-r border-border/50 flex flex-col overflow-hidden bg-background/30 backdrop-blur-sm">
+        <aside
+          className="shrink-0 border-r border-border/50 flex flex-col overflow-hidden bg-background/30 backdrop-blur-sm relative"
+          style={{ width: leftWidth }}
+        >
           <FileExplorer />
           <TaskPanel />
+          {/* Resizer */}
+          <div
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 transition-colors z-20"
+            onMouseDown={startResizing('left')}
+          />
         </aside>
 
         {/* Center - Chat Interface */}
-        <main className="flex-1 border-r border-border/50">
+        <main className="flex-1 border-r border-border/50 min-w-0">
           <ChatInterface />
         </main>
 
         {/* Right Sidebar - Monitoring & Workspace */}
-        <aside className="w-80 flex flex-col">
-          {/* Metrics */}
-          <div className="p-3 border-b border-border/50">
-            <MetricsPanel />
-          </div>
+        <aside
+          className="shrink-0 flex flex-col relative bg-background/30 backdrop-blur-sm"
+          style={{ width: rightWidth }}
+        >
+          {/* Resizer */}
+          <div
+            className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-primary/50 transition-colors z-20"
+            onMouseDown={startResizing('right')}
+          />
+
 
           {/* Activity Feed */}
-          <div className="p-3 border-b border-border/50">
+          <div className="flex-1 border-b border-border/50 overflow-hidden">
             <ActivityFeed />
           </div>
 
-          {/* Terminal Log */}
-          <div className="flex-1 border-b border-border/50 overflow-hidden">
-            <div className="h-full flex flex-col">
-              <div className="p-2 border-b border-border/50">
-                <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {ICONS.terminal} Terminal
-                </h3>
-              </div>
-              <TerminalLog />
-            </div>
-          </div>
-
           {/* Work Products */}
-          <div className="h-64">
+          <div className="shrink-0 border-t border-border/50">
             <WorkProductViewer />
           </div>
         </aside>
