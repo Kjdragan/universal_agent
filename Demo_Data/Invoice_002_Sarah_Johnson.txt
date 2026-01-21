@@ -1,0 +1,33 @@
+=================================================================
+                   AquaFlow Plumbing Services                    
+=================================================================
+                       123 Pipeline Street                       
+                       Waterford, CA 90210                       
+Phone:                     (555) 123-4567                      Email: billing@aquaflowplumbing.com
+=================================================================
+
+INVOICE
+Invoice Number: INV-2025-002                             Date: December 06, 2025
+Bill To:                                    Due Date: January 05, 2026
+
+Sarah Johnson
+789 Palm Boulevard, Beverly Hills, CA 90210
+Phone: (310) 555-0102
+
+-----------------------------------------------------------------
+DESCRIPTION                                               AMOUNT
+-----------------------------------------------------------------
+Main Water Line Replacement (40 ft)           $          2850.00
+Full Bathroom Plumbing Renovation             $          4200.00
+-----------------------------------------------------------------
+SUBTOTAL                                      $          7050.00
+Tax (8.25%)                                   $           581.62
+=================================================================
+TOTAL DUE                                     $          7631.62
+=================================================================
+
+Payment Terms: Net 30 Days
+Thank you for your business!
+
+Make checks payable to: AquaFlow Plumbing Services
+Payment methods: Cash, Check, Credit Card, Bank Transfer

@@ -1,0 +1,34 @@
+=================================================================
+                   AquaFlow Plumbing Services                    
+=================================================================
+                       123 Pipeline Street                       
+                       Waterford, CA 90210                       
+Phone:                     (555) 123-4567                      Email: billing@aquaflowplumbing.com
+=================================================================
+
+INVOICE
+Invoice Number: INV-2025-005                             Date: December 28, 2025
+Bill To:                                    Due Date: January 27, 2026
+
+David Thompson
+987 Sunset Lane, Santa Monica, CA 90401
+Phone: (310) 555-0105
+
+-----------------------------------------------------------------
+DESCRIPTION                                               AMOUNT
+-----------------------------------------------------------------
+Drain Cleaning Service (Whole House)          $           395.00
+Outdoor Faucet and Irrigation System Repair   $           680.00
+Leak Detection and Repair (3 locations)       $           720.00
+-----------------------------------------------------------------
+SUBTOTAL                                      $          1795.00
+Tax (8.25%)                                   $           148.09
+=================================================================
+TOTAL DUE                                     $          1943.09
+=================================================================
+
+Payment Terms: Net 30 Days
+Thank you for your business!
+
+Make checks payable to: AquaFlow Plumbing Services
+Payment methods: Cash, Check, Credit Card, Bank Transfer

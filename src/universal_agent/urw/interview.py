@@ -15,6 +15,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import logfire
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
@@ -351,37 +352,39 @@ class InterviewConductor:
         
         try:
             async with ClaudeSDKClient(options=options) as client:
-                await client.query(
-                    f"User's massive task:\n\n{massive_request}\n\n"
-                    "Begin the planning interview. Ask clarifying questions to understand "
-                    "the requirements, then produce a structured Plan."
-                )
+                with logfire.span("llm_api_wait", context="interview_conduct"):
+                    await client.query(
+                        f"User's massive task:\n\n{massive_request}\n\n"
+                        "Begin the planning interview. Ask clarifying questions to understand "
+                        "the requirements, then produce a structured Plan."
+                    )
                 
-                async for message in client.receive_response():
-                    # Check for structured output (the Plan)
-                    if hasattr(message, 'structured_output') and message.structured_output:
-                        try:
-                            plan = Plan.model_validate(message.structured_output)
-                            plan.massive_request = massive_request
-                            plan.harness_id = self.harness_id
-                            break
-                        except Exception as e:
-                            print(f"⚠️ Failed to parse plan: {e}")
+                with logfire.span("llm_response_stream", context="interview_conduct"):
+                    async for message in client.receive_response():
+                        # Check for structured output (the Plan)
+                        if hasattr(message, 'structured_output') and message.structured_output:
+                            try:
+                                plan = Plan.model_validate(message.structured_output)
+                                plan.massive_request = massive_request
+                                plan.harness_id = self.harness_id
+                                break
+                            except Exception as e:
+                                print(f"⚠️ Failed to parse plan: {e}")
                     
-                    # Print assistant messages for visibility
-                    if isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                print(f"\n🤖 {block.text}")
+                        # Print assistant messages for visibility
+                        if isinstance(message, AssistantMessage):
+                            for block in message.content:
+                                if isinstance(block, TextBlock):
+                                    print(f"\n🤖 {block.text}")
                                 
-                                # Fallback: parse plan from markdown text
-                                if not plan:
-                                    extracted = self._extract_plan_from_text(block.text)
-                                    if extracted:
-                                        plan = extracted
-                                        plan.massive_request = massive_request
-                                        plan.harness_id = self.harness_id
-                                        break
+                                    # Fallback: parse plan from markdown text
+                                    if not plan:
+                                        extracted = self._extract_plan_from_text(block.text)
+                                        if extracted:
+                                            plan = extracted
+                                            plan.massive_request = massive_request
+                                            plan.harness_id = self.harness_id
+                                            break
             
             if plan:
                 # Save interview log
@@ -433,33 +436,35 @@ class InterviewConductor:
                     "4. If you cannot use the structured output tool, output the raw JSON string inside a ```json code block."
                 )
                 
-                await client.query(query)
+                with logfire.span("llm_api_wait", context="interview_template"):
+                    await client.query(query)
                 
-                async for message in client.receive_response():
-                    # Check for structured output (the Plan)
-                    if hasattr(message, 'structured_output') and message.structured_output:
-                        try:
-                            plan = Plan.model_validate(message.structured_output)
-                            plan.massive_request = massive_request
-                            plan.harness_id = self.harness_id
-                            break
-                        except Exception as e:
-                            print(f"⚠️ Failed to parse plan: {e}")
+                with logfire.span("llm_response_stream", context="interview_template"):
+                    async for message in client.receive_response():
+                        # Check for structured output (the Plan)
+                        if hasattr(message, 'structured_output') and message.structured_output:
+                            try:
+                                plan = Plan.model_validate(message.structured_output)
+                                plan.massive_request = massive_request
+                                plan.harness_id = self.harness_id
+                                break
+                            except Exception as e:
+                                print(f"⚠️ Failed to parse plan: {e}")
                     
-                    # Print assistant messages for visibility
-                    if isinstance(message, AssistantMessage):
-                        for block in message.content:
-                            if isinstance(block, TextBlock):
-                                print(f"\n🤖 {block.text}")
+                        # Print assistant messages for visibility
+                        if isinstance(message, AssistantMessage):
+                            for block in message.content:
+                                if isinstance(block, TextBlock):
+                                    print(f"\n🤖 {block.text}")
                                 
-                                # Fallback: parse plan from markdown text
-                                if not plan:
-                                    extracted = self._extract_plan_from_text(block.text)
-                                    if extracted:
-                                        plan = extracted
-                                        plan.massive_request = massive_request
-                                        plan.harness_id = self.harness_id
-                                        break
+                                    # Fallback: parse plan from markdown text
+                                    if not plan:
+                                        extracted = self._extract_plan_from_text(block.text)
+                                        if extracted:
+                                            plan = extracted
+                                            plan.massive_request = massive_request
+                                            plan.harness_id = self.harness_id
+                                            break
             
             if plan:
                 print("\n" + "=" * 60)

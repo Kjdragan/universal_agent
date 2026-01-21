@@ -266,6 +266,13 @@ if LOGFIRE_TOKEN:
     except Exception as e:
         print(f"⚠️ Anthropic instrumentation not available: {e}")
 
+    # Instrument Asyncio
+    try:
+        logfire.instrument_asyncio()
+        print("✅ Logfire Asyncio instrumentation enabled")
+    except Exception as e:
+        print(f"⚠️ Asyncio instrumentation not available: {e}")
+
     print("✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/")
 elif not LOGFIRE_DISABLED:
     print("⚠️ No LOGFIRE_TOKEN found - tracing disabled")
@@ -4935,533 +4942,535 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         print(f"{'=' * 80}")
 
         iter_start = time.time()
-        await client.query(query)
+        with logfire.span("llm_api_wait", query_length=len(query)):
+            await client.query(query)
 
         tool_calls_this_iter = []
         needs_user_input = False
         auth_link = None
         final_text = ""  # Buffer to capture final agent response for printing after execution summary
 
-        async for msg in client.receive_response():
-            if isinstance(msg, ResultMessage):
-                # Track token usage from the final ResultMessage of the turn
-                # This explicitly contains the usage statistics for the turn
-                if hasattr(msg, "usage") and msg.usage:
-                    u = msg.usage
-                    inp = u.get("input_tokens", 0) or 0
-                    out = u.get("output_tokens", 0) or 0
+        with logfire.span("llm_response_stream"):
+            async for msg in client.receive_response():
+                if isinstance(msg, ResultMessage):
+                    # Track token usage from the final ResultMessage of the turn
+                    # This explicitly contains the usage statistics for the turn
+                    if hasattr(msg, "usage") and msg.usage:
+                        u = msg.usage
+                        inp = u.get("input_tokens", 0) or 0
+                        out = u.get("output_tokens", 0) or 0
 
-                    # Update local trace counters
-                    if trace and "token_usage" in trace:
-                        trace["token_usage"]["input"] += inp
-                        trace["token_usage"]["output"] += out
-                        trace["token_usage"]["total"] += inp + out
+                        # Update local trace counters
+                        if trace and "token_usage" in trace:
+                            trace["token_usage"]["input"] += inp
+                            trace["token_usage"]["output"] += out
+                            trace["token_usage"]["total"] += inp + out
 
-                    logfire.info(
-                        "token_usage_update",
-                        run_id=run_id,
-                        input=inp,
-                        output=out,
-                        total_so_far=trace["token_usage"]["total"] if trace else 0,
-                    )
-
-                    # Durability: Update DB with latest token count
-                    if run_id and runtime_db_conn:
-                        update_run_tokens(
-                            runtime_db_conn, run_id, trace["token_usage"]["total"]
+                        logfire.info(
+                            "token_usage_update",
+                            run_id=run_id,
+                            input=inp,
+                            output=out,
+                            total_so_far=trace["token_usage"]["total"] if trace else 0,
                         )
 
-                    # [FIX 7] Token-Based Harness Trigger
-                    # Connect the Brain (Token Count) to the Body (Harness Action)
-                    total_tokens = trace["token_usage"]["total"]
-                    if total_tokens > TRUNCATION_THRESHOLD:
-                        print(
-                            f"\n⚠️ CONTEXT THRESHOLD REACHED ({total_tokens} > {TRUNCATION_THRESHOLD})"
-                        )
-                        print("🔄 Triggering Harness Iteration (Context Reset)...")
-
-                        # Synthesize a "context_exhausted" event for the hook/logic
-                        # Instead of calling the hook, we trigger the restart specific logic directly here
-                        # to align with the "Autonomous Execution Protocol"
-
-                        # 1. Increment Iteration
+                        # Durability: Update DB with latest token count
                         if run_id and runtime_db_conn:
-                            current_iter = get_iteration_info(
-                                runtime_db_conn, run_id
-                            ).get("iteration_count", 0)
-                            max_iter = get_iteration_info(runtime_db_conn, run_id).get(
-                                "max_iterations", 10
+                            update_run_tokens(
+                                runtime_db_conn, run_id, trace["token_usage"]["total"]
                             )
 
-                            if current_iter >= max_iter:
-                                print(
-                                    f"⛔ Max iterations ({max_iter}) reached despite context exhaustion. Stopping."
-                                )
-                                break
-
-                            new_iter = increment_iteration_count(
-                                runtime_db_conn, run_id
-                            )
-
-                            # 2. Construct Handoff Prompt (Ledger-Aware)
-                            # Check for handoff.json written by build_evidence_ledger
-                            handoff_path = os.path.join(workspace_dir, "handoff.json") if workspace_dir else None
-                            handoff_state = None
-                            
-                            if handoff_path and os.path.exists(handoff_path):
-                                try:
-                                    with open(handoff_path, "r") as hf:
-                                        handoff_state = json.load(hf)
-                                except Exception as e:
-                                    logfire.warning("handoff_json_read_error", error=str(e))
-                            
-                            if handoff_state and handoff_state.get("phase") == "ledger_complete":
-                                # Ledger-aware restart: guide agent to read only the ledger
-                                ledger_path = handoff_state.get("ledger_path", "")
-                                topic = handoff_state.get("topic", "the research topic")
-                                next_prompt = (
-                                    f"RESUMING (Phase: SYNTHESIS):\n"
-                                    f"Context was reset after {total_tokens} tokens.\n"
-                                    f"Evidence ledger is ready at: {ledger_path}\n\n"
-                                    f"INSTRUCTIONS:\n"
-                                    f"1. READ ONLY the evidence ledger file (do NOT re-read raw corpus)\n"
-                                    f"2. Use EVID-XXX references when citing evidence\n"
-                                    f"3. Write the report based on ledger evidence for: {topic}\n\n"
-                                    f"Status: Iteration {current_iter + 1}/{max_iter}"
-                                )
-                                logfire.info("harness_handoff_ledger_aware", ledger_path=ledger_path, topic=topic)
-                            else:
-                                # Generic restart: no ledger available
-                                next_prompt = f"RESUMING (Context Limit Reached): You exceeded the context limit ({total_tokens} tokens). I have reset your memory. Continue the mission.json tasks from where you left off. Status: {current_iter + 1}/{max_iter}."
-
-                            pending_prompt = next_prompt
-
-                            # 3. Clear Context
-                            if hasattr(client, "history"):
-                                client.history = []
-                                print("🧹 Client history cleared (Context Reset).")
-
-                            # 4. Reset Token Counter for new session
-                            trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
-
-                            continue  # Restart inner loop with new prompt
-
-            if isinstance(msg, AssistantMessage):
-                # Wrapped in span for full visibility of assistant's turn
-                with logfire.span("assistant_message", model=msg.model):
-                    for block in msg.content:
-                        if isinstance(block, ToolUseBlock):
-                            if is_malformed_tool_name(block.name):
-                                logfire.warning(
-                                    "malformed_tool_name_detected",
-                                    tool_name=block.name,
-                                    run_id=run_id,
-                                    step_id=step_id,
-                                )
-                                _mark_run_waiting_for_human(
-                                    "malformed_tool_name_detected",
-                                    tool_name=block.name,
-                                    tool_call_id=str(block.id),
-                                )
-                            # Nested tool_use span
-                            with logfire.span(
-                                "tool_use", tool_name=block.name, tool_id=block.id
-                            ):
-                                tool_record = {
-                                    "run_id": run_id,
-                                    "step_id": step_id,
-                                    "iteration": iteration,
-                                    "name": block.name,
-                                    "id": block.id,
-                                    "time_offset_seconds": round(
-                                        time.time() - start_ts, 3
-                                    ),
-                                    "input": block.input
-                                    if hasattr(block, "input")
-                                    else None,
-                                    "input_size_bytes": len(json.dumps(block.input))
-                                    if hasattr(block, "input") and block.input
-                                    else 0,
-                                }
-                                if tool_ledger:
-                                    ledger_entry = tool_ledger.get_tool_call(
-                                        str(block.id)
-                                    )
-                                    if ledger_entry:
-                                        tool_record["idempotency_key"] = (
-                                            ledger_entry.get("idempotency_key")
-                                        )
-                                        tool_record["side_effect_class"] = (
-                                            ledger_entry.get("side_effect_class")
-                                        )
-                                        tool_record["replay_policy"] = ledger_entry.get(
-                                            "replay_policy"
-                                        )
-                                        tool_record["ledger_status"] = ledger_entry.get(
-                                            "status"
-                                        )
-                                trace["tool_calls"].append(tool_record)
-                                tool_calls_this_iter.append(tool_record)
-                                budget_state["tool_calls"] += 1
-                                if (
-                                    budget_config.get("max_tool_calls")
-                                    and budget_state["tool_calls"]
-                                    > budget_config["max_tool_calls"]
-                                ):
-                                    raise BudgetExceeded(
-                                        "max_tool_calls",
-                                        budget_config["max_tool_calls"],
-                                        budget_state["tool_calls"],
-                                        detail="tool call limit exceeded",
-                                    )
-
-                                # Log to Logfire with PAYLOAD preview
-                                input_preview = None
-                                if tool_record["input"]:
-                                    input_json = json.dumps(tool_record["input"])
-                                    # Capture up to 2KB of input for debugging code generation
-                                    input_preview = (
-                                        input_json[:2000]
-                                        if len(input_json) > 2000
-                                        else input_json
-                                    )
-
-                                # Check for sub-agent context (parent_tool_use_id indicates this call is from within a sub-agent)
-                                parent_tool_id = getattr(
-                                    msg, "parent_tool_use_id", None
-                                )
-
-                                logfire.info(
-                                    "tool_input",
-                                    tool_name=block.name,
-                                    tool_id=block.id,
-                                    input_size=tool_record["input_size_bytes"],
-                                    input_preview=input_preview,
-                                    parent_tool_use_id=parent_tool_id,  # Sub-agent context
-                                    is_subagent_call=bool(parent_tool_id),
-                                    run_id=run_id,
-                                    step_id=step_id,
-                                )
-
-                                # Sub-agent tagging logic: Entering sub-agent
-                                if block.name == "Task":
-                                    subagent_type = "unknown"
-                                    if hasattr(block, "input") and isinstance(
-                                        block.input, dict
-                                    ):
-                                        subagent_type = block.input.get(
-                                            "subagent_type", "unknown"
-                                        )
-
-                                    logfire.set_baggage(agent=subagent_type)
-                                    logfire.set_baggage(is_subagent="true")
-                                    logfire.set_baggage(
-                                        loop="1"
-                                    )  # Reset loop for the sub-agent
-
-                                # Check for WORKBENCH or code execution tools
-                                is_code_exec = any(
-                                    x in block.name.upper()
-                                    for x in [
-                                        "WORKBENCH",
-                                        "CODE",
-                                        "EXECUTE",
-                                        "PYTHON",
-                                        "SANDBOX",
-                                        "BASH",
-                                    ]
-                                )
-                                marker = "🏭 CODE EXECUTION" if is_code_exec else "🔧"
-
-                                print(
-                                    f"\n{marker} [{block.name}] +{tool_record['time_offset_seconds']}s"
-                                )
-                                print(
-                                    f"   Input size: {tool_record['input_size_bytes']} bytes"
-                                )
-
-                                if tool_record["input"]:
-                                    input_preview = json.dumps(
-                                        tool_record["input"], indent=2
-                                    )
-                                    max_len = 3000 if is_code_exec else 500
-                                    if len(input_preview) > max_len:
-                                        input_preview = input_preview[:max_len] + "..."
-                                    print(f"   Input: {input_preview}")
-                                
-                                # Show what we're waiting for
-                                print(f"   ⏳ Waiting for {block.name} response...")
-
-                        elif isinstance(block, TextBlock):
-                            if "connect.composio.dev/link" in block.text:
-                                import re
-
-                                links = re.findall(
-                                    r"https://connect\.composio\.dev/link/[^\s\)]+",
-                                    block.text,
-                                )
-                                if links:
-                                    auth_link = links[0]
-                                    needs_user_input = True
-
-                            # Buffer final text to print AFTER execution summary (not printed here)
-                            final_text = block.text[:3000] + (
-                                "..." if len(block.text) > 3000 else ""
-                            )
-
-                            # Log text block
-                            logfire.info(
-                                "text_block",
-                                length=len(block.text),
-                                text_preview=block.text[:500],
-                            )
-
-                        elif isinstance(block, ThinkingBlock):
-                            # Log extended thinking
+                        # [FIX 7] Token-Based Harness Trigger
+                        # Connect the Brain (Token Count) to the Body (Harness Action)
+                        total_tokens = trace["token_usage"]["total"]
+                        if total_tokens > TRUNCATION_THRESHOLD:
                             print(
-                                f"\n🧠 Thinking (+{round(time.time() - start_ts, 1)}s)..."
+                                f"\n⚠️ CONTEXT THRESHOLD REACHED ({total_tokens} > {TRUNCATION_THRESHOLD})"
                             )
-                            logfire.info(
-                                "thinking",
-                                thinking_length=len(block.thinking),
-                                thinking_preview=block.thinking[:1000],
-                                signature=block.signature,
-                            )
+                            print("🔄 Triggering Harness Iteration (Context Reset)...")
 
-            elif isinstance(msg, (UserMessage, ToolResultBlock)):
-                # Handle both UserMessage (legacy) and ToolResultBlock (new SDK)
-                blocks = msg.content if isinstance(msg, UserMessage) else [msg]
+                            # Synthesize a "context_exhausted" event for the hook/logic
+                            # Instead of calling the hook, we trigger the restart specific logic directly here
+                            # to align with the "Autonomous Execution Protocol"
 
-                for block in blocks:
-                    # Check for ToolResultBlock or dict-like content in UserMessage
-                    is_result = isinstance(block, ToolResultBlock) or hasattr(
-                        block, "tool_use_id"
-                    )
-
-                    if is_result:
-                        tool_use_id = getattr(block, "tool_use_id", None)
-
-                        # Nested tool_result span requires finding tool info first (if possible) or just ID
-                        with logfire.span("tool_result", tool_use_id=tool_use_id):
-                            is_error = getattr(block, "is_error", False)
-
-                            # Extract content - keep as typed object
-                            block_content = getattr(block, "content", "")
-                            content_str = str(block_content)
-
-                            result_record = {
-                                "run_id": run_id,
-                                "step_id": step_id,
-                                "tool_use_id": tool_use_id,
-                                "time_offset_seconds": round(time.time() - start_ts, 3),
-                                "is_error": is_error,
-                                "content_size_bytes": len(content_str),
-                                "content_preview": content_str[:1000]
-                                if len(content_str) > 1000
-                                else content_str,
-                            }
-                            if tool_ledger and tool_use_id:
-                                ledger_entry = tool_ledger.get_tool_call(
-                                    str(tool_use_id)
-                                )
-                                if ledger_entry:
-                                    result_record["idempotency_key"] = ledger_entry.get(
-                                        "idempotency_key"
-                                    )
-                                    result_record["ledger_status"] = ledger_entry.get(
-                                        "status"
-                                    )
-                            trace["tool_results"].append(result_record)
-
-                            # Log to Logfire with CONTENT preview
-                            full_content = content_str[:2000]
-
-                            logfire.info(
-                                "tool_output",
-                                tool_use_id=result_record["tool_use_id"],
-                                content_size=result_record["content_size_bytes"],
-                                is_error=result_record["is_error"],
-                                content_preview=full_content,
-                                run_id=run_id,
-                                step_id=step_id,
-                            )
-
-                            print(
-                                f"\n📦 Tool Result ({result_record['content_size_bytes']} bytes) +{result_record['time_offset_seconds']}s"
-                            )
-                            # Always show a preview of the result content
-                            preview = result_record.get("content_preview", "")[:2000]
-                            if preview:
-                                print(
-                                    f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 2000 else ''}"
+                            # 1. Increment Iteration
+                            if run_id and runtime_db_conn:
+                                current_iter = get_iteration_info(
+                                    runtime_db_conn, run_id
+                                ).get("iteration_count", 0)
+                                max_iter = get_iteration_info(runtime_db_conn, run_id).get(
+                                    "max_iterations", 10
                                 )
 
-                            # [Interview Tool Interception] Check if this is an interview request
-                            # NON-BLOCKING: Save questions to file, let iteration complete,
-                            # then display interview between iterations
-                            try:
-                                full_result_content = content_str  # Use full content, not truncated preview
-                                if "__INTERVIEW_REQUEST__" in full_result_content:
+                                if current_iter >= max_iter:
                                     print(
-                                        f"\n   📋 Interview questions detected - will display after this iteration"
+                                        f"⛔ Max iterations ({max_iter}) reached despite context exhaustion. Stopping."
                                     )
-
-                                    # Parse the outer wrapper (may be {"result": "..."})
-                                    try:
-                                        outer = json.loads(full_result_content)
-                                        inner_content = outer.get(
-                                            "result", full_result_content
-                                        )
-                                    except json.JSONDecodeError:
-                                        inner_content = full_result_content
-
-                                    # Strip trace ID prefix if present (format: "[local-toolkit-trace-id: ...]\n{...")
-                                    if isinstance(
-                                        inner_content, str
-                                    ) and inner_content.startswith("["):
-                                        json_start = inner_content.find("{")
-                                        if json_start != -1:
-                                            inner_content = inner_content[json_start:]
-
-                                    # Parse the interview data
-                                    interview_data = (
-                                        json.loads(inner_content)
-                                        if isinstance(inner_content, str)
-                                        else inner_content
-                                    )
-
-                                    if interview_data.get("__INTERVIEW_REQUEST__"):
-                                        questions = interview_data.get("questions", [])
-                                        if questions and OBSERVER_WORKSPACE_DIR:
-                                            # Save questions to workspace for post-iteration processing
-                                            pending_interview_file = os.path.join(
-                                                OBSERVER_WORKSPACE_DIR,
-                                                "pending_interview.json",
-                                            )
-                                            with open(pending_interview_file, "w") as f:
-                                                json.dump(
-                                                    {"questions": questions},
-                                                    f,
-                                                    indent=2,
-                                                )
-
-                                            # Tell agent to wait for user answers
-                                            waiting_msg = "Waiting for user to answer interview questions. Answers will be provided in the next message."
-                                            # Only modify block_content if it has a content attribute
-                                            if hasattr(block_content, "content"):
-                                                block_content.content = waiting_msg
-                                            result_record["content_preview"] = (
-                                                waiting_msg
-                                            )
-                            except (json.JSONDecodeError, Exception) as e:
-                                print(f"   ⚠️ Interview setup error: {e}")
-
-                            # Observer Pattern: Fire-and-forget async save for SERP results
-                            # Look up tool name from tool_use_id
-                            tool_name = None
-                            tool_input = None
-                            for tc in tool_calls_this_iter:
-                                if tc.get("id") == tool_use_id:
-                                    tool_name = tc.get("name")
-                                    tool_input = tc.get("input", {})
                                     break
 
-                            # Reset sub-agent tagging if Task returned (Back to Main)
-                            if tool_name == "Task":
-                                logfire.set_baggage(agent="main")
-                                logfire.set_baggage(is_subagent="false")
-                                if not is_error and OBSERVER_WORKSPACE_DIR:
-                                    paths = _persist_subagent_output(
-                                        workspace_dir=OBSERVER_WORKSPACE_DIR,
-                                        tool_use_id=str(tool_use_id)
-                                        if tool_use_id
-                                        else None,
-                                        tool_input=tool_input or {},
-                                        raw_tool_name=tool_name or "Task",
-                                        output=block_content,
-                                        output_str=content_str,
-                                    )
-                                    if paths:
-                                        logfire.info(
-                                            "subagent_output_persisted",
-                                            task_key=os.path.basename(paths["dir"]),
-                                            output_path=paths["json"],
-                                        )
-                                if not is_error:
-                                    asyncio.create_task(
-                                        _capture_subagent_memory(
-                                            tool_input or {}, content_str
-                                        )
-                                    )
-
-                            if tool_name and OBSERVER_WORKSPACE_DIR:
-                                # Search results observer - pass typed content
-                                asyncio.create_task(
-                                    observe_and_save_search_results(
-                                        tool_name, block_content, OBSERVER_WORKSPACE_DIR
-                                    )
-                                )
-                                # Workbench activity observer
-                                asyncio.create_task(
-                                    observe_and_save_workbench_activity(
-                                        tool_name,
-                                        tool_input or {},
-                                        content_str,
-                                        OBSERVER_WORKSPACE_DIR,
-                                    )
-                                )
-                                # Work products observer - copy reports to persistent directory
-                                asyncio.create_task(
-                                    observe_and_save_work_products(
-                                        tool_name,
-                                        tool_input or {},
-                                        content_str,
-                                        OBSERVER_WORKSPACE_DIR,
-                                    )
-                                )
-                                # Video/audio output observer - copy media to session workspace
-                                asyncio.create_task(
-                                    observe_and_save_video_outputs(
-                                        tool_name,
-                                        tool_input or {},
-                                        content_str,
-                                        OBSERVER_WORKSPACE_DIR,
-                                    )
+                                new_iter = increment_iteration_count(
+                                    runtime_db_conn, run_id
                                 )
 
-                                # Post-subagent compliance verification (for Task results)
-                                compliance_error = verify_subagent_compliance(
-                                    tool_name, content_str, OBSERVER_WORKSPACE_DIR
-                                )
-                                if compliance_error:
-                                    # Log the compliance failure prominently
-                                    print(compliance_error)
+                                # 2. Construct Handoff Prompt (Ledger-Aware)
+                                # Check for handoff.json written by build_evidence_ledger
+                                handoff_path = os.path.join(workspace_dir, "handoff.json") if workspace_dir else None
+                                handoff_state = None
+                            
+                                if handoff_path and os.path.exists(handoff_path):
+                                    try:
+                                        with open(handoff_path, "r") as hf:
+                                            handoff_state = json.load(hf)
+                                    except Exception as e:
+                                        logfire.warning("handoff_json_read_error", error=str(e))
+                            
+                                if handoff_state and handoff_state.get("phase") == "ledger_complete":
+                                    # Ledger-aware restart: guide agent to read only the ledger
+                                    ledger_path = handoff_state.get("ledger_path", "")
+                                    topic = handoff_state.get("topic", "the research topic")
+                                    next_prompt = (
+                                        f"RESUMING (Phase: SYNTHESIS):\n"
+                                        f"Context was reset after {total_tokens} tokens.\n"
+                                        f"Evidence ledger is ready at: {ledger_path}\n\n"
+                                        f"INSTRUCTIONS:\n"
+                                        f"1. READ ONLY the evidence ledger file (do NOT re-read raw corpus)\n"
+                                        f"2. Use EVID-XXX references when citing evidence\n"
+                                        f"3. Write the report based on ledger evidence for: {topic}\n\n"
+                                        f"Status: Iteration {current_iter + 1}/{max_iter}"
+                                    )
+                                    logfire.info("harness_handoff_ledger_aware", ledger_path=ledger_path, topic=topic)
+                                else:
+                                    # Generic restart: no ledger available
+                                    next_prompt = f"RESUMING (Context Limit Reached): You exceeded the context limit ({total_tokens} tokens). I have reset your memory. Continue the mission.json tasks from where you left off. Status: {current_iter + 1}/{max_iter}."
+
+                                pending_prompt = next_prompt
+
+                                # 3. Clear Context
+                                if hasattr(client, "history"):
+                                    client.history = []
+                                    print("🧹 Client history cleared (Context Reset).")
+
+                                # 4. Reset Token Counter for new session
+                                trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
+
+                                continue  # Restart inner loop with new prompt
+
+                if isinstance(msg, AssistantMessage):
+                    # Wrapped in span for full visibility of assistant's turn
+                    with logfire.span("assistant_message", model=msg.model):
+                        for block in msg.content:
+                            if isinstance(block, ToolUseBlock):
+                                if is_malformed_tool_name(block.name):
                                     logfire.warning(
-                                        "subagent_compliance_message_injected",
-                                        error=compliance_error[:200],
+                                        "malformed_tool_name_detected",
+                                        tool_name=block.name,
+                                        run_id=run_id,
+                                        step_id=step_id,
+                                    )
+                                    _mark_run_waiting_for_human(
+                                        "malformed_tool_name_detected",
+                                        tool_name=block.name,
+                                        tool_call_id=str(block.id),
+                                    )
+                                # Nested tool_use span
+                                with logfire.span(
+                                    "tool_use", tool_name=block.name, tool_id=block.id
+                                ):
+                                    tool_record = {
+                                        "run_id": run_id,
+                                        "step_id": step_id,
+                                        "iteration": iteration,
+                                        "name": block.name,
+                                        "id": block.id,
+                                        "time_offset_seconds": round(
+                                            time.time() - start_ts, 3
+                                        ),
+                                        "input": block.input
+                                        if hasattr(block, "input")
+                                        else None,
+                                        "input_size_bytes": len(json.dumps(block.input))
+                                        if hasattr(block, "input") and block.input
+                                        else 0,
+                                    }
+                                    if tool_ledger:
+                                        ledger_entry = tool_ledger.get_tool_call(
+                                            str(block.id)
+                                        )
+                                        if ledger_entry:
+                                            tool_record["idempotency_key"] = (
+                                                ledger_entry.get("idempotency_key")
+                                            )
+                                            tool_record["side_effect_class"] = (
+                                                ledger_entry.get("side_effect_class")
+                                            )
+                                            tool_record["replay_policy"] = ledger_entry.get(
+                                                "replay_policy"
+                                            )
+                                            tool_record["ledger_status"] = ledger_entry.get(
+                                                "status"
+                                            )
+                                    trace["tool_calls"].append(tool_record)
+                                    tool_calls_this_iter.append(tool_record)
+                                    budget_state["tool_calls"] += 1
+                                    if (
+                                        budget_config.get("max_tool_calls")
+                                        and budget_state["tool_calls"]
+                                        > budget_config["max_tool_calls"]
+                                    ):
+                                        raise BudgetExceeded(
+                                            "max_tool_calls",
+                                            budget_config["max_tool_calls"],
+                                            budget_state["tool_calls"],
+                                            detail="tool call limit exceeded",
+                                        )
+
+                                    # Log to Logfire with PAYLOAD preview
+                                    input_preview = None
+                                    if tool_record["input"]:
+                                        input_json = json.dumps(tool_record["input"])
+                                        # Capture up to 2KB of input for debugging code generation
+                                        input_preview = (
+                                            input_json[:2000]
+                                            if len(input_json) > 2000
+                                            else input_json
+                                        )
+
+                                    # Check for sub-agent context (parent_tool_use_id indicates this call is from within a sub-agent)
+                                    parent_tool_id = getattr(
+                                        msg, "parent_tool_use_id", None
                                     )
 
-            elif isinstance(msg, ResultMessage):
-                logfire.info(
-                    "result_message",
-                    duration_ms=msg.duration_ms,
-                    total_cost_usd=msg.total_cost_usd,
-                    num_turns=msg.num_turns,
-                    is_error=msg.is_error,
-                )
-                if msg.session_id:
-                    _maybe_update_provider_session(
-                        msg.session_id, forked_from=provider_session_forked_from
-                    )
-                if msg.is_error and msg.result and runtime_db_conn and run_id:
-                    error_text = str(msg.result).lower()
-                    if "resume" in error_text or "session" in error_text:
-                        update_run_provider_session(runtime_db_conn, run_id, None)
-                        logfire.warning(
-                            "provider_session_invalidated",
-                            run_id=run_id,
-                            error=error_text[:200],
+                                    logfire.info(
+                                        "tool_input",
+                                        tool_name=block.name,
+                                        tool_id=block.id,
+                                        input_size=tool_record["input_size_bytes"],
+                                        input_preview=input_preview,
+                                        parent_tool_use_id=parent_tool_id,  # Sub-agent context
+                                        is_subagent_call=bool(parent_tool_id),
+                                        run_id=run_id,
+                                        step_id=step_id,
+                                    )
+
+                                    # Sub-agent tagging logic: Entering sub-agent
+                                    if block.name == "Task":
+                                        subagent_type = "unknown"
+                                        if hasattr(block, "input") and isinstance(
+                                            block.input, dict
+                                        ):
+                                            subagent_type = block.input.get(
+                                                "subagent_type", "unknown"
+                                            )
+
+                                        logfire.set_baggage(agent=subagent_type)
+                                        logfire.set_baggage(is_subagent="true")
+                                        logfire.set_baggage(
+                                            loop="1"
+                                        )  # Reset loop for the sub-agent
+
+                                    # Check for WORKBENCH or code execution tools
+                                    is_code_exec = any(
+                                        x in block.name.upper()
+                                        for x in [
+                                            "WORKBENCH",
+                                            "CODE",
+                                            "EXECUTE",
+                                            "PYTHON",
+                                            "SANDBOX",
+                                            "BASH",
+                                        ]
+                                    )
+                                    marker = "🏭 CODE EXECUTION" if is_code_exec else "🔧"
+
+                                    print(
+                                        f"\n{marker} [{block.name}] +{tool_record['time_offset_seconds']}s"
+                                    )
+                                    print(
+                                        f"   Input size: {tool_record['input_size_bytes']} bytes"
+                                    )
+
+                                    if tool_record["input"]:
+                                        input_preview = json.dumps(
+                                            tool_record["input"], indent=2
+                                        )
+                                        max_len = 3000 if is_code_exec else 500
+                                        if len(input_preview) > max_len:
+                                            input_preview = input_preview[:max_len] + "..."
+                                        print(f"   Input: {input_preview}")
+                                
+                                    # Show what we're waiting for
+                                    print(f"   ⏳ Waiting for {block.name} response...")
+
+                            elif isinstance(block, TextBlock):
+                                if "connect.composio.dev/link" in block.text:
+                                    import re
+
+                                    links = re.findall(
+                                        r"https://connect\.composio\.dev/link/[^\s\)]+",
+                                        block.text,
+                                    )
+                                    if links:
+                                        auth_link = links[0]
+                                        needs_user_input = True
+
+                                # Buffer final text to print AFTER execution summary (not printed here)
+                                final_text = block.text[:3000] + (
+                                    "..." if len(block.text) > 3000 else ""
+                                )
+
+                                # Log text block
+                                logfire.info(
+                                    "text_block",
+                                    length=len(block.text),
+                                    text_preview=block.text[:500],
+                                )
+
+                            elif isinstance(block, ThinkingBlock):
+                                # Log extended thinking
+                                print(
+                                    f"\n🧠 Thinking (+{round(time.time() - start_ts, 1)}s)..."
+                                )
+                                logfire.info(
+                                    "thinking",
+                                    thinking_length=len(block.thinking),
+                                    thinking_preview=block.thinking[:1000],
+                                    signature=block.signature,
+                                )
+
+                elif isinstance(msg, (UserMessage, ToolResultBlock)):
+                    # Handle both UserMessage (legacy) and ToolResultBlock (new SDK)
+                    blocks = msg.content if isinstance(msg, UserMessage) else [msg]
+
+                    for block in blocks:
+                        # Check for ToolResultBlock or dict-like content in UserMessage
+                        is_result = isinstance(block, ToolResultBlock) or hasattr(
+                            block, "tool_use_id"
                         )
+
+                        if is_result:
+                            tool_use_id = getattr(block, "tool_use_id", None)
+
+                            # Nested tool_result span requires finding tool info first (if possible) or just ID
+                            with logfire.span("tool_result", tool_use_id=tool_use_id):
+                                is_error = getattr(block, "is_error", False)
+
+                                # Extract content - keep as typed object
+                                block_content = getattr(block, "content", "")
+                                content_str = str(block_content)
+
+                                result_record = {
+                                    "run_id": run_id,
+                                    "step_id": step_id,
+                                    "tool_use_id": tool_use_id,
+                                    "time_offset_seconds": round(time.time() - start_ts, 3),
+                                    "is_error": is_error,
+                                    "content_size_bytes": len(content_str),
+                                    "content_preview": content_str[:1000]
+                                    if len(content_str) > 1000
+                                    else content_str,
+                                }
+                                if tool_ledger and tool_use_id:
+                                    ledger_entry = tool_ledger.get_tool_call(
+                                        str(tool_use_id)
+                                    )
+                                    if ledger_entry:
+                                        result_record["idempotency_key"] = ledger_entry.get(
+                                            "idempotency_key"
+                                        )
+                                        result_record["ledger_status"] = ledger_entry.get(
+                                            "status"
+                                        )
+                                trace["tool_results"].append(result_record)
+
+                                # Log to Logfire with CONTENT preview
+                                full_content = content_str[:2000]
+
+                                logfire.info(
+                                    "tool_output",
+                                    tool_use_id=result_record["tool_use_id"],
+                                    content_size=result_record["content_size_bytes"],
+                                    is_error=result_record["is_error"],
+                                    content_preview=full_content,
+                                    run_id=run_id,
+                                    step_id=step_id,
+                                )
+
+                                print(
+                                    f"\n📦 Tool Result ({result_record['content_size_bytes']} bytes) +{result_record['time_offset_seconds']}s"
+                                )
+                                # Always show a preview of the result content
+                                preview = result_record.get("content_preview", "")[:2000]
+                                if preview:
+                                    print(
+                                        f"   Preview: {preview}{'...' if len(result_record.get('content_preview', '')) > 2000 else ''}"
+                                    )
+
+                                # [Interview Tool Interception] Check if this is an interview request
+                                # NON-BLOCKING: Save questions to file, let iteration complete,
+                                # then display interview between iterations
+                                try:
+                                    full_result_content = content_str  # Use full content, not truncated preview
+                                    if "__INTERVIEW_REQUEST__" in full_result_content:
+                                        print(
+                                            f"\n   📋 Interview questions detected - will display after this iteration"
+                                        )
+
+                                        # Parse the outer wrapper (may be {"result": "..."})
+                                        try:
+                                            outer = json.loads(full_result_content)
+                                            inner_content = outer.get(
+                                                "result", full_result_content
+                                            )
+                                        except json.JSONDecodeError:
+                                            inner_content = full_result_content
+
+                                        # Strip trace ID prefix if present (format: "[local-toolkit-trace-id: ...]\n{...")
+                                        if isinstance(
+                                            inner_content, str
+                                        ) and inner_content.startswith("["):
+                                            json_start = inner_content.find("{")
+                                            if json_start != -1:
+                                                inner_content = inner_content[json_start:]
+
+                                        # Parse the interview data
+                                        interview_data = (
+                                            json.loads(inner_content)
+                                            if isinstance(inner_content, str)
+                                            else inner_content
+                                        )
+
+                                        if interview_data.get("__INTERVIEW_REQUEST__"):
+                                            questions = interview_data.get("questions", [])
+                                            if questions and OBSERVER_WORKSPACE_DIR:
+                                                # Save questions to workspace for post-iteration processing
+                                                pending_interview_file = os.path.join(
+                                                    OBSERVER_WORKSPACE_DIR,
+                                                    "pending_interview.json",
+                                                )
+                                                with open(pending_interview_file, "w") as f:
+                                                    json.dump(
+                                                        {"questions": questions},
+                                                        f,
+                                                        indent=2,
+                                                    )
+
+                                                # Tell agent to wait for user answers
+                                                waiting_msg = "Waiting for user to answer interview questions. Answers will be provided in the next message."
+                                                # Only modify block_content if it has a content attribute
+                                                if hasattr(block_content, "content"):
+                                                    block_content.content = waiting_msg
+                                                result_record["content_preview"] = (
+                                                    waiting_msg
+                                                )
+                                except (json.JSONDecodeError, Exception) as e:
+                                    print(f"   ⚠️ Interview setup error: {e}")
+
+                                # Observer Pattern: Fire-and-forget async save for SERP results
+                                # Look up tool name from tool_use_id
+                                tool_name = None
+                                tool_input = None
+                                for tc in tool_calls_this_iter:
+                                    if tc.get("id") == tool_use_id:
+                                        tool_name = tc.get("name")
+                                        tool_input = tc.get("input", {})
+                                        break
+
+                                # Reset sub-agent tagging if Task returned (Back to Main)
+                                if tool_name == "Task":
+                                    logfire.set_baggage(agent="main")
+                                    logfire.set_baggage(is_subagent="false")
+                                    if not is_error and OBSERVER_WORKSPACE_DIR:
+                                        paths = _persist_subagent_output(
+                                            workspace_dir=OBSERVER_WORKSPACE_DIR,
+                                            tool_use_id=str(tool_use_id)
+                                            if tool_use_id
+                                            else None,
+                                            tool_input=tool_input or {},
+                                            raw_tool_name=tool_name or "Task",
+                                            output=block_content,
+                                            output_str=content_str,
+                                        )
+                                        if paths:
+                                            logfire.info(
+                                                "subagent_output_persisted",
+                                                task_key=os.path.basename(paths["dir"]),
+                                                output_path=paths["json"],
+                                            )
+                                    if not is_error:
+                                        asyncio.create_task(
+                                            _capture_subagent_memory(
+                                                tool_input or {}, content_str
+                                            )
+                                        )
+
+                                if tool_name and OBSERVER_WORKSPACE_DIR:
+                                    # Search results observer - pass typed content
+                                    asyncio.create_task(
+                                        observe_and_save_search_results(
+                                            tool_name, block_content, OBSERVER_WORKSPACE_DIR
+                                        )
+                                    )
+                                    # Workbench activity observer
+                                    asyncio.create_task(
+                                        observe_and_save_workbench_activity(
+                                            tool_name,
+                                            tool_input or {},
+                                            content_str,
+                                            OBSERVER_WORKSPACE_DIR,
+                                        )
+                                    )
+                                    # Work products observer - copy reports to persistent directory
+                                    asyncio.create_task(
+                                        observe_and_save_work_products(
+                                            tool_name,
+                                            tool_input or {},
+                                            content_str,
+                                            OBSERVER_WORKSPACE_DIR,
+                                        )
+                                    )
+                                    # Video/audio output observer - copy media to session workspace
+                                    asyncio.create_task(
+                                        observe_and_save_video_outputs(
+                                            tool_name,
+                                            tool_input or {},
+                                            content_str,
+                                            OBSERVER_WORKSPACE_DIR,
+                                        )
+                                    )
+
+                                    # Post-subagent compliance verification (for Task results)
+                                    compliance_error = verify_subagent_compliance(
+                                        tool_name, content_str, OBSERVER_WORKSPACE_DIR
+                                    )
+                                    if compliance_error:
+                                        # Log the compliance failure prominently
+                                        print(compliance_error)
+                                        logfire.warning(
+                                            "subagent_compliance_message_injected",
+                                            error=compliance_error[:200],
+                                        )
+
+                elif isinstance(msg, ResultMessage):
+                    logfire.info(
+                        "result_message",
+                        duration_ms=msg.duration_ms,
+                        total_cost_usd=msg.total_cost_usd,
+                        num_turns=msg.num_turns,
+                        is_error=msg.is_error,
+                    )
+                    if msg.session_id:
+                        _maybe_update_provider_session(
+                            msg.session_id, forked_from=provider_session_forked_from
+                        )
+                    if msg.is_error and msg.result and runtime_db_conn and run_id:
+                        error_text = str(msg.result).lower()
+                        if "resume" in error_text or "session" in error_text:
+                            update_run_provider_session(runtime_db_conn, run_id, None)
+                            logfire.warning(
+                                "provider_session_invalidated",
+                                run_id=run_id,
+                                error=error_text[:200],
+                            )
 
         iter_record = {
             "run_id": run_id,
@@ -5566,16 +5575,18 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
 
     # We use the client to query, but since it has tools configured, we must rely on the prompt to restrict tool usage.
     # In a production system, we might use a separate client without tools.
-    await client.query(classification_prompt)
+    with logfire.span("llm_api_wait", context="classification"):
+        await client.query(classification_prompt)
 
     result_text = ""
-    async for msg in client.receive_response():
-        if isinstance(msg, AssistantMessage):
-            for block in msg.content:
-                if isinstance(block, TextBlock):
-                    result_text += block.text
-        elif isinstance(msg, ResultMessage):
-            _maybe_update_provider_session(msg.session_id)
+    with logfire.span("llm_response_stream", context="classification"):
+        async for msg in client.receive_response():
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        result_text += block.text
+            elif isinstance(msg, ResultMessage):
+                _maybe_update_provider_session(msg.session_id)
 
     decision = result_text.strip().upper()
 
@@ -5605,7 +5616,8 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
     print(f"\n⚡ Direct Answer (Fast Path):")
     print("-" * 40)
 
-    await client.query(query)
+    with logfire.span("llm_api_wait", context="direct_answer"):
+        await client.query(query)
 
     full_response = ""
     tool_use_detected = False
@@ -5626,24 +5638,25 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
             ]
         )
 
-    async for msg in client.receive_response():
-        if isinstance(msg, AssistantMessage):
-            for block in msg.content:
-                if isinstance(block, TextBlock):
-                    print(block.text, end="", flush=True)
-                    full_response += block.text
-                elif isinstance(block, ToolUseBlock):
-                    if disable_local_memory and block.name in ignored_tool_names:
-                        # Ignore local memory tool attempts when local memory is disabled.
-                        continue
-                    # ABORT! The model wants to use a tool.
-                    tool_use_detected = True
-                    break
+    with logfire.span("llm_response_stream", context="direct_answer"):
+        async for msg in client.receive_response():
+            if isinstance(msg, AssistantMessage):
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        print(block.text, end="", flush=True)
+                        full_response += block.text
+                    elif isinstance(block, ToolUseBlock):
+                        if disable_local_memory and block.name in ignored_tool_names:
+                            # Ignore local memory tool attempts when local memory is disabled.
+                            continue
+                        # ABORT! The model wants to use a tool.
+                        tool_use_detected = True
+                        break
 
-            if tool_use_detected:
-                break
-        elif isinstance(msg, ResultMessage):
-            pass  # stream end
+                if tool_use_detected:
+                    break
+            elif isinstance(msg, ResultMessage):
+                pass  # stream end
 
     print("\n" + "-" * 40)  # separator
 
