@@ -40,51 +40,60 @@ const ICONS = {
 
 function TaskPanel() {
   const toolCalls = useAgentStore((s) => s.toolCalls);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   // Filter for 'Task' tool calls
   const tasks = toolCalls.filter(tc => tc.name === "Task" || tc.name === "task").reverse();
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 border-t border-border/50 bg-background/50">
-      <div className="p-3 bg-secondary/10 border-b border-border/50">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center justify-between">
-          <span className="flex items-center gap-2">{ICONS.activity} Tasks</span>
-          {tasks.length > 0 && (
+    <div className={`flex flex-col border-t border-border/50 bg-background/50 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
+      <div
+        className="p-3 bg-secondary/10 border-b border-border/50 cursor-pointer hover:bg-secondary/20 flex items-center justify-between"
+        onClick={() => setIsCollapsed(!isCollapsed)}
+      >
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+          {ICONS.activity} Tasks
+          {tasks.length > 0 && !isCollapsed && (
             <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded-full text-[10px]">{tasks.length}</span>
           )}
         </h2>
+        <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
+          ▼
+        </span>
       </div>
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-2">
-        {tasks.length === 0 ? (
-          <div className="text-xs text-muted-foreground text-center py-8 italic opacity-50">
-            No active tasks
-          </div>
-        ) : (
-          tasks.map((task) => {
-            const input = task.input as any;
-            const subagent = input.subagent_type || "unknown";
-            const description = input.description || "No description";
-            const statusConfig = {
-              pending: { color: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20", icon: "⏳" },
-              running: { color: "bg-blue-500/10 text-blue-500 border-blue-500/20", icon: "🔄" },
-              complete: { color: "bg-green-500/10 text-green-500 border-green-500/20", icon: "✅" },
-              error: { color: "bg-red-500/10 text-red-500 border-red-500/20", icon: "❌" },
-            };
-            const config = statusConfig[task.status as keyof typeof statusConfig] || statusConfig.running;
+      {!isCollapsed && (
+        <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-2">
+          {tasks.length === 0 ? (
+            <div className="text-xs text-muted-foreground text-center py-8 italic opacity-50">
+              No active tasks
+            </div>
+          ) : (
+            tasks.map((task) => {
+              const input = task.input as any;
+              const subagent = input.subagent_type || "unknown";
+              const description = input.description || "No description";
+              const statusConfig = {
+                pending: { color: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20", icon: "⏳" },
+                running: { color: "bg-blue-500/10 text-blue-500 border-blue-500/20", icon: "🔄" },
+                complete: { color: "bg-green-500/10 text-green-500 border-green-500/20", icon: "✅" },
+                error: { color: "bg-red-500/10 text-red-500 border-red-500/20", icon: "❌" },
+              };
+              const config = statusConfig[task.status as keyof typeof statusConfig] || statusConfig.running;
 
-            return (
-              <div key={task.id} className={`rounded-md border p-2 text-xs ${config.color}`}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="font-semibold capitalize flex items-center gap-1.5">
-                    {config.icon} {subagent.replace("-", " ")}
-                  </span>
+              return (
+                <div key={task.id} className={`rounded-md border p-2 text-xs ${config.color}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="font-semibold capitalize flex items-center gap-1.5">
+                      {config.icon} {subagent.replace("-", " ")}
+                    </span>
+                  </div>
+                  <div className="line-clamp-3 opacity-80 leading-relaxed font-light">{description}</div>
                 </div>
-                <div className="line-clamp-3 opacity-80 leading-relaxed font-light">{description}</div>
-              </div>
-            );
-          })
-        )}
-      </div>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -96,6 +105,7 @@ function FileExplorer() {
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   useEffect(() => {
     if (!currentSession?.session_id) return;
@@ -123,41 +133,53 @@ function FileExplorer() {
   };
 
   return (
-    <div className="flex flex-col max-h-[300px] shrink-0 border-b border-border/50">
-      <div className="p-3 border-b border-border/50 bg-secondary/10 flex items-center justify-between">
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider truncate max-w-[150px]" title={currentSession?.session_id}>
-          {ICONS.folder} {path ? `.../${path.split("/").pop()}` : "Files"}
-        </h2>
-        {path && (
+    <div className={`flex flex-col border-b border-border/50 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
+      <div
+        className="p-3 border-b border-border/50 bg-secondary/10 flex items-center justify-between cursor-pointer hover:bg-secondary/20"
+        onClick={(e) => {
+          // Prevent collapse when clicking the 'Up' button
+          if ((e.target as HTMLElement).tagName === 'BUTTON') return;
+          setIsCollapsed(!isCollapsed);
+        }}
+      >
+        <div className="flex items-center gap-2 overflow-hidden">
+          <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}>▼</span>
+          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider truncate" title={currentSession?.session_id}>
+            {ICONS.folder} {path ? `.../${path.split("/").pop()}` : "Files"}
+          </h2>
+        </div>
+        {!isCollapsed && path && (
           <button onClick={handleUp} className="text-xs hover:bg-black/20 p-1 rounded" title="Go Up">
             ⬆️
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-1">
-        {!currentSession ? (
-          <div className="text-xs text-muted-foreground text-center py-4">No active session</div>
-        ) : loading ? (
-          <div className="text-xs text-muted-foreground text-center py-4">Loading...</div>
-        ) : files.length === 0 ? (
-          <div className="text-xs text-muted-foreground text-center py-4">Empty directory</div>
-        ) : (
-          <div className="space-y-0.5">
-            {files.map((file, i) => (
-              <div
-                key={i}
-                className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-colors ${file.is_dir ? "hover:bg-primary/10 text-primary" : "hover:bg-accent text-foreground/80"
-                  }`}
-                onClick={() => handleNavigate(file.name, file.is_dir)}
-              >
-                <span>{file.is_dir ? ICONS.folder : ICONS.file}</span>
-                <span className="truncate flex-1">{file.name}</span>
-                {file.size && <span className="text-[9px] opacity-50">{formatFileSize(file.size)}</span>}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+      {!isCollapsed && (
+        <div className="flex-1 overflow-y-auto scrollbar-thin p-1">
+          {!currentSession ? (
+            <div className="text-xs text-muted-foreground text-center py-4">No active session</div>
+          ) : loading ? (
+            <div className="text-xs text-muted-foreground text-center py-4">Loading...</div>
+          ) : files.length === 0 ? (
+            <div className="text-xs text-muted-foreground text-center py-4">Empty directory</div>
+          ) : (
+            <div className="space-y-0.5">
+              {files.map((file, i) => (
+                <div
+                  key={i}
+                  className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-colors ${file.is_dir ? "hover:bg-primary/10 text-primary" : "hover:bg-accent text-foreground/80"
+                    }`}
+                  onClick={() => handleNavigate(file.name, file.is_dir)}
+                >
+                  <span>{file.is_dir ? ICONS.folder : ICONS.file}</span>
+                  <span className="truncate flex-1">{file.name}</span>
+                  {file.size && <span className="text-[9px] opacity-50">{formatFileSize(file.size)}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -466,6 +488,7 @@ function ActivityItem({ activity }: { activity: any }) {
 function ActivityFeed() {
   const toolCalls = useAgentStore((s) => s.toolCalls);
   const workProducts = useAgentStore((s) => s.workProducts);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const activities = [
     ...toolCalls.map((tc) => ({
@@ -484,23 +507,31 @@ function ActivityFeed() {
   ].sort((a, b) => a.time - b.time);
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="p-3 border-b border-border/50">
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+    <div className={`flex flex-col transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
+      <div
+        className="p-3 border-b border-border/50 flex items-center justify-between cursor-pointer hover:bg-secondary/10"
+        onClick={() => setIsCollapsed(!isCollapsed)}
+      >
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
           {ICONS.activity} Activity
         </h3>
+        <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
+          ▼
+        </span>
       </div>
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">
-        {activities.length === 0 ? (
-          <div className="text-xs text-muted-foreground text-center py-4">
-            No activity yet
-          </div>
-        ) : (
-          activities.map((activity, i) => (
-            <ActivityItem key={i} activity={activity} />
-          ))
-        )}
-      </div>
+      {!isCollapsed && (
+        <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">
+          {activities.length === 0 ? (
+            <div className="text-xs text-muted-foreground text-center py-4">
+              No activity yet
+            </div>
+          ) : (
+            activities.map((activity, i) => (
+              <ActivityItem key={i} activity={activity} />
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
