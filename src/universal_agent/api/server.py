@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Project paths
-BASE_DIR = Path(__file__).parent.parent.parent
+BASE_DIR = Path(__file__).parent.parent.parent.parent
 WORKSPACES_DIR = BASE_DIR / "AGENT_RUN_WORKSPACES"
 
 # Import agent bridge

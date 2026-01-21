@@ -107,11 +107,30 @@ When complete, provide a summary of:
 class UniversalAgentAdapter(BaseAgentAdapter):
     """Adapter for the existing Universal Agent system."""
 
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self._setup: Optional[Any] = None  # AgentSetup instance (cached for session reuse)
+
     async def _create_agent(self) -> Any:
         from universal_agent.agent_core import UniversalAgent
+        from universal_agent.agent_setup import AgentSetup
 
         workspace_dir = str(self._workspace_path) if self._workspace_path else None
-        return UniversalAgent(workspace_dir=workspace_dir)
+        
+        if self._setup is None:
+            # First phase: create new AgentSetup
+            self._setup = AgentSetup(
+                workspace_dir=workspace_dir,
+                enable_skills=True,
+                enable_memory=False,
+                verbose=self.config.get("verbose", False),
+            )
+            await self._setup.initialize()
+            return await UniversalAgent.from_setup(self._setup)
+        else:
+            # Subsequent phases: reuse session, just bind new workspace
+            self._setup.bind_workspace(workspace_dir)
+            return await UniversalAgent.from_setup(self._setup)
 
     async def _run_agent(
         self, agent: Any, prompt: str, workspace_path: Path

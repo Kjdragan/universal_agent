@@ -33,9 +33,134 @@ const ICONS = {
   refresh: "🔄",
 };
 
+
 // =============================================================================
 // Components
 // =============================================================================
+
+function TaskPanel() {
+  const toolCalls = useAgentStore((s) => s.toolCalls);
+
+  // Filter for 'Task' tool calls
+  const tasks = toolCalls.filter(tc => tc.name === "Task" || tc.name === "task").reverse();
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0 border-t border-border/50 bg-background/50">
+      <div className="p-3 bg-secondary/10 border-b border-border/50">
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center justify-between">
+          <span className="flex items-center gap-2">{ICONS.activity} Tasks</span>
+          {tasks.length > 0 && (
+            <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded-full text-[10px]">{tasks.length}</span>
+          )}
+        </h2>
+      </div>
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-2">
+        {tasks.length === 0 ? (
+          <div className="text-xs text-muted-foreground text-center py-8 italic opacity-50">
+            No active tasks
+          </div>
+        ) : (
+          tasks.map((task) => {
+            const input = task.input as any;
+            const subagent = input.subagent_type || "unknown";
+            const description = input.description || "No description";
+            const statusConfig = {
+              pending: { color: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20", icon: "⏳" },
+              running: { color: "bg-blue-500/10 text-blue-500 border-blue-500/20", icon: "🔄" },
+              complete: { color: "bg-green-500/10 text-green-500 border-green-500/20", icon: "✅" },
+              error: { color: "bg-red-500/10 text-red-500 border-red-500/20", icon: "❌" },
+            };
+            const config = statusConfig[task.status as keyof typeof statusConfig] || statusConfig.running;
+
+            return (
+              <div key={task.id} className={`rounded-md border p-2 text-xs ${config.color}`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="font-semibold capitalize flex items-center gap-1.5">
+                    {config.icon} {subagent.replace("-", " ")}
+                  </span>
+                </div>
+                <div className="line-clamp-3 opacity-80 leading-relaxed font-light">{description}</div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+const API_BASE = "http://localhost:8001";
+
+function FileExplorer() {
+  const currentSession = useAgentStore((s) => s.currentSession);
+  const [path, setPath] = useState("");
+  const [files, setFiles] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!currentSession?.session_id) return;
+
+    setLoading(true);
+    fetch(`${API_BASE}/api/files?session_id=${currentSession.session_id}&path=${encodeURIComponent(path)}`)
+      .then(res => res.json())
+      .then(data => {
+        setFiles(data.files || []);
+      })
+      .catch(err => console.error("Failed to fetch files:", err))
+      .finally(() => setLoading(false));
+  }, [currentSession?.session_id, path]);
+
+  const handleNavigate = (itemName: string, isDir: boolean) => {
+    if (!isDir) return; // File preview logic can go here later
+    setPath(prev => prev ? `${prev}/${itemName}` : itemName);
+  };
+
+  const handleUp = () => {
+    if (!path) return;
+    const parts = path.split("/");
+    parts.pop();
+    setPath(parts.join("/"));
+  };
+
+  return (
+    <div className="flex flex-col max-h-[300px] shrink-0 border-b border-border/50">
+      <div className="p-3 border-b border-border/50 bg-secondary/10 flex items-center justify-between">
+        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider truncate max-w-[150px]" title={currentSession?.session_id}>
+          {ICONS.folder} {path ? `.../${path.split("/").pop()}` : "Files"}
+        </h2>
+        {path && (
+          <button onClick={handleUp} className="text-xs hover:bg-black/20 p-1 rounded" title="Go Up">
+            ⬆️
+          </button>
+        )}
+      </div>
+      <div className="flex-1 overflow-y-auto scrollbar-thin p-1">
+        {!currentSession ? (
+          <div className="text-xs text-muted-foreground text-center py-4">No active session</div>
+        ) : loading ? (
+          <div className="text-xs text-muted-foreground text-center py-4">Loading...</div>
+        ) : files.length === 0 ? (
+          <div className="text-xs text-muted-foreground text-center py-4">Empty directory</div>
+        ) : (
+          <div className="space-y-0.5">
+            {files.map((file, i) => (
+              <div
+                key={i}
+                className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-colors ${file.is_dir ? "hover:bg-primary/10 text-primary" : "hover:bg-accent text-foreground/80"
+                  }`}
+                onClick={() => handleNavigate(file.name, file.is_dir)}
+              >
+                <span>{file.is_dir ? ICONS.folder : ICONS.file}</span>
+                <span className="truncate flex-1">{file.name}</span>
+                {file.size && <span className="text-[9px] opacity-50">{formatFileSize(file.size)}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function ConnectionIndicator() {
   const status = useAgentStore((s) => s.connectionStatus);
@@ -53,9 +178,8 @@ function ConnectionIndicator() {
   return (
     <div className="flex items-center gap-2 text-sm">
       <div
-        className={`w-2 h-2 rounded-full ${config.color} ${
-          config.pulse ? "animate-pulse-glow" : ""
-        }`}
+        className={`w-2 h-2 rounded-full ${config.color} ${config.pulse ? "animate-pulse-glow" : ""
+          }`}
       />
       <span className="text-muted-foreground">{config.label}</span>
     </div>
@@ -117,9 +241,8 @@ function ToolCallCard({ toolCall }: { toolCall: any }) {
           <span className="font-mono text-sm text-primary">{ICONS.terminal}</span>
           <span className="font-mono text-sm">{toolCall.name}</span>
           <span
-            className={`text-xs ${
-              statusColors[toolCall.status as keyof typeof statusColors]
-            }`}
+            className={`text-xs ${statusColors[toolCall.status as keyof typeof statusColors]
+              }`}
           >
             {toolCall.status}
           </span>
@@ -165,20 +288,42 @@ function TerminalLog() {
 
 function ChatMessage({ message }: { message: any }) {
   const isUser = message.role === "user";
+  const [formattedTime, setFormattedTime] = useState("");
+
+  // Format time only on client to avoid hydration mismatch
+  useEffect(() => {
+    setFormattedTime(new Date(message.timestamp).toLocaleTimeString());
+  }, [message.timestamp]);
+
+  // Split content by newlines that look like separate thoughts or sections
+  const contentSegments = message.content.split(/\n\n+/).filter(Boolean);
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-4`}>
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-6 group`}>
       <div
-        className={`max-w-[80%] rounded-lg p-3 ${
-          isUser
-            ? "bg-primary/20 border border-primary/30"
-            : "bg-card/50 border border-border/50"
-        }`}
+        className={`max-w-[85%] rounded-xl p-4 shadow-sm ${isUser
+          ? "bg-primary/10 border border-primary/20 text-foreground"
+          : "bg-card border border-border/50 shadow-lg"
+          }`}
       >
-        <div className="text-xs text-muted-foreground mb-1">
-          {isUser ? "You" : "Agent"} • {new Date(message.timestamp).toLocaleTimeString()}
+        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-2 font-medium">
+          <span className={`${isUser ? "text-primary" : "text-blue-400"}`}>
+            {isUser ? "You" : "Primary Agent"}
+          </span>
+          <span className="opacity-30">•</span>
+          <span className="opacity-50 font-mono">{formattedTime}</span>
         </div>
-        <div className="whitespace-pre-wrap">{message.content}</div>
+
+        <div className="space-y-4 text-sm leading-relaxed">
+          {contentSegments.map((segment: string, i: number) => (
+            <div key={i}>
+              <div className="whitespace-pre-wrap">{segment}</div>
+              {i < contentSegments.length - 1 && (
+                <div className="w-8 h-px bg-border/50 my-3 ml-0.5" />
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -207,7 +352,7 @@ function ChatInterface() {
     });
 
     try {
-      ws.sendQuery(query);
+      await ws.sendQuery(query);
     } catch (error) {
       console.error("Failed to send query:", error);
       useAgentStore.getState().setLastError("Failed to send query. Check connection.");
@@ -275,6 +420,51 @@ function ChatInterface() {
   );
 }
 
+function ActivityItem({ activity }: { activity: any }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div>
+      <div
+        className="text-xs flex items-center gap-2 cursor-pointer hover:bg-white/5 p-1 rounded"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span>{activity.type === "tool" ? ICONS.terminal : ICONS.file}</span>
+        <span className="flex-1 truncate font-mono opacity-80">{activity.name}</span>
+        <span className="text-[10px] text-muted-foreground">
+          {expanded ? "▼" : "▶"}
+        </span>
+      </div>
+
+      {expanded && activity.item && (
+        <div className="pl-6 mt-1 text-[10px] space-y-1 overflow-hidden">
+          {activity.type === "tool" && (
+            <>
+              <div className="text-muted-foreground uppercase tracking-wider text-[9px]">Input</div>
+              <pre className="bg-black/30 p-1.5 rounded text-muted-foreground overflow-x-auto">
+                {JSON.stringify(activity.item.input, null, 2)}
+              </pre>
+              {activity.item.result && (
+                <>
+                  <div className="text-muted-foreground uppercase tracking-wider text-[9px] mt-1">Output</div>
+                  <div className="bg-black/30 p-1.5 rounded text-muted-foreground max-h-32 overflow-y-auto whitespace-pre-wrap">
+                    {activity.item.result.content_preview || "No output"}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+          {activity.type === "product" && (
+            <div className="bg-black/30 p-1.5 rounded text-muted-foreground">
+              {activity.item.path}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ActivityFeed() {
   const toolCalls = useAgentStore((s) => s.toolCalls);
   const workProducts = useAgentStore((s) => s.workProducts);
@@ -285,11 +475,13 @@ function ActivityFeed() {
       name: tc.name,
       status: tc.status,
       time: tc.time_offset,
+      item: tc
     })),
     ...workProducts.map((wp) => ({
       type: "product",
       name: wp.filename,
       time: wp.timestamp,
+      item: wp
     })),
   ].sort((a, b) => a.time - b.time);
 
@@ -298,17 +490,14 @@ function ActivityFeed() {
       <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
         {ICONS.activity} Activity
       </h3>
-      <div className="space-y-1 max-h-48 overflow-y-auto scrollbar-thin">
+      <div className="space-y-1 max-h-64 overflow-y-auto scrollbar-thin">
         {activities.length === 0 ? (
           <div className="text-xs text-muted-foreground text-center py-4">
             No activity yet
           </div>
         ) : (
           activities.map((activity, i) => (
-            <div key={i} className="text-xs flex items-center gap-2">
-              <span>{activity.type === "tool" ? ICONS.terminal : ICONS.file}</span>
-              <span className="flex-1 truncate">{activity.name}</span>
-            </div>
+            <ActivityItem key={i} activity={activity} />
           ))
         )}
       </div>
@@ -340,9 +529,8 @@ function WorkProductViewer() {
               <button
                 key={wp.id}
                 onClick={() => setSelectedProduct(wp)}
-                className={`w-full text-left px-3 py-2 text-sm hover:bg-accent/50 transition-colors ${
-                  selectedProduct?.id === wp.id ? "bg-accent" : ""
-                }`}
+                className={`w-full text-left px-3 py-2 text-sm hover:bg-accent/50 transition-colors ${selectedProduct?.id === wp.id ? "bg-accent" : ""
+                  }`}
               >
                 <div className="truncate">{wp.filename}</div>
               </button>
@@ -445,16 +633,10 @@ export default function HomePage() {
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar - Sessions */}
-        <aside className="w-56 border-r border-border/50 p-3 overflow-y-auto scrollbar-thin">
-          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-            {ICONS.folder} Sessions
-          </h2>
-          <div className="space-y-1">
-            <div className="text-xs text-muted-foreground">
-              {useAgentStore.getState().currentSession?.session_id || "No active session"}
-            </div>
-          </div>
+        {/* Left Sidebar - Sessions & Tasks */}
+        <aside className="w-64 border-r border-border/50 flex flex-col overflow-hidden bg-background/30 backdrop-blur-sm">
+          <FileExplorer />
+          <TaskPanel />
         </aside>
 
         {/* Center - Chat Interface */}
