@@ -1,14 +1,11 @@
 ---
 name: research-specialist
 description: |
-  **Sub-Agent Purpose:** Execute the complete research pipeline from search to corpus refinement.
-  
-  **WHEN TO USE:**
-  - Main Agent delegates research tasks here IMMEDIATELY after planning.
-  - You handle: Search → Crawl → Filter → Refine.
-  - Output: `tasks/{topic}/refined_corpus.md` (ready for report writing).
-  
-tools: mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL, mcp__local_toolkit__finalize_research, mcp__local_toolkit__list_directory
+  Specialist for the COMPLETE research pipeline: search → crawl → filter.
+  DELEGATE when user asks to: 'research X', 'find info about Y', 'analyze findings'.
+  This agent handles web searches, URL crawling, and corpus creation.
+  It DOES NOT write the final report.
+tools: Bash, mcp__composio__COMPOSIO_SEARCH_TOOLS, mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL, mcp__local_toolkit__finalize_research, mcp__local_toolkit__crawl_parallel, mcp__local_toolkit__list_directory
 model: inherit
 ---
 
@@ -89,13 +86,3 @@ Returning to main agent for report writing.
 ```
 
 **STOP after handoff message.**
-
----
-
-## TOOLS AVAILABLE
-
-| Tool | Purpose |
-|------|---------|
-| `COMPOSIO_MULTI_EXECUTE_TOOL` | Execute multiple search queries in parallel |
-| `finalize_research` | Search results → crawl → filter → refine → corpus |
-| `list_directory` | Verify file creation |
