@@ -149,9 +149,29 @@ export class AgentWebSocket {
     }
   }
 
-  sendQuery(text: string): void {
+  async sendQuery(text: string): Promise<void> {
+    console.log(`[AgentWebSocket] sending query: "${text.substring(0, 50)}..."`);
+
+    // Auto-connect if needed
+    if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
+      console.log("[AgentWebSocket] WebSocket disconnected, attempting to reconnect...");
+      this.connect();
+    }
+
+    // Wait for connection if connecting
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+      console.log("[AgentWebSocket] WebSocket connecting, waiting...");
+      try {
+        await this.waitForConnection();
+      } catch (e) {
+        throw new Error("Connection timeout awaiting socket open");
+      }
+    }
+
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket is not connected");
+      const state = this.ws ? this.ws.readyState : "null";
+      console.error(`[AgentWebSocket] Cannot send, socket state: ${state}`);
+      throw new Error(`WebSocket is not connected (State: ${state})`);
     }
 
     const event: WebSocketEvent = {
@@ -160,8 +180,24 @@ export class AgentWebSocket {
       timestamp: Date.now(),
     };
 
+    console.log("[AgentWebSocket] sending payload over wire");
     this.ws.send(JSON.stringify(event));
     this.updateStatus("processing");
+  }
+
+  private waitForConnection(timeout = 5000): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      const interval = setInterval(() => {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          clearInterval(interval);
+          resolve();
+        } else if (Date.now() - start > timeout) {
+          clearInterval(interval);
+          reject(new Error("Timeout"));
+        }
+      }, 100);
+    });
   }
 
   sendApproval(approval: { phase_id: string; approved: boolean; followup_input?: string }): void {

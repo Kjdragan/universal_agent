@@ -851,113 +851,27 @@ class UniversalAgent:
         return workspace_dir
 
     async def initialize(self) -> None:
-        """Initialize Composio, Claude SDK, and tracing."""
+        """Initialize using AgentSetup for consistent configuration."""
         if self._initialized:
             return
 
-        # Initialize Composio
-        downloads_dir = os.path.join(self.workspace_dir, "downloads")
-        os.makedirs(downloads_dir, exist_ok=True)
-        self.composio = Composio(
-            api_key=os.environ["COMPOSIO_API_KEY"], file_download_dir=downloads_dir
-        )
-
-        # Create session (local tools exposed via local MCP server, not custom_tools)
-        self.session = self.composio.create(
-            user_id=self.user_id, toolkits={"disable": ["firecrawl", "exa"]}
-        )
-
-        # Define sub-agents first so we can reference them in system prompt
-        abs_workspace = os.path.abspath(self.workspace_dir)
+        from universal_agent.agent_setup import AgentSetup
         
-        self.sub_agents = {
-            "report-writer": AgentDefinition(
-                description=(
-                    "Specialist for creating professional HTML reports from research. "
-                    "Use when task involves: report, summary, comprehensive output, detailed analysis, html generation."
-                ),
-                prompt=self._build_report_writer_prompt(abs_workspace),
-                tools=[
-                    "Read",
-                    "Write",
-                    "Bash",
-                    "mcp__local_toolkit__finalize_research",
-                    "mcp__local_toolkit__list_directory",
-                    "mcp__local_toolkit__append_to_file",
-                    "mcp__local_toolkit__generate_image",
-                    "mcp__local_toolkit__workbench_download",
-                    "mcp__local_toolkit__workbench_upload",
-                    "mcp__local_toolkit__draft_report_parallel",
-                    "mcp__local_toolkit__cleanup_report",
-                    "mcp__local_toolkit__compile_report",
-                ],
-                model="inherit",
-            ),
-             "research-specialist": AgentDefinition(
-                description=(
-                    "Specialist for deep web research and data gathering. "
-                    "Use when task involves: finding information, searching web, gathering data, investigating topics."
-                ),
-                prompt=self._build_research_specialist_prompt(abs_workspace),
-                tools=[
-                    "Read",
-                    "Write",
-                    "Bash",
-                    "mcp__local_toolkit__finalize_research",
-                    "mcp__composio__COMPOSIO_SEARCH_WEB", 
-                    "mcp__composio__COMPOSIO_SEARCH_NEWS",
-                    "mcp__local_toolkit__crawl_parallel",
-                ],
-                 model="inherit",
-            ),
-        }
-
-        # Build system prompt with dynamic agent awareness
-        import sys
-        
-        # Set workspace in environment so MCP server subprocess can access it
-        os.environ["CURRENT_SESSION_WORKSPACE"] = abs_workspace
-        
-        system_prompt = self._build_system_prompt(abs_workspace, agents=self.sub_agents)
-
-        self.options = ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            disallowed_tools=DISALLOWED_TOOLS,
-            mcp_servers={
-                "composio": {
-                    "type": "http",
-                    "url": self.session.mcp.url,
-                    "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
-                },
-                "local_toolkit": {
-                    "type": "stdio",
-                    "command": sys.executable,
-                    "args": [
-                        os.path.join(
-                            os.path.dirname(os.path.dirname(__file__)), "mcp_server.py"
-                        )
-                    ],
-                    "env": {
-                        "CURRENT_SESSION_WORKSPACE": abs_workspace
-                    },
-                },
-            },
-            # Note: No allowed_tools restriction - main agent can use any tool for flexibility
-            agents=self.sub_agents,
-            hooks={
-                "PreToolUse": [
-                    HookMatcher(matcher="*", hooks=[malformed_tool_guardrail_hook]),
-                ],
-                "PostToolUse": [
-                    HookMatcher(matcher="Write", hooks=[tool_output_validator_hook]),
-                ],
-                "PreCompact": [
-                    HookMatcher(matcher="*", hooks=[pre_compact_context_capture_hook]),
-                ],
-            },
-            permission_mode="bypassPermissions",
+        # Use AgentSetup for unified initialization
+        self._setup = AgentSetup(
+            workspace_dir=self.workspace_dir,
+            user_id=self.user_id,
+            enable_skills=True,
+            enable_memory=False,  # URW/API may not need memory
+            verbose=True,
         )
-        _warn_if_subagent_hooks_configured(self.options.agents)
+        await self._setup.initialize()
+        
+        # Copy references from setup
+        self.composio = self._setup.composio
+        self.session = self._setup.session
+        self.options = self._setup.options
+        self.run_id = self._setup.run_id
 
         # Initialize trace
         self.trace = {
@@ -986,6 +900,49 @@ class UniversalAgent:
 
         if LOGFIRE_TOKEN:
             logfire.set_baggage(run_id=self.run_id)
+
+    def bind_workspace(self, new_workspace: str) -> None:
+        """Update workspace for URW phase transitions."""
+        self.workspace_dir = new_workspace
+        if hasattr(self, '_setup') and self._setup:
+            self._setup.bind_workspace(new_workspace)
+            self.options = self._setup.options
+
+    @classmethod
+    async def from_setup(cls, setup: "AgentSetup") -> "UniversalAgent":
+        """Create UniversalAgent from an existing AgentSetup (for URW)."""
+        agent = cls(workspace_dir=setup.workspace_dir, user_id=setup.user_id)
+        agent._setup = setup
+        agent.composio = setup.composio
+        agent.session = setup.session
+        agent.options = setup.options
+        agent.run_id = setup.run_id
+        
+        agent.trace = {
+            "run_id": agent.run_id,
+            "session_info": {
+                "url": setup.session.mcp.url,
+                "user_id": setup.user_id,
+                "run_id": setup.run_id,
+                "timestamp": datetime.now().isoformat(),
+            },
+            "query": None,
+            "start_time": None,
+            "end_time": None,
+            "total_duration_seconds": None,
+            "tool_calls": [],
+            "tool_results": [],
+            "iterations": [],
+            "token_usage": {"input": 0, "output": 0, "total": 0},
+            "logfire_enabled": bool(LOGFIRE_TOKEN),
+        }
+        agent._initialized = True
+        agent.history = MessageHistory(system_prompt_tokens=2000)
+        
+        if LOGFIRE_TOKEN:
+            logfire.set_baggage(run_id=agent.run_id)
+        
+        return agent
 
     def _build_system_prompt(self, workspace_path: str, agents: Optional[dict] = None) -> str:
         """Build the main system prompt."""
@@ -1043,7 +1000,13 @@ class UniversalAgent:
             "- Complete the full task end-to-end in a single workflow.\n"
             "- For simple factual questions, you can respond directly.\n"
             "- For any research/report task, delegate to sub-agent.\n\n"
-            f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
+            "## WORKSPACE & ISOLATION\n"
+        f"You are executing within a specific session workspace: `{workspace_path}`\n"
+        "1. **STRICT CONFINEMENT**: You MUST NOT access, search, read, or write files outside this directory structure unless explicitly requested by the user.\n"
+        "2. **ISOLATION**: Do NOT explore, list, or modify adjacent session directories (e.g. `../session_...`). Treat them as non-existent.\n"
+        "3. **PATHING**: Your current working directory may be the project root. ALWAYS use ABSOLUTE PATHS prefixed with your workspace path for file operations (e.g. `find {workspace_path} -name ...`).\n"
+        "4. **AVOID GLOBAL SEARCH**: Do NOT use `files='**'` or global `find .` commands that scan the entire project. Target your workspace explicitly.\n\n"
+        f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
         )
         tool_knowledge = get_tool_knowledge_block()
         if tool_knowledge:

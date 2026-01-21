@@ -6095,6 +6095,7 @@ async def setup_session(
     options = ClaudeAgentOptions(
         model="claude-3-5-sonnet-20241022",
         add_dirs=[os.path.join(src_dir, ".claude")],
+        setting_sources=["project"],  # Enable loading agents from .claude/agents/
         disallowed_tools=disallowed_tools,
         # Read token limits from env vars (default 64K for good balance of capacity vs safety)
         env={

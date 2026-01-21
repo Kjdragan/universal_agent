@@ -34,7 +34,7 @@ class AgentBridge:
     def __init__(self):
         self.current_agent: Optional[UniversalAgent] = None
         self.current_session_id: Optional[str] = None
-        self.workspace_base = Path("AGENT_RUN_WORKSPACES")
+        self.workspace_base = Path("AGENT_RUN_WORKSPACES").resolve()
         self.event_callbacks: list[Callable[[WebSocketEvent], None]] = []
 
     async def create_session(self, user_id: str = "user_ui") -> SessionInfo:
