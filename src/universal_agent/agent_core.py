@@ -1503,9 +1503,7 @@ class UniversalAgent:
                                     file_path = tool_input.get(
                                         "file_path", ""
                                     ) or tool_input.get("path", "")
-                                    if "work_products" in file_path and file_path.endswith(
-                                        ".html"
-                                    ):
+                                    if file_path.endswith(".html"):
                                         # Read the file content and emit work_product event
                                         try:
                                             if os.path.exists(file_path):
