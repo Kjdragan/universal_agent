@@ -83,6 +83,13 @@ agent-browser is enabled @e1      # Check if enabled
 agent-browser is checked @e1      # Check if checked
 ```
 
+### Data Extraction Best Practices
+- **Prefer `innerText`**: Dynamic sites often obfuscate class names (e.g., `css-1234`). Use `document.body.innerText` to get all text and parse it with your LLM context.
+- **Use `snapshot -i`**: This uses the accessibility tree which is more stable than HTML structure, especially for interactive elements.
+- **Avoid complex selectors**: Selectors like `div > div:nth-child(3)` are brittle. If you must use JS, try robust queries like `document.querySelectorAll('a[href*="showtime"]')`.
+- **Fallback**: If a JS extraction returns `[]`, immediately fallback to getting the whole page text.
+
+
 ### Screenshots & PDF
 ```bash
 agent-browser screenshot          # Screenshot to stdout

@@ -1,0 +1,33 @@
+=================================================================
+                   AquaFlow Plumbing Services                    
+=================================================================
+                       123 Pipeline Street                       
+                       Waterford, CA 90210                       
+Phone:                     (555) 123-4567                      Email: billing@aquaflowplumbing.com
+=================================================================
+
+INVOICE
+Invoice Number: INV-2025-007                             Date: December 06, 2025
+Bill To:                                    Due Date: January 05, 2026
+
+Robert Wilson
+258 Canyon Road, Burbank, CA 91501
+Phone: (818) 555-0107
+
+-----------------------------------------------------------------
+DESCRIPTION                                               AMOUNT
+-----------------------------------------------------------------
+Water Softener System Installation            $          2100.00
+Garbage Disposal Unit Installation            $           525.00
+-----------------------------------------------------------------
+SUBTOTAL                                      $          2625.00
+Tax (8.25%)                                   $           216.56
+=================================================================
+TOTAL DUE                                     $          2841.56
+=================================================================
+
+Payment Terms: Net 30 Days
+Thank you for your business!
+
+Make checks payable to: AquaFlow Plumbing Services
+Payment methods: Cash, Check, Credit Card, Bank Transfer

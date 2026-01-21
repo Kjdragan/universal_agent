@@ -1258,274 +1258,276 @@ class UniversalAgent:
             type=EventType.STATUS, data={"status": "processing", "iteration": iteration}
         )
 
-        await self.client.query(query)  # type: ignore
+        with logfire.span("llm_api_wait", query_length=len(query)):
+            await self.client.query(query)  # type: ignore
 
         tool_calls_this_iter = []
         auth_link = None
 
-        async for msg in self.client.receive_response():  # type: ignore
-            if isinstance(msg, AssistantMessage):
-                for block in msg.content:
-                    if isinstance(block, ToolUseBlock):
-                        if is_malformed_tool_name(block.name):
-                            logfire.warning(
-                                "malformed_tool_name_detected",
-                                tool_name=block.name,
-                                run_id=self.run_id,
-                                step_id=step_id,
-                            )
-                            yield AgentEvent(
-                                type=EventType.ERROR,
-                                data={
-                                    "error": "Malformed tool call name detected.",
-                                    "tool_name": block.name,
-                                },
-                            )
-                        tool_record = {
-                            "run_id": self.run_id,
-                            "step_id": step_id,
-                            "iteration": iteration,
-                            "name": block.name,
-                            "id": block.id,
-                            "time_offset_seconds": round(
-                                time.time() - self.start_ts, 3
-                            ),
-                            "input": block.input if hasattr(block, "input") else None,
-                        }
-                        self.trace["tool_calls"].append(tool_record)
-                        tool_calls_this_iter.append(tool_record)
-
-                        # Track token usage if available in tool use block message (unlikely but safe)
-                        if hasattr(msg, "usage") and msg.usage:
-                            u = msg.usage
-                            inp = getattr(u, "input_tokens", 0) or 0
-                            out = getattr(u, "output_tokens", 0) or 0
-                            self.trace["token_usage"]["input"] += inp
-                            self.trace["token_usage"]["output"] += out
-                            self.trace["token_usage"]["total"] += inp + out
-
-                        yield AgentEvent(
-                            type=EventType.TOOL_CALL,
-                            data={
+        with logfire.span("llm_response_stream"):
+            async for msg in self.client.receive_response():  # type: ignore
+                if isinstance(msg, AssistantMessage):
+                    for block in msg.content:
+                        if isinstance(block, ToolUseBlock):
+                            if is_malformed_tool_name(block.name):
+                                logfire.warning(
+                                    "malformed_tool_name_detected",
+                                    tool_name=block.name,
+                                    run_id=self.run_id,
+                                    step_id=step_id,
+                                )
+                                yield AgentEvent(
+                                    type=EventType.ERROR,
+                                    data={
+                                        "error": "Malformed tool call name detected.",
+                                        "tool_name": block.name,
+                                    },
+                                )
+                            tool_record = {
+                                "run_id": self.run_id,
+                                "step_id": step_id,
+                                "iteration": iteration,
                                 "name": block.name,
                                 "id": block.id,
-                                "input": block.input,
-                                "time_offset": tool_record["time_offset_seconds"],
-                            },
-                        )
+                                "time_offset_seconds": round(
+                                    time.time() - self.start_ts, 3
+                                ),
+                                "input": block.input if hasattr(block, "input") else None,
+                            }
+                            self.trace["tool_calls"].append(tool_record)
+                            tool_calls_this_iter.append(tool_record)
 
-                    elif isinstance(block, TextBlock):
-                        # Check for auth link
-                        if "connect.composio.dev/link" in block.text:
-                            links = re.findall(
-                                r"https://connect\.composio\.dev/link/[^\s\)]+",
-                                block.text,
+                            # Track token usage if available in tool use block message (unlikely but safe)
+                            if hasattr(msg, "usage") and msg.usage:
+                                u = msg.usage
+                                inp = getattr(u, "input_tokens", 0) or 0
+                                out = getattr(u, "output_tokens", 0) or 0
+                                self.trace["token_usage"]["input"] += inp
+                                self.trace["token_usage"]["output"] += out
+                                self.trace["token_usage"]["total"] += inp + out
+
+                            yield AgentEvent(
+                                type=EventType.TOOL_CALL,
+                                data={
+                                    "name": block.name,
+                                    "id": block.id,
+                                    "input": block.input,
+                                    "time_offset": tool_record["time_offset_seconds"],
+                                },
                             )
-                            if links:
-                                auth_link = links[0]
-                                yield AgentEvent(
-                                    type=EventType.AUTH_REQUIRED,
-                                    data={"auth_link": auth_link},
+
+                        elif isinstance(block, TextBlock):
+                            # Check for auth link
+                            if "connect.composio.dev/link" in block.text:
+                                links = re.findall(
+                                    r"https://connect\.composio\.dev/link/[^\s\)]+",
+                                    block.text,
                                 )
-
-                        yield AgentEvent(type=EventType.TEXT, data={"text": block.text})
-
-                    elif isinstance(block, ThinkingBlock):
-                        yield AgentEvent(
-                            type=EventType.THINKING,
-                            data={"thinking": block.thinking[:500]},
-                        )
-
-            elif isinstance(msg, ResultMessage):
-                if msg.session_id:
-                    self.trace["provider_session_id"] = msg.session_id
-
-                # Check for usage info in ResultMessage (Anthropic often puts it here)
-                if hasattr(msg, "usage") and msg.usage:
-                    u = msg.usage
-                    inp = getattr(u, "input_tokens", 0) or 0
-                    out = getattr(u, "output_tokens", 0) or 0
-
-                    # Update cumulative trace (for backwards compatibility)
-                    self.trace["token_usage"]["input"] += inp
-                    self.trace["token_usage"]["output"] += out
-                    self.trace["token_usage"]["total"] += inp + out
-
-                    # Add to MessageHistory for per-message tracking (Anthropic pattern)
-                    self.history.add_message("assistant", "response", u)
-
-                    # Check for truncation and apply it
-                    if self.history.truncate():
-                        logfire.warning(
-                            "context_truncated_mid_session",
-                            run_id=self.run_id,
-                            stats=self.history.get_stats(),
-                        )
-
-                    # Check if we should trigger harness handoff
-                    if self.history.should_handoff():
-                        logfire.warning(
-                            "context_threshold_reached",
-                            run_id=self.run_id,
-                            total_tokens=self.history.total_tokens,
-                            threshold=TRUNCATION_THRESHOLD,
-                        )
-                        yield AgentEvent(
-                            type=EventType.STATUS,
-                            data={
-                                "status": "CONTEXT_THRESHOLD",
-                                "tokens": self.history.total_tokens,
-                                "threshold": TRUNCATION_THRESHOLD,
-                            },
-                        )
-
-                    logfire.info(
-                        "token_usage_update",
-                        run_id=self.run_id,
-                        input=inp,
-                        output=out,
-                        total_so_far=self.trace["token_usage"]["total"],
-                        history_tokens=self.history.total_tokens,
-                    )
-
-            elif isinstance(msg, (UserMessage, ToolResultBlock)):
-                blocks = msg.content if isinstance(msg, UserMessage) else [msg]
-
-                for block in blocks:
-                    is_result = isinstance(block, ToolResultBlock) or hasattr(
-                        block, "tool_use_id"
-                    )
-
-                    if is_result:
-                        tool_use_id = getattr(block, "tool_use_id", None)
-                        is_error = getattr(block, "is_error", False)
-                        block_content = getattr(block, "content", "")
-                        content_str = str(block_content)
-
-                        result_record = {
-                            "run_id": self.run_id,
-                            "step_id": step_id,
-                            "tool_use_id": tool_use_id,
-                            "time_offset_seconds": round(
-                                time.time() - self.start_ts, 3
-                            ),
-                            "is_error": is_error,
-                            "content_size_bytes": len(content_str),
-                        }
-                        self.trace["tool_results"].append(result_record)
-
-                        # --- CONSECUTIVE ERROR TRACKING ---
-                        # Logic: If we see repeated schema validation errors, escalate and eventually abort.
-                        if is_error:
-                            error_text = str(block_content)
-                            # Only count validation/schema errors which indicate a loop
-                            if (
-                                "validation" in error_text.lower()
-                                or "missing required" in error_text.lower()
-                            ):
-                                self.consecutive_tool_errors += 1
-                                logfire.warning(
-                                    "consecutive_tool_error",
-                                    count=self.consecutive_tool_errors,
-                                    error=error_text[:100],
-                                )
-
-                                # Level 2: Escalated Nudge (3 errors)
-                                if self.consecutive_tool_errors == 3:
-                                    # We can't modify the PAST block, but we can potentially inject a steering message?
-                                    # Actually the most effective way is to let the result go through,
-                                    # but if we could intercept... for now relies on the agent reading the error.
-                                    # We will implement the Escalated Nudge in the *next* user message or via system event if possible.
-                                    # For now, just logging.
-                                    pass
-
-                                # Level 3: Hard Stop (4 errors)
-                                if self.consecutive_tool_errors >= 4:
-                                    raise HarnessError(
-                                        f"Aborting iteration due to {self.consecutive_tool_errors} consecutive tool validation errors.",
-                                        context={"last_tool_error": error_text[:500]},
+                                if links:
+                                    auth_link = links[0]
+                                    yield AgentEvent(
+                                        type=EventType.AUTH_REQUIRED,
+                                        data={"auth_link": auth_link},
                                     )
-                        else:
-                            # Reset on success
-                            self.consecutive_tool_errors = 0
-                        # ----------------------------------
 
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_use_id": tool_use_id,
-                                "is_error": is_error,
-                                "content_preview": content_str[:2000],
-                                "content_size": len(content_str),
-                            },
+                            yield AgentEvent(type=EventType.TEXT, data={"text": block.text})
+
+                        elif isinstance(block, ThinkingBlock):
+                            yield AgentEvent(
+                                type=EventType.THINKING,
+                                data={"thinking": block.thinking[:500]},
+                            )
+
+                elif isinstance(msg, ResultMessage):
+                    if msg.session_id:
+                        self.trace["provider_session_id"] = msg.session_id
+
+                    # Check for usage info in ResultMessage (Anthropic often puts it here)
+                    if hasattr(msg, "usage") and msg.usage:
+                        u = msg.usage
+                        inp = getattr(u, "input_tokens", 0) or 0
+                        out = getattr(u, "output_tokens", 0) or 0
+
+                        # Update cumulative trace (for backwards compatibility)
+                        self.trace["token_usage"]["input"] += inp
+                        self.trace["token_usage"]["output"] += out
+                        self.trace["token_usage"]["total"] += inp + out
+
+                        # Add to MessageHistory for per-message tracking (Anthropic pattern)
+                        self.history.add_message("assistant", "response", u)
+
+                        # Check for truncation and apply it
+                        if self.history.truncate():
+                            logfire.warning(
+                                "context_truncated_mid_session",
+                                run_id=self.run_id,
+                                stats=self.history.get_stats(),
+                            )
+
+                        # Check if we should trigger harness handoff
+                        if self.history.should_handoff():
+                            logfire.warning(
+                                "context_threshold_reached",
+                                run_id=self.run_id,
+                                total_tokens=self.history.total_tokens,
+                                threshold=TRUNCATION_THRESHOLD,
+                            )
+                            yield AgentEvent(
+                                type=EventType.STATUS,
+                                data={
+                                    "status": "CONTEXT_THRESHOLD",
+                                    "tokens": self.history.total_tokens,
+                                    "threshold": TRUNCATION_THRESHOLD,
+                                },
+                            )
+
+                        logfire.info(
+                            "token_usage_update",
+                            run_id=self.run_id,
+                            input=inp,
+                            output=out,
+                            total_so_far=self.trace["token_usage"]["total"],
+                            history_tokens=self.history.total_tokens,
                         )
 
-                        # Fire observers
-                        tool_name = None
-                        tool_input = None
-                        for tc in tool_calls_this_iter:
-                            if tc.get("id") == tool_use_id:
-                                tool_name = tc.get("name")
-                                tool_input = tc.get("input", {})
-                                break
+                elif isinstance(msg, (UserMessage, ToolResultBlock)):
+                    blocks = msg.content if isinstance(msg, UserMessage) else [msg]
 
-                        if tool_name and self.workspace_dir:
-                            asyncio.create_task(
-                                observe_and_save_search_results(
-                                    tool_name, block_content, self.workspace_dir
-                                )
-                            )
-                            asyncio.create_task(
-                                observe_and_save_workbench_activity(
-                                    tool_name,
-                                    tool_input or {},
-                                    content_str,
-                                    self.workspace_dir,
-                                )
-                            )
-                            asyncio.create_task(
-                                observe_and_enrich_corpus(
-                                    tool_name,
-                                    tool_input or {},
-                                    block_content,
-                                    self.workspace_dir,
-                                )
-                            )
+                    for block in blocks:
+                        is_result = isinstance(block, ToolResultBlock) or hasattr(
+                            block, "tool_use_id"
+                        )
 
-                            # Check for work_product events (Write tool to work_products/)
-                            tool_lower = tool_name.lower()
-                            is_write_tool = "write" in tool_lower and (
-                                "__write" in tool_lower or tool_lower.endswith("write")
-                            )
-                            if is_write_tool and tool_input:
-                                file_path = tool_input.get(
-                                    "file_path", ""
-                                ) or tool_input.get("path", "")
-                                if "work_products" in file_path and file_path.endswith(
-                                    ".html"
+                        if is_result:
+                            tool_use_id = getattr(block, "tool_use_id", None)
+                            is_error = getattr(block, "is_error", False)
+                            block_content = getattr(block, "content", "")
+                            content_str = str(block_content)
+
+                            result_record = {
+                                "run_id": self.run_id,
+                                "step_id": step_id,
+                                "tool_use_id": tool_use_id,
+                                "time_offset_seconds": round(
+                                    time.time() - self.start_ts, 3
+                                ),
+                                "is_error": is_error,
+                                "content_size_bytes": len(content_str),
+                            }
+                            self.trace["tool_results"].append(result_record)
+
+                            # --- CONSECUTIVE ERROR TRACKING ---
+                            # Logic: If we see repeated schema validation errors, escalate and eventually abort.
+                            if is_error:
+                                error_text = str(block_content)
+                                # Only count validation/schema errors which indicate a loop
+                                if (
+                                    "validation" in error_text.lower()
+                                    or "missing required" in error_text.lower()
                                 ):
-                                    # Read the file content and emit work_product event
-                                    try:
-                                        if os.path.exists(file_path):
-                                            with open(
-                                                file_path, "r", encoding="utf-8"
-                                            ) as f:
-                                                html_content = f.read()
-                                            yield AgentEvent(
-                                                type=EventType.WORK_PRODUCT,
-                                                data={
-                                                    "content_type": "text/html",
-                                                    "content": html_content,
-                                                    "filename": os.path.basename(
-                                                        file_path
-                                                    ),
-                                                    "path": file_path,
-                                                },
-                                            )
-                                    except Exception as e:
-                                        logfire.warning(
-                                            "work_product_read_error", error=str(e)
+                                    self.consecutive_tool_errors += 1
+                                    logfire.warning(
+                                        "consecutive_tool_error",
+                                        count=self.consecutive_tool_errors,
+                                        error=error_text[:100],
+                                    )
+
+                                    # Level 2: Escalated Nudge (3 errors)
+                                    if self.consecutive_tool_errors == 3:
+                                        # We can't modify the PAST block, but we can potentially inject a steering message?
+                                        # Actually the most effective way is to let the result go through,
+                                        # but if we could intercept... for now relies on the agent reading the error.
+                                        # We will implement the Escalated Nudge in the *next* user message or via system event if possible.
+                                        # For now, just logging.
+                                        pass
+
+                                    # Level 3: Hard Stop (4 errors)
+                                    if self.consecutive_tool_errors >= 4:
+                                        raise HarnessError(
+                                            f"Aborting iteration due to {self.consecutive_tool_errors} consecutive tool validation errors.",
+                                            context={"last_tool_error": error_text[:500]},
                                         )
+                            else:
+                                # Reset on success
+                                self.consecutive_tool_errors = 0
+                            # ----------------------------------
+
+                            yield AgentEvent(
+                                type=EventType.TOOL_RESULT,
+                                data={
+                                    "tool_use_id": tool_use_id,
+                                    "is_error": is_error,
+                                    "content_preview": content_str[:2000],
+                                    "content_size": len(content_str),
+                                },
+                            )
+
+                            # Fire observers
+                            tool_name = None
+                            tool_input = None
+                            for tc in tool_calls_this_iter:
+                                if tc.get("id") == tool_use_id:
+                                    tool_name = tc.get("name")
+                                    tool_input = tc.get("input", {})
+                                    break
+
+                            if tool_name and self.workspace_dir:
+                                asyncio.create_task(
+                                    observe_and_save_search_results(
+                                        tool_name, block_content, self.workspace_dir
+                                    )
+                                )
+                                asyncio.create_task(
+                                    observe_and_save_workbench_activity(
+                                        tool_name,
+                                        tool_input or {},
+                                        content_str,
+                                        self.workspace_dir,
+                                    )
+                                )
+                                asyncio.create_task(
+                                    observe_and_enrich_corpus(
+                                        tool_name,
+                                        tool_input or {},
+                                        block_content,
+                                        self.workspace_dir,
+                                    )
+                                )
+
+                                # Check for work_product events (Write tool to work_products/)
+                                tool_lower = tool_name.lower()
+                                is_write_tool = "write" in tool_lower and (
+                                    "__write" in tool_lower or tool_lower.endswith("write")
+                                )
+                                if is_write_tool and tool_input:
+                                    file_path = tool_input.get(
+                                        "file_path", ""
+                                    ) or tool_input.get("path", "")
+                                    if "work_products" in file_path and file_path.endswith(
+                                        ".html"
+                                    ):
+                                        # Read the file content and emit work_product event
+                                        try:
+                                            if os.path.exists(file_path):
+                                                with open(
+                                                    file_path, "r", encoding="utf-8"
+                                                ) as f:
+                                                    html_content = f.read()
+                                                yield AgentEvent(
+                                                    type=EventType.WORK_PRODUCT,
+                                                    data={
+                                                        "content_type": "text/html",
+                                                        "content": html_content,
+                                                        "filename": os.path.basename(
+                                                            file_path
+                                                        ),
+                                                        "path": file_path,
+                                                    },
+                                                )
+                                        except Exception as e:
+                                            logfire.warning(
+                                                "work_product_read_error", error=str(e)
+                                            )
 
         iter_record = {
             "run_id": self.run_id,

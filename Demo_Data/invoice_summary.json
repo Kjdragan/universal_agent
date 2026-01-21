@@ -1,0 +1,102 @@
+[
+  {
+    "invoice_number": "INV-2025-001",
+    "customer_name": "John Martinez",
+    "date": "2025-12-31",
+    "due_date": "2026-01-30",
+    "services": "Emergency Pipe Repair - Kitchen Sink, Main Water Line Replacement (40 ft), Bathroom Fixture Replacement (Toilet + S...",
+    "subtotal": 4175.0,
+    "tax": 344.44,
+    "total": 4519.44
+  },
+  {
+    "invoice_number": "INV-2025-002",
+    "customer_name": "Sarah Johnson",
+    "date": "2025-12-06",
+    "due_date": "2026-01-05",
+    "services": "Main Water Line Replacement (40 ft), Full Bathroom Plumbing Renovation",
+    "subtotal": 7050.0,
+    "tax": 581.62,
+    "total": 7631.62
+  },
+  {
+    "invoice_number": "INV-2025-003",
+    "customer_name": "Michael Chen",
+    "date": "2025-12-12",
+    "due_date": "2026-01-11",
+    "services": "Water Softener System Installation, Slab Leak Detection and Repair, Sewer Line Inspection and Cleaning, Leak Detection and Repair (3 locations)",
+    "subtotal": 5645.0,
+    "tax": 465.71,
+    "total": 6110.71
+  },
+  {
+    "invoice_number": "INV-2025-004",
+    "customer_name": "Emily Rodriguez",
+    "date": "2025-12-01",
+    "due_date": "2025-12-31",
+    "services": "Bathroom Fixture Replacement (Toilet + S..., Main Water Line Replacement (40 ft)",
+    "subtotal": 3725.0,
+    "tax": 307.31,
+    "total": 4032.31
+  },
+  {
+    "invoice_number": "INV-2025-005",
+    "customer_name": "David Thompson",
+    "date": "2025-12-28",
+    "due_date": "2026-01-27",
+    "services": "Drain Cleaning Service (Whole House), Outdoor Faucet and Irrigation System Rep..., Leak Detection and Repair (3 locations)",
+    "subtotal": 1795.0,
+    "tax": 148.09,
+    "total": 1943.09
+  },
+  {
+    "invoice_number": "INV-2025-006",
+    "customer_name": "Lisa Anderson",
+    "date": "2025-12-17",
+    "due_date": "2026-01-16",
+    "services": "Slab Leak Detection and Repair, Sump Pump Installation",
+    "subtotal": 3650.0,
+    "tax": 301.12,
+    "total": 3951.12
+  },
+  {
+    "invoice_number": "INV-2025-007",
+    "customer_name": "Robert Wilson",
+    "date": "2025-12-06",
+    "due_date": "2026-01-05",
+    "services": "Water Softener System Installation, Garbage Disposal Unit Installation",
+    "subtotal": 2625.0,
+    "tax": 216.56,
+    "total": 2841.56
+  },
+  {
+    "invoice_number": "INV-2025-008",
+    "customer_name": "Jennifer Lee",
+    "date": "2025-12-14",
+    "due_date": "2026-01-13",
+    "services": "Slab Leak Detection and Repair, Emergency Pipe Repair - Kitchen Sink",
+    "subtotal": 2650.0,
+    "tax": 218.62,
+    "total": 2868.62
+  },
+  {
+    "invoice_number": "INV-2025-009",
+    "customer_name": "William Davis",
+    "date": "2025-12-26",
+    "due_date": "2026-01-25",
+    "services": "Leak Detection and Repair (3 locations), Sewer Line Inspection and Cleaning, Garbage Disposal Unit Installation",
+    "subtotal": 1870.0,
+    "tax": 154.28,
+    "total": 2024.28
+  },
+  {
+    "invoice_number": "INV-2025-010",
+    "customer_name": "Amanda Garcia",
+    "date": "2025-12-30",
+    "due_date": "2026-01-29",
+    "services": "Tankless Water Heater Installation, Main Water Line Replacement (40 ft), Emergency Pipe Repair - Kitchen Sink",
+    "subtotal": 6400.0,
+    "tax": 528.0,
+    "total": 6928.0
+  }
+]
