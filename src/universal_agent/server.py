@@ -233,6 +233,26 @@ async def websocket_endpoint(websocket: WebSocket):
                         }
                     )
 
+                # Check for and send execution summary if available
+                if _current_workspace:
+                    summary_path = os.path.join(_current_workspace, "session_summary.txt")
+                    if os.path.exists(summary_path):
+                        try:
+                            with open(summary_path, "r", encoding="utf-8") as f:
+                                summary_content = f.read()
+                            
+                            if summary_content:
+                                # Send as a distinct agent response event so it renders in the chat
+                                await websocket.send_json(
+                                    {
+                                        "type": "agent_response",
+                                        "data": {"text": summary_content},
+                                        "timestamp": asyncio.get_event_loop().time(),
+                                    }
+                                )
+                        except Exception as e:
+                            print(f"⚠️ Failed to read session summary: {e}")
+
                 # Signal query complete
                 await websocket.send_json({"type": "query_complete", "data": {}})
 

@@ -23,7 +23,7 @@ run `uv add remotion-lambda python-dotenv`
 **Remotion Project Setup:**
 If no project exists, initialize one:
 ```bash
-npx create-remotion@latest ./my-video --template=helloworld
+npx create-remotion@latest ./remotion_projects/my-video --template=helloworld
 ```
 
 ## 🏗️ Workflows
