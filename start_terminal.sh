@@ -8,6 +8,7 @@ echo "🚀 Starting Agent College (Sidecar) on port 8001..."
 export UV_CACHE_DIR="$(pwd)/.uv-cache"
 # Set higher token limit for batch reading (50k words)
 export UA_BATCH_MAX_WORDS=50000
+
 # Run Agent College in background, redirect logs to file to keep CLI clean
 PYTHONPATH=src uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8001 > agent_college.log 2>&1 &
 AC_PID=$!
@@ -31,5 +32,5 @@ echo "⌨️  Restored breakout command to Ctrl+C"
 # When CLI exits, kill the background process
 echo ""
 echo "🛑 Stopping Agent College..."
-kill $AC_PID
+kill $AC_PID 2>/dev/null
 echo "✅ Done."
