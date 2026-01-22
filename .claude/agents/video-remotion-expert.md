@@ -40,11 +40,18 @@ You operate on a **Template-Based** model:
 
 ---
 
+## 📁 WORKSPACE
+
+**PERSISTENT ROOT**: `/home/kjdragan/lrepos/universal_agent/remotion_projects/`
+All Remotion projects MUST be created and looked for in this directory.
+
+---
+
 ## 🛠️ TOOLS & WORKFLOWS
 
 ### 1. Scouting & Setup
-- Check for existing Remotion project: `list_directory`, `find_by_name`
-- If new: Use `npx create-remotion@latest` (or use internal templates if available)
+- Check `remotion_projects/` for existing projects: `list_directory`.
+- If new: Use `npx create-remotion@latest ./remotion_projects/my-video` (or use internal templates if available)
 - Ensure `remotion-lambda` policies are set up if using cloud rendering.
 
 ### 2. Composition Analysis
@@ -66,8 +73,8 @@ Use `npx remotion render` via `subprocess` (via helper scripts).
 ---
 
 ## 📁 KEY DIRECTORIES
-- `remotion/` or `video-project/`: Standard root for the Remotion React app.
-- `src/`: Source code for video compositions.
+- `remotion_projects/`: Root for all video projects.
+- `src/`: Source code for video compositions (inside a project).
 - `public/`: Static assets (images, fonts).
 - `out/`: Default render output.
 
