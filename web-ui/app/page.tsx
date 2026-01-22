@@ -317,8 +317,16 @@ function HeaderMetrics() {
     return () => clearInterval(interval);
   }, [startTime]);
 
+  const currentSession = useAgentStore((s) => s.currentSession);
+  const sessionId = currentSession?.workspace ? currentSession.workspace.split('/').pop() : 'No Session';
+
   return (
     <div className="hidden md:flex items-center gap-3 mr-6 bg-secondary/20 px-3 py-1.5 rounded-md border border-border/50">
+      <div className="flex items-center gap-2 text-[10px] tracking-wide">
+        <span className="text-muted-foreground font-semibold">SESSION</span>
+        <span className="font-mono text-primary truncate max-w-[150px]" title={sessionId}>{sessionId}</span>
+      </div>
+      <div className="w-px h-3 bg-border/50" />
       <div className="flex items-center gap-2 text-[10px] tracking-wide">
         <span className="text-muted-foreground font-semibold">TOKENS</span>
         <span className="font-mono">{tokenUsage.total.toLocaleString()}</span>
@@ -657,26 +665,46 @@ function WorkProductViewer() {
 
     const fetchKeyFiles = async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/files?session_id=${currentSession.session_id}&path=.`);
-        const data = await res.json();
-        const files = data.files || [];
+        // Fetch valid files from ROOT
+        const resRoot = await fetch(`${API_BASE}/api/files?session_id=${currentSession.session_id}&path=.`);
+        const dataRoot = await resRoot.json();
+        const filesRoot = dataRoot.files || [];
 
-        // Filter for interesting files
-        const interesting = files.filter((f: any) =>
-          f.name === 'run.log' ||
+        // Fetch valid files from WORK_PRODUCTS
+        const resWp = await fetch(`${API_BASE}/api/files?session_id=${currentSession.session_id}&path=work_products`);
+        const dataWp = await resWp.json();
+        const filesWp = dataWp.files || [];
+
+        // Merge and filter
+        // 1. Root files: Filtered (logs, transcript, reports)
+        const relevantRootFiles = filesRoot.filter((f: any) =>
+          f.name.endsWith('.log') ||
           f.name === 'transcript.md' ||
           f.name.startsWith('report') ||
-          f.name.endsWith('.pdf')
+          f.name.endsWith('.pdf') ||
+          f.name.endsWith('.html') ||
+          f.name.endsWith('.md')
         );
-        setKeyFiles(interesting);
-      } catch (e) {
-        console.error("Failed to fetch key files", e);
+
+        // 2. Work Products: Include ALL files from work_products directory
+        // We assume anything the agent put there is important
+        const relevantWorkProducts = filesWp.map((f: any) => ({ ...f, source: 'work_product' }));
+
+        const interesting = [...relevantRootFiles, ...relevantWorkProducts];
+
+        // Remove duplicates if any
+        const unique = Array.from(new Map(interesting.map((item: any) => [item.path, item])).values());
+
+        setKeyFiles(unique);
+      } catch (err) {
+        console.error("Failed to fetch key files:", err);
       }
     };
 
-    // Refresh periodically or just once? Once + on workProducts update might be good.
-    // For now just once + manual dependency on workProducts length?
-    fetchKeyFiles();
+    fetchKeyFiles(); // Initial fetch
+    const interval = setInterval(fetchKeyFiles, 10000); // Poll every 10 seconds
+
+    return () => clearInterval(interval);
   }, [currentSession?.session_id, workProducts.length]);
 
   return (

@@ -238,6 +238,20 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
       break;
     }
 
+    // Handle token usage from any event that has it
+    default: {
+      const data = event.data as Record<string, unknown>;
+      if (data && data.token_usage) {
+        store.updateTokenUsage(data.token_usage as { input: number; output: number; total: number });
+      }
+      break;
+    }
+  }
+
+  // Process specific event types
+  switch (event.type) {
+
+
     case "text": {
       const data = event.data as Record<string, unknown>;
       store.appendToStream((data.text as string) ?? "");

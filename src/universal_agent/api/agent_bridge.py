@@ -110,9 +110,18 @@ class AgentBridge:
 
     def _convert_agent_event(self, agent_event: AgentEvent) -> WebSocketEvent:
         """Convert AgentEvent from agent_core to WebSocketEvent."""
+        # Extract token usage from agent trace if available
+        token_usage = None
+        if self.current_agent and hasattr(self.current_agent, "trace"):
+            token_usage = self.current_agent.trace.get("token_usage")
+
+        data = agent_event.data.copy() if agent_event.data else {}
+        if token_usage:
+            data["token_usage"] = token_usage
+
         return WebSocketEvent(
             type=WSEventType(agent_event.type.value),
-            data=agent_event.data,
+            data=data,
             timestamp=agent_event.timestamp,
         )
 
