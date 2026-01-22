@@ -2074,6 +2074,7 @@ SUBAGENT_EXPECTED_SKILLS = {
     "image-expert": ["image-generation"],
     "video-creation-expert": [],  # Uses MCP tools, not skills
     "browserbase": [],  # Uses Composio MCP tools, not skills
+    "video-remotion-expert": ["video-remotion"],
 }
 
 
