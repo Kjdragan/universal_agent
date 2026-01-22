@@ -55,6 +55,27 @@ function FileViewer() {
   const currentSession = useAgentStore.getState().currentSession;
   const fileUrl = `${API_BASE}/api/files/${currentSession?.session_id}/${viewingFile.path}`;
 
+  // Fetch content if missing and not an iframe type
+  useEffect(() => {
+    if (!viewingFile || isHtml || isPdf || isImage || viewingFile.content) return;
+
+    fetch(fileUrl)
+      .then(res => res.text())
+      .then(text => {
+        // Auto-format if JSON or similar
+        if (viewingFile.name.endsWith('.json')) {
+          try {
+            const obj = JSON.parse(text);
+            text = JSON.stringify(obj, null, 2);
+          } catch (e) {
+            // Keep original text on parse error
+          }
+        }
+        useAgentStore.getState().setViewingFile({ ...viewingFile, content: text });
+      })
+      .catch(err => console.error("Failed to fetch file content:", err));
+  }, [viewingFile, fileUrl, isHtml, isPdf, isImage]);
+
   return (
     <div className="flex flex-col h-full bg-background animate-in fade-in zoom-in-95 duration-200">
       <div className="h-10 border-b border-border/50 flex items-center justify-between px-4 bg-secondary/10">
@@ -159,7 +180,7 @@ function TaskPanel() {
   );
 }
 
-const API_BASE = "http://localhost:8001";
+const API_BASE = "";
 
 function FileExplorer() {
   const currentSession = useAgentStore((s) => s.currentSession);

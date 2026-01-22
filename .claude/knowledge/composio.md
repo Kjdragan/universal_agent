@@ -1,4 +1,8 @@
-# Composio Tool Knowledge
+# Composio Knowledge Base
+
+> [!IMPORTANT]
+> **MANDATORY DELEGATION**: All research tasks (web search, news search, deep dives) MUST start by delegating to the `research-specialist` sub-agent.
+> Do NOT use search tools directly in the primary agent. Use the `Task` tool to delegate.
 
 ## GMAIL_SEND_EMAIL
 
