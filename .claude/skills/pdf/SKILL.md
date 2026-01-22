@@ -12,6 +12,11 @@ This guide covers essential PDF processing operations using Python libraries and
 
 ## Quick Start
 
+> [!IMPORTANT]
+> When defining output paths for PDF generation or manipulation, **ALWAYS use relative paths** (e.g., `work_products/output.pdf` or `merged.pdf`).
+> **NEVER use absolute paths** (e.g., `/home/user/...`) as these may break session isolation and save files to unexpected locations (like the project root).
+> The agent's current working directory is the session root, so relative paths will correctly place files in the session's workspace.
+
 ```python
 from pypdf import PdfReader, PdfWriter
 

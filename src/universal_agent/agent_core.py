@@ -842,6 +842,8 @@ class UniversalAgent:
         self._initialized = False
         # Track consecutive tool validation errors to detect loops
         self.consecutive_tool_errors: int = 0
+        # Track processed message IDs to prevent double-counting tokens
+        self._processed_msg_ids: set = set()
 
     def _create_workspace(self) -> str:
         """Create a new session workspace directory."""
@@ -1186,6 +1188,7 @@ class UniversalAgent:
         if not self._initialized:
             await self.initialize()
 
+        print(f"DEBUG CORE: Starting run_query for query: {query[:50]}...")
         self.trace["query"] = query
         self.trace["start_time"] = datetime.now().isoformat()
         self.start_ts = time.time()
@@ -1230,6 +1233,30 @@ class UniversalAgent:
         with logfire.span("llm_response_stream"):
             async for msg in self.client.receive_response():  # type: ignore
                 if isinstance(msg, AssistantMessage):
+                    # Track token usage if available in message
+                    # (Docs say: "Same ID = Same Usage. Charge only once per step")
+                    usage_source = getattr(msg, "usage", None)
+                    if usage_source:
+                        # Safe extraction handling both dict and object access
+                        def get_val(obj, key):
+                            if isinstance(obj, dict): return obj.get(key, 0)
+                            return getattr(obj, key, 0)
+                        
+                        inp = get_val(usage_source, "input_tokens") or 0
+                        out = get_val(usage_source, "output_tokens") or 0
+                        
+                        msg_id = getattr(msg, "id", None)
+                        # Process if ID is new, OR if ID is missing (e.g. ResultMessage often lacks ID)
+                        # We assume messages without ID are unique events in the stream
+                        if (msg_id and msg_id not in self._processed_msg_ids) or not msg_id:
+                            if msg_id:
+                                self._processed_msg_ids.add(msg_id)
+                            
+                            self.trace["token_usage"]["input"] += inp
+                            self.trace["token_usage"]["output"] += out
+                            self.trace["token_usage"]["total"] += inp + out
+                            print(f"DEBUG CORE: Updated tokens (ID: {msg_id}): +{inp+out} (Total: {self.trace['token_usage']['total']})")
+
                     for block in msg.content:
                         if isinstance(block, ToolUseBlock):
                             if is_malformed_tool_name(block.name):
@@ -1259,15 +1286,6 @@ class UniversalAgent:
                             }
                             self.trace["tool_calls"].append(tool_record)
                             tool_calls_this_iter.append(tool_record)
-
-                            # Track token usage if available in tool use block message (unlikely but safe)
-                            if hasattr(msg, "usage") and msg.usage:
-                                u = msg.usage
-                                inp = getattr(u, "input_tokens", 0) or 0
-                                out = getattr(u, "output_tokens", 0) or 0
-                                self.trace["token_usage"]["input"] += inp
-                                self.trace["token_usage"]["output"] += out
-                                self.trace["token_usage"]["total"] += inp + out
 
                             yield AgentEvent(
                                 type=EventType.TOOL_CALL,
@@ -1306,18 +1324,29 @@ class UniversalAgent:
                         self.trace["provider_session_id"] = msg.session_id
 
                     # Check for usage info in ResultMessage (Anthropic often puts it here)
-                    if hasattr(msg, "usage") and msg.usage:
-                        u = msg.usage
-                        inp = getattr(u, "input_tokens", 0) or 0
-                        out = getattr(u, "output_tokens", 0) or 0
+                    usage_source = getattr(msg, "usage", None)
+                    if usage_source:
+                        def get_val(obj, key):
+                            if isinstance(obj, dict): return obj.get(key, 0)
+                            return getattr(obj, key, 0)
+                        
+                        inp = get_val(usage_source, "input_tokens") or 0
+                        out = get_val(usage_source, "output_tokens") or 0
 
                         # Update cumulative trace (for backwards compatibility)
-                        self.trace["token_usage"]["input"] += inp
-                        self.trace["token_usage"]["output"] += out
-                        self.trace["token_usage"]["total"] += inp + out
+                        # Update cumulative trace (for backwards compatibility)
+                        # ResultMessage usually contains cumulative for the step
+                        msg_id = getattr(msg, "id", None)
+                        if (msg_id and msg_id not in self._processed_msg_ids) or not msg_id:
+                             if msg_id:
+                                 self._processed_msg_ids.add(msg_id)
+                             self.trace["token_usage"]["input"] += inp
+                             self.trace["token_usage"]["output"] += out
+                             self.trace["token_usage"]["total"] += inp + out
+                             print(f"DEBUG CORE: Updated tokens (ID: {msg_id}): +{inp+out} (Total: {self.trace['token_usage']['total']})")
 
                         # Add to MessageHistory for per-message tracking (Anthropic pattern)
-                        self.history.add_message("assistant", "response", u)
+                        self.history.add_message("assistant", "response", usage_source)
 
                         # Check for truncation and apply it
                         if self.history.truncate():
