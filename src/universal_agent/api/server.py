@@ -298,7 +298,8 @@ async def get_file(session_id: str, file_path: str):
     if filename.endswith(".json"):
         try:
             data = json.loads(content.decode("utf-8"))
-            return JSONResponse(data)
+            # Return pretty-printed JSON
+            return Response(content=json.dumps(data, indent=2), media_type="application/json")
         except Exception:
             pass
 

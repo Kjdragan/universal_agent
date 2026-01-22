@@ -44,8 +44,16 @@ export class AgentWebSocket {
   // State
   private currentStatus: ConnectionStatus = "disconnected";
 
-  constructor(url: string = "ws://localhost:8001/ws/agent") {
-    this.url = url;
+  constructor(url?: string) {
+    if (url) {
+      this.url = url;
+    } else if (typeof window !== "undefined") {
+      // Use relative protocol (ws for http, wss for https)
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      this.url = `${protocol}//${window.location.host}/ws/agent`;
+    } else {
+      this.url = "ws://localhost:8001/ws/agent";
+    }
   }
 
   // ==========================================================================
