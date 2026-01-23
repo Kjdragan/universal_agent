@@ -12,6 +12,25 @@ import logging
 import inspect
 from collections import Counter
 from datetime import datetime
+import traceback
+
+# UA_LOG_LEVEL Control (INFO by default)
+UA_LOG_LEVEL = os.getenv("UA_LOG_LEVEL", "INFO").upper()
+
+def mcp_log(message: str, level: str = "INFO", prefix: str = "[Local Toolkit]"):
+    """
+    Log to stderr with level control. 
+    Outputs appear in real-time in the Agent terminal.
+    """
+    # Order: DEBUG < INFO < WARNING < ERROR
+    levels = {"DEBUG": 10, "INFO": 20, "WARNING": 30, "ERROR": 40}
+    current_val = levels.get(UA_LOG_LEVEL, 20)
+    msg_val = levels.get(level, 20)
+    
+    if msg_val >= current_val:
+        sys.stderr.write(f"{prefix} {message}\n")
+        sys.stderr.flush()
+
 from functools import wraps
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -19,7 +38,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 # Setup logger for MCP server
 logger = logging.getLogger("mcp_server")
-logging.basicConfig(level=logging.INFO)
+# Match standard logging level to UA_LOG_LEVEL
+logging.basicConfig(level=getattr(logging, UA_LOG_LEVEL, logging.INFO))
 
 # Ensure src path for imports
 sys.path.append(os.path.abspath("src"))
@@ -131,7 +151,7 @@ def trace_tool_output(func):
 
 
 try:
-    sys.stderr.write("[Local Toolkit] Server starting components...\n")
+    mcp_log("Server starting components...", level="DEBUG")
     mcp = FastMCP("Local Intelligence Toolkit")
 except Exception:
     raise
@@ -1329,8 +1349,8 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
     if crawl4ai_api_key:
         # Cloud API mode: Use crawl4ai-cloud.com synchronous /query endpoint
         cloud_endpoint = "https://www.crawl4ai-cloud.com/query"
-        print(f"\n🌐 [Crawl4AI] Starting cloud crawl of {len(urls)} URLs...")
-        sys.stderr.write(f"[crawl_core] Using Cloud API for {len(urls)} URLs\\n")
+        mcp_log(f"🌐 [Crawl4AI] Starting cloud crawl of {len(urls)} URLs...", level="INFO", prefix="")
+        mcp_log(f"Using Cloud API for {len(urls)} URLs", level="DEBUG", prefix="[crawl_core]")
         if logfire:
             logfire.info("crawl4ai_started", url_count=len(urls), mode="cloud")
 
@@ -1477,8 +1497,10 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                 }
 
             # Execute concurrent crawl with rate limiting
-            sys.stderr.write(
-                f"[crawl_core] Starting crawl of {len(urls)} URLs (max {CONCURRENCY_LIMIT} parallel, {MAX_RETRIES} retries)\\n"
+            mcp_log(
+                f"Starting crawl of {len(urls)} URLs (max {CONCURRENCY_LIMIT} parallel, {MAX_RETRIES} retries)",
+                level="DEBUG",
+                prefix="[crawl_core]"
             )
             async with aiohttp.ClientSession() as session:
                 tasks = [crawl_single_url(session, url) for url in urls]
@@ -1486,9 +1508,11 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
             
             # Console visibility
             success_count = sum(1 for r in crawl_results if isinstance(r, dict) and r.get("success"))
-            print(f"   ✅ Crawl complete: {success_count}/{len(urls)} successful")
-            sys.stderr.write(
-                f"[crawl_core] Cloud API returned {len(crawl_results)} results\\n"
+            mcp_log(f"✅ Crawl complete: {success_count}/{len(urls)} successful", level="INFO", prefix="   ")
+            mcp_log(
+                f"Cloud API returned {len(crawl_results)} results",
+                level="DEBUG",
+                prefix="[crawl_core]"
             )
             if logfire:
                 logfire.info(
@@ -1785,8 +1809,10 @@ If you need large files, read them individually with `read_local_file`.
     else:
         if crawl4ai_api_url:
             # Docker API mode (legacy): Use crawl4ai Docker container
-            sys.stderr.write(
-                f"[crawl_core] Using Docker API at {crawl4ai_api_url} for {len(urls)} URLs\\n"
+            mcp_log(
+                f"Using Docker API at {crawl4ai_api_url} for {len(urls)} URLs",
+                level="DEBUG",
+                prefix="[crawl_core]"
             )
             return json.dumps(
                 {
@@ -1797,9 +1823,8 @@ If you need large files, read them individually with `read_local_file`.
         return json.dumps(results_summary, indent=2)
 
 
-@mcp.tool()
-@trace_tool_output
-async def crawl_parallel(urls: list[str], session_dir: str) -> str:
+# LEGACY - Hidden from MCP server to favor in-process tool
+async def _crawl_parallel_legacy(urls: list[str], session_dir: str) -> str:
     """
     High-speed parallel web scraping using crawl4ai.
     Scrapes multiple URLs concurrently, extracts clean markdown (removing ads/nav),
@@ -3052,9 +3077,9 @@ def batch_tool_execute(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     return results
 
 
-@mcp.tool()
+# @mcp.tool()
 @trace_tool_output
-async def run_research_pipeline(query: str, task_name: str = "default") -> str:
+async def _run_research_pipeline_legacy(query: str, task_name: str = "default") -> str:
     """
     Execute the Post-Search Research Pipeline: Crawl -> Refine -> Outline -> Draft -> Cleanup -> Compile.
     
@@ -3080,7 +3105,7 @@ async def run_research_pipeline(query: str, task_name: str = "default") -> str:
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set."
 
-    sys.stderr.write(f"\n🚀 [Pipeline] Starting post-search research pipeline for: '{query}'\n")
+    mcp_log(f"🚀 [Pipeline] Starting post-search research pipeline for: '{query}'", level="INFO", prefix="")
     
     # Verify search results exist
     search_dir = os.path.join(workspace, "search_results")
@@ -3097,13 +3122,11 @@ async def run_research_pipeline(query: str, task_name: str = "default") -> str:
             "The agent must call COMPOSIO_MULTI_EXECUTE_TOOL with search queries BEFORE calling this tool."
         )
     
-    sys.stderr.write(f"[Pipeline] Found {len(json_files)} search result file(s). Proceeding...\n")
-    sys.stderr.flush()
+    mcp_log(f"[Pipeline] Found {len(json_files)} search result file(s). Proceeding...", level="DEBUG")
 
     # 1. FINALIZE (Crawl & Refine)
     try:
-        sys.stderr.write("[Pipeline] Step 1/5: Crawling & Refining (this may take 30-60s)...\n")
-        sys.stderr.flush()
+        mcp_log("[Pipeline] Step 1/5: Crawling & Refining (this may take 30-60s)...", level="INFO")
         res = await finalize_research(session_dir=workspace, task_name=task_name)
         if "error" in res.lower() and "status" not in res.lower():
              return f"❌ Pipeline Failed at Finalize Step: {res}"
@@ -3112,8 +3135,7 @@ async def run_research_pipeline(query: str, task_name: str = "default") -> str:
 
     # 2. OUTLINE
     try:
-        sys.stderr.write("[Pipeline] Step 2/5: Generating Outline...\n")
-        sys.stderr.flush()
+        mcp_log("[Pipeline] Step 2/5: Generating Outline...", level="INFO")
         res = await generate_outline(topic=query, task_name=task_name)
         if "Error" in res:
              return f"❌ Pipeline Failed at Outline Step: {res}"
@@ -3122,8 +3144,7 @@ async def run_research_pipeline(query: str, task_name: str = "default") -> str:
 
     # 3. DRAFT
     try:
-        sys.stderr.write("[Pipeline] Step 3/5: Drafting Sections (Parallel)...\n")
-        sys.stderr.flush()
+        mcp_log("[Pipeline] Step 3/5: Drafting Sections (Parallel)...", level="INFO")
         res = await draft_report_parallel(task_name=task_name)
         if "Error" in res:
              return f"❌ Pipeline Failed at Drafting Step: {res}"
@@ -3132,8 +3153,7 @@ async def run_research_pipeline(query: str, task_name: str = "default") -> str:
 
     # 4. CLEANUP
     try:
-        sys.stderr.write("[Pipeline] Step 4/5: Cleaning & Synthesizing (LLM Audit)...\n")
-        sys.stderr.flush()
+        mcp_log("[Pipeline] Step 4/5: Cleaning & Synthesizing (LLM Audit)...", level="INFO")
         res = await cleanup_report()
         if "Error" in res:
              return f"❌ Pipeline Failed at Cleanup Step: {res}"
@@ -3142,8 +3162,7 @@ async def run_research_pipeline(query: str, task_name: str = "default") -> str:
 
     # 5. COMPILE
     try:
-        sys.stderr.write("[Pipeline] Step 5/5: Compiling HTML...\n")
-        sys.stderr.flush()
+        mcp_log("[Pipeline] Step 5/5: Compiling HTML...", level="INFO")
         res = compile_report(theme="modern")
         return f"✅ Pipeline Complete!\n\n{res}"
     except Exception as e:

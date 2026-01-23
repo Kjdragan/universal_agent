@@ -25,6 +25,9 @@ from universal_agent.prompt_assets import (
     generate_skills_xml,
     get_tool_knowledge_block,
 )
+from claude_agent_sdk import create_sdk_mcp_server
+from universal_agent.tools.research_bridge import run_research_pipeline_wrapper
+
 
 
 # Get project directories
@@ -45,6 +48,7 @@ DISALLOWED_TOOLS = [
     "WebSearch",
     "web_search",
     "mcp__composio__WebSearch",
+    "mcp__local_toolkit__run_research_pipeline",  # REPLACED by in-process mcp__internal__run_research_pipeline
 ]
 
 
@@ -372,6 +376,11 @@ class AgentSetup:
                 "command": sys.executable,
                 "args": ["-m", "mcp_youtube"],
             },
+            "internal": create_sdk_mcp_server(
+                name="internal",
+                version="1.0.0",
+                tools=[run_research_pipeline_wrapper]
+            ),
             "zai_vision": {
                 "type": "stdio",
                 "command": "npx",

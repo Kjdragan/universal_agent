@@ -17,11 +17,11 @@
 }
 ```
 
-## mcp__local_toolkit__finalize_research
+## mcp__internal__run_research_pipeline
 ```json
 {
-  "session_dir": "/home/.../AGENT_RUN_WORKSPACES/session_YYYYMMDD_HHMMSS",
-  "task_name": "ai_news_summary"
+  "query": "Research Topic context",
+  "task_name": "task_identifier_string"
 }
 ```
 

@@ -37,6 +37,11 @@ from universal_agent.utils.message_history import TRUNCATION_THRESHOLD
 import glob
 from universal_agent.harness.verifier import TaskVerifier
 from universal_agent.agent_core import UniversalAgent
+from claude_agent_sdk import create_sdk_mcp_server, HookMatcher
+from universal_agent.tools.research_bridge import (
+    run_research_pipeline_wrapper,
+    crawl_parallel_wrapper,
+)
 
 # Timezone helper for consistent date/time across deployments
 def get_user_datetime():
@@ -187,6 +192,8 @@ DISALLOWED_TOOLS = [
     "WebSearch",
     "web_search",
     "mcp__composio__WebSearch",
+    "mcp__local_toolkit__run_research_pipeline",  # REPLACED by in-process mcp__internal__run_research_pipeline
+    "mcp__local_toolkit__crawl_parallel",  # REPLACED by in-process mcp__internal__crawl_parallel
 ]
 
 
@@ -6252,6 +6259,14 @@ async def setup_session(
                     "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
                 },
             },
+            "internal": create_sdk_mcp_server(
+                name="internal",
+                version="1.0.0",
+                tools=[
+                    run_research_pipeline_wrapper,
+                    crawl_parallel_wrapper,
+                ]
+            ),
         },
         # NOTE: Do NOT set allowed_tools here - that would restrict to ONLY those tools.
         # The agent needs access to BOTH Composio tools (COMPOSIO_SEARCH_NEWS, etc.)
