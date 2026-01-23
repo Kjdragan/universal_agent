@@ -266,12 +266,7 @@ if LOGFIRE_TOKEN:
     except Exception as e:
         print(f"⚠️ Anthropic instrumentation not available: {e}")
 
-    # Instrument Asyncio
-    try:
-        logfire.instrument_asyncio()
-        print("✅ Logfire Asyncio instrumentation enabled")
-    except Exception as e:
-        print(f"⚠️ Asyncio instrumentation not available: {e}")
+
 
     print("✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/")
 elif not LOGFIRE_DISABLED:

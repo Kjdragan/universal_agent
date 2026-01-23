@@ -338,6 +338,7 @@ class AgentSetup:
                 "type": "stdio",
                 "command": sys.executable,
                 "args": [
+                    "-u",
                     os.path.join(
                         os.path.dirname(os.path.dirname(__file__)), "mcp_server.py"
                     )

@@ -4,7 +4,7 @@ import os
 import sys
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from anthropic import AsyncAnthropic
 
@@ -193,12 +193,30 @@ async def cleanup_report_async(workspace_path: Path) -> str:
 
     # Helper for fuzzy matching filenames
     def match_filename(target: str, available: List[str]) -> Optional[str]:
-        if target in available:
-            return target
-        # Try finding a single match that ends with the target
-        matches = [f for f in available if f.endswith(target) or target.endswith(f)]
-        if len(matches) == 1:
-            return matches[0]
+        # Normalize: lower, remove extension, remove non-alphanumeric
+        def normalize(s: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", s.lower().replace(".md", ""))
+
+        target_norm = normalize(target)
+        
+        # 1. Exact match (normalized)
+        for fname in available:
+            if normalize(fname) == target_norm:
+                return fname
+                
+        # 2. Containment (e.g. "executive" in "01_executive_summary.md")
+        # Check if target is in filename
+        for fname in available:
+            fname_norm = normalize(fname)
+            if target_norm in fname_norm:
+                return fname
+        
+        # 3. Reverse Containment (if LLM returns full path but we have short name?)
+        for fname in available:
+            fname_norm = normalize(fname)
+            if fname_norm in target_norm:
+                return fname
+                
         return None
 
     for filename, content in updates_payload.items():
