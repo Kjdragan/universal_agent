@@ -400,17 +400,71 @@ function ToolCallCard({ toolCall }: { toolCall: any }) {
 }
 
 function TerminalLog() {
-  const toolCalls = useAgentStore((s) => s.toolCalls);
+  const logs = useAgentStore((s) => s.logs);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const [filterLevel, setFilterLevel] = useState<"INFO" | "DEBUG">("DEBUG");
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs, filterLevel]);
+
+  // Filter logs based on selection
+  const visibleLogs = logs.filter(log => {
+    if (filterLevel === "DEBUG") return true;
+    // If INFO selected, hide DEBUG
+    return log.level !== "DEBUG";
+  });
 
   return (
-    <div className="h-full overflow-y-auto scrollbar-thin p-2 space-y-1">
-      {toolCalls.length === 0 ? (
-        <div className="text-center text-muted-foreground py-8">
-          {ICONS.terminal} Terminal ready
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Controls */}
+      <div className="flex items-center justify-between px-2 py-1 border-b border-white/5 bg-white/5 mx-2 mt-2 rounded-t-sm">
+        <span className="text-[10px] text-muted-foreground uppercase">Console Output</span>
+        <div className="flex gap-1">
+          {(["INFO", "DEBUG"] as const).map((level) => (
+            <button
+              key={level}
+              onClick={() => setFilterLevel(level)}
+              className={`text-[9px] px-1.5 py-0.5 rounded border ${filterLevel === level
+                  ? "bg-primary/20 border-primary/50 text-primary-foreground"
+                  : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
+                } transition-colors uppercase`}
+            >
+              {level}
+            </button>
+          ))}
         </div>
-      ) : (
-        toolCalls.map((tc) => <ToolCallCard key={tc.id} toolCall={tc} />)
-      )}
+      </div>
+
+      {/* Log List */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-1 font-mono text-[10px]">
+        {visibleLogs.length === 0 ? (
+          <div className="text-center text-muted-foreground py-8 italic opacity-50">
+            {ICONS.terminal} No logs to display...
+          </div>
+        ) : (
+          visibleLogs.map((log) => {
+            const levelColors: Record<string, string> = {
+              DEBUG: "text-blue-400/50",
+              INFO: "text-foreground/90",
+              WARNING: "text-yellow-500",
+              ERROR: "text-red-500 font-bold",
+            };
+            const color = levelColors[log.level] || levelColors.INFO;
+
+            return (
+              <div key={log.id} className="flex gap-2 border-b border-white/5 pb-0.5 last:border-0 hover:bg-white/5">
+                <span className="opacity-30 shrink-0 w-14">{new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                <span className={`shrink-0 w-10 text-right ${color}`}>[{log.level === 'WARNING' ? 'WARN' : log.level}]</span>
+                <span className="opacity-50 shrink-0">{log.prefix}</span>
+                <span className={`${color} break-all`}>{log.message}</span>
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
@@ -894,8 +948,17 @@ export default function HomePage() {
 
           {/* Activity Feed */}
           <div className="flex-1 min-h-0 border-b border-border/50 flex flex-col overflow-hidden">
-            {/* Using flex-1 on container and flex-col ensures child overflow-y-auto works */}
             <ActivityFeed />
+          </div>
+
+          {/* Internal Logs - The "Vocal" Logs */}
+          <div className="flex-1 min-h-0 border-b border-border/50 flex flex-col overflow-hidden bg-black/20">
+            <div className="p-3 border-b border-border/50 flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                {ICONS.terminal} Internal Logs
+              </h3>
+            </div>
+            <TerminalLog />
           </div>
 
           {/* Work Products */}

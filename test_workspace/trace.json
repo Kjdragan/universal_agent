@@ -1,0 +1,31 @@
+{
+  "run_id": "19be0d63-35fe-411e-9e80-566c2aed6ac3",
+  "session_info": {
+    "url": "https://backend.composio.dev/tool_router/trs_yPFsg98geQEE/mcp",
+    "user_id": "user_test",
+    "run_id": "19be0d63-35fe-411e-9e80-566c2aed6ac3",
+    "timestamp": "2026-01-23T16:35:18.911525"
+  },
+  "query": "test query",
+  "start_time": "2026-01-23T16:35:18.911575",
+  "end_time": "2026-01-23T16:35:20.915653",
+  "total_duration_seconds": 2.004,
+  "tool_calls": [],
+  "tool_results": [],
+  "iterations": [
+    {
+      "run_id": "19be0d63-35fe-411e-9e80-566c2aed6ac3",
+      "step_id": "a12721d2-2b13-4d61-b9f3-9aa00a1c2d7e",
+      "iteration": 1,
+      "query": "test query",
+      "duration_seconds": 2.004,
+      "tool_calls": 0
+    }
+  ],
+  "token_usage": {
+    "input": 0,
+    "output": 0,
+    "total": 0
+  },
+  "logfire_enabled": true
+}

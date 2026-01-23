@@ -87,6 +87,11 @@ interface AgentStore {
   viewingFile: { name: string; path: string; content?: string; type: string } | null;
   setViewingFile: (file: { name: string; path: string; content?: string; type: string } | null) => void;
 
+  // Logs (real-time tool output)
+  logs: Array<{ id: string; message: string; level: string; prefix: string; timestamp: number }>;
+  addLog: (log: { message: string; level: string; prefix: string }) => void;
+  clearLogs: () => void;
+
   // Reset
   reset: () => void;
 }
@@ -204,12 +209,27 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   viewingFile: null,
   setViewingFile: (file) => set({ viewingFile: file }),
 
+  // Logs
+  logs: [],
+  addLog: (log) => set((state) => ({
+    logs: [
+      ...state.logs,
+      {
+        ...log,
+        id: generateId(),
+        timestamp: Date.now(),
+      },
+    ].slice(-500), // Keep last 500 logs
+  })),
+  clearLogs: () => set({ logs: [] }),
+
   // Reset
   reset: () => set({
     messages: [],
     currentStreamingMessage: "",
     toolCalls: [],
     workProducts: [],
+    logs: [],
     currentThinking: "",
     tokenUsage: { input: 0, output: 0, total: 0 },
     startTime: null,
@@ -295,6 +315,13 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
       const data = event.data as Record<string, unknown>;
       if (data.status === "processing") {
         store.setConnectionStatus("processing");
+      }
+      if (data.is_log) {
+        store.addLog({
+          message: (data.status as string) ?? "",
+          level: (data.level as string) ?? "INFO",
+          prefix: (data.prefix as string) ?? "",
+        });
       }
       if (data.token_usage) {
         store.updateTokenUsage(data.token_usage as { input: number; output: number; total: number });
