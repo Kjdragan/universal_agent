@@ -844,6 +844,8 @@ class UniversalAgent:
         self.consecutive_tool_errors: int = 0
         # Track processed message IDs to prevent double-counting tokens
         self._processed_msg_ids: set = set()
+        # Async queue for merging events from multiple sources (SDK + tool logs)
+        self._event_queue: Optional[asyncio.Queue] = None
 
     def _create_workspace(self) -> str:
         """Create a new session workspace directory."""
@@ -1193,22 +1195,85 @@ class UniversalAgent:
         self.trace["start_time"] = datetime.now().isoformat()
         self.start_ts = time.time()
 
+        # Initialize event queue
+        self._event_queue = asyncio.Queue()
+
         # Emit session info
-        yield AgentEvent(
+        await self._event_queue.put(AgentEvent(
             type=EventType.SESSION_INFO,
             data={
                 "session_url": self.session.mcp.url,  # type: ignore
                 "workspace": self.workspace_dir,
                 "user_id": self.user_id,
             },
-        )
+        ))
+
+        # Setup log bridging from mcp_server
+        try:
+            from mcp_server import set_mcp_log_callback
+            
+            def bridge_log_to_queue(message: str, level: str, prefix: str):
+                """Callback to push tool logs into the agent event queue."""
+                if self._event_queue:
+                    # Map level to some visual indicator if needed
+                    # For now just push as STATUS with is_log=True
+                    event = AgentEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "status": message,
+                            "level": level,
+                            "prefix": prefix,
+                            "is_log": True,
+                        }
+                    )
+                    try:
+                        # Safe for both sync and async calls
+                        loop = asyncio.get_running_loop()
+                        loop.call_soon_threadsafe(self._event_queue.put_nowait, event)
+                    except Exception:
+                        pass
+
+            set_mcp_log_callback(bridge_log_to_queue)
+        except ImportError:
+            # Fallback if mcp_server is not importable
+            pass
+
+        async def sdk_worker():
+            """Worker to consume SDK events and push to queue."""
+            try:
+                async for event in self._run_conversation(query, iteration=1):
+                    if self._event_queue:
+                        await self._event_queue.put(event)
+                if self._event_queue:
+                    await self._event_queue.put(None)  # Sentinel for completion
+            except Exception as e:
+                if self._event_queue:
+                    await self._event_queue.put(AgentEvent(type=EventType.ERROR, data={"error": str(e)}))
+                    await self._event_queue.put(None)
 
         async with ClaudeSDKClient(self.options) as client:
             self.client = client
+            
+            # Start the worker task
+            worker_task = asyncio.create_task(sdk_worker())
 
-            # Run the conversation
-            async for event in self._run_conversation(query, iteration=1):
-                yield event
+            try:
+                # Consume from the merged queue
+                while True:
+                    event = await self._event_queue.get()
+                    if event is None:
+                        break
+                    yield event
+            finally:
+                # Cleanup
+                try:
+                    from mcp_server import set_mcp_log_callback
+                    set_mcp_log_callback(None)
+                except ImportError:
+                    pass
+                
+                if not worker_task.done():
+                    worker_task.cancel()
 
         # Save trace
         self._save_trace()

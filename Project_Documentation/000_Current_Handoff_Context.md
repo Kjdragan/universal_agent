@@ -1,53 +1,35 @@
-# 000: Current Project Context & Handoff
+# Handoff Context: Universal Agent Architecture Refactor
 
-**Date**: January 23, 2026  
-**Focus**: MCP Visibility Refactor & Architectural Stabilization
+**Date:** 2026-01-23
+**Status:** Architecture Analysis Phase
 
----
+## 📍 Where We Are
+We have successfully stabilized the **Universal Agent** execution pipeline across the Terminal (CLI) and Web UI.
+-   **Fixed:** Web UI agent now correctly delegates research tasks (synced system prompt from CLI).
+-   **Fixed:** Internal MCP logs are now visible in the Web UI.
+-   **Enhanced:** Web UI "Internal Logs" panel now has a verbosity toggle (DEBUG/INFO).
 
-## 🎯 Recent Session Summary
+## 🚧 The Next Challenge: Unification & Multi-Channel
+The user correctly identified that maintaining two entry points (`main.py` vs `server.py`) with duplicated prompt logic is fragile. They also referenced **ClawdBOT** as a target architecture style to emulate.
 
-This session achieved a breakthrough in **Execution Disclosure** by migrating from subprocess-based MCP tools to native **In-Process SDK Tools**.
+**Goal:** Refactor `universal_agent` towards a truly "universal" architecture that relies on a single core logic engine serving multiple interfaces (Terminal, Web, Slack, Telegram).
 
-### 🟢 Completed Work
+## 📂 Relevant Context
+1.  **Reference Reference:** `lrepos/clawdbot` (User wants us to analyze this repo).
+2.  **Strategy Doc:** `Project_Documentation/010_clawdbot_integration_phasing.md` (Already outlines Phase 2: "Plumbing & Event Bus").
+3.  **Core Issue:** Currently `main.py` (CLI) and `server.py` (Web) are loosely coupled forks. We need to unify them into a streamlined service architecture.
 
-#### 1. "Vocal" MCP Refactor
-- **Migrated `run_research_pipeline` & `crawl_parallel`**: These critical long-running tools now run inside the main process.
-- **Real-Time Logging**: Implemented `mcp_log` with `UA_LOG_LEVEL` (INFO/DEBUG) control. User now receives step-by-step progress during 2+ minute operations.
-- **Bridge Architecture**: Created `research_bridge.py` as the clean interface between the core algorithms and the Claude Agent SDK.
+## 📝 Immediate Next Tasks
+1.  **Analyze Clawdbot**: Perform a deep dive into `lrepos/clawdbot` to understand how it handles multi-channel support and event dispatching.
+2.  **Gap Analysis**: Compare `universal_agent` vs `clawdbot` architectures. Look for:
+    -   Event Bus implementation.
+    -   Plugin/Skill loading patterns.
+    -   Separation of "Core Agent" from "Interface".
+3.  **Proposal**: Create a plan to refactor `universal_agent` to use a "Unified Config Factory" and disjoint "Interface Adapters" (CLI Adapter, Web Adapter, Bot Adapter).
+    -   *Constraint:* Minimize disruption to the currently working Web UI.
 
-#### 2. Architectural Clarity (Source of Truth Docs)
-- **008: Evolution of MCP Visibility**: Explains the shift from "Silent Subprocesses" to native tools.
-- **009: MCP Visibility Architecture**: A Decision Record (ADR) on why we use both In-Process and Subprocess styles.
-- **010: Clawdbot Integration Roadmap**: Records the completion of Phase 1 (Skills) and the roadmap for Phase 2 (Event Bus).
-
-#### 3. Execution Success
-- Verified a complex "Search → Research → PDF → Email" run with only **8 tool calls**.
-- Confirmed "Full Disclosure" logging works exactly as expected in the terminal.
-
----
-
-## ⚠️ Immediate Next Steps
-
-### 1. Verification of UI & Harness
-We need to verify if the architectural shifts (moving tools in-process, refactoring `main.py`) have impacted the other two entry points:
-- **Web UI**: Check if `npm run dev` in `web-ui/` still interacts correctly with the backend.
-- **URW Harness**: Verify that the long-running task wrapper still breaks down phases correctly using the improved execution engine.
-
-### 2. Phase 2 Planning (The Event Bus)
-- Decoupling `server.py` from the agent loop via an `AsyncEventEmitter`.
-- Implementing formal sub-agent registration for lifecycle tracking.
-
----
-
-## 🛠️ Key Files to Review
-
-| Component | File Path |
-| :--- | :--- |
-| **Main Engine** | [main.py](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/main.py) |
-| **In-Process Bridge** | [research_bridge.py](file:///home/kjdragan/lrepos/universal_agent/src/universal_agent/tools/research_bridge.py) |
-| **MCP Definitions** | [mcp_server.py](file:///home/kjdragan/lrepos/universal_agent/src/mcp_server.py) |
-| **Visibility ADR** | [009_mcp_visibility_architecture.md](file:///home/kjdragan/lrepos/universal_agent/Project_Documentation/009_mcp_visibility_architecture.md) |
-| **Clawdbot Phases** | [010_clawdbot_integration_phasing.md](file:///home/kjdragan/lrepos/universal_agent/Project_Documentation/010_clawdbot_integration_phasing.md) |
-
----
+## 🔑 Key Files
+-   `src/universal_agent/main.py`: Current CLI entry point (contains the "Golden Path" logic).
+-   `src/universal_agent/api/server.py`: Current Web entry point.
+-   `src/universal_agent/agent_setup.py`: The newly patched shared config (good start, but needs to go further).
+-   `Project_Documentation/010_clawdbot_integration_phasing.md`: The roadmap.

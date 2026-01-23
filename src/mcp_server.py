@@ -17,6 +17,14 @@ import traceback
 # UA_LOG_LEVEL Control (INFO by default)
 UA_LOG_LEVEL = os.getenv("UA_LOG_LEVEL", "INFO").upper()
 
+# Global callback for UI redirection
+_LOG_CALLBACK = None
+
+def set_mcp_log_callback(callback):
+    """Set a callback for mcp_log to redirect logs to UI/other consumers."""
+    global _LOG_CALLBACK
+    _LOG_CALLBACK = callback
+
 def mcp_log(message: str, level: str = "INFO", prefix: str = "[Local Toolkit]"):
     """
     Log to stderr with level control. 
@@ -28,6 +36,13 @@ def mcp_log(message: str, level: str = "INFO", prefix: str = "[Local Toolkit]"):
     msg_val = levels.get(level, 20)
     
     if msg_val >= current_val:
+        # Route to UI if callback is registered
+        if _LOG_CALLBACK:
+            try:
+                _LOG_CALLBACK(message, level, prefix)
+            except Exception:
+                pass
+        
         sys.stderr.write(f"{prefix} {message}\n")
         sys.stderr.flush()
 
