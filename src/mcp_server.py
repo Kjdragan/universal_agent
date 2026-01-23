@@ -764,7 +764,7 @@ def read_research_files(file_paths: list[str]) -> str:
 
 @mcp.tool()
 @trace_tool_output
-async def draft_report_parallel(retry_id: str = "") -> str:
+async def draft_report_parallel(retry_id: str = "", task_name: str = "default") -> str:
     """
     Execute the Python-based parallel drafting system to generate report sections concurrently.
     
@@ -778,6 +778,7 @@ async def draft_report_parallel(retry_id: str = "") -> str:
     
     Args:
         retry_id: Optional string (e.g., timestamp) to force re-execution if previous call failed/was blocked.
+        task_name: The task name to locate the specific research corpus (default: "default").
     """
     
     # Lazy import to avoid circular dependencies or top-level errors
@@ -790,11 +791,14 @@ async def draft_report_parallel(retry_id: str = "") -> str:
     if not workspace:
         return "Error: CURRENT_SESSION_WORKSPACE not set. Cannot determine session workspace."
         
-    sys.stderr.write(f"[Local Toolkit] Starting parallel drafter in-process for: {workspace}\n")
+    sys.stderr.write(f"[Local Toolkit] Starting parallel drafter in-process for: {workspace} (Task: {task_name})\n")
     
     try:
-        # Run the async drafting process directly
-        result = await draft_report_async(Path(workspace))
+        # Run the async drafting process directly with specific corpus path
+        ws_path = Path(workspace)
+        corpus_path = ws_path / "tasks" / task_name / "refined_corpus.md"
+        
+        result = await draft_report_async(ws_path, corpus_path=corpus_path)
         return result
     except Exception as e:
         logger.error(f"Error in draft_report_parallel: {e}", exc_info=True)
@@ -884,6 +888,32 @@ async def cleanup_report() -> str:
     except Exception as e:
         logger.error(f"Error in cleanup_report: {e}", exc_info=True)
         return f"Error running cleanup: {e}"
+
+
+@mcp.tool()
+@trace_tool_output
+async def generate_outline(topic: str, task_name: str = "default") -> str:
+    """
+    Generate a report outline from the refined corpus.
+    Use this AFTER finalize_research and BEFORE drafted_report_parallel.
+    """
+    try:
+        from universal_agent.scripts.generate_outline import generate_outline_async
+    except ImportError:
+        return "Error: Could not import generate_outline_async."
+        
+    workspace = _resolve_workspace()
+    if not workspace:
+        return "Error: CURRENT_SESSION_WORKSPACE not set."
+
+    sys.stderr.write(f"[Local Toolkit] Generating outline for task '{task_name}' in: {workspace}\n")
+    
+    try:
+        result = await generate_outline_async(Path(workspace), task_name, topic)
+        return result
+    except Exception as e:
+        logger.error(f"Error in generate_outline: {e}", exc_info=True)
+        return f"Error generating outline: {e}"
 
 
 @mcp.tool()
@@ -1887,6 +1917,18 @@ async def finalize_research(
                 # ---------------------------------------------------------
                 tool_name = data.get("tool", "")
                 config = SEARCH_TOOL_CONFIG.get(tool_name)
+
+                # HEURISTIC FALLBACK: Infer tool from filename if explicit tool tag missing/unknown
+                if not config:
+                    fname_slug = filename.lower().replace(".json", "").replace("_", "").replace("-", "")
+                    for k, v in SEARCH_TOOL_CONFIG.items():
+                        k_slug = k.lower().replace("_", "")
+                        # Check for exact slug match (e.g. composiosearchnews == composiosearchnews)
+                        if k_slug == fname_slug:
+                            config = v
+                            tool_name = k
+                            logger.info(f"Inferred tool '{k}' from filename '{filename}'")
+                            break
 
                 extracted_count = 0
 
@@ -3008,6 +3050,105 @@ def batch_tool_execute(tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]
                 results[i] = {"index": i, "status": "error", "error": str(exc)}
 
     return results
+
+
+@mcp.tool()
+@trace_tool_output
+async def run_research_pipeline(query: str, task_name: str = "default") -> str:
+    """
+    Execute the Post-Search Research Pipeline: Crawl -> Refine -> Outline -> Draft -> Cleanup -> Compile.
+    
+    IMPORTANT: This tool expects that search results already exist in the session's 
+    `search_results/` directory. The agent should call Composio search tools 
+    (via MCP) BEFORE calling this tool.
+    
+    This function orchestrates:
+    1. Finalize Research (Crawl URLs, process results, create corpus)
+    2. Generate Outline (LLM-based)
+    3. Draft Report (Parallel Workers)
+    4. Cleanup Report (Synthesis & Formatting)
+    5. Compile Report (HTML Generation)
+    
+    Args:
+        query: The research topic (used for outline generation context)
+        task_name: Identifier for the task directory (e.g., "russia_ukraine_jan2026")
+    
+    Returns:
+        Success message with report location, or error details.
+    """
+    workspace = _resolve_workspace()
+    if not workspace:
+        return "Error: CURRENT_SESSION_WORKSPACE not set."
+
+    sys.stderr.write(f"\n🚀 [Pipeline] Starting post-search research pipeline for: '{query}'\n")
+    
+    # Verify search results exist
+    search_dir = os.path.join(workspace, "search_results")
+    if not os.path.isdir(search_dir):
+        return (
+            "❌ Pipeline Failed: No search_results/ directory found.\n"
+            "The agent must call COMPOSIO_MULTI_EXECUTE_TOOL with search queries BEFORE calling this tool."
+        )
+    
+    json_files = [f for f in os.listdir(search_dir) if f.endswith(".json")]
+    if not json_files:
+        return (
+            "❌ Pipeline Failed: search_results/ directory is empty.\n"
+            "The agent must call COMPOSIO_MULTI_EXECUTE_TOOL with search queries BEFORE calling this tool."
+        )
+    
+    sys.stderr.write(f"[Pipeline] Found {len(json_files)} search result file(s). Proceeding...\n")
+    sys.stderr.flush()
+
+    # 1. FINALIZE (Crawl & Refine)
+    try:
+        sys.stderr.write("[Pipeline] Step 1/5: Crawling & Refining (this may take 30-60s)...\n")
+        sys.stderr.flush()
+        res = await finalize_research(session_dir=workspace, task_name=task_name)
+        if "error" in res.lower() and "status" not in res.lower():
+             return f"❌ Pipeline Failed at Finalize Step: {res}"
+    except Exception as e:
+        return f"❌ Pipeline Failed at Finalize Step: {e}"
+
+    # 2. OUTLINE
+    try:
+        sys.stderr.write("[Pipeline] Step 2/5: Generating Outline...\n")
+        sys.stderr.flush()
+        res = await generate_outline(topic=query, task_name=task_name)
+        if "Error" in res:
+             return f"❌ Pipeline Failed at Outline Step: {res}"
+    except Exception as e:
+        return f"❌ Pipeline Failed at Outline Step: {e}"
+
+    # 3. DRAFT
+    try:
+        sys.stderr.write("[Pipeline] Step 3/5: Drafting Sections (Parallel)...\n")
+        sys.stderr.flush()
+        res = await draft_report_parallel(task_name=task_name)
+        if "Error" in res:
+             return f"❌ Pipeline Failed at Drafting Step: {res}"
+    except Exception as e:
+         return f"❌ Pipeline Failed at Drafting Step: {e}"
+
+    # 4. CLEANUP
+    try:
+        sys.stderr.write("[Pipeline] Step 4/5: Cleaning & Synthesizing (LLM Audit)...\n")
+        sys.stderr.flush()
+        res = await cleanup_report()
+        if "Error" in res:
+             return f"❌ Pipeline Failed at Cleanup Step: {res}"
+    except Exception as e:
+         return f"❌ Pipeline Failed at Cleanup Step: {e}"
+
+    # 5. COMPILE
+    try:
+        sys.stderr.write("[Pipeline] Step 5/5: Compiling HTML...\n")
+        sys.stderr.flush()
+        res = compile_report(theme="modern")
+        return f"✅ Pipeline Complete!\n\n{res}"
+    except Exception as e:
+        return f"❌ Pipeline Failed at Compile Step: {e}"
+
 
 
 if __name__ == "__main__":
