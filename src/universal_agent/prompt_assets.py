@@ -59,13 +59,42 @@ def get_tool_knowledge_block() -> str:
     return _TOOL_KNOWLEDGE_BLOCK or ""
 
 
+import shutil
+
+def _check_skill_requirements(frontmatter: dict) -> tuple[bool, str]:
+    """
+    Check if skill requirements are met.
+    Returns (is_available, reason).
+    """
+    try:
+        # Check explicit binary requirements
+        # metadata: { clawdbot: { requires: { bins: ["gh"] } } }
+        clawdbot_meta = frontmatter.get("metadata", {}).get("clawdbot", {})
+        requires = clawdbot_meta.get("requires", {})
+        
+        # Check mandatory binaries
+        bins = requires.get("bins", [])
+        for binary in bins:
+            if not shutil.which(binary):
+                return False, f"Missing binary: {binary}"
+
+        # Check 'anyBins' (at least one must exist)
+        any_bins = requires.get("anyBins", [])
+        if any_bins:
+            if not any(shutil.which(b) for b in any_bins):
+                return False, f"Missing any of: {any_bins}"
+
+        return True, ""
+    except Exception as e:
+        return True, ""  # Default to allowing on error to avoid blocking valid skills
+
+
 def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
     """
     Scan .claude/skills/ directory and parse SKILL.md frontmatter.
     Returns list of {name, description, path} for each skill.
-
-    Progressive disclosure: We only load name+description here.
-    Full SKILL.md content is loaded by the agent when needed via read_local_file.
+    
+    NOW IMPLEMENTS GATING: Hides skills if dependencies are missing.
     """
     import yaml
 
@@ -92,15 +121,24 @@ def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
                     if len(parts) >= 3:
                         frontmatter = yaml.safe_load(parts[1])
                         if frontmatter and isinstance(frontmatter, dict):
-                            skills.append(
-                                {
-                                    "name": frontmatter.get("name", skill_name),
-                                    "description": frontmatter.get(
-                                        "description", "No description"
-                                    ),
-                                    "path": skill_md,
-                                }
-                            )
+                            # GATING CHECK
+                            is_avail, reason = _check_skill_requirements(frontmatter)
+                            if is_avail:
+                                skills.append(
+                                    {
+                                        "name": frontmatter.get("name", skill_name),
+                                        "description": frontmatter.get(
+                                            "description", "No description"
+                                        ),
+                                        "path": skill_md,
+                                    }
+                                )
+                            else:
+                                try:
+                                    logfire.info("skill_gated", skill=skill_name, reason=reason)
+                                except Exception:
+                                    pass
+
             except Exception as exc:
                 # Skip malformed SKILL.md files
                 try:
@@ -117,12 +155,17 @@ def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
 def generate_skills_xml(skills: list[dict]) -> str:
     """
     Generate <available_skills> XML block for system prompt injection.
-    This enables Claude to be aware of skills and read them when relevant.
+    Includes instructions on Progressive Disclosure (reading references).
     """
     if not skills:
         return ""
 
-    lines = ["<available_skills>"]
+    lines = [
+        "<available_skills>",
+        "<!-- INSTRUCTION: proper usage of skills -->",
+        "<!-- 1. Read the 'SKILL.md' file to understand the workflow. -->",
+        "<!-- 2. If the skill mentions a 'references/' directory or other .md files, READ THEM as needed. -->",
+    ]
     for skill in skills:
         lines.append(
             f"""<skill>
