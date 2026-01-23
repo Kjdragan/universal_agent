@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../ralph-loop-quickstart"
+		},
+		{
+			"path": "../clawdbot"
+		}
+	],
+	"settings": {}
+}

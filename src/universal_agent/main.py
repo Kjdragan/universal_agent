@@ -1859,12 +1859,12 @@ async def on_pre_bash_block_composio_sdk(
             "systemMessage": (
                 "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                 "**USE MCP TOOLS INSTEAD:**\n"
-                "- For email: `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` with `tool_slug: 'GMAIL_SEND_EMAIL'`\n"
+                "- For email: Use `GMAIL_SEND_EMAIL` tool directly.\n"
                 "- For file upload: `mcp__local_toolkit__upload_to_composio`\n"
-                "- For search: Use `COMPOSIO_SEARCH_TOOLS` to discover the correct MCP pattern\n\n"
+                "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool.\n\n"
                 "The Composio SDK is not available in the Bash environment. "
-                "All Composio interactions must go through MCP tools which handle auth automatically.\n\n"
-                "If you're a sub-agent without Composio MCP access, RETURN CONTROL to the main agent."
+                "All actions must go through specific MCP tools which handle auth automatically.\n\n"
+                "If you cannot find a tool, use `COMPOSIO_SEARCH_TOOLS` to look for it."
             ),
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -6176,11 +6176,6 @@ async def setup_session(
             "   - NAMING: `dependency_summary.md`, `calendar_events.txt`, `generated_script.py`\n"
             "   - `work_products` dir is auto-created. Just save there.\n"
             "     Wait for 'File saved...' confirmation before proceeding.\n\n"
-            "8. ⚡ COMPOSIO_MULTI_EXECUTE_TOOL USAGE:\n"
-            "   - When using `COMPOSIO_MULTI_EXECUTE_TOOL`, you MUST provide `tool_slug` for EACH item in the `tools` list.\n"
-            "   - INCORRECT: `{'tools': [{'arguments': {...}}]}`\n"
-            "   - CORRECT: `{'tools': [{'tool_slug': 'googlecalendar', 'arguments': {...}}]}`\n"
-            "   - omitting `tool_slug` will cause the action to fail.\n\n"
             "9. 🔗 MANDATORY REPORT DELEGATION (YOU MUST DELEGATE):\n"
             "   🚨 TRIGGER KEYWORDS REQUIRING DELEGATION: 'report', 'comprehensive', 'detailed', 'in-depth', 'analysis', 'research'.\n"
             "   IF the user query contains ANY of these keywords, you MUST delegate to 'report-creation-expert'.\n"

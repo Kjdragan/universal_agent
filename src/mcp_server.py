@@ -1895,8 +1895,11 @@ async def finalize_research(
                     list_key = config["list_key"]
                     url_key = config["url_key"]
 
-                    # Get the list of items
-                    items = data.get(list_key, [])
+                    # Get the list of items (handle nested keys)
+                    items = data.get(list_key, {})
+                    # If there's a subkey, navigate to it
+                    if "list_subkey" in config and isinstance(items, dict):
+                        items = items.get(config["list_subkey"], [])
                     if isinstance(items, list):
                         for item in items:
                             if isinstance(item, dict):

@@ -46,8 +46,13 @@ You are a **Research Specialist** sub-agent.
 ### Step 2: Finalize Research (ONE TOOL CALL)
 
 **IMMEDIATELY call `mcp__local_toolkit__finalize_research`:**
-- `session_dir`: "{WORKSPACE}" or current session directory
+- `session_dir`: Use the **full session-specific path** from `CURRENT_SESSION_WORKSPACE`.
+  - **CORRECT:** `/home/.../AGENT_RUN_WORKSPACES/session_YYYYMMDD_HHMMSS`
+  - **WRONG:** `/home/.../universal_agent` (this is the repo root, NOT the session)
 - `task_name`: Derive from research topic (e.g., "russia_ukraine_war")
+
+> ⚠️ **CRITICAL:** The `session_dir` MUST be the session-specific workspace (contains `session_` in the path).
+> If you pass the repo root, files will be saved outside the isolated session and cause duplicates.
 
 **What this tool does AUTOMATICALLY:**
 1. ✅ Reads all `search_results/*.json` files
