@@ -15,6 +15,19 @@ from typing import Any, Dict, List, Optional
 from .orchestrator import AgentExecutionResult, AgentLoopInterface
 from .state import Task
 
+# Gateway imports for Stage 5
+try:
+    from universal_agent.gateway import Gateway, InProcessGateway, ExternalGateway, GatewayRequest
+    from universal_agent.agent_core import EventType
+    GATEWAY_AVAILABLE = True
+except ImportError:
+    GATEWAY_AVAILABLE = False
+    Gateway = None  # type: ignore
+    InProcessGateway = None  # type: ignore
+    ExternalGateway = None  # type: ignore
+    GatewayRequest = None  # type: ignore
+    EventType = None  # type: ignore
+
 
 class BaseAgentAdapter(AgentLoopInterface):
     """Base class for agent loop adapters."""
@@ -704,10 +717,203 @@ class MockAgentAdapter(BaseAgentAdapter):
         return "the Universal Agent harness integration"
 
 
+class GatewayURWAdapter(BaseAgentAdapter):
+    """
+    URW adapter that routes through the Gateway API instead of direct agent calls.
+    
+    Supports both InProcessGateway (local) and ExternalGateway (remote server).
+    """
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        if not GATEWAY_AVAILABLE:
+            raise RuntimeError("Gateway imports not available")
+        
+        self._gateway: Optional[Gateway] = None
+        self._gateway_session: Optional[Any] = None
+        self._gateway_url = config.get("gateway_url")
+
+    async def _get_gateway(self) -> Gateway:
+        if self._gateway is None:
+            if self._gateway_url:
+                self._gateway = ExternalGateway(base_url=self._gateway_url)
+            else:
+                self._gateway = InProcessGateway()
+        return self._gateway
+
+    async def _ensure_session(self, workspace_path: Path) -> Any:
+        """Ensure gateway session exists, creating if needed."""
+        gateway = await self._get_gateway()
+        
+        if self._gateway_session is None:
+            self._gateway_session = await gateway.create_session(
+                user_id="urw_harness",
+                workspace_dir=str(workspace_path),
+            )
+        return self._gateway_session
+
+    async def _create_agent(self) -> Any:
+        """Not used directly - gateway manages agent lifecycle."""
+        return None
+
+    async def _run_agent(
+        self, agent: Any, prompt: str, workspace_path: Path
+    ) -> AgentExecutionResult:
+        """Execute through gateway and collect results."""
+        gateway = await self._get_gateway()
+        session = await self._ensure_session(workspace_path)
+
+        output_chunks: List[str] = []
+        tool_calls: List[Dict[str, Any]] = []
+        tool_call_by_id: Dict[str, Dict[str, Any]] = {}
+        tool_results: List[Dict[str, Any]] = []
+        artifacts: List[Dict[str, Any]] = []
+        side_effects: List[Dict[str, Any]] = []
+        side_effect_keys: set[str] = set()
+        tools_invoked: List[str] = []
+        auth_required = False
+
+        request = GatewayRequest(user_input=prompt)
+
+        async for event in gateway.execute(session, request):
+            if self.config.get("verbose"):
+                print(f"[GATEWAY EVENT] {event.type} Data: {str(event.data)[:200]}", flush=True)
+
+            if event.type == EventType.TEXT:
+                text = event.data.get("text")
+                if text:
+                    output_chunks.append(text)
+            elif event.type == EventType.TOOL_CALL:
+                tool_calls.append(event.data)
+                tool_id = event.data.get("id")
+                if tool_id:
+                    tool_call_by_id[str(tool_id)] = event.data
+            elif event.type == EventType.TOOL_RESULT:
+                tool_results.append(event.data)
+                self._capture_side_effects_gateway(
+                    event.data,
+                    tool_call_by_id,
+                    side_effects,
+                    side_effect_keys,
+                )
+            elif event.type == EventType.WORK_PRODUCT:
+                path = event.data.get("path") or event.data.get("filename")
+                if path:
+                    artifacts.append({"path": path, "type": "file", "metadata": event.data})
+            elif event.type == EventType.AUTH_REQUIRED:
+                auth_required = True
+
+        # Capture file artifacts from tool calls
+        artifacts.extend(self._capture_file_writes_gateway(tool_calls))
+        tools_invoked = [tc.get("name") for tc in tool_calls if tc.get("name")]
+
+        output = "\n".join(output_chunks).strip()
+        if not output:
+            output = "(No text response returned by gateway)"
+
+        if auth_required:
+            return AgentExecutionResult(
+                success=False,
+                output=output,
+                error="Authentication required",
+                artifacts_produced=artifacts,
+                side_effects=side_effects,
+                tools_invoked=tools_invoked,
+            )
+
+        return AgentExecutionResult(
+            success=True,
+            output=output,
+            artifacts_produced=artifacts,
+            side_effects=side_effects,
+            tools_invoked=tools_invoked,
+            context_tokens_used=self._estimate_tokens(prompt, output),
+        )
+
+    def _capture_file_writes_gateway(self, tool_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Capture file write artifacts from tool calls."""
+        artifacts: List[Dict[str, Any]] = []
+        for call in tool_calls:
+            name = (call.get("name") or "").lower()
+            tool_input = call.get("input") or {}
+            if not isinstance(tool_input, dict):
+                continue
+            if "write" in name or "append_to_file" in name:
+                file_path = tool_input.get("file_path") or tool_input.get("path")
+                if file_path:
+                    artifacts.append({"path": file_path, "type": "file", "metadata": {"tool": name}})
+        return artifacts
+
+    def _capture_side_effects_gateway(
+        self,
+        tool_result: Dict[str, Any],
+        tool_call_by_id: Dict[str, Dict[str, Any]],
+        side_effects: List[Dict[str, Any]],
+        side_effect_keys: set,
+    ) -> None:
+        """Capture side effects from tool results."""
+        tool_use_id = tool_result.get("tool_use_id")
+        tool_call = tool_call_by_id.get(str(tool_use_id), {}) if tool_use_id else {}
+        tool_name = tool_call.get("name", "")
+        content_preview = tool_result.get("content_preview") or ""
+
+        if tool_result.get("is_error"):
+            return
+        if not tool_name:
+            return
+
+        effect_type = self._match_effect_type_gateway(tool_name)
+        if not effect_type:
+            return
+
+        idempotency_key = f"{tool_name}:{tool_use_id}"
+        if idempotency_key in side_effect_keys:
+            return
+
+        side_effect_keys.add(idempotency_key)
+        side_effects.append({
+            "type": effect_type,
+            "key": idempotency_key,
+            "details": {"tool": tool_name},
+        })
+
+    def _match_effect_type_gateway(self, tool_name: str) -> Optional[str]:
+        """Match tool name to effect type."""
+        if not tool_name:
+            return None
+        normalized = tool_name.upper()
+        if "GMAIL_SEND_EMAIL" in normalized:
+            return "email_sent"
+        if "SLACK_SEND_MESSAGE" in normalized:
+            return "slack_message_sent"
+        return None
+
+    def _estimate_tokens(self, prompt: str, output: str) -> int:
+        return int((len(prompt) + len(output)) / 4)
+
+    async def rebind_workspace(self, workspace_path: Path) -> None:
+        """Rebind gateway session to new workspace for phase transitions."""
+        gateway = await self._get_gateway()
+        if self._gateway_session:
+            # Create new session for new workspace
+            self._gateway_session = await gateway.create_session(
+                user_id="urw_harness",
+                workspace_dir=str(workspace_path),
+            )
+
+    async def close(self) -> None:
+        """Clean up gateway resources."""
+        if hasattr(self._gateway, 'close'):
+            await self._gateway.close()
+        self._gateway = None
+        self._gateway_session = None
+
+
 def create_adapter_for_system(system_type: str, config: Dict[str, Any]) -> BaseAgentAdapter:
     adapters = {
         "universal_agent": UniversalAgentAdapter,
         "mock": MockAgentAdapter,
+        "gateway": GatewayURWAdapter,
     }
     adapter_class = adapters.get(system_type)
     if not adapter_class:
