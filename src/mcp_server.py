@@ -49,7 +49,7 @@ def mcp_log(message: str, level: str = "INFO", prefix: str = "[Local Toolkit]"):
 from functools import wraps
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 # Setup logger for MCP server
 logger = logging.getLogger("mcp_server")
@@ -1274,15 +1274,12 @@ def get_core_memory_blocks() -> str:
 
 class SearchItem(BaseModel):
     """Represents a single search result or news article."""
+    model_config = ConfigDict(extra="ignore")
 
     url: Optional[str] = None
     link: Optional[str] = None  # Fallback for Scholar/News
     title: Optional[str] = None
     snippet: Optional[str] = None
-
-    # Allow extra fields for flexibility
-    class Config:
-        extra = "ignore"
 
 
 class SearchResultFile(BaseModel):
@@ -1292,13 +1289,10 @@ class SearchResultFile(BaseModel):
     News Search: {"articles": [...]}
     Web Answer: {"results": [...]} (nested inside outer object, but we parse the file content)
     """
+    model_config = ConfigDict(extra="ignore")
 
     results: Optional[List[SearchItem]] = None
     articles: Optional[List[SearchItem]] = None
-
-    # Allow extra fields/metadata
-    class Config:
-        extra = "ignore"
 
     @property
     def all_urls(self) -> List[str]:
