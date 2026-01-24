@@ -33,6 +33,7 @@ from .interview import run_planning_interview, run_planning_from_template
 from .evaluator import CompositeEvaluator, EvaluationResult, create_default_evaluator
 from .adapter import HarnessAdapter
 from .state import Artifact, ArtifactType, Task as StateTask
+from universal_agent.execution_context import bind_workspace_env
 import uuid
 
 
@@ -328,8 +329,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         phase.session_path = session_path
         
         # CRITICAL: Update env var so MCP tools (mcp_server.py) write to the correct phase dir
-        import os
-        os.environ["CURRENT_SESSION_WORKSPACE"] = str(session_path)
+        bind_workspace_env(str(session_path))
 
         # EFFICIENCY: Pre-create standard directories to prevent agent 404s
         (session_path / "work_products").mkdir(exist_ok=True)

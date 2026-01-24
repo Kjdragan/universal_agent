@@ -42,6 +42,7 @@ from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
     crawl_parallel_wrapper,
 )
+from universal_agent.gateway import InProcessGateway, GatewayRequest
 
 # Timezone helper for consistent date/time across deployments
 def get_user_datetime():
@@ -94,12 +95,6 @@ import sys
 import argparse
 
 # prompt_toolkit for better terminal input (arrow keys, history, multiline)
-from prompt_toolkit import PromptSession
-from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.styles import Style
-
 from universal_agent.prompt_assets import (
     discover_skills,
     generate_skills_xml,
@@ -114,32 +109,20 @@ from universal_agent.observers import (
     observe_and_save_video_outputs,
     verify_subagent_compliance,
 )
-
-
-class DualWriter:
-    """Writes to both a file and the original stream (stdout/stderr)."""
-
-    def __init__(self, file_handle, original_stream):
-        self.file = file_handle
-        self.stream = original_stream
-
-    def write(self, data):
-        self.stream.write(data)
-        self.stream.flush()
-        self.file.write(data)
-        self.file.flush()
-
-    def flush(self):
-        self.stream.flush()
-        self.file.flush()
-
-    def isatty(self):
-        """Check if the stream is a TTY (needed by prompt_toolkit)."""
-        return hasattr(self.stream, "isatty") and self.stream.isatty()
-
-    def fileno(self):
-        """Return file descriptor (needed by prompt_toolkit)."""
-        return self.stream.fileno()
+from universal_agent.cli_io import (
+    attach_run_log,
+    open_run_log,
+    read_run_log_tail,
+    collect_local_tool_trace_ids,
+    build_prompt_session,
+    read_prompt_input,
+    print_job_completion_summary,
+    list_workspace_artifacts,
+    render_agent_events,
+)
+from universal_agent.execution_context import bind_workspace
+from universal_agent.execution_session import ExecutionSession
+from universal_agent.trace_utils import write_trace
 
 
 class BudgetExceeded(RuntimeError):
@@ -2447,23 +2430,7 @@ def _extract_promise_from_log(workspace_dir: str, tail_lines: int = 100) -> str:
     Returns:
         The last N lines of run.log as a string, or empty string on failure
     """
-    if not workspace_dir:
-        return ""
-    
-    run_log_path = os.path.join(workspace_dir, "run.log")
-    if not os.path.exists(run_log_path):
-        return ""
-    
-    try:
-        with open(run_log_path, "r", encoding="utf-8", errors="ignore") as f:
-            # Read last N lines for efficiency
-            lines = f.readlines()
-            tail = lines[-tail_lines:] if len(lines) > tail_lines else lines
-            content = "".join(tail)
-            return content
-    except Exception as e:
-        print(f"⚠️ Fallback log read failed: {e}")
-        return ""
+    return read_run_log_tail(workspace_dir, tail_lines=tail_lines)
 
 
 def on_agent_stop(context: HookContext, run_id: str = None, db_conn=None) -> dict:
@@ -2765,6 +2732,7 @@ budget_state: dict = {"start_ts": None, "steps": 0, "tool_calls": 0}
 runtime_db_conn = None
 tool_ledger: Optional[ToolCallLedger] = None
 current_step_id: Optional[str] = None
+current_execution_session: Optional[ExecutionSession] = None
 interrupt_requested = False
 last_sigint_ts: float | None = None
 provider_session_forked_from: Optional[str] = None
@@ -2885,7 +2853,9 @@ def _handle_cancel_request(
     mark_run_cancelled(conn, run_id)
     run_cancelled_by_operator = True
     print("⚠️ Run cancellation requested. Stopping at safe boundary.")
-    print_job_completion_summary(conn, run_id, "cancelled", workspace_dir, "")
+    print_job_completion_summary(
+        conn, run_id, "cancelled", workspace_dir, "", trace, update_restart_file
+    )
     return True
 
 
@@ -4241,16 +4211,6 @@ async def reconcile_inflight_tools(
     return True
 
 
-def _list_workspace_artifacts(workspace_dir: str) -> list[str]:
-    if not workspace_dir or not os.path.isdir(workspace_dir):
-        return []
-    artifacts = []
-    for name in sorted(os.listdir(workspace_dir)):
-        if name.lower().endswith((".html", ".pdf", ".pptx")):
-            artifacts.append(name)
-    return artifacts
-
-
 def build_resume_packet(
     conn: sqlite3.Connection,
     run_id: str,
@@ -4329,7 +4289,7 @@ def build_resume_packet(
             }
         )
 
-    artifacts = _list_workspace_artifacts(workspace_dir)
+    artifacts = list_workspace_artifacts(workspace_dir)
 
     packet = {
         "run_id": run_id,
@@ -4377,36 +4337,6 @@ def build_resume_packet(
     return packet, "\n".join(summary_lines)
 
 
-def _summarize_response(text: str, max_chars: int = 700) -> str:
-    if not text:
-        return ""
-    compact = " ".join(text.split())
-    if len(compact) > max_chars:
-        return compact[: max_chars - 3] + "..."
-    return compact
-
-
-_LOCAL_TRACE_ID_PATTERN = re.compile(r"\[local-toolkit-trace-id: ([0-9a-f]{32})\]")
-
-
-def _collect_local_tool_trace_ids(workspace_dir: str) -> list[str]:
-    if not workspace_dir:
-        return []
-    run_log_path = os.path.join(workspace_dir, "run.log")
-    if not os.path.exists(run_log_path):
-        return []
-    trace_ids: set[str] = set()
-    try:
-        with open(run_log_path, "r", encoding="utf-8") as handle:
-            for line in handle:
-                match = _LOCAL_TRACE_ID_PATTERN.search(line)
-                if match:
-                    trace_ids.add(match.group(1))
-    except Exception:
-        return []
-    return sorted(trace_ids)
-
-
 def update_restart_file(
     run_id: str,
     workspace_dir: str,
@@ -4418,360 +4348,6 @@ def update_restart_file(
     # Logic removed per user request to avoid file path errors
     pass
 
-
-def print_job_completion_summary(
-    conn: sqlite3.Connection,
-    run_id: str,
-    status: str,
-    workspace_dir: str,
-    response_text: str,
-) -> None:
-    local_trace_ids = _collect_local_tool_trace_ids(workspace_dir)
-    main_trace_id = None
-    if isinstance(trace, dict):
-        main_trace_id = trace.get("trace_id")
-    artifacts = _list_workspace_artifacts(workspace_dir)
-    receipt_rows = conn.execute(
-        """
-        SELECT tool_name, status, idempotency_key, response_ref
-        FROM tool_calls
-        WHERE run_id = ? AND status = 'succeeded' AND side_effect_class != 'read_only'
-        ORDER BY updated_at DESC
-        LIMIT 5
-        """,
-        (run_id,),
-    ).fetchall()
-    receipts = []
-    for row in receipt_rows:
-        response_preview = (row["response_ref"] or "")[:200]
-        receipts.append(
-            {
-                "tool_name": row["tool_name"],
-                "status": row["status"],
-                "idempotency_key": row["idempotency_key"],
-                "response_ref": response_preview,
-            }
-        )
-    evidence_rows = conn.execute(
-        """
-        SELECT tool_name, response_ref
-        FROM tool_calls
-        WHERE run_id = ? AND status = 'succeeded' AND side_effect_class != 'read_only'
-        ORDER BY updated_at DESC
-        """,
-        (run_id,),
-    ).fetchall()
-    evidence_receipts = [
-        {
-            "tool_name": row["tool_name"],
-            "response_ref": row["response_ref"] or "",
-        }
-        for row in evidence_rows
-    ]
-
-    replay_rows = conn.execute(
-        """
-        SELECT tool_name, replay_status
-        FROM tool_calls
-        WHERE run_id = ? AND replay_status IS NOT NULL
-        ORDER BY updated_at DESC
-        LIMIT 10
-        """,
-        (run_id,),
-    ).fetchall()
-    replayed = [
-        {"tool_name": row["tool_name"], "replay_status": row["replay_status"]}
-        for row in replay_rows
-    ]
-
-    abandoned_rows = conn.execute(
-        """
-        SELECT tool_name, error_detail
-        FROM tool_calls
-        WHERE run_id = ? AND status = 'abandoned_on_resume'
-        ORDER BY updated_at DESC
-        LIMIT 10
-        """,
-        (run_id,),
-    ).fetchall()
-    abandoned = []
-    for row in abandoned_rows:
-        detail = (row["error_detail"] or "").lower()
-        outcome = "relaunched"
-        if "needs_human" in detail or "failed" in detail:
-            outcome = "needs-human"
-        abandoned.append({"tool_name": row["tool_name"], "outcome": outcome})
-
-    summary_row = conn.execute(
-        """
-        SELECT
-            COUNT(*) AS total_tool_calls,
-            SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS succeeded,
-            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
-            SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS running,
-            SUM(CASE WHEN status = 'prepared' THEN 1 ELSE 0 END) AS prepared,
-            SUM(CASE WHEN status = 'abandoned_on_resume' THEN 1 ELSE 0 END) AS abandoned,
-            SUM(CASE WHEN replay_status IS NOT NULL THEN 1 ELSE 0 END) AS replayed
-        FROM tool_calls
-        WHERE run_id = ?
-        """,
-        (run_id,),
-    ).fetchone()
-    tool_counts = conn.execute(
-        """
-        SELECT tool_name, COUNT(*) AS count
-        FROM tool_calls
-        WHERE run_id = ?
-        GROUP BY tool_name
-        ORDER BY count DESC, tool_name ASC
-        LIMIT 10
-        """,
-        (run_id,),
-    ).fetchall()
-    step_row = conn.execute(
-        """
-        SELECT COUNT(*) AS total_steps, MIN(step_index) AS min_step, MAX(step_index) AS max_step
-        FROM run_steps
-        WHERE run_id = ?
-        """,
-        (run_id,),
-    ).fetchone()
-    time_row = conn.execute(
-        """
-        SELECT MIN(created_at) AS first_event, MAX(updated_at) AS last_event
-        FROM tool_calls
-        WHERE run_id = ?
-        """,
-        (run_id,),
-    ).fetchone()
-    side_effect_row = conn.execute(
-        """
-        SELECT COUNT(*) AS side_effect_succeeded
-        FROM tool_calls
-        WHERE run_id = ? AND status = 'succeeded' AND side_effect_class != 'read_only'
-        """,
-        (run_id,),
-    ).fetchone()
-    runwide_summary = {
-        "total_tool_calls": summary_row["total_tool_calls"] if summary_row else 0,
-        "status_counts": {
-            "succeeded": summary_row["succeeded"] if summary_row else 0,
-            "failed": summary_row["failed"] if summary_row else 0,
-            "running": summary_row["running"] if summary_row else 0,
-            "prepared": summary_row["prepared"] if summary_row else 0,
-            "abandoned_on_resume": summary_row["abandoned"] if summary_row else 0,
-            "replayed": summary_row["replayed"] if summary_row else 0,
-        },
-        "top_tools": [
-            {"tool_name": row["tool_name"], "count": row["count"]}
-            for row in tool_counts
-        ],
-        "steps": {
-            "total_steps": step_row["total_steps"] if step_row else 0,
-            "min_step": step_row["min_step"] if step_row else None,
-            "max_step": step_row["max_step"] if step_row else None,
-        },
-        "timeline": {
-            "first_event": time_row["first_event"] if time_row else None,
-            "last_event": time_row["last_event"] if time_row else None,
-        },
-        "side_effect_succeeded": (
-            side_effect_row["side_effect_succeeded"] if side_effect_row else 0
-        ),
-    }
-
-    def _effects_from_receipts(receipt_items: list[dict]) -> set[str]:
-        effects: set[str] = set()
-        for receipt in receipt_items:
-            tool_name = str(receipt.get("tool_name", "") or "")
-            response_ref = str(receipt.get("response_ref", "") or "")
-            tool_name_upper = tool_name.upper()
-            haystack = f"{tool_name} {response_ref}".lower()
-            if "GMAIL_SEND_EMAIL" in tool_name_upper:
-                effects.add("email")
-            elif "COMPOSIO_MULTI_EXECUTE_TOOL" in tool_name_upper:
-                if "gmail_send_email" in haystack or "recipient_email" in haystack:
-                    effects.add("email")
-            elif "send_email" in haystack and "gmail" in haystack:
-                effects.add("email")
-            if "UPLOAD_TO_COMPOSIO" in tool_name_upper:
-                effects.add("upload")
-            elif "upload_to_composio" in haystack or (
-                "upload" in haystack and "composio" in haystack
-            ):
-                effects.add("upload")
-        return effects
-
-    confirmed_effects = _effects_from_receipts(evidence_receipts)
-    effect_labels = {
-        "email": "Email sent",
-        "upload": "Upload to Composio/S3",
-    }
-    runwide_line = None
-    if runwide_summary["total_tool_calls"]:
-        runwide_line = (
-            "Run-wide: "
-            f"{runwide_summary['total_tool_calls']} tools | "
-            f"{runwide_summary['status_counts']['succeeded']} succeeded | "
-            f"{runwide_summary['status_counts']['failed']} failed | "
-            f"{runwide_summary['status_counts']['abandoned_on_resume']} abandoned | "
-            f"{runwide_summary['status_counts']['replayed']} replayed | "
-            f"{runwide_summary['steps']['total_steps']} steps"
-        )
-
-    print("\n" + "=" * 80)
-    print("=== JOB COMPLETE ===")
-    print(f"Run ID: {run_id}")
-    print(f"Status: {status}")
-    if main_trace_id:
-        print(f"Main Trace ID: {main_trace_id}")
-    if local_trace_ids:
-        print("Related Trace IDs (local-toolkit):")
-        for trace_id in local_trace_ids:
-            print(f"- {trace_id}")
-    if artifacts:
-        print("Artifacts:")
-        for name in artifacts:
-            print(f"- {os.path.join(workspace_dir, name)}")
-    if receipts:
-        print("Last side-effect receipts:")
-        for receipt in receipts:
-            print(
-                f"- {receipt['tool_name']} | {receipt['status']} | {receipt['idempotency_key']}"
-            )
-    if replayed:
-        print("Replayed tools:")
-        for row in replayed:
-            print(f"- {row['tool_name']} | {row['replay_status']}")
-    if abandoned:
-        print("Abandoned tools:")
-        for row in abandoned:
-            print(f"- {row['tool_name']} | {row['outcome']}")
-    summary = _summarize_response(response_text)
-    if summary:
-        print("Summary:")
-        print(summary)
-    if confirmed_effects:
-        print("Evidence summary (receipts only):")
-        for effect in sorted(confirmed_effects):
-            print(f"- {effect_labels.get(effect, effect)}")
-    elif receipts:
-        print("Evidence summary (receipts only):")
-        print("- none")
-    if runwide_summary["total_tool_calls"]:
-        if runwide_line:
-            print(runwide_line)
-        print("Run-wide summary:")
-        print(
-            "Tool calls: "
-            f"{runwide_summary['total_tool_calls']} total | "
-            f"{runwide_summary['status_counts']['succeeded']} succeeded | "
-            f"{runwide_summary['status_counts']['failed']} failed | "
-            f"{runwide_summary['status_counts']['abandoned_on_resume']} abandoned | "
-            f"{runwide_summary['status_counts']['replayed']} replayed"
-        )
-        print(
-            "Steps: "
-            f"{runwide_summary['steps']['total_steps']} total "
-            f"(min {runwide_summary['steps']['min_step']}, "
-            f"max {runwide_summary['steps']['max_step']})"
-        )
-        print(
-            "Timeline: "
-            f"{runwide_summary['timeline']['first_event']} → "
-            f"{runwide_summary['timeline']['last_event']}"
-        )
-        if runwide_summary["top_tools"]:
-            print("Top tools:")
-            for row in runwide_summary["top_tools"]:
-                print(f"- {row['tool_name']} | {row['count']}")
-    print("=" * 80)
-
-    summary_path = None
-    if workspace_dir:
-        summary_path = os.path.join(workspace_dir, f"job_completion_{run_id}.md")
-        try:
-            with open(summary_path, "w", encoding="utf-8") as f:
-                f.write(f"# Job Completion Summary\n\n")
-                f.write(f"Run ID: {run_id}\n\n")
-                f.write(f"Status: {status}\n\n")
-                if main_trace_id:
-                    f.write(f"Main Trace ID: {main_trace_id}\n\n")
-                if local_trace_ids:
-                    f.write("Related Trace IDs (local-toolkit):\n")
-                    for trace_id in local_trace_ids:
-                        f.write(f"- {trace_id}\n")
-                    f.write("\n")
-                if artifacts:
-                    f.write("Artifacts:\n")
-                    for name in artifacts:
-                        f.write(f"- {os.path.join(workspace_dir, name)}\n")
-                    f.write("\n")
-                if receipts:
-                    f.write("Last side-effect receipts:\n")
-                    for receipt in receipts:
-                        f.write(
-                            f"- {receipt['tool_name']} | {receipt['status']} | {receipt['idempotency_key']}\n"
-                        )
-                    f.write("\n")
-                if replayed:
-                    f.write("Replayed tools:\n")
-                    for row in replayed:
-                        f.write(f"- {row['tool_name']} | {row['replay_status']}\n")
-                    f.write("\n")
-                if abandoned:
-                    f.write("Abandoned tools:\n")
-                    for row in abandoned:
-                        f.write(f"- {row['tool_name']} | {row['outcome']}\n")
-                    f.write("\n")
-                if summary:
-                    f.write("Summary:\n")
-                    f.write(summary + "\n")
-                if confirmed_effects or receipts:
-                    f.write("Evidence summary (receipts only):\n")
-                    if confirmed_effects:
-                        for effect in sorted(confirmed_effects):
-                            f.write(f"- {effect_labels.get(effect, effect)}\n")
-                    else:
-                        f.write("- none\n")
-                if runwide_summary["total_tool_calls"]:
-                    f.write("\nRun-wide summary:\n")
-                    if runwide_line:
-                        f.write(runwide_line + "\n")
-                    f.write(
-                        "Tool calls: "
-                        f"{runwide_summary['total_tool_calls']} total | "
-                        f"{runwide_summary['status_counts']['succeeded']} succeeded | "
-                        f"{runwide_summary['status_counts']['failed']} failed | "
-                        f"{runwide_summary['status_counts']['abandoned_on_resume']} abandoned | "
-                        f"{runwide_summary['status_counts']['replayed']} replayed\n"
-                    )
-                    f.write(
-                        "Steps: "
-                        f"{runwide_summary['steps']['total_steps']} total "
-                        f"(min {runwide_summary['steps']['min_step']}, "
-                        f"max {runwide_summary['steps']['max_step']})\n"
-                    )
-                    f.write(
-                        "Timeline: "
-                        f"{runwide_summary['timeline']['first_event']} → "
-                        f"{runwide_summary['timeline']['last_event']}\n"
-                    )
-                    if runwide_summary["top_tools"]:
-                        f.write("Top tools:\n")
-                        for row in runwide_summary["top_tools"]:
-                            f.write(f"- {row['tool_name']} | {row['count']}\n")
-        except Exception as exc:
-            print(f"⚠️ Failed to save job completion summary: {exc}")
-    if summary_path:
-        update_restart_file(
-            run_id,
-            workspace_dir,
-            job_summary_path=summary_path,
-            runwide_summary_line=runwide_line,
-        )
-
-
 async def continue_job_run(
     client: ClaudeSDKClient,
     run_id: str,
@@ -4780,6 +4356,7 @@ async def continue_job_run(
     resume_packet_summary: str,
     replay_note: Optional[str] = None,
     max_error_retries: int = 3,
+    execution_session: Optional[ExecutionSession] = None,
 ) -> Optional[str]:
     error_retries = 0
     last_error = None
@@ -4814,7 +4391,11 @@ async def continue_job_run(
 
         try:
             result = await process_turn(
-                client, user_input, workspace_dir, force_complex=True
+                client,
+                user_input,
+                workspace_dir,
+                force_complex=True,
+                execution_session=execution_session,
             )
             final_response_text = result.response_text or ""
             _maybe_mark_run_succeeded()
@@ -4836,6 +4417,7 @@ async def continue_job_run(
                             user_input,
                             workspace_dir,
                             force_complex=True,
+                            execution_session=execution_session,
                         )
                     final_response_text = result.response_text or ""
                     _maybe_mark_run_succeeded()
@@ -5768,6 +5350,11 @@ def parse_cli_args() -> argparse.Namespace:
         action="store_true",
         help="Enable verbose URW logging.",
     )
+    parser.add_argument(
+        "--use-gateway",
+        action="store_true",
+        help="Use the in-process Gateway for CLI execution (experimental).",
+    )
     return parser.parse_args()
 
 
@@ -5870,7 +5457,16 @@ async def setup_session(
     Initialize the agent session, tools, and options.
     Returns: (options, session, user_id, workspace_dir, trace)
     """
-    global trace, composio, user_id, session, options, OBSERVER_WORKSPACE_DIR, run_id, workspace_dir
+    global \
+        trace, \
+        composio, \
+        user_id, \
+        session, \
+        options, \
+        OBSERVER_WORKSPACE_DIR, \
+        run_id, \
+        workspace_dir, \
+        current_execution_session
     run_id = run_id_override or str(uuid.uuid4())
 
     # Create main span for entire execution
@@ -5911,7 +5507,11 @@ async def setup_session(
     os.makedirs(workspace_dir, exist_ok=True)
     
     # Set workspace in environment EARLY so MCP server subprocess inherits it
-    os.environ["CURRENT_SESSION_WORKSPACE"] = workspace_dir
+    def _set_observer_workspace(path: str) -> None:
+        global OBSERVER_WORKSPACE_DIR
+        OBSERVER_WORKSPACE_DIR = path
+
+    bind_workspace(workspace_dir, observer_setter=_set_observer_workspace)
 
     # Initialize Composio with automatic file downloads to this workspace
     downloads_dir = os.path.join(workspace_dir, "downloads")
@@ -6326,14 +5926,11 @@ async def setup_session(
         "logfire_enabled": bool(LOGFIRE_TOKEN),
     }
 
-    # Configure observer to save artifacts to this workspace
-    OBSERVER_WORKSPACE_DIR = workspace_dir
+    # Observer workspace already bound during session setup
 
     # Setup Output Logging
-    run_log_path = os.path.join(workspace_dir, "run.log")
-    log_file = open(run_log_path, "a", encoding="utf-8")
-    sys.stdout = DualWriter(log_file, sys.stdout)
-    sys.stderr = DualWriter(log_file, sys.stderr)
+    log_file = open_run_log(workspace_dir)
+    attach_run_log(log_file)
 
     # Inject Workspace Path into System Prompt for Sub-Agents
     abs_workspace_path = os.path.abspath(workspace_dir)
@@ -6357,6 +5954,7 @@ async def setup_session(
             options.system_prompt = tool_knowledge_block
         print(f"✅ Injected Knowledge Base ({len(tool_knowledge_content)} chars)")
 
+
     return options, session, user_id, workspace_dir, trace
 
 
@@ -6365,17 +5963,30 @@ async def process_turn(
     user_input: str,
     workspace_dir: str,
     force_complex: bool = False,
+    execution_session: Optional[ExecutionSession] = None,
 ) -> ExecutionResult:
     """
     Process a single user query.
     Returns: ExecutionResult with rich feedback
     """
-    global trace, start_ts
+    global trace, start_ts, run_id, runtime_db_conn, current_execution_session
 
-    abs_workspace_dir = os.path.abspath(workspace_dir)
-    os.environ["CURRENT_SESSION_WORKSPACE"] = abs_workspace_dir
-    global OBSERVER_WORKSPACE_DIR
-    OBSERVER_WORKSPACE_DIR = abs_workspace_dir
+    session_ctx = execution_session or current_execution_session
+    if session_ctx:
+        if session_ctx.trace is not None:
+            trace = session_ctx.trace
+        if session_ctx.run_id is not None:
+            run_id = session_ctx.run_id
+        if session_ctx.runtime_db_conn is not None:
+            runtime_db_conn = session_ctx.runtime_db_conn
+
+    def _set_observer_workspace(path: str) -> None:
+        global OBSERVER_WORKSPACE_DIR
+        OBSERVER_WORKSPACE_DIR = path
+
+    abs_workspace_dir = bind_workspace(
+        workspace_dir, absolute=True, observer_setter=_set_observer_workspace
+    )
 
     trace["query"] = user_input
     trace["start_time"] = datetime.now().isoformat()
@@ -6524,7 +6135,7 @@ async def process_turn(
                 )
 
         # Collect and display all trace IDs for debugging
-        local_trace_ids = _collect_local_tool_trace_ids(workspace_dir)
+        local_trace_ids = collect_local_tool_trace_ids(workspace_dir)
         print("\n=== TRACE IDS (for Logfire debugging) ===")
         print(f"  Main Agent:     {trace.get('trace_id', 'N/A')}")
         if local_trace_ids:
@@ -6577,9 +6188,7 @@ async def process_turn(
 
         # NEW: Incremental Trace JSON Save (for live debugging)
         try:
-            trace_path = os.path.join(workspace_dir, "trace.json")
-            with open(trace_path, "w") as f:
-                json.dump(trace, f, indent=2, default=str)
+            write_trace(trace, workspace_dir)
         except Exception as e:
             print(f"⚠️ Failed to save incremental trace: {e}")
 
@@ -6609,7 +6218,8 @@ async def main(args: argparse.Namespace):
         budget_state, \
         runtime_db_conn, \
         tool_ledger, \
-        provider_session_forked_from
+        provider_session_forked_from, \
+        current_execution_session
 
     # Create main span for entire execution
     main_span = logfire.span("standalone_composio_test")
@@ -6642,6 +6252,23 @@ async def main(args: argparse.Namespace):
         _print_tool_policy_explain(args.explain_tool_policy)
         main_span.__exit__(None, None, None)
         return
+
+    use_gateway = args.use_gateway or os.getenv("UA_USE_GATEWAY", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if use_gateway and (
+        args.resume
+        or args.fork
+        or args.job_path
+        or args.harness_objective
+        or args.urw_request
+    ):
+        print(
+            "⚠️ Gateway preview disabled for resume/job/harness/URW modes; using CLI path."
+        )
+        use_gateway = False
     
     # Handle --reset-letta: clear all Letta memory
     if getattr(args, 'reset_letta', False) and LETTA_ENABLED and _letta_client:
@@ -6734,9 +6361,28 @@ async def main(args: argparse.Namespace):
         run_id_override=run_id_override,
         workspace_dir_override=workspace_override,
     )
+    current_execution_session = ExecutionSession(
+        workspace_dir=workspace_dir,
+        run_id=run_id,
+        trace=trace,
+        runtime_db_conn=runtime_db_conn,
+    )
 
     trace["budgets"] = budget_config
     tool_ledger = ToolCallLedger(runtime_db_conn, workspace_dir)
+
+    gateway = InProcessGateway() if use_gateway else None
+    gateway_session = None
+    if gateway:
+        try:
+            gateway_session = await gateway.create_session(user_id=user_id or "user_cli")
+            print("🧭 Gateway preview enabled (in-process).")
+            print(f"Gateway Session: {gateway_session.session_id}")
+            print(f"Gateway Workspace: {gateway_session.workspace_dir}")
+        except Exception as exc:
+            print(f"⚠️ Gateway initialization failed, falling back to CLI: {exc}")
+            gateway = None
+            gateway_session = None
 
     provider_session_id = None
     resume_source_row = run_row if args.resume else base_run_row
@@ -6864,24 +6510,7 @@ async def main(args: argparse.Namespace):
 
     # Configure prompt with history (persists across sessions) and better editing
     history_file = os.path.join(workspace_dir, ".prompt_history")
-    prompt_style = Style.from_dict(
-        {
-            "prompt": "#00aa00 bold",  # Green prompt
-        }
-    )
-
-    # Only use PromptSession if running in an interactive terminal
-    if sys.stdin.isatty():
-        prompt_session = PromptSession(
-            history=FileHistory(history_file),
-            auto_suggest=AutoSuggestFromHistory(),
-            multiline=False,  # Single line, but with full editing support
-            style=prompt_style,
-            enable_history_search=True,  # Ctrl+R for history search
-        )
-    else:
-        # Non-interactive mode (e.g. piped input)
-        prompt_session = None
+    prompt_session = build_prompt_session(history_file)
 
     run_status = run_row["status"] if run_row else None
     should_auto_continue_job = (
@@ -7007,6 +6636,8 @@ async def main(args: argparse.Namespace):
                     run_status,
                     workspace_dir,
                     "",
+                    trace,
+                    update_restart_file,
                 )
                 auto_resume_complete = True
             if should_auto_continue_job and run_id:
@@ -7062,6 +6693,7 @@ async def main(args: argparse.Namespace):
                                 job_prompt,
                                 resume_summary,
                                 replay_note="In-flight tool calls were replayed; do not re-run them.",
+                                execution_session=current_execution_session,
                             )
                             if runtime_db_conn and run_id:
                                 status_row = get_run(runtime_db_conn, run_id)
@@ -7075,6 +6707,8 @@ async def main(args: argparse.Namespace):
                                         status_value,
                                         workspace_dir,
                                         final_response or "",
+                                        trace,
+                                        update_restart_file,
                                     )
                             auto_resume_complete = True
                     except BudgetExceeded as exc:
@@ -7117,25 +6751,10 @@ async def main(args: argparse.Namespace):
                         pending_prompt = None
                         print("🤖 Auto-running job prompt from run spec...")
                     else:
-                        if prompt_session:
-                            with patch_stdout():
-                                user_input = await prompt_session.prompt_async(
-                                    "🤖 Enter your request (or 'quit'): ",
-                                )
-                        else:
-                            # Non-interactive mode: read from stdin directly
-                            try:
-                                # Run in executor to avoid blocking the event loop
-                                user_input = (
-                                    await asyncio.get_event_loop().run_in_executor(
-                                        None, sys.stdin.readline
-                                    )
-                                )
-                                if not user_input:  # EOF
-                                    raise EOFError
-                            except Exception:
-                                raise EOFError
-
+                        user_input = await read_prompt_input(
+                            prompt_session,
+                            "🤖 Enter your request (or 'quit'): ",
+                        )
                         user_input = user_input.strip()
                 except (EOFError, KeyboardInterrupt):
                     run_failed = True
@@ -7310,8 +6929,53 @@ async def main(args: argparse.Namespace):
                         force_complex_for_harness = bool(harness_info.get("completion_promise"))
                         if force_complex_for_harness:
                             print("📋 Harness mode active - forcing Complex Path")
-                        
-                        result = await process_turn(client, user_input, workspace_dir, force_complex=force_complex_for_harness)
+
+                        if gateway and gateway_session:
+                            next_input = user_input
+                            final_response_text = ""
+                            tool_calls = 0
+                            while True:
+                                event_result = await render_agent_events(
+                                    gateway.execute(
+                                        gateway_session,
+                                        GatewayRequest(
+                                            user_input=next_input,
+                                            force_complex=force_complex_for_harness,
+                                        ),
+                                    )
+                                )
+                                final_response_text = event_result["response_text"] or ""
+                                tool_calls = event_result["tool_calls"]
+                                if event_result["auth_required"] and event_result["auth_link"]:
+                                    print(f"\n{'=' * 80}")
+                                    print("🔐 AUTHENTICATION REQUIRED")
+                                    print(f"{'=' * 80}")
+                                    print(f"\nPlease open this link in your browser:\n")
+                                    print(f"  {event_result['auth_link']}\n")
+                                    print("After completing authentication, press Enter to continue...")
+                                    input()
+                                    next_input = "I have completed the authentication. Please continue with the task."
+                                    continue
+                                break
+
+                            result = ExecutionResult(
+                                response_text=final_response_text,
+                                execution_time_seconds=0.0,
+                                tool_calls=tool_calls,
+                                tool_breakdown=[],
+                                code_execution_used=False,
+                                workspace_path=gateway_session.workspace_dir,
+                                trace_id=None,
+                                follow_up_suggestions=[],
+                            )
+                        else:
+                            result = await process_turn(
+                                client,
+                                user_input,
+                                workspace_dir,
+                                force_complex=force_complex_for_harness,
+                                execution_session=current_execution_session,
+                            )
                     except HarnessError as he:
                         # [Harness Error Recovery]
                         # 1. Capture context
@@ -7732,6 +7396,8 @@ async def main(args: argparse.Namespace):
                                 status,
                                 workspace_dir,
                                 result.response_text or "",
+                                trace,
+                                update_restart_file,
                             )
                         break
                 except KeyboardInterrupt:
@@ -7817,9 +7483,7 @@ async def main(args: argparse.Namespace):
 
             # Save trace
             # Save trace to workspace
-            trace_path = os.path.join(workspace_dir, "trace.json")
-            with open(trace_path, "w") as f:
-                json.dump(trace, f, indent=2, default=str)
+            trace_path = write_trace(trace, workspace_dir)
             print(f"\n📊 Full trace saved to {trace_path}")
 
             # Save comprehensive session summary
