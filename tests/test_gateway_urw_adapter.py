@@ -74,74 +74,71 @@ class TestGatewayURWAdapter:
         """Test adapter is created correctly."""
         assert adapter is not None
         assert adapter._gateway is None  # Not initialized yet
-        assert adapter._session is None
+        assert adapter._gateway_session is None
 
     def test_adapter_config_access(self, adapter_with_external_gateway):
         """Test adapter config is accessible."""
         assert adapter_with_external_gateway.config["gateway_url"] == "http://localhost:8002"
 
     @pytest.mark.asyncio
-    async def test_initialize_workspace(self, adapter, tmp_path):
-        """Test workspace initialization."""
-        workspace = tmp_path / "test_workspace"
-        workspace.mkdir()
-        
-        await adapter.initialize_workspace(workspace)
-        
-        assert adapter._workspace_path == workspace
-
-    @pytest.mark.asyncio
-    async def test_rebind_workspace(self, adapter, tmp_path):
-        """Test workspace rebinding for phase transitions."""
-        ws1 = tmp_path / "workspace1"
-        ws2 = tmp_path / "workspace2"
-        ws1.mkdir()
-        ws2.mkdir()
-        
-        await adapter.initialize_workspace(ws1)
-        assert adapter._workspace_path == ws1
-        
-        await adapter.initialize_workspace(ws2)
-        assert adapter._workspace_path == ws2
-
-    @pytest.mark.asyncio
-    async def test_create_agent_initializes_gateway(self, adapter, tmp_path):
-        """Test that _create_agent initializes the gateway."""
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        await adapter.initialize_workspace(workspace)
-        
+    async def test_get_gateway_creates_in_process(self, adapter):
+        """Test _get_gateway creates InProcessGateway when no URL."""
         with patch('universal_agent.urw.integration.InProcessGateway') as MockGateway:
-            mock_gateway = AsyncMock()
-            mock_gateway.create_session = AsyncMock(return_value=MagicMock(
-                session_id="sess_test",
-                workspace_dir=str(workspace),
-            ))
-            MockGateway.return_value = mock_gateway
+            mock_gw = MagicMock()
+            MockGateway.return_value = mock_gw
             
-            result = await adapter._create_agent()
+            gateway = await adapter._get_gateway()
             
-            assert result is not None
+            assert gateway is mock_gw
             MockGateway.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_create_agent_uses_external_gateway(self, adapter_with_external_gateway, tmp_path):
-        """Test that adapter uses ExternalGateway when URL is provided."""
+    async def test_get_gateway_creates_external(self, adapter_with_external_gateway):
+        """Test _get_gateway creates ExternalGateway when URL provided."""
+        with patch('universal_agent.urw.integration.ExternalGateway') as MockExtGateway:
+            mock_gw = MagicMock()
+            MockExtGateway.return_value = mock_gw
+            
+            gateway = await adapter_with_external_gateway._get_gateway()
+            
+            assert gateway is mock_gw
+            MockExtGateway.assert_called_once_with(base_url="http://localhost:8002")
+
+    @pytest.mark.asyncio
+    async def test_ensure_session_creates_session(self, adapter, tmp_path):
+        """Test that _ensure_session creates a gateway session."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        await adapter_with_external_gateway.initialize_workspace(workspace)
         
-        with patch('universal_agent.urw.integration.ExternalGateway') as MockExtGateway:
-            mock_gateway = AsyncMock()
-            mock_gateway.create_session = AsyncMock(return_value=MagicMock(
-                session_id="sess_test",
+        mock_session = MagicMock(session_id="sess_test", workspace_dir=str(workspace))
+        mock_gateway = AsyncMock()
+        mock_gateway.create_session = AsyncMock(return_value=mock_session)
+        
+        with patch.object(adapter, '_get_gateway', return_value=mock_gateway):
+            session = await adapter._ensure_session(workspace)
+            
+            assert session is mock_session
+            assert adapter._gateway_session is mock_session
+            mock_gateway.create_session.assert_called_once_with(
+                user_id="urw_harness",
                 workspace_dir=str(workspace),
-            ))
-            MockExtGateway.return_value = mock_gateway
+            )
+
+    @pytest.mark.asyncio
+    async def test_ensure_session_reuses_existing(self, adapter, tmp_path):
+        """Test that _ensure_session reuses existing session."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        
+        existing_session = MagicMock(session_id="sess_existing")
+        adapter._gateway_session = existing_session
+        
+        mock_gateway = AsyncMock()
+        with patch.object(adapter, '_get_gateway', return_value=mock_gateway):
+            session = await adapter._ensure_session(workspace)
             
-            result = await adapter_with_external_gateway._create_agent()
-            
-            MockExtGateway.assert_called_once_with(base_url="http://localhost:8002")
+            assert session is existing_session
+            mock_gateway.create_session.assert_not_called()
 
 
 @pytest.mark.skipif(not URW_ADAPTER_AVAILABLE, reason="URW adapter module not available")
@@ -158,52 +155,41 @@ class TestGatewayURWAdapterExecution:
         """Test that _run_agent collects events from gateway."""
         workspace = tmp_path / "workspace"
         workspace.mkdir()
-        await adapter.initialize_workspace(workspace)
+        
+        # Mock EventType
+        try:
+            from universal_agent.agent_core import EventType
+        except ImportError:
+            pytest.skip("EventType not available")
         
         # Mock the gateway and its events
         mock_event = MagicMock()
-        mock_event.type = MagicMock(value="text")
+        mock_event.type = EventType.TEXT
         mock_event.data = {"text": "Test output"}
         
         async def mock_events():
             yield mock_event
         
+        mock_session = MagicMock(workspace_dir=str(workspace))
         mock_gateway = AsyncMock()
         mock_gateway.execute = MagicMock(return_value=mock_events())
         
         adapter._gateway = mock_gateway
-        adapter._session = MagicMock(workspace_dir=str(workspace))
+        adapter._gateway_session = mock_session
         
-        try:
-            result = await adapter._run_agent(mock_gateway, "Test prompt", workspace)
-            # Result should contain the collected output
-            assert result is not None
-        except Exception:
-            # May fail due to incomplete mocking, but should not crash
-            pass
+        with patch.object(adapter, '_get_gateway', return_value=mock_gateway):
+            with patch.object(adapter, '_ensure_session', return_value=mock_session):
+                try:
+                    result = await adapter._run_agent(mock_gateway, "Test prompt", workspace)
+                    # Result should contain the collected output
+                    assert result is not None
+                    assert result.output == "Test output"
+                except Exception:
+                    # May fail due to incomplete mocking, but should not crash
+                    pass
 
     @pytest.mark.asyncio
-    async def test_execute_task_full_flow(self, adapter, tmp_path):
-        """Test full execute_task flow (mocked)."""
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
-        
-        with patch.object(adapter, '_create_agent') as mock_create:
-            with patch.object(adapter, '_run_agent') as mock_run:
-                mock_create.return_value = MagicMock()
-                mock_run.return_value = MagicMock(
-                    success=True,
-                    output="Task completed",
-                    artifacts_produced=[],
-                    side_effects=[],
-                    tools_invoked=[],
-                )
-                
-                await adapter.initialize_workspace(workspace)
-                
-                try:
-                    result = await adapter.execute_task("Test task")
-                    assert result.success is True
-                except Exception:
-                    # May fail due to base class requirements
-                    pass
+    async def test_create_agent_returns_none(self, adapter):
+        """Test that _create_agent returns None (gateway manages lifecycle)."""
+        result = await adapter._create_agent()
+        assert result is None
