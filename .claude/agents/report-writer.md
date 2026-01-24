@@ -27,10 +27,10 @@ Your PRIMARY source is the Refined Corpus: `{CURRENT_SESSION_WORKSPACE}/tasks/{t
 ## Phase 1: Planning
 
 1. Read `refined_corpus.md`.
-2. Create `work_products/_working/outline.json`.
+2. Create `{CURRENT_SESSION_WORKSPACE}/work_products/_working/outline.json`.
 
 --- PHASE 1 CHECKPOINT ---
-✅ SELF-CHECK: Does `outline.json` exist?
+✅ SELF-CHECK: Does `{CURRENT_SESSION_WORKSPACE}/work_products/_working/outline.json` exist?
 👉 ACTION: Proceed IMMEDIATELY to Phase 2.
 ---
 
@@ -46,7 +46,7 @@ Your PRIMARY source is the Refined Corpus: `{CURRENT_SESSION_WORKSPACE}/tasks/{t
    *Note: The tool automatically runs the python script to generate all sections.*
 
 --- PHASE 2 CHECKPOINT ---
-✅ SELF-CHECK: Do section files exist?
+✅ SELF-CHECK: Do section files exist in `{CURRENT_SESSION_WORKSPACE}/work_products/_working/sections/`?
 👉 ACTION: Proceed to Phase 3.
 ---
 
@@ -64,7 +64,7 @@ Your PRIMARY source is the Refined Corpus: `{CURRENT_SESSION_WORKSPACE}/tasks/{t
    *Note: This tool deterministically merges sections and generates the HTML.*
 
 --- PHASE 3 CHECKPOINT ---
-✅ SELF-CHECK: Does `work_products/report.html` exist?
+✅ SELF-CHECK: Does `{CURRENT_SESSION_WORKSPACE}/work_products/report.html` exist?
 👉 ACTION: Proceed to Phase 4.
 ---
 
@@ -73,11 +73,11 @@ Your PRIMARY source is the Refined Corpus: `{CURRENT_SESSION_WORKSPACE}/tasks/{t
 1. **Action:** Convert the HTML report to PDF.
    - **Method:** Use the `pdf` skill's headless chrome functionality.
    - **Command:** Execute `.claude/skills/pdf/scripts/html_to_pdf.py` via `run_command` or similar.
-   - **Input:** `work_products/report.html`
-   - **Output:** `work_products/report.pdf`
+   - **Input:** `{CURRENT_SESSION_WORKSPACE}/work_products/report.html`
+   - **Output:** `{CURRENT_SESSION_WORKSPACE}/work_products/report.pdf`
 
 --- PHASE 4 CHECKPOINT ---
-✅ SELF-CHECK: Does `work_products/report.pdf` exist?
+✅ SELF-CHECK: Does `{CURRENT_SESSION_WORKSPACE}/work_products/report.pdf` exist?
 👉 ACTION: Report success to parent agent.
    - Message: "Report generation complete. Final report available at: [Absolute Path to PDF]"
    - **STOP** (Return control to Primary Agent)
