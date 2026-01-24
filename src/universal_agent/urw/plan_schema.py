@@ -12,7 +12,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 
 class TaskStatus(str, Enum):
@@ -126,8 +126,11 @@ class Plan(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
+    model_config = ConfigDict()
+    
+    @field_serializer('created_at', 'updated_at')
+    def serialize_datetime(self, v: datetime) -> str:
+        return v.isoformat()
 
     def get_pending_phases(self) -> List[Phase]:
         """Get phases that haven't started yet."""
