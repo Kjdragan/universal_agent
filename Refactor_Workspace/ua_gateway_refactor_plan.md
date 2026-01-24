@@ -13,7 +13,7 @@ Deliver a gateway-first architecture that unifies CLI/Web/UI entrypoints while p
 - Prefer additive changes behind flags until validated.
 - Document each milestone and decision in `ua_gateway_refactor_progress.md`.
 
-## Stage 1 — Dependency Hardening (In Progress)
+## Stage 1 — Dependency Hardening (Completed)
 Goal: isolate CLI I/O, workspace binding, trace persistence; prepare for gateway without routing changes.
 
 ### Completed
@@ -25,7 +25,7 @@ Goal: isolate CLI I/O, workspace binding, trace persistence; prepare for gateway
 - Added Gateway contract + in-process facade (AgentBridge-backed).
 
 ### Remaining (Stage 1)
-- Validate call sites for CLI-only behaviors still match pre-refactor outputs.
+- None. Stage 1 exit criteria satisfied via Stage 2 parity checks.
 
 ### Exit Criteria
 - CLI behavior unchanged in default path.
@@ -35,7 +35,7 @@ Goal: isolate CLI I/O, workspace binding, trace persistence; prepare for gateway
 ### Gateway Preview Flags (CLI)
 - `--use-gateway` / `UA_USE_GATEWAY=1`: route interactive CLI turns through `InProcessGateway`.
 - `--gateway-use-cli-workspace` / `UA_GATEWAY_USE_CLI_WORKSPACE=1`: reuse CLI workspace for gateway sessions.
-- Auto-disabled for resume/fork/job/harness/URW modes to avoid behavior regressions.
+- Auto-disabled for resume/fork/harness/URW modes to avoid behavior regressions.
 
 ## Stage 2 — Event Stream Normalization
 Goal: normalize agent output to structured events consumed by CLI/Web without behavior changes.
@@ -44,6 +44,7 @@ Tasks
 - Define a CLI event renderer that mirrors current output formatting.
 - Build adapter to map `AgentEvent` → CLI output with no semantic differences.
 - Add feature flag to route CLI rendering from event stream (off by default).
+ - Expand parity coverage for tool-heavy flows (search, Write/Read, Bash).
 
 Exit Criteria
 - CLI output diff matches current behavior for representative runs.

@@ -1524,6 +1524,7 @@ class UniversalAgent:
                                     "is_error": is_error,
                                     "content_preview": content_str[:2000],
                                     "content_size": len(content_str),
+                                    "content_raw": block_content,
                                 },
                             )
 
