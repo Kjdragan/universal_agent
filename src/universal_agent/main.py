@@ -230,6 +230,27 @@ def _get_gateway_tool_call_id(raw_id: object) -> str:
     return tool_call_id
 
 
+def _normalize_gateway_file_path(path_value: Any) -> Any:
+    if not isinstance(path_value, str) or not path_value:
+        return path_value
+    if not OBSERVER_WORKSPACE_DIR:
+        return path_value
+    if "/.claude/sessions/" not in path_value and f"{os.sep}sessions{os.sep}" not in path_value:
+        return path_value
+    for marker in (
+        "work_products",
+        "search_results",
+        "search_results_filtered_best",
+        "workbench",
+        "downloads",
+    ):
+        marker_token = f"{os.sep}{marker}{os.sep}"
+        if marker_token in path_value:
+            suffix = path_value.split(marker_token, 1)[1].lstrip(os.sep)
+            return os.path.join(OBSERVER_WORKSPACE_DIR, marker, suffix)
+    return os.path.join(OBSERVER_WORKSPACE_DIR, "work_products", os.path.basename(path_value))
+
+
 def _ensure_gateway_step() -> str:
     global current_step_id
     if not runtime_db_conn or not run_id:
@@ -956,6 +977,20 @@ async def on_pre_tool_use_ledger(
         if resume_key and not updated_tool_input.get("task_key"):
             updated_tool_input["task_key"] = resume_key
         tool_input = updated_tool_input
+
+    if gateway_mode_active and tool_name in ("Write", "Read", "Edit", "MultiEdit"):
+        if isinstance(tool_input, dict):
+            normalized_input = dict(tool_input)
+            changed = False
+            for key in ("file_path", "path", "old_path", "new_path"):
+                if key in normalized_input:
+                    normalized_value = _normalize_gateway_file_path(normalized_input.get(key))
+                    if normalized_value != normalized_input.get(key):
+                        normalized_input[key] = normalized_value
+                        changed = True
+            if changed:
+                updated_tool_input = normalized_input
+                tool_input = normalized_input
 
     raw_tool_input = tool_input if isinstance(tool_input, dict) else {}
     email_updated_input, email_errors, email_replacements = resolve_email_recipients(
@@ -6372,12 +6407,11 @@ async def main(args: argparse.Namespace):
     if use_gateway and (
         args.resume
         or args.fork
-        or args.job_path
         or args.harness_objective
         or args.urw_request
     ):
         print(
-            "⚠️ Gateway preview disabled for resume/job/harness/URW modes; using CLI path."
+            "⚠️ Gateway preview disabled for resume/fork/harness/URW modes; using CLI path."
         )
         use_gateway = False
         gateway_use_cli_workspace = False
@@ -7125,7 +7159,8 @@ async def main(args: argparse.Namespace):
                                                         user_input=next_input,
                                                         force_complex=force_complex_for_harness,
                                                     ),
-                                                )
+                                                ),
+                                                workspace_dir=gateway_session.workspace_dir,
                                             )
                                             final_response_text = event_result["response_text"] or ""
                                             tool_calls = event_result["tool_calls"]

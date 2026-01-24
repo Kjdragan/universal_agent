@@ -60,6 +60,9 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Stage 2 parity expanded with Write/Read tool flow; gateway preview succeeded without ledger blocks and diff captured (`cli_default_write_read.log`, `cli_gateway_preview_write_read.log`, `cli_vs_gateway_write_read.diff`).
 - 2026-01-24: Stage 2 parity expanded with Composio search + Write/Read tool chain; diff captured (`cli_default_search_chain.log`, `cli_gateway_preview_search_chain.log`, `cli_vs_gateway_search_chain.diff`). Output deltas beyond session/trace IDs: gateway writes to `.claude/sessions/.../work_products/` instead of gateway workspace path and does not emit `search_results/` observer save line.
 - 2026-01-24: Gateway job-mode validation deferred: CLI disables `--use-gateway` for job/resume/harness/URW paths, so no gateway job-mode run is currently possible without lifting that guard.
+- 2026-01-24: Gateway search chain parity fix: normalized gateway Write/Read paths to the gateway workspace and ensured observer save lines appear by awaiting `observe_and_save_search_results` in gateway event rendering (log: `cli_gateway_preview_search_chain_fix4.log`, diff: `cli_vs_gateway_search_chain_fix4.diff`).
+- 2026-01-24: Gateway job-mode enabled and validated with `job_gateway_bash.json`; gateway session created, `=== JOB COMPLETE (GATEWAY) ===` printed, and `job_completion_gateway_session_20260124_004750_97ea9213.md` written in the gateway workspace (log: `cli_gateway_job_bash.log`).
+- 2026-01-24: Lifted gateway guard for `--job-path` runs; gateway remains disabled for resume/fork/harness/URW modes.
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.
@@ -156,7 +159,6 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
   - Harness orchestrator still calls `process_turn` directly (Stage 1 keeps as-is) @src/universal_agent/urw/harness_orchestrator.py#122-200.
 
 ## Next Steps
-- Validate job completion summary output in gateway job-mode path once gateway supports job runs.
 - Continue Stage 2 validation: compare CLI output vs event-rendered output on representative runs and log diffs.
 - Expand Stage 2 parity checks on tool-heavy flows (Write/Edit, Composio search, multi-step tool chains).
 - Review gateway contract with stakeholders (CLI + API + URW owners) once Stage 2 output parity is confirmed.

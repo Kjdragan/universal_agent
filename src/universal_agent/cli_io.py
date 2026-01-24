@@ -13,6 +13,7 @@ from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.styles import Style
 
 from universal_agent.agent_core import AgentEvent, EventType
+from universal_agent.observers.core import observe_and_save_search_results
 
 
 class DualWriter:
@@ -99,6 +100,25 @@ def summarize_response(text: str, max_chars: int = 700) -> str:
     return compact
 
 
+def _normalize_display_path(path_value: Any, workspace_dir: Optional[str]) -> Any:
+    if not isinstance(path_value, str) or not path_value or not workspace_dir:
+        return path_value
+    if "/.claude/sessions/" not in path_value and f"{os.sep}sessions{os.sep}" not in path_value:
+        return path_value
+    for marker in (
+        "work_products",
+        "search_results",
+        "search_results_filtered_best",
+        "workbench",
+        "downloads",
+    ):
+        marker_token = f"{os.sep}{marker}{os.sep}"
+        if marker_token in path_value:
+            suffix = path_value.split(marker_token, 1)[1].lstrip(os.sep)
+            return os.path.join(workspace_dir, marker, suffix)
+    return os.path.join(workspace_dir, "work_products", os.path.basename(path_value))
+
+
 def build_prompt_session(history_file: str) -> Optional[PromptSession]:
     # Only use PromptSession if running in an interactive terminal
     if not sys.stdin.isatty():
@@ -141,11 +161,13 @@ async def read_prompt_input(
 
 async def render_agent_events(
     event_stream: AsyncIterator[AgentEvent],
+    workspace_dir: Optional[str] = None,
 ) -> dict[str, Any]:
     response_text = ""
     tool_calls = 0
     tool_results = 0
     tool_call_entries: list[dict[str, Any]] = []
+    tool_call_lookup: dict[str, dict[str, Any]] = {}
     work_products: list[dict[str, Any]] = []
     status_updates: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -162,12 +184,21 @@ async def render_agent_events(
             tool_calls += 1
             tool_name = (event.data or {}).get("name") or "unknown"
             tool_input = (event.data or {}).get("input")
+            tool_use_id = (event.data or {}).get("id")
             time_offset = (event.data or {}).get("time_offset", 0.0) or 0.0
             is_code_exec = any(
                 token in tool_name.upper()
                 for token in ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"]
             )
             marker = "🏭 CODE EXECUTION" if is_code_exec else "🔧"
+            if workspace_dir and isinstance(tool_input, dict):
+                normalized_input = dict(tool_input)
+                for key in ("file_path", "path", "old_path", "new_path"):
+                    if key in normalized_input:
+                        normalized_input[key] = _normalize_display_path(
+                            normalized_input.get(key), workspace_dir
+                        )
+                tool_input = normalized_input
             input_preview = ""
             input_size = 0
             if tool_input is not None:
@@ -192,6 +223,11 @@ async def render_agent_events(
                     "id": (event.data or {}).get("id"),
                 }
             )
+            if tool_use_id is not None:
+                tool_call_lookup[str(tool_use_id)] = {
+                    "name": tool_name,
+                    "input": tool_input,
+                }
         elif event.type == EventType.TOOL_RESULT:
             tool_results += 1
             result_size = (event.data or {}).get("content_size")
@@ -204,6 +240,18 @@ async def render_agent_events(
                 preview = result_preview[:2000]
                 suffix = "..." if len(result_preview) > 2000 else ""
                 print(f"   Preview: {preview}{suffix}")
+            tool_use_id = (event.data or {}).get("tool_use_id")
+            lookup = tool_call_lookup.get(str(tool_use_id)) if tool_use_id is not None else None
+            tool_name = (lookup or {}).get("name")
+            if workspace_dir and tool_name:
+                try:
+                    await observe_and_save_search_results(
+                        tool_name,
+                        (event.data or {}).get("content_raw") or result_preview,
+                        workspace_dir,
+                    )
+                except Exception:
+                    pass
         elif event.type == EventType.AUTH_REQUIRED:
             auth_required = True
             auth_link = event.data.get("auth_link")
