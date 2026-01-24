@@ -47,6 +47,8 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Smoke tests attempted (CLI default / gateway preview / gateway + CLI workspace) but blocked by missing `python-dotenv` dependency in the local environment.
 - 2026-01-24: Installed `python-dotenv` in the project venv and reran smoke tests; CLI default + gateway preview (separate + CLI workspace) all reached interactive prompt and exited cleanly via `quit`.
 - 2026-01-24: Stage 1 validation pass: reviewed bot adapter + process_turn call sites. Bot adapter still calls `process_turn` directly (no `ExecutionSession`), same as pre-refactor; main/URW paths rely on `current_execution_session` default for context. No regressions identified, but explicit ExecutionSession for bot path is a follow-up candidate.
+- 2026-01-24: Plan review update: Stage 1 effectively complete with gateway preview path validated; remaining follow-ups are bot adapter ExecutionSession wiring, flag/behavior documentation, and formal Stage 2 output-diff validation.
+- 2026-01-24: Bot adapter now builds an `ExecutionSession` from setup_session state and passes it into `process_turn` for explicit context binding.
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.
@@ -143,7 +145,8 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
   - Harness orchestrator still calls `process_turn` directly (Stage 1 keeps as-is) @src/universal_agent/urw/harness_orchestrator.py#122-200.
 
 ## Next Steps
-- Validate Stage 1 extraction points (CLI I/O helpers + session context) against actual call sites.
-- Review gateway contract with stakeholders (CLI + API + URW owners).
-- Catalog all Claude Agent SDK guardrails/hooks/injections to ensure parity in gateway flow.
+- Decide whether to wire `ExecutionSession` explicitly in the bot adapter path or document deferral.
+- Add a short doc note enumerating new gateway flags/behavior (CLI + env) in plan/progress docs.
+- Start Stage 2 validation: compare CLI output vs event-rendered output on representative runs and log diffs.
+- Review gateway contract with stakeholders (CLI + API + URW owners) once Stage 2 output parity is confirmed.
 - Confirm missing Clawdbot features (lanes/sandboxing) by checking the Clawdbot repo directly.
