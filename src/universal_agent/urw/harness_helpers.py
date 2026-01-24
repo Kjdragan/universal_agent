@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from universal_agent.execution_context import bind_workspace_env
 
 def toggle_session(
     harness_dir: Path,
@@ -38,7 +39,7 @@ def toggle_session(
     new_workspace = str(session_path)
     
     # Update environment variable so MCP servers pick it up
-    os.environ["CURRENT_SESSION_WORKSPACE"] = new_workspace
+    bind_workspace_env(new_workspace)
     
     return new_workspace
 

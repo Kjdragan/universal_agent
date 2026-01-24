@@ -30,6 +30,7 @@ from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
     crawl_parallel_wrapper,
 )
+from universal_agent.execution_context import bind_workspace_env
 
 
 # Get project directories
@@ -139,7 +140,7 @@ class AgentSetup:
         self._setup_workspace_dirs()
 
         # Set workspace in environment for MCP server subprocess
-        os.environ["CURRENT_SESSION_WORKSPACE"] = self.workspace_dir
+        bind_workspace_env(self.workspace_dir)
 
         # Initialize Composio
         downloads_dir = os.path.join(self.workspace_dir, "downloads")
@@ -228,7 +229,7 @@ class AgentSetup:
         Used by URW harness for phase transitions.
         """
         self.workspace_dir = new_workspace
-        os.environ["CURRENT_SESSION_WORKSPACE"] = new_workspace
+        bind_workspace_env(new_workspace)
         self._setup_workspace_dirs()
         
         # Rebuild options with new workspace
