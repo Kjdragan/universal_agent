@@ -1,0 +1,62 @@
+--- Refactor_Workspace/stage2_validation/cli_default_hello.log	2026-01-23 23:41:48.617030206 -0600
++++ Refactor_Workspace/stage2_validation/cli_gateway_preview_hello_fastpath.log	2026-01-23 23:52:50.484038934 -0600
+@@ -20,25 +20,33 @@
+ ✅ Discovered Skills: ['excalidraw-free', 'coding-agent', 'skill-creator', 'slack', 'image-generation', 'video-remotion', 'media-processing', 'pdf', 'discord', 'github', 'notion', 'mcp-builder', 'agent-browser', 'webapp-testing']
+ ⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.
+ ✅ Identity registry loaded: primary_email=kevin.dragan@outlook.com, aliases=['me', 'my email', 'my gmail', 'my outlook', 'myself']
+-✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260123_234137
++✅ Injected Session Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260123_235234
+ ✅ Injected Knowledge Base (12479 chars)
+-DEBUG: After setups - run_id global is 3f33d600-1e98-497b-a60a-db2541b0fbac
+-DEBUG: Inside upsert_run for 3f33d600-1e98-497b-a60a-db2541b0fbac path=<sqlite3.Connection object at 0x7595c80d5030>
++⏳ Starting Composio Session initialization...
++⏳ Discovering connected apps...
++✅ Composio Session Created
++✅ Active Apps (Discovered + Core): ['codeinterpreter', 'composio_search', 'filetool', 'gmail', 'google_maps', 'googlephotos', 'googlesheets', 'linear', 'openweather_api', 'sqltool', 'youtube', 'browserbase', 'github']
++✅ Discovered Skills: ['excalidraw-free', 'coding-agent', 'skill-creator', 'slack', 'image-generation', 'video-remotion', 'media-processing', 'pdf', 'discord', 'github', 'notion', 'mcp-builder', 'agent-browser', 'webapp-testing']
++🧭 Gateway preview enabled (in-process).
++Gateway Session: session_20260123_235236_0aca815e
++Gateway Workspace: /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260123_235236_0aca815e
++DEBUG: After setups - run_id global is 574a0d66-8f1a-4eaf-857c-6fb5671edc1f
++DEBUG: Inside upsert_run for 574a0d66-8f1a-4eaf-857c-6fb5671edc1f path=<sqlite3.Connection object at 0x762824249210>
+ 
+ ============================================================
+          🔍 TRACING IDS (for Logfire debugging)
+ ============================================================
+-  Main Agent Trace ID:    019bee85ac29bd7d1931ef60b38cc583
++  Main Agent Trace ID:    019bee8fb56082c06616695da6bc0ad5
+   Local Toolkit Trace ID: (shown in tool results)
+ ============================================================
+ 
+ === Composio Session Info ===
+ Session URL: https://backend.composio.dev/tool_router/trs_8r9TMK_pK0NN/mcp
+ User ID: pg-test-8c18facc-7f25-4693-918c-7252c15d36b2
+-Run ID: 3f33d600-1e98-497b-a60a-db2541b0fbac
+-Timestamp: 20260123_234137
+-Trace ID: 019bee85ac29bd7d1931ef60b38cc583
+-Resume Command: PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id 3f33d600-1e98-497b-a60a-db2541b0fbac
++Run ID: 574a0d66-8f1a-4eaf-857c-6fb5671edc1f
++Timestamp: 20260123_235234
++Trace ID: 019bee8fb56082c06616695da6bc0ad5
++Resume Command: PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id 574a0d66-8f1a-4eaf-857c-6fb5671edc1f
+ ============================
+ 
+ ================================================================================
+@@ -52,7 +60,16 @@
+ 
+ ⚡ Direct Answer (Fast Path):
+ ----------------------------------------
+-Hello! How can I help you today?
++Hello! How can I help you today? I'm here to assist with a wide range of tasks including:
++
++- **Research & Reports** - Web searches, news analysis, comprehensive reports
++- **Email & Communication** - Send emails via Gmail, Slack messages
++- **File Processing** - PDF manipulation, media conversion, document generation
++- **Coding & Development** - GitHub operations, code analysis, testing
++- **Data Analysis** - Financial statements, company research, data visualization
++- **Automation** - Browser automation, workflow orchestration
++
++What would you like to work on?
+ ----------------------------------------
+ 
+ ================================================================================

@@ -50,6 +50,10 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Plan review update: Stage 1 effectively complete with gateway preview path validated; remaining follow-ups are bot adapter ExecutionSession wiring, flag/behavior documentation, and formal Stage 2 output-diff validation.
 - 2026-01-24: Bot adapter now builds an `ExecutionSession` from setup_session state and passes it into `process_turn` for explicit context binding.
 - 2026-01-24: Updated refactor plan with gateway preview flag documentation and marked bot adapter ExecutionSession wiring as complete.
+- 2026-01-24: Stage 2 validation started: captured CLI default + gateway preview logs in `Refactor_Workspace/stage2_validation/` and diffed outputs. Gateway preview currently initializes a second Composio session and emits additional gateway session lines; baseline output otherwise matches (trace/run IDs differ as expected).
+- 2026-01-24: Stage 1 parity audit (targeted): grep confirms CLI/URW/AgentSetup use `execution_context`/`cli_io`/`trace_utils`; operator CLI still tails `run.log` and bot ExecutionLogger remains DualWriter-based. Smoke runs with `hello` confirm `run.log` presence in CLI workspaces and `trace.json` creation in gateway workspaces; CLI simple path does not emit `trace.json` (expected since trace writes only in complex path). Job completion summary not exercised in these runs.
+- 2026-01-24: Job-mode smoke run completed using `Refactor_Workspace/stage2_validation/job_smoke.json`. CLI printed `=== JOB COMPLETE ===`, `run.log` contains the summary block, and `job_completion_<run_id>.md` was written in the job workspace (`session_20260123_234527`).
+- 2026-01-24: Gateway preview now uses CLI fast-path classification for SIMPLE queries before streaming events; captured `cli_gateway_preview_hello_fastpath.log` and diffed against CLI hello. Formatting matches fast-path output; response content still varies (model non-determinism). Duplicate Composio session initialization remains.
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.
@@ -146,7 +150,8 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
   - Harness orchestrator still calls `process_turn` directly (Stage 1 keeps as-is) @src/universal_agent/urw/harness_orchestrator.py#122-200.
 
 ## Next Steps
-- Validate remaining Stage 1 call sites for CLI-only behavior parity.
-- Start Stage 2 validation: compare CLI output vs event-rendered output on representative runs and log diffs.
+- Validate job completion summary output in gateway job-mode path once gateway supports job runs.
+- Continue Stage 2 validation: compare CLI output vs event-rendered output on representative runs and log diffs.
+- Investigate duplicate Composio session initialization in gateway preview and decide on reuse strategy.
 - Review gateway contract with stakeholders (CLI + API + URW owners) once Stage 2 output parity is confirmed.
 - Confirm missing Clawdbot features (lanes/sandboxing) by checking the Clawdbot repo directly.
