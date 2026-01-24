@@ -1534,6 +1534,17 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
             # Process results
             for result in crawl_results:
                 if isinstance(result, Exception):
+                    # Structured Logfire event for crawl exception
+                    try:
+                        logfire.info(
+                            "crawl_failure",
+                            url="unknown",
+                            reason="exception",
+                            error=str(result),
+                            phase="finalize_research",
+                        )
+                    except Exception:
+                        pass
                     results_summary["failed"] += 1
                     results_summary["errors"].append(
                         {"url": "unknown", "error": str(result)}
@@ -1555,6 +1566,17 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                         )
                         if is_cloudflare_blocked:
                             logger.warning(f"Cloudflare blocked: {url}")
+                            # Structured Logfire event for crawl failure
+                            try:
+                                logfire.info(
+                                    "crawl_failure",
+                                    url=url,
+                                    reason="cloudflare_blocked",
+                                    content_length=len(content),
+                                    phase="finalize_research",
+                                )
+                            except Exception:
+                                pass  # Logfire optional
                             results_summary["failed"] += 1
                             results_summary["errors"].append(
                                 {"url": url, "error": "Cloudflare blocked"}
