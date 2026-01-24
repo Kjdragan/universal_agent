@@ -46,6 +46,7 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Gateway preview now binds observer workspace to the gateway session (sets `CURRENT_SESSION_WORKSPACE` + `OBSERVER_WORKSPACE_DIR`).
 - 2026-01-24: Smoke tests attempted (CLI default / gateway preview / gateway + CLI workspace) but blocked by missing `python-dotenv` dependency in the local environment.
 - 2026-01-24: Installed `python-dotenv` in the project venv and reran smoke tests; CLI default + gateway preview (separate + CLI workspace) all reached interactive prompt and exited cleanly via `quit`.
+- 2026-01-24: Stage 1 validation pass: reviewed bot adapter + process_turn call sites. Bot adapter still calls `process_turn` directly (no `ExecutionSession`), same as pre-refactor; main/URW paths rely on `current_execution_session` default for context. No regressions identified, but explicit ExecutionSession for bot path is a follow-up candidate.
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.
