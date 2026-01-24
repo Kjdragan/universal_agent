@@ -54,6 +54,7 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Stage 1 parity audit (targeted): grep confirms CLI/URW/AgentSetup use `execution_context`/`cli_io`/`trace_utils`; operator CLI still tails `run.log` and bot ExecutionLogger remains DualWriter-based. Smoke runs with `hello` confirm `run.log` presence in CLI workspaces and `trace.json` creation in gateway workspaces; CLI simple path does not emit `trace.json` (expected since trace writes only in complex path). Job completion summary not exercised in these runs.
 - 2026-01-24: Job-mode smoke run completed using `Refactor_Workspace/stage2_validation/job_smoke.json`. CLI printed `=== JOB COMPLETE ===`, `run.log` contains the summary block, and `job_completion_<run_id>.md` was written in the job workspace (`session_20260123_234527`).
 - 2026-01-24: Gateway preview now uses CLI fast-path classification for SIMPLE queries before streaming events; captured `cli_gateway_preview_hello_fastpath.log` and diffed against CLI hello. Formatting matches fast-path output; response content still varies (model non-determinism). Duplicate Composio session initialization remains.
+- 2026-01-24: Gateway preview now lazily initializes the in-process session only when complex/tool execution is needed. SIMPLE queries no longer spin up a second Composio session. For complex queries, ledger hooks are bypassed in gateway mode to avoid “Prepared ledger row missing” blocks; tool execution succeeds and `cli_vs_gateway_listdir.diff` captured for parity review.
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.
@@ -152,6 +153,7 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 ## Next Steps
 - Validate job completion summary output in gateway job-mode path once gateway supports job runs.
 - Continue Stage 2 validation: compare CLI output vs event-rendered output on representative runs and log diffs.
-- Investigate duplicate Composio session initialization in gateway preview and decide on reuse strategy.
+- Replace gateway ledger bypass with a proper durable ledger integration (avoid “Prepared ledger row missing” without disabling hooks).
+- Decide whether to reuse CLI Composio session for gateway complex paths or accept dual-session behavior.
 - Review gateway contract with stakeholders (CLI + API + URW owners) once Stage 2 output parity is confirmed.
 - Confirm missing Clawdbot features (lanes/sandboxing) by checking the Clawdbot repo directly.

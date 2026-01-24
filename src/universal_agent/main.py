@@ -664,6 +664,7 @@ async def on_pre_tool_use_ledger(
         forced_tool_queue, \
         forced_tool_active_ids, \
         forced_tool_mode_active, \
+        gateway_mode_active, \
         runtime_db_conn
     if tool_ledger is None or run_id is None:
         return {}
@@ -1182,6 +1183,9 @@ async def on_pre_tool_use_ledger(
         else:
             return schema_guardrail
 
+    if gateway_mode_active:
+        return _allow_with_updated_input()
+
     side_effect_class = "unknown"
     try:
         decision = prepare_tool_call(
@@ -1390,7 +1394,10 @@ async def on_post_tool_use_ledger(
         forced_tool_active_ids, \
         forced_tool_queue, \
         runtime_db_conn, \
-        run_id
+        run_id, \
+        gateway_mode_active
+    if gateway_mode_active:
+        return {}
     if tool_ledger is None:
         return {}
 
@@ -2772,6 +2779,7 @@ current_execution_session: Optional[ExecutionSession] = None
 interrupt_requested = False
 last_sigint_ts: float | None = None
 provider_session_forked_from: Optional[str] = None
+gateway_mode_active = False
 forced_tool_queue: list[dict[str, Any]] = []
 forced_tool_active_ids: dict[str, dict[str, Any]] = {}
 forced_tool_mode_active = False
@@ -6232,7 +6240,8 @@ async def main(args: argparse.Namespace):
         runtime_db_conn, \
         tool_ledger, \
         provider_session_forked_from, \
-        current_execution_session
+        current_execution_session, \
+        gateway_mode_active
 
     # Create main span for entire execution
     main_span = logfire.span("standalone_composio_test")
@@ -6391,7 +6400,12 @@ async def main(args: argparse.Namespace):
 
     gateway = InProcessGateway(hooks=build_cli_hooks()) if use_gateway else None
     gateway_session = None
-    if gateway:
+    async def _ensure_gateway_session() -> bool:
+        nonlocal gateway_session, gateway
+        if not gateway:
+            return False
+        if gateway_session:
+            return True
         try:
             gateway_session = await gateway.create_session(
                 user_id=user_id or "user_cli",
@@ -6400,6 +6414,7 @@ async def main(args: argparse.Namespace):
             print("🧭 Gateway preview enabled (in-process).")
             print(f"Gateway Session: {gateway_session.session_id}")
             print(f"Gateway Workspace: {gateway_session.workspace_dir}")
+
             def _set_gateway_observer_workspace(path: str) -> None:
                 global OBSERVER_WORKSPACE_DIR
                 OBSERVER_WORKSPACE_DIR = path
@@ -6409,10 +6424,12 @@ async def main(args: argparse.Namespace):
                 absolute=True,
                 observer_setter=_set_gateway_observer_workspace,
             )
+            return True
         except Exception as exc:
             print(f"⚠️ Gateway initialization failed, falling back to CLI: {exc}")
             gateway = None
             gateway_session = None
+            return False
 
     provider_session_id = None
     resume_source_row = run_row if args.resume else base_run_row
@@ -6960,7 +6977,7 @@ async def main(args: argparse.Namespace):
                         if force_complex_for_harness:
                             print("📋 Harness mode active - forcing Complex Path")
 
-                        if gateway and gateway_session:
+                        if gateway:
                             gateway_used_fast_path = False
                             if not force_complex_for_harness:
                                 gateway_decision = await classify_query(client, user_input)
@@ -6975,85 +6992,98 @@ async def main(args: argparse.Namespace):
                                             tool_calls=0,
                                             tool_breakdown=[],
                                             code_execution_used=False,
-                                            workspace_path=gateway_session.workspace_dir,
+                                            workspace_path=workspace_dir,
                                             trace_id=None,
                                             follow_up_suggestions=[],
                                         )
                                         gateway_used_fast_path = True
 
                             if not gateway_used_fast_path:
-                                next_input = user_input
-                                final_response_text = ""
-                                tool_calls = 0
-                                while True:
-                                    request_start_ts = time.time()
-                                    event_result = await render_agent_events(
-                                        gateway.execute(
-                                            gateway_session,
-                                            GatewayRequest(
-                                                user_input=next_input,
-                                                force_complex=force_complex_for_harness,
-                                            ),
-                                        )
+                                if not await _ensure_gateway_session():
+                                    result = await process_turn(
+                                        client,
+                                        user_input,
+                                        workspace_dir,
+                                        force_complex=force_complex_for_harness,
+                                        execution_session=current_execution_session,
                                     )
-                                    final_response_text = event_result["response_text"] or ""
-                                    tool_calls = event_result["tool_calls"]
-                                    if event_result["auth_required"] and event_result["auth_link"]:
-                                        print(f"\n{'=' * 80}")
-                                        print("🔐 AUTHENTICATION REQUIRED")
-                                        print(f"{'=' * 80}")
-                                        print(f"\nPlease open this link in your browser:\n")
-                                        print(f"  {event_result['auth_link']}\n")
-                                        print("After completing authentication, press Enter to continue...")
-                                        input()
-                                        next_input = "I have completed the authentication. Please continue with the task."
-                                        continue
-                                    request_duration = time.time() - request_start_ts
-                                    trace_id = None
+                                else:
+                                    next_input = user_input
+                                    final_response_text = ""
+                                    tool_calls = 0
+                                    gateway_mode_active = True
                                     try:
-                                        if gateway._bridge.current_agent and hasattr(
-                                            gateway._bridge.current_agent, "trace"
-                                        ):
-                                            trace_id = gateway._bridge.current_agent.trace.get(
-                                                "trace_id"
+                                        while True:
+                                            request_start_ts = time.time()
+                                            event_result = await render_agent_events(
+                                                gateway.execute(
+                                                    gateway_session,
+                                                    GatewayRequest(
+                                                        user_input=next_input,
+                                                        force_complex=force_complex_for_harness,
+                                                    ),
+                                                )
                                             )
-                                    except Exception:
-                                        trace_id = None
-                                    if event_result["tool_calls"]:
-                                        print_execution_summary_from_events(
-                                            request_duration=request_duration,
-                                            tool_call_entries=event_result.get(
-                                                "tool_call_entries", []
-                                            ),
-                                            workspace_dir=gateway_session.workspace_dir,
-                                            trace_id=trace_id,
-                                            work_products=event_result.get("work_products"),
-                                        )
-                                    if run_mode == "job" and args.job_path:
-                                        print_job_completion_summary_from_events(
-                                            session_id=gateway_session.session_id,
-                                            workspace_dir=gateway_session.workspace_dir,
-                                            response_text=final_response_text,
-                                            tool_call_entries=event_result.get(
-                                                "tool_call_entries", []
-                                            ),
-                                            tool_results=event_result.get("tool_results", 0),
-                                            work_products=event_result.get("work_products"),
-                                            errors=event_result.get("errors"),
-                                            trace_id=trace_id,
-                                        )
-                                    break
+                                            final_response_text = event_result["response_text"] or ""
+                                            tool_calls = event_result["tool_calls"]
+                                            if event_result["auth_required"] and event_result["auth_link"]:
+                                                print(f"\n{'=' * 80}")
+                                                print("🔐 AUTHENTICATION REQUIRED")
+                                                print(f"{'=' * 80}")
+                                                print(f"\nPlease open this link in your browser:\n")
+                                                print(f"  {event_result['auth_link']}\n")
+                                                print("After completing authentication, press Enter to continue...")
+                                                input()
+                                                next_input = "I have completed the authentication. Please continue with the task."
+                                                continue
+                                            request_duration = time.time() - request_start_ts
+                                            trace_id = None
+                                            try:
+                                                if gateway._bridge.current_agent and hasattr(
+                                                    gateway._bridge.current_agent, "trace"
+                                                ):
+                                                    trace_id = gateway._bridge.current_agent.trace.get(
+                                                        "trace_id"
+                                                    )
+                                            except Exception:
+                                                trace_id = None
+                                            if event_result["tool_calls"]:
+                                                print_execution_summary_from_events(
+                                                    request_duration=request_duration,
+                                                    tool_call_entries=event_result.get(
+                                                        "tool_call_entries", []
+                                                    ),
+                                                    workspace_dir=gateway_session.workspace_dir,
+                                                    trace_id=trace_id,
+                                                    work_products=event_result.get("work_products"),
+                                                )
+                                            if run_mode == "job" and args.job_path:
+                                                print_job_completion_summary_from_events(
+                                                    session_id=gateway_session.session_id,
+                                                    workspace_dir=gateway_session.workspace_dir,
+                                                    response_text=final_response_text,
+                                                    tool_call_entries=event_result.get(
+                                                        "tool_call_entries", []
+                                                    ),
+                                                    tool_results=event_result.get("tool_results", 0),
+                                                    work_products=event_result.get("work_products"),
+                                                    errors=event_result.get("errors"),
+                                                    trace_id=trace_id,
+                                                )
+                                            break
+                                    finally:
+                                        gateway_mode_active = False
 
-                                result = ExecutionResult(
-                                    response_text=final_response_text,
-                                    execution_time_seconds=0.0,
-                                    tool_calls=tool_calls,
-                                    tool_breakdown=[],
-                                    code_execution_used=False,
-                                    workspace_path=gateway_session.workspace_dir,
-                                    trace_id=None,
-                                    follow_up_suggestions=[],
-                                )
+                                    result = ExecutionResult(
+                                        response_text=final_response_text,
+                                        execution_time_seconds=0.0,
+                                        tool_calls=tool_calls,
+                                        tool_breakdown=[],
+                                        code_execution_used=False,
+                                        workspace_path=gateway_session.workspace_dir,
+                                        trace_id=None,
+                                        follow_up_suggestions=[],
+                                    )
                         else:
                             result = await process_turn(
                                 client,
