@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import re
 import sqlite3
@@ -144,6 +145,7 @@ async def render_agent_events(
     response_text = ""
     tool_calls = 0
     tool_results = 0
+    tool_call_entries: list[dict[str, Any]] = []
     work_products: list[dict[str, Any]] = []
     status_updates: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -158,13 +160,58 @@ async def render_agent_events(
                 print(text, end="", flush=True)
         elif event.type == EventType.TOOL_CALL:
             tool_calls += 1
+            tool_name = (event.data or {}).get("name") or "unknown"
+            tool_input = (event.data or {}).get("input")
+            time_offset = (event.data or {}).get("time_offset", 0.0) or 0.0
+            is_code_exec = any(
+                token in tool_name.upper()
+                for token in ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"]
+            )
+            marker = "🏭 CODE EXECUTION" if is_code_exec else "🔧"
+            input_preview = ""
+            input_size = 0
+            if tool_input is not None:
+                try:
+                    input_preview = json.dumps(tool_input, indent=2)
+                except Exception:
+                    input_preview = str(tool_input)
+                input_size = len(input_preview.encode("utf-8"))
+            print(f"\n{marker} [{tool_name}] +{round(time_offset, 3)}s")
+            if input_size:
+                print(f"   Input size: {input_size} bytes")
+            if input_preview:
+                max_len = 3000 if is_code_exec else 500
+                if len(input_preview) > max_len:
+                    input_preview = input_preview[:max_len] + "..."
+                print(f"   Input: {input_preview}")
+            print(f"   ⏳ Waiting for {tool_name} response...")
+            tool_call_entries.append(
+                {
+                    "name": tool_name,
+                    "time_offset": time_offset,
+                    "id": (event.data or {}).get("id"),
+                }
+            )
         elif event.type == EventType.TOOL_RESULT:
             tool_results += 1
+            result_size = (event.data or {}).get("content_size")
+            result_preview = (event.data or {}).get("content_preview") or ""
+            result_time = (event.data or {}).get("time_offset", 0.0) or 0.0
+            print(
+                f"\n📦 Tool Result ({result_size if result_size is not None else 'unknown'} bytes) +{round(result_time, 3)}s"
+            )
+            if result_preview:
+                preview = result_preview[:2000]
+                suffix = "..." if len(result_preview) > 2000 else ""
+                print(f"   Preview: {preview}{suffix}")
         elif event.type == EventType.AUTH_REQUIRED:
             auth_required = True
             auth_link = event.data.get("auth_link")
         elif event.type == EventType.WORK_PRODUCT:
             work_products.append(event.data or {})
+            filename = (event.data or {}).get("filename") or (event.data or {}).get("path")
+            if filename:
+                print(f"\n📄 Work product saved: {filename}")
         elif event.type == EventType.STATUS:
             status_updates.append(event.data or {})
         elif event.type == EventType.ERROR:
@@ -179,12 +226,74 @@ async def render_agent_events(
         "response_text": response_text,
         "tool_calls": tool_calls,
         "tool_results": tool_results,
+        "tool_call_entries": tool_call_entries,
         "work_products": work_products,
         "status_updates": status_updates,
         "errors": errors,
         "auth_required": auth_required,
         "auth_link": auth_link,
     }
+
+
+def print_execution_summary_from_events(
+    request_duration: float,
+    tool_call_entries: list[dict[str, Any]],
+    workspace_dir: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    work_products: Optional[list[dict[str, Any]]] = None,
+) -> None:
+    print(f"\n{'=' * 80}")
+    print("=== EXECUTION SUMMARY ===")
+    print(f"{'=' * 80}")
+    print(f"Execution Time: {round(request_duration, 3)} seconds")
+    print(f"Tool Calls: {len(tool_call_entries)}")
+
+    code_exec_used = any(
+        any(
+            token in (entry.get("name") or "").upper()
+            for token in ["WORKBENCH", "CODE", "EXECUTE", "PYTHON", "SANDBOX", "BASH"]
+        )
+        for entry in tool_call_entries
+    )
+    if code_exec_used:
+        print("🏭 Code execution was used")
+
+    if tool_call_entries:
+        print("\n=== TOOL CALL BREAKDOWN ===")
+        for entry in tool_call_entries:
+            name = entry.get("name") or "unknown"
+            marker = (
+                "🏭"
+                if any(
+                    token in name.upper()
+                    for token in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]
+                )
+                else "  "
+            )
+            time_offset = entry.get("time_offset", 0.0) or 0.0
+            print(f"  {marker} Iter - | +{time_offset:>6.1f}s | {name}")
+
+    local_trace_ids = collect_local_tool_trace_ids(workspace_dir) if workspace_dir else []
+    print("\n=== TRACE IDS (for Logfire debugging) ===")
+    print(f"  Main Agent:     {trace_id or 'N/A'}")
+    if local_trace_ids:
+        print(f"  Local Toolkit:  {', '.join(local_trace_ids[:5])}")
+        if len(local_trace_ids) > 5:
+            print(f"                  (+{len(local_trace_ids) - 5} more)")
+    else:
+        print("  Local Toolkit:  (no local tool calls)")
+
+    if work_products:
+        names = []
+        for item in work_products:
+            name = item.get("filename") or item.get("path") or "work_product"
+            names.append(name)
+        if names:
+            print("\n=== WORK PRODUCTS ===")
+            for name in names:
+                print(f"- {name}")
+
+    print(f"{'=' * 80}")
 
 
 def list_workspace_artifacts(workspace_dir: str) -> list[str]:
@@ -553,3 +662,127 @@ def print_job_completion_summary(
             summary_path,
             runwide_line,
         )
+
+
+def print_job_completion_summary_from_events(
+    session_id: str,
+    workspace_dir: str,
+    response_text: str,
+    tool_call_entries: list[dict[str, Any]],
+    tool_results: int,
+    work_products: Optional[list[dict[str, Any]]] = None,
+    errors: Optional[list[str]] = None,
+    trace_id: Optional[str] = None,
+) -> None:
+    status = "failed" if errors else "succeeded"
+    artifacts = list_workspace_artifacts(workspace_dir)
+    summary = summarize_response(response_text)
+    local_trace_ids = collect_local_tool_trace_ids(workspace_dir) if workspace_dir else []
+    work_product_names: list[str] = []
+    for item in work_products or []:
+        name = item.get("filename") or item.get("path")
+        if name:
+            work_product_names.append(name)
+
+    print("\n" + "=" * 80)
+    print("=== JOB COMPLETE (GATEWAY) ===")
+    print(f"Run ID: {session_id}")
+    print(f"Status: {status}")
+    if trace_id:
+        print(f"Main Trace ID: {trace_id}")
+    if artifacts:
+        print("Artifacts:")
+        for name in artifacts:
+            print(f"- {os.path.join(workspace_dir, name)}")
+    if work_product_names:
+        print("Work products (events):")
+        for name in work_product_names:
+            print(f"- {name}")
+    if errors:
+        print("Errors:")
+        for err in errors[:5]:
+            print(f"- {err}")
+    if summary:
+        print("Summary:")
+        print(summary)
+    if tool_call_entries:
+        print("Tool Call Breakdown:")
+        for entry in tool_call_entries:
+            name = entry.get("name") or "unknown"
+            marker = (
+                "🏭"
+                if any(
+                    token in name.upper()
+                    for token in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]
+                )
+                else "  "
+            )
+            time_offset = entry.get("time_offset", 0.0) or 0.0
+            print(f"  {marker} Iter - | +{time_offset:>6.1f}s | {name}")
+    print(
+        "Run-wide: "
+        f"{len(tool_call_entries)} tools | "
+        f"{tool_results} results"
+    )
+    print("Trace IDs (for Logfire debugging):")
+    print(f"  Main Agent:     {trace_id or 'N/A'}")
+    if local_trace_ids:
+        print(f"  Local Toolkit:  {', '.join(local_trace_ids[:5])}")
+        if len(local_trace_ids) > 5:
+            print(f"                  (+{len(local_trace_ids) - 5} more)")
+    else:
+        print("  Local Toolkit:  (no local tool calls)")
+    print("=" * 80)
+
+    if workspace_dir:
+        summary_path = os.path.join(
+            workspace_dir, f"job_completion_gateway_{session_id}.md"
+        )
+        try:
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write("# Job Completion Summary (Gateway)\n\n")
+                f.write(f"Run ID: {session_id}\n\n")
+                f.write(f"Status: {status}\n\n")
+                if trace_id:
+                    f.write(f"Main Trace ID: {trace_id}\n\n")
+                if artifacts:
+                    f.write("Artifacts:\n")
+                    for name in artifacts:
+                        f.write(f"- {os.path.join(workspace_dir, name)}\n")
+                    f.write("\n")
+                if work_product_names:
+                    f.write("Work products (events):\n")
+                    for name in work_product_names:
+                        f.write(f"- {name}\n")
+                    f.write("\n")
+                if errors:
+                    f.write("Errors:\n")
+                    for err in errors[:5]:
+                        f.write(f"- {err}\n")
+                    f.write("\n")
+                if summary:
+                    f.write("Summary:\n")
+                    f.write(summary + "\n")
+                if tool_call_entries:
+                    f.write("\nTool Call Breakdown:\n")
+                    for entry in tool_call_entries:
+                        name = entry.get("name") or "unknown"
+                        time_offset = entry.get("time_offset", 0.0) or 0.0
+                        f.write(f"- +{time_offset:>6.1f}s | {name}\n")
+                f.write(
+                    "\nRun-wide: "
+                    f"{len(tool_call_entries)} tools | "
+                    f"{tool_results} results\n"
+                )
+                f.write("\nTrace IDs (for Logfire debugging):\n")
+                f.write(f"- Main Agent: {trace_id or 'N/A'}\n")
+                if local_trace_ids:
+                    shown = ", ".join(local_trace_ids[:5])
+                    extra = len(local_trace_ids) - 5
+                    if extra > 0:
+                        shown = f"{shown} (+{extra} more)"
+                    f.write(f"- Local Toolkit: {shown}\n")
+                else:
+                    f.write("- Local Toolkit: (no local tool calls)\n")
+        except Exception as exc:
+            print(f"⚠️ Failed to save gateway job completion summary: {exc}")

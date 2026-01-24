@@ -63,7 +63,8 @@ Use this checklist to verify parity when introducing the Gateway layer. Sources 
   - Source: @src/universal_agent/agent_setup.py#253-262
 
 ## Gateway Entry Path Notes
-- [ ] **CLI pre-tool guardrails parity** (gateway preview path currently bypasses `main.py` PreToolUse hooks; ensure equivalent guardrails are enforced via AgentSetup/agent_core before making gateway default)
+- [ ] **CLI pre-tool guardrails parity** (gateway preview now injects `build_cli_hooks()` when launched from CLI; still verify parity before making gateway default)
 - [ ] **Workspace binding parity** (gateway sessions must set `CURRENT_SESSION_WORKSPACE` + `OBSERVER_WORKSPACE_DIR` for tools/observers before defaulting to gateway)
 - [ ] **DISALLOWED_TOOLS parity** (gateway entry path must enforce disallowed tools list consistently with CLI)
 - [ ] **Durability gates parity** (gateway path must honor durable job tool gate + schema guardrail usage)
+- [ ] **Session listing parity** (gateway `list_sessions()` should include non-default workspace roots used by CLI)

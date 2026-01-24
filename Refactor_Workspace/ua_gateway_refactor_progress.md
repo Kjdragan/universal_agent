@@ -39,6 +39,13 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Created `ua_gateway_refactor_plan.md` to track staged execution plan, exit criteria, and validation gates.
 - 2026-01-24: Added CLI `--use-gateway` flag (and `UA_USE_GATEWAY` env) to optionally route interactive CLI input through `InProcessGateway`; added minimal `AgentEvent` renderer for gateway preview path.
 - 2026-01-24: Expanded gateway event renderer to collect TOOL_RESULT/STATUS/WORK_PRODUCT/ERROR metadata and updated guardrails checklist for gateway entry parity requirements.
+- 2026-01-24: Added gateway event renderer parity output (tool call/result previews + execution summary) and enabled optional CLI workspace reuse for gateway sessions via `--gateway-use-cli-workspace`/`UA_GATEWAY_USE_CLI_WORKSPACE`. Gateway preview now injects CLI hook set for PreToolUse parity.
+- 2026-01-24: Added gateway job-completion summary parity (via event-driven execution summary) plus improved session listing for non-default workspace roots; created `ua_gateway_smoke_tests.md` with a 3-case CLI/Gateway matrix.
+- 2026-01-24: Added gateway job-completion summary writer for job runs (event-derived, saved as `job_completion_gateway_<session_id>.md`).
+- 2026-01-24: Gateway job-completion summary now includes tool call breakdown + local toolkit trace IDs for parity with CLI trace reporting.
+- 2026-01-24: Gateway preview now binds observer workspace to the gateway session (sets `CURRENT_SESSION_WORKSPACE` + `OBSERVER_WORKSPACE_DIR`).
+- 2026-01-24: Smoke tests attempted (CLI default / gateway preview / gateway + CLI workspace) but blocked by missing `python-dotenv` dependency in the local environment.
+- 2026-01-24: Installed `python-dotenv` in the project venv and reran smoke tests; CLI default + gateway preview (separate + CLI workspace) all reached interactive prompt and exited cleanly via `quit`.
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.

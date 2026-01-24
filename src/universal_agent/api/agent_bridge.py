@@ -31,33 +31,46 @@ class AgentBridge:
     Manages agent lifecycle, session persistence, and event conversion.
     """
 
-    def __init__(self):
+    def __init__(self, hooks: Optional[dict] = None):
         self.current_agent: Optional[UniversalAgent] = None
         self.current_session_id: Optional[str] = None
         self.workspace_base = Path("AGENT_RUN_WORKSPACES").resolve()
         self.event_callbacks: list[Callable[[WebSocketEvent], None]] = []
+        self._hooks = hooks
+        self._session_roots: set[Path] = {self.workspace_base}
+        self._session_registry: dict[str, Path] = {}
 
-    async def create_session(self, user_id: str = "user_ui") -> SessionInfo:
+    async def create_session(
+        self, user_id: str = "user_ui", workspace_dir: Optional[str] = None
+    ) -> SessionInfo:
         """Create a new agent session."""
         # Create workspace directory
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_id = f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
-        workspace_dir = self.workspace_base / session_id
-        workspace_dir.mkdir(parents=True, exist_ok=True)
+        if workspace_dir:
+            workspace_path = Path(workspace_dir).resolve()
+            workspace_path.mkdir(parents=True, exist_ok=True)
+            session_id = workspace_path.name
+            self._session_roots.add(workspace_path.parent)
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            session_id = f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
+            workspace_path = self.workspace_base / session_id
+            workspace_path.mkdir(parents=True, exist_ok=True)
 
         # Initialize agent
         self.current_agent = UniversalAgent(
-            workspace_dir=str(workspace_dir),
+            workspace_dir=str(workspace_path),
             user_id=user_id,
+            hooks=self._hooks,
         )
         await self.current_agent.initialize()
 
         self.current_session_id = session_id
+        self._session_registry[session_id] = workspace_path
 
         # Build session info
         return SessionInfo(
             session_id=session_id,
-            workspace=str(workspace_dir),
+            workspace=str(workspace_path),
             user_id=user_id,
             session_url=self.current_agent.session.mcp.url if self.current_agent.session else None,
             logfire_enabled=bool(os.getenv("LOGFIRE_TOKEN")),
@@ -67,16 +80,22 @@ class AgentBridge:
         """Resume an existing session (create new agent in same workspace)."""
         workspace_dir = self.workspace_base / session_id
         if not workspace_dir.exists():
+            # Fall back to registry for non-standard roots
+            workspace_dir = self._session_registry.get(session_id, workspace_dir)
+        if not workspace_dir.exists():
             return None
 
         # Create new agent instance in existing workspace
         self.current_agent = UniversalAgent(
             workspace_dir=str(workspace_dir),
             user_id="user_ui",
+            hooks=self._hooks,
         )
         await self.current_agent.initialize()
 
         self.current_session_id = session_id
+        self._session_registry[session_id] = workspace_dir
+        self._session_roots.add(workspace_dir.parent)
 
         return SessionInfo(
             session_id=session_id,
@@ -133,28 +152,46 @@ class AgentBridge:
 
     def list_sessions(self) -> list[dict]:
         """List all available sessions."""
-        sessions = []
-        if not self.workspace_base.exists():
-            return sessions
+        sessions: list[dict] = []
 
-        for session_dir in sorted(self.workspace_base.iterdir(), reverse=True):
-            if session_dir.is_dir() and session_dir.name.startswith("session_"):
-                # Check for trace.json to determine status
-                trace_file = session_dir / "trace.json"
-                status = "complete" if trace_file.exists() else "incomplete"
+        def _session_entry(session_dir: Path) -> Optional[dict]:
+            if not session_dir.exists() or not session_dir.is_dir():
+                return None
+            trace_file = session_dir / "trace.json"
+            status = "complete" if trace_file.exists() else "incomplete"
+            files = self._get_session_files(session_dir)
+            return {
+                "session_id": session_dir.name,
+                "timestamp": session_dir.stat().st_mtime,
+                "workspace_path": str(session_dir),
+                "status": status,
+                "files": files,
+            }
 
-                # Get file info
-                files = self._get_session_files(session_dir)
+        seen: set[str] = set()
 
-                sessions.append({
-                    "session_id": session_dir.name,
-                    "timestamp": session_dir.stat().st_mtime,
-                    "workspace_path": str(session_dir),
-                    "status": status,
-                    "files": files,
-                })
+        for session_id, session_dir in self._session_registry.items():
+            entry = _session_entry(session_dir)
+            if entry:
+                sessions.append(entry)
+                seen.add(entry["session_id"])
 
-        return sessions[:50]  # Return latest 50
+        for root in sorted(self._session_roots):
+            if not root.exists():
+                continue
+            for session_dir in sorted(root.iterdir(), reverse=True):
+                if (
+                    session_dir.is_dir()
+                    and session_dir.name.startswith("session_")
+                    and session_dir.name not in seen
+                ):
+                    entry = _session_entry(session_dir)
+                    if entry:
+                        sessions.append(entry)
+                        seen.add(entry["session_id"])
+
+        sessions.sort(key=lambda row: row.get("timestamp", 0), reverse=True)
+        return sessions[:50]
 
     def _get_session_files(self, session_dir: Path) -> dict:
         """Get files organized by type from a session."""
