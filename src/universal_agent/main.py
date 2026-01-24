@@ -1442,6 +1442,8 @@ async def on_pre_tool_use_ledger(
     try:
         _assert_prepared_tool_row(tool_call_id, tool_name)
         tool_ledger.mark_running(tool_call_id)
+        # Record tool execution start time for duration tracking
+        tool_execution_start_times[tool_call_id] = (time.time(), tool_name)
         logfire.info(
             "ledger_mark_running",
             tool_use_id=tool_call_id,
@@ -1493,6 +1495,21 @@ async def on_pre_tool_use_ledger(
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             with open(audit_file, "a", encoding="utf-8") as af:
                 af.write(f"[{ts}] {cmd}\n")
+            
+            # [PDF Rendering Instrumentation] Log PDF render start
+            cmd_lower = cmd.lower()
+            if "print-to-pdf" in cmd_lower or ("pdf" in cmd_lower and ("chrome" in cmd_lower or "chromium" in cmd_lower)):
+                # Extract output path from command (e.g., --print-to-pdf="output.pdf")
+                import re
+                pdf_match = re.search(r'print-to-pdf[="\s]+([^\s"]+)', cmd)
+                pdf_output = pdf_match.group(1).strip('"\'') if pdf_match else "unknown"
+                logfire.info(
+                    "pdf_render_started",
+                    tool_call_id=tool_call_id,
+                    command_preview=cmd[:200],
+                    output_path=pdf_output,
+                    run_id=run_id,
+                )
         except Exception:
             pass  # Non-critical visibility feature
 
@@ -1720,13 +1737,74 @@ async def on_post_tool_use_ledger(
                 step_id=current_step_id,
                 external_correlation_id=external_id,
             )
+            # Log tool execution span with duration
+            start_info = tool_execution_start_times.pop(tool_call_id, None)
+            if start_info:
+                start_time, tool_name_recorded = start_info
+                duration_seconds = time.time() - start_time
+                logfire.info(
+                    "tool_execution_completed",
+                    tool_name=tool_name_recorded,
+                    tool_use_id=tool_call_id,
+                    duration_seconds=round(duration_seconds, 3),
+                    run_id=run_id,
+                    step_id=current_step_id,
+                    status="succeeded",
+                )
+                
+            # [PDF Rendering Instrumentation] Log PDF render completion with output size
+            if raw_tool_name and raw_tool_name.upper() == "BASH":
+                cmd = tool_input.get("command") or tool_input.get("cmd") or ""
+                cmd_lower = cmd.lower()
+                if "print-to-pdf" in cmd_lower or ("pdf" in cmd_lower and ("chrome" in cmd_lower or "chromium" in cmd_lower)):
+                    try:
+                        import re
+                        pdf_match = re.search(r'print-to-pdf[="\s]+([^\s"]+)', cmd)
+                        if pdf_match:
+                            pdf_output = pdf_match.group(1).strip('"\'')
+                            # Try to get file size if path is accessible
+                            pdf_size = None
+                            workspace = OBSERVER_WORKSPACE_DIR or ""
+                            if workspace and not os.path.isabs(pdf_output):
+                                pdf_path = os.path.join(workspace, pdf_output)
+                            else:
+                                pdf_path = pdf_output
+                            if os.path.exists(pdf_path):
+                                pdf_size = os.path.getsize(pdf_path)
+                            logfire.info(
+                                "pdf_render_completed",
+                                tool_call_id=tool_call_id,
+                                output_path=pdf_output,
+                                output_size_bytes=pdf_size,
+                                duration_seconds=round(duration_seconds, 3) if start_info else None,
+                                run_id=run_id,
+                            )
+                    except Exception:
+                        pass  # Non-critical
     except Exception as exc:
         logfire.warning(
             "ledger_mark_result_failed", tool_use_id=tool_call_id, error=str(exc)
         )
+        # Log failed tool execution with duration if we have start time
+        start_info = tool_execution_start_times.pop(tool_call_id, None)
+        if start_info:
+            start_time, tool_name_recorded = start_info
+            duration_seconds = time.time() - start_time
+            logfire.info(
+                "tool_execution_completed",
+                tool_name=tool_name_recorded,
+                tool_use_id=tool_call_id,
+                duration_seconds=round(duration_seconds, 3),
+                run_id=run_id,
+                step_id=current_step_id,
+                status="failed",
+                error=str(exc),
+            )
     finally:
         if gateway_mode_active:
             gateway_tool_call_map.pop(str(tool_use_id or ""), None)
+        # Cleanup any orphaned start times
+        tool_execution_start_times.pop(tool_call_id, None)
 
     return {}
 
@@ -2900,6 +2978,7 @@ last_sigint_ts: float | None = None
 provider_session_forked_from: Optional[str] = None
 gateway_mode_active = False
 gateway_tool_call_map: dict[str, str] = {}
+tool_execution_start_times: dict[str, tuple[float, str]] = {}  # tool_call_id -> (start_time, tool_name)
 forced_tool_queue: list[dict[str, Any]] = []
 forced_tool_active_ids: dict[str, dict[str, Any]] = {}
 forced_tool_mode_active = False
@@ -6689,6 +6768,9 @@ async def main(args: argparse.Namespace):
 
     # Use the trace ID extracted earlier (now stored in main_trace_id_hex and env var)
     trace["trace_id"] = main_trace_id_hex
+
+    # Extract timestamp from workspace_dir (e.g. "session_20251228_123456" -> "20251228_123456")
+    timestamp = os.path.basename(workspace_dir).replace("session_", "")
 
     print(f"\n{'=' * 60}")
     print("         🔍 TRACE IDS (Logfire context)")
