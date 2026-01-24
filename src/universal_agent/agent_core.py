@@ -80,6 +80,11 @@ class EventType(str, Enum):
     SESSION_INFO = "session_info"
     ITERATION_END = "iteration_end"
     WORK_PRODUCT = "work_product"  # HTML reports, files saved to work_products/
+    # URW Phase Events (Stage 5)
+    URW_PHASE_START = "urw_phase_start"
+    URW_PHASE_COMPLETE = "urw_phase_complete"
+    URW_PHASE_FAILED = "urw_phase_failed"
+    URW_EVALUATION = "urw_evaluation"
 
 
 class HarnessError(Exception):

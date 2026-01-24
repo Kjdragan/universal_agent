@@ -42,7 +42,7 @@ from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
     crawl_parallel_wrapper,
 )
-from universal_agent.gateway import InProcessGateway, GatewayRequest
+from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
 
 # Timezone helper for consistent date/time across deployments
 def get_user_datetime():
@@ -5524,6 +5524,12 @@ def parse_cli_args() -> argparse.Namespace:
         action="store_true",
         help="Use the CLI workspace directory for Gateway sessions (experimental).",
     )
+    parser.add_argument(
+        "--gateway-url",
+        type=str,
+        default=None,
+        help="URL of external gateway server (e.g., http://localhost:8002). Implies --use-gateway.",
+    )
     return parser.parse_args()
 
 
@@ -6395,7 +6401,12 @@ async def main(args: argparse.Namespace):
         main_span.__exit__(None, None, None)
         return
 
-    use_gateway = args.use_gateway or os.getenv("UA_USE_GATEWAY", "").lower() in {
+    gateway_url = getattr(args, 'gateway_url', None) or os.getenv("UA_GATEWAY_URL")
+    use_gateway = args.use_gateway or gateway_url or os.getenv("UA_USE_GATEWAY", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    } or os.getenv("UA_DEV_GATEWAY_DEFAULT", "").lower() in {
         "1",
         "true",
         "yes",
@@ -6517,7 +6528,17 @@ async def main(args: argparse.Namespace):
     trace["budgets"] = budget_config
     tool_ledger = ToolCallLedger(runtime_db_conn, workspace_dir)
 
-    gateway = InProcessGateway(hooks=build_cli_hooks()) if use_gateway else None
+    gateway = None
+    if use_gateway:
+        if gateway_url:
+            try:
+                gateway = ExternalGateway(base_url=gateway_url)
+                print(f"🌐 Using external gateway: {gateway_url}")
+            except RuntimeError as e:
+                print(f"⚠️ External gateway unavailable ({e}), falling back to in-process")
+                gateway = InProcessGateway(hooks=build_cli_hooks())
+        else:
+            gateway = InProcessGateway(hooks=build_cli_hooks())
     gateway_session = None
     async def _ensure_gateway_session() -> bool:
         nonlocal gateway_session, gateway
@@ -6530,9 +6551,11 @@ async def main(args: argparse.Namespace):
                 user_id=user_id or "user_cli",
                 workspace_dir=workspace_dir if gateway_use_cli_workspace else None,
             )
-            print("🧭 Gateway preview enabled (in-process).")
-            print(f"Gateway Session: {gateway_session.session_id}")
-            print(f"Gateway Workspace: {gateway_session.workspace_dir}")
+            verbose = getattr(args, 'verbose', False) or os.getenv("UA_VERBOSE", "").lower() in {"1", "true", "yes"}
+            if verbose:
+                print("🧭 Gateway preview enabled (in-process).")
+                print(f"Gateway Session: {gateway_session.session_id}")
+                print(f"Gateway Workspace: {gateway_session.workspace_dir}")
 
             def _set_gateway_observer_workspace(path: str) -> None:
                 global OBSERVER_WORKSPACE_DIR

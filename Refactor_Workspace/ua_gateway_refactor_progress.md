@@ -67,10 +67,49 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Stage 3 readiness check: gateway preview now covers simple, tool-heavy, and job-mode flows with guardrails enabled; remaining pre-default blockers are documentation sign-off on parity and any determinism gaps in output diffs.
 - 2026-01-24: Stage 2 parity expanded with Edit/MultiEdit + Write/Read chain; diff captured (`cli_default_edit_chain.log`, `cli_gateway_preview_edit_chain.log`, `cli_vs_gateway_edit_chain.diff`). Policy warning observed for `Edit` (unknown tool) remains in CLI and gateway runs.
 - 2026-01-24: Stage 3 dev-mode trial: ran CLI with `UA_USE_GATEWAY=1` and compared to CLI default listdir output; diff captured (`cli_gateway_default_trial.log`, `cli_vs_gateway_default_trial.diff`) shows only session/trace deltas plus gateway session banner.
+- 2026-01-24: **Stage 2 Parity Sign-Off** — Formal acceptance of remaining output deltas documented below.
+- 2026-01-24: **Stage 4 Implementation** — Created `gateway_server.py` (FastAPI server on port 8002), `ExternalGateway` client class, and CLI `--gateway-url` / `UA_GATEWAY_URL` integration. REST endpoints tested; WebSocket streaming implemented.
+- 2026-01-24: **Stage 5 Implementation** — Created `GatewayURWAdapter` in `urw/integration.py` that routes through Gateway API. Added URW phase events (`URW_PHASE_START`, `URW_PHASE_COMPLETE`, `URW_PHASE_FAILED`, `URW_EVALUATION`) to `EventType`. Updated `HarnessOrchestrator` with `use_gateway` config option and `_gateway_process_turn` method.
+- 2026-01-24: **Stage 6 Implementation** — Created `durable/worker_pool.py` with `Worker`, `WorkerPoolManager`, `PoolConfig`, `WorkerConfig` classes. Features: lease-based coordination, dynamic scaling, heartbeat monitoring, gateway integration for execution, `queue_run()` helper for job submission.
+
+## Stage 2 Parity Sign-Off
+
+**Date:** 2026-01-24  
+**Status:** ✅ Accepted
+
+### Validated Parity Runs
+| Flow | CLI Log | Gateway Log | Diff |
+|------|---------|-------------|------|
+| ListDir | `cli_default_listdir_fix.log` | `cli_gateway_preview_listdir_fix.log` | `cli_vs_gateway_listdir_fix.diff` |
+| Write/Read | `cli_default_write_read.log` | `cli_gateway_preview_write_read.log` | `cli_vs_gateway_write_read.diff` |
+| Composio Search Chain | `cli_default_search_chain.log` | `cli_gateway_preview_search_chain_fix4.log` | `cli_vs_gateway_search_chain_fix4.diff` |
+| Bash+Search+Write Combo | `cli_default_combo_chain.log` | `cli_gateway_preview_combo_chain.log` | `cli_vs_gateway_combo_chain.diff` |
+| Edit/MultiEdit Chain | `cli_default_edit_chain.log` | `cli_gateway_preview_edit_chain.log` | `cli_vs_gateway_edit_chain.diff` |
+| Gateway Default Trial | — | `cli_gateway_default_trial.log` | `cli_vs_gateway_default_trial.diff` |
+| Gateway Job-Mode | — | `cli_gateway_job_bash.log` | — |
+
+### Accepted Deltas
+- **Session/trace IDs**: Gateway creates distinct session IDs; trace IDs differ per run. *Expected and acceptable.*
+- **Gateway session banner**: `🌐 Gateway preview enabled` line appears in gateway output. *Cosmetic; see banner policy decision.*
+- **Model output variance**: Non-deterministic LLM responses cause minor text differences. *Inherent to model behavior.*
+- **Dual Composio sessions**: Complex gateway flows initialize a second Composio session. *Accepted for Stage 2/3; revisit before externalization.*
+
+### Known Warnings (Accepted)
+- **`Edit` tool policy warning**: `UA_POLICY_UNKNOWN_TOOL` logged for `Edit`. Tool functions correctly; warning documented as accepted.
+
+### Exit Criteria
+- [x] Parity diffs captured for simple, tool-heavy, and job-mode flows.
+- [x] Observer save lines appear in gateway output.
+- [x] Write/Read/Edit paths normalize to gateway workspace.
+- [x] Deltas documented and accepted.
+
+---
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.
 - 2026-01-24: Keep both `server.py` and `api/server.py` through Stage 3; consolidate after Gateway is stable and externalized.
+- 2026-01-24: **Gateway Default Policy** — Gateway remains opt-in via `--use-gateway` / `UA_USE_GATEWAY`. Dev-mode default (`UA_DEV_GATEWAY_DEFAULT=1`) enables gateway by default for local development without affecting production CLI behavior.
+- 2026-01-24: **Gateway Banner Policy** — Gateway session banner gated behind `--verbose` / `UA_VERBOSE`. Silent by default; banner only prints when verbose mode is enabled.
 
 ## Dependency Map (Summary)
 - **CLI Entry:** `main.py` owns `process_turn` and CLI loop; `/harness` dispatches into URW harness.

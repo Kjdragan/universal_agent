@@ -36,6 +36,20 @@ from .state import Artifact, ArtifactType, Task as StateTask
 from universal_agent.execution_context import bind_workspace_env
 import uuid
 
+# Gateway imports for Stage 5
+try:
+    from universal_agent.gateway import Gateway, InProcessGateway, ExternalGateway, GatewayRequest
+    from universal_agent.agent_core import AgentEvent, EventType
+    GATEWAY_AVAILABLE = True
+except ImportError:
+    GATEWAY_AVAILABLE = False
+    Gateway = None  # type: ignore
+    InProcessGateway = None  # type: ignore
+    ExternalGateway = None  # type: ignore
+    GatewayRequest = None  # type: ignore
+    AgentEvent = None  # type: ignore
+    EventType = None  # type: ignore
+
 
 class HarnessStatus(Enum):
     """Status of the harness orchestration."""
@@ -54,6 +68,9 @@ class HarnessConfig:
     force_new_client_between_phases: bool = False
     persist_to_sqlite: bool = True
     verbose: bool = True
+    # Stage 5: Gateway integration
+    use_gateway: bool = False
+    gateway_url: Optional[str] = None  # If set, use external gateway
 
 
 @dataclass
@@ -90,7 +107,7 @@ class HarnessOrchestrator:
     2. For each phase in Plan:
        a. Toggle to new session directory
        b. Build phase prompt with context injection
-       c. Feed to multi-agent system (process_turn)
+       c. Feed to multi-agent system (process_turn or gateway)
        d. Evaluate completion
        e. Mark phase complete/retry
     3. Generate final summary
@@ -113,6 +130,63 @@ class HarnessOrchestrator:
         # Persistence
         self.file_persistence: Optional[PlanPersistence] = None
         self.db_persistence: Optional[SQLitePlanStore] = None
+        
+        # Stage 5: Gateway integration
+        self._gateway: Optional[Gateway] = None
+        self._gateway_session: Optional[Any] = None
+
+    async def _get_gateway(self) -> Optional[Gateway]:
+        """Get or create gateway instance if gateway mode enabled."""
+        if not self.config.use_gateway:
+            return None
+        if not GATEWAY_AVAILABLE:
+            self._log("⚠️ Gateway not available, falling back to process_turn")
+            return None
+        if self._gateway is None:
+            if self.config.gateway_url:
+                self._gateway = ExternalGateway(base_url=self.config.gateway_url)
+                self._log(f"🌐 Using external gateway: {self.config.gateway_url}")
+            else:
+                self._gateway = InProcessGateway()
+                self._log("🌐 Using in-process gateway")
+        return self._gateway
+
+    async def _gateway_process_turn(
+        self,
+        prompt: str,
+        workspace_dir: str,
+    ) -> Dict[str, Any]:
+        """Execute a turn through the gateway instead of process_turn."""
+        gateway = await self._get_gateway()
+        if not gateway:
+            raise RuntimeError("Gateway not initialized")
+
+        # Create/reuse session for this workspace
+        if self._gateway_session is None or self._gateway_session.workspace_dir != workspace_dir:
+            self._gateway_session = await gateway.create_session(
+                user_id="urw_harness",
+                workspace_dir=workspace_dir,
+            )
+
+        request = GatewayRequest(user_input=prompt)
+        
+        output_chunks = []
+        tool_calls = []
+        
+        async for event in gateway.execute(self._gateway_session, request):
+            if event.type == EventType.TEXT:
+                text = event.data.get("text", "")
+                if text:
+                    output_chunks.append(text)
+            elif event.type == EventType.TOOL_CALL:
+                tool_calls.append(event.data)
+
+        response_text = "".join(output_chunks)
+        
+        return {
+            "response_text": response_text,
+            "tool_calls": tool_calls,
+        }
     
     def _log(self, message: str) -> None:
         """Log with timestamp."""
@@ -421,12 +495,18 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
                 self._log(f"🔧 Starting In-Session Repair Attempt {attempt}/{max_repairs}")
             
             try:
-                # Execute Turn
-                result = await process_turn(
-                    client,
-                    current_prompt,
-                    session_path,
-                )
+                # Execute Turn (via gateway or process_turn)
+                if self.config.use_gateway and await self._get_gateway():
+                    result = await self._gateway_process_turn(
+                        current_prompt,
+                        str(session_path),
+                    )
+                else:
+                    result = await process_turn(
+                        client,
+                        current_prompt,
+                        session_path,
+                    )
                 
                 # Capture output
                 agent_output = ""
