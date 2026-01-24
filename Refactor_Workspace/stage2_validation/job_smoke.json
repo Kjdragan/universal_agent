@@ -1,0 +1,14 @@
+{
+  "objective": "Smoke test: respond with a short acknowledgement. Do not use external tools or network calls.",
+  "constraints": {
+    "no_external_actions": true,
+    "no_tools": true,
+    "no_network": true
+  },
+  "tasks": [
+    "Return a brief acknowledgement message only."
+  ],
+  "stop_conditions": [
+    "acknowledgement_complete"
+  ]
+}
