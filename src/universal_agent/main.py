@@ -216,6 +216,52 @@ DISALLOWED_TOOLS = [
 ]
 
 
+def _normalize_gateway_tool_call_id(raw_id: object) -> str:
+    base = str(raw_id or uuid.uuid4())
+    return f"gw-{run_id or 'unknown'}-{base}"
+
+
+def _get_gateway_tool_call_id(raw_id: object) -> str:
+    key = str(raw_id or uuid.uuid4())
+    if key in gateway_tool_call_map:
+        return gateway_tool_call_map[key]
+    tool_call_id = f"gw-{run_id or 'unknown'}-{uuid.uuid4()}"
+    gateway_tool_call_map[key] = tool_call_id
+    return tool_call_id
+
+
+def _ensure_gateway_step() -> str:
+    global current_step_id
+    if not runtime_db_conn or not run_id:
+        return current_step_id or "unknown"
+    if not current_step_id or current_step_id == "unknown":
+        current_step_id = str(uuid.uuid4())
+    try:
+        row = runtime_db_conn.execute(
+            "SELECT 1 FROM run_steps WHERE step_id = ? LIMIT 1",
+            (current_step_id,),
+        ).fetchone()
+    except Exception:
+        row = None
+    if not row:
+        try:
+            step_index = _next_step_index(runtime_db_conn, run_id)
+            start_step(runtime_db_conn, run_id, current_step_id, step_index)
+            logfire.info(
+                "durable_step_started_gateway_hook",
+                run_id=run_id,
+                step_id=current_step_id,
+                step_index=step_index,
+            )
+        except Exception as exc:
+            logfire.warning(
+                "runtime_step_insert_failed_gateway_hook",
+                step_id=current_step_id,
+                error=str(exc),
+            )
+    return current_step_id
+
+
 # Configure Logfire BEFORE importing Claude SDK
 import logfire
 
@@ -684,6 +730,8 @@ async def on_pre_tool_use_ledger(
 
     tool_name = input_data.get("tool_name", "")
     tool_call_id = str(tool_use_id or uuid.uuid4())
+    if gateway_mode_active:
+        tool_call_id = _get_gateway_tool_call_id(tool_use_id)
     transcript_path = input_data.get("transcript_path", "")
     session_id = input_data.get("session_id", "")
     if transcript_path:
@@ -995,9 +1043,15 @@ async def on_pre_tool_use_ledger(
             }
         }
 
-    step_id = current_step_id or "unknown"
+    if gateway_mode_active:
+        step_id = _ensure_gateway_step()
+    else:
+        step_id = current_step_id or "unknown"
 
     if forced_tool_mode_active and not forced_tool_queue:
+        forced_tool_mode_active = False
+    if gateway_mode_active:
+        forced_tool_queue = []
         forced_tool_mode_active = False
 
     # Early bypass: Allow Task/Bash in harness mode (not crash recovery)
@@ -1183,9 +1237,6 @@ async def on_pre_tool_use_ledger(
         else:
             return schema_guardrail
 
-    if gateway_mode_active:
-        return _allow_with_updated_input()
-
     side_effect_class = "unknown"
     try:
         decision = prepare_tool_call(
@@ -1230,6 +1281,36 @@ async def on_pre_tool_use_ledger(
                 "permissionDecisionReason": "Ledger prepare failed.",
             },
         }
+
+    if gateway_mode_active and tool_ledger.get_tool_call(tool_call_id) is None:
+        try:
+            identity = parse_tool_identity(tool_name)
+            tool_ledger.prepare_tool_call(
+                tool_call_id=tool_call_id,
+                run_id=run_id,
+                step_id=step_id,
+                tool_name=identity.tool_name,
+                tool_namespace=identity.tool_namespace,
+                raw_tool_name=tool_name,
+                tool_input=tool_input,
+                metadata={"raw_tool_name": tool_name},
+                allow_duplicate=True,
+                idempotency_nonce=tool_call_id,
+            )
+            logfire.info(
+                "ledger_prepare_gateway_recover",
+                tool_name=tool_name,
+                tool_use_id=tool_call_id,
+                run_id=run_id,
+                step_id=step_id,
+            )
+        except Exception as exc:
+            logfire.warning(
+                "ledger_prepare_gateway_recover_failed",
+                tool_name=tool_name,
+                tool_use_id=tool_call_id,
+                error=str(exc),
+            )
 
     if decision.deduped and decision.receipt:
         prior_entry = tool_ledger.get_tool_call(decision.receipt.tool_call_id)
@@ -1396,12 +1477,12 @@ async def on_post_tool_use_ledger(
         runtime_db_conn, \
         run_id, \
         gateway_mode_active
-    if gateway_mode_active:
-        return {}
     if tool_ledger is None:
         return {}
 
     tool_call_id = str(tool_use_id or "")
+    if gateway_mode_active:
+        tool_call_id = _get_gateway_tool_call_id(tool_use_id)
     if not tool_call_id:
         return {}
 
@@ -1608,6 +1689,9 @@ async def on_post_tool_use_ledger(
         logfire.warning(
             "ledger_mark_result_failed", tool_use_id=tool_call_id, error=str(exc)
         )
+    finally:
+        if gateway_mode_active:
+            gateway_tool_call_map.pop(str(tool_use_id or ""), None)
 
     return {}
 
@@ -2780,6 +2864,7 @@ interrupt_requested = False
 last_sigint_ts: float | None = None
 provider_session_forked_from: Optional[str] = None
 gateway_mode_active = False
+gateway_tool_call_map: dict[str, str] = {}
 forced_tool_queue: list[dict[str, Any]] = []
 forced_tool_active_ids: dict[str, dict[str, Any]] = {}
 forced_tool_mode_active = False
@@ -7008,6 +7093,24 @@ async def main(args: argparse.Namespace):
                                         execution_session=current_execution_session,
                                     )
                                 else:
+                                    gateway_step_id = str(uuid.uuid4())
+                                    current_step_id = gateway_step_id
+                                    if runtime_db_conn and run_id:
+                                        try:
+                                            step_index = _next_step_index(runtime_db_conn, run_id)
+                                            start_step(runtime_db_conn, run_id, gateway_step_id, step_index)
+                                            logfire.info(
+                                                "durable_step_started_gateway",
+                                                run_id=run_id,
+                                                step_id=gateway_step_id,
+                                                step_index=step_index,
+                                            )
+                                        except Exception as exc:
+                                            logfire.warning(
+                                                "runtime_step_insert_failed_gateway",
+                                                step_id=gateway_step_id,
+                                                error=str(exc),
+                                            )
                                     next_input = user_input
                                     final_response_text = ""
                                     tool_calls = 0
