@@ -65,6 +65,8 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Lifted gateway guard for `--job-path` runs; gateway remains disabled for resume/fork/harness/URW modes.
 - 2026-01-24: Stage 2 parity expanded with a Bash + search + Write/Read combo chain; diff captured (`cli_default_combo_chain.log`, `cli_gateway_preview_combo_chain.log`, `cli_vs_gateway_combo_chain.diff`). Remaining deltas largely limited to session/trace IDs and model output variance.
 - 2026-01-24: Stage 3 readiness check: gateway preview now covers simple, tool-heavy, and job-mode flows with guardrails enabled; remaining pre-default blockers are documentation sign-off on parity and any determinism gaps in output diffs.
+- 2026-01-24: Stage 2 parity expanded with Edit/MultiEdit + Write/Read chain; diff captured (`cli_default_edit_chain.log`, `cli_gateway_preview_edit_chain.log`, `cli_vs_gateway_edit_chain.diff`). Policy warning observed for `Edit` (unknown tool) remains in CLI and gateway runs.
+- 2026-01-24: Stage 3 dev-mode trial: ran CLI with `UA_USE_GATEWAY=1` and compared to CLI default listdir output; diff captured (`cli_gateway_default_trial.log`, `cli_vs_gateway_default_trial.diff`) shows only session/trace deltas plus gateway session banner.
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.
