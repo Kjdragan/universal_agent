@@ -1,9 +1,11 @@
 import os
 import sys
 import asyncio
+import uuid
 from typing import Optional, Any
 from dataclasses import dataclass
 from .execution_logger import ExecutionLogger
+from universal_agent.execution_session import ExecutionSession
 
 @dataclass
 class AgentRequest:
@@ -19,6 +21,8 @@ class AgentAdapter:
         self.user_id = None
         self.workspace_dir = None
         self.trace = None
+        self.execution_session = None
+        self.execution_session: Optional[ExecutionSession] = None
         
         # Async Actor state
         self.request_queue = asyncio.Queue()
@@ -34,6 +38,19 @@ class AgentAdapter:
         
         print("🤖 Initializing Agent Session...")
         self.options, self.session, self.user_id, self.workspace_dir, self.trace = await setup_session()
+        run_id = None
+        if isinstance(self.trace, dict):
+            run_id = self.trace.get("run_id")
+        if not run_id:
+            run_id = str(uuid.uuid4())
+            if isinstance(self.trace, dict):
+                self.trace["run_id"] = run_id
+        self.execution_session = ExecutionSession(
+            workspace_dir=self.workspace_dir,
+            run_id=run_id,
+            trace=self.trace if isinstance(self.trace, dict) else None,
+            runtime_db_conn=None,
+        )
         
         # Start background worker loop
         self._shutdown_event.clear()
@@ -65,7 +82,12 @@ class AgentAdapter:
                         
                     try:
                         print(f"🧵 Actor processing prompt: {request.prompt[:50]}...")
-                        result = await process_turn(client, request.prompt, request.workspace_dir)
+                        result = await process_turn(
+                            client,
+                            request.prompt,
+                            request.workspace_dir,
+                            execution_session=self.execution_session,
+                        )
                         if not request.reply_future.done():
                             request.reply_future.set_result(result)
                     except Exception as e:
