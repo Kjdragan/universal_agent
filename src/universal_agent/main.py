@@ -6261,6 +6261,18 @@ async def process_turn(
         if request_tool_calls:
             print("\n=== TOOL CALL BREAKDOWN ===")
             for tc in request_tool_calls:
+                name = tc.get("name", "")
+                input_payload = tc.get("input") or {}
+                bash_snippet = ""
+                if "BASH" in name.upper() and isinstance(input_payload, dict):
+                    command = input_payload.get("command")
+                    description = input_payload.get("description")
+                    snippet_source = command or description or ""
+                    if snippet_source:
+                        snippet = str(snippet_source).replace("\n", " ").strip()
+                        if len(snippet) > 80:
+                            snippet = snippet[:77] + "..."
+                        bash_snippet = f" ({snippet})"
                 marker = (
                     "🏭"
                     if any(
@@ -6270,7 +6282,7 @@ async def process_turn(
                     else "  "
                 )
                 print(
-                    f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}"
+                    f"  {marker} Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}{bash_snippet}"
                 )
                 tool_breakdown.append(
                     {
@@ -6534,11 +6546,30 @@ async def main(args: argparse.Namespace):
             try:
                 gateway = ExternalGateway(base_url=gateway_url)
                 print(f"🌐 Using external gateway: {gateway_url}")
+                logfire.info(
+                    "gateway_mode_selected",
+                    mode="external",
+                    gateway_url=gateway_url,
+                    run_id=run_id,
+                )
             except RuntimeError as e:
                 print(f"⚠️ External gateway unavailable ({e}), falling back to in-process")
                 gateway = InProcessGateway(hooks=build_cli_hooks())
+                logfire.info(
+                    "gateway_mode_selected",
+                    mode="in_process",
+                    fallback="external_unavailable",
+                    run_id=run_id,
+                )
         else:
             gateway = InProcessGateway(hooks=build_cli_hooks())
+            logfire.info(
+                "gateway_mode_selected",
+                mode="in_process",
+                run_id=run_id,
+            )
+    else:
+        logfire.info("gateway_mode_selected", mode="cli_direct", run_id=run_id)
     gateway_session = None
     async def _ensure_gateway_session() -> bool:
         nonlocal gateway_session, gateway
@@ -6556,6 +6587,18 @@ async def main(args: argparse.Namespace):
                 print("🧭 Gateway preview enabled (in-process).")
                 print(f"Gateway Session: {gateway_session.session_id}")
                 print(f"Gateway Workspace: {gateway_session.workspace_dir}")
+            print(
+                "🧭 Gateway session active: "
+                f"{gateway_session.session_id} "
+                f"({gateway_session.workspace_dir})"
+            )
+            logfire.info(
+                "gateway_session_created",
+                session_id=gateway_session.session_id,
+                workspace_dir=gateway_session.workspace_dir,
+                requested_workspace=workspace_dir if gateway_use_cli_workspace else None,
+                run_id=run_id,
+            )
 
             def _set_gateway_observer_workspace(path: str) -> None:
                 global OBSERVER_WORKSPACE_DIR
@@ -6647,20 +6690,20 @@ async def main(args: argparse.Namespace):
     # Use the trace ID extracted earlier (now stored in main_trace_id_hex and env var)
     trace["trace_id"] = main_trace_id_hex
 
-    # Extract timestamp from workspace_dir (e.g. "session_20251228_123456" -> "20251228_123456")
-    timestamp = os.path.basename(workspace_dir).replace("session_", "")
-
-    # Display session info with both trace IDs prominently for debugging
     print(f"\n{'=' * 60}")
-    print("         🔍 TRACING IDS (for Logfire debugging)")
+    print("         🔍 TRACE IDS (Logfire context)")
     print(f"{'=' * 60}")
     print(f"  Main Agent Trace ID:    {main_trace_id_hex}")
-    print(f"  Local Toolkit Trace ID: (shown in tool results)")
+    if use_gateway:
+        gateway_mode = "external" if gateway_url else "in_process"
+        print(f"  Gateway Mode:           {gateway_mode}")
+        if gateway_url:
+            print(f"  Gateway URL:            {gateway_url}")
+    else:
+        print("  Gateway Mode:           cli_direct")
+    print("  Local Toolkit Trace IDs: emitted inline as")
+    print("                           [local-toolkit-trace-id: <id>] in tool results")
     print(f"{'=' * 60}")
-
-    print(f"\n=== Composio Session Info ===")
-    print(f"Session URL: {session.mcp.url}")
-    print(f"User ID: {user_id}")
     print(f"Run ID: {run_id}")
     print(f"Timestamp: {timestamp}")
     print(f"Trace ID: {main_trace_id_hex}")

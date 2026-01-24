@@ -1954,15 +1954,28 @@ async def finalize_research(
 
                 # HEURISTIC FALLBACK: Infer tool from filename if explicit tool tag missing/unknown
                 if not config:
-                    fname_slug = filename.lower().replace(".json", "").replace("_", "").replace("-", "")
+                    fname_slug = (
+                        filename.lower()
+                        .replace(".json", "")
+                        .replace("_", "")
+                        .replace("-", "")
+                    )
+                    best_match = None
+                    best_match_slug = ""
                     for k, v in SEARCH_TOOL_CONFIG.items():
                         k_slug = k.lower().replace("_", "")
-                        # Check for exact slug match (e.g. composiosearchnews == composiosearchnews)
-                        if k_slug == fname_slug:
-                            config = v
-                            tool_name = k
-                            logger.info(f"Inferred tool '{k}' from filename '{filename}'")
-                            break
+                        # Support filenames with suffixes like _2_123112 by prefix matching.
+                        if k_slug == fname_slug or fname_slug.startswith(k_slug):
+                            if len(k_slug) > len(best_match_slug):
+                                best_match = (k, v)
+                                best_match_slug = k_slug
+                    if best_match:
+                        tool_name, config = best_match
+                        logger.info(
+                            "Inferred tool '%s' from filename '%s'",
+                            tool_name,
+                            filename,
+                        )
 
                 extracted_count = 0
 
@@ -1995,6 +2008,28 @@ async def finalize_research(
                         scanned_files += 1
                         processed_files_list.append(filename)
                         # We will move file later
+
+                    # Config matched but no URLs extracted; fall back to legacy parser
+                    if extracted_count == 0:
+                        try:
+                            model = SearchResultFile.model_validate(data)
+                            urls = model.all_urls
+                            if urls:
+                                all_urls.update(urls)
+                                scanned_files += 1
+                                processed_files_list.append(filename)
+                                logger.info(
+                                    "[%s] Fallback-parsed %d URLs from %s",
+                                    tool_name,
+                                    len(urls),
+                                    filename,
+                                )
+                        except ValidationError:
+                            logger.warning(
+                                "Unknown tool schema in %s (Tool: %s)",
+                                filename,
+                                tool_name,
+                            )
 
                 # ---------------------------------------------------------
                 # STRATEGY B: Static Pydantic Fallback (Legacy/Unknown Tools)
