@@ -58,6 +58,8 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Gateway ledger integration fix: added `_ensure_gateway_step` to create/run `run_steps` before PreToolUse ledger preparation; reran tool-heavy listdir flow and confirmed `tool_calls` rows recorded with no “Prepared ledger row missing” blocks (logs: `cli_default_listdir_fix.log`, `cli_gateway_preview_listdir_fix.log`, diff: `cli_vs_gateway_listdir_fix.diff`).
 - 2026-01-24: Decision: accept dual Composio sessions for gateway complex paths during Stage 2/3; lazy gateway init preserves single-session behavior for SIMPLE fast-path.
 - 2026-01-24: Stage 2 parity expanded with Write/Read tool flow; gateway preview succeeded without ledger blocks and diff captured (`cli_default_write_read.log`, `cli_gateway_preview_write_read.log`, `cli_vs_gateway_write_read.diff`).
+- 2026-01-24: Stage 2 parity expanded with Composio search + Write/Read tool chain; diff captured (`cli_default_search_chain.log`, `cli_gateway_preview_search_chain.log`, `cli_vs_gateway_search_chain.diff`). Output deltas beyond session/trace IDs: gateway writes to `.claude/sessions/.../work_products/` instead of gateway workspace path and does not emit `search_results/` observer save line.
+- 2026-01-24: Gateway job-mode validation deferred: CLI disables `--use-gateway` for job/resume/harness/URW paths, so no gateway job-mode run is currently possible without lifting that guard.
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.
