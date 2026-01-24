@@ -63,6 +63,8 @@ Track refactor progress, stage status, decisions, dependencies, and open questio
 - 2026-01-24: Gateway search chain parity fix: normalized gateway Write/Read paths to the gateway workspace and ensured observer save lines appear by awaiting `observe_and_save_search_results` in gateway event rendering (log: `cli_gateway_preview_search_chain_fix4.log`, diff: `cli_vs_gateway_search_chain_fix4.diff`).
 - 2026-01-24: Gateway job-mode enabled and validated with `job_gateway_bash.json`; gateway session created, `=== JOB COMPLETE (GATEWAY) ===` printed, and `job_completion_gateway_session_20260124_004750_97ea9213.md` written in the gateway workspace (log: `cli_gateway_job_bash.log`).
 - 2026-01-24: Lifted gateway guard for `--job-path` runs; gateway remains disabled for resume/fork/harness/URW modes.
+- 2026-01-24: Stage 2 parity expanded with a Bash + search + Write/Read combo chain; diff captured (`cli_default_combo_chain.log`, `cli_gateway_preview_combo_chain.log`, `cli_vs_gateway_combo_chain.diff`). Remaining deltas largely limited to session/trace IDs and model output variance.
+- 2026-01-24: Stage 3 readiness check: gateway preview now covers simple, tool-heavy, and job-mode flows with guardrails enabled; remaining pre-default blockers are documentation sign-off on parity and any determinism gaps in output diffs.
 
 ## Decisions Log
 - 2026-01-24: Gateway will wrap existing `AgentBridge` session tracking for Stages 1-3 to minimize behavior changes; revisit ownership after Gateway externalization.
