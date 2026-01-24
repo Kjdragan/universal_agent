@@ -20,6 +20,7 @@ try:
         InProcessGateway,
         GatewayRequest,
         GatewaySession,
+        GatewayResult,
     )
     GATEWAY_AVAILABLE = True
 except ImportError:
@@ -57,9 +58,9 @@ class TestGatewaySessionManagement:
             workspace_dir=str(tmp_path),
         )
         
-        # Verify session can be retrieved multiple times
+        # Verify session can be resumed multiple times
         for _ in range(3):
-            retrieved = await gateway.get_session(session.session_id)
+            retrieved = await gateway.resume_session(session.session_id)
             assert retrieved is not None
             assert retrieved.session_id == session.session_id
 
@@ -78,9 +79,11 @@ class TestGatewaySessionManagement:
         assert session1.session_id != session2.session_id
         assert session1.workspace_dir != session2.workspace_dir
         
-        # Each should be retrievable
-        assert await gateway.get_session(session1.session_id) is not None
-        assert await gateway.get_session(session2.session_id) is not None
+        # Each should be resumable
+        retrieved1 = await gateway.resume_session(session1.session_id)
+        retrieved2 = await gateway.resume_session(session2.session_id)
+        assert retrieved1 is not None
+        assert retrieved2 is not None
 
 
 @pytest.mark.skipif(not GATEWAY_AVAILABLE or not EVENTS_AVAILABLE, 
@@ -102,7 +105,7 @@ class TestGatewayEventStream:
     async def test_execute_yields_events(self, gateway_session):
         """Test that execute yields event objects."""
         gateway, session = gateway_session
-        request = GatewayRequest(user_input="Hello", max_iterations=1)
+        request = GatewayRequest(user_input="Hello")
         
         events = []
         try:
@@ -119,9 +122,9 @@ class TestGatewayEventStream:
 
     @pytest.mark.asyncio
     async def test_run_query_returns_response(self, gateway_session):
-        """Test that run_query returns proper response object."""
+        """Test that run_query returns proper GatewayResult object."""
         gateway, session = gateway_session
-        request = GatewayRequest(user_input="Hello", max_iterations=1)
+        request = GatewayRequest(user_input="Hello")
         
         # Mock the underlying execution
         with patch.object(gateway, 'execute') as mock_execute:
@@ -132,8 +135,9 @@ class TestGatewayEventStream:
             mock_execute.return_value = mock_events()
             
             try:
-                response = await gateway.run_query(session, request)
-                assert response.session_id == session.session_id
+                result = await gateway.run_query(session, request)
+                # GatewayResult has response_text, not session_id
+                assert isinstance(result, GatewayResult)
             except Exception:
                 # May fail with incomplete mocking
                 pass
@@ -267,7 +271,7 @@ class TestExternalGatewayIntegration:
             gateway = ExternalGateway(base_url=gateway_url)
             session = await gateway.create_session(user_id="test_user")
             
-            request = GatewayRequest(user_input="Hello", max_iterations=1)
+            request = GatewayRequest(user_input="Hello")
             
             events = []
             async for event in gateway.execute(session, request):
@@ -290,9 +294,9 @@ class TestGatewayErrorHandling:
 
     @pytest.mark.asyncio
     async def test_invalid_session_id(self, gateway):
-        """Test handling of invalid session ID."""
-        session = await gateway.get_session("nonexistent_session_12345")
-        assert session is None
+        """Test handling of invalid session ID raises error."""
+        with pytest.raises(ValueError, match="Unknown session_id"):
+            await gateway.resume_session("nonexistent_session_12345")
 
     @pytest.mark.asyncio
     async def test_execute_with_invalid_session(self, gateway):
@@ -301,7 +305,6 @@ class TestGatewayErrorHandling:
             session_id="fake_session",
             user_id="fake_user",
             workspace_dir="/nonexistent",
-            created_at=None,
         )
         
         request = GatewayRequest(user_input="Hello")
