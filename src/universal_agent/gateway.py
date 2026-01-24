@@ -67,13 +67,19 @@ class Gateway:
 
 
 class InProcessGateway(Gateway):
-    def __init__(self, agent_bridge: Optional[AgentBridge] = None):
-        self._bridge = agent_bridge or AgentBridge()
+    def __init__(
+        self,
+        agent_bridge: Optional[AgentBridge] = None,
+        hooks: Optional[dict] = None,
+    ):
+        self._bridge = agent_bridge or AgentBridge(hooks=hooks)
 
     async def create_session(
         self, user_id: str, workspace_dir: Optional[str] = None
     ) -> GatewaySession:
-        session_info = await self._bridge.create_session(user_id=user_id)
+        session_info = await self._bridge.create_session(
+            user_id=user_id, workspace_dir=workspace_dir
+        )
         metadata = {
             "session_url": session_info.session_url,
             "logfire_enabled": session_info.logfire_enabled,

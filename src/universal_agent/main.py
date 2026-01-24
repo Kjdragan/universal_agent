@@ -119,6 +119,8 @@ from universal_agent.cli_io import (
     print_job_completion_summary,
     list_workspace_artifacts,
     render_agent_events,
+    print_execution_summary_from_events,
+    print_job_completion_summary_from_events,
 )
 from universal_agent.execution_context import bind_workspace
 from universal_agent.execution_session import ExecutionSession
@@ -162,6 +164,40 @@ def load_budget_config() -> dict:
         "max_wallclock_minutes": _get_env_int("UA_MAX_WALLCLOCK_MINUTES", 90),
         "max_steps": _get_env_int("UA_MAX_STEPS", 50),
         "max_tool_calls": _get_env_int("UA_MAX_TOOL_CALLS", 250),
+    }
+
+
+def build_cli_hooks() -> dict:
+    return {
+        "AgentStop": [
+            HookMatcher(matcher=None, hooks=[on_agent_stop]),
+        ],
+        "SubagentStop": [
+            HookMatcher(matcher=None, hooks=[on_subagent_stop]),
+        ],
+        "PreToolUse": [
+            HookMatcher(matcher=None, hooks=[on_pre_tool_use_ledger]),
+            HookMatcher(
+                matcher="Bash",
+                hooks=[on_pre_bash_block_composio_sdk, on_pre_bash_skill_hint],
+            ),
+            HookMatcher(matcher="Task", hooks=[on_pre_task_skill_awareness]),
+        ],
+        "PostToolUse": [
+            HookMatcher(matcher=None, hooks=[on_post_tool_use_ledger]),
+            HookMatcher(matcher=None, hooks=[on_post_tool_use_validation]),
+            HookMatcher(
+                matcher=None, hooks=[on_post_research_finalized_cache]
+            ),  # Cache refined_corpus.md on finalize
+            HookMatcher(matcher=None, hooks=[on_post_email_send_artifact]),
+            HookMatcher(matcher="Task", hooks=[on_post_task_guidance]),
+        ],
+        # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
+        # "error: 'types.UnionType' object is not callable"
+        # This is a CLI-side issue, not our code. PreToolUse still provides skill guidance.
+        "UserPromptSubmit": [
+            HookMatcher(matcher=None, hooks=[on_user_prompt_skill_awareness]),
+        ],
     }
 
 
@@ -5355,6 +5391,11 @@ def parse_cli_args() -> argparse.Namespace:
         action="store_true",
         help="Use the in-process Gateway for CLI execution (experimental).",
     )
+    parser.add_argument(
+        "--gateway-use-cli-workspace",
+        action="store_true",
+        help="Use the CLI workspace directory for Gateway sessions (experimental).",
+    )
     return parser.parse_args()
 
 
@@ -5873,35 +5914,7 @@ async def setup_session(
         # AND local_toolkit tools (crawl_parallel, read_local_file, etc.)
         # Sub-agents inherit all tools via model="inherit".
 
-        hooks={
-            "AgentStop": [
-                HookMatcher(matcher=None, hooks=[on_agent_stop]),
-            ],
-            "SubagentStop": [
-                HookMatcher(matcher=None, hooks=[on_subagent_stop]),
-            ],
-            "PreToolUse": [
-                HookMatcher(matcher=None, hooks=[on_pre_tool_use_ledger]),
-                HookMatcher(
-                    matcher="Bash",
-                    hooks=[on_pre_bash_block_composio_sdk, on_pre_bash_skill_hint],
-                ),
-                HookMatcher(matcher="Task", hooks=[on_pre_task_skill_awareness]),
-            ],
-            "PostToolUse": [
-                HookMatcher(matcher=None, hooks=[on_post_tool_use_ledger]),
-                HookMatcher(matcher=None, hooks=[on_post_tool_use_validation]),
-                HookMatcher(matcher=None, hooks=[on_post_research_finalized_cache]),  # Cache refined_corpus.md on finalize
-                HookMatcher(matcher=None, hooks=[on_post_email_send_artifact]),
-                HookMatcher(matcher="Task", hooks=[on_post_task_guidance]),
-            ],
-            # DISABLED: UserPromptSubmit hook triggers Claude CLI bug:
-            # "error: 'types.UnionType' object is not callable"
-            # This is a CLI-side issue, not our code. PreToolUse still provides skill guidance.
-            "UserPromptSubmit": [
-                HookMatcher(matcher=None, hooks=[on_user_prompt_skill_awareness]),
-            ],
-        },
+        hooks=build_cli_hooks(),
         permission_mode="bypassPermissions",
     )
     _warn_if_subagent_hooks_configured(options.agents)
@@ -6258,6 +6271,10 @@ async def main(args: argparse.Namespace):
         "true",
         "yes",
     }
+    gateway_use_cli_workspace = (
+        args.gateway_use_cli_workspace
+        or os.getenv("UA_GATEWAY_USE_CLI_WORKSPACE", "").lower() in {"1", "true", "yes"}
+    )
     if use_gateway and (
         args.resume
         or args.fork
@@ -6269,6 +6286,7 @@ async def main(args: argparse.Namespace):
             "⚠️ Gateway preview disabled for resume/job/harness/URW modes; using CLI path."
         )
         use_gateway = False
+        gateway_use_cli_workspace = False
     
     # Handle --reset-letta: clear all Letta memory
     if getattr(args, 'reset_letta', False) and LETTA_ENABLED and _letta_client:
@@ -6371,14 +6389,26 @@ async def main(args: argparse.Namespace):
     trace["budgets"] = budget_config
     tool_ledger = ToolCallLedger(runtime_db_conn, workspace_dir)
 
-    gateway = InProcessGateway() if use_gateway else None
+    gateway = InProcessGateway(hooks=build_cli_hooks()) if use_gateway else None
     gateway_session = None
     if gateway:
         try:
-            gateway_session = await gateway.create_session(user_id=user_id or "user_cli")
+            gateway_session = await gateway.create_session(
+                user_id=user_id or "user_cli",
+                workspace_dir=workspace_dir if gateway_use_cli_workspace else None,
+            )
             print("🧭 Gateway preview enabled (in-process).")
             print(f"Gateway Session: {gateway_session.session_id}")
             print(f"Gateway Workspace: {gateway_session.workspace_dir}")
+            def _set_gateway_observer_workspace(path: str) -> None:
+                global OBSERVER_WORKSPACE_DIR
+                OBSERVER_WORKSPACE_DIR = path
+
+            bind_workspace(
+                gateway_session.workspace_dir,
+                absolute=True,
+                observer_setter=_set_gateway_observer_workspace,
+            )
         except Exception as exc:
             print(f"⚠️ Gateway initialization failed, falling back to CLI: {exc}")
             gateway = None
@@ -6935,6 +6965,7 @@ async def main(args: argparse.Namespace):
                             final_response_text = ""
                             tool_calls = 0
                             while True:
+                                request_start_ts = time.time()
                                 event_result = await render_agent_events(
                                     gateway.execute(
                                         gateway_session,
@@ -6956,6 +6987,40 @@ async def main(args: argparse.Namespace):
                                     input()
                                     next_input = "I have completed the authentication. Please continue with the task."
                                     continue
+                                request_duration = time.time() - request_start_ts
+                                trace_id = None
+                                try:
+                                    if gateway._bridge.current_agent and hasattr(
+                                        gateway._bridge.current_agent, "trace"
+                                    ):
+                                        trace_id = gateway._bridge.current_agent.trace.get(
+                                            "trace_id"
+                                        )
+                                except Exception:
+                                    trace_id = None
+                                if event_result["tool_calls"]:
+                                    print_execution_summary_from_events(
+                                        request_duration=request_duration,
+                                        tool_call_entries=event_result.get(
+                                            "tool_call_entries", []
+                                        ),
+                                        workspace_dir=gateway_session.workspace_dir,
+                                        trace_id=trace_id,
+                                        work_products=event_result.get("work_products"),
+                                    )
+                                if run_mode == "job" and args.job_path:
+                                    print_job_completion_summary_from_events(
+                                        session_id=gateway_session.session_id,
+                                        workspace_dir=gateway_session.workspace_dir,
+                                        response_text=final_response_text,
+                                        tool_call_entries=event_result.get(
+                                            "tool_call_entries", []
+                                        ),
+                                        tool_results=event_result.get("tool_results", 0),
+                                        work_products=event_result.get("work_products"),
+                                        errors=event_result.get("errors"),
+                                        trace_id=trace_id,
+                                    )
                                 break
 
                             result = ExecutionResult(

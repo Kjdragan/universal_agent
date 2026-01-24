@@ -829,7 +829,12 @@ class UniversalAgent:
     Emits AgentEvent objects via async generator for UI/CLI to consume.
     """
 
-    def __init__(self, workspace_dir: Optional[str] = None, user_id: str = "user_123"):
+    def __init__(
+        self,
+        workspace_dir: Optional[str] = None,
+        user_id: str = "user_123",
+        hooks: Optional[dict] = None,
+    ):
         self.user_id = user_id
         self.workspace_dir = workspace_dir or self._create_workspace()
         self.run_id = str(uuid.uuid4())
@@ -846,6 +851,7 @@ class UniversalAgent:
         self._processed_msg_ids: set = set()
         # Async queue for merging events from multiple sources (SDK + tool logs)
         self._event_queue: Optional[asyncio.Queue] = None
+        self._hooks = hooks
 
     def _create_workspace(self) -> str:
         """Create a new session workspace directory."""
@@ -869,6 +875,8 @@ class UniversalAgent:
             enable_memory=False,  # URW/API may not need memory
             verbose=True,
         )
+        if self._hooks:
+            self._setup.set_hooks(self._hooks)
         await self._setup.initialize()
         
         # Copy references from setup
