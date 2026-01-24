@@ -21,17 +21,21 @@ Goal: isolate CLI I/O, workspace binding, trace persistence; prepare for gateway
 - Centralized workspace binding in `execution_context` (env + observer).
 - Added `trace_utils.write_trace` for trace persistence.
 - Added `ExecutionSession` and plumbed into CLI path.
+- Wired bot adapter to pass `ExecutionSession` into `process_turn`.
 - Added Gateway contract + in-process facade (AgentBridge-backed).
 
 ### Remaining (Stage 1)
-- Verify bot adapter path uses `ExecutionSession` (ensure no regressions).
 - Validate call sites for CLI-only behaviors still match pre-refactor outputs.
-- Add explicit doc notes about any new flags introduced (if any).
 
 ### Exit Criteria
 - CLI behavior unchanged in default path.
 - Guardrails checklist unchanged or explicitly revalidated.
 - Progress log updated with concrete call site validation.
+
+### Gateway Preview Flags (CLI)
+- `--use-gateway` / `UA_USE_GATEWAY=1`: route interactive CLI turns through `InProcessGateway`.
+- `--gateway-use-cli-workspace` / `UA_GATEWAY_USE_CLI_WORKSPACE=1`: reuse CLI workspace for gateway sessions.
+- Auto-disabled for resume/fork/job/harness/URW modes to avoid behavior regressions.
 
 ## Stage 2 — Event Stream Normalization
 Goal: normalize agent output to structured events consumed by CLI/Web without behavior changes.
