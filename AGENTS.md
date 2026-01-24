@@ -101,7 +101,7 @@ Deep web research and data gathering expert.
 - `COMPOSIO_MULTI_EXECUTE_TOOL` — Parallel searches (max 4 tools per call)
 - `finalize_research` — Automated crawl → filter → corpus pipeline
 - `run_research_pipeline` — Full post-search pipeline: Crawl → Refine → Outline → Draft → Cleanup → Compile
-- `crawl_parallel` — High-speed parallel web scraping via crawl4ai
+
 
 ---
 
