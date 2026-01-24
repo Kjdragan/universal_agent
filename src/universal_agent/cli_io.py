@@ -310,6 +310,17 @@ def print_execution_summary_from_events(
         print("\n=== TOOL CALL BREAKDOWN ===")
         for entry in tool_call_entries:
             name = entry.get("name") or "unknown"
+            input_payload = entry.get("input") or {}
+            bash_snippet = ""
+            if "BASH" in name.upper() and isinstance(input_payload, dict):
+                command = input_payload.get("command")
+                description = input_payload.get("description")
+                snippet_source = command or description or ""
+                if snippet_source:
+                    snippet = str(snippet_source).replace("\n", " ").strip()
+                    if len(snippet) > 80:
+                        snippet = snippet[:77] + "..."
+                    bash_snippet = f" ({snippet})"
             marker = (
                 "🏭"
                 if any(
@@ -319,7 +330,9 @@ def print_execution_summary_from_events(
                 else "  "
             )
             time_offset = entry.get("time_offset", 0.0) or 0.0
-            print(f"  {marker} Iter - | +{time_offset:>6.1f}s | {name}")
+            print(
+                f"  {marker} Iter - | +{time_offset:>6.1f}s | {name}{bash_snippet}"
+            )
 
     local_trace_ids = collect_local_tool_trace_ids(workspace_dir) if workspace_dir else []
     print("\n=== TRACE IDS (for Logfire debugging) ===")
