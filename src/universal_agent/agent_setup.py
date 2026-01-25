@@ -410,45 +410,45 @@ class AgentSetup:
                     "LOGFIRE_TOKEN": os.environ.get("LOGFIRE_TOKEN", ""),
                 },
             },
-            "edgartools": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": ["-m", "edgar.ai"],
-                "env": {
-                    "EDGAR_IDENTITY": os.environ.get("EDGAR_IDENTITY", "Agent agent@example.com")
-                },
-            },
-            "video_audio": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [
-                    os.path.join(
-                        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                        "external_mcps",
-                        "video-audio-mcp",
-                        "server.py",
-                    )
-                ],
-            },
-            "youtube": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": ["-m", "mcp_youtube"],
-            },
+            # "edgartools": {
+            #     "type": "stdio",
+            #     "command": sys.executable,
+            #     "args": ["-m", "edgar.ai"],
+            #     "env": {
+            #         "EDGAR_IDENTITY": os.environ.get("EDGAR_IDENTITY", "Agent agent@example.com")
+            #     },
+            # },
+            # "video_audio": {
+            #     "type": "stdio",
+            #     "command": sys.executable,
+            #     "args": [
+            #         os.path.join(
+            #             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            #             "external_mcps",
+            #             "video-audio-mcp",
+            #             "server.py",
+            #         )
+            #     ],
+            # },
+            # "youtube": {
+            #     "type": "stdio",
+            #     "command": sys.executable,
+            #     "args": ["-m", "mcp_youtube"],
+            # },
             "internal": create_sdk_mcp_server(
                 name="internal",
                 version="1.0.0",
                 tools=[run_research_pipeline_wrapper, crawl_parallel_wrapper]
             ),
-            "zai_vision": {
-                "type": "stdio",
-                "command": "npx",
-                "args": ["-y", "@z_ai/mcp-server"],
-                "env": {
-                    "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
-                    "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
-                },
-            },
+            # "zai_vision": {
+            #     "type": "stdio",
+            #     "command": "npx",
+            #     "args": ["-y", "@z_ai/mcp-server"],
+            #     "env": {
+            #         "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
+            #         "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
+            #     },
+            # },
         }
 
     def _default_hooks(self) -> dict:

@@ -1,12 +1,16 @@
 """
 List Letta agents matching 'universal_agent*' with basic metadata.
-Run: uv run python scripts/letta_list_agents.py
+Run: uv run python letta/scripts/list_agents.py
 """
 
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-load_dotenv("/home/kjdragan/lrepos/universal_agent/.env")
+ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+if ENV_PATH.exists():
+    load_dotenv(ENV_PATH)
 
 from agentic_learning import AgenticLearning
 

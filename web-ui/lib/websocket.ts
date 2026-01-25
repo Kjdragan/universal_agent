@@ -47,13 +47,26 @@ export class AgentWebSocket {
   constructor(url?: string) {
     if (url) {
       this.url = url;
-    } else if (typeof window !== "undefined") {
+      return;
+    }
+
+    const envUrl = process.env.NEXT_PUBLIC_WS_URL;
+    if (envUrl) {
+      this.url = envUrl;
+      return;
+    }
+
+    if (typeof window !== "undefined") {
       // Use relative protocol (ws for http, wss for https)
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      this.url = `${protocol}//${window.location.host}/ws/agent`;
-    } else {
-      this.url = "ws://localhost:8001/ws/agent";
+      const hostname = window.location.hostname;
+      const port = window.location.port === "3000" ? "8001" : window.location.port;
+      const host = port ? `${hostname}:${port}` : hostname;
+      this.url = `${protocol}//${host}/ws/agent`;
+      return;
     }
+
+    this.url = "ws://localhost:8001/ws/agent";
   }
 
   // ==========================================================================

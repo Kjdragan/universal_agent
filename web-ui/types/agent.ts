@@ -73,6 +73,7 @@ export interface ToolCall {
   name: string;
   input: Record<string, unknown>;
   time_offset: number;
+  timestamp?: number; // Added for interleaved sorting
   result?: ToolResult;
   status: "pending" | "running" | "complete" | "error";
 }
