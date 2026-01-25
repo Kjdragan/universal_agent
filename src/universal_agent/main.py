@@ -473,10 +473,28 @@ LETTA_MEMORY_BLOCKS = [
     "human",
     "system_rules",
     "project_context",
+    "failure_patterns",
+    "recovery_patterns",
     "recent_queries",
     "recent_reports",
 ]
 LETTA_MEMORY_BLOCK_DESCRIPTIONS = {
+    "system_rules": (
+        "Capture stable operational rules and constraints for the Universal Agent. "
+        "Include tool usage conventions, workspace expectations, and do/don't guidance."
+    ),
+    "project_context": (
+        "Capture concise, high-signal project context: architecture notes, key paths, "
+        "and workflow conventions that help the agent stay aligned."
+    ),
+    "failure_patterns": (
+        "Track recurring failure modes, symptoms, and suspected causes. "
+        "Note impact and any follow-up needed to prevent repeats."
+    ),
+    "recovery_patterns": (
+        "Track successful recoveries or improvised workflows that worked well. "
+        "These are candidates for future skills or formalized procedures."
+    ),
     "recent_queries": (
         "Track recent user requests and tasks run in the Universal Agent. "
         "Keep a short rolling list with timestamps, request summaries, and outcomes."

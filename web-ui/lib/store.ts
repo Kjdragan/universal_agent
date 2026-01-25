@@ -154,7 +154,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   // Tool calls
   toolCalls: [],
   addToolCall: (toolCall) => set((state) => ({
-    toolCalls: [...state.toolCalls, { ...toolCall, status: "pending" }],
+    toolCalls: [...state.toolCalls, { ...toolCall, status: "pending", timestamp: Date.now() }],
   })),
   updateToolCall: (id, updates) => set((state) => ({
     toolCalls: state.toolCalls.map((tc) =>
