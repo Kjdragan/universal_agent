@@ -3,31 +3,35 @@
 # Ensure we are in the project root
 cd "$(dirname "$0")"
 
-echo "🚀 Starting Agent College (Sidecar) on port 8001..."
-# Keep uv cache inside repo to avoid sandbox permission issues
-export UV_CACHE_DIR="$(pwd)/.uv-cache"
-# Set higher token limit for batch reading (50k words)
-export UA_BATCH_MAX_WORDS=50000
+echo "🧹 Cleaning up existing processes..."
+fuser -k 8001/tcp 2>/dev/null
+fuser -k 3000/tcp 2>/dev/null
+# Give them a moment to die
+sleep 1
 
-# Run Agent College in background
-PYTHONPATH=src uv run uvicorn AgentCollege.logfire_fetch.main:app --port 8001 > agent_college.log 2>&1 &
-AC_PID=$!
-
-echo "✅ Agent College started (PID: $AC_PID)."
-echo "⏳ Waiting 2 seconds for startup..."
-sleep 2
-
-echo "🤖 Starting Universal Agent Web UI..."
+echo "🚀 Starting Universal Agent v2.1 Stack..."
 echo "---------------------------------------------------"
-echo "🌐 UI URL:  http://localhost:8000"
-echo "---------------------------------------------------"
-echo "Press Ctrl+C to stop all services."
 
-# Run Server in foreground
-PYTHONPATH=src uv run src/universal_agent/server.py
+# 1. Start Backend API (Background)
+echo "🔌 Starting API Server (Port 8001)..."
+PYTHONPATH=src uv run python -m universal_agent.api.server > api.log 2>&1 &
+API_PID=$!
+echo "   PID: $API_PID (Logs: tail -f api.log)"
+
+# Wait for API to be ready
+echo "⏳ Waiting for API..."
+sleep 3
+
+# 2. Start Web UI (Foreground)
+echo "💻 Starting Web UI (Port 3000)..."
+echo "   Use Ctrl+C to stop both."
+echo "---------------------------------------------------"
+
+cd web-ui
+npm run dev
 
 # Cleanup on exit
 echo ""
-echo "🛑 Stopping Agent College..."
-kill $AC_PID 2>/dev/null
+echo "🛑 Stopping API Server..."
+kill $API_PID 2>/dev/null
 echo "✅ Done."
