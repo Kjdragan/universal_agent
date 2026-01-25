@@ -418,19 +418,19 @@ function TerminalLog() {
   });
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden bg-black/40">
       {/* Controls */}
-      <div className="flex items-center justify-between px-2 py-1 border-b border-white/5 bg-white/5 mx-2 mt-2 rounded-t-sm">
-        <span className="text-[10px] text-muted-foreground uppercase">Console Output</span>
-        <div className="flex gap-1">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/5">
+        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Console Output</span>
+        <div className="flex gap-2">
           {(["INFO", "DEBUG"] as const).map((level) => (
             <button
               key={level}
               onClick={() => setFilterLevel(level)}
-              className={`text-[9px] px-1.5 py-0.5 rounded border ${filterLevel === level
-                  ? "bg-primary/20 border-primary/50 text-primary-foreground"
-                  : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
-                } transition-colors uppercase`}
+              className={`text-[10px] px-2 py-1 rounded border transition-colors uppercase font-medium ${filterLevel === level
+                ? "bg-primary/20 border-primary/50 text-primary-foreground"
+                : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
+                }`}
             >
               {level}
             </button>
@@ -439,27 +439,33 @@ function TerminalLog() {
       </div>
 
       {/* Log List */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-1 font-mono text-[10px]">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1.5 font-mono text-xs">
         {visibleLogs.length === 0 ? (
-          <div className="text-center text-muted-foreground py-8 italic opacity-50">
+          <div className="text-center text-muted-foreground py-12 italic opacity-50">
             {ICONS.terminal} No logs to display...
           </div>
         ) : (
           visibleLogs.map((log) => {
             const levelColors: Record<string, string> = {
-              DEBUG: "text-blue-400/50",
-              INFO: "text-foreground/90",
-              WARNING: "text-yellow-500",
-              ERROR: "text-red-500 font-bold",
+              DEBUG: "text-blue-400/60",
+              INFO: "text-green-400", // Brighter green for info
+              WARNING: "text-yellow-400",
+              ERROR: "text-red-400 font-bold",
             };
-            const color = levelColors[log.level] || levelColors.INFO;
+            const color = levelColors[log.level] || "text-foreground";
 
             return (
-              <div key={log.id} className="flex gap-2 border-b border-white/5 pb-0.5 last:border-0 hover:bg-white/5">
-                <span className="opacity-30 shrink-0 w-14">{new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
-                <span className={`shrink-0 w-10 text-right ${color}`}>[{log.level === 'WARNING' ? 'WARN' : log.level}]</span>
-                <span className="opacity-50 shrink-0">{log.prefix}</span>
-                <span className={`${color} break-all`}>{log.message}</span>
+              <div key={log.id} className="flex gap-3 border-b border-white/5 pb-1 last:border-0 hover:bg-white/5 items-start">
+                <span className="text-muted-foreground/60 shrink-0 w-16 text-[10px] pt-0.5 font-light">
+                  {new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+                <span className={`shrink-0 w-12 text-left font-bold text-[10px] pt-0.5 ${color}`}>
+                  {log.level === 'WARNING' ? 'WARN' : log.level}
+                </span>
+                <div className="flex-1 break-all leading-relaxed">
+                  {log.prefix && <span className="opacity-60 mr-2 text-muted-foreground">[{log.prefix.replace(/[\[\]]/g, '')}]</span>}
+                  <span className={color}>{log.message}</span>
+                </div>
               </div>
             );
           })
@@ -762,7 +768,7 @@ function WorkProductViewer() {
   }, [currentSession?.session_id, workProducts.length]);
 
   return (
-    <div className={`flex flex-col ${isCollapsed ? '' : 'h-64'} transition-all duration-300`}>
+    <div className={`flex flex-col transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
       <div
         className="p-3 border-b border-border/50 flex items-center justify-between cursor-pointer hover:bg-secondary/10"
         onClick={() => setIsCollapsed(!isCollapsed)}
@@ -784,7 +790,7 @@ function WorkProductViewer() {
             keyFiles.map((file, i) => (
               <button
                 key={i}
-                onClick={() => setViewingFile({ name: file.name, path: file.name, type: 'file' })}
+                onClick={() => setViewingFile({ name: file.name, path: file.path, type: 'file' })}
                 className="w-full text-left px-3 py-2 text-xs rounded hover:bg-black/20 transition-colors flex items-center gap-2"
               >
                 <span className="text-lg">{file.name.endsWith('pdf') ? '📕' : file.name.endsWith('html') ? '🌐' : '📄'}</span>
@@ -801,6 +807,145 @@ function WorkProductViewer() {
   );
 }
 
+function CombinedActivityLog() {
+  const toolCalls = useAgentStore((s) => s.toolCalls);
+  const workProducts = useAgentStore((s) => s.workProducts);
+  const logs = useAgentStore((s) => s.logs);
+  const [filterLevel, setFilterLevel] = useState<"INFO" | "DEBUG">("DEBUG");
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [toolCalls, logs, filterLevel]);
+
+  // Merge and sort
+  const items = [
+    ...toolCalls.map((tc) => ({
+      type: "tool",
+      id: tc.id,
+      timestamp: tc.timestamp || (Date.now() - (tc.time_offset * 1000)), // Fallback if no timestamp
+      level: "INFO",
+      data: tc
+    })),
+    ...workProducts.map((wp) => ({
+      type: "product",
+      id: wp.id,
+      timestamp: wp.timestamp,
+      level: "INFO",
+      data: wp
+    })),
+    ...logs.map((log) => ({
+      type: "log",
+      id: log.id,
+      timestamp: log.timestamp,
+      level: log.level,
+      data: log
+    }))
+  ]
+    .filter(item => {
+      if (item.type === 'log') {
+        if (filterLevel === "DEBUG") return true;
+        return item.level !== "DEBUG";
+      }
+      return true;
+    })
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  return (
+    <div className="flex flex-col h-full bg-black/40">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/5">
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+          {ICONS.activity} Activity & Logs
+        </h3>
+        <div className="flex gap-2">
+          <span className="text-[10px] text-muted-foreground uppercase mr-2 pt-0.5">Log Level:</span>
+          {(["INFO", "DEBUG"] as const).map((level) => (
+            <button
+              key={level}
+              onClick={() => setFilterLevel(level)}
+              className={`text-[10px] px-2 py-0.5 rounded border transition-colors uppercase font-medium ${filterLevel === level
+                ? "bg-primary/20 border-primary/50 text-primary-foreground"
+                : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
+                }`}
+            >
+              {level}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-0 font-mono text-xs">
+        {items.length === 0 ? (
+          <div className="text-center text-muted-foreground py-12 italic opacity-50">
+            No activity yet...
+          </div>
+        ) : (
+          items.map((item, i) => {
+            if (item.type === 'log') {
+              const log = item.data as any;
+              const levelColors: Record<string, string> = {
+                DEBUG: "text-blue-400/60",
+                INFO: "text-green-400",
+                WARNING: "text-yellow-400",
+                ERROR: "text-red-400 font-bold",
+              };
+              const color = levelColors[log.level] || "text-foreground";
+
+              return (
+                <CollapsibleLogItem key={item.id} log={log} color={color} />
+              );
+            } else if (item.type === 'tool') {
+              const toolData = item.data as any; // Cast to avoid union type issues
+              return <ActivityItem key={item.id} activity={{ type: 'tool', name: toolData.name, item: toolData }} />;
+            } else {
+              const productData = item.data as any; // Cast to avoid union type issues
+              return <ActivityItem key={item.id} activity={{ type: 'product', name: productData.filename, item: productData }} />;
+            }
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CollapsibleLogItem({ log, color }: { log: any, color: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const firstLine = log.message.split('\n')[0];
+  const hasMore = log.message.length > firstLine.length;
+
+  return (
+    <div className="flex gap-2 border-b border-white/5 hover:bg-white/5 px-3 py-1 items-start group">
+      <span className="text-muted-foreground/50 shrink-0 w-16 text-[10px] pt-0.5 font-light">
+        {new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+      </span>
+      <span className={`shrink-0 w-10 text-left font-bold text-[10px] pt-0.5 ${color}`}>
+        {log.level === 'WARNING' ? 'WARN' : log.level}
+      </span>
+      <div className="flex-1 min-w-0">
+        <div
+          className={`flex items-start gap-2 cursor-pointer ${hasMore ? 'hover:opacity-80' : ''}`}
+          onClick={() => hasMore && setExpanded(!expanded)}
+        >
+          <div className="flex-1 break-all leading-relaxed">
+            {log.prefix && <span className="opacity-50 mr-2 text-muted-foreground text-[10px]">[{log.prefix.replace(/[\[\]]/g, '')}]</span>}
+            <span className={`${color} opacity-90`}>
+              {expanded ? log.message : firstLine}
+              {!expanded && hasMore && <span className="opacity-50 ml-1 text-[10px]">(...)</span>}
+            </span>
+          </div>
+          {hasMore && (
+            <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity pt-1">
+              {expanded ? "▲" : "▼"}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // =============================================================================
 // Main App Component
 // =============================================================================
@@ -812,7 +957,7 @@ export default function HomePage() {
 
   // Layout State
   const [leftWidth, setLeftWidth] = useState(260);
-  const [rightWidth, setRightWidth] = useState(400); // Wider default as requested
+  const [rightWidth, setRightWidth] = useState(600); // Wider default (600px) as requested
 
   // Resizing Logic
   const startResizing = (direction: 'left' | 'right') => (mouseDownEvent: React.MouseEvent) => {
@@ -916,8 +1061,11 @@ export default function HomePage() {
           className="shrink-0 border-r border-border/50 flex flex-col overflow-hidden bg-background/30 backdrop-blur-sm relative"
           style={{ width: leftWidth }}
         >
-          <FileExplorer />
-          <TaskPanel />
+          <div className="flex-1 flex flex-col min-h-0">
+            <FileExplorer />
+            <WorkProductViewer />
+            <TaskPanel />
+          </div>
           {/* Resizer */}
           <div
             className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 transition-colors z-20"
@@ -945,26 +1093,7 @@ export default function HomePage() {
             onMouseDown={startResizing('right')}
           />
 
-
-          {/* Activity Feed */}
-          <div className="flex-1 min-h-0 border-b border-border/50 flex flex-col overflow-hidden">
-            <ActivityFeed />
-          </div>
-
-          {/* Internal Logs - The "Vocal" Logs */}
-          <div className="flex-1 min-h-0 border-b border-border/50 flex flex-col overflow-hidden bg-black/20">
-            <div className="p-3 border-b border-border/50 flex items-center justify-between">
-              <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                {ICONS.terminal} Internal Logs
-              </h3>
-            </div>
-            <TerminalLog />
-          </div>
-
-          {/* Work Products */}
-          <div className="shrink-0 border-t border-border/50">
-            <WorkProductViewer />
-          </div>
+          <CombinedActivityLog />
         </aside>
       </div>
 

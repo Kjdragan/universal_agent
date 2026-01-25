@@ -8,6 +8,7 @@ This module provides the UniversalAgent class which encapsulates:
 """
 
 import asyncio
+import logging
 import os
 import time
 import json
@@ -134,6 +135,70 @@ def _agent_definition_supports_hooks() -> bool:
         return False
 
 
+# =============================================================================
+# LOGGING & CAPTURE UTILS
+# =============================================================================
+
+class QueueLogHandler(logging.Handler):
+    """Logging handler that pushes records to an asyncio Queue."""
+    def __init__(self, queue: asyncio.Queue):
+        super().__init__()
+        self.queue = queue
+        self.loop = asyncio.get_running_loop()
+
+    def emit(self, record: logging.LogRecord):
+        try:
+            msg = self.format(record)
+            event = AgentEvent(
+                type=EventType.STATUS,
+                data={
+                    "status": msg,
+                    "level": record.levelname,
+                    "prefix": f"[{record.name}]",
+                    "is_log": True,
+                }
+            )
+            # Use call_soon_threadsafe to basic-safety across threads if needed
+            self.loop.call_soon_threadsafe(self.queue.put_nowait, event)
+        except Exception:
+            self.handleError(record)
+
+class StreamCapture:
+    """Captures stdout/stderr and mirrors to a queue while keeping original output."""
+    def __init__(self, queue: asyncio.Queue, stream, level="INFO", prefix="[STDOUT]"):
+        self.queue = queue
+        self.stream = stream
+        self.level = level
+        self.prefix = prefix
+        self.loop = asyncio.get_running_loop()
+
+    def write(self, text: str):
+        # Mirror to original stream
+        self.stream.write(text)
+        
+        # Determine if we should send to queue (filter empty newlines if desired)
+        if text.strip():
+            event = AgentEvent(
+                type=EventType.STATUS,
+                data={
+                    "status": text.strip(),
+                    "level": self.level,
+                    "prefix": self.prefix,
+                    "is_log": True,
+                }
+            )
+            try:
+                self.loop.call_soon_threadsafe(self.queue.put_nowait, event)
+            except Exception:
+                pass
+
+    def flush(self):
+        self.stream.flush()
+
+    def isatty(self):
+        return getattr(self.stream, "isatty", lambda: False)()
+
+
 def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
     """
     Check if any sub-agent definitions have explicit hooks configured.
@@ -141,10 +206,6 @@ def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
     NOTE: As of SDK 0.1.3+, hooks from the MAIN agent's ClaudeAgentOptions
     automatically apply to all sub-agents. The hook system is "agent-agnostic"
     and operates at the CLI level.
-    
-    This function warns if someone tries to configure hooks directly in 
-    AgentDefinition (which the class doesn't support), not that hooks don't
-    work for sub-agents (they do, via inheritance).
     """
     if not agents or _agent_definition_supports_hooks():
         return
@@ -918,6 +979,31 @@ class UniversalAgent:
         if LOGFIRE_TOKEN:
             logfire.set_baggage(run_id=self.run_id)
 
+        # [NEW] Centralized Logging: Create run.log in workspace
+        try:
+            log_path = os.path.join(self.workspace_dir, "run.log")
+            
+            # Create file handler
+            file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+            file_handler.setFormatter(logging.Formatter(
+                '%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
+                datefmt='%H:%M:%S'
+            ))
+            
+            # Add to root logger to capture all libraries (composio, etc)
+            root_logger = logging.getLogger()
+            root_logger.addHandler(file_handler)
+            
+            # Also ensure our specific logger has it
+            logger = logging.getLogger("universal_agent")
+            if logger.propagate is False:
+                logger.addHandler(file_handler)
+                
+            logging.info(f"📝 Centralized logging initialized: {log_path}")
+            
+        except Exception as e:
+            print(f"Failed to setup run.log: {e}")
+
     def bind_workspace(self, new_workspace: str) -> None:
         """Update workspace for URW phase transitions."""
         self.workspace_dir = new_workspace
@@ -1221,35 +1307,25 @@ class UniversalAgent:
             },
         ))
 
-        # Setup log bridging from mcp_server
-        try:
-            from mcp_server import set_mcp_log_callback
-            
-            def bridge_log_to_queue(message: str, level: str, prefix: str):
-                """Callback to push tool logs into the agent event queue."""
-                if self._event_queue:
-                    # Map level to some visual indicator if needed
-                    # For now just push as STATUS with is_log=True
-                    event = AgentEvent(
-                        type=EventType.STATUS,
-                        data={
-                            "status": message,
-                            "level": level,
-                            "prefix": prefix,
-                            "is_log": True,
-                        }
-                    )
-                    try:
-                        # Safe for both sync and async calls
-                        loop = asyncio.get_running_loop()
-                        loop.call_soon_threadsafe(self._event_queue.put_nowait, event)
-                    except Exception:
-                        pass
+        # Setup log bridging from mcp_server (Deprecated/No-op for subprocess, but kept for structure)
+        # Instead, we attach our own handlers to capture root logging + stdout/stderr
+        import logging
+        import sys
 
-            set_mcp_log_callback(bridge_log_to_queue)
-        except ImportError:
-            # Fallback if mcp_server is not importable
-            pass
+        # 1. Attach QueueLogHandler to root logger
+        queue_handler = QueueLogHandler(self._event_queue)
+        # queue_handler.setLevel(logging.INFO) 
+        root_logger = logging.getLogger()
+        root_logger.addHandler(queue_handler)
+
+        # 2. Capture stdout/stderr
+        # We replace sys.stdout/stderr with our wrapper. 
+        # CAUTION: threading/async safety is managed by call_soon_threadsafe.
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+        
+        sys.stdout = StreamCapture(self._event_queue, original_stdout, level="INFO", prefix="[STDOUT]")  # type: ignore
+        sys.stderr = StreamCapture(self._event_queue, original_stderr, level="ERROR", prefix="[STDERR]") # type: ignore
 
         async def sdk_worker():
             """Worker to consume SDK events and push to queue."""
@@ -1260,6 +1336,9 @@ class UniversalAgent:
                 if self._event_queue:
                     await self._event_queue.put(None)  # Sentinel for completion
             except Exception as e:
+                # Log traceback explicitly to capture it
+                import traceback
+                traceback.print_exc()
                 if self._event_queue:
                     await self._event_queue.put(AgentEvent(type=EventType.ERROR, data={"error": str(e)}))
                     await self._event_queue.put(None)
@@ -1278,7 +1357,15 @@ class UniversalAgent:
                         break
                     yield event
             finally:
-                # Cleanup
+                # Cleanup Hooks
+                try:
+                    root_logger.removeHandler(queue_handler)
+                    sys.stdout = original_stdout
+                    sys.stderr = original_stderr
+                except Exception:
+                    pass
+
+                # Cleanup Legacy Hook
                 try:
                     from mcp_server import set_mcp_log_callback
                     set_mcp_log_callback(None)
