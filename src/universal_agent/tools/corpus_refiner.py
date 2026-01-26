@@ -248,53 +248,72 @@ async def extract_batch(
             ]
         }
         
-        start = time.perf_counter()
-        try:
-            response = await session.post(
-                f"{BASE_URL}/v1/messages",
-                headers=headers,
-                json=payload
-            )
-            elapsed = time.perf_counter() - start
-            
-            if response.status_code == 200:
-                data = response.json()
-                content = data.get("content", [{}])[0].get("text", "")
-                result = {
-                    "success": True,
-                    "batch_size": len(articles),
-                    "output": content,
-                    "latency_ms": int(elapsed * 1000),
-                    "tokens_in": data.get("usage", {}).get("input_tokens", 0),
-                    "tokens_out": data.get("usage", {}).get("output_tokens", 0),
-                }
-                if LOGFIRE_AVAILABLE and logfire and span_context:
-                    logfire.info(
-                        "batch_extraction_complete",
-                        tokens_in=result["tokens_in"],
-                        tokens_out=result["tokens_out"],
-                        latency_ms=result["latency_ms"],
-                    )
-                    span_context.__exit__(None, None, None)
-                return result
-            elif response.status_code == 429:
-                # Rate limited - wait and retry
-                await asyncio.sleep(2)
-                return await extract_batch(session, articles, semaphore)
-            else:
+        MAX_RETRIES = 5
+        base_delay = 2
+        
+        for attempt in range(MAX_RETRIES):
+            start = time.perf_counter()
+            try:
+                response = await session.post(
+                    f"{BASE_URL}/v1/messages",
+                    headers=headers,
+                    json=payload,
+                    timeout=90.0 # Increased timeout
+                )
+                elapsed = time.perf_counter() - start
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    content = data.get("content", [{}])[0].get("text", "")
+                    result = {
+                        "success": True,
+                        "batch_size": len(articles),
+                        "output": content,
+                        "latency_ms": int(elapsed * 1000),
+                        "tokens_in": data.get("usage", {}).get("input_tokens", 0),
+                        "tokens_out": data.get("usage", {}).get("output_tokens", 0),
+                    }
+                    if LOGFIRE_AVAILABLE and logfire and span_context:
+                        logfire.info(
+                            "batch_extraction_complete",
+                            tokens_in=result["tokens_in"],
+                            tokens_out=result["tokens_out"],
+                            latency_ms=result["latency_ms"],
+                        )
+                    return result
+                elif response.status_code == 429:
+                    # Rate limited - exponential backoff
+                    delay = base_delay * (2 ** attempt)
+                    print(f"  ⚠️ [429] Rate limited (Batch {batch_index}). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    return {
+                        "success": False,
+                        "batch_size": len(articles),
+                        "error": f"HTTP {response.status_code}: {response.text[:200]}",
+                        "latency_ms": int(elapsed * 1000),
+                    }
+            except Exception as e:
+                # For network errors, also consider retrying if we haven't exhausted attempts
+                if attempt < MAX_RETRIES - 1:
+                    delay = base_delay * (2 ** attempt)
+                    print(f"  ⚠️ [Network Error] {type(e).__name__} (Batch {batch_index}). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
+                    await asyncio.sleep(delay)
+                    continue
                 return {
                     "success": False,
                     "batch_size": len(articles),
-                    "error": f"HTTP {response.status_code}: {response.text[:200]}",
-                    "latency_ms": int(elapsed * 1000),
+                    "error": f"{type(e).__name__}: {str(e)}",
+                    "latency_ms": 0,
                 }
-        except Exception as e:
-            return {
-                "success": False,
-                "batch_size": len(articles),
-                "error": str(e),
-                "latency_ms": 0,
-            }
+        
+        return {
+            "success": False,
+            "batch_size": len(articles),
+            "error": "Max retries exceeded for 429/Network errors",
+            "latency_ms": 0,
+        }
 
 
 async def generate_report_outline(corpus_content: str, articles: list) -> str:
@@ -340,20 +359,36 @@ OUTPUT FORMAT:
         "messages": [{"role": "user", "content": prompt}],
     }
     
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                f"{BASE_URL}/v1/messages",
-                headers=headers,
-                json=payload
-            )
-            if response.status_code == 200:
-                data = response.json()
-                return data.get("content", [{}])[0].get("text", "## Key Themes\n- Unable to generate outline")
-            else:
-                return "## Key Themes\n- Outline generation failed"
-    except Exception as e:
-        return f"## Key Themes\n- Outline error: {str(e)[:100]}"
+    MAX_RETRIES = 3
+    base_delay = 2
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(
+                    f"{BASE_URL}/v1/messages",
+                    headers=headers,
+                    json=payload
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    return data.get("content", [{}])[0].get("text", "## Key Themes\n- Unable to generate outline")
+                elif response.status_code == 429:
+                    delay = base_delay * (2 ** attempt)
+                    print(f"  ⚠️ [429] Rate limited (Outline). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    return f"## Key Themes\n- Outline generation failed (HTTP {response.status_code})"
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                delay = base_delay * (2 ** attempt)
+                print(f"  ⚠️ [Network Error] {type(e).__name__} (Outline). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
+                await asyncio.sleep(delay)
+                continue
+            return f"## Key Themes\n- Outline error: {str(e)[:100]}"
+    
+    return "## Key Themes\n- Outline failed after max retries"
 
 
 async def refine_corpus(

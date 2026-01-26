@@ -464,6 +464,7 @@ from universal_agent.identity import (
     resolve_email_recipients,
     validate_recipient_policy,
     load_identity_registry,
+    resolve_user_id,
 )
 from universal_agent.harness import ask_user_questions, present_plan_summary
 
@@ -5845,13 +5846,8 @@ async def setup_session(
     # 3. Initialize Composio    # User Identity
     # Using specific entity ID that holds the active integrations (GitHub, Linear, Notion, etc.)
     # user_id = "user_123"  # Consolidated to the primary admin identity
-    user_id = os.getenv("COMPOSIO_USER_ID") or os.getenv("DEFAULT_USER_ID")
-    if not user_id:
-        print(
-            "⚠️  WARNING: No COMPOSIO_USER_ID or DEFAULT_USER_ID found, defaulting to 'unknown_user'"
-        )
-        user_id = "unknown_user"
-        # raise ValueError("COMPOSIO_USER_ID or DEFAULT_USER_ID must be set in .env")
+    user_id = resolve_user_id()
+    print(f"DEBUG: Resolved Identity -> {user_id}")
 
     from universal_agent.utils.composio_discovery import (
         discover_connected_toolkits,

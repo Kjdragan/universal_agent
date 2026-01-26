@@ -22,6 +22,7 @@ from universal_agent.api.events import (
     create_error_event,
     create_status_event,
 )
+from universal_agent.identity import resolve_user_id
 
 
 class AgentBridge:
@@ -48,11 +49,8 @@ class AgentBridge:
         """Create a new agent session."""
         # Resolve user_id if not provided
         if not user_id:
-            env_user = os.getenv("COMPOSIO_USER_ID")
-            default_user = os.getenv("DEFAULT_USER_ID")
-            print(f"DEBUG BRIDGE: Resolving user_id. Env COMPOSIO_USER_ID={env_user}, DEFAULT_USER_ID={default_user}")
-            user_id = env_user or default_user or "user_ui"
-            print(f"DEBUG BRIDGE: Final user_id={user_id}")
+            user_id = resolve_user_id()
+            print(f"DEBUG BRIDGE: Resolved user_id={user_id}")
             
         # Create workspace directory
         if workspace_dir:
@@ -104,7 +102,7 @@ class AgentBridge:
             return None
 
         # Create new agent instance in existing workspace
-        user_id = os.getenv("COMPOSIO_USER_ID") or os.getenv("DEFAULT_USER_ID") or "user_ui"
+        user_id = resolve_user_id()
         self.current_agent = UniversalAgent(
             workspace_dir=str(workspace_dir),
             user_id=user_id,

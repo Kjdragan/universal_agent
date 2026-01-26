@@ -29,6 +29,7 @@ from universal_agent.gateway import (
     GatewaySessionSummary,
 )
 from universal_agent.agent_core import AgentEvent, EventType
+from universal_agent.identity import resolve_user_id
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ WORKSPACES_DIR = BASE_DIR / "AGENT_RUN_WORKSPACES"
 
 
 class CreateSessionRequest(BaseModel):
-    user_id: Optional[str] = "user_gateway"
+    user_id: Optional[str] = None
     workspace_dir: Optional[str] = None
 
 
@@ -190,7 +191,7 @@ async def create_session(request: CreateSessionRequest):
     gateway = get_gateway()
     try:
         session = await gateway.create_session(
-            user_id=request.user_id or "user_gateway",
+            user_id=resolve_user_id(request.user_id),
             workspace_dir=request.workspace_dir,
         )
         store_session(session)

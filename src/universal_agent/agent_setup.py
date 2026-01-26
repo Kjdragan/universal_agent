@@ -81,7 +81,9 @@ class AgentSetup:
         verbose: bool = True,
     ):
         self.workspace_dir = workspace_dir
-        self.user_id = user_id or os.getenv("COMPOSIO_USER_ID") or os.getenv("DEFAULT_USER_ID") or "user_123"
+        from universal_agent.identity.resolver import resolve_user_id
+        self.workspace_dir = workspace_dir
+        self.user_id = resolve_user_id(user_id)
         self.enable_skills = enable_skills
         self.enable_memory = enable_memory and not os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
         self.verbose = verbose
