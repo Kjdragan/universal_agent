@@ -1,0 +1,21 @@
+{
+    "massive_request": "Compare the ESG performance of Coca-Cola vs PepsiCo for 2024. Email report to kevin.dragan@outlook.com",
+    "questions_and_answers": [
+        {
+            "question": "What is the primary purpose of this comparison?",
+            "answer": "Investment research and sustainability benchmarking."
+        },
+        {
+            "question": "What key ESG frameworks should be used?",
+            "answer": "GRI and SASB standards."
+        },
+        {
+            "question": "Are there specific years to include besides 2024?",
+            "answer": "Focus on 2024 data, but include 2023 for trend analysis."
+        },
+        {
+            "question": "What is the desired output format?",
+            "answer": "A comprehensive HTML report converted to PDF."
+        }
+    ]
+}

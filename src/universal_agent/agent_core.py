@@ -972,6 +972,9 @@ class UniversalAgent:
         # Async queue for merging events from multiple sources (SDK + tool logs)
         self._event_queue: Optional[asyncio.Queue] = None
         self._hooks = hooks
+        
+        # Initialize History
+        self.history = MessageHistory(system_prompt_tokens=2000)
 
     async def send_agent_event(self, event_type: EventType, data: dict) -> None:
         """

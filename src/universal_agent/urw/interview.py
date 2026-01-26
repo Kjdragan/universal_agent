@@ -31,6 +31,20 @@ from .plan_schema import Plan, Phase, AtomicTask, TaskStatus
 
 
 # -----------------------------------------------------------------------------
+# Auto-Interview Support
+# -----------------------------------------------------------------------------
+
+_AUTO_ANSWERS: List[str] = []
+
+def set_auto_answers(answers: List[str]) -> None:
+    """Set the queue of auto-answers for the interview."""
+    global _AUTO_ANSWERS
+    _AUTO_ANSWERS = list(answers)
+    print(f"🤖 Auto-Interview Enabled: Queued {len(_AUTO_ANSWERS)} answers.")
+
+
+
+# -----------------------------------------------------------------------------
 # Interview State Management
 # -----------------------------------------------------------------------------
 
@@ -97,6 +111,13 @@ async def ask_user_tool(args: Dict[str, Any]) -> Dict[str, Any]:
     print(f"\n📋 [{category.upper()}]")
     print(f"❓ {question}")
     
+    # Check for auto-answers
+    if _AUTO_ANSWERS:
+        answer = _AUTO_ANSWERS.pop(0)
+        print(f"\n🤖 [AUTO-ANSWER] Using pre-filled answer: {answer}")
+        print(f"\n🤖 [AUTO-ANSWER] Using pre-filled answer: {answer}")
+        return {"content": [{"type": "text", "text": f"User answered: {answer}"}]}
+
     if options and len(options) > 0:
         for i, opt in enumerate(options, 1):
             print(f"   {i}. {opt}")
@@ -162,8 +183,8 @@ The Plan must include:
 - Each phase has a descriptive prompt that can be fed to the multi-agent system
 
 ## Phase Design Principle:
-- **Phase = New Context Window**: Only create multiple phases if the task is massive and requires clearing memory between steps.
-- **Single Phase Default**: For most workflows (e.g., Research -> Write -> Email), put ALL steps as Atomic Tasks into a **SINGLE PHASE**.
+- **Phase = New Context Window**: Use multiple phases for tasks that have distinct logical steps (e.g., Research vs. Writing) or require >4 atomic tasks.
+- **Multi-Phase Strategy**: decomposing the work into smaller, verifiable chunks is preferred over a single massive phase.
 - **Atomic Task**: A specific action (search, write file, calculate) that the agent performs.
 - **Use Case**: Providing "subatomic" details (specific constraints, attachment requirements, known fields) in the `use_case` field is highly encouraged to guide the tool router.
 

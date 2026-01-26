@@ -1,0 +1,74 @@
+{
+    "name": "ESG Comparison: Coca-Cola vs PepsiCo 2024",
+    "phases": [
+        {
+            "name": "Research & Analysis Phase",
+            "order": 1,
+            "tasks": [
+                {
+                    "name": "Research Company Sustainability Reports",
+                    "description": "Retrieve official 2024 ESG reports for Coca-Cola and PepsiCo. Focus on environmental metrics (carbon, water, waste), social metrics (labor, diversity), and governance.",
+                    "use_case": "Gather primary source data for comparison.",
+                    "subagent": "research-specialist",
+                    "success_criteria": [
+                        "Official 2024 reports located and key metrics extracted."
+                    ]
+                },
+                {
+                    "name": "Gather Third-Party ESG Ratings",
+                    "description": "Collect ESG ratings from MSCI, Sustainalytics, and S&P Global for both companies. Identify industry leaders for benchmarking.",
+                    "use_case": "Provide objective third-party verification and context.",
+                    "subagent": "research-specialist",
+                    "success_criteria": [
+                        "Ratings from at least 2 major agencies retrieved."
+                    ]
+                },
+                {
+                    "name": "Verify Data from SEC & CDP",
+                    "description": "Cross-reference key claims with SEC filings and CDP disclosures to ensure accuracy.",
+                    "use_case": "Validate self-reported data against regulatory filings.",
+                    "subagent": "research-specialist",
+                    "success_criteria": [
+                        "Key data points verified against regulatory submissions."
+                    ]
+                },
+                {
+                    "name": "Analyze Environmental Performance",
+                    "description": "Deep dive analysis of environmental pillars: Carbon emissions, water usage, waste management, with a specific focus on plastic and sustainability initiatives.",
+                    "use_case": "Detailed comparison of environmental impact.",
+                    "subagent": "report-writer",
+                    "success_criteria": [
+                        "Comparative analysis of E-pillar generated."
+                    ]
+                },
+                {
+                    "name": "Analyze Social & Governance Performance",
+                    "description": "Analyze social (labor, diversity, community) and governance (ethics, board) performance.",
+                    "use_case": "Detailed comparison of S and G pillars.",
+                    "subagent": "report-writer",
+                    "success_criteria": [
+                        "Comparative analysis of S and G pillars generated."
+                    ]
+                },
+                {
+                    "name": "Create Comprehensive Report",
+                    "description": "Generate a 5-10 page professional HTML report comparing Coca-Cola vs PepsiCo ESG performance. Include executive summary, data tables, and visualizations. Benchmark against industry leaders.",
+                    "use_case": "Final deliverable creation.",
+                    "subagent": "report-writer",
+                    "success_criteria": [
+                        "Professional HTML report generated."
+                    ]
+                },
+                {
+                    "name": "Email Report",
+                    "description": "Email the final report as an attachment to kevin.dragan@outlook.com. Include a brief executive summary in the email body.",
+                    "use_case": "Deliver findings to stakeholder.",
+                    "subagent": "computer-user",
+                    "success_criteria": [
+                        "Email sent successfully with attachment."
+                    ]
+                }
+            ]
+        }
+    ]
+}
