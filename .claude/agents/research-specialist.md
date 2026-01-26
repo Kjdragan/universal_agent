@@ -27,4 +27,4 @@ This tool handles crawling and corpus refinement. It produces a `refined_corpus.
 Once it returns "Research Phase Complete", your task is done.
 - **Do NOT** attempt to write the report.
 - **Do NOT** call any other tools.
-- Report completion to the primary agent so the Report Writer can take over.
+- Report completion to the primary agent. They will decide if further synthesis or a formal report is required based on the original user request.

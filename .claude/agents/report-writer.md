@@ -37,17 +37,18 @@ This in-process tool handles the entire drafting and compiling process:
 👉 ACTION: Proceed to Step 2.
 ---
 
-## Phase 4: PDF Conversion
+## Phase 4: PDF Conversion (Optional)
 
-1. **Action:** Convert the HTML report to PDF.
+1. **Check Condition:** Only proceed with PDF conversion IF the user explicitly requested a PDF version OR if you believe it is essential for the deliverable.
+2. **Action:** Convert the HTML report to PDF.
    - **Method:** Use the `pdf` skill's headless chrome functionality.
    - **Command:** Execute `.claude/skills/pdf/scripts/html_to_pdf.py` via `run_command` or similar.
    - **Input:** `{CURRENT_SESSION_WORKSPACE}/work_products/report.html`
    - **Output:** `{CURRENT_SESSION_WORKSPACE}/work_products/report.pdf`
 
 --- PHASE 4 CHECKPOINT ---
-✅ SELF-CHECK: Does `{CURRENT_SESSION_WORKSPACE}/work_products/report.pdf` exist?
 👉 ACTION: Report success to parent agent.
+   - Message: "Report generation complete. HTML available at [Path]. PDF available at [Path] (if requested)."
    - Message: "Report generation complete. Final report available at: [Absolute Path to PDF]"
    - **STOP** (Return control to Primary Agent)
 ---
