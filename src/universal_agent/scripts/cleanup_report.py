@@ -169,7 +169,7 @@ async def cleanup_report_async(workspace_path: Path) -> str:
     try:
         resp = await client.messages.create(
             model=MODEL,
-            max_tokens=4000, # Increased for safety
+            max_tokens=8192, # Increased to prevent truncation of large JSONs
             messages=[{"role": "user", "content": prompt}],
         )
     except Exception as exc:

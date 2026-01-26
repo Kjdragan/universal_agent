@@ -32,6 +32,7 @@ export interface WebSocketEvent {
   type: EventType;
   data: EventData;
   timestamp: number;
+  time_offset?: number;
 }
 
 export type EventData =
@@ -55,6 +56,8 @@ export type EventData =
 
 export interface TextEventData {
   text: string;
+  author?: string;
+  time_offset?: number;
 }
 
 // =============================================================================
@@ -76,6 +79,7 @@ export interface ToolCall {
   timestamp?: number; // Added for interleaved sorting
   result?: ToolResult;
   status: "pending" | "running" | "complete" | "error";
+  error?: string; // Optional top-level error
 }
 
 // =============================================================================
@@ -215,9 +219,11 @@ export interface Message {
   role: MessageRole;
   content: string;
   timestamp: number;
+  time_offset: number;
   tool_calls?: ToolCall[];
   thinking?: string;
   is_complete: boolean;
+  author?: string;
 }
 
 // =============================================================================

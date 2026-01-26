@@ -257,6 +257,7 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
         "type": event.type.value if hasattr(event.type, "value") else str(event.type),
         "data": event.data,
         "timestamp": datetime.now().isoformat(),
+        "time_offset": event.data.get("time_offset") if isinstance(event.data, dict) else None,
     }
 
 

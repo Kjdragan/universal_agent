@@ -3236,6 +3236,121 @@ async def _run_research_pipeline_legacy(query: str, task_name: str = "default") 
 
 
 
+@mcp.tool()
+@trace_tool_output
+async def _run_research_phase_legacy(query: str, task_name: str = "default") -> str:
+    """
+    Execute Phase 1 of the Research Pipeline: Crawl -> Refine.
+    This creates the 'refined_corpus.md' needed for the report writer.
+    """
+    workspace = _resolve_workspace()
+    if not workspace:
+        return "Error: CURRENT_SESSION_WORKSPACE not set."
+
+    mcp_log(f"🚀 [Research Phase] Starting crawling & refinement for: '{query}'", level="INFO", prefix="")
+    
+    # Verify search results exist
+    search_dir = os.path.join(workspace, "search_results")
+    if not os.path.isdir(search_dir):
+        return (
+            "❌ Research Phase Failed: No search_results/ directory found.\n"
+            "The agent must call COMPOSIO_MULTI_EXECUTE_TOOL with search queries BEFORE calling this tool."
+        )
+    
+    json_files = [f for f in os.listdir(search_dir) if f.endswith(".json")]
+    if not json_files:
+        return (
+            "❌ Research Phase Failed: search_results/ directory is empty.\n"
+            "The agent must call COMPOSIO_MULTI_EXECUTE_TOOL with search queries BEFORE calling this tool."
+        )
+    
+    mcp_log(f"[Research Phase] Found {len(json_files)} search result file(s). Proceeding...", level="DEBUG")
+
+    # 1. FINALIZE (Crawl & Refine)
+    try:
+        mcp_log("[Research Phase] Step 1/1: Crawling & Refining...", level="INFO")
+        res = await finalize_research(session_dir=workspace, task_name=task_name)
+        if "error" in res.lower() and "status" not in res.lower():
+             return f"❌ Research Phase Failed: {res}"
+    except Exception as e:
+        return f"❌ Research Phase Failed: {e}"
+        
+    return f"✅ Research Phase Complete! Refined corpus available in tasks/{task_name}/refined_corpus.md"
+
+
+@mcp.tool()
+@trace_tool_output
+async def _run_report_generation_legacy(query: str, task_name: str = "default", corpus_data: str = None) -> str:
+    """
+    Execute Phase 2 of the Research Pipeline: Outline -> Draft -> Cleanup -> Compile.
+    This consumes 'refined_corpus.md' and generates 'report.html'.
+    
+    Args:
+        query: Report topic/query
+        task_name: Unique task identifier
+        corpus_data: Optional text content to use as the corpus (auto-creates refined_corpus.md)
+    """
+    workspace = _resolve_workspace()
+    if not workspace:
+        return "Error: CURRENT_SESSION_WORKSPACE not set."
+
+    mcp_log(f"🚀 [Report Gen] Starting report generation for: '{query}'", level="INFO", prefix="")
+    
+    corpus_path = os.path.join(workspace, "tasks", task_name, "refined_corpus.md")
+
+    # If explicit corpus data provided, write it to disk first
+    if corpus_data:
+        try:
+            mcp_log("[Report Gen] Using provided corpus data...", level="INFO")
+            os.makedirs(os.path.dirname(corpus_path), exist_ok=True)
+            with open(corpus_path, "w", encoding="utf-8") as f:
+                f.write(corpus_data)
+        except Exception as e:
+            return f"❌ Failed to write corpus_data to {corpus_path}: {e}"
+    
+    # Verify refined corpus exists
+    if not os.path.exists(corpus_path):
+        return (
+            f"❌ Report Gen Failed: Refined corpus not found at {corpus_path}.\n"
+            "The Research Specialist must complete the research phase first."
+        )
+
+    # 1. OUTLINE
+    try:
+        mcp_log("[Report Gen] Step 1/4: Generating Outline...", level="INFO")
+        res = await generate_outline(topic=query, task_name=task_name)
+        if "Error" in res:
+             return f"❌ Report Gen Failed at Outline Step: {res}"
+    except Exception as e:
+        return f"❌ Report Gen Failed at Outline Step: {e}"
+
+    # 2. DRAFT
+    try:
+        mcp_log("[Report Gen] Step 2/4: Drafting Sections (Parallel)...", level="INFO")
+        res = await draft_report_parallel(task_name=task_name)
+        if "Error" in res:
+             return f"❌ Report Gen Failed at Drafting Step: {res}"
+    except Exception as e:
+         return f"❌ Report Gen Failed at Drafting Step: {e}"
+
+    # 3. CLEANUP
+    try:
+        mcp_log("[Report Gen] Step 3/4: Cleaning & Synthesizing (LLM Audit)...", level="INFO")
+        res = await cleanup_report()
+        if "Error" in res:
+             return f"❌ Report Gen Failed at Cleanup Step: {res}"
+    except Exception as e:
+         return f"❌ Report Gen Failed at Cleanup Step: {e}"
+
+    # 4. COMPILE
+    try:
+        mcp_log("[Report Gen] Step 4/4: Compiling HTML...", level="INFO")
+        res = compile_report(theme="modern")
+        return f"✅ Report Generation Complete!\n\n{res}"
+    except Exception as e:
+        return f"❌ Report Gen Failed at Compile Step: {e}"
+
+
 if __name__ == "__main__":
     # Run the MCP server using stdio transport
     mcp.run(transport="stdio")
