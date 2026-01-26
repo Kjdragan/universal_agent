@@ -68,6 +68,7 @@ class HarnessConfig:
     force_new_client_between_phases: bool = False
     persist_to_sqlite: bool = True
     verbose: bool = True
+    max_iterations: int = 20
     # Stage 5: Gateway integration
     use_gateway: bool = False
     gateway_url: Optional[str] = None  # If set, use external gateway
@@ -422,6 +423,18 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         from universal_agent.urw.harness_helpers import compact_agent_context
         compact_result = compact_agent_context(client, self.config.force_new_client_between_phases)
         self._log(f"Context: {compact_result['notes']}")
+
+        if not compact_result.get("keep_client", True):
+            if hasattr(client, "history"):
+                if hasattr(client.history, "clear_history"):
+                    client.history.clear_history()
+                elif hasattr(client.history, "reset"): # Support for MessageHistory
+                    client.history.reset()
+                else:
+                    client.history = []
+                self._log("🧼 Client history cleared (Phase Boundary Hard Reset)")
+            else:
+                self._log("⚠️ Could not clear history: client.history not available")
         
         # --- Heuristic Context Injection ---
         # "Prod" the agent to use specialists if the task description matches known capabilities.
@@ -506,6 +519,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
                         client,
                         current_prompt,
                         session_path,
+                        max_iterations=self.config.max_iterations,
                     )
                 
                 # Capture output
@@ -965,23 +979,17 @@ async def run_harness(
     skip_interview: bool = False,
     plan_file: Optional[Path] = None,
     template_file: Optional[Path] = None,
+    max_iterations: int = 20,
 ) -> Dict[str, Any]:
     """
     Run the complete harness flow.
-    
-    Args:
-        massive_request: The user's massive request
-        workspaces_root: Root directory for workspaces
-        process_turn: The main agent's process_turn function
-        client: The ClaudeSDKClient
-        config: Optional config
-        skip_interview: If True, skip interview and use plan_file
-        plan_file: Path to JSON plan file (used when skip_interview=True)
-        template_file: Path to interview transcript JSON (for template-based planning)
-        
-    Returns:
-        Summary dict
     """
+    if config is None:
+        config = HarnessConfig(max_iterations=max_iterations)
+    else:
+        # Override if passed explicitly
+        config.max_iterations = max_iterations
+
     orchestrator = HarnessOrchestrator(workspaces_root, config)
     return await orchestrator.run(
         massive_request, 
