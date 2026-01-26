@@ -4741,7 +4741,7 @@ async def continue_job_run(
             continue
 
 
-async def run_conversation(client, query: str, start_ts: float, iteration: int = 1):
+async def run_conversation(client, query: str, start_ts: float, iteration: int = 1, max_iterations: int = 20):
     """Run a single conversation turn with full tracing."""
     global \
         trace, \
@@ -4755,6 +4755,11 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
     step_id = str(uuid.uuid4())
     current_step_id = step_id
     step_index = iteration
+
+    if iteration > max_iterations:
+        print(f"⚠️ Max iterations ({max_iterations}) reached. Forcing stop.")
+        # Return equivalent of "done"
+        return False, None, "Max iterations reached."
 
     if runtime_db_conn and run_id:
         try:
@@ -4929,7 +4934,12 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                                 # 3. Clear Context
                                 if hasattr(client, "history"):
-                                    client.history = []
+                                    if hasattr(client.history, "clear_history"):
+                                        client.history.clear_history()
+                                    elif hasattr(client.history, "reset"):
+                                        client.history.reset()
+                                    else:
+                                        client.history = []
                                     print("🧹 Client history cleared (Context Reset).")
 
                                 # 4. Reset Token Counter for new session
@@ -5576,7 +5586,8 @@ def parse_cli_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-iterations",
         type=int,
-        help="Maximum number of harness iterations (default: 10)",
+        default=20,
+        help="Maximum number of harness iterations (default: 20)",
     )
     parser.add_argument(
         "--completion-promise",
@@ -5625,10 +5636,10 @@ def parse_cli_args() -> argparse.Namespace:
         help="Max iterations per URW task.",
     )
     parser.add_argument(
-        "--urw-max-total-iterations",
+        "--max-workers",
         type=int,
-        default=200,
-        help="Max total URW iterations.",
+        default=3,
+        help="Maximum concurrent workers (default: 3).",
     )
     parser.add_argument(
         "--urw-iteration-timeout",
@@ -6252,6 +6263,7 @@ async def process_turn(
     workspace_dir: str,
     force_complex: bool = False,
     execution_session: Optional[ExecutionSession] = None,
+    max_iterations: int = 20,
 ) -> ExecutionResult:
     """
     Process a single user query.
@@ -6301,6 +6313,7 @@ async def process_turn(
                 workspaces_root=workspaces_root,
                 process_turn=process_turn,
                 client=client,
+                max_iterations=args.max_iterations,
             )
             
             summary = f"Harness complete: {result.get('phases_completed', 0)} phases completed"
@@ -6350,7 +6363,7 @@ async def process_turn(
 
         while True:
             needs_input, auth_link, final_text = await run_conversation(
-                client, current_query, start_ts, iteration
+                client, current_query, start_ts, iteration, max_iterations=max_iterations
             )
             final_response_text = final_text  # Capture for printing after summary
 
@@ -6520,7 +6533,8 @@ async def main(args: argparse.Namespace):
         tool_ledger, \
         provider_session_forked_from, \
         current_execution_session, \
-        gateway_mode_active
+        gateway_mode_active, \
+        current_step_id
 
     # Create main span for entire execution
     main_span = logfire.span("standalone_composio_test")
@@ -7335,6 +7349,7 @@ async def main(args: argparse.Namespace):
                                         workspace_dir,
                                         force_complex=force_complex_for_harness,
                                         execution_session=current_execution_session,
+                                        max_iterations=args.max_iterations,
                                     )
                                 else:
                                     gateway_step_id = str(uuid.uuid4())
@@ -7439,6 +7454,7 @@ async def main(args: argparse.Namespace):
                                 workspace_dir,
                                 force_complex=force_complex_for_harness,
                                 execution_session=current_execution_session,
+                                max_iterations=args.max_iterations,
                             )
                     except HarnessError as he:
                         # [Harness Error Recovery]
@@ -7466,7 +7482,17 @@ async def main(args: argparse.Namespace):
                         pending_prompt = failure_alert
 
                         # 4. Clear Client History (Force restart)
-                        client.history.clear_history()
+                        if hasattr(client, "history"):
+                            if hasattr(client.history, "clear_history"):
+                                client.history.clear_history()
+                            elif hasattr(client.history, "reset"):
+                                client.history.reset()
+                            else:
+                                client.history = []
+                        else:
+                            # If no history attribute, maybe we can't clear it easily, 
+                            # but logging failure allows debugging
+                            logfire.warning("harness_restart_history_clear_failed")
 
                         # 5. Continue loop (skips existing post-turn logic, goes to next iteration)
                         continue

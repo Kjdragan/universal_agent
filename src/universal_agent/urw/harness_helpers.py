@@ -68,18 +68,22 @@ def compact_agent_context(client: Any, force_new_client: bool = False) -> dict:
         - keep_client: True if current client should be kept
         - notes: explanation of action taken
     """
+    # Updated Strategy for harness (User Request 2026-01-26):
+    # 1. DEFAULT to hard reset (keep_client=False) for phase transitions.
+    #    Phases are intended to be "natural breaks" with clean context windows.
+    # 2. Injection logic in build_harness_context_injection() provides the necessary
+    #    continuity context (prior session paths).
+    
     if force_new_client:
-        # Full reset - caller will create new ClaudeSDKClient
         return {
             "keep_client": False,
-            "notes": "Hard reset - new client will be created (loses all memory)"
+            "notes": "Hard reset (Explicit) - new client will be created"
         }
     
-    # Default: Keep the client, let auto-compaction preserve summarized memory
-    # The session directory toggle is handled separately by toggle_session()
+    # Default: Clear client history for cleaner context between phases
     return {
-        "keep_client": True,
-        "notes": "Soft reset - keeping client for memory continuity via auto-compaction"
+        "keep_client": False,
+        "notes": "Hard reset (Default) - clearing history for clean phase start"
     }
 
 

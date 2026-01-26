@@ -275,8 +275,8 @@ class InterviewConductor:
     def _extract_plan_from_text(self, text: str) -> Optional[Plan]:
         """Attempt to extract and parse JSON Plan from text with normalization."""
         try:
-            # Look for JSON code block
-            match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+            # Look for JSON code block (optional "json" tag)
+            match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
             if not match:
                 # Look for just JSON object start/end
                 match = re.search(r"(\{.*\})", text, re.DOTALL)
@@ -328,7 +328,9 @@ class InterviewConductor:
                 
                 return Plan.model_validate(data)
         except Exception as e:
-            print(f"⚠️ JSON extraction failed: {e}")
+            # Silent fail on regex miss is fine, just logging for debug
+            # print(f"⚠️ JSON extraction failed: {e}")
+            pass
         return None
 
     async def conduct_interview(self, massive_request: str) -> Optional[Plan]:
@@ -352,6 +354,7 @@ class InterviewConductor:
         
         try:
             async with ClaudeSDKClient(options=options) as client:
+                # 1. Primary Interview Loop
                 with logfire.span("llm_api_wait", context="interview_conduct"):
                     await client.query(
                         f"User's massive task:\n\n{massive_request}\n\n"
@@ -359,33 +362,48 @@ class InterviewConductor:
                         "the requirements, then produce a structured Plan."
                     )
                 
-                with logfire.span("llm_response_stream", context="interview_conduct"):
-                    async for message in client.receive_response():
-                        # Check for structured output (the Plan)
-                        if hasattr(message, 'structured_output') and message.structured_output:
-                            try:
-                                plan = Plan.model_validate(message.structured_output)
-                                plan.massive_request = massive_request
-                                plan.harness_id = self.harness_id
-                                break
-                            except Exception as e:
-                                print(f"⚠️ Failed to parse plan: {e}")
-                    
-                        # Print assistant messages for visibility
-                        if isinstance(message, AssistantMessage):
-                            for block in message.content:
-                                if isinstance(block, TextBlock):
-                                    print(f"\n🤖 {block.text}")
-                                
-                                    # Fallback: parse plan from markdown text
-                                    if not plan:
-                                        extracted = self._extract_plan_from_text(block.text)
-                                        if extracted:
-                                            plan = extracted
-                                            plan.massive_request = massive_request
-                                            plan.harness_id = self.harness_id
-                                            break
-            
+                async def _process_stream():
+                    nonlocal plan
+                    with logfire.span("llm_response_stream", context="interview_conduct"):
+                        async for message in client.receive_response():
+                            # Check for structured output (the Plan)
+                            if hasattr(message, 'structured_output') and message.structured_output:
+                                try:
+                                    plan = Plan.model_validate(message.structured_output)
+                                    plan.massive_request = massive_request
+                                    plan.harness_id = self.harness_id
+                                    return True # Found plan
+                                except Exception as e:
+                                    print(f"⚠️ Failed to parse plan: {e}")
+                        
+                            # Print assistant messages for visibility
+                            if isinstance(message, AssistantMessage):
+                                for block in message.content:
+                                    if isinstance(block, TextBlock):
+                                        print(f"\n🤖 {block.text}")
+                                    
+                                        # Fallback: parse plan from markdown text
+                                        if not plan:
+                                            extracted = self._extract_plan_from_text(block.text)
+                                            if extracted:
+                                                plan = extracted
+                                                plan.massive_request = massive_request
+                                                plan.harness_id = self.harness_id
+                                                return True # Found plan
+                    return False
+
+                # Run main loop
+                await _process_stream()
+
+                # 2. Repair Loop (if no plan generated)
+                if not plan:
+                    print("\n⚠️ Plan not detected. Triggering repair request...")
+                    await client.query(
+                        "SYSTEM ALERT: You indicated the interview is complete, but you did not output the **structured JSON Plan object**.\n"
+                        "Please output the JSON Plan now using the schema/tool."
+                    )
+                    await _process_stream()
+
             if plan:
                 # Save interview log
                 self._save_interview_log(massive_request)
