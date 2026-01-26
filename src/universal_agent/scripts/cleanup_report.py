@@ -163,17 +163,35 @@ async def cleanup_report_async(workspace_path: Path) -> str:
 
     preprocessed_sections = preprocess_sections(original_sections)
 
-    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL)
+    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL, max_retries=3, timeout=120.0)
     prompt = build_cleanup_prompt(preprocessed_sections)
-
-    try:
-        resp = await client.messages.create(
-            model=MODEL,
-            max_tokens=8192, # Increased to prevent truncation of large JSONs
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except Exception as exc:
-        return f"Error during cleanup model call: {exc}"
+    
+    MAX_RETRIES = 3
+    base_delay = 5 # Longer delay for cleanup as it's a huge context
+    
+    resp = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = await client.messages.create(
+                model=MODEL,
+                max_tokens=8192, # Increased to prevent truncation of large JSONs
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = "429" in error_str or "too many requests" in error_str or "high concurrency" in error_str
+            
+            if is_rate_limit and attempt < MAX_RETRIES - 1:
+                delay = base_delay * (2 ** attempt)
+                print(f"  ⚠️ [429] Rate limited (Cleanup). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
+                await asyncio.sleep(delay)
+                continue
+            
+            return f"Error during cleanup model call: {e}"
+    
+    if not resp:
+        return "Error: Cleanup failed after max retries."
 
     response_text = resp.content[0].text if resp.content else ""
     updates_payload: Dict[str, str] = {}

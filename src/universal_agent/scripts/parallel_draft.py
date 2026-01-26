@@ -54,18 +54,36 @@ async def write_section(sem, client, section, corpus_text, order, base_path: Pat
 
         INSTRUCTION: Write a detailed, fact-based section for this report. Use markdown only (no code fences). {format_rules} Focus on this section's topic and avoid repeating statistics central to other sections unless needed for context."""
 
-        try:
-            resp = await client.messages.create(
-                model=MODEL,
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            content = resp.content[0].text
-            
-            out_path.write_text(content, encoding="utf-8")
-            print(f"✓ Finished {section['id']}")
-        except Exception as e:
-            print(f"❌ Error {section['id']}: {e}")
+        MAX_RETRIES = 5
+        base_delay = 2
+        
+        for attempt in range(MAX_RETRIES):
+            try:
+                resp = await client.messages.create(
+                    model=MODEL,
+                    max_tokens=4000,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                content = resp.content[0].text
+                
+                out_path.write_text(content, encoding="utf-8")
+                print(f"✓ Finished {section['id']}")
+                return # Success
+            except Exception as e:
+                # Check for 429 or concurrency errors
+                error_str = str(e).lower()
+                is_rate_limit = "429" in error_str or "too many requests" in error_str or "high concurrency" in error_str
+                
+                if is_rate_limit and attempt < MAX_RETRIES - 1:
+                    delay = base_delay * (2 ** attempt)
+                    print(f"  ⚠️ [429] Rate limited ({section['id']}). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
+                    await asyncio.sleep(delay)
+                    continue
+                
+                # For other errors or if max retries hit
+                print(f"❌ Error {section['id']}: {e}")
+                if not is_rate_limit:
+                    break # Don't retry non-rate-limit errors manually for now
 
 async def draft_report_async(
     workspace_path: Path, 
@@ -114,8 +132,8 @@ async def draft_report_async(
         return "Error: ANTHROPIC_AUTH_TOKEN/ZAI_API_KEY not set"
 
     # 3. Initialize Client
-    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL)
-    sem = asyncio.Semaphore(5) # Max 5 concurrent requests
+    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL, max_retries=3, timeout=60.0)
+    sem = asyncio.Semaphore(3) # Max 3 concurrent requests (reduced from 5 to avoid 429)
 
     # 4. Run Parallel - pass order index for filename ordering
     tasks = [write_section(sem, client, s, corpus_text, i+1, workspace_path) for i, s in enumerate(sections)]

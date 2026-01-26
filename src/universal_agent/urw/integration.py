@@ -745,9 +745,10 @@ class GatewayURWAdapter(BaseAgentAdapter):
         """Ensure gateway session exists, creating if needed."""
         gateway = await self._get_gateway()
         
+        from universal_agent.identity.resolver import resolve_user_id
         if self._gateway_session is None:
             self._gateway_session = await gateway.create_session(
-                user_id="urw_harness",
+                user_id=resolve_user_id(),
                 workspace_dir=str(workspace_path),
             )
         return self._gateway_session
