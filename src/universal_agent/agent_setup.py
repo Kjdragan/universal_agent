@@ -29,6 +29,8 @@ from claude_agent_sdk import create_sdk_mcp_server
 from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
     crawl_parallel_wrapper,
+    run_report_generation_wrapper,
+    run_research_phase_wrapper,
 )
 from universal_agent.execution_context import bind_workspace_env
 
@@ -52,6 +54,11 @@ DISALLOWED_TOOLS = [
     "web_search",
     "mcp__composio__WebSearch",
     "mcp__local_toolkit__run_research_pipeline",  # REPLACED by in-process mcp__internal__run_research_pipeline
+    "mcp__local_toolkit__crawl_parallel",  # REPLACED by in-process mcp__internal__crawl_parallel
+    # Force delegation to research-specialist for search/research tasks
+    "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+    "mcp__composio__COMPOSIO_SEARCH_NEWS",
+    "mcp__composio__COMPOSIO_SEARCH_WEB",
 ]
 
 
@@ -306,6 +313,7 @@ class AgentSetup:
             "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
             "🔍 SEARCH TOOL PREFERENCE:\n"
             "- For web/news research, ALWAYS use Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
+            "- **PRIMARY AGENT WARNING**: You are FORBIDDEN from using these tools directly. You must DELEGATE to `research-specialist`.\n"
             "- Do NOT use native 'WebSearch' - it bypasses our artifact saving system.\n"
             "- Composio search results are auto-saved by the Observer for sub-agent access.\n\n"
             "🔒 SEARCH HYGIENE (MANDATORY):\n"
@@ -341,7 +349,8 @@ class AgentSetup:
             "   - 🚫 NEVER try to access local files from REMOTE_WORKBENCH - local paths don't exist there!\n"
             "4. 🚨 MANDATORY DELEGATION FOR RESEARCH & REPORTS:\n"
             "   - Role: You are the COORDINATOR. You delegate work to specialists.\n"
-            "   - DO NOT perform web searches yourself. Delegate to `research-specialist`.\n"
+            "   - 🚫 **ABSOLUTE PROHIBITION**: You must NOT perform web searches, crawls, or report writing yourself.\n"
+            "   - You must delegate ALL research to `research-specialist` immediately.\n"
             "   - PROCEDURE:\n"
             "     1. **STEP 1:** Delegate to `research-specialist` using `Task` IMMEDIATELY.\n"
             "        PROMPT: 'Research [topic]: execute searches, crawl sources, finalize corpus.'\n"
@@ -368,16 +377,13 @@ class AgentSetup:
             "   - NAMING: `dependency_summary.md`, `calendar_events.txt`, `generated_script.py`\n"
             "   - `work_products` dir is auto-created. Just save there.\n"
             "     Wait for 'File saved...' confirmation before proceeding.\n\n"
-            "9. 🔗 MANDATORY REPORT DELEGATION (YOU MUST DELEGATE):\n"
-            "   🚨 TRIGGER KEYWORDS REQUIRING DELEGATION: 'report', 'comprehensive', 'detailed', 'in-depth', 'analysis', 'research'.\n"
-            "   IF the user query contains ANY of these keywords, you MUST delegate to 'report-creation-expert'.\n"
-            "   - After a Composio search, the Observer AUTO-SAVES results to `search_results/` directory.\n"
-            "   - You will see: '📁 [OBSERVER] Saved: search_results/xxx.json'.\n"
-            "   - DO NOT write the report yourself. DO NOT call `crawl_parallel` yourself.\n"
-            "   - IMMEDIATELY delegate to 'report-creation-expert' with: 'Call finalize_research, then use refined_corpus.md to generate the report.'\n"
-            "   - WHY: The sub-agent will scrape ALL URLs for full article content. Your search only has snippets.\n"
-            "   - WITHOUT DELEGATION: Your report will be shallow (snippets only). WITH DELEGATION: Deep research (full articles).\n"
-            "   - Trust the Observer. Trust the sub-agent. Your job is to search and delegate.\n\n"
+            "10. 🔗 MANDATORY DELEGATION FOR RESEARCH (NO EXCEPTIONS):\n"
+            "   - **SIMPLE vs COMPLEX**: Even for 'simple' research (e.g., 'What is the stock price of Apple?', 'Latest news on X'), you MUST delegate.\n"
+            "   - **INTERNAL vs EXTERNAL**: If the question requires ANY outside information not in your training data, DELEGATE.\n"
+            "   - **PROHIBITION**: Do NOT use `WebSearch`, `Google`, or `Composio` search tools directly. Those are for the specialist.\n"
+            "   - **WHY**: The specialist creates a 'Refined Corpus' that serves as the Source of Truth for the entire session.\n"
+            "   - **ACTION**: Immediately call `Task(subagent_type='research-specialist', ...)`.\n"
+            "   - Trust the specialist to find the answer. Do not 'double check' or 'preview'.\n\n"
             "10. 💡 PROACTIVE FOLLOW-UP SUGGESTIONS:\n"
             "   - After completing a task, suggest 2-3 helpful follow-up actions based on what was just accomplished.\n"
             "   - Examples: 'Would you like me to email this report?', 'Should I save this to a different format?',\n"
@@ -438,7 +444,7 @@ class AgentSetup:
             "internal": create_sdk_mcp_server(
                 name="internal",
                 version="1.0.0",
-                tools=[run_research_pipeline_wrapper, crawl_parallel_wrapper]
+                tools=[run_report_generation_wrapper, run_research_pipeline_wrapper, crawl_parallel_wrapper, run_research_phase_wrapper]
             ),
             # "zai_vision": {
             #     "type": "stdio",

@@ -10,10 +10,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")
 try:
     from mcp_server import _run_research_pipeline_legacy as original_pipeline
     from mcp_server import _crawl_core
+    from mcp_server import _run_research_phase_legacy as research_phase_core
+    from mcp_server import _run_report_generation_legacy as report_gen_core
 except ImportError:
     # Fallback for when running from different contexts
     from src.mcp_server import _run_research_pipeline_legacy as original_pipeline
     from src.mcp_server import _crawl_core
+    from src.mcp_server import _run_research_phase_legacy as research_phase_core
+    from src.mcp_server import _run_report_generation_legacy as report_gen_core
 
 @tool(
     name="run_research_pipeline", 
@@ -72,3 +76,40 @@ async def crawl_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
             "text": result_str
         }]
     }
+
+@tool(
+    name="run_research_phase",
+    description="Execute Phase 1 of Research: Crawl & Refine. Produces refined_corpus.md.",
+    input_schema={
+        "query": str, 
+        "task_name": str
+    }
+)
+async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    """
+    Wrapper for research phase (Crawl -> Refine) to run in-process.
+    """
+    query = args.get("query")
+    task_name = args.get("task_name", "default")
+    result_str = await research_phase_core(query, task_name)
+    return {"content": [{"type": "text", "text": result_str}]}
+
+@tool(
+    name="run_report_generation",
+    description="Execute Phase 2 of Research: Outline -> Draft -> Cleanup -> Compile Report.",
+    input_schema={
+        "query": str, 
+        "task_name": str,
+        "corpus_data": str  # Option to provide corpus directly (for non-search tasks)
+    }
+)
+async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    """
+    Wrapper for report generation (Outline -> Compile) to run in-process.
+    """
+    query = args.get("query")
+    task_name = args.get("task_name", "default")
+    corpus_data = args.get("corpus_data")
+    
+    result_str = await report_gen_core(query, task_name, corpus_data=corpus_data)
+    return {"content": [{"type": "text", "text": result_str}]}

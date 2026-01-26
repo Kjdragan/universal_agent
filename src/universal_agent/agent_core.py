@@ -46,6 +46,11 @@ from universal_agent.durable.tool_gateway import (
 from universal_agent.guardrails.tool_schema import validate_tool_input
 from universal_agent.prompt_assets import get_tool_knowledge_block
 from universal_agent.utils.message_history import MessageHistory, TRUNCATION_THRESHOLD
+
+DEFAULT_AGENT_NAME = "Primary Agent"
+SEARCH_AGENT_NAME = "Research Specialist"
+WRITER_AGENT_NAME = "Report Author"
+
 # Local MCP server provides: crawl_parallel, finalize_research, append_to_file, etc.
 # Note: read_research_files is deprecated - use refined_corpus.md from finalize_research
 
@@ -165,11 +170,12 @@ class QueueLogHandler(logging.Handler):
 
 class StreamCapture:
     """Captures stdout/stderr and mirrors to a queue while keeping original output."""
-    def __init__(self, queue: asyncio.Queue, stream, level="INFO", prefix="[STDOUT]"):
+    def __init__(self, queue: asyncio.Queue, stream, level="INFO", prefix="[STDOUT]", log_handler: Optional[logging.Handler] = None):
         self.queue = queue
         self.stream = stream
         self.level = level
         self.prefix = prefix
+        self.log_handler = log_handler
         self.loop = asyncio.get_running_loop()
 
     def write(self, text: str):
@@ -178,11 +184,33 @@ class StreamCapture:
         
         # Determine if we should send to queue (filter empty newlines if desired)
         if text.strip():
+            # Heuristic: Detect log level from content
+            computed_level = self.level
+            
+            clean_text = text.strip()
+            # Auto-detect ERRORs if level is INFO (upgrade strategy)
+            # This allows STDERR to be INFO by default (neutral color) but turn RED on actual errors
+            if self.level == "INFO":
+                if any(x in clean_text for x in ["Traceback (most recent call last)", "Error:", "Exception:", "CRITICAL", "FATAL"]):
+                    computed_level = "ERROR"
+            
+            # If default is ERROR (legacy usage), try to downgrade if it looks like a status message
+            elif self.level == "ERROR":
+                # Common indicators of non-error status messages
+                if any(x in clean_text for x in ["🚀", "✅", "⏳", "INFO", "DEBUG", "Starting", "Success", "Completed"]):
+                    computed_level = "INFO"
+                # Check for explicit log level prefixes like "[INFO]" or "INFO:"
+                elif "[INFO]" in clean_text or clean_text.startswith("INFO"):
+                    computed_level = "INFO"
+                elif "[DEBUG]" in clean_text or clean_text.startswith("DEBUG"):
+                    computed_level = "DEBUG"
+
+            # 1. Emit to Event Queue (for UI)
             event = AgentEvent(
                 type=EventType.STATUS,
                 data={
                     "status": text.strip(),
-                    "level": self.level,
+                    "level": computed_level,
                     "prefix": self.prefix,
                     "is_log": True,
                 }
@@ -191,12 +219,37 @@ class StreamCapture:
                 self.loop.call_soon_threadsafe(self.queue.put_nowait, event)
             except Exception:
                 pass
+            
+            # 2. Emit to Log File (for run.log persistence)
+            if self.log_handler:
+                try:
+                    # Map string level to int
+                    level_int = getattr(logging, computed_level, logging.INFO)
+                    # Create a LogRecord manually to format matches other logs
+                    record = logging.LogRecord(
+                        name=self.prefix.strip("[]"), # Use prefix as logger name e.g. "STDOUT"
+                        level=level_int,
+                        pathname="agent_core.py",
+                        lineno=0,
+                        msg=text.strip(),
+                        args=(),
+                        exc_info=None
+                    )
+                    # Using call_soon_threadsafe is tricky for handlers, but FileHandler is thread-safe usually.
+                    # We'll just emit directly as we are likely in a thread or async context 
+                    # where file I/O is acceptable for logging.
+                    self.log_handler.emit(record)
+                except Exception:
+                    pass
 
     def flush(self):
         self.stream.flush()
 
     def isatty(self):
         return getattr(self.stream, "isatty", lambda: False)()
+
+    def fileno(self):
+        return self.stream.fileno()
 
 
 def _warn_if_subagent_hooks_configured(agents: dict[str, Any] | None) -> None:
@@ -908,16 +961,26 @@ class UniversalAgent:
         self.start_ts: float = 0
         self.composio: Optional[Composio] = None
         self.session = None
-        self.options: Optional[ClaudeAgentOptions] = None
-        self.client: Optional[ClaudeSDKClient] = None
+        self.options = None
         self._initialized = False
+        self.tool_name_map = {}
+        self._processed_msg_ids = set()
+        self.client: Optional[ClaudeSDKClient] = None
         # Track consecutive tool validation errors to detect loops
         self.consecutive_tool_errors: int = 0
-        # Track processed message IDs to prevent double-counting tokens
         self._processed_msg_ids: set = set()
         # Async queue for merging events from multiple sources (SDK + tool logs)
         self._event_queue: Optional[asyncio.Queue] = None
         self._hooks = hooks
+
+    async def send_agent_event(self, event_type: EventType, data: dict) -> None:
+        """
+        Receive events from external sources (log bridge, tools) and push to queue.
+        Used by LogBridgeHandler and StdoutInterceptor.
+        """
+        if self._event_queue:
+            event = AgentEvent(type=event_type, data=data)
+            await self._event_queue.put(event)
 
     def _create_workspace(self) -> str:
         """Create a new session workspace directory."""
@@ -984,20 +1047,27 @@ class UniversalAgent:
             log_path = os.path.join(self.workspace_dir, "run.log")
             
             # Create file handler
-            file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-            file_handler.setFormatter(logging.Formatter(
+            self.file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+            self.file_handler.setFormatter(logging.Formatter(
                 '%(asctime)s [%(levelname)s] [%(name)s] %(message)s',
                 datefmt='%H:%M:%S'
             ))
             
             # Add to root logger to capture all libraries (composio, etc)
             root_logger = logging.getLogger()
-            root_logger.addHandler(file_handler)
+            root_logger.addHandler(self.file_handler)
             
             # Also ensure our specific logger has it
             logger = logging.getLogger("universal_agent")
             if logger.propagate is False:
-                logger.addHandler(file_handler)
+                logger.addHandler(self.file_handler)
+                
+            # FORCE capture of httpx/httpcore logs
+            for lib in ["httpx", "httpcore"]:
+                lib_logger = logging.getLogger(lib)
+                lib_logger.setLevel(logging.INFO)
+                lib_logger.addHandler(self.file_handler)
+                lib_logger.propagate = True # Ensure it bubbles to root too for QueueHandler
                 
             logging.info(f"📝 Centralized logging initialized: {log_path}")
             
@@ -1313,22 +1383,98 @@ class UniversalAgent:
         import sys
 
         # 1. Attach QueueLogHandler to root logger
+        # 1. Attach QueueLogHandler to root logger
         queue_handler = QueueLogHandler(self._event_queue)
         # queue_handler.setLevel(logging.INFO) 
         root_logger = logging.getLogger()
         root_logger.addHandler(queue_handler)
 
-        # 2. Capture stdout/stderr
-        # We replace sys.stdout/stderr with our wrapper. 
-        # CAUTION: threading/async safety is managed by call_soon_threadsafe.
-        original_stdout = sys.stdout
-        original_stderr = sys.stderr
+        # Attach to mcp_server.mcp_log for in-process tool logging (Critical for UI visibility)
+        try:
+            from mcp_server import set_mcp_log_callback
+            
+            def mcp_bridge_sync(msg, level, prefix=""):
+                if self._event_queue:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        event = AgentEvent(
+                            type=EventType.STATUS, 
+                            data={"status": msg, "level": level, "prefix": prefix, "is_log": True}
+                        )
+                        loop.call_soon_threadsafe(self._event_queue.put_nowait, event)
+                    except Exception:
+                        pass
+            
+            set_mcp_log_callback(mcp_bridge_sync)
+        except ImportError:
+            print("DEBUG CORE: Could not import mcp_server for log hooking.")
+            pass
+
+        # 2. Capture stdout/stderr (Native OS-level)
+        # We redirect stdout/stderr to run.log using os.dup2 to capture C-extensions/subprocess output
+        # capturing strictly to file avoids buffer deadlocks.
+        original_stdout_fd = os.dup(1)
+        original_stderr_fd = os.dup(2)
         
-        sys.stdout = StreamCapture(self._event_queue, original_stdout, level="INFO", prefix="[STDOUT]")  # type: ignore
-        sys.stderr = StreamCapture(self._event_queue, original_stderr, level="ERROR", prefix="[STDERR]") # type: ignore
+        run_log_path = os.path.join(self.workspace_dir, "run.log")
+        journal_path = os.path.join(self.workspace_dir, "activity_journal.log")
+        
+        # Open in append mode, unbuffered (0) or line buffered (1) not supported for binary, 
+        # so we use default key and flush often.
+        run_log_file = open(run_log_path, "a")
+        journal_file = open(journal_path, "a", encoding="utf-8")
+        
+        def log_to_journal(event: AgentEvent):
+            """Helper to log high-level activity to the journal."""
+            try:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                etype = event.type.value if hasattr(event.type, "value") else str(event.type)
+                data = event.data or {}
+                
+                # Dynamic author determined by context or explicit event data
+                # Default to current_agent_name if not provided in data
+                current_author = data.get("author") or getattr(self, "current_agent_name", DEFAULT_AGENT_NAME)
+                
+                entry = f"[{timestamp}] [{etype.upper()}]"
+                
+                if etype == "text":
+                    author = data.get("author", current_author)
+                    text = data.get("text", "").strip()
+                    if text:
+                        entry += f" {author}: {text}"
+                elif etype == "thinking":
+                    thinking = data.get("thinking", "").strip()
+                    if thinking:
+                        entry += f" Reasoning: {thinking}"
+                elif etype == "tool_call":
+                    entry += f" Calling {data.get('name')} with input: {data.get('input')}"
+                elif etype == "tool_result":
+                    entry += f" {data.get('tool_name')} result: {data.get('content_preview', '(no preview)')}"
+                elif etype == "status":
+                    # LOG STREAM ATTRIBUTION
+                    if data.get("is_log"):
+                        entry = f"[{timestamp}] [LOG] {current_author}: {data.get('status')}"
+                    else:
+                        entry += f" {data.get('status')}"
+                elif etype == "error":
+                    entry += f" ERROR: {data.get('error')}"
+                
+                if entry.strip():
+                    journal_file.write(entry + "\n")
+                    journal_file.flush()
+            except Exception as e:
+                print(f"DEBUG CORE: Journal logging failed: {e}", flush=True)
+        # Flush python buffers before redirecting
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        # Redirect stdout/stderr to the file descriptor of run.log
+        os.dup2(run_log_file.fileno(), 1)
+        os.dup2(run_log_file.fileno(), 2)
 
         async def sdk_worker():
             """Worker to consume SDK events and push to queue."""
+            print("DEBUG CORE: sdk_worker started. Calling _run_conversation...", flush=True)
             try:
                 async for event in self._run_conversation(query, iteration=1):
                     if self._event_queue:
@@ -1343,10 +1489,13 @@ class UniversalAgent:
                     await self._event_queue.put(AgentEvent(type=EventType.ERROR, data={"error": str(e)}))
                     await self._event_queue.put(None)
 
+        print("DEBUG CORE: About to initialize ClaudeSDKClient...", flush=True)
         async with ClaudeSDKClient(self.options) as client:
+            print("DEBUG CORE: ClaudeSDKClient initialized successfully.", flush=True)
             self.client = client
             
             # Start the worker task
+            print("DEBUG CORE: Starting sdk_worker task...", flush=True)
             worker_task = asyncio.create_task(sdk_worker())
 
             try:
@@ -1355,13 +1504,30 @@ class UniversalAgent:
                     event = await self._event_queue.get()
                     if event is None:
                         break
+                    
+                    # Journal EVERY event that passes through the UI queue
+                    log_to_journal(event)
+                    
                     yield event
             finally:
                 # Cleanup Hooks
                 try:
                     root_logger.removeHandler(queue_handler)
-                    sys.stdout = original_stdout
-                    sys.stderr = original_stderr
+                    
+                    # Flush and restore stdout/stderr
+                    try:
+                        sys.stdout.flush()
+                        sys.stderr.flush()
+                    except Exception:
+                        pass
+
+                    os.dup2(original_stdout_fd, 1)
+                    os.dup2(original_stderr_fd, 2)
+                    os.close(original_stdout_fd)
+                    os.close(original_stderr_fd)
+                    journal_file.close()
+                    run_log_file.close()
+
                 except Exception:
                     pass
 
@@ -1382,6 +1548,7 @@ class UniversalAgent:
         self, query: str, iteration: int
     ) -> AsyncGenerator[AgentEvent, None]:
         """Run a single conversation turn."""
+        self.tool_name_map = getattr(self, "tool_name_map", {})
         step_id = str(uuid.uuid4())
         if LOGFIRE_TOKEN:
             logfire.set_baggage(step_id=step_id)
@@ -1395,9 +1562,33 @@ class UniversalAgent:
         tool_calls_this_iter = []
         auth_link = None
 
+        # Track current agent persona based on tools used
+        current_agent_name = getattr(self, "current_agent_name", DEFAULT_AGENT_NAME)
+
         with logfire.span("llm_response_stream"):
             async for msg in self.client.receive_response():  # type: ignore
                 if isinstance(msg, AssistantMessage):
+                    # TRACK SUB-AGENT CONTEXT
+                    parent_tool_use_id = getattr(msg, "parent_tool_use_id", None)
+                    if not parent_tool_use_id:
+                         # Compatibility check for some SDK versions where it might be a dict or in StreamEvent
+                         parent_tool_use_id = msg.__dict__.get("parent_tool_use_id")
+                    
+                    # Logic: If we have a parent_tool_use_id, we are a sub-agent.
+                    # Otherwise, we have returned to the Primary Agent.
+                    msg_author = DEFAULT_AGENT_NAME
+                    if parent_tool_use_id:
+                        raw_name = self.tool_name_map.get(parent_tool_use_id, "Subagent")
+                        # Add prefix only if not already an agent-like name
+                        if any(x in raw_name for x in ["Specialist", "Author", "Agent"]):
+                            msg_author = raw_name
+                        else:
+                            msg_author = f"Subagent: {raw_name}"
+                    
+                    # Store current author for log attribution until next message arrives
+                    self.current_agent_name = msg_author
+
+
                     # Track token usage if available in message
                     # (Docs say: "Same ID = Same Usage. Charge only once per step")
                     usage_source = getattr(msg, "usage", None)
@@ -1424,6 +1615,25 @@ class UniversalAgent:
 
                     for block in msg.content:
                         if isinstance(block, ToolUseBlock):
+                            # Store for back-attribution
+                            resolved_name = block.name
+                            
+                            # IMPROVED: Map internal tools to human-friendly agent names
+                            if "research_pipeline" in block.name:
+                                resolved_name = SEARCH_AGENT_NAME
+                            elif "compile_report" in block.name:
+                                resolved_name = WRITER_AGENT_NAME
+                            elif block.name == "Task" and isinstance(block.input, dict):
+                                sub_type = block.input.get("subagent_type")
+                                if sub_type:
+                                    resolved_name = f"Subagent: {sub_type}"
+                            
+                            self.tool_name_map[block.id] = resolved_name
+
+                            # Update log attribution author immediately when a tool starts
+                            # This ensures logs *during* the tool run are correctly attributed.
+                            self.current_agent_name = resolved_name
+
                             if is_malformed_tool_name(block.name):
                                 logfire.warning(
                                     "malformed_tool_name_detected",
@@ -1476,13 +1686,50 @@ class UniversalAgent:
                                         data={"auth_link": auth_link},
                                     )
 
-                            yield AgentEvent(type=EventType.TEXT, data={"text": block.text})
+                            yield AgentEvent(
+                                type=EventType.TEXT, 
+                                data={
+                                    "text": block.text, 
+                                    "author": msg_author,
+                                    "time_offset": round(time.time() - self.start_ts, 3)
+                                }
+                            )
 
                         elif isinstance(block, ThinkingBlock):
                             yield AgentEvent(
                                 type=EventType.THINKING,
-                                data={"thinking": block.thinking[:500]},
+                                data={"thinking": block.thinking[:1000]},
                             )
+                        
+                        elif isinstance(block, ToolResultBlock):
+                            # EXTRACT DIALOGUE FROM TOOL RESULTS (Sub-agent speech)
+                            if block.content:
+                                text_content = ""
+                                if isinstance(block.content, str):
+                                    text_content = block.content
+                                elif isinstance(block.content, list):
+                                    # Handle list of blocks (SDK pattern)
+                                    for b in block.content:
+                                        if isinstance(b, dict) and b.get("type") == "text":
+                                            text_content += b.get("text", "")
+                                        elif hasattr(b, "text"):
+                                            text_content += b.text
+                                
+                                if text_content.strip():
+                                    # Attribute to the tool/sub-agent that produced it
+                                    tool_name = self.tool_name_map.get(block.tool_use_id, "Subagent")
+                                    author_label = tool_name
+                                    if not any(x in tool_name for x in ["Specialist", "Author", "Agent", "Subagent"]):
+                                        author_label = f"Subagent: {tool_name}"
+                                        
+                                    yield AgentEvent(
+                                        type=EventType.TEXT, 
+                                        data={
+                                            "text": text_content, 
+                                            "author": author_label,
+                                            "time_offset": round(time.time() - self.start_ts, 3)
+                                        }
+                                    )
 
                 elif isinstance(msg, ResultMessage):
                     if msg.session_id:

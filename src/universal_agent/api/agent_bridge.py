@@ -41,9 +41,19 @@ class AgentBridge:
         self._session_registry: dict[str, Path] = {}
 
     async def create_session(
-        self, user_id: str = "user_ui", workspace_dir: Optional[str] = None
+        self, 
+        user_id: Optional[str] = None, 
+        workspace_dir: Optional[str] = None
     ) -> SessionInfo:
         """Create a new agent session."""
+        # Resolve user_id if not provided
+        if not user_id:
+            env_user = os.getenv("COMPOSIO_USER_ID")
+            default_user = os.getenv("DEFAULT_USER_ID")
+            print(f"DEBUG BRIDGE: Resolving user_id. Env COMPOSIO_USER_ID={env_user}, DEFAULT_USER_ID={default_user}")
+            user_id = env_user or default_user or "user_ui"
+            print(f"DEBUG BRIDGE: Final user_id={user_id}")
+            
         # Create workspace directory
         if workspace_dir:
             workspace_path = Path(workspace_dir).resolve()
@@ -56,11 +66,19 @@ class AgentBridge:
             workspace_path = self.workspace_base / session_id
             workspace_path.mkdir(parents=True, exist_ok=True)
 
+        # Unify architecture: Use shared hooks from hooks.py
+        from universal_agent.hooks import AgentHookSet
+        hooks_manager = AgentHookSet(
+            run_id=session_id,
+            active_workspace=str(workspace_path),
+            enable_skills=True
+        )
+
         # Initialize agent
         self.current_agent = UniversalAgent(
             workspace_dir=str(workspace_path),
             user_id=user_id,
-            hooks=self._hooks,
+            hooks=hooks_manager.build_hooks(),
         )
         await self.current_agent.initialize()
 
@@ -86,9 +104,10 @@ class AgentBridge:
             return None
 
         # Create new agent instance in existing workspace
+        user_id = os.getenv("COMPOSIO_USER_ID") or os.getenv("DEFAULT_USER_ID") or "user_ui"
         self.current_agent = UniversalAgent(
             workspace_dir=str(workspace_dir),
-            user_id="user_ui",
+            user_id=user_id,
             hooks=self._hooks,
         )
         await self.current_agent.initialize()

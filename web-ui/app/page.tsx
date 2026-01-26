@@ -17,6 +17,7 @@ import { processWebSocketEvent } from "@/lib/store";
 import { ConnectionStatus, WebSocketEvent } from "@/types/agent";
 import { formatDuration, formatFileSize } from "@/lib/utils";
 import { ApprovalModal, useApprovalModal } from "@/components/approvals/ApprovalModal";
+import { CombinedActivityLog } from "@/components/CombinedActivityLog";
 
 // Icons (using emoji for now - replace with lucide-react in production)
 const ICONS = {
@@ -101,7 +102,7 @@ function FileViewer() {
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-hidden relative bg-white/5">
+      <div className="flex-1 overflow-hidden relative bg-white">
         {isHtml || isPdf || isImage ? (
           <iframe
             src={fileUrl}
@@ -109,7 +110,7 @@ function FileViewer() {
             title={viewingFile.name}
           />
         ) : (
-          <div className="h-full overflow-auto p-4 scrollbar-thin">
+          <div className="h-full overflow-auto p-4 scrollbar-thin bg-background text-foreground">
             <pre className="text-xs font-mono whitespace-pre-wrap text-muted-foreground">
               {viewingFile.content || "Loading or Binary Content..."}
             </pre>
@@ -399,76 +400,28 @@ function ToolCallCard({ toolCall }: { toolCall: any }) {
   );
 }
 
-function TerminalLog() {
-  const logs = useAgentStore((s) => s.logs);
-  const scrollRef = React.useRef<HTMLDivElement>(null);
-  const [filterLevel, setFilterLevel] = useState<"INFO" | "DEBUG">("DEBUG");
+function ThinkingBubble({ content }: { content: string }) {
+  const [isExpanded, setIsExpanded] = useState(true);
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [logs, filterLevel]);
-
-  // Filter logs based on selection
-  const visibleLogs = logs.filter(log => {
-    if (filterLevel === "DEBUG") return true;
-    // If INFO selected, hide DEBUG
-    return log.level !== "DEBUG";
-  });
+  if (!content) return null;
 
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-black/40">
-      {/* Controls */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/5">
-        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Console Output</span>
-        <div className="flex gap-2">
-          {(["INFO", "DEBUG"] as const).map((level) => (
-            <button
-              key={level}
-              onClick={() => setFilterLevel(level)}
-              className={`text-[10px] px-2 py-1 rounded border transition-colors uppercase font-medium ${filterLevel === level
-                ? "bg-primary/20 border-primary/50 text-primary-foreground"
-                : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
-                }`}
-            >
-              {level}
-            </button>
-          ))}
+    <div className="flex justify-start mb-4 group ml-10 max-w-[85%]">
+      <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-0 overflow-hidden w-full transition-colors hover:bg-amber-500/10">
+        <div
+          className="flex items-center gap-2 cursor-pointer bg-amber-500/10 px-3 py-2 text-amber-600/80 hover:text-amber-600 transition-colors"
+          onClick={() => setIsExpanded(!isExpanded)}
+        >
+          <span className="text-sm">🧠</span>
+          <span className="uppercase tracking-wider font-bold text-[10px]">Thinking Process</span>
+          <span className="ml-auto text-[10px] opacity-60 hover:opacity-100">{isExpanded ? "Collapse" : "Expand"}</span>
         </div>
-      </div>
-
-      {/* Log List */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1.5 font-mono text-xs">
-        {visibleLogs.length === 0 ? (
-          <div className="text-center text-muted-foreground py-12 italic opacity-50">
-            {ICONS.terminal} No logs to display...
+        {isExpanded && (
+          <div className="p-3 bg-amber-500/5">
+            <div className="whitespace-pre-wrap text-amber-900/70 dark:text-amber-100/70 font-mono text-xs leading-relaxed border-l-2 border-amber-500/30 pl-3">
+              {content}
+            </div>
           </div>
-        ) : (
-          visibleLogs.map((log) => {
-            const levelColors: Record<string, string> = {
-              DEBUG: "text-blue-400/60",
-              INFO: "text-green-400", // Brighter green for info
-              WARNING: "text-yellow-400",
-              ERROR: "text-red-400 font-bold",
-            };
-            const color = levelColors[log.level] || "text-foreground";
-
-            return (
-              <div key={log.id} className="flex gap-3 border-b border-white/5 pb-1 last:border-0 hover:bg-white/5 items-start">
-                <span className="text-muted-foreground/60 shrink-0 w-16 text-[10px] pt-0.5 font-light">
-                  {new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                </span>
-                <span className={`shrink-0 w-12 text-left font-bold text-[10px] pt-0.5 ${color}`}>
-                  {log.level === 'WARNING' ? 'WARN' : log.level}
-                </span>
-                <div className="flex-1 break-all leading-relaxed">
-                  {log.prefix && <span className="opacity-60 mr-2 text-muted-foreground">[{log.prefix.replace(/[\[\]]/g, '')}]</span>}
-                  <span className={color}>{log.message}</span>
-                </div>
-              </div>
-            );
-          })
         )}
       </div>
     </div>
@@ -477,43 +430,111 @@ function TerminalLog() {
 
 function ChatMessage({ message }: { message: any }) {
   const isUser = message.role === "user";
-  const [formattedTime, setFormattedTime] = useState("");
+  const [formattedDelta, setFormattedDelta] = useState("");
 
-  // Format time only on client to avoid hydration mismatch
+  // Format delta time on client
   useEffect(() => {
-    setFormattedTime(new Date(message.timestamp).toLocaleTimeString());
-  }, [message.timestamp]);
+    const delta = message.time_offset;
+    if (delta !== undefined) {
+      setFormattedDelta(delta > 0 ? `+${delta.toFixed(1)}s` : `0s`);
+    } else {
+      setFormattedDelta(new Date(message.timestamp).toLocaleTimeString());
+    }
+  }, [message.time_offset, message.timestamp]);
 
-  // Split content by newlines that look like separate thoughts or sections
+  // Split content by distinct sections (double newlines)
   const contentSegments = message.content.split(/\n\n+/).filter(Boolean);
 
-  return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"} mb-6 group`}>
-      <div
-        className={`max-w-[85%] rounded-xl p-4 shadow-sm ${isUser
-          ? "bg-primary/10 border border-primary/20 text-foreground"
-          : "bg-card border border-border/50 shadow-lg"
-          }`}
-      >
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-2 font-medium">
-          <span className={`${isUser ? "text-primary" : "text-blue-400"}`}>
-            {isUser ? "You" : "Primary Agent"}
-          </span>
-          <span className="opacity-30">•</span>
-          <span className="opacity-50 font-mono">{formattedTime}</span>
-        </div>
-
-        <div className="space-y-4 text-sm leading-relaxed">
-          {contentSegments.map((segment: string, i: number) => (
-            <div key={i}>
-              <div className="whitespace-pre-wrap">{segment}</div>
-              {i < contentSegments.length - 1 && (
-                <div className="w-8 h-px bg-border/50 my-3 ml-0.5" />
-              )}
+  if (isUser) {
+    return (
+      <div className="flex justify-end mb-6">
+        <div className="flex flex-col items-end max-w-[85%]">
+          <div className="flex items-center gap-2 mb-1 w-full justify-between text-[10px] text-muted-foreground uppercase tracking-wider">
+            <span className="opacity-50">{formattedDelta}</span>
+            <div className="flex items-center gap-1">
+              <span>You</span>
+              <span>{ICONS.chat}</span>
             </div>
-          ))}
+          </div>
+          <div className="bg-primary/10 border border-primary/20 text-foreground rounded-xl p-4 shadow-sm text-sm">
+            <div className="whitespace-pre-wrap">{message.content}</div>
+          </div>
         </div>
       </div>
+    );
+  }
+
+  // Assistant: Render segments as specific bubbles
+  const author = message.author || "Primary Agent";
+  const isResearch = author.toLowerCase().includes("research");
+  const isSubagent = author.toLowerCase().includes("subagent");
+
+  let icon = "🤖";
+  let labelColor = "text-blue-400";
+  let iconBg = "bg-blue-500/10";
+  let iconBorder = "border-blue-500/20";
+
+  if (isResearch) {
+    icon = "🔍";
+    labelColor = "text-purple-400";
+    iconBg = "bg-purple-500/10";
+    iconBorder = "border-purple-500/20";
+  } else if (author.toLowerCase().includes("report") || author.toLowerCase().includes("writer")) {
+    icon = "📝";
+    labelColor = "text-orange-400";
+    iconBg = "bg-orange-500/10";
+    iconBorder = "border-orange-500/20";
+  } else if (author.toLowerCase().includes("plan") || author.toLowerCase().includes("orchestra")) {
+    icon = "🗺️";
+    labelColor = "text-cyan-400";
+    iconBg = "bg-cyan-500/10";
+    iconBorder = "border-cyan-500/20";
+  } else if (author.toLowerCase().includes("verify") || author.toLowerCase().includes("test")) {
+    icon = "✅";
+    labelColor = "text-green-400";
+    iconBg = "bg-green-500/10";
+    iconBorder = "border-green-500/20";
+  } else if (author.toLowerCase().includes("image") || author.toLowerCase().includes("video")) {
+    icon = "🎨";
+    labelColor = "text-pink-400";
+    iconBg = "bg-pink-500/10";
+    iconBorder = "border-pink-500/20";
+  } else if (isSubagent) {
+    icon = "⚙️";
+    labelColor = "text-emerald-400";
+    iconBg = "bg-emerald-500/10";
+    iconBorder = "border-emerald-500/20";
+  }
+
+  return (
+    <div className="flex flex-col gap-4 mb-8">
+      {/* Historical Thinking Block */}
+      {message.thinking && <ThinkingBubble content={message.thinking} />}
+
+      {contentSegments.map((segment: string, i: number) => (
+        <div key={i} className="flex justify-start group">
+          <div className="flex gap-3 max-w-[90%]">
+            {/* Agent Icon per bubble */}
+            <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-lg border ${iconBg} ${iconBorder}`}>
+              {icon}
+            </div>
+            <div className="flex flex-col flex-1">
+              {/* Top Header: Author on left, Delta on right */}
+              <div className="flex items-center justify-between mb-1">
+                <div className={`text-[10px] uppercase tracking-wider font-medium ${labelColor}`}>
+                  {author}
+                </div>
+                <div className="text-[9px] text-muted-foreground opacity-50">
+                  {formattedDelta}
+                </div>
+              </div>
+              <div className="bg-card border border-border/50 shadow-md rounded-xl p-4 text-sm leading-relaxed">
+                <div className="whitespace-pre-wrap">{segment}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -521,6 +542,8 @@ function ChatMessage({ message }: { message: any }) {
 function ChatInterface() {
   const messages = useAgentStore((s) => s.messages);
   const currentStreamingMessage = useAgentStore((s) => s.currentStreamingMessage);
+  const currentThinking = useAgentStore((s) => s.currentThinking);
+  const currentAuthor = useAgentStore((s) => s.currentAuthor);
   const setStartTime = useAgentStore((s) => s.setStartTime);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -543,6 +566,7 @@ function ChatInterface() {
     useAgentStore.getState().addMessage({
       role: "user",
       content: query,
+      time_offset: 0,
       is_complete: true,
     });
 
@@ -577,11 +601,70 @@ function ChatInterface() {
             {messages.map((msg) => (
               <ChatMessage key={msg.id} message={msg} />
             ))}
+            {/* Streaming Thinking Context */}
+            {currentThinking && <ThinkingBubble content={currentThinking} />}
+
             {currentStreamingMessage && (
               <div className="flex justify-start mb-4">
-                <div className="max-w-[80%] rounded-lg p-3 bg-card/50 border border-border/50">
-                  <div className="whitespace-pre-wrap">{currentStreamingMessage}</div>
-                  <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
+                <div className="flex gap-3 max-w-[90%]">
+                  {(() => {
+                    const author = currentAuthor || "Primary Agent";
+                    let icon = "🤖";
+                    let iconBg = "bg-blue-500/10";
+                    let iconBorder = "border-blue-500/20";
+                    let labelColor = "text-blue-400";
+
+                    if (author.toLowerCase().includes("research")) {
+                      icon = "🔍";
+                      iconBg = "bg-purple-500/10";
+                      iconBorder = "border-purple-500/20";
+                      labelColor = "text-purple-400";
+                    } else if (author.toLowerCase().includes("report") || author.toLowerCase().includes("writer")) {
+                      icon = "📝";
+                      iconBg = "bg-orange-500/10";
+                      iconBorder = "border-orange-500/20";
+                      labelColor = "text-orange-400";
+                    } else if (author.toLowerCase().includes("plan") || author.toLowerCase().includes("orchestra")) {
+                      icon = "🗺️";
+                      iconBg = "bg-cyan-500/10";
+                      iconBorder = "border-cyan-500/20";
+                      labelColor = "text-cyan-400";
+                    } else if (author.toLowerCase().includes("verify") || author.toLowerCase().includes("test")) {
+                      icon = "✅";
+                      iconBg = "bg-green-500/10";
+                      iconBorder = "border-green-500/20";
+                      labelColor = "text-green-400";
+                    } else if (author.toLowerCase().includes("image") || author.toLowerCase().includes("video")) {
+                      icon = "🎨";
+                      iconBg = "bg-pink-500/10";
+                      iconBorder = "border-pink-500/20";
+                      labelColor = "text-pink-400";
+                    } else if (author.toLowerCase().includes("subagent")) {
+                      icon = "⚙️";
+                      iconBg = "bg-emerald-500/10";
+                      iconBorder = "border-emerald-500/20";
+                      labelColor = "text-emerald-400";
+                    }
+
+                    return (
+                      <>
+                        <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-lg border ${iconBg} ${iconBorder}`}>
+                          {icon}
+                        </div>
+                        <div className="flex flex-col">
+                          <div className={`text-[10px] uppercase tracking-wider font-medium mb-1 ${labelColor}`}>
+                            {author}
+                          </div>
+                          <div className="bg-card border border-border/50 shadow-md rounded-xl p-4 text-sm leading-relaxed">
+                            <div className="whitespace-pre-wrap">
+                              {currentStreamingMessage}
+                              <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             )}
@@ -615,101 +698,7 @@ function ChatInterface() {
   );
 }
 
-function ActivityItem({ activity }: { activity: any }) {
-  const [expanded, setExpanded] = useState(false);
 
-  return (
-    <div>
-      <div
-        className="text-xs flex items-center gap-2 cursor-pointer hover:bg-white/5 p-1 rounded"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <span>{activity.type === "tool" ? ICONS.terminal : ICONS.file}</span>
-        <span className="flex-1 truncate font-mono opacity-80">{activity.name}</span>
-        <span className="text-[10px] text-muted-foreground">
-          {expanded ? "▼" : "▶"}
-        </span>
-      </div>
-
-      {expanded && activity.item && (
-        <div className="pl-6 mt-1 text-[10px] space-y-1 overflow-hidden">
-          {activity.type === "tool" && (
-            <>
-              <div className="text-muted-foreground uppercase tracking-wider text-[9px]">Input</div>
-              <pre className="bg-black/30 p-1.5 rounded text-muted-foreground overflow-x-auto">
-                {JSON.stringify(activity.item.input, null, 2)}
-              </pre>
-              {activity.item.result && (
-                <>
-                  <div className="text-muted-foreground uppercase tracking-wider text-[9px] mt-1">Output</div>
-                  <div className="bg-black/30 p-1.5 rounded text-muted-foreground max-h-32 overflow-y-auto whitespace-pre-wrap">
-                    {activity.item.result.content_preview || "No output"}
-                  </div>
-                </>
-              )}
-            </>
-          )}
-          {activity.type === "product" && (
-            <div className="bg-black/30 p-1.5 rounded text-muted-foreground">
-              {activity.item.path}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ActivityFeed() {
-  const toolCalls = useAgentStore((s) => s.toolCalls);
-  const workProducts = useAgentStore((s) => s.workProducts);
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  const activities = [
-    ...toolCalls.map((tc) => ({
-      type: "tool",
-      name: tc.name,
-      status: tc.status,
-      time: tc.time_offset,
-      item: tc
-    })),
-    ...workProducts.map((wp) => ({
-      type: "product",
-      name: wp.filename,
-      time: wp.timestamp,
-      item: wp
-    })),
-  ].sort((a, b) => a.time - b.time);
-
-  return (
-    <div className={`flex flex-col transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
-      <div
-        className="p-3 border-b border-border/50 flex items-center justify-between cursor-pointer hover:bg-secondary/10"
-        onClick={() => setIsCollapsed(!isCollapsed)}
-      >
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-          {ICONS.activity} Activity
-        </h3>
-        <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
-          ▼
-        </span>
-      </div>
-      {!isCollapsed && (
-        <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-1">
-          {activities.length === 0 ? (
-            <div className="text-xs text-muted-foreground text-center py-4">
-              No activity yet
-            </div>
-          ) : (
-            activities.map((activity, i) => (
-              <ActivityItem key={i} activity={activity} />
-            ))
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 function WorkProductViewer() {
   const workProducts = useAgentStore((s) => s.workProducts);
@@ -807,144 +796,7 @@ function WorkProductViewer() {
   );
 }
 
-function CombinedActivityLog() {
-  const toolCalls = useAgentStore((s) => s.toolCalls);
-  const workProducts = useAgentStore((s) => s.workProducts);
-  const logs = useAgentStore((s) => s.logs);
-  const [filterLevel, setFilterLevel] = useState<"INFO" | "DEBUG">("DEBUG");
-  const scrollRef = React.useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [toolCalls, logs, filterLevel]);
-
-  // Merge and sort
-  const items = [
-    ...toolCalls.map((tc) => ({
-      type: "tool",
-      id: tc.id,
-      timestamp: tc.timestamp || (Date.now() - (tc.time_offset * 1000)), // Fallback if no timestamp
-      level: "INFO",
-      data: tc
-    })),
-    ...workProducts.map((wp) => ({
-      type: "product",
-      id: wp.id,
-      timestamp: wp.timestamp,
-      level: "INFO",
-      data: wp
-    })),
-    ...logs.map((log) => ({
-      type: "log",
-      id: log.id,
-      timestamp: log.timestamp,
-      level: log.level,
-      data: log
-    }))
-  ]
-    .filter(item => {
-      if (item.type === 'log') {
-        if (filterLevel === "DEBUG") return true;
-        return item.level !== "DEBUG";
-      }
-      return true;
-    })
-    .sort((a, b) => a.timestamp - b.timestamp);
-
-  return (
-    <div className="flex flex-col h-full bg-black/40">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-white/5">
-        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-          {ICONS.activity} Activity & Logs
-        </h3>
-        <div className="flex gap-2">
-          <span className="text-[10px] text-muted-foreground uppercase mr-2 pt-0.5">Log Level:</span>
-          {(["INFO", "DEBUG"] as const).map((level) => (
-            <button
-              key={level}
-              onClick={() => setFilterLevel(level)}
-              className={`text-[10px] px-2 py-0.5 rounded border transition-colors uppercase font-medium ${filterLevel === level
-                ? "bg-primary/20 border-primary/50 text-primary-foreground"
-                : "bg-transparent border-transparent text-muted-foreground hover:bg-white/5"
-                }`}
-            >
-              {level}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin p-0 font-mono text-xs">
-        {items.length === 0 ? (
-          <div className="text-center text-muted-foreground py-12 italic opacity-50">
-            No activity yet...
-          </div>
-        ) : (
-          items.map((item, i) => {
-            if (item.type === 'log') {
-              const log = item.data as any;
-              const levelColors: Record<string, string> = {
-                DEBUG: "text-blue-400/60",
-                INFO: "text-green-400",
-                WARNING: "text-yellow-400",
-                ERROR: "text-red-400 font-bold",
-              };
-              const color = levelColors[log.level] || "text-foreground";
-
-              return (
-                <CollapsibleLogItem key={item.id} log={log} color={color} />
-              );
-            } else if (item.type === 'tool') {
-              const toolData = item.data as any; // Cast to avoid union type issues
-              return <ActivityItem key={item.id} activity={{ type: 'tool', name: toolData.name, item: toolData }} />;
-            } else {
-              const productData = item.data as any; // Cast to avoid union type issues
-              return <ActivityItem key={item.id} activity={{ type: 'product', name: productData.filename, item: productData }} />;
-            }
-          })
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CollapsibleLogItem({ log, color }: { log: any, color: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const firstLine = log.message.split('\n')[0];
-  const hasMore = log.message.length > firstLine.length;
-
-  return (
-    <div className="flex gap-2 border-b border-white/5 hover:bg-white/5 px-3 py-1 items-start group">
-      <span className="text-muted-foreground/50 shrink-0 w-16 text-[10px] pt-0.5 font-light">
-        {new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-      </span>
-      <span className={`shrink-0 w-10 text-left font-bold text-[10px] pt-0.5 ${color}`}>
-        {log.level === 'WARNING' ? 'WARN' : log.level}
-      </span>
-      <div className="flex-1 min-w-0">
-        <div
-          className={`flex items-start gap-2 cursor-pointer ${hasMore ? 'hover:opacity-80' : ''}`}
-          onClick={() => hasMore && setExpanded(!expanded)}
-        >
-          <div className="flex-1 break-all leading-relaxed">
-            {log.prefix && <span className="opacity-50 mr-2 text-muted-foreground text-[10px]">[{log.prefix.replace(/[\[\]]/g, '')}]</span>}
-            <span className={`${color} opacity-90`}>
-              {expanded ? log.message : firstLine}
-              {!expanded && hasMore && <span className="opacity-50 ml-1 text-[10px]">(...)</span>}
-            </span>
-          </div>
-          {hasMore && (
-            <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity pt-1">
-              {expanded ? "▲" : "▼"}
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // =============================================================================
 // Main App Component
@@ -1063,8 +915,12 @@ export default function HomePage() {
         >
           <div className="flex-1 flex flex-col min-h-0">
             <FileExplorer />
-            <WorkProductViewer />
-            <TaskPanel />
+            <div className="border-t border-border/50 pt-2 flex-1 flex flex-col min-h-0">
+              <WorkProductViewer />
+            </div>
+            <div className="border-t border-border/50 pt-2 h-1/3 flex flex-col min-h-0">
+              <TaskPanel />
+            </div>
           </div>
           {/* Resizer */}
           <div

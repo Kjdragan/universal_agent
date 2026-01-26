@@ -1,48 +1,39 @@
-# Handoff Context: Web UI Gateway Testing
+# Handoff Context: Web UI Optimization & Engineering Hardening
 
-**Date:** 2026-01-24
-**Status:** Web UI validation phase
+**Date:** 2026-01-25
+**Status:** Web UI Field Ready; Engineering Refinements Pending
 
 ## 📍 Where We Are
-We completed a focused Letta memory pass and organized Letta-related tooling into a dedicated workspace.
+We have successfully validated the **Universal Agent v2.1 Web UI** end-to-end. The system is stable, aesthetically refined, and capable of complex research workflows (e.g., Russia-Ukraine Report).
 
-- **Letta workspace:** `letta/` now contains scripts, reports, and README.
-- **Letta blocks updated:** Added `failure_patterns` + `recovery_patterns`, plus seeded `system_rules` and `project_context`.
-- **Test agents cleaned up:** `universal_agent_test*` removed from Letta.
-- **Latest memory snapshot:** `letta/reports/letta_memory_report_postseed.md`.
+### Key Achievements
+- **End-to-End Execution**: Validated "Happy Path" efficiency (Research -> Draft -> PDF -> Email).
+- **Stability**: Resolved critical `NameError` and startup deadlocks (reverted `StreamCapture`).
+- **Authentication**: Fixed Composio identity mismatch (`pg-test-8c18...` alignment).
+- **UI UX**:
+    - **Chat Bubbles**: Implemented distinct bubbles with user/agent icons.
+    - **PDF Viewer**: Enforced white background for dark mode compatibility.
+    - **Logs**: Granular `httpx` logging via `run.log` (FileHandler).
 
 ## 🎯 Current Goal
-Begin **web-based UI testing** to confirm the refactor works end-to-end with the gateway architecture.
+Enhance system observability and transparency by implementing "safe" native logging and granular sub-agent attribution.
 
-We need to validate:
-- Gateway session creation & resume behavior in the Web UI.
-- Tool calls and logs render correctly in the Web UI.
-- Web UI can run the same workflows as the CLI without divergence.
-- Web UI output artifacts are stored in the correct session workspace.
-
-## 🧾 Latest Summary (Web UI Bring-up)
-- Started refactored stack: API server (`uv run python -m universal_agent.api.server`, port 8001) + Next.js UI (`npm run dev`, port 3000).
-- UI loaded but showed **Disconnected** and query input disabled.
-- Root cause suspected: WebSocket URL defaulted to `ws://<ui-host>:3000/ws/agent` instead of API server.
-- Patch applied in `web-ui/lib/websocket.ts` to:
-  - Honor `NEXT_PUBLIC_WS_URL` if set.
-  - Auto-switch dev port from `3000` → `8001` when building the ws URL.
-- Next.js dev server restarted after patch. API server remained running.
-- **Status:** UI still needs verification of connection + ability to submit queries.
-
-## 🧭 Next Steps
-1. **Start the Web UI** and confirm gateway connectivity.
-2. **Run a simple end-to-end test** (small prompt) to verify session creation and tool execution.
-3. **Verify logs & artifacts** appear in the UI and in `AGENT_RUN_WORKSPACES/{session_id}`.
-4. **Record any deviations** between CLI and Web UI execution paths.
+## 🧭 Next Steps (New Conversation)
+1.  **Backend Author Tagging**:
+    - Update `agent_core.py` to tag messages with `author` (e.g., "Primary Agent", "Researcher Tool").
+    - Update Frontend `ChatMessage` to render distinct icons based on this tag.
+2.  **Native Log Capture (`os.dup2`)**:
+    - Implement safe OS-level pipe capturing to redirect `stdout/stderr` (including C-extensions) to `run.log` without crashing `subprocess`.
+    - Add filtering/buffering to prevent noise.
+3.  **Run Evaluation**: Continue monitoring runs using the new `01_Run_Evaluation_Report.md` template.
 
 ## 🔑 Key Files
-- `src/universal_agent/api/server.py`: Web entry point & gateway integration.
-- `src/universal_agent/agent_setup.py`: Shared config for CLI/Web.
-- `src/web/server.py`: Web server glue and session handling.
-- `web-ui/`: Next.js frontend (UI for gateway sessions).
-- `letta/README.md`: Letta tooling overview.
+- `src/universal_agent/web-ui/app/page.tsx`: Chat & File Viewer UI (React).
+- `src/universal_agent/agent_core.py`: Backend Core (Logging, SDK Client).
+- `src/universal_agent/api/server.py`: API Entry point.
+- `Project_Documentation/000_Current_Handoff_Context.md`: This file.
 
 ## 📂 Relevant Context
-- `Project_Documentation/010_clawdbot_integration_phasing.md`: Refactor roadmap.
-- `letta/reports/letta_memory_report_postseed.md`: Seeded Letta memory snapshot.
+- `01_Run_Evaluation_Report.md`: Benchmark of the latest successful run.
+- `api.log`: Current backend log showing successful startup.
+

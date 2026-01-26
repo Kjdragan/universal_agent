@@ -41,8 +41,11 @@ from claude_agent_sdk import create_sdk_mcp_server, HookMatcher
 from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
     crawl_parallel_wrapper,
+    run_research_phase_wrapper,
+    run_report_generation_wrapper,
 )
 from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
+from universal_agent.hooks import AgentHookSet
 
 # Timezone helper for consistent date/time across deployments
 def get_user_datetime():
@@ -201,19 +204,7 @@ def build_cli_hooks() -> dict:
     }
 
 
-DISALLOWED_TOOLS = [
-    "TaskOutput",
-    "TaskResult",
-    "taskoutput",
-    "taskresult",
-    "mcp__composio__TaskOutput",
-    "mcp__composio__TaskResult",
-    "WebSearch",
-    "web_search",
-    "mcp__composio__WebSearch",
-    "mcp__local_toolkit__run_research_pipeline",  # REPLACED by in-process mcp__internal__run_research_pipeline
-    "mcp__local_toolkit__crawl_parallel",  # REPLACED by in-process mcp__internal__crawl_parallel
-]
+from universal_agent.agent_setup import DISALLOWED_TOOLS
 
 
 def _normalize_gateway_tool_call_id(raw_id: object) -> str:
@@ -388,12 +379,38 @@ from universal_agent.harness.verifier import TaskVerifier
 # Durable runtime support
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
+import logging
+import sys
 from universal_agent.agent_core import (
     UniversalAgent,
     EventType,
-    AgentEvent,
     HarnessError,
 )
+from universal_agent.utils.log_bridge import LogBridgeHandler, StdoutInterceptor
+
+
+def setup_log_bridge(agent: UniversalAgent):
+    """Attach log bridge to capturing loggers and intercept stdout/stderr."""
+    if not agent:
+        return
+        
+    bridge = LogBridgeHandler(agent.send_agent_event)
+    bridge.setLevel(logging.INFO)
+    
+    # Attach to httpx
+    httpx_logger = logging.getLogger("httpx")
+    httpx_logger.addHandler(bridge)
+    httpx_logger.setLevel(logging.INFO)
+    
+    # Attach to composio if needed
+    # logging.getLogger("composio").addHandler(bridge)
+    
+    # Intercept stdout/stderr for rich terminal output (e.g. from local tools)
+    sys.stdout = StdoutInterceptor(agent.send_agent_event, sys.stdout, prefix="Console")
+    sys.stderr = StdoutInterceptor(agent.send_agent_event, sys.stderr, prefix="System")
+    
+    return bridge
+
 from universal_agent.durable.ledger import ToolCallLedger
 from universal_agent.durable.tool_gateway import (
     prepare_tool_call,
@@ -812,18 +829,36 @@ async def on_pre_tool_use_ledger(
 
     # Check for disallowed/hallucinated tools
     if tool_name in DISALLOWED_TOOLS:
-        return {
-            "systemMessage": (
-                f"⚠️ Tool '{tool_name}' is not available or is a restricted native tool. "
-                "Use 'mcp__composio__COMPOSIO_SEARCH_WEB' or similar relevant tools instead."
-            ),
-            "decision": "block",
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": f"Tool '{tool_name}' is disallowed.",
-            },
-        }
+        print(f"DEBUG: Checking disallowed tool: {tool_name}")
+        # Context detection for sub-agents (Allow Research Specialist to search)
+        parent_tool_use_id = input_data.get("parent_tool_use_id")
+        transcript_path_chk = input_data.get("transcript_path", "")
+        # Safety check for _primary_transcript_path existence
+        primary_path = globals().get("_primary_transcript_path")
+        
+        is_subagent_context = bool(parent_tool_use_id) or (
+            primary_path is not None 
+            and transcript_path_chk 
+            and transcript_path_chk != primary_path
+        )
+        print(f"DEBUG: is_subagent_context={is_subagent_context} (parent={parent_tool_use_id}, path={transcript_path_chk}, primary={primary_path})")
+        
+        # If in sub-agent, ALLOW the tool (Specialists need access to tools blocked for Primary)
+        if is_subagent_context:
+             pass
+        else:
+            return {
+                "systemMessage": (
+                    f"⚠️ Tool '{tool_name}' is not available for the Primary Agent. "
+                    "You must DELEGATE this task to a specialist (e.g., use the 'Task' tool with 'research-specialist')."
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": f"Tool '{tool_name}' is disallowed for Primary Agent.",
+                },
+            }
 
     # Block Write calls with empty/missing required params (context exhaustion symptom)
     if tool_name == "Write":
@@ -5966,7 +6001,18 @@ async def setup_session(
             ]
         )
 
+    # Unify architecture: Use shared hooks from hooks.py
+    # Initialize hooks manager (passing global run context)
+    hooks_manager = AgentHookSet(
+        run_id=run_id,
+        tool_ledger=tool_ledger,
+        runtime_db_conn=runtime_db_conn,
+        enable_skills=True,
+        active_workspace=str(workspace_dir)
+    )
+
     agent = UniversalAgent(workspace_dir=workspace_dir)
+    setup_log_bridge(agent)
     options = ClaudeAgentOptions(
         model="claude-3-5-sonnet-20241022",
         add_dirs=[os.path.join(src_dir, ".claude")],
@@ -6137,6 +6183,8 @@ async def setup_session(
                 tools=[
                     run_research_pipeline_wrapper,
                     crawl_parallel_wrapper,
+                    run_research_phase_wrapper,
+                    run_report_generation_wrapper,
                 ]
             ),
         },
@@ -6145,7 +6193,7 @@ async def setup_session(
         # AND local_toolkit tools (crawl_parallel, read_local_file, etc.)
         # Sub-agents inherit all tools via model="inherit".
 
-        hooks=build_cli_hooks(),
+        hooks=hooks_manager.build_hooks(),
         permission_mode="bypassPermissions",
     )
     _warn_if_subagent_hooks_configured(options.agents)
@@ -7907,58 +7955,74 @@ async def main(args: argparse.Namespace):
             print(f"\n📊 Full trace saved to {trace_path}")
 
             # Save comprehensive session summary
-            summary_path = os.path.join(workspace_dir, "session_summary.txt")
-            with open(summary_path, "w") as f:
-                f.write("=" * 60 + "\n")
-                f.write("SESSION SUMMARY\n")
-                f.write("=" * 60 + "\n\n")
-                f.write(f"Session Start: {trace.get('start_time', 'N/A')}\n")
-                f.write(f"Session End: {trace.get('end_time', 'N/A')}\n")
-                f.write(f"Execution Time: {trace['total_duration_seconds']}s\n")
-                f.write(f"Total Iterations: {len(trace['iterations'])}\n")
-                f.write(f"Total Tool Calls: {len(trace['tool_calls'])}\n")
-                f.write(f"Total Tool Results: {len(trace['tool_results'])}\n")
-                f.write(f"Status: {trace.get('status', 'complete')}\n\n")
+            summary_lines = []
+            summary_lines.append("=" * 60)
+            summary_lines.append("SESSION SUMMARY")
+            summary_lines.append("=" * 60 + "\n")
+            summary_lines.append(f"Session Start: {trace.get('start_time', 'N/A')}")
+            summary_lines.append(f"Session End: {trace.get('end_time', 'N/A')}")
+            summary_lines.append(f"Execution Time: {trace['total_duration_seconds']}s")
+            summary_lines.append(f"Total Iterations: {len(trace['iterations'])}")
+            summary_lines.append(f"Total Tool Calls: {len(trace['tool_calls'])}")
+            summary_lines.append(f"Total Tool Results: {len(trace['tool_results'])}")
+            summary_lines.append(f"Status: {trace.get('status', 'complete')}\n")
 
-                # Code execution check
-                code_exec_tools = [
-                    "WORKBENCH",
-                    "CODE",
-                    "EXECUTE",
-                    "PYTHON",
-                    "SANDBOX",
-                    "BASH",
-                ]
-                code_exec_used = any(
-                    any(x in tc["name"].upper() for x in code_exec_tools)
-                    for tc in trace["tool_calls"]
+            # Code execution check
+            code_exec_tools = [
+                "WORKBENCH",
+                "CODE",
+                "EXECUTE",
+                "PYTHON",
+                "SANDBOX",
+                "BASH",
+            ]
+            code_exec_used = any(
+                any(x in tc["name"].upper() for x in code_exec_tools)
+                for tc in trace["tool_calls"]
+            )
+            summary_lines.append(f"Code Execution Used: {'Yes' if code_exec_used else 'No'}\n")
+
+            # Tool call breakdown
+            summary_lines.append("=" * 60)
+            summary_lines.append("TOOL CALL BREAKDOWN")
+            summary_lines.append("=" * 60)
+            for tc in trace["tool_calls"]:
+                marker = (
+                    "🏭 "
+                    if any(
+                        x in tc["name"].upper()
+                        for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]
+                    )
+                    else "   "
                 )
-                f.write(f"Code Execution Used: {'Yes' if code_exec_used else 'No'}\n\n")
+                summary_lines.append(
+                    f"{marker}Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}"
+                )
 
-                # Tool call breakdown
-                f.write("=" * 60 + "\n")
-                f.write("TOOL CALL BREAKDOWN\n")
-                f.write("=" * 60 + "\n")
-                for tc in trace["tool_calls"]:
-                    marker = (
-                        "🏭 "
-                        if any(
-                            x in tc["name"].upper()
-                            for x in ["WORKBENCH", "CODE", "EXECUTE", "BASH"]
-                        )
-                        else "   "
-                    )
-                    f.write(
-                        f"{marker}Iter {tc['iteration']} | +{tc['time_offset_seconds']:>6.1f}s | {tc['name']}\n"
-                    )
+            # Logfire trace link
+            if LOGFIRE_TOKEN and "trace_id" in trace:
+                project_slug = os.getenv(
+                    "LOGFIRE_PROJECT_SLUG", "Kjdragan/composio-claudemultiagent"
+                )
+                logfire_url = f"https://logfire.pydantic.dev/{project_slug}?q=trace_id%3D%27{trace['trace_id']}%27"
+                summary_lines.append(f"\nLogfire Trace: {logfire_url}")
 
-                # Logfire trace link
-                if LOGFIRE_TOKEN and "trace_id" in trace:
-                    project_slug = os.getenv(
-                        "LOGFIRE_PROJECT_SLUG", "Kjdragan/composio-claudemultiagent"
-                    )
-                    logfire_url = f"https://logfire.pydantic.dev/{project_slug}?q=trace_id%3D%27{trace['trace_id']}%27"
-                    f.write(f"\nLogfire Trace: {logfire_url}\n")
+            summary_content = "\n".join(summary_lines)
+            summary_path = os.path.join(workspace_dir, "session_summary.txt")
+            
+            with open(summary_path, "w") as f:
+                f.write(summary_content)
+
+            # Emit summary to UI Logs
+            try:
+                await agent.send_agent_event(EventType.STATUS, {
+                    "status": summary_content,
+                    "level": "INFO", 
+                    "prefix": "SYSTEM",
+                    "is_log": True
+                })
+            except Exception as e:
+                print(f"⚠️ Failed to emit summary to UI: {e}")
 
             print(f"📋 Session summary saved to {summary_path}")
 

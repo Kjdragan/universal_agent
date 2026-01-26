@@ -40,7 +40,9 @@ interface AgentStore {
 
   // Current streaming message
   currentStreamingMessage: string;
-  appendToStream: (text: string) => void;
+  currentAuthor?: string;
+  currentOffset?: number;
+  appendToStream: (text: string, author?: string, offset?: number) => void;
   finishStream: () => void;
 
   // Tool calls
@@ -120,6 +122,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         ...message,
         id: generateId(),
         timestamp: Date.now(),
+        time_offset: message.time_offset ?? 0,
       },
     ],
   })),
@@ -130,8 +133,12 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   // Current streaming message
   currentStreamingMessage: "",
-  appendToStream: (text) => set((state) => ({
+  currentAuthor: undefined,
+  currentOffset: undefined,
+  appendToStream: (text, author, offset) => set((state) => ({
     currentStreamingMessage: state.currentStreamingMessage + text,
+    currentAuthor: author || state.currentAuthor,
+    currentOffset: offset !== undefined ? offset : state.currentOffset,
   })),
   finishStream: () => set((state) => {
     // Add the completed message to the messages list
@@ -141,14 +148,19 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         role: "assistant",
         content: state.currentStreamingMessage,
         timestamp: Date.now(),
+        time_offset: state.currentOffset ?? 0,
         is_complete: true,
+        author: state.currentAuthor,
+        thinking: state.currentThinking,
       };
       return {
         messages: [...state.messages, newMessage],
         currentStreamingMessage: "",
+        currentAuthor: undefined,
+        currentThinking: "",
       };
     }
-    return { currentStreamingMessage: "" };
+    return { currentStreamingMessage: "", currentAuthor: undefined, currentThinking: "" };
   }),
 
   // Tool calls
@@ -274,11 +286,15 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
 
     case "text": {
       const data = event.data as Record<string, unknown>;
-      store.appendToStream((data.text as string) ?? "");
+      const offset = (data.time_offset as number) ?? (event.time_offset as number);
+      store.appendToStream((data.text as string) ?? "", (data.author as string), offset);
       break;
     }
 
     case "tool_call": {
+      const store = useAgentStore.getState(); // Re-fetch logic if needed, but 'store' is already in scope
+      store.finishStream(); // <--- BREAK THE WALL OF TEXT
+
       const data = event.data as Record<string, unknown>;
       store.addToolCall({
         id: (data.id as string) ?? "",

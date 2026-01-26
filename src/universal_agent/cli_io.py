@@ -174,9 +174,24 @@ async def render_agent_events(
     auth_required = False
     auth_link = None
 
+    last_author = None
     async for event in event_stream:
         if event.type == EventType.TEXT:
             text = event.data.get("text", "")
+            author = event.data.get("author", "Primary Agent")
+            
+            # Print author header if it changed
+            if author != last_author:
+                prefix = "\n\n🤖"
+                if "Research" in author: prefix = "\n\n🔍"
+                elif "Subagent" in author: prefix = "\n\n⚙️"
+                
+                offset = event.data.get("time_offset")
+                offset_str = f" [+{offset:.1f}s]" if offset is not None else ""
+                
+                print(f"{prefix} \033[1;34m{author}\033[0m\033[2m{offset_str}\033[0m\n", flush=True)
+                last_author = author
+
             response_text += text
             if text:
                 print(text, end="", flush=True)
