@@ -5009,6 +5009,12 @@ wheels = [
 ]
 
 [[package]]
+name = "tasklib"
+version = "2.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3e/50/3e876f39e31bad8783fd3fe117577cbf1dde836e161f8446631bde71aeb4/tasklib-2.5.1.tar.gz", hash = "sha256:5ccd731b52636dd10457a8b8d858cb0d026ffaab1e3e751baf791bf803e37d7b", size = 23805, upload-time = "2022-11-17T02:48:09.446Z" }
+
+[[package]]
 name = "tenacity"
 version = "9.1.2"
 source = { registry = "https://pypi.org/simple" }
@@ -5379,6 +5385,7 @@ dependencies = [
     { name = "rich" },
     { name = "sentence-transformers" },
     { name = "starlette" },
+    { name = "tasklib" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "weasyprint" },
     { name = "websockets" },
@@ -5435,6 +5442,7 @@ requires-dist = [
     { name = "rich", specifier = ">=14.2.0" },
     { name = "sentence-transformers", specifier = ">=5.2.0" },
     { name = "starlette", specifier = ">=0.50.0" },
+    { name = "tasklib", specifier = ">=2.5.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "weasyprint", specifier = ">=67.0" },
     { name = "websockets", specifier = ">=14.0" },

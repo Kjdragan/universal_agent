@@ -54,6 +54,7 @@ dependencies = [
     "matplotlib>=3.10.8",
     "fpdf2>=2.8.5",
     "remotion-lambda>=4.0.409",
+    "tasklib>=2.5.1",
 ]
 
 

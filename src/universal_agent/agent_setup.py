@@ -451,15 +451,28 @@ class AgentSetup:
                 version="1.0.0",
                 tools=[run_report_generation_wrapper, run_research_pipeline_wrapper, crawl_parallel_wrapper, run_research_phase_wrapper]
             ),
-            # "zai_vision": {
-            #     "type": "stdio",
-            #     "command": "npx",
-            #     "args": ["-y", "@z_ai/mcp-server"],
-            #     "env": {
-            #         "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
-            #         "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
-            #     },
-            # },
+            "taskwarrior": {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [
+                    os.path.join(
+                        os.path.dirname(__file__), "mcp_server_taskwarrior.py"
+                    )
+                ],
+            },
+            "telegram": {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [
+                    os.path.join(
+                        os.path.dirname(__file__), "mcp_server_telegram.py"
+                    )
+                ],
+                "env": {
+                    "TELEGRAM_BOT_TOKEN": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+                    "TELEGRAM_ALLOWED_USER_IDS": os.environ.get("TELEGRAM_ALLOWED_USER_IDS", ""),
+                },
+            },
         }
 
     def _default_hooks(self) -> dict:
