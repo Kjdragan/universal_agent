@@ -130,6 +130,21 @@ from universal_agent.execution_session import ExecutionSession
 from universal_agent.trace_utils import write_trace
 
 
+# Global State Initialization
+tool_ledger = None
+budget_state = {}
+trace = {}
+run_id = None
+runtime_db_conn = None
+budget_config = {}
+provider_session_forked_from = None
+current_execution_session = None
+gateway_mode_active = False
+interrupt_requested = False
+last_sigint_ts = None
+current_step_id = None
+
+
 class BudgetExceeded(RuntimeError):
     def __init__(
         self, budget_name: str, limit: float, current: float, detail: str = ""
@@ -219,6 +234,45 @@ def _get_gateway_tool_call_id(raw_id: object) -> str:
     tool_call_id = f"gw-{run_id or 'unknown'}-{uuid.uuid4()}"
     gateway_tool_call_map[key] = tool_call_id
     return tool_call_id
+
+
+
+def safe_clear_history(client: Any) -> bool:
+    """
+    Safely clear message history for many client types (ClaudeSDKClient, UniversalAgent, etc).
+    Returns True if history was found and cleared.
+    """
+    if not client or not hasattr(client, "history"):
+        return False
+        
+    cleared = False
+    hist = client.history
+    
+    # 1. Try explicit clear_history() (SDK Hook pattern)
+    if hasattr(hist, "clear_history") and callable(hist.clear_history):
+        try:
+            hist.clear_history()
+            cleared = True
+        except Exception:
+            pass
+            
+    # 2. Try reset() (MessageHistory pattern)
+    if not cleared and hasattr(hist, "reset") and callable(hist.reset):
+        try:
+            hist.reset()
+            cleared = True
+        except Exception:
+            pass
+            
+    # 3. Try to set to empty list (Native history / generic pattern)
+    if not cleared:
+        try:
+            client.history = []
+            cleared = True
+        except Exception:
+            pass
+            
+    return cleared
 
 
 def _normalize_gateway_file_path(path_value: Any) -> Any:
@@ -534,20 +588,28 @@ _LETTA_SUBAGENT_ENABLED = os.getenv("UA_LETTA_SUBAGENT_MEMORY", "0").lower() in 
 
 try:
     from agentic_learning import learning, AgenticLearning, AsyncAgenticLearning
+    
+    # Only attempt initialization if explicitly enabled or if we want soft degradation
+    if _LETTA_SUBAGENT_ENABLED:
+        try:
+            _letta_client = AgenticLearning()
+            _letta_async_client = AsyncAgenticLearning()
 
-    _letta_client = AgenticLearning()
-    _letta_async_client = AsyncAgenticLearning()
+            # Ensure agent exists
+            try:
+                _letta_client.agents.retrieve(LETTA_AGENT_NAME)
+            except Exception:
+                _letta_client.agents.create(
+                    agent=LETTA_AGENT_NAME,
+                    memory=LETTA_MEMORY_BLOCKS,
+                    model="anthropic/claude-sonnet-4-20250514",
+                )
+                print(f"✅ Letta agent '{LETTA_AGENT_NAME}' created")
+        except Exception as e:
+            print(f"⚠️ Letta initialization failed (soft fail): {e}")
+            _letta_client = None
+            _letta_async_client = None
 
-    # Ensure agent exists
-    try:
-        _letta_client.agents.retrieve(LETTA_AGENT_NAME)
-    except Exception:
-        _letta_client.agents.create(
-            agent=LETTA_AGENT_NAME,
-            memory=LETTA_MEMORY_BLOCKS,
-            model="anthropic/claude-sonnet-4-20250514",
-        )
-        print(f"✅ Letta agent '{LETTA_AGENT_NAME}' created")
     
     # Log subagent memory status
     if _LETTA_SUBAGENT_ENABLED:
@@ -571,10 +633,15 @@ async def _ensure_letta_context() -> None:
     if _letta_async_client is None:
         return
 
+    capture_only = os.getenv("UA_LETTA_CAPTURE_ONLY", "0").lower() in {"1", "true", "yes"}
+    if capture_only:
+        print("🧠 Letta mode: LEARNING ONLY (Injection disabled)")
+
     _LETTA_CONTEXT = learning(
         agent=LETTA_AGENT_NAME,
         memory=LETTA_MEMORY_BLOCKS,
         client=_letta_async_client,
+        capture_only=capture_only,
     )
     await _LETTA_CONTEXT.__aenter__()
     _LETTA_CONTEXT_READY = True
@@ -3017,18 +3084,16 @@ session = None
 options = None
 
 
-# Trace will be created in main() after session is initialized
-# Type hint: Dict[str, Any] - initialized in main()
-trace: dict = {}
-run_id: Optional[str] = None
-budget_config: dict = {}
-budget_state: dict = {"start_ts": None, "steps": 0, "tool_calls": 0}
-runtime_db_conn = None
-tool_ledger: Optional[ToolCallLedger] = None
+# Global session state
+run_id: str = "unknown"
 current_step_id: Optional[str] = None
+trace: dict = {"tool_calls": [], "token_usage": {"input": 0, "output": 0, "total": 0}}
+start_ts: float = time.time()
+runtime_db_conn: Optional[sqlite3.Connection] = None
 current_execution_session: Optional[ExecutionSession] = None
 interrupt_requested = False
 last_sigint_ts: float | None = None
+OBSERVER_WORKSPACE_DIR = os.getcwd() # Default baseline
 provider_session_forked_from: Optional[str] = None
 gateway_mode_active = False
 gateway_tool_call_map: dict[str, str] = {}
@@ -4933,14 +4998,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 pending_prompt = next_prompt
 
                                 # 3. Clear Context
-                                if hasattr(client, "history"):
-                                    if hasattr(client.history, "clear_history"):
-                                        client.history.clear_history()
-                                    elif hasattr(client.history, "reset"):
-                                        client.history.reset()
-                                    else:
-                                        client.history = []
+                                if safe_clear_history(client):
                                     print("🧹 Client history cleared (Context Reset).")
+                                else:
+                                    print("⚠️ Could not clear history: client.history not available")
 
                                 # 4. Reset Token Counter for new session
                                 trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
@@ -5609,6 +5670,17 @@ def parse_cli_args() -> argparse.Namespace:
         dest="harness_objective",
         help="Run in harness mode with the specified objective.",
     )
+    # [NEW] Auto-Interview support
+    parser.add_argument(
+        "--interview-auto",
+        type=str,
+        help="Comma-separated list of answers for automated interview (e.g., '1,2,1')",
+    )
+    parser.add_argument(
+        "--harness-template",
+        type=str,
+        help="Path to a plan JSON file to skip interview (e.g., 'urw/sample_plan.json')",
+    )
     parser.add_argument(
         "--explain-tool-policy",
         dest="explain_tool_policy",
@@ -6254,7 +6326,7 @@ async def setup_session(
         print(f"✅ Injected Knowledge Base ({len(tool_knowledge_content)} chars)")
 
 
-    return options, session, user_id, workspace_dir, trace
+    return options, session, user_id, workspace_dir, trace, agent
 
 
 async def process_turn(
@@ -6681,7 +6753,7 @@ async def main(args: argparse.Namespace):
         workspace_override = run_spec.get("workspace_dir")
         run_id_override = args.run_id
 
-    options, session, user_id, workspace_dir, trace = await setup_session(
+    options, session, user_id, workspace_dir, trace, agent = await setup_session(
         run_id_override=run_id_override,
         workspace_dir_override=workspace_override,
     )
@@ -6910,6 +6982,7 @@ async def main(args: argparse.Namespace):
     )
 
     def save_interrupt_checkpoint(prompt_preview: str) -> None:
+        global current_step_id
         if not runtime_db_conn or not run_id:
             return
         step_id = current_step_id
@@ -7272,19 +7345,53 @@ async def main(args: argparse.Namespace):
 
                     print(f"🎯 Objective: {target_objective}")
 
+                    from pathlib import Path
+
+                    # [NEW] Configure Auto-Interview
+                    if args.interview_auto:
+                        from .urw import interview
+                        answers = [a.strip() for a in args.interview_auto.split(",") if a.strip()]
+                        interview.set_auto_answers(answers)
+                        print(f"⏩ Auto-Interview Enabled: {len(answers)} pre-filled answers loaded.")
+
+                    # [NEW] Template Mode
+                    template_file = None
+                    # [NEW] Template Mode
+                    template_file = None
+                    if args.harness_template:
+                         # Resolve the path relative to CWD or absolute
+                         given_path = Path(args.harness_template) 
+                         if not given_path.exists():
+                             # Try relative to module if not found
+                             module_path = Path(__file__).parent / "urw" / args.harness_template
+                             if module_path.exists():
+                                 given_path = module_path
+                         
+                         template_file = given_path
+                         if not template_file.exists():
+                             print(f"❌ Template file not found: {args.harness_template}")
+                             return 
+                         
                     # Route to HarnessOrchestrator for phase-based execution
                     try:
-                        from pathlib import Path
                         from .urw.harness_orchestrator import run_harness
                         
                         workspaces_root = Path(workspace_dir).parent
                         
-                        result = await run_harness(
-                            massive_request=target_objective,
-                            workspaces_root=workspaces_root,
-                            process_turn=process_turn,
-                            client=client,
-                        )
+                        run_kwargs = {
+                            "massive_request": target_objective,
+                            "workspaces_root": workspaces_root,
+                            "process_turn": process_turn,
+                            "client": client,
+                            "agent": None,
+                        }
+
+                        if template_file:
+                             # Pass as template_file (transcript) for generation
+                             run_kwargs["template_file"] = template_file
+                             print(f"📋 Running with interview template: {template_file}")
+
+                        result = await run_harness(**run_kwargs)
                         
                         print(f"\n{'=' * 60}")
                         print("🏁 HARNESS COMPLETE")
@@ -7482,16 +7589,9 @@ async def main(args: argparse.Namespace):
                         pending_prompt = failure_alert
 
                         # 4. Clear Client History (Force restart)
-                        if hasattr(client, "history"):
-                            if hasattr(client.history, "clear_history"):
-                                client.history.clear_history()
-                            elif hasattr(client.history, "reset"):
-                                client.history.reset()
-                            else:
-                                client.history = []
+                        if safe_clear_history(client):
+                            print("🧹 Client history cleared (Force restart).")
                         else:
-                            # If no history attribute, maybe we can't clear it easily, 
-                            # but logging failure allows debugging
                             logfire.warning("harness_restart_history_clear_failed")
 
                         # 5. Continue loop (skips existing post-turn logic, goes to next iteration)
@@ -7760,8 +7860,7 @@ async def main(args: argparse.Namespace):
                                     pending_prompt = next_prompt
 
                                 # Clear Client History
-                                if hasattr(client, "history"):
-                                    client.history = []
+                                if safe_clear_history(client):
                                     print("🧹 Client history cleared.")
 
                                 continue
@@ -7822,8 +7921,8 @@ async def main(args: argparse.Namespace):
                                         )
                                         # Trigger restart
                                         pending_prompt = next_prompt
-                                        if hasattr(client, "history"):
-                                            client.history = []
+                                        if safe_clear_history(client):
+                                            pass # Cleared successfully
                                         continue
 
                                     # Verify all completed tasks
@@ -7863,8 +7962,8 @@ async def main(args: argparse.Namespace):
                                     )
                                     # Continue to restart logic (handled below)
                                     pending_prompt = next_prompt
-                                    if hasattr(client, "history"):
-                                        client.history = []
+                                    if safe_clear_history(client):
+                                        pass # Cleared successfully
                                     continue
                                 
                                 print("✅ Verification Passed. Finishing run.")

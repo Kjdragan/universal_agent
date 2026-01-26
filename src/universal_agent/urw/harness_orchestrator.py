@@ -200,6 +200,7 @@ class HarnessOrchestrator:
         massive_request: str,
         process_turn: ProcessTurnInterface,
         client: Any,
+        agent: Any = None,
         skip_interview: bool = False,
         plan_file: Optional[Path] = None,
         template_file: Optional[Path] = None,
@@ -319,6 +320,7 @@ class HarnessOrchestrator:
                     phase,
                     process_turn,
                     client,
+                    agent=agent,
                     feedback=feedback,
                     is_resuming=is_resuming,
                     prior_session_path=prior_session_path,
@@ -390,6 +392,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         phase: Phase,
         process_turn: ProcessTurnInterface,
         client: Any,
+        agent: Any = None,
         feedback: Optional[str] = None,
         is_resuming: bool = False,
         prior_session_path: Optional[str] = None,
@@ -423,18 +426,37 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         from universal_agent.urw.harness_helpers import compact_agent_context
         compact_result = compact_agent_context(client, self.config.force_new_client_between_phases)
         self._log(f"Context: {compact_result['notes']}")
+        
+        # DEBUG: Check agent status
+        self._log(f"DEBUG: agent_object={agent}, has_history={hasattr(agent, 'history') if agent else 'N/A'}")
 
         if not compact_result.get("keep_client", True):
-            if hasattr(client, "history"):
-                if hasattr(client.history, "clear_history"):
-                    client.history.clear_history()
-                elif hasattr(client.history, "reset"): # Support for MessageHistory
-                    client.history.reset()
+            # Try to clear history on the underlying UniversalAgent if available
+            if agent and hasattr(agent, "history"):
+                if hasattr(agent.history, "reset"):
+                     agent.history.reset()
+                     self._log("🧼 Agent history reset (Phase Boundary Hard Reset)")
+                else:
+                     self._log("⚠️ Could not reset agent history: .reset() missing")
+            # Fallback for SDK client history (legacy support)
+            elif hasattr(client, "history"):
+                cleared = False
+                hist = client.history
+                
+                if hasattr(hist, "clear_history"):
+                    hist.clear_history()
+                    cleared = True
+                elif hasattr(hist, "reset"): # Support for MessageHistory
+                    hist.reset()
+                    cleared = True
                 else:
                     client.history = []
-                self._log("🧼 Client history cleared (Phase Boundary Hard Reset)")
+                    cleared = True
+                    
+                if cleared:
+                    self._log("🧼 Client history cleared (Phase Boundary Hard Reset)")
             else:
-                self._log("⚠️ Could not clear history: client.history not available")
+                self._log("⚠️ Could not clear history: agent/client history not available")
         
         # --- Heuristic Context Injection ---
         # "Prod" the agent to use specialists if the task description matches known capabilities.
@@ -626,6 +648,13 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
                 for f in task_dir.iterdir():
                     if f.is_file():
                         artifacts.append(str(f.relative_to(session_path)))
+
+        # CRITICAL FIX: Include search results so research tasks can be verified
+        search_results = session_root / "search_results"
+        if search_results.exists():
+            for f in search_results.rglob("*"):
+                if f.is_file() and f.suffix.lower() == ".json":
+                    artifacts.append(str(f.relative_to(session_path)))
         
         return artifacts
 
@@ -975,6 +1004,7 @@ async def run_harness(
     workspaces_root: Path,
     process_turn: ProcessTurnInterface,
     client: Any,
+    agent: Any = None,
     config: Optional[HarnessConfig] = None,
     skip_interview: bool = False,
     plan_file: Optional[Path] = None,
@@ -995,6 +1025,7 @@ async def run_harness(
         massive_request, 
         process_turn, 
         client,
+        agent=agent,
         skip_interview=skip_interview,
         plan_file=plan_file,
         template_file=template_file,

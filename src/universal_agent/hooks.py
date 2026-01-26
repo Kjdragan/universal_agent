@@ -254,7 +254,52 @@ class AgentHookSet:
             pass # Ledger completion logic
         return {}
 
-    async def on_post_tool_use_validation(self, *args) -> dict:
+    async def on_post_tool_use_validation(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
+        """
+        PostToolUse Hook: Detect validation errors and inject corrective hints.
+        This provides 'Corrective Schema Advice' to help the agent recover autonomously.
+        """
+        tool_result = input_data.get("tool_result", {})
+        is_error = False
+        error_text = ""
+        
+        # Extract error from standard SDK result format
+        if isinstance(tool_result, dict):
+             is_error = tool_result.get("is_error", False)
+             content = tool_result.get("content", [])
+             if is_error and isinstance(content, list):
+                 for block in content:
+                     if isinstance(block, dict) and block.get("type") == "text":
+                         error_text += block.get("text", "")
+        
+        if is_error and error_text:
+            # 1. Detect common schema/validation errors
+            validation_hints = {
+                "required parameter": "⚠️ Schema Validation Failed: You missed a mandatory argument.",
+                "missing required parameter": "⚠️ Schema Validation Failed: You missed a mandatory argument.",
+                "InputValidationError": "⚠️ Input Validation Failed: The arguments provided do not match the expected schema.",
+                "invalid type": "⚠️ Type Mismatch: Check the schema for correct argument types (e.g., string vs list).",
+            }
+            
+            hint = "⚠️ Tool call failed validation."
+            for pattern, advice in validation_hints.items():
+                if pattern.lower() in error_text.lower():
+                    hint = advice
+                    break
+            
+            # Suggest remedial action
+            hint += f"\n\n**Corrective Advice:**\n1. Re-read the tool definition using `?tool_name` (if available) or check the error message carefully: `{error_text[:200]}`.\n2. Ensure ALL required parameters are present.\n3. Do not assume values; if unsure, search for the correct data first."
+            
+            logfire.warning(
+                "tool_validation_error_detected",
+                tool_use_id=str(tool_use_id),
+                error_preview=error_text[:100],
+            )
+            
+            return {
+                "systemMessage": hint
+            }
+
         return {}
 
     async def on_post_research_finalized_cache(self, *args) -> dict:
