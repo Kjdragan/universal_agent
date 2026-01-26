@@ -59,3 +59,7 @@ russia_ukraine_war_*.md
 tasks/
 test-remotion-project
 remotion_projects/
+*.db
+*.db-shm
+*.db-wal
+models.txt
