@@ -484,8 +484,10 @@ class AgentSetup:
                 tool_output_validator_hook,
                 pre_compact_context_capture_hook,
             )
+            from universal_agent.guardrails.tool_schema import pre_tool_use_schema_guardrail
             return {
                 "PreToolUse": [
+                    HookMatcher(matcher="*", hooks=[pre_tool_use_schema_guardrail]),
                     HookMatcher(matcher="*", hooks=[malformed_tool_guardrail_hook]),
                 ],
                 "PostToolUse": [

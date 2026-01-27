@@ -10,6 +10,7 @@ try:
 except ImportError:
     # Fallback types for pure logic if SDK not present (unlikely)
     Message = Dict[str, Any]
+    UserMessage = AssistantMessage = ToolUseBlock = ToolResultBlock = TextBlock = object
 
 logger = logging.getLogger(__name__)
 
@@ -96,31 +97,43 @@ class ContextManager:
         
         while i < len(middle):
             msg = middle[i]
-            
+
             # Check if this is an Assistant message with ToolUse
             is_tool_use = False
             tool_uses = []
-            
+
             if hasattr(msg, 'content') and isinstance(msg.content, list):
                 for block in msg.content:
                     if isinstance(block, ToolUseBlock):
                         is_tool_use = True
                         tool_uses.append(block)
-            
+            elif isinstance(msg, dict):
+                # Anthropic dict schema: assistant content blocks with type "tool_use"
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            is_tool_use = True
+                            tool_uses.append(block)
+
             # Simple Pattern: Assistant(ToolUse) -> User(ToolResult)
             if is_tool_use and (i + 1 < len(middle)):
-                next_msg = middle[i+1]
+                next_msg = middle[i + 1]
                 is_tool_result = False
                 # Check if next message is tool results matching the uses
                 # Simplify: just check if next is User/ToolResult message
                 if hasattr(next_msg, 'content') and isinstance(next_msg.content, list):
-                    # It's a list of blocks
-                    # Check if all blocks are ToolResultBlocks
-                    # Actually, just check if it contains ANY result.
                     # In SDK, results come as UserMessage with ToolResultBlocks
-                    result_blocks = [b for b in next_msg.content if isinstance(block, ToolResultBlock)]
-                    if result_blocks or isinstance(next_msg, UserMessage): # UserMessage often holds the result
-                         is_tool_result = True
+                    result_blocks = [b for b in next_msg.content if isinstance(b, ToolResultBlock)]
+                    if result_blocks or isinstance(next_msg, UserMessage):
+                        is_tool_result = True
+                elif isinstance(next_msg, dict):
+                    content = next_msg.get("content", [])
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                is_tool_result = True
+                                break
                 
                 if is_tool_result:
                     # FOUND A LOOP: Tool Use -> Tool Result
@@ -169,9 +182,8 @@ class ContextManager:
                     # Just truncate large ToolResultBlocks.
                     
                     # Logic 2: Truncate Result Content
-                    new_blocks = []
                     modified = False
-                    if isinstance(next_msg.content, list):
+                    if hasattr(next_msg, "content") and isinstance(next_msg.content, list):
                         for b in next_msg.content:
                             if isinstance(b, ToolResultBlock): # Check type name
                                 # Truncate content
@@ -189,6 +201,23 @@ class ContextManager:
                                     except Exception:
                                         # If immutable, we might need a different strategy
                                         pass
+                    elif isinstance(next_msg, dict):
+                        content = next_msg.get("content", [])
+                        if isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "tool_result":
+                                    block_content = block.get("content")
+                                    content_str = str(block_content) if block_content else ""
+                                    if len(content_str) > 500:
+                                        block["content"] = content_str[:200] + f"... [TRUNCATED: {len(content_str)} chars]"
+                                        modified = True
+                                        tools_summarized += 1
+                        # If the tool result isn't block-based, fallback to summary note
+                        if not modified and isinstance(next_msg.get("content"), str):
+                            if len(next_msg["content"]) > 500:
+                                next_msg["content"] = summary_text
+                                modified = True
+                                tools_summarized += 1
                     
                     if modified:
                         # We successfully pruned in place

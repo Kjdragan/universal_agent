@@ -1016,6 +1016,12 @@ async def run_harness(
     """
     if config is None:
         config = HarnessConfig(max_iterations=max_iterations)
+        use_gateway_env = os.getenv("UA_HARNESS_USE_GATEWAY", "1").lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        config.use_gateway = use_gateway_env
     else:
         # Override if passed explicitly
         config.max_iterations = max_iterations
