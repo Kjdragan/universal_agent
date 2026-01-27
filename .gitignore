@@ -63,3 +63,6 @@ remotion_projects/
 *.db-shm
 *.db-wal
 models.txt
+
+src/universal_agent.egg-info/
+scripts/test_results.json
