@@ -44,6 +44,8 @@ for env_path in [
 import httpx
 import yaml
 
+from universal_agent.rate_limiter import ZAIRateLimiter
+
 # Configuration
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 AUTH_TOKEN = os.getenv("ZAI_API_KEY", os.getenv("ANTHROPIC_AUTH_TOKEN"))
@@ -211,11 +213,12 @@ def parse_article_file(filepath: Path) -> Optional[ArticleMetadata]:
 async def extract_batch(
     session: httpx.AsyncClient, 
     articles: list[ArticleMetadata],
-    semaphore: asyncio.Semaphore,
+    limiter: ZAIRateLimiter,
     batch_index: int = 0
 ) -> dict:
-    """Extract key content from a batch of articles in a single API call."""
-    async with semaphore:
+    """Extract key content from a batch of articles using centralized rate limiter."""
+    context = f"corpus_batch_{batch_index}"
+    async with limiter.acquire(context):
         # Start Logfire span for batch extraction
         span_context = None
         if LOGFIRE_AVAILABLE and logfire:
@@ -263,6 +266,7 @@ async def extract_batch(
                 elapsed = time.perf_counter() - start
                 
                 if response.status_code == 200:
+                    await limiter.record_success()
                     data = response.json()
                     content = data.get("content", [{}])[0].get("text", "")
                     result = {
@@ -282,9 +286,10 @@ async def extract_batch(
                         )
                     return result
                 elif response.status_code == 429:
-                    # Rate limited - exponential backoff
-                    delay = base_delay * (2 ** attempt)
-                    print(f"  ⚠️ [429] Rate limited (Batch {batch_index}). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
+                    # Rate limited - use adaptive backoff
+                    await limiter.record_429(context)
+                    delay = limiter.get_backoff(attempt)
+                    print(f"  ⚠️ [429] Rate limited (Batch {batch_index}). Backoff: {delay:.1f}s (Attempt {attempt+1}/{MAX_RETRIES})")
                     await asyncio.sleep(delay)
                     continue
                 else:
@@ -297,8 +302,8 @@ async def extract_batch(
             except Exception as e:
                 # For network errors, also consider retrying if we haven't exhausted attempts
                 if attempt < MAX_RETRIES - 1:
-                    delay = base_delay * (2 ** attempt)
-                    print(f"  ⚠️ [Network Error] {type(e).__name__} (Batch {batch_index}). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
+                    delay = limiter.get_backoff(attempt)
+                    print(f"  ⚠️ [Network Error] {type(e).__name__} (Batch {batch_index}). Backoff: {delay:.1f}s (Attempt {attempt+1}/{MAX_RETRIES})")
                     await asyncio.sleep(delay)
                     continue
                 return {
@@ -442,14 +447,14 @@ async def refine_corpus(
         batches.append(articles[i:i + BATCH_SIZE])
     print(f"Created {len(batches)} batches (size={BATCH_SIZE})")
     
-    # 3. Process batches concurrently with rate limiting
+    # 3. Process batches concurrently with centralized rate limiter
+    limiter = ZAIRateLimiter.get_instance()
     print(f"\n⏳ Extracting key facts from {len(articles)} articles...")
-    print(f"   (Using {len(batches)} batches, max {MAX_CONCURRENT} concurrent)")
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+    print(f"   (Using {len(batches)} batches, max {limiter._max_concurrent} concurrent)")
     
     start_time = time.perf_counter()
     async with httpx.AsyncClient(timeout=60.0) as session:
-        tasks = [extract_batch(session, batch, semaphore, i) for i, batch in enumerate(batches)]
+        tasks = [extract_batch(session, batch, limiter, i) for i, batch in enumerate(batches)]
         results = await asyncio.gather(*tasks)
     total_time = time.perf_counter() - start_time
     print(f"   ✅ Extraction complete in {total_time:.1f}s")

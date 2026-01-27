@@ -6,58 +6,59 @@ from pathlib import Path
 from typing import Optional
 from anthropic import AsyncAnthropic
 
+from universal_agent.rate_limiter import ZAIRateLimiter
+
 # CONFIG - Auto-detect environment
 API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 MODEL = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-4.7")
 
-async def write_section(sem, client, section, corpus_text, order, base_path: Path):
-    """Write a single section. order is used to prefix filename for correct ordering."""
-    async with sem:
-        # Prefix with order number for correct assembly order
-        # Use base_path to construct the full path
-        output_dir = base_path / "work_products" / "_working" / "sections"
-        out_path = output_dir / f"{order:02d}_{section['id']}.md"
-        
-        if out_path.exists():
-            print(f"Skipping {section['id']} (Exists)")
-            return
+async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, order, base_path: Path):
+    """Write a single section using centralized rate limiter."""
+    # Prefix with order number for correct assembly order
+    output_dir = base_path / "work_products" / "_working" / "sections"
+    out_path = output_dir / f"{order:02d}_{section['id']}.md"
+    
+    if out_path.exists():
+        print(f"Skipping {section['id']} (Exists)")
+        return
 
-        # Identification
-        title = section.get("title", "").strip()
-        section_id = section.get("id", "").strip().lower()
-        is_executive = section_id == "executive_summary" or "executive summary" in title.lower()
-        
-        # Ensure directory exists (thread-safe enough for mkdir -p)
-        output_dir.mkdir(parents=True, exist_ok=True)
+    # Identification
+    title = section.get("title", "").strip()
+    section_id = section.get("id", "").strip().lower()
+    is_executive = section_id == "executive_summary" or "executive summary" in title.lower()
+    
+    # Ensure directory exists
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-        if is_executive:
-            print(f"Skipping generation for {section['id']} (Will be synthesized in cleanup phase)")
-            # Write placeholder so cleanup script finds the file
-            out_path.write_text("# Executive Summary\n\n[Pending Synthesis by Cleanup Tool]", encoding="utf-8")
-            return
+    if is_executive:
+        print(f"Skipping generation for {section['id']} (Will be synthesized in cleanup phase)")
+        out_path.write_text("# Executive Summary\n\n[Pending Synthesis by Cleanup Tool]", encoding="utf-8")
+        return
 
-        print(f"Drafting {section['title']}...")
-        
-        # Construct Prompt
-        heading_line = f"## {title}"
-        format_rules = "Start with the heading line exactly as shown. Use '###' for subheads as needed."
+    print(f"Drafting {section['title']}...")
+    
+    # Construct Prompt
+    heading_line = f"## {title}"
+    format_rules = "Start with the heading line exactly as shown. Use '###' for subheads as needed."
 
-        prompt = f"""You are a professional report writer.
+    prompt = f"""You are a professional report writer.
 
-        REQUIRED HEADING (first line):
-        {heading_line}
+    REQUIRED HEADING (first line):
+    {heading_line}
 
-        SECTION TITLE: {title}
-        CONTEXT:
-        {corpus_text[:20000]}
+    SECTION TITLE: {title}
+    CONTEXT:
+    {corpus_text[:20000]}
 
-        INSTRUCTION: Write a detailed, fact-based section for this report. Use markdown only (no code fences). {format_rules} Focus on this section's topic and avoid repeating statistics central to other sections unless needed for context."""
+    INSTRUCTION: Write a detailed, fact-based section for this report. Use markdown only (no code fences). {format_rules} Focus on this section's topic and avoid repeating statistics central to other sections unless needed for context."""
 
-        MAX_RETRIES = 5
-        base_delay = 2
-        
-        for attempt in range(MAX_RETRIES):
+    MAX_RETRIES = 5
+    last_error = None
+    context = section['id']
+    
+    for attempt in range(MAX_RETRIES):
+        async with limiter.acquire(context):
             try:
                 resp = await client.messages.create(
                     model=MODEL,
@@ -66,24 +67,29 @@ async def write_section(sem, client, section, corpus_text, order, base_path: Pat
                 )
                 content = resp.content[0].text
                 
+                await limiter.record_success()
                 out_path.write_text(content, encoding="utf-8")
                 print(f"✓ Finished {section['id']}")
-                return # Success
+                return
             except Exception as e:
-                # Check for 429 or concurrency errors
                 error_str = str(e).lower()
                 is_rate_limit = "429" in error_str or "too many requests" in error_str or "high concurrency" in error_str
                 
-                if is_rate_limit and attempt < MAX_RETRIES - 1:
-                    delay = base_delay * (2 ** attempt)
-                    print(f"  ⚠️ [429] Rate limited ({section['id']}). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
-                    await asyncio.sleep(delay)
-                    continue
-                
-                # For other errors or if max retries hit
-                print(f"❌ Error {section['id']}: {e}")
-                if not is_rate_limit:
-                    break # Don't retry non-rate-limit errors manually for now
+                if is_rate_limit:
+                    await limiter.record_429(context)
+                    last_error = e
+                    
+                    if attempt < MAX_RETRIES - 1:
+                        delay = limiter.get_backoff(attempt)
+                        print(f"  ⚠️ [429] Rate limited ({context}). Backoff: {delay:.1f}s (Attempt {attempt+1}/{MAX_RETRIES})")
+                        await asyncio.sleep(delay)
+                        continue
+                else:
+                    print(f"❌ Error {section['id']}: {e}")
+                    return
+    
+    if last_error:
+        print(f"❌ Max retries exhausted for {section['id']}: {last_error}")
 
 async def draft_report_async(
     workspace_path: Path, 
@@ -131,12 +137,13 @@ async def draft_report_async(
     if not API_KEY:
         return "Error: ANTHROPIC_AUTH_TOKEN/ZAI_API_KEY not set"
 
-    # 3. Initialize Client
-    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL, max_retries=3, timeout=60.0)
-    sem = asyncio.Semaphore(3) # Max 3 concurrent requests (reduced from 5 to avoid 429)
+    # 3. Initialize Client and Rate Limiter
+    # Set max_retries=0 on SDK - we handle retries with the centralized rate limiter
+    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL, max_retries=0, timeout=60.0)
+    limiter = ZAIRateLimiter.get_instance()
 
-    # 4. Run Parallel - pass order index for filename ordering
-    tasks = [write_section(sem, client, s, corpus_text, i+1, workspace_path) for i, s in enumerate(sections)]
+    # 4. Run Parallel - rate limiter controls concurrency
+    tasks = [write_section(limiter, client, s, corpus_text, i+1, workspace_path) for i, s in enumerate(sections)]
     await asyncio.gather(*tasks)
     
     return f"Drafting complete. Check {workspace_path}/work_products/_working/sections/"

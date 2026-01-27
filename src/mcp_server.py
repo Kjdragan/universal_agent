@@ -1366,8 +1366,8 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
         try:
             import asyncio
 
-            # Concurrency limit: max 5 parallel requests to avoid overwhelming API/System
-            CONCURRENCY_LIMIT = 5
+            # Concurrency limit: configurable via env var, default 8 for paid plans
+            CONCURRENCY_LIMIT = int(os.environ.get("CRAWL4AI_CONCURRENCY", "8"))
             semaphore = asyncio.Semaphore(CONCURRENCY_LIMIT)
 
             # Retry settings
@@ -1401,7 +1401,7 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                     try:
                         async with semaphore:  # Rate limit concurrent requests
                             async with session.post(
-                                cloud_endpoint, json=payload, timeout=60
+                                cloud_endpoint, json=payload, timeout=30
                             ) as resp:
                                 if resp.status == 429:  # Rate limited
                                     last_error = "Rate limited (429)"
@@ -1485,7 +1485,7 @@ async def _crawl_core(urls: list[str], session_dir: str) -> str:
                                 }
 
                     except asyncio.TimeoutError:
-                        last_error = "Timeout (60s)"
+                        last_error = "Timeout (30s)"
                         if attempt < MAX_RETRIES - 1:
                             await asyncio.sleep(RETRY_BACKOFF[attempt])
                             continue

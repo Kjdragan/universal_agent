@@ -7,6 +7,8 @@ from typing import Dict, Any, Optional
 
 from anthropic import AsyncAnthropic
 
+from universal_agent.rate_limiter import ZAIRateLimiter
+
 # Configuration
 API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
@@ -103,16 +105,43 @@ OUTPUT FORMAT (JSON ONLY):
 }}
 """
 
-    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL)
+    # Use centralized rate limiter with SDK retries disabled
+    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL, max_retries=0)
+    limiter = ZAIRateLimiter.get_instance()
     
-    try:
-        resp = await client.messages.create(
-            model=MODEL,
-            max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except Exception as exc:
-        return f"Error calling LLM: {exc}"
+    MAX_RETRIES = 5
+    resp = None
+    last_error = None
+    context = "generate_outline"
+    
+    for attempt in range(MAX_RETRIES):
+        async with limiter.acquire(context):
+            try:
+                resp = await client.messages.create(
+                    model=MODEL,
+                    max_tokens=2000,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                await limiter.record_success()
+                break
+            except Exception as e:
+                error_str = str(e).lower()
+                is_rate_limit = "429" in error_str or "too many requests" in error_str
+                
+                if is_rate_limit:
+                    await limiter.record_429(context)
+                    last_error = e
+                    
+                    if attempt < MAX_RETRIES - 1:
+                        delay = limiter.get_backoff(attempt)
+                        print(f"  ⚠️ [429] Rate limited ({context}). Backoff: {delay:.1f}s (Attempt {attempt+1}/{MAX_RETRIES})")
+                        await asyncio.sleep(delay)
+                        continue
+                else:
+                    return f"Error calling LLM: {e}"
+    
+    if not resp:
+        return f"Error: Outline generation failed after max retries. Last error: {last_error}"
 
     response_text = resp.content[0].text
     
