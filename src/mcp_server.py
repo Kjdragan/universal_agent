@@ -3275,7 +3275,7 @@ async def _run_research_phase_legacy(query: str, task_name: str = "default") -> 
     except Exception as e:
         return f"❌ Research Phase Failed: {e}"
         
-    return f"✅ Research Phase Complete! Refined corpus available in tasks/{task_name}/refined_corpus.md"
+    return f"✅ Research Phase Complete! Refined corpus available in {os.path.join(workspace, 'tasks', task_name, 'refined_corpus.md')}"
 
 
 @mcp.tool()

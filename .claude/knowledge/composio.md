@@ -131,6 +131,12 @@ Use this to discover the best Composio search tools and get recommended steps.
 }
 ```
 
+**⚠️ WHEN NOT TO USE:**
+- Do **NOT** use this to "find" standard tools like Gmail, Google Calendar, or Web Search.
+- If you know the tool exists (e.g. `GMAIL_SEND_EMAIL`), **JUST USE IT DIRECTLY**.
+- Using this tool unnecessarily wastes time and tokens.
+
+
 **Notes:**
 - `queries` MUST be a JSON array (not a quoted JSON string).
 - Each item should include `use_case` and `known_fields`.
