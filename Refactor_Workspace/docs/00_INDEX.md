@@ -20,6 +20,10 @@
 | 07 | [SEQUENCE_DIAGRAMS.md](07_SEQUENCE_DIAGRAMS.md) | Mermaid sequence diagrams for all flows |
 | 08 | [TESTING_GUIDE.md](08_TESTING_GUIDE.md) | Test organization and execution guide |
 
+## Additional Living Docs
+
+- **CLI-centric execution engine refactor**: `../cli_centric_gateway_refactor/00_INDEX.md`
+
 ---
 
 ## Quick Start

@@ -30,6 +30,8 @@ from universal_agent.gateway import (
 )
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id
+from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.migrations import ensure_schema
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -134,7 +136,25 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Universal Agent Gateway Server starting...")
     logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize runtime database (required by ProcessTurnAdapter -> setup_session)
+    import universal_agent.main as main_module
+    db_path = get_runtime_db_path()
+    logger.info(f"📊 Connecting to runtime DB: {db_path}")
+    main_module.runtime_db_conn = connect_runtime_db(db_path)
+    # Enable WAL mode for concurrent access (CLI + gateway can coexist)
+    main_module.runtime_db_conn.execute("PRAGMA journal_mode=WAL")
+    main_module.runtime_db_conn.execute("PRAGMA busy_timeout=5000")
+    ensure_schema(main_module.runtime_db_conn)
+    
+    # Load budget config (defined in main.py)
+    main_module.budget_config = main_module.load_budget_config()
+    
     yield
+    
+    # Cleanup
+    if main_module.runtime_db_conn:
+        main_module.runtime_db_conn.close()
     logger.info("👋 Universal Agent Gateway Server shutting down...")
 
 

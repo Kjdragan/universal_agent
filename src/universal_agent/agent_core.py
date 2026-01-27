@@ -846,6 +846,28 @@ async def observe_and_save_search_results(
                     ],
                 }
 
+            # Handle Composio MULTI_EXECUTE_TOOL format with "citations" array
+            elif "citations" in search_data:
+                raw_list = safe_get_list(search_data, "citations")
+                cleaned = {
+                    "type": "composio_search",
+                    "timestamp": datetime.now().isoformat(),
+                    "tool": slug,
+                    "answer": search_data.get("answer", ""),
+                    "results": [
+                        {
+                            "position": idx + 1,
+                            "title": c.get("title"),
+                            "url": c.get("url") or c.get("id"),
+                            "snippet": c.get("snippet"),
+                            "source": c.get("source"),
+                            "publishedDate": c.get("publishedDate"),
+                        }
+                        for idx, c in enumerate(raw_list)
+                        if isinstance(c, dict)
+                    ],
+                }
+
             if cleaned and workspace_dir:
                 filename = "unknown"
                 try:
@@ -2160,6 +2182,15 @@ class UniversalAgent:
                             total_so_far=self.trace["token_usage"]["total"],
                             history_tokens=self.history.total_tokens,
                         )
+                        
+                        # Emit token usage event for UI updates
+                        yield AgentEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "status": "token_update",
+                                "token_usage": self.trace["token_usage"],
+                            },
+                        )
 
                 elif isinstance(msg, (UserMessage, ToolResultBlock)):
                     blocks = msg.content if isinstance(msg, UserMessage) else [msg]
@@ -2244,11 +2275,12 @@ class UniversalAgent:
                                     break
 
                             if tool_name and self.workspace_dir:
-                                asyncio.create_task(
-                                    observe_and_save_search_results(
-                                        tool_name, block_content, self.workspace_dir
-                                    )
+                                # CRITICAL: Await search results observer to ensure files exist
+                                # before agent calls run_research_phase (fixes race condition)
+                                await observe_and_save_search_results(
+                                    tool_name, block_content, self.workspace_dir
                                 )
+                                # These can remain fire-and-forget as they're not blocking dependencies
                                 asyncio.create_task(
                                     observe_and_save_workbench_activity(
                                         tool_name,

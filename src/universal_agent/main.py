@@ -39,7 +39,7 @@ from universal_agent.utils.message_history import (
 )
 import glob
 from universal_agent.harness.verifier import TaskVerifier
-from universal_agent.agent_core import UniversalAgent
+from universal_agent.agent_core import UniversalAgent, AgentEvent, EventType
 from claude_agent_sdk import create_sdk_mcp_server, HookMatcher
 from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
@@ -6399,10 +6399,15 @@ async def process_turn(
     force_complex: bool = False,
     execution_session: Optional[ExecutionSession] = None,
     max_iterations: int = 20,
+    event_callback: Optional[Callable[["AgentEvent"], None]] = None,
 ) -> ExecutionResult:
     """
     Process a single user query.
     Returns: ExecutionResult with rich feedback
+    
+    Args:
+        event_callback: Optional callback to receive AgentEvents in real-time.
+                       Used by gateway/adapters for event streaming.
     """
     global trace, start_ts, run_id, runtime_db_conn, current_execution_session
 
@@ -6480,21 +6485,40 @@ async def process_turn(
     is_simple = (complexity == "SIMPLE") and not force_complex
 
     final_response_text = ""
+    
+    # Helper to emit events via callback (defined early for both paths)
+    def emit_event(event: AgentEvent) -> None:
+        if event_callback:
+            try:
+                event_callback(event)
+            except Exception:
+                pass
 
     if is_simple:
         # Try Fast Path
-        # Try Fast Path
+        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "fast"}))
         success, fast_path_text = await handle_simple_query(client, user_input)
         if not success:
             is_simple = False  # Fallback to Complex Path
         else:
             final_response_text = fast_path_text
+            # Emit events for fast path completion
+            emit_event(AgentEvent(type=EventType.TEXT, data={"text": final_response_text}))
+            emit_event(AgentEvent(type=EventType.ITERATION_END, data={
+                "status": "complete",
+                "path": "fast",
+                "duration_seconds": round(time.time() - start_ts, 2),
+                "tool_calls": 0,
+            }))
 
     if not is_simple:
         # Complex Path (Tool Loop) - track per-request timing
         request_start_ts = time.time()
         iteration = 1
         current_query = user_input
+        
+        # Emit processing started for complex path
+        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "complex", "iteration": iteration}))
 
         while True:
             needs_input, auth_link, final_text = await run_conversation(
@@ -6503,6 +6527,11 @@ async def process_turn(
             final_response_text = final_text  # Capture for printing after summary
 
             if needs_input and auth_link:
+                # Emit auth required event for gateway/adapters
+                emit_event(AgentEvent(
+                    type=EventType.AUTH_REQUIRED,
+                    data={"auth_link": auth_link},
+                ))
                 print(f"\n{'=' * 80}")
                 print("🔐 AUTHENTICATION REQUIRED")
                 print(f"{'=' * 80}")
@@ -6581,6 +6610,17 @@ async def process_turn(
                         "marker": marker,
                     }
                 )
+                # Emit tool call event for gateway/adapters
+                emit_event(AgentEvent(
+                    type=EventType.TOOL_CALL,
+                    data={
+                        "name": tc["name"],
+                        "id": tc.get("id"),
+                        "input": input_payload,
+                        "time_offset": tc["time_offset_seconds"],
+                        "iteration": tc["iteration"],
+                    },
+                ))
 
         # Collect and display all trace IDs for debugging
         local_trace_ids = collect_local_tool_trace_ids(workspace_dir)
@@ -6602,6 +6642,11 @@ async def process_turn(
         # Print agent's final response (with follow-up suggestions) AFTER execution summary
         if final_response_text:
             print(f"\n{final_response_text}")
+            # Emit final text event for gateway/adapters
+            emit_event(AgentEvent(
+                type=EventType.TEXT,
+                data={"text": final_response_text},
+            ))
 
         # Extract follow-up suggestions
         suggestions = []

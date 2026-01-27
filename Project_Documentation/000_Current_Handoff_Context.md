@@ -39,7 +39,11 @@ The next major evolution is the implementation of **Vertical Task Decomposition*
 5.  **Execution Engine + Gateway Unification**:
     *   **Goal**: converge CLI + Web UI + Harness on one canonical execution engine (CLI `process_turn` path).
     *   **Reason**: current Web UI/API path diverges (timeouts + inconsistent output paths); CLI path is stable.
-    *   **Docs**: `Project_Documentation/016_Execution_Engine_Gateway_Model.md` and `Project_Documentation/017_Execution_Engine_Gateway_Development_Plan.md`.
+    *   **Status**: Architecture approved. Implementation plan created.
+    *   **Docs**: 
+        - `Project_Documentation/016_Execution_Engine_Gateway_Model.md` (Why/What)
+        - `Project_Documentation/017_Execution_Engine_Gateway_Development_Plan.md` (Outline)
+        - `Project_Documentation/018_Execution_Engine_Gateway_Implementation_Plan.md` (Detailed Implementation)
 
 ---
 

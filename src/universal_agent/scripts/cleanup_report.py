@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Tuple
 
 from anthropic import AsyncAnthropic
 
+from universal_agent.rate_limiter import ZAIRateLimiter
+
 API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 MODEL = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-4.7")
@@ -163,35 +165,44 @@ async def cleanup_report_async(workspace_path: Path) -> str:
 
     preprocessed_sections = preprocess_sections(original_sections)
 
-    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL, max_retries=3, timeout=120.0)
+    # Use centralized rate limiter with SDK retries disabled
+    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL, max_retries=0, timeout=120.0)
+    limiter = ZAIRateLimiter.get_instance()
     prompt = build_cleanup_prompt(preprocessed_sections)
     
-    MAX_RETRIES = 3
-    base_delay = 5 # Longer delay for cleanup as it's a huge context
-    
+    MAX_RETRIES = 5
     resp = None
+    last_error = None
+    context = "cleanup_report"
+    
     for attempt in range(MAX_RETRIES):
-        try:
-            resp = await client.messages.create(
-                model=MODEL,
-                max_tokens=8192, # Increased to prevent truncation of large JSONs
-                messages=[{"role": "user", "content": prompt}],
-            )
-            break
-        except Exception as e:
-            error_str = str(e).lower()
-            is_rate_limit = "429" in error_str or "too many requests" in error_str or "high concurrency" in error_str
-            
-            if is_rate_limit and attempt < MAX_RETRIES - 1:
-                delay = base_delay * (2 ** attempt)
-                print(f"  ⚠️ [429] Rate limited (Cleanup). Retrying in {delay}s... (Attempt {attempt+1}/{MAX_RETRIES})")
-                await asyncio.sleep(delay)
-                continue
-            
-            return f"Error during cleanup model call: {e}"
+        async with limiter.acquire(context):
+            try:
+                resp = await client.messages.create(
+                    model=MODEL,
+                    max_tokens=8192,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                await limiter.record_success()
+                break
+            except Exception as e:
+                error_str = str(e).lower()
+                is_rate_limit = "429" in error_str or "too many requests" in error_str or "high concurrency" in error_str
+                
+                if is_rate_limit:
+                    await limiter.record_429(context)
+                    last_error = e
+                    
+                    if attempt < MAX_RETRIES - 1:
+                        delay = limiter.get_backoff(attempt)
+                        print(f"  ⚠️ [429] Rate limited ({context}). Backoff: {delay:.1f}s (Attempt {attempt+1}/{MAX_RETRIES})")
+                        await asyncio.sleep(delay)
+                        continue
+                else:
+                    return f"Error during cleanup model call: {e}"
     
     if not resp:
-        return "Error: Cleanup failed after max retries."
+        return f"Error: Cleanup failed after max retries. Last error: {last_error}"
 
     response_text = resp.content[0].text if resp.content else ""
     updates_payload: Dict[str, str] = {}

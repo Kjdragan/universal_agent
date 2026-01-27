@@ -274,10 +274,35 @@ class AgentBridge:
         return (content_type, file_full.name, content)
 
 
-# Global bridge instance
-_agent_bridge = AgentBridge()
+# Global bridge instance (lazy init to check env at runtime)
+_agent_bridge = None
+_gateway_bridge = None
 
 
-def get_agent_bridge() -> AgentBridge:
-    """Get the global agent bridge instance."""
-    return _agent_bridge
+def get_agent_bridge():
+    """
+    Get the global agent bridge instance.
+    
+    If UA_GATEWAY_URL is set, returns a GatewayBridge that forwards to the external
+    gateway server. Otherwise, returns the in-process AgentBridge.
+    
+    This allows the Web UI to use the same canonical execution engine as the CLI
+    when running in gateway mode.
+    """
+    global _agent_bridge, _gateway_bridge
+    
+    gateway_url = os.getenv("UA_GATEWAY_URL")
+    
+    if gateway_url:
+        # Use gateway mode - forward to external gateway server
+        if _gateway_bridge is None:
+            from universal_agent.api.gateway_bridge import GatewayBridge
+            _gateway_bridge = GatewayBridge(gateway_url)
+            print(f"🌐 Web UI using external gateway: {gateway_url}")
+        return _gateway_bridge
+    else:
+        # Use direct mode - run agent in-process
+        if _agent_bridge is None:
+            _agent_bridge = AgentBridge()
+            print("🏠 Web UI using in-process agent (direct mode)")
+        return _agent_bridge

@@ -13,6 +13,10 @@ from universal_agent.agent_core import (
     pre_compact_context_capture_hook,
 )
 from universal_agent.guardrails.tool_schema import pre_tool_use_schema_guardrail
+from universal_agent.guardrails.workspace_guard import (
+    validate_tool_paths,
+    WorkspaceGuardError,
+)
 from universal_agent.durable.tool_gateway import (
     prepare_tool_call,
     parse_tool_identity,
@@ -89,7 +93,9 @@ class AgentHookSet:
             "PreToolUse": [
                 # Schema guardrails first (blocks malformed or missing inputs)
                 HookMatcher(matcher="*", hooks=[self.on_pre_tool_use_schema_guardrail]),
-                # Ledger/Guardrails first
+                # Workspace path enforcement (rewrites relative paths, blocks escapes)
+                HookMatcher(matcher="*", hooks=[self.on_pre_tool_use_workspace_guard]),
+                # Ledger/Guardrails
                 HookMatcher(matcher="*", hooks=[self.on_pre_tool_use_ledger]),
                 # Bash Skills
                 HookMatcher(
@@ -141,6 +147,64 @@ class AgentHookSet:
     async def on_pre_compact_capture(self, input_data: dict, context: dict) -> dict:
         """PreCompact hook to capture compaction events in CLI/harness."""
         return await pre_compact_context_capture_hook(input_data, context)
+
+    async def on_pre_tool_use_workspace_guard(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
+        """PreToolUse hook to enforce workspace-scoped file paths for WRITE operations only."""
+        if not self.workspace_dir:
+            return {}  # No workspace bound yet
+        
+        tool_name = input_data.get("tool_name", "")
+        tool_input = input_data.get("tool_input", {})
+        if not isinstance(tool_input, dict):
+            return {}
+        
+        # Read-only tools are allowed to access paths outside workspace
+        READ_ONLY_TOOLS = {
+            "mcp__local_toolkit__list_directory",
+            "Read",
+            "View",
+            "ListDir",
+            "read_file",
+            "list_dir",
+        }
+        
+        # Check if tool name contains read-only patterns
+        tool_lower = tool_name.lower()
+        is_read_only = (
+            tool_name in READ_ONLY_TOOLS
+            or "list" in tool_lower
+            or "read" in tool_lower
+            or "view" in tool_lower
+            or "cat" in tool_lower
+            or "head" in tool_lower
+            or "tail" in tool_lower
+        )
+        
+        if is_read_only:
+            return {}  # Allow reads from anywhere
+        
+        try:
+            from pathlib import Path
+            workspace_path = Path(self.workspace_dir)
+            validated_input = validate_tool_paths(tool_input, workspace_path)
+            # If paths were modified, update the tool input
+            if validated_input != tool_input:
+                return {"tool_input": validated_input}
+        except WorkspaceGuardError as e:
+            logfire.warning("workspace_guard_blocked", error=str(e), tool_use_id=str(tool_use_id), tool_name=tool_name)
+            return {
+                "systemMessage": f"⚠️ {e}",
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": str(e),
+                },
+            }
+        except Exception:
+            pass  # Don't block on guard errors
+        
+        return {}
 
     async def on_pre_tool_use_ledger(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
         """Main guardrail and ledger hook."""
