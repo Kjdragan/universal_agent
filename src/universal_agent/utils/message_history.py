@@ -159,6 +159,10 @@ class MessageHistory:
             List of message dicts ready for API
         """
         return self.messages.copy()
+
+    def get_messages(self) -> list[dict]:
+        """Return raw message history for external processors."""
+        return self.messages.copy()
     
     def reset(self) -> None:
         """Reset history to initial state (for new session)."""

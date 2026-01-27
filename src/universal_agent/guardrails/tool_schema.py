@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import os
+from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
 from universal_agent.durable.tool_gateway import parse_tool_identity
@@ -336,6 +338,40 @@ async def pre_tool_use_schema_guardrail(
         }
 
     normalized_name = identity.tool_name.lower()
+
+    # 1.5. Research-phase guardrail: ensure search_results exist in current workspace
+    if normalized_name.endswith("run_research_phase"):
+        workspace = os.getenv("CURRENT_SESSION_WORKSPACE", "")
+        if not workspace:
+            return {
+                "systemMessage": (
+                    "⚠️ Cannot run research phase: CURRENT_SESSION_WORKSPACE is not set. "
+                    "Bind the workspace for this phase before calling run_research_phase."
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Missing CURRENT_SESSION_WORKSPACE.",
+                },
+            }
+        search_dir = Path(workspace) / "search_results"
+        json_files = list(search_dir.glob("*.json")) if search_dir.exists() else []
+        processed_json_files = list((search_dir / "processed_json").glob("*.json")) if (search_dir / "processed_json").exists() else []
+        if not json_files and not processed_json_files:
+            return {
+                "systemMessage": (
+                    "⚠️ Cannot run research phase: no search_results found in the current workspace. "
+                    "You must run COMPOSIO_MULTI_EXECUTE_TOOL searches in this session first, "
+                    "and ensure CURRENT_SESSION_WORKSPACE points to the active phase directory."
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "search_results empty for run_research_phase.",
+                },
+            }
     if isinstance(tool_input, dict):
         normalized_input = _normalize_tool_input(identity.tool_name, tool_input)
         if normalized_input is not None:

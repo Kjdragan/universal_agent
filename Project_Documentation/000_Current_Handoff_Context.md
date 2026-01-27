@@ -1,7 +1,7 @@
 # Handoff Context: ESG Harness Success & Decomposition Evolution
 
-**Date:** 2026-01-26
-**Status:** Harness Stable; Context Compaction Verified; Shift to Vertical Decomposition
+**Date:** 2026-01-27
+**Status:** Harness Stable; Context Compaction Verified; Execution Engine + Gateway Unification Planning
 
 ---
 
@@ -33,8 +33,13 @@ The next major evolution is the implementation of **Vertical Task Decomposition*
 3.  **Async Lifecycle Cleanup**:
     *   Resolve the `Event loop is closed` error during process termination in `main.py`. This is caused by `httpx` and `Lettas` client cleanup after the `asyncio` loop has begun closing.
 
-3.  **Integration & Feature Parity**:
+4.  **Integration & Feature Parity**:
     *   Continue porting the "best of Clawdbot" (specifically the isolation of execution from interface) into the `UniversalAgent` core.
+
+5.  **Execution Engine + Gateway Unification**:
+    *   **Goal**: converge CLI + Web UI + Harness on one canonical execution engine (CLI `process_turn` path).
+    *   **Reason**: current Web UI/API path diverges (timeouts + inconsistent output paths); CLI path is stable.
+    *   **Docs**: `Project_Documentation/016_Execution_Engine_Gateway_Model.md` and `Project_Documentation/017_Execution_Engine_Gateway_Development_Plan.md`.
 
 ---
 
@@ -42,6 +47,8 @@ The next major evolution is the implementation of **Vertical Task Decomposition*
 *   **Recent Documentation**:
     *   `Project_Documentation/014_Thought_on_massive_task_decomposition.md` (Strategic Theory)
     *   `Project_Documentation/015_ESG_Harness_Verification_Record.md` (Metrics & Proof)
+    *   `Project_Documentation/016_Execution_Engine_Gateway_Model.md` (Unified engine + gateway concept)
+    *   `Project_Documentation/017_Execution_Engine_Gateway_Development_Plan.md` (Plan outline + guidance)
 *   **Harness Core**:
     *   `src/universal_agent/urw/harness_orchestrator.py` (Main Logic)
     *   `src/universal_agent/urw/interview.py` (Planning Prompts)
@@ -53,3 +60,16 @@ The next major evolution is the implementation of **Vertical Task Decomposition*
 ## 💡 Usage Notes
 *   **Running the Harness**: Use `--harness-template "esg_template.json"` for consistent, non-interactive testing of the 2-phase ESG flow.
 *   **Decomposition Philosophy**: We are moving away from Horizontal (layered) flows toward Vertical (integrated) flows to prevent context drift in massive tasks.
+
+---
+
+## 🧪 Recent Findings (2026-01-27)
+
+1. **CLI vs Web UI divergence**
+   *   CLI path completes reliably with correct tool usage and output placement.
+   *   Web UI path (via `start_ui.sh`) timed out during initialization (`Control request timeout: initialize`).
+   *   API-only Web UI run succeeded but wrote to repo-root `work_products/summary.md` instead of session workspace.
+
+2. **Recommended direction**
+   *   Keep CLI `process_turn` as the canonical engine.
+   *   Make Web UI and other clients call the same engine through a gateway control plane.

@@ -33,7 +33,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Callable
 from dotenv import load_dotenv
-from universal_agent.utils.message_history import TRUNCATION_THRESHOLD
+from universal_agent.utils.message_history import (
+    TRUNCATION_THRESHOLD,
+    CONTEXT_WINDOW_TOKENS,
+)
 import glob
 from universal_agent.harness.verifier import TaskVerifier
 from universal_agent.agent_core import UniversalAgent
@@ -647,6 +650,36 @@ async def _ensure_letta_context() -> None:
     _LETTA_CONTEXT_READY = True
     await _ensure_letta_memory_blocks(LETTA_AGENT_NAME)
     print(f"🧠 Letta memory active for '{LETTA_AGENT_NAME}'")
+
+
+async def _shutdown_letta() -> None:
+    """Cleanly shutdown Letta clients before the event loop closes."""
+    global _LETTA_CONTEXT_READY, _LETTA_CONTEXT, _letta_async_client, _letta_client
+    if not LETTA_ENABLED:
+        return
+    if _LETTA_CONTEXT_READY and _LETTA_CONTEXT:
+        try:
+            await _LETTA_CONTEXT.__aexit__(None, None, None)
+        except Exception:
+            pass
+        _LETTA_CONTEXT_READY = False
+        _LETTA_CONTEXT = None
+    if _letta_async_client:
+        try:
+            if hasattr(_letta_async_client, "aclose"):
+                await _letta_async_client.aclose()
+            elif hasattr(_letta_async_client, "close"):
+                _letta_async_client.close()
+        except Exception:
+            pass
+        _letta_async_client = None
+    if _letta_client:
+        try:
+            if hasattr(_letta_client, "close"):
+                _letta_client.close()
+        except Exception:
+            pass
+        _letta_client = None
 
 
 def _sanitize_letta_agent_name(name: str) -> str:
@@ -4932,6 +4965,35 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 runtime_db_conn, run_id, trace["token_usage"]["total"]
                             )
 
+                        # Emit token usage for UI consumers (CLI/harness path)
+                        if "agent" in globals() and agent is not None:
+                            try:
+                                await agent.send_agent_event(
+                                    EventType.STATUS,
+                                    {"token_usage": trace.get("token_usage")},
+                                )
+                            except Exception:
+                                pass
+
+                        # Proactive context warning (CLI/harness visibility)
+                        if trace and "token_usage" in trace:
+                            usage_total = trace["token_usage"]["total"]
+                            flags = trace.setdefault("token_usage_flags", {})
+                            if CONTEXT_WINDOW_TOKENS:
+                                utilization = usage_total / CONTEXT_WINDOW_TOKENS
+                                if utilization >= 0.7 and not flags.get("warned_70"):
+                                    print(
+                                        f"\n⚠️ CONTEXT USAGE HIGH ({int(utilization*100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
+                                        "Consider wrapping the phase soon."
+                                    )
+                                    flags["warned_70"] = True
+                                if utilization >= 0.9 and not flags.get("warned_90"):
+                                    print(
+                                        f"\n⚠️ CONTEXT USAGE VERY HIGH ({int(utilization*100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
+                                        "Expect compaction or reset soon."
+                                    )
+                                    flags["warned_90"] = True
+
                         # [FIX 7] Token-Based Harness Trigger
                         # Connect the Brain (Token Count) to the Body (Harness Action)
                         total_tokens = trace["token_usage"]["total"]
@@ -5005,6 +5067,7 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                                 # 4. Reset Token Counter for new session
                                 trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
+                                trace["token_usage_flags"] = {}
 
                                 continue  # Restart inner loop with new prompt
 
@@ -8184,6 +8247,12 @@ async def main(args: argparse.Namespace):
                 await client.__aexit__(None, None, None)
             except Exception as e:
                 print(f"⚠️ Error closing client: {e}")
+        # Ensure Letta async clients exit before loop shutdown
+        if LETTA_ENABLED:
+            try:
+                await _shutdown_letta()
+            except Exception as e:
+                print(f"⚠️ Error shutting down Letta clients: {e}")
 
     # Close the main span to ensure all nested spans are captured in trace
     main_span.__exit__(None, None, None)

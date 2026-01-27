@@ -188,6 +188,12 @@ The Plan must include:
 - **Atomic Task**: A specific action (search, write file, calculate) that the agent performs.
 - **Use Case**: Providing "subatomic" details (specific constraints, attachment requirements, known fields) in the `use_case` field is highly encouraged to guide the tool router.
 
+## Vertical Decomposition (Preferred):
+- **Group by Topic/Outcome**: Prefer phases that complete a vertical slice (e.g., "Environmental Analysis" includes research → analysis → draft for that section).
+- **Avoid Layered Phases**: Do not split into global "Research then Analysis then Writing" when the deliverable has multiple distinct sections.
+- **Phase Output**: Each vertical phase should produce a tangible artifact (section draft, dataset, or report slice) that the next phase can reference.
+- **Final Integration**: Use a final phase only for integration, formatting, or delivery once verticals are complete.
+
 ## Output Schema:
 {
   "name": "Plan Name",

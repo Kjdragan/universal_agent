@@ -1578,6 +1578,7 @@ class UniversalAgent:
                 # UNLESS it was already part of initial_history_prompt (which is None for first run)
                 if iteration == 1 and not initial_history_prompt:
                      # Send the initial query
+                     self.history.add_message("user", query)
                      await self.client.query(query)
 
                 # Event Loop
@@ -1601,7 +1602,7 @@ class UniversalAgent:
                      # 4. Set initial_history_prompt
                      # 5. Continue loop -> Reconnects with new history
                      
-                     full_history = self.history.get_messages() # Assuming MessageHistory has this
+                     full_history = self.history.get_messages()
                      pruned_history, stats = context_manager.prune_history(full_history)
                      
                      print(f"DEBUG CORE: Pruned tokens: {stats.original_tokens} -> {stats.pruned_tokens}")

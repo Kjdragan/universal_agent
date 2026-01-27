@@ -7,7 +7,12 @@ import inspect
 from typing import Any, Optional
 from dataclasses import dataclass
 from claude_agent_sdk import HookMatcher
-from universal_agent.agent_core import AgentEvent, EventType
+from universal_agent.agent_core import (
+    AgentEvent,
+    EventType,
+    pre_compact_context_capture_hook,
+)
+from universal_agent.guardrails.tool_schema import pre_tool_use_schema_guardrail
 from universal_agent.durable.tool_gateway import (
     prepare_tool_call,
     parse_tool_identity,
@@ -82,6 +87,8 @@ class AgentHookSet:
                 HookMatcher(matcher=None, hooks=[self.on_subagent_stop]),
             ],
             "PreToolUse": [
+                # Schema guardrails first (blocks malformed or missing inputs)
+                HookMatcher(matcher="*", hooks=[self.on_pre_tool_use_schema_guardrail]),
                 # Ledger/Guardrails first
                 HookMatcher(matcher="*", hooks=[self.on_pre_tool_use_ledger]),
                 # Bash Skills
@@ -91,6 +98,9 @@ class AgentHookSet:
                 ),
                 # Task Skills
                 HookMatcher(matcher="Task", hooks=[self.on_pre_task_skill_awareness]),
+            ],
+            "PreCompact": [
+                HookMatcher(matcher="*", hooks=[self.on_pre_compact_capture]),
             ],
             "PostToolUse": [
                 HookMatcher(matcher=None, hooks=[self.on_post_tool_use_ledger]),
@@ -116,6 +126,21 @@ class AgentHookSet:
 
     async def on_subagent_stop(self, input_data: dict, *args) -> dict:
         return {}
+
+    async def on_pre_tool_use_schema_guardrail(
+        self, input_data: dict, tool_use_id: object, context: dict
+    ) -> dict:
+        """PreToolUse guardrail to validate schema and workspace prerequisites."""
+        return await pre_tool_use_schema_guardrail(
+            input_data,
+            run_id=self.run_id,
+            step_id=self.current_step_id,
+            logger=logger,
+        )
+
+    async def on_pre_compact_capture(self, input_data: dict, context: dict) -> dict:
+        """PreCompact hook to capture compaction events in CLI/harness."""
+        return await pre_compact_context_capture_hook(input_data, context)
 
     async def on_pre_tool_use_ledger(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
         """Main guardrail and ledger hook."""
