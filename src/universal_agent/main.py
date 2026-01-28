@@ -8347,6 +8347,22 @@ async def main(args: argparse.Namespace):
                 await client.__aexit__(None, None, None)
             except Exception as e:
                 print(f"⚠️ Error closing client: {e}")
+        # Close gateway httpx clients before loop shutdown
+        if 'gateway' in locals() and gateway:
+            try:
+                if hasattr(gateway, 'close'):
+                    await gateway.close()
+                # For InProcessGateway, clean up any adapter clients
+                if hasattr(gateway, '_adapters'):
+                    for adapter in gateway._adapters.values():
+                        if hasattr(adapter, 'close'):
+                            try:
+                                await adapter.close()
+                            except Exception:
+                                pass
+            except Exception as e:
+                # Log but don't fail - cleanup errors are non-fatal
+                pass
         # Ensure Letta async clients exit before loop shutdown
         if LETTA_ENABLED:
             try:
