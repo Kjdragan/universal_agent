@@ -204,6 +204,7 @@ class HarnessOrchestrator:
         skip_interview: bool = False,
         plan_file: Optional[Path] = None,
         template_file: Optional[Path] = None,
+        harness_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run the complete harness flow.
@@ -222,7 +223,7 @@ class HarnessOrchestrator:
         self._log(f"Starting harness for: {massive_request[:80]}...")
         
         # 1. Create harness directory and session manager
-        self.session_manager = HarnessSessionManager(self.workspaces_root)
+        self.session_manager = HarnessSessionManager(self.workspaces_root, harness_id=harness_id)
         harness_dir = self.session_manager.harness_dir
         harness_id = self.session_manager.harness_id
         
@@ -1010,6 +1011,7 @@ async def run_harness(
     plan_file: Optional[Path] = None,
     template_file: Optional[Path] = None,
     max_iterations: int = 20,
+    harness_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run the complete harness flow.
@@ -1035,4 +1037,5 @@ async def run_harness(
         skip_interview=skip_interview,
         plan_file=plan_file,
         template_file=template_file,
+        harness_id=harness_id,
     )

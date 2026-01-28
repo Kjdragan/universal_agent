@@ -102,10 +102,25 @@ def build_cleanup_prompt(sections: Dict[str, str]) -> str:
 
 
 def extract_json_payload(text: str) -> Dict:
+    # 1. Try to find markdown JSON block
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass  # Fallback to raw extraction
+
+    # 2. Try raw JSON extraction
     start = text.find("{")
     end = text.rfind("}")
+    
     if start == -1 or end == -1 or end <= start:
-        raise ValueError("No JSON object found in response")
+        # Check for potential truncation
+        if start != -1 and end == -1:
+             raise ValueError(f"JSON object appears truncated (found '{{' at {start} but no closing '}}'). Total length: {len(text)}")
+        
+        raise ValueError(f"No JSON object found in response. Length: {len(text)}")
+        
     payload = text[start : end + 1]
     return json.loads(payload)
 
