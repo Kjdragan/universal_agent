@@ -181,7 +181,7 @@ class ProcessTurnAdapter:
         def event_callback(event: AgentEvent) -> None:
             """Callback to capture events from process_turn."""
             try:
-                print(f"DEBUG ProcessTurnAdapter: event_callback received type={event.type}")
+                # print(f"DEBUG ProcessTurnAdapter: event_callback received type={event.type}")
                 event_queue.put_nowait(event)
             except Exception:
                 pass
@@ -224,7 +224,7 @@ class ProcessTurnAdapter:
                     if event.data.get("status") == "engine_complete":
                         break
                     
-                    print(f"DEBUG ProcessTurnAdapter: yielding event type={event.type}")
+                    # print(f"DEBUG ProcessTurnAdapter: yielding event type={event.type}")
                     yield event
                     
                 except asyncio.TimeoutError:
