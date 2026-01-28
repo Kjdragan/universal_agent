@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS runs (
   lease_expires_at TEXT,
   last_heartbeat_at TEXT,
   cancel_requested_at TEXT,
-  cancel_reason TEXT
+  cancel_reason TEXT,
+  total_tokens INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS run_steps (
@@ -133,6 +134,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "runs", "iteration_count", "INTEGER DEFAULT 0")
     _add_column_if_missing(conn, "runs", "max_iterations", "INTEGER")
     _add_column_if_missing(conn, "runs", "completion_promise", "TEXT")
+    _add_column_if_missing(conn, "runs", "total_tokens", "INTEGER DEFAULT 0")
     # Corpus cache for sub-agent context restoration
     _add_column_if_missing(conn, "checkpoints", "corpus_data", "TEXT")
     conn.commit()

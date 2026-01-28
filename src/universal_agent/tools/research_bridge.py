@@ -19,6 +19,10 @@ except ImportError:
     from src.mcp_server import _run_research_phase_legacy as research_phase_core
     from src.mcp_server import _run_report_generation_legacy as report_gen_core
 
+# Import Task Guardrails
+from universal_agent.utils.task_guardrails import resolve_best_task_match
+from universal_agent.hooks import StdoutToEventStream
+
 @tool(
     name="run_research_pipeline", 
     description="Execute the Post-Search Research Pipeline: Crawl -> Refine -> Outline -> Draft -> Cleanup -> Compile.",
@@ -32,11 +36,16 @@ async def run_research_pipeline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     Wrapper for the research pipeline to run in-process.
     """
     query = args.get("query")
-    task_name = args.get("task_name", "default")
+    raw_task_name = args.get("task_name", "default")
+    
+    # Apply Guardrail
+    task_name = resolve_best_task_match(raw_task_name)
     
     # Execute the original function directly
     # Since it runs in this process, its print/stderr writes will go to our console
-    result_str = await original_pipeline(query, task_name)
+    # [ENHANCED] Capture stdout and bridge to Web UI events
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result_str = await original_pipeline(query, task_name)
     
     return {
         "content": [{
@@ -68,7 +77,8 @@ async def crawl_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
             }]
         }
     
-    result_str = await _crawl_core(urls, session_dir)
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result_str = await _crawl_core(urls, session_dir)
     
     return {
         "content": [{
@@ -90,8 +100,13 @@ async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     Wrapper for research phase (Crawl -> Refine) to run in-process.
     """
     query = args.get("query")
-    task_name = args.get("task_name", "default")
-    result_str = await research_phase_core(query, task_name)
+    raw_task_name = args.get("task_name", "default")
+    
+    # Apply Guardrail
+    task_name = resolve_best_task_match(raw_task_name)
+    
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result_str = await research_phase_core(query, task_name)
     return {"content": [{"type": "text", "text": result_str}]}
 
 @tool(
@@ -108,8 +123,12 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     Wrapper for report generation (Outline -> Compile) to run in-process.
     """
     query = args.get("query")
-    task_name = args.get("task_name", "default")
+    raw_task_name = args.get("task_name", "default")
     corpus_data = args.get("corpus_data")
     
-    result_str = await report_gen_core(query, task_name, corpus_data=corpus_data)
+    # Apply Guardrail
+    task_name = resolve_best_task_match(raw_task_name)
+    
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result_str = await report_gen_core(query, task_name, corpus_data=corpus_data)
     return {"content": [{"type": "text", "text": result_str}]}

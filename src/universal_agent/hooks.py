@@ -1,10 +1,14 @@
 import asyncio
+import sys
 import os
 import uuid
 import json
 import logging
 import inspect
-from typing import Any, Optional
+import time
+import ast
+import re
+from typing import Any, Optional, Callable
 from dataclasses import dataclass
 from claude_agent_sdk import HookMatcher
 from universal_agent.agent_core import (
@@ -37,6 +41,169 @@ logger = logging.getLogger(__name__)
 from universal_agent.agent_setup import DISALLOWED_TOOLS
 
 OBSERVER_WORKSPACE_DIR = None 
+
+# -----------------------------------------------------------------------------
+# Tool event streaming helpers (Gateway/UI)
+# -----------------------------------------------------------------------------
+
+_TOOL_EVENT_CALLBACK: Optional[Callable[[AgentEvent], None]] = None
+_TOOL_EVENT_START_TS: Optional[float] = None
+_EMITTED_TOOL_CALL_IDS: set[str] = set()
+_EMITTED_TOOL_RESULT_IDS: set[str] = set()
+
+
+def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
+    """Register a callback for streaming tool events (gateway/UI)."""
+    global _TOOL_EVENT_CALLBACK
+    _TOOL_EVENT_CALLBACK = callback
+
+
+def set_event_start_ts(start_ts: Optional[float]) -> None:
+    """Set the start timestamp for time_offset calculation."""
+    global _TOOL_EVENT_START_TS
+    _TOOL_EVENT_START_TS = start_ts
+
+
+def reset_tool_event_tracking() -> None:
+    """Clear per-turn tool event dedupe caches."""
+    _EMITTED_TOOL_CALL_IDS.clear()
+    _EMITTED_TOOL_RESULT_IDS.clear()
+
+
+def _emit_event(event: AgentEvent) -> None:
+    if _TOOL_EVENT_CALLBACK is None:
+        return
+    try:
+        _TOOL_EVENT_CALLBACK(event)
+    except Exception:
+        pass
+
+
+def _tool_time_offset() -> float:
+    if _TOOL_EVENT_START_TS is None:
+        return 0.0
+    return round(time.time() - _TOOL_EVENT_START_TS, 3)
+
+
+def _normalize_tool_use_id(tool_use_id: object, input_data: Optional[dict] = None) -> str:
+    if tool_use_id:
+        return str(tool_use_id)
+    if input_data:
+        for key in ("tool_use_id", "tool_call_id", "id"):
+            value = input_data.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def emit_tool_call_event(
+    *,
+    tool_use_id: object,
+    tool_name: str,
+    tool_input: Any,
+    input_data: Optional[dict] = None,
+    time_offset: Optional[float] = None,
+) -> bool:
+    """Emit a TOOL_CALL event if not already emitted for this tool_use_id."""
+    tool_id = _normalize_tool_use_id(tool_use_id, input_data)
+    if not tool_id or tool_id in _EMITTED_TOOL_CALL_IDS:
+        return False
+    _EMITTED_TOOL_CALL_IDS.add(tool_id)
+    input_payload = tool_input if isinstance(tool_input, dict) else {"value": tool_input}
+    _emit_event(
+        AgentEvent(
+            type=EventType.TOOL_CALL,
+            data={
+                "id": tool_id,
+                "name": tool_name or "",
+                "input": input_payload,
+                "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
+            },
+        )
+    )
+    return True
+
+
+def _extract_tool_result_text(result: Any) -> str:
+    """Refined extraction logic ported from transcript_builder."""
+    # 1. Basic Content Extraction
+    content = result
+    if isinstance(result, dict):
+        content = result.get("content", result.get("result", result))
+    
+    # Handle TextBlock list or list of dicts
+    final_str = ""
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                 # Try 'text' then 'json' then str
+                 parts.append(str(block.get("text", block)))
+            elif hasattr(block, "text"):
+                parts.append(block.text)
+            else:
+                parts.append(str(block))
+        final_str = "\n".join(parts)
+    else:
+        final_str = str(content)
+
+    # 2. Smasher Logic (Unwrap nested JSON/Python repr)
+    # Attempt to unwrap Python list of TextBlocks string representation
+    if final_str.strip().startswith("[") and "'type':" in final_str:
+         try:
+             parsed = ast.literal_eval(final_str)
+             if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict):
+                 if parsed[0].get("type") == "text":
+                     final_str = parsed[0].get("text", "")
+         except Exception:
+             pass
+    
+    # Regex fallback for truncated logs
+    match = re.search(r"^\s*\[\s*\{\s*['\"]type['\"]\s*:\s*['\"]text['\"]\s*,\s*['\"]text['\"]\s*:\s*['\"](.*)", final_str, re.DOTALL)
+    if match:
+        inner = match.group(1)
+        # Try to find clean end
+        clean_end_match = re.search(r"(.*)['\"]\s*\}\s*\]\s*$", inner, re.DOTALL)
+        if clean_end_match:
+            final_str = clean_end_match.group(1)
+        else:
+            final_str = inner
+
+    # 3. JSON Formatting (try to make it pretty if it's JSON)
+    try:
+        parsed_json = json.loads(final_str)
+        return json.dumps(parsed_json, indent=2)
+    except Exception:
+        return final_str
+
+
+def emit_tool_result_event(
+    *,
+    tool_use_id: object,
+    is_error: bool,
+    tool_result: Any,
+    input_data: Optional[dict] = None,
+    time_offset: Optional[float] = None,
+) -> bool:
+    """Emit a TOOL_RESULT event if not already emitted for this tool_use_id."""
+    tool_id = _normalize_tool_use_id(tool_use_id, input_data)
+    if not tool_id or tool_id in _EMITTED_TOOL_RESULT_IDS:
+        return False
+    _EMITTED_TOOL_RESULT_IDS.add(tool_id)
+    content_text = _extract_tool_result_text(tool_result)
+    _emit_event(
+        AgentEvent(
+            type=EventType.TOOL_RESULT,
+            data={
+                "tool_use_id": tool_id,
+                "is_error": bool(is_error),
+                "content_preview": content_text[:2500],
+                "content_size": len(content_text),
+                "time_offset": time_offset if time_offset is not None else _tool_time_offset(),
+            },
+        )
+    )
+    return True
 
 # Helper methods (adapted from main.py)
 def _is_task_output_name(name: str) -> bool:
@@ -104,11 +271,14 @@ class AgentHookSet:
                 ),
                 # Task Skills
                 HookMatcher(matcher="Task", hooks=[self.on_pre_task_skill_awareness]),
+                # Emit tool_call after other pre-hooks allow it
+                HookMatcher(matcher="*", hooks=[self.on_pre_tool_use_emit_event]),
             ],
             "PreCompact": [
                 HookMatcher(matcher="*", hooks=[self.on_pre_compact_capture]),
             ],
             "PostToolUse": [
+                HookMatcher(matcher=None, hooks=[self.on_post_tool_use_emit_event]),
                 HookMatcher(matcher=None, hooks=[self.on_post_tool_use_ledger]),
                 HookMatcher(matcher=None, hooks=[self.on_post_tool_use_validation]),
                 HookMatcher(
@@ -248,6 +418,18 @@ class AgentHookSet:
 
         return {}
 
+    async def on_pre_tool_use_emit_event(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
+        """Emit TOOL_CALL for UI/gateway streaming once tool use is allowed."""
+        tool_name = input_data.get("tool_name", "")
+        tool_input = input_data.get("tool_input", {}) or {}
+        emit_tool_call_event(
+            tool_use_id=tool_use_id,
+            tool_name=tool_name,
+            tool_input=tool_input,
+            input_data=input_data,
+        )
+        return {}
+
     # =========================================================================
     # SKILL HINTS (The "Smart" part user requested)
     # =========================================================================
@@ -338,6 +520,22 @@ class AgentHookSet:
     async def on_pre_task_skill_awareness(self, input_data: dict, *args) -> dict:
         return {}
         
+    async def on_post_tool_use_emit_event(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
+        """Emit TOOL_RESULT for UI/gateway streaming."""
+        tool_result = input_data.get("tool_result")
+        if tool_result is None:
+            tool_result = input_data.get("tool_response")
+        is_error = bool(input_data.get("is_error"))
+        if isinstance(tool_result, dict):
+            is_error = bool(is_error or tool_result.get("is_error") or tool_result.get("error"))
+        emit_tool_result_event(
+            tool_use_id=tool_use_id,
+            is_error=is_error,
+            tool_result=tool_result,
+            input_data=input_data,
+        )
+        return {}
+
     async def on_post_tool_use_ledger(self, *args) -> dict:
         if self.tool_ledger:
             pass # Ledger completion logic
@@ -402,3 +600,90 @@ class AgentHookSet:
 
     async def on_user_prompt_skill_awareness(self, *args) -> dict:
         return {}
+
+def emit_text_event(text: str) -> None:
+    """Emit a TEXT event."""
+    _emit_event(
+        AgentEvent(
+            type=EventType.TEXT,
+            data={
+                "text": text,
+                "author": "Assistant",
+                "time_offset": _tool_time_offset(),
+            },
+        )
+    )
+
+def emit_thinking_event(thinking: str, signature: Optional[str] = None) -> None:
+    """Emit a THINKING event."""
+    _emit_event(
+        AgentEvent(
+            type=EventType.THINKING,
+            data={
+                "thinking": thinking,
+                "signature": signature,
+                "time_offset": _tool_time_offset(),
+            },
+        )
+    )
+
+def emit_thinking_event(thinking: str, signature: Optional[str] = None) -> None:
+    """Emit a THINKING event."""
+    # We do not dedup thinking events as they are sequential parts of the stream
+    _emit_event(
+        AgentEvent(
+            type=EventType.THINKING,
+            data={
+                "thinking": thinking,
+                "signature": signature,
+                "time_offset": _tool_time_offset(),
+            },
+        )
+    )
+
+def emit_status_event(status: str, level: str = "INFO", prefix: str = "") -> None:
+    """Emit a STATUS event for logs/messages."""
+    _emit_event(
+        AgentEvent(
+            type=EventType.STATUS,
+            data={
+                "status": status,
+                "level": level,
+                "prefix": prefix,
+                "is_log": True,
+                "time_offset": _tool_time_offset(),
+            },
+        )
+    )
+
+
+class StdoutToEventStream:
+    """Context manager to capture stdout/stderr and emit STATUS events."""
+    def __init__(self, prefix="[LOG]", level="INFO"):
+        self.prefix = prefix
+        self.level = level
+        self._stdout = sys.stdout
+        self._stderr = sys.stderr
+
+    def __enter__(self):
+        sys.stdout = self._make_stream(self._stdout)
+        sys.stderr = self._make_stream(self._stderr)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        sys.stdout = self._stdout
+        sys.stderr = self._stderr
+
+    def _make_stream(self, original):
+        # Create a proxy that writes to original AND emits event
+        parent = self
+        class StreamProxy:
+            def write(self, text):
+                original.write(text)
+                if text.strip():
+                     emit_status_event(text.strip(), parent.level, parent.prefix)
+            def flush(self):
+                original.flush()
+            def isatty(self):
+                return getattr(original, "isatty", lambda: False)()
+        return StreamProxy()
