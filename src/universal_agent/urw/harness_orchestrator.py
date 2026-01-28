@@ -28,6 +28,7 @@ from .harness_helpers import (
     toggle_session,
     compact_agent_context,
     build_harness_context_injection,
+    generate_phase_summary,
 )
 from .interview import run_planning_interview, run_planning_from_template
 from .evaluator import CompositeEvaluator, EvaluationResult, create_default_evaluator
@@ -151,6 +152,16 @@ class HarnessOrchestrator:
                 self._gateway = InProcessGateway()
                 self._log("🌐 Using in-process gateway")
         return self._gateway
+
+    async def close(self) -> None:
+        """Clean up gateway httpx clients to prevent event loop closure errors."""
+        if self._gateway and hasattr(self._gateway, 'close'):
+            try:
+                await self._gateway.close()
+            except Exception:
+                pass  # Cleanup errors are non-fatal
+        self._gateway = None
+        self._gateway_session = None
 
     async def _gateway_process_turn(
         self,
@@ -375,6 +386,18 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
             if phase_success:
                 self.plan.mark_phase_complete(phase.id)
                 self._persist_plan()
+                
+                # Generate semantic handoff summary for next phase
+                try:
+                    artifacts_list = [a.path for a in phase_result.artifacts_produced] if phase_result.artifacts_produced else []
+                    await generate_phase_summary(
+                        client,
+                        str(phase_result.session_path),
+                        phase.name,
+                        artifacts_list,
+                    )
+                except Exception as e:
+                    self._log(f"⚠️ Failed to generate phase handoff: {e}")
             else:
                 self._log(f"Phase {phase.name} failed after {retry_count} attempts.")
                 if not await self._handle_phase_failure(phase, phase_result):
@@ -405,7 +428,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         
         # 1. Toggle to new session directory
         session_path = self.session_manager.next_phase_session()
-        phase.session_path = session_path
+        phase.session_path = str(session_path)
         
         # CRITICAL: Update env var so MCP tools (mcp_server.py) write to the correct phase dir
         bind_workspace_env(str(session_path))
@@ -1029,13 +1052,17 @@ async def run_harness(
         config.max_iterations = max_iterations
 
     orchestrator = HarnessOrchestrator(workspaces_root, config)
-    return await orchestrator.run(
-        massive_request, 
-        process_turn, 
-        client,
-        agent=agent,
-        skip_interview=skip_interview,
-        plan_file=plan_file,
-        template_file=template_file,
-        harness_id=harness_id,
-    )
+    try:
+        return await orchestrator.run(
+            massive_request, 
+            process_turn, 
+            client,
+            agent=agent,
+            skip_interview=skip_interview,
+            plan_file=plan_file,
+            template_file=template_file,
+            harness_id=harness_id,
+        )
+    finally:
+        # Ensure gateway httpx clients are cleaned up before event loop closes
+        await orchestrator.close()
