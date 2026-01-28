@@ -37,13 +37,9 @@ import logfire
 
 logger = logging.getLogger(__name__)
 
-# Constants (moved from main.py)
-from universal_agent.agent_setup import DISALLOWED_TOOLS
+# Constants
+from universal_agent.constants import DISALLOWED_TOOLS
 
-OBSERVER_WORKSPACE_DIR = None 
-
-# -----------------------------------------------------------------------------
-# Tool event streaming helpers (Gateway/UI)
 # -----------------------------------------------------------------------------
 
 _TOOL_EVENT_CALLBACK: Optional[Callable[[AgentEvent], None]] = None
@@ -664,6 +660,7 @@ class StdoutToEventStream:
         self.level = level
         self._stdout = sys.stdout
         self._stderr = sys.stderr
+        self._emitting = False
 
     def __enter__(self):
         sys.stdout = self._make_stream(self._stdout)
@@ -680,8 +677,15 @@ class StdoutToEventStream:
         class StreamProxy:
             def write(self, text):
                 original.write(text)
-                if text.strip():
-                     emit_status_event(text.strip(), parent.level, parent.prefix)
+                # Reentrancy guard: if we are already emitting, don't emit again
+                # This prevents infinite recursion if emit_status_event prints to stdout
+                if text.strip() and not parent._emitting:
+                     try:
+                         parent._emitting = True
+                         emit_status_event(text.strip(), parent.level, parent.prefix)
+                     finally:
+                         parent._emitting = False
+
             def flush(self):
                 original.flush()
             def isatty(self):
