@@ -119,6 +119,25 @@ def build_harness_context_injection(
     Returns:
         Formatted prompt string ready to be fed to the multi-agent system
     """
+    prompt_parts = []
+    
+    # 1. Handoffs from prior sessions (The "Semantic Handoff" Logic)
+    handoff_section = ""
+    if prior_session_paths:
+        handoffs = []
+        for p in prior_session_paths:
+            path = Path(p)
+            handoff_file = path / "phase_handoff.md"
+            if handoff_file.exists():
+                try:
+                    summary = handoff_file.read_text().strip()
+                    handoffs.append(f"### From {path.name}:\n{summary}")
+                except Exception:
+                    pass
+        
+        if handoffs:
+            handoff_section = "## 📜 Prior Phase Summaries\n" + "\n\n".join(handoffs) + "\n"
+
     prior_section = ""
     if prior_session_paths:
         paths_list = "\n".join(f"- {p}" for p in prior_session_paths)
@@ -126,6 +145,7 @@ def build_harness_context_injection(
 {paths_list}
 (Consult ONLY if needed for continuity)
 
+{handoff_section}
 """
     
     # Format atomic tasks
@@ -176,6 +196,81 @@ Complete this phase by executing the atomic tasks below.
 ## Expected Outputs
 {artifacts_section}
 """
+
+
+async def generate_phase_summary(
+    client: Any,
+    session_path: str,
+    phase_name: str,
+    artifacts: list[str],
+) -> None:
+    """
+    Generate a semantic summary of the phase for the next agent.
+    Writes 'phase_handoff.md' to the session directory.
+    
+    Args:
+        client: ClaudeSDKClient instance
+        session_path: Path to the current session (where handoff file lives)
+        phase_name: Name of the phase just completed
+        artifacts: List of relative paths to artifacts produced
+    """
+    import asyncio
+    
+    # Simple prompt for the agent to summarize its own work
+    # We rely on the client's current context which *should* contain the recent history
+    # of the phase execution.
+    
+    prompt = f"""
+SYSTEM: You have just completed Phase: "{phase_name}".
+OBJECTIVE: Write a brief "Handoff Summary" for the next agent who will pick up your work.
+
+REQUIREMENTS:
+1. Summarize what was accomplished (1-2 sentences).
+2. List key decisions or findings that the next agent MUST know.
+3. Mention the most important artifacts you created (referenced from `{session_path}`).
+4. Keep it under 200 words.
+5. Format as Markdown.
+
+Write ONLY the markdown content for 'phase_handoff.md'. Do not include conversational filler.
+"""
+    
+    try:
+        # We need to send this as a user message to the agent/client
+        # Depending on client type (SDK vs Agent), method differs.
+        # Assuming ClaudeSDKClient or similar that behaves like one.
+        
+        # We use a direct "create_message" if available to avoid side-effects of tool use?
+        # Or just use the standard interface if possible.
+        # For SDK client: client.create_message(messages=[...])
+        
+        # NOTE: harness_orchestrator passes 'client' which is typically ClaudeSDKClient.
+        # It has .create_message()
+        
+        from claude_agent_sdk.types import UserMessage
+        
+        response = await client.create_message(
+            messages=[UserMessage(content=prompt)],
+            system="You are a helpful assistant writing a handover report.",
+            stop_sequences=None,
+            max_tokens=1000,
+            tool_choice={"type": "none"} # Force text only
+        )
+        
+        # Extract text
+        content = ""
+        for block in response.content:
+            if hasattr(block, "text"):
+                content += block.text
+        
+        if content:
+            # Write to file
+            out_path = Path(session_path) / "phase_handoff.md"
+            out_path.write_text(content)
+            print(f"✅ Generated Phase Handoff: {out_path}")
+            
+    except Exception as e:
+        print(f"⚠️ Failed to generate phase summary: {e}")
+
 
 
 def create_harness_workspace(

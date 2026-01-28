@@ -5935,6 +5935,7 @@ def _print_tool_policy_explain(raw_tool_name: str) -> None:
 async def setup_session(
     run_id_override: Optional[str] = None,
     workspace_dir_override: Optional[str] = None,
+    session_prefix: str = "session_",
 ) -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
     """
     Initialize the agent session, tools, and options.
@@ -5965,7 +5966,7 @@ async def setup_session(
         # 1. Configured Root (Railway/Docker)
         if os.getenv("AGENT_WORKSPACE_ROOT"):
             base_dir = os.getenv("AGENT_WORKSPACE_ROOT")
-            workspace_dir = os.path.join(base_dir, f"session_{timestamp}")
+            workspace_dir = os.path.join(base_dir, f"{session_prefix}{timestamp}")
         else:
             # 2. Auto-Discovery (Local)
             # Try /app first (Docker), then project root (local), fallback to /tmp
@@ -5977,7 +5978,7 @@ async def setup_session(
                 "/tmp",
             ]:
                 workspace_dir = os.path.join(
-                    base_dir, "AGENT_RUN_WORKSPACES", f"session_{timestamp}"
+                    base_dir, "AGENT_RUN_WORKSPACES", f"{session_prefix}{timestamp}"
                 )
                 try:
                     os.makedirs(workspace_dir, exist_ok=True)
@@ -6898,10 +6899,22 @@ async def main(args: argparse.Namespace):
         workspace_override = run_spec.get("workspace_dir")
         run_id_override = args.run_id
 
+    # Determine session prefix (Consolidate Harness Workspace)
+    session_prefix = "session_"
+    if args.harness_objective or args.harness_template:
+        session_prefix = "harness_"
+
     options, session, user_id, workspace_dir, trace, agent = await setup_session(
         run_id_override=run_id_override,
         workspace_dir_override=workspace_override,
+        session_prefix=session_prefix,
     )
+
+    # Extract harness_id if applicable so Orchestrator reuses this directory
+    harness_id_override = None
+    if session_prefix == "harness_":
+        harness_id_override = os.path.basename(workspace_dir).replace("harness_", "")
+
     current_execution_session = ExecutionSession(
         workspace_dir=workspace_dir,
         run_id=run_id,
@@ -7530,6 +7543,9 @@ async def main(args: argparse.Namespace):
                             "client": client,
                             "agent": None,
                         }
+                        
+                        if harness_id_override:
+                            run_kwargs["harness_id"] = harness_id_override
 
                         if template_file:
                              # Pass as template_file (transcript) for generation
@@ -8337,6 +8353,9 @@ async def main(args: argparse.Namespace):
                 await _shutdown_letta()
             except Exception as e:
                 print(f"⚠️ Error shutting down Letta clients: {e}")
+        
+        # Give async tasks (like httpx pool cleanup) a moment to settle
+        await asyncio.sleep(0.25)
 
     # Close the main span to ensure all nested spans are captured in trace
     main_span.__exit__(None, None, None)
