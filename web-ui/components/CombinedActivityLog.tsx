@@ -117,7 +117,7 @@ const CollapsibleData = ({ label, data, isError = false }: { label: string, data
             {expanded && (
                 <div className="border-t bg-background p-0">
                     <pre className={cn(
-                        "p-2 overflow-x-auto text-xs font-mono",
+                        "p-2 text-xs font-mono whitespace-pre-wrap break-words",
                         isError ? "text-red-600 dark:text-red-400" : "text-foreground"
                     )}>
                         {data?.content_preview || jsonString}
@@ -208,7 +208,7 @@ function LogRow({ log }: { log: LogEntry }) {
                 )}>
                     {log.level}
                 </span>
-                <div className="flex-1 break-all">
+                <div className="flex-1 whitespace-pre-wrap break-words">
                     {log.prefix && <span className="text-blue-500 mr-1">{log.prefix}</span>}
                     {headerPreview}
                     {hasMore && !isOpen && <span className="text-muted-foreground ml-1">...</span>}
@@ -216,7 +216,7 @@ function LogRow({ log }: { log: LogEntry }) {
             </div>
 
             {isOpen && hasMore && (
-                <div className="mt-1 pl-[110px] text-muted-foreground whitespace-pre-wrap break-all">
+                <div className="mt-1 pl-[110px] text-muted-foreground whitespace-pre-wrap break-words">
                     {log.message}
                 </div>
             )}

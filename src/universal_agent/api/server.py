@@ -355,7 +355,6 @@ async def websocket_agent(websocket: WebSocket):
 
             try:
                 # Parse message
-                print(f"DEBUG SERVER: Received raw data: {data}")
                 client_event = WebSocketEvent.from_json(data)
                 if client_event.type == WSEventType.QUERY:
                     query = client_event.data.get("text", "")

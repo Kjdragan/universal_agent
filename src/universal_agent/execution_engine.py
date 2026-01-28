@@ -163,7 +163,15 @@ class ProcessTurnAdapter:
         
         # Import here to avoid circular imports
         from claude_agent_sdk.client import ClaudeSDKClient
-        from universal_agent.main import process_turn
+        from universal_agent.main import process_turn, budget_state
+        
+        # Initialize budget state for gateway execution if missing
+        if "start_ts" not in budget_state:
+            budget_state["start_ts"] = time.time()
+        if "steps" not in budget_state:
+            budget_state["steps"] = 0
+        if "tool_calls" not in budget_state:
+            budget_state["tool_calls"] = 0
         
         start_ts = time.time()
         
@@ -173,6 +181,7 @@ class ProcessTurnAdapter:
         def event_callback(event: AgentEvent) -> None:
             """Callback to capture events from process_turn."""
             try:
+                print(f"DEBUG ProcessTurnAdapter: event_callback received type={event.type}")
                 event_queue.put_nowait(event)
             except Exception:
                 pass
@@ -215,6 +224,7 @@ class ProcessTurnAdapter:
                     if event.data.get("status") == "engine_complete":
                         break
                     
+                    print(f"DEBUG ProcessTurnAdapter: yielding event type={event.type}")
                     yield event
                     
                 except asyncio.TimeoutError:
@@ -282,7 +292,7 @@ class ProcessTurnAdapter:
             yield AgentEvent(
                 type=EventType.ERROR,
                 data={
-                    "error": result_holder.get("error", "Unknown error"),
+                    "message": result_holder.get("error", "Unknown error"),
                     "duration_seconds": round(time.time() - start_ts, 2),
                 },
             )

@@ -135,7 +135,6 @@ class GatewayBridge:
                     try:
                         event_data = json.loads(message)
                         event_type_str = event_data.get("type", "")
-                        
                         # Convert gateway event to Web UI event
                         ws_event = self._convert_gateway_event(event_type_str, event_data)
                         if ws_event:
@@ -147,6 +146,7 @@ class GatewayBridge:
                             
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse gateway event: {e}")
+
                         
         except asyncio.TimeoutError:
             yield create_error_event("Gateway connection timeout")

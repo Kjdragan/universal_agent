@@ -48,6 +48,7 @@ from universal_agent.tools.research_bridge import (
     run_report_generation_wrapper,
 )
 from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
+from universal_agent import hooks as hook_events
 from universal_agent.hooks import AgentHookSet
 
 # Timezone helper for consistent date/time across deployments
@@ -4839,8 +4840,12 @@ async def continue_job_run(
             continue
 
 
-async def run_conversation(client, query: str, start_ts: float, iteration: int = 1, max_iterations: int = 20):
-    """Run a single conversation turn with full tracing."""
+async def run_conversation(client, query: str, start_ts: float, iteration: int = 1, max_iterations: int = 20, event_callback: Optional[Callable[["AgentEvent"], None]] = None):
+    """Run a single conversation turn with full tracing.
+    
+    Args:
+        event_callback: Optional callback to receive AgentEvents in real-time for gateway streaming.
+    """
     global \
         trace, \
         run_id, \
@@ -5127,6 +5132,15 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             )
                                     trace["tool_calls"].append(tool_record)
                                     tool_calls_this_iter.append(tool_record)
+                                    
+                                    # Emit TOOL_CALL event for gateway/UI streaming (deduped)
+                                    hook_events.emit_tool_call_event(
+                                        tool_use_id=block.id,
+                                        tool_name=block.name,
+                                        tool_input=block.input if hasattr(block, "input") else {},
+                                        time_offset=tool_record.get("time_offset_seconds", 0),
+                                    )
+                                    
                                     budget_state["tool_calls"] += 1
                                     if (
                                         budget_config.get("max_tool_calls")
@@ -5218,6 +5232,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     print(f"   ⏳ Waiting for {block.name} response...")
 
                             elif isinstance(block, TextBlock):
+                                # Emit TEXT event for streaming
+                                hook_events.emit_text_event(block.text)
+
                                 if "connect.composio.dev/link" in block.text:
                                     import re
 
@@ -5242,10 +5259,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 )
 
                             elif isinstance(block, ThinkingBlock):
+                                # Emit thinking event
+                                hook_events.emit_thinking_event(block.thinking, block.signature)
+                                
                                 # Log extended thinking
                                 print(
                                     f"\n🧠 Thinking (+{round(time.time() - start_ts, 1)}s)..."
                                 )
+                                print(block.thinking)  # Print thinking content to CLI
                                 logfire.info(
                                     "thinking",
                                     thinking_length=len(block.thinking),
@@ -5309,6 +5330,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     content_preview=full_content,
                                     run_id=run_id,
                                     step_id=step_id,
+                                )
+
+                                # Emit TOOL_RESULT event for gateway/UI streaming (deduped)
+                                hook_events.emit_tool_result_event(
+                                    tool_use_id=tool_use_id,
+                                    is_error=is_error,
+                                    tool_result=block_content,
+                                    time_offset=result_record.get("time_offset_seconds", 0),
                                 )
 
                                 print(
@@ -6432,6 +6461,15 @@ async def process_turn(
     trace["start_time"] = datetime.now().isoformat()
     start_ts = time.time()
 
+    # Register gateway/UI event callback for hook-based tool streaming
+    hook_events.set_event_callback(event_callback)
+    hook_events.set_event_start_ts(start_ts)
+    hook_events.reset_tool_event_tracking()
+
+    def _clear_hook_events() -> None:
+        hook_events.set_event_callback(None)
+        hook_events.set_event_start_ts(None)
+
     if LOGFIRE_TOKEN:
         logfire.info("query_started", query=user_input)
 
@@ -6457,6 +6495,7 @@ async def process_turn(
             )
             
             summary = f"Harness complete: {result.get('phases_completed', 0)} phases completed"
+            _clear_hook_events()
             return ExecutionResult(
                 success=result.get("status") == "complete",
                 final_output=summary,
@@ -6468,6 +6507,7 @@ async def process_turn(
             print(f"\n❌ Harness error: {e}")
             import traceback
             traceback.print_exc()
+            _clear_hook_events()
             return ExecutionResult(
                 success=False,
                 final_output="",
@@ -6522,7 +6562,8 @@ async def process_turn(
 
         while True:
             needs_input, auth_link, final_text = await run_conversation(
-                client, current_query, start_ts, iteration, max_iterations=max_iterations
+                client, current_query, start_ts, iteration, max_iterations=max_iterations,
+                event_callback=event_callback  # Forward callback for tool event streaming
             )
             final_response_text = final_text  # Capture for printing after summary
 
@@ -6610,17 +6651,13 @@ async def process_turn(
                         "marker": marker,
                     }
                 )
-                # Emit tool call event for gateway/adapters
-                emit_event(AgentEvent(
-                    type=EventType.TOOL_CALL,
-                    data={
-                        "name": tc["name"],
-                        "id": tc.get("id"),
-                        "input": input_payload,
-                        "time_offset": tc["time_offset_seconds"],
-                        "iteration": tc["iteration"],
-                    },
-                ))
+                # Emit tool call event for gateway/adapters (deduped)
+                hook_events.emit_tool_call_event(
+                    tool_use_id=tc.get("id"),
+                    tool_name=tc.get("name", ""),
+                    tool_input=input_payload,
+                    time_offset=tc.get("time_offset_seconds", 0),
+                )
 
         # Collect and display all trace IDs for debugging
         local_trace_ids = collect_local_tool_trace_ids(workspace_dir)
@@ -6690,7 +6727,7 @@ async def process_turn(
     trace["end_time"] = datetime.now().isoformat()
     trace["total_duration_seconds"] = round(end_ts - start_ts, 3)
 
-
+    _clear_hook_events()
     return ExecutionResult(
         response_text=final_response_text,
         execution_time_seconds=request_duration if not is_simple else 0.0,
@@ -8074,7 +8111,9 @@ async def main(args: argparse.Namespace):
                                         pass # Cleared successfully
                                     continue
                                 
-                                print("✅ Verification Passed. Finishing run.")
+                                print("✅ Verification Passed.")
+                                print("ℹ️  Mission complete. Session remains open for follow-up queries. Type 'quit' to exit.")
+                                # Do not break here; allow loop to continue for user input.
 
                     if run_mode == "job" and args.job_path:
                         if runtime_db_conn and run_id:

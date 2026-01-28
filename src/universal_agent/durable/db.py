@@ -23,7 +23,7 @@ def get_runtime_db_path() -> str:
 
 def connect_runtime_db(db_path: Optional[str] = None) -> sqlite3.Connection:
     path = db_path or get_runtime_db_path()
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=60.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
