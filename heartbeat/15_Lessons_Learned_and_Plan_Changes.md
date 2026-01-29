@@ -21,7 +21,8 @@ Use this document to record **deviations**, **issues**, and **lessons learned** 
 ## 3. Issues encountered
 | Date | Area | Issue | Resolution |
 |------|------|-------|------------|
-| 2026-01-29 | — | Initialized document | — |
+| 2026-01-29 | Testing | `tests/stabilization/test_smoke_direct.py` timed out (30s) running `python -m universal_agent.main` | Pending: re-run with longer timeout and investigate CLI startup latency |
+| 2026-01-29 | Testing | agent-browser failed: missing Chromium (`chrome-headless-shell`) after `agent-browser install` | Pending: run `npx playwright install chromium` and retry parity workflow |
 
 ## 4. Open questions (live)
 - (Add questions that block progress or require decision.)

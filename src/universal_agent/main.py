@@ -132,6 +132,7 @@ from universal_agent.cli_io import (
 from universal_agent.execution_context import bind_workspace
 from universal_agent.execution_session import ExecutionSession
 from universal_agent.trace_utils import write_trace
+from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled
 
 
 # Global State Initialization
@@ -147,6 +148,10 @@ gateway_mode_active = False
 interrupt_requested = False
 last_sigint_ts = None
 current_step_id = None
+
+# Feature flags (placeholders for future gating; no behavior change yet)
+HEARTBEAT_ENABLED = heartbeat_enabled()
+MEMORY_INDEX_ENABLED = memory_index_enabled()
 
 
 class BudgetExceeded(RuntimeError):

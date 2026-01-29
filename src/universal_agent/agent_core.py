@@ -81,6 +81,7 @@ class EventType(str, Enum):
     TOOL_RESULT = "tool_result"
     THINKING = "thinking"
     STATUS = "status"
+    HEARTBEAT = "heartbeat"
     AUTH_REQUIRED = "auth_required"
     ERROR = "error"
     SESSION_INFO = "session_info"

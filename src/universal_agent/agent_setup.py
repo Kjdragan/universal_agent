@@ -33,6 +33,7 @@ from universal_agent.tools.research_bridge import (
     run_research_phase_wrapper,
 )
 from universal_agent.execution_context import bind_workspace_env
+from universal_agent.feature_flags import memory_index_enabled
 
 
 # Get project directories
@@ -68,7 +69,8 @@ class AgentSetup:
         self.workspace_dir = workspace_dir
         self.user_id = resolve_user_id(user_id)
         self.enable_skills = enable_skills
-        self.enable_memory = enable_memory and not os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
+        disable_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
+        self.enable_memory = enable_memory and memory_index_enabled() and not disable_memory
         self.verbose = verbose
         
         self.run_id = str(uuid.uuid4())

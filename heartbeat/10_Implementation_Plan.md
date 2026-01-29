@@ -22,13 +22,15 @@ This plan is intentionally cautious to protect the stability of the current syst
 **Work:**
 1. Confirm heartbeat prompt + suppression contract (`UA_HEARTBEAT_OK`).
 2. Decide on `EventType.HEARTBEAT` vs `STATUS.kind="heartbeat"` (D‑002).
-3. Add config schema placeholders for:
+3. Implement the chosen heartbeat event type in `agent_core` + WebSocket events.
+4. Add config schema placeholders for:
    - `heartbeat.enabled` (default **false**) @/home/kjdragan/lrepos/universal_agent/heartbeat/14_Heartbeat_Enablement_Feasibility.md#58-95
    - `memory.enabled` (default **false**)
-4. Add explicit kill switches (env vars) for heartbeat + memory indexing.
-5. Define regression checklist (CLI, gateway WS, Telegram bot startup).
-6. Expand testing docs with a Phase 0 smoke checklist (update the parity suite + UI runbook). @/home/kjdragan/lrepos/universal_agent/Project_Documentation/015_Testing_Strategy.md#1-53
-7. Document the UI‑agnostic parity contract and add a parity test matrix to the testing strategy.
+5. Add explicit kill switches (env vars) for heartbeat + memory indexing.
+6. Define regression checklist (CLI, gateway WS, Telegram bot startup).
+7. Expand testing docs with a Phase 0 smoke checklist (update the parity suite + UI runbook). @/home/kjdragan/lrepos/universal_agent/Project_Documentation/015_Testing_Strategy.md#37-67
+8. Document the UI‑agnostic parity contract and add a parity test matrix to the testing strategy.
+9. Add agent-browser steps for Web UI parity verification in the testing strategy.
 
 **Gate (must pass):**
 - CLI + gateway smoke tests pass with all toggles **off**.
@@ -177,10 +179,15 @@ For each phase, mark items **done** before starting the next phase. This section
 
 ### Phase 0 readiness
 - [ ] Heartbeat prompt + suppression contract finalized.
-- [ ] Event type decision documented (new `EventType` or `STATUS.kind`).
-- [ ] Feature flags added (heartbeat + memory).
-- [ ] Regression checklist defined and executed with toggles off.
-- [ ] Parity test matrix documented and baseline parity checks run (CLI direct ↔ gateway ↔ Web UI).
+- [x] Event type decision documented (new `EventType` or `STATUS.kind`).
+- [x] Heartbeat event type implemented in `agent_core` + WebSocket events.
+- [x] Feature flags module added (heartbeat + memory).
+- [x] Feature flags wired into runtime (no behavior change).
+- [ ] Regression checklist defined and executed with toggles off (direct + gateway smoke done; UI pending).
+- [x] Parity test matrix documented (CLI direct ↔ gateway ↔ Web UI).
+- [x] Agent-browser parity workflow documented.
+- [ ] Agent-browser parity workflow executed on Web UI.
+- [ ] Baseline parity checks run (CLI direct ↔ gateway ↔ Web UI) — CLI direct + gateway done.
 
 ### Phase 1 readiness
 - [ ] WS broadcast works for multiple connections.

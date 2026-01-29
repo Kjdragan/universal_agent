@@ -29,12 +29,17 @@ from universal_agent.gateway import (
     GatewaySessionSummary,
 )
 from universal_agent.agent_core import AgentEvent, EventType
+from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled
 from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Feature flags (placeholders, no runtime behavior changes yet)
+HEARTBEAT_ENABLED = heartbeat_enabled()
+MEMORY_INDEX_ENABLED = memory_index_enabled()
 
 BASE_DIR = Path(__file__).parent.parent.parent
 WORKSPACES_DIR = BASE_DIR / "AGENT_RUN_WORKSPACES"
