@@ -65,6 +65,7 @@ sys.path.append(
 )  # Repo Root
 from universal_agent.search_config import SEARCH_TOOL_CONFIG
 from universal_agent.tools.corpus_refiner import refine_corpus_programmatic
+from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled
 from tools.workbench_bridge import WorkbenchBridge
 from composio import Composio
 
@@ -74,6 +75,10 @@ disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {
     "true",
     "yes",
 }
+
+# Feature flags (placeholders for future gating; no behavior change yet)
+HEARTBEAT_ENABLED = heartbeat_enabled()
+MEMORY_INDEX_ENABLED = memory_index_enabled()
 if disable_local_memory:
     sys.stderr.write(
         "[Local Toolkit] Memory System disabled via UA_DISABLE_LOCAL_MEMORY.\n"

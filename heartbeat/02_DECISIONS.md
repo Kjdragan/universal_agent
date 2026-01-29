@@ -32,3 +32,15 @@ This is a running log of decisions. Append new decisions (do not rewrite history
   - Prevents spam.
   - Enables consistent “no alert” behavior while still logging/indicating health.
 
+### D-005 — Heartbeat uses a first‑class EventType
+- **Decision**: Add `EventType.HEARTBEAT` (and mirror in WebSocket `EventType`) rather than overloading `STATUS.kind`.
+- **Rationale**:
+  - Cleaner UI routing and stable contracts across CLI/gateway/Web UI.
+  - Avoids ambiguous parsing of status text.
+
+### D-006 — Heartbeat defaults off + kill switch
+- **Decision**: Heartbeat is **disabled by default** and gated by a config flag, with a proposed env kill switch (`UA_DISABLE_HEARTBEAT`).
+- **Rationale**:
+  - Minimizes latency risk until behavior is proven.
+  - Aligns with deployment realities (uptime vs scale-to-zero).
+

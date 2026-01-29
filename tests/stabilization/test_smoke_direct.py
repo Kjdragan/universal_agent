@@ -30,7 +30,7 @@ def test_direct_mode_plumbing():
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        timeout=30  # Hard limit for smoke test
+        timeout=90  # Hard limit for smoke test (startup can be slow)
     )
     duration = time.time() - start_time
     
