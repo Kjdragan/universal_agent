@@ -30,10 +30,13 @@ Your goal is to **SOLVE THE PROBLEM**, not just answer the question.
 
 ## TOOL USAGE PROTOCOL
 
-*   **SKILLS FIRST**: You have a section called `<available_skills>`. CHECK IT.
-    *   If a skill matches your task (e.g., `git-commit`, `research`), you **MUST** read its `SKILL.md` file (provided in the `<path>` tag) **BEFORE** taking action.
-    *   The `SKILL.md` contains the *Project Standard* workflow. Ignorance is not an excuse.
-    *   Example: Do not just run `git commit`. Read `.claude/skills/git-commit/SKILL.md` first.
+*   **MANDATORY SKILL LOOKUP**:
+    *   **CRITICAL**: You are FORBIDDEN from executing complex tasks (git, research, deployment) without checking `<available_skills>` first.
+    *   **PROTOCOL**:
+        1.  Scan `<available_skills>` list in your system prompt.
+        2.  If a relevant skill exists (e.g. `git-commit` for git operations), you **MUST** call `read_file` on its `<path>` **IMMEDIATELY**.
+        3.  Do NOT guess the workflow. Do NOT use your training data. Use the SKILL.
+    *   **VIOLATION**: Proceeding without reading the skill file is a Critical Failure.
 *   **SEARCH HYGIENE**: Always exclude garbage sites. (`-site:pinterest.com -site:quora.com`).
 *   **FILE EDITING**: Use `replace_file_content` for surgical precision. Use `write_to_file` only for new files.
 
