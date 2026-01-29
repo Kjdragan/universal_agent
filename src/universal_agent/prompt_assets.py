@@ -154,25 +154,18 @@ def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
 
 def generate_skills_xml(skills: list[dict]) -> str:
     """
-    Generate <available_skills> XML block for system prompt injection.
-    Includes instructions on Progressive Disclosure (reading references).
+    Generate Markdown list of available skills for system prompt injection.
+    Using Markdown check-list style to encourage reading.
     """
     if not skills:
         return ""
 
     lines = [
-        "<available_skills>",
-        "<!-- INSTRUCTION: proper usage of skills -->",
-        "<!-- 1. Read the 'SKILL.md' file to understand the workflow. -->",
-        "<!-- 2. If the skill mentions a 'references/' directory or other .md files, READ THEM as needed. -->",
+        "## 📚 AVAILABLE SKILLS (Standard Operating Procedures)",
+        "You MUST read the relevant SOP before executing these tasks:",
     ]
     for skill in skills:
         lines.append(
-            f"""<skill>
-  <name>{skill['name']}</name>
-  <description>{skill['description']}</description>
-  <path>{skill['path']}</path>
-</skill>"""
+            f"- **{skill['name']}**: {skill['description']} (Path: `{skill['path']}`)"
         )
-    lines.append("</available_skills>")
     return "\n".join(lines)
