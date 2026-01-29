@@ -40,6 +40,10 @@ These documents are **living**:
   - UA feasibility and adoption plan for file-based memory.
 - `13_Memory_Migration_Checklist.md`
   - Letta → file-based memory migration checklist.
+- `14_Heartbeat_Enablement_Feasibility.md`
+  - Heartbeat on/off feasibility analysis.
+- `15_Lessons_Learned_and_Plan_Changes.md`
+  - Running log of lessons learned and plan deviations.
 
 ## Conventions
 - **Numbered prefixes** are intentional so docs have stable ordering.
