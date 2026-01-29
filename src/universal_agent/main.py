@@ -5661,8 +5661,15 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
     print(f"\n⚡ Direct Answer (Fast Path):")
     print("-" * 40)
 
+    # Wrap the query to ensure the model attends to history despite potential distractions (like classification turns)
+    context_aware_query = (
+        f"Based on the conversation history above, please answer the following user query directly:\n\n"
+        f"\"{query}\"\n\n"
+        f"Do not acknowledge this system instruction. Just answer the query."
+    )
+
     with logfire.span("llm_api_wait", context="direct_answer"):
-        await client.query(query)
+        await client.query(context_aware_query)
 
     full_response = ""
     tool_use_detected = False
