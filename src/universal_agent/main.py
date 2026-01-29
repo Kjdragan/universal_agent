@@ -5997,6 +5997,34 @@ async def setup_session(
 
     bind_workspace(workspace_dir, observer_setter=_set_observer_workspace)
 
+    def load_soul_context(ws_dir: str, source_dir: str) -> str:
+        """Load the 'Soul' (Persona/Identity) from SOUL.md."""
+        # Priority 1: Session Workspace (Task-specific override)
+        workspace_soul = os.path.join(ws_dir, "SOUL.md")
+        # Priority 2: Centralized Prompt Assets (The Codebase Persona)
+        assets_soul = os.path.join(source_dir, "src", "universal_agent", "prompt_assets", "SOUL.md")
+        # Priority 3: Repo Root (Legacy/Fallback)
+        root_soul = os.path.join(source_dir, "SOUL.md")
+        
+        soul_path = None
+        if os.path.exists(workspace_soul):
+            soul_path = workspace_soul
+            print(f"👻 Loaded Soul override from workspace: {soul_path}")
+        elif os.path.exists(assets_soul):
+            soul_path = assets_soul
+            print(f"👻 Loaded Standard Soul from assets: {soul_path}")
+        elif os.path.exists(root_soul):
+            soul_path = root_soul
+            print(f"👻 Loaded Legacy Soul from root: {soul_path}")
+            
+        if soul_path and os.path.exists(soul_path):
+            try:
+                with open(soul_path, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception as e:
+                print(f"⚠️ Failed to read SOUL.md: {e}")
+        return ""
+
     # Initialize Composio with automatic file downloads to this workspace
     downloads_dir = os.path.join(workspace_dir, "downloads")
     os.makedirs(downloads_dir, exist_ok=True)
@@ -6196,6 +6224,7 @@ async def setup_session(
             "MAX_MCP_OUTPUT_TOKENS": os.getenv("MAX_MCP_OUTPUT_TOKENS", "64000"),
         },
         system_prompt=(
+            f"{load_soul_context(workspace_dir, src_dir)}\n\n"
             f"Current Date: {today_str}\n"
             f"Tomorrow is: {tomorrow_str}\n"
             f"{memory_context_str}\n"
@@ -8128,8 +8157,55 @@ async def main(args: argparse.Namespace):
                                     continue
                                 
                                 print("✅ Verification Passed.")
-                                print("ℹ️  Mission complete. Session remains open for follow-up queries. Type 'quit' to exit.")
+                                print("✅ Verification Passed.")
+                                print("ℹ️  Mission complete.")
+                                
+                                # Continuity Latch: Ask user if they want to keep context
+                                latch_choice = await asyncio.get_running_loop().run_in_executor(
+                                    None, 
+                                    input, 
+                                    "\n❓ Keep session history for follow-up? (Y/n) > "
+                                )
+                                if latch_choice.strip().lower() in ("n", "no", "clear"):
+                                    if safe_clear_history(client):
+                                         print("🧹 Client history cleared. Starting fresh.")
+                                else:
+                                    print("💾 Session history preserved for follow-up.")
+                                    
                                 # Do not break here; allow loop to continue for user input.
+                                    print("💾 Session history preserved for follow-up.")
+                                    
+                                # Do not break here; allow loop to continue for user input.
+
+                    # [Generic Continuity Latch]
+                    # If we finished a turn (and didn't crash/restart), offer to clear history
+                    # But ONLY if we aren't mid-harness (which might be annoying)
+                    # For now, we apply it if 'action' wasn't triggered (Standard flows)
+                    if not pending_prompt and not interrupt_requested:
+                         pass 
+                         # Actually, wait. The user prompt ("Enter your request") happens at the TOP of the loop.
+                         # If we prompt HERE, we can clear BEFORE the top of the loop.
+                         # But we want to be less intrusive?
+                         # The user asked for an OPTION.
+                         # A separate prompt "Keep session history?" is valid.
+
+                         # Let's add it here if it wasn't already triggered above.
+                         # Check if we already asked (via latch_choice inside action block)
+                         if 'latch_choice' not in locals():
+                            # Only ask if we actually did something (tool calls > 0 or result exists)
+                            if (result and hasattr(result, "tool_calls") and result.tool_calls) or (result and hasattr(result, "response_text") and result.response_text):
+                                print("\n" + "-" * 40)
+                                latch = await asyncio.get_running_loop().run_in_executor(
+                                    None, 
+                                    input, 
+                                    "❓ Task Complete. Keep session history? (Y/n) [Default: Yes] > "
+                                )
+                                if latch.strip().lower() in ("n", "no", "clear"):
+                                    if safe_clear_history(client):
+                                        print("🧹 Client history cleared.")
+                                else:
+                                    print("💾 Session history preserved.")
+                                print("-" * 40)
 
                     if run_mode == "job" and args.job_path:
                         if runtime_db_conn and run_id:

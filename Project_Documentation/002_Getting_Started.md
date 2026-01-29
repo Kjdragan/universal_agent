@@ -30,15 +30,32 @@ This guide covers how to set up the Universal Agent development environment and 
 
 ## Running the Agent
 
-### Quick Start (Helper Script)
-The easiest way to start the agent in a local development loop is via the helper script:
+### Quick Start (In-Process Gateway)
+The easiest way to start the agent. The gateway runs inside the CLI process.
 ```bash
-./start_local.sh
-```
-This script handles environment activation and calls the entry point with standard flags.
+# Helper script (Recommended)
+./start_cli_dev.sh
 
-### Manual Execution
-To run the agent directly with `uv`:
+# Or manual execution
+uv run python -m universal_agent.main --use-gateway
+```
+
+### External Gateway Mode (Client-Server)
+Recommended for long-running workflows where you want the "Brain" (Gateway) to stay alive independent of the CLI "Client".
+
+1.  **Start the Gateway Server** (Terminal 1)
+    ```bash
+    ./start_gateway.sh --server
+    # Server runs on http://localhost:8002
+    ```
+
+2.  **Connect the CLI Client** (Terminal 2)
+    ```bash
+    uv run python -m universal_agent.main --gateway-url http://localhost:8002
+    ```
+
+### Manual Execution (Standard)
+To run the agent directly with `uv` (uses in-process gateway by default if no flags):
 ```bash
 uv run python src/universal_agent/main.py --task "Your task here"
 ```

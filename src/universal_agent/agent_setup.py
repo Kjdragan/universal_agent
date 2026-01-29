@@ -85,6 +85,7 @@ class AgentSetup:
         self._discovered_skills: list[dict] = []
         self._skills_xml: str = ""
         self._memory_context: str = ""
+        self._soul_context: str = ""
         
         # Hooks (set by main.py or can use defaults)
         self._hooks: dict = {}
@@ -180,7 +181,10 @@ class AgentSetup:
         # Load memory context
         if self.enable_memory:
             self._memory_context = await self._load_memory_context()
-
+        
+        # Load soul/persona
+        self._load_soul_context()
+        
         # Build options
         self._options = self._build_options()
         self._initialized = True
@@ -213,6 +217,36 @@ class AgentSetup:
         except Exception as e:
             self._log(f"⚠️ Failed to load Memory Context: {e}")
             return ""
+
+    def _load_soul_context(self):
+        """Load the 'Soul' (Persona/Identity) from SOUL.md."""
+        # Priority 1: Session Workspace (Task-specific override)
+        workspace_soul = os.path.join(self.workspace_dir, "SOUL.md")
+        # Priority 2: Centralized Prompt Assets (The Codebase Persona)
+        assets_soul = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "SOUL.md")
+        # Priority 3: Repo Root (Legacy/Fallback)
+        root_soul = os.path.join(self.src_dir, "..", "..", "SOUL.md")
+        
+        soul_path = None
+        if os.path.exists(workspace_soul):
+            soul_path = workspace_soul
+            self._log(f"👻 Loaded Soul override from workspace: {soul_path}")
+        elif os.path.exists(assets_soul):
+            soul_path = assets_soul
+            self._log(f"👻 Loaded Standard Soul from assets: {soul_path}")
+        elif os.path.exists(root_soul):
+            # Resolve path relative to src_dir for robustness
+            soul_path = root_soul
+            self._log(f"👻 Loaded Legacy Soul from root: {soul_path}")
+            
+        if soul_path and os.path.exists(soul_path):
+            try:
+                with open(soul_path, "r", encoding="utf-8") as f:
+                    self._soul_context = f.read().strip()
+            except Exception as e:
+                self._log(f"⚠️ Failed to read SOUL.md: {e}")
+        else:
+             self._log("👻 No SOUL.md found. Running in default Checkpoint mode.")
 
     def bind_workspace(self, new_workspace: str) -> None:
         """
@@ -287,7 +321,11 @@ class AgentSetup:
         tool_knowledge_block = get_tool_knowledge_block()
         skills_section = f"\n   - Available skills (read SKILL.md for detailed instructions):\n{self._skills_xml}\n" if self._skills_xml else ""
 
+        # Inject Soul if present
+        soul_section = f"\n\n{self._soul_context}\n\n" if self._soul_context else ""
+
         return (
+            f"{soul_section}"
             f"Current Date: {today_str}\n"
             f"Tomorrow is: {tomorrow_str}\n"
             f"{self._memory_context}\n"
