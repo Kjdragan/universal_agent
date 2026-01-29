@@ -10,6 +10,7 @@ This plan is intentionally cautious to protect the stability of the current syst
 ## Guiding guardrails (non‑negotiable)
 - **Default off** for heartbeat + memory indexing in production.
 - No change to existing CLI direct behavior unless explicitly enabled.
+- **UI‑agnostic parity:** CLI direct, CLI via gateway, Web UI, and Telegram must use the same execution path and produce equivalent results (UI differences only).
 - Every phase includes **entry/exit gates** and a **rollback** path.
 - New services must be **kill‑switchable** via config.
 
@@ -27,6 +28,7 @@ This plan is intentionally cautious to protect the stability of the current syst
 4. Add explicit kill switches (env vars) for heartbeat + memory indexing.
 5. Define regression checklist (CLI, gateway WS, Telegram bot startup).
 6. Expand testing docs with a Phase 0 smoke checklist (update the parity suite + UI runbook). @/home/kjdragan/lrepos/universal_agent/Project_Documentation/015_Testing_Strategy.md#1-53
+7. Document the UI‑agnostic parity contract and add a parity test matrix to the testing strategy.
 
 **Gate (must pass):**
 - CLI + gateway smoke tests pass with all toggles **off**.
@@ -178,6 +180,7 @@ For each phase, mark items **done** before starting the next phase. This section
 - [ ] Event type decision documented (new `EventType` or `STATUS.kind`).
 - [ ] Feature flags added (heartbeat + memory).
 - [ ] Regression checklist defined and executed with toggles off.
+- [ ] Parity test matrix documented and baseline parity checks run (CLI direct ↔ gateway ↔ Web UI).
 
 ### Phase 1 readiness
 - [ ] WS broadcast works for multiple connections.
