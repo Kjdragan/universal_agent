@@ -35,10 +35,42 @@ class MemoryManager:
             
     def _on_file_change(self, filepath: str, content: str):
         """Callback for file watcher."""
-        # Auto-index changed files
         filename = os.path.basename(filepath)
-        print(f"[MemoryManager] Auto-indexing changed file: {filename}")
+        print(f"[MemoryManager] Processing changed file: {filename}")
+        
+        # 1. Archival Indexing (Existing behavior - works for all files)
         self.archival_memory_insert(content, tags=f"file:{filename},auto-sync")
+        
+        # 2. Core Block Syncing (Specific to MEMORY.md)
+        if filename == "MEMORY.md":
+            self._sync_core_blocks_from_markdown(content)
+            
+    def _sync_core_blocks_from_markdown(self, content: str):
+        """Parse MEMORY.md and update SQLite blocks if headers match."""
+        import re
+        # Regex to find headers like '## [PERSONA]' and capture content until next header
+        pattern = r"##\s*\[([A-Z_]+)\]\s*\n(.*?)(?=\n##\s*\[|$)"
+        matches = re.findall(pattern, content, re.DOTALL)
+        
+        updates = 0
+        for label_upper, block_content in matches:
+            label = label_upper.lower() # DB uses lowercase labels
+            clean_content = block_content.strip()
+            
+            # Check if this block exists in our state
+            existing_block = self.get_memory_block(label)
+            if existing_block:
+                if existing_block.value.strip() != clean_content:
+                    print(f"[MemoryManager] Syncing Core Block '{label}' from file...")
+                    self.update_memory_block(label, clean_content)
+                    updates += 1
+            else:
+                # Optional: Allow creating new blocks via file? 
+                # For now, let's stick to updating existing ones to be safe
+                pass
+                
+        if updates > 0:
+            print(f"[MemoryManager] Synced {updates} core blocks from MEMORY.md")
         
     def close(self):
         """Cleanup resources."""
