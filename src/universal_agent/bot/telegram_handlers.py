@@ -99,6 +99,8 @@ async def agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Please provide a prompt: `/agent Research AI trends`", parse_mode="Markdown")
         return
 
+async def _process_agent_request(update: Update, context: ContextTypes.DEFAULT_TYPE, prompt: str):
+    """Helper to process an agent request from command or text."""
     task_manager = context.bot_data.get("task_manager")
     user_id = update.effective_user.id
     
@@ -106,7 +108,7 @@ async def agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_continue = task_manager.is_continuation_enabled(user_id)
     mode_text = "🔗 Continuing session" if is_continue else "🆕 Fresh session"
     
-    # Enqueue Task (TaskManager checks continuation mode internally)
+    # Enqueue Task
     task_id = await task_manager.add_task(user_id, prompt)
     
     await update.message.reply_text(
@@ -115,3 +117,22 @@ async def agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"I will notify you when it starts and finishes.",
         parse_mode="Markdown"
     )
+
+async def agent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await check_auth(update): return
+    
+    prompt = " ".join(context.args)
+    if not prompt:
+        await update.message.reply_text("⚠️ Please provide a prompt: `/agent Research AI trends`", parse_mode="Markdown")
+        return
+        
+    await _process_agent_request(update, context, prompt)
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle plain text messages as agent commands."""
+    if not await check_auth(update): return
+    
+    prompt = update.message.text
+    if not prompt: return
+    
+    await _process_agent_request(update, context, prompt)

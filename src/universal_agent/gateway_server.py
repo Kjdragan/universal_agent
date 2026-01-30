@@ -18,6 +18,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from dotenv import load_dotenv
+
+# Load .env early so SDK/CLI subprocesses inherit API keys and settings.
+BASE_DIR = Path(__file__).parent.parent.parent
+load_dotenv(BASE_DIR / ".env", override=False)
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -33,6 +39,7 @@ from universal_agent.feature_flags import heartbeat_enabled, memory_index_enable
 from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
+from universal_agent.heartbeat_service import HeartbeatService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,8 +48,24 @@ logger = logging.getLogger(__name__)
 HEARTBEAT_ENABLED = heartbeat_enabled()
 MEMORY_INDEX_ENABLED = memory_index_enabled()
 
-BASE_DIR = Path(__file__).parent.parent.parent
-WORKSPACES_DIR = BASE_DIR / "AGENT_RUN_WORKSPACES"
+# 1. Configurable Workspaces Directory
+# Default to AGENT_RUN_WORKSPACES in project root, but allow override via env var
+_default_ws_dir = BASE_DIR / "AGENT_RUN_WORKSPACES"
+env_ws_dir = os.getenv("UA_WORKSPACES_DIR")
+if env_ws_dir:
+    WORKSPACES_DIR = Path(env_ws_dir).resolve()
+    logger.info(f"📁 Workspaces Directory Overridden: {WORKSPACES_DIR}")
+else:
+    WORKSPACES_DIR = _default_ws_dir
+
+# 2. Allowlist Configuration
+ALLOWED_USERS = set()
+_allowed_users_str = os.getenv("UA_ALLOWED_USERS", "").strip()
+if _allowed_users_str:
+    ALLOWED_USERS = {u.strip() for u in _allowed_users_str.split(",") if u.strip()}
+    logger.info(f"🔒 Authenticated Access Only. Allowed Users: {len(ALLOWED_USERS)}")
+else:
+    logger.info("🔓 Public Access Mode (No Allowlist configured)")
 
 
 # =============================================================================
@@ -87,12 +110,14 @@ class GatewayEventWire(BaseModel):
 
 _gateway: Optional[InProcessGateway] = None
 _sessions: dict[str, GatewaySession] = {}
+_heartbeat_service: Optional[HeartbeatService] = None
 
 
 def get_gateway() -> InProcessGateway:
     global _gateway
     if _gateway is None:
-        _gateway = InProcessGateway()
+        # Pass the configured workspace base to the gateway
+        _gateway = InProcessGateway(workspace_base=WORKSPACES_DIR)
     return _gateway
 
 
@@ -104,6 +129,13 @@ def get_session(session_id: str) -> Optional[GatewaySession]:
     return _sessions.get(session_id)
 
 
+def is_user_allowed(user_id: str) -> bool:
+    """Check if user_id is in the allowlist (if active)."""
+    if not ALLOWED_USERS:
+        return True
+    return user_id in ALLOWED_USERS
+
+
 # =============================================================================
 # WebSocket Connection Manager
 # =============================================================================
@@ -111,21 +143,56 @@ def get_session(session_id: str) -> Optional[GatewaySession]:
 
 class ConnectionManager:
     def __init__(self):
+        # connection_id -> WebSocket
         self.active_connections: dict[str, WebSocket] = {}
+        # session_id -> set of connection_ids
+        self.session_connections: dict[str, set[str]] = {}
 
-    async def connect(self, connection_id: str, websocket: WebSocket):
+    async def connect(self, connection_id: str, websocket: WebSocket, session_id: str):
         await websocket.accept()
         self.active_connections[connection_id] = websocket
-        logger.info(f"Gateway WebSocket connected: {connection_id}")
+        
+        if session_id not in self.session_connections:
+            self.session_connections[session_id] = set()
+        self.session_connections[session_id].add(connection_id)
+        
+        logger.info(f"Gateway WebSocket connected: {connection_id} (session: {session_id})")
 
-    def disconnect(self, connection_id: str):
+    def disconnect(self, connection_id: str, session_id: str):
         if connection_id in self.active_connections:
             del self.active_connections[connection_id]
             logger.info(f"Gateway WebSocket disconnected: {connection_id}")
+            
+        if session_id in self.session_connections:
+            self.session_connections[session_id].discard(connection_id)
+            if not self.session_connections[session_id]:
+                del self.session_connections[session_id]
 
     async def send_json(self, connection_id: str, data: dict):
         if connection_id in self.active_connections:
-            await self.active_connections[connection_id].send_text(json.dumps(data))
+            try:
+                await self.active_connections[connection_id].send_text(json.dumps(data))
+            except Exception as e:
+                logger.error(f"Failed to send to {connection_id}: {e}")
+
+    async def broadcast(self, session_id: str, data: dict, exclude_connection_id: Optional[str] = None):
+        """Send a message to all connections associated with a session_id."""
+        if session_id not in self.session_connections:
+            return
+
+        payload = json.dumps(data)
+        # Snapshot the list to avoid runtime errors if connections drop during iteration
+        targets = list(self.session_connections[session_id])
+        
+        for connection_id in targets:
+            if connection_id == exclude_connection_id:
+                continue
+                
+            if connection_id in self.active_connections:
+                try:
+                    await self.active_connections[connection_id].send_text(payload)
+                except Exception as e:
+                    logger.error(f"Failed to broadcast to {connection_id}: {e}")
 
 
 manager = ConnectionManager()
@@ -155,9 +222,21 @@ async def lifespan(app: FastAPI):
     # Load budget config (defined in main.py)
     main_module.budget_config = main_module.load_budget_config()
     
+    # Initialize Heartbeat Service
+    global _heartbeat_service
+    if HEARTBEAT_ENABLED:
+        logger.info("💓 Heartbeat System ENABLED")
+        _heartbeat_service = HeartbeatService(get_gateway(), manager)
+        await _heartbeat_service.start()
+    else:
+        logger.info("💤 Heartbeat System DISABLED (feature flag)")
+    
     yield
     
     # Cleanup
+    if _heartbeat_service:
+        await _heartbeat_service.stop()
+        
     if main_module.runtime_db_conn:
         main_module.runtime_db_conn.close()
     logger.info("👋 Universal Agent Gateway Server shutting down...")
@@ -202,24 +281,66 @@ async def root():
     }
 
 
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response, status
+
+# ... (imports)
+
 @app.get("/api/v1/health")
-async def health():
+async def health(response: Response):
+    """
+    Deep health check associated with DB connectivity.
+    """
+    import universal_agent.main as main_module
+    
+    db_status = "unknown"
+    db_error = None
+    
+    is_healthy = True
+    try:
+        if main_module.runtime_db_conn:
+            # Execute a lightweight query to verify connection
+            main_module.runtime_db_conn.execute("SELECT 1")
+            db_status = "connected"
+        else:
+            db_status = "disconnected"
+            is_healthy = False
+    except Exception as e:
+        db_status = "error"
+        db_error = str(e)
+        is_healthy = False
+        logger.error(f"Health check failed: {e}")
+
+    if not is_healthy:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
     return {
-        "status": "healthy",
+        "status": "healthy" if is_healthy else "unhealthy",
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0",
+        "db_status": db_status,
+        "db_error": db_error
     }
 
 
 @app.post("/api/v1/sessions", response_model=CreateSessionResponse)
 async def create_session(request: CreateSessionRequest):
+    # 1. Enforce Allowlist
+    final_user_id = resolve_user_id(request.user_id)
+    if not is_user_allowed(final_user_id):
+        logger.warning(f"⛔ Access Denied: User '{final_user_id}' not in allowlist.")
+        raise HTTPException(status_code=403, detail="Access denied: User not allowed.")
+
     gateway = get_gateway()
     try:
         session = await gateway.create_session(
-            user_id=resolve_user_id(request.user_id),
+            user_id=final_user_id,
             workspace_dir=request.workspace_dir,
         )
         store_session(session)
+        if _heartbeat_service:
+            _heartbeat_service.register_session(session)
+        else:
+            logger.warning("Heartbeat service not available in create_session")
         return CreateSessionResponse(
             session_id=session.session_id,
             user_id=session.user_id,
@@ -256,8 +377,15 @@ async def get_session_info(session_id: str):
         try:
             session = await gateway.resume_session(session_id)
             store_session(session)
+            if _heartbeat_service:
+                _heartbeat_service.register_session(session)
         except ValueError:
             raise HTTPException(status_code=404, detail="Session not found")
+            
+    # Allowlist check for resume (optional, but good practice)
+    if not is_user_allowed(session.user_id):
+        raise HTTPException(status_code=403, detail="Access denied: User not allowed.")
+        
     return CreateSessionResponse(
         session_id=session.session_id,
         user_id=session.user_id,
@@ -290,7 +418,8 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
 @app.websocket("/api/v1/sessions/{session_id}/stream")
 async def websocket_stream(websocket: WebSocket, session_id: str):
     connection_id = f"gw_{session_id}_{time.time()}"
-    await manager.connect(connection_id, websocket)
+    # Register connection with session_id
+    await manager.connect(connection_id, websocket, session_id)
 
     gateway = get_gateway()
     session = get_session(session_id)
@@ -299,11 +428,21 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
         try:
             session = await gateway.resume_session(session_id)
             store_session(session)
+            if _heartbeat_service:
+                _heartbeat_service.register_session(session)
         except ValueError:
             await websocket.close(code=4004, reason="Session not found")
-            manager.disconnect(connection_id)
+            manager.disconnect(connection_id, session_id)
             return
 
+    # 1. Enforce Allowlist for WebSocket
+    if not is_user_allowed(session.user_id):
+        logger.warning(f"⛔ Access Denied (WS): User '{session.user_id}' not in allowlist.")
+        await websocket.close(code=4003, reason="Access denied")
+        manager.disconnect(connection_id, session_id)
+        return
+
+    # Send initial connection success message
     await manager.send_json(
         connection_id,
         {
@@ -342,6 +481,9 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         metadata=msg.get("data", {}).get("metadata", {}),
                     )
 
+                    # Execute the request and stream back to THIS connection
+                    # We continue to use send_json here for the active command response
+                    # Broadcast can be used later for side-effects or heartbeat events
                     async for event in gateway.execute(session, request):
                         await manager.send_json(connection_id, agent_event_to_wire(event))
 
@@ -359,6 +501,16 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         connection_id,
                         {"type": "pong", "data": {}, "timestamp": datetime.now().isoformat()},
                     )
+                
+                elif msg_type == "broadcast_test":
+                     # Test event to verify broadcast capability (Phase 1 verification)
+                     payload = {
+                         "type": "server_notice", 
+                         "data": {"message": "Broadcast test received"},
+                         "timestamp": datetime.now().isoformat()
+                     }
+                     # Broadcast to ALL connections for this session
+                     await manager.broadcast(session_id, payload)
 
                 else:
                     await manager.send_json(
@@ -391,10 +543,10 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                 )
 
     except WebSocketDisconnect:
-        manager.disconnect(connection_id)
+        manager.disconnect(connection_id, session_id)
         logger.info(f"Gateway WebSocket disconnected: {connection_id}")
     except Exception as e:
-        manager.disconnect(connection_id)
+        manager.disconnect(connection_id, session_id)
         logger.error(f"Gateway WebSocket error: {e}")
 
 

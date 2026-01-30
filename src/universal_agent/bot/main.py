@@ -2,16 +2,15 @@ import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import Application, CommandHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from telegram.request import HTTPXRequest
 import os
 
 from .config import TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, WEBHOOK_URL, PORT
 from .task_manager import TaskManager
 from .agent_adapter import AgentAdapter
-from .telegram_handlers import start_command, help_command, status_command, agent_command, continue_command, new_command
+from .telegram_handlers import start_command, help_command, status_command, agent_command, continue_command, new_command, handle_message
 from .telegram_formatter import format_telegram_response
-
 # nest_asyncio removed to avoid conflict with uvicorn loop_factory in Python 3.13
 
 
@@ -77,6 +76,44 @@ async def lifespan(app: FastAPI):
     )
     
     # 3. Setup Task Manager with Notification Callback (with retry)
+    async def send_split_message(bot, chat_id, text):
+        """
+        Send a message to a user, splitting it if it exceeds Telegram's 4096 char limit.
+        Tries MarkdownV2 first, falls back to plain text on error.
+        """
+        MAX_LENGTH = 4000  # Leave some buffer for safety
+        
+        # Simple chunking by newlines eventually, but strict length first
+        chunks = []
+        while text:
+            if len(text) <= MAX_LENGTH:
+                chunks.append(text)
+                break
+            
+            # Find a smart split point
+            split_idx = text.rfind('\n', 0, MAX_LENGTH)
+            if split_idx == -1:
+                split_idx = text.rfind(' ', 0, MAX_LENGTH)
+            if split_idx == -1:
+                split_idx = MAX_LENGTH
+                
+            chunks.append(text[:split_idx])
+            text = text[split_idx:].lstrip()
+            
+        for chunk in chunks:
+            try:
+                # Try MarkdownV2
+                await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="MarkdownV2")
+            except Exception as e_md:
+                print(f"⚠️ MarkdownV2 failed for chunk, trying plain text: {e_md}")
+                try:
+                    # Fallback to plain text
+                    # We might want to strip markdown chars here if we were fancy, 
+                    # but sending raw is better than nothing.
+                    await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=None)
+                except Exception as e_plain:
+                    print(f"❌ Failed to send chunk: {e_plain}")
+
     async def notify_user(task):
         max_retries = 3
         for attempt in range(max_retries):
@@ -86,9 +123,6 @@ async def lifespan(app: FastAPI):
                     # Prefer execution_summary (ExecutionResult object) if available
                     result_to_format = task.execution_summary if task.execution_summary else task.result
                     formatted_msg = format_telegram_response(result_to_format)
-                    # We might want to prepend "✅ Task Completed" or similar? 
-                    # Actually formatted_msg includes stats, so maybe just send it.
-                    # Use a short header
                     msg = f"✅ *Task Completed*\n\n{formatted_msg}"
                     
                 elif task.status == "error":
@@ -97,13 +131,8 @@ async def lifespan(app: FastAPI):
                     # Updates for running/pending
                     msg = f"Task Update: `{task.id[:8]}`\nStatus: {task.status.upper()}"
 
-                try:
-                    await ptb_app.bot.send_message(chat_id=task.user_id, text=msg, parse_mode="MarkdownV2")
-                except Exception as e_md:
-                    print(f"⚠️ MarkdownV2 failed, trying plain text: {e_md}")
-                    # Fallback to plain text if markdown fails
-                    # We might want to strip markdown chars or just send raw
-                    await ptb_app.bot.send_message(chat_id=task.user_id, text=msg, parse_mode=None)
+                # Use robust sender
+                await send_split_message(ptb_app.bot, task.user_id, msg)
                 
                 # Send Log File if completed or error
                 if task.status in ["completed", "error"] and task.log_file and os.path.exists(task.log_file):
@@ -136,6 +165,9 @@ async def lifespan(app: FastAPI):
     ptb_app.add_handler(CommandHandler("agent", agent_command))
     ptb_app.add_handler(CommandHandler("continue", continue_command))
     ptb_app.add_handler(CommandHandler("new", new_command))
+    
+    # Handle text messages as agent prompts
+    ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Store Task Manager in bot_data for handlers
     ptb_app.bot_data["task_manager"] = task_manager

@@ -39,7 +39,7 @@ PYTHONPATH=src uv run pytest tests/durable
 | Directory | Purpose | Key Tests |
 |-----------|---------|-----------|
 | `tests/unit` | Fast, isolated logic checks | `test_memory.py`, `test_agent_core.py` |
-| `tests/gateway` | API & WebSocket behavior | `test_gateway.py`, `test_gateway_events.py` |
+| `tests/gateway` | API & WebSocket behavior | `test_gateway.py`, `test_gateway_events.py`, `test_broadcast.py` |
 | `tests/durable` | State persistence | `test_durable_ledger.py`, `test_durable_state.py` |
 | `tests/stabilization` | End-to-End Smoke Tests | `test_smoke_direct.py`, `test_smoke_gateway.py` |
 | `tests/letta` | Letta Memory integration | `test_letta_client.py` |
@@ -52,7 +52,18 @@ Use this checklist before any behavior changes. It confirms the **same execution
 - [ ] **Web UI:** follow `UI_Documentation/06_Testing_Guide.md` Test 1 + Test 2.
 - [ ] Confirm outputs are equivalent (tool call counts, completion status, artifacts).
 
-## 5. UI-agnostic parity matrix (contract)
+## 5. Phase 1 Verification (Broadcast)
+Verify that the WebSocket broadcast foundation is working correctly.
+
+- [ ] **Run Broadcast Test**:
+  ```bash
+  # Requires a running gateway on default ports or configured appropriately
+  export GATEWAY_URL=http://localhost:8002
+  export PYTHONPATH=src
+  uv run tests/gateway/test_broadcast.py
+  ```
+
+## 6. UI-agnostic parity matrix (contract)
 All interfaces must produce **equivalent results** (same logic + artifacts), with differences only in UI rendering.
 
 | Interface | Entry point | Expected engine | Parity checks |
@@ -62,7 +73,7 @@ All interfaces must produce **equivalent results** (same logic + artifacts), wit
 | Web UI | WS `execute` | gateway engine | Same output + artifacts as CLI via gateway |
 | Telegram | gateway client | gateway engine | Same output summary + artifacts as Web UI |
 
-## 6. Agent-browser parity workflow (Web UI)
+## 7. Agent-browser parity workflow (Web UI)
 Use `agent-browser` to automate Web UI parity checks when validating gateway output.
 
 **Prereqs:**
@@ -85,9 +96,9 @@ Use `agent-browser` to automate Web UI parity checks when validating gateway out
 - Compare response text, tool call count, and artifacts against CLI/gateway runs.
 - Re-run snapshot after completion for verification.
 
-## 7. UI Testing
+## 8. UI Testing
 Currently, the UI is tested **manually** following the `UI_Documentation/06_Testing_Guide.md` runbook. Automated UI testing (e.g. Playwright) is planned for future phases.
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 - **Gateway connection refused**: Ensure no orphaned `uvicorn` processes are running (`pkill -f uvicorn`).
 - **DB Locks**: If SQLite errors occur, delete `AGENT_RUN_WORKSPACES/test_*.db`.

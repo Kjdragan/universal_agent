@@ -190,9 +190,9 @@ For each phase, mark items **done** before starting the next phase. This section
 - [ ] Baseline parity checks run (CLI direct ↔ gateway ↔ Web UI) — CLI direct + gateway done.
 
 ### Phase 1 readiness
-- [ ] WS broadcast works for multiple connections.
-- [ ] Execute streaming unchanged.
-- [ ] Broadcast test or integration check passing.
+- [x] WS broadcast works for multiple connections.
+- [x] Execute streaming unchanged.
+- [x] Broadcast test or integration check passing.
 
 ### Phase 2 readiness
 - [ ] Scheduler guarded by `heartbeat.enabled`.

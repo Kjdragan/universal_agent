@@ -32,6 +32,7 @@ from universal_agent.tools.research_bridge import (
     run_report_generation_wrapper,
     run_research_phase_wrapper,
 )
+from universal_agent.tools.memory import ua_memory_get
 from universal_agent.execution_context import bind_workspace_env
 from universal_agent.feature_flags import memory_index_enabled
 
@@ -269,7 +270,16 @@ class AgentSetup:
         os.makedirs(self.workspace_dir, exist_ok=True)
         os.makedirs(os.path.join(self.workspace_dir, "downloads"), exist_ok=True)
         os.makedirs(os.path.join(self.workspace_dir, "work_products", "media"), exist_ok=True)
+        os.makedirs(os.path.join(self.workspace_dir, "work_products", "media"), exist_ok=True)
         os.makedirs(os.path.join(self.workspace_dir, "search_results"), exist_ok=True)
+        
+        # Memory scaffolding
+        if self.enable_memory:
+            os.makedirs(os.path.join(self.workspace_dir, "memory"), exist_ok=True)
+            memory_file = os.path.join(self.workspace_dir, "MEMORY.md")
+            if not os.path.exists(memory_file):
+                with open(memory_file, "w") as f:
+                    f.write("# Agent Memory\n\nPersistent context for the agent.\n")
 
     def _build_options(self) -> ClaudeAgentOptions:
         """Build ClaudeAgentOptions with full configuration."""
@@ -472,7 +482,12 @@ class AgentSetup:
             "internal": create_sdk_mcp_server(
                 name="internal",
                 version="1.0.0",
-                tools=[run_report_generation_wrapper, run_research_pipeline_wrapper, crawl_parallel_wrapper, run_research_phase_wrapper]
+                tools=[
+                    run_report_generation_wrapper, 
+                    run_research_pipeline_wrapper, 
+                    crawl_parallel_wrapper, 
+                    run_research_phase_wrapper,
+                ] + ([ua_memory_get] if self.enable_memory else [])
             ),
             "taskwarrior": {
                 "type": "stdio",

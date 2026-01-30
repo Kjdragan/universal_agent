@@ -1,8 +1,11 @@
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
+import os
 from .models import MemoryBlock, ArchivalItem, AgentState
 from .storage import StorageManager
+from .watcher import MemoryWatcher
+from universal_agent.feature_flags import memory_index_enabled
 
 class MemoryManager:
     """
@@ -10,9 +13,37 @@ class MemoryManager:
     Manages the 'Brain' of the agent.
     """
     
-    def __init__(self, storage_dir: str = "Memory_System/data"):
+    def __init__(self, storage_dir: str = "Memory_System/data", workspace_dir: str = None):
         self.storage = StorageManager(storage_dir)
         self.agent_state = self._load_or_initialize_state()
+        
+        # Determine paths for watcher
+        # If workspace_dir is provided, we watch workspace_dir/memory
+        # Otherwise we assume default relative path
+        self.watch_dir = None
+        if workspace_dir:
+            self.watch_dir = os.path.join(workspace_dir, "memory")
+        elif os.path.exists("memory"):
+            self.watch_dir = os.path.abspath("memory")
+            
+        # Initialize Watcher if enabled
+        # Index enabled flag controls "Active" features like watcher
+        self.watcher = None
+        if memory_index_enabled() and self.watch_dir:
+            self.watcher = MemoryWatcher(self.watch_dir, self._on_file_change)
+            self.watcher.start()
+            
+    def _on_file_change(self, filepath: str, content: str):
+        """Callback for file watcher."""
+        # Auto-index changed files
+        filename = os.path.basename(filepath)
+        print(f"[MemoryManager] Auto-indexing changed file: {filename}")
+        self.archival_memory_insert(content, tags=f"file:{filename},auto-sync")
+        
+    def close(self):
+        """Cleanup resources."""
+        if self.watcher:
+            self.watcher.stop()
 
     def _load_or_initialize_state(self) -> AgentState:
         """
@@ -145,9 +176,18 @@ class MemoryManager:
         
         return f"✅ Saved to Archival Memory (ID: {item_id})"
 
+    def transcript_index(self, session_id: str, content: str):
+        """
+        Index a transcript chunk.
+        ON BY DEFAULT (opt-out implementation would be at caller level).
+        """
+        # We process it as a normal archival item but tag it specifically
+        self.archival_memory_insert(content, tags=f"transcript,session:{session_id}")
+
     def archival_memory_search(self, query: str, limit: int = 5) -> str:
         """Tool: Semantic search for facts."""
-        results = self.storage.search_archival(query, limit)
+        # Use Hybrid Search
+        results = self.storage.search_archival_hybrid(query, limit)
         
         if not results:
             return "No relevant memories found."
