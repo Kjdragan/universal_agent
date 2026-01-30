@@ -96,6 +96,7 @@ def build_harness_context_injection(
     expected_artifacts: list[str],
     tasks: Optional[list[Any]] = None,
     current_session_path: Optional[str] = None,
+    overall_goal: Optional[str] = None,
 ) -> str:
     """
     Build the context injection for a new phase.
@@ -184,7 +185,10 @@ Use the current date/time above as authoritative; do not treat post-training dat
 
     return f"""# Phase {phase_num} of {total_phases}: {phase_title}
 
-You are working through a larger multi-phase project. Your current phase is this one.
+You are working through a larger multi-phase project. 
+{f"**Overall Project Goal**: {overall_goal}" if overall_goal else ""}
+
+Your current phase is this one.
 Complete this phase by executing the atomic tasks below.
 {config_section}
 {prior_section}

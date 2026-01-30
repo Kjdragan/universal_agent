@@ -216,6 +216,7 @@ class HarnessOrchestrator:
         plan_file: Optional[Path] = None,
         template_file: Optional[Path] = None,
         harness_id: Optional[str] = None,
+        boot_log: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Run the complete harness flow.
@@ -336,6 +337,8 @@ class HarnessOrchestrator:
                     feedback=feedback,
                     is_resuming=is_resuming,
                     prior_session_path=prior_session_path,
+                    boot_log=boot_log if self.plan.phases.index(phase) == 0 and retry_count == 0 else None,
+                    overall_goal=self.plan.massive_request or self.plan.name,
                 )
                 
                 # Only "resuming" on the very first try of the phase. 
@@ -389,7 +392,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
                 
                 # Generate semantic handoff summary for next phase
                 try:
-                    artifacts_list = [a.path for a in phase_result.artifacts_produced] if phase_result.artifacts_produced else []
+                    artifacts_list = phase_result.artifacts_produced if phase_result.artifacts_produced else []
                     await generate_phase_summary(
                         client,
                         str(phase_result.session_path),
@@ -420,6 +423,8 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         feedback: Optional[str] = None,
         is_resuming: bool = False,
         prior_session_path: Optional[str] = None,
+        boot_log: Optional[str] = None,
+        overall_goal: Optional[str] = None,
     ) -> PhaseResult:
         """
         Execute a single phase of the plan.
@@ -429,6 +434,19 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
         # 1. Toggle to new session directory
         session_path = self.session_manager.next_phase_session()
         phase.session_path = str(session_path)
+        
+        # [NEW] Inject Boot Log if provided and this is the first phase/attempt
+        if boot_log and phase.order == 0:
+             try:
+                 run_log_path = session_path / "run.log"
+                 # Only write if not exists to avoid overwriting on retry
+                 if not run_log_path.exists():
+                     session_path.mkdir(parents=True, exist_ok=True)
+                     with open(run_log_path, "w", encoding="utf-8") as f:
+                         f.write(boot_log + "\n\n")
+                     self._log("✅ Injected boot log into Phase 1 run.log")
+             except Exception as e:
+                 self._log(f"⚠️ Failed to inject boot log: {e}")
         
         # CRITICAL: Update env var so MCP tools (mcp_server.py) write to the correct phase dir
         bind_workspace_env(str(session_path))
@@ -525,6 +543,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
             expected_artifacts=phase.get_expected_artifacts(),
             tasks=phase.tasks,
             current_session_path=session_path,
+            overall_goal=overall_goal,
         )
         
         if is_resuming:
@@ -1035,6 +1054,7 @@ async def run_harness(
     template_file: Optional[Path] = None,
     max_iterations: int = 20,
     harness_id: Optional[str] = None,
+    boot_log: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Run the complete harness flow.
@@ -1062,6 +1082,7 @@ async def run_harness(
             plan_file=plan_file,
             template_file=template_file,
             harness_id=harness_id,
+            boot_log=boot_log,
         )
     finally:
         # Ensure gateway httpx clients are cleaned up before event loop closes
