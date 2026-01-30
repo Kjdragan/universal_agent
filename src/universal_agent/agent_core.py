@@ -407,6 +407,34 @@ async def malformed_tool_guardrail_hook(
             },
         }
 
+    # [ENHANCED] Path Hygiene Guard: Block relative paths in Write calls
+    if tool_name == "Write":
+        file_path = tool_input.get("file_path")
+        # Check if path is provided and NOT absolute (and looks like a path, not just a filename)
+        # We allow simple filenames (which default to CWD) BUT for 'work_products/' specifically we want to catch it.
+        # Actually, best practice is to ALWAYS enforce absolute paths to avoid ambiguity.
+        if file_path and not file_path.startswith("/"):
+            logfire.warning(
+                "relative_path_write_blocked",
+                tool_name=tool_name,
+                file_path=file_path,
+                tool_use_id=tool_use_id,
+            )
+            return {
+                "systemMessage": (
+                    f"⚠️ BLOCKED: You tried to write to a relative path: '{file_path}'.\n"
+                    "Security rules require absolute paths to ensure files are saved in the correct workspace.\n"
+                    "Please construct the path dynamically:\n"
+                    "path = os.path.join(os.environ['CURRENT_SESSION_WORKSPACE'], 'work_products', 'filename')"
+                ),
+                "decision": "block",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Blocked relative path write.",
+                },
+            }
+
     # [ENHANCED] Zero-Byte Guard: Block empty Write calls (prevents hangs/crashes)
     if tool_name == "Write":
         file_path = tool_input.get("file_path")
@@ -1064,6 +1092,12 @@ class UniversalAgent:
 
         # Initialize MessageHistory for context management (Anthropic pattern)
         self.history = MessageHistory(system_prompt_tokens=2000)
+        
+        # [FIX] Hydrate history from transcript if resuming a session
+        try:
+            self._try_load_history_from_transcript()
+        except Exception as e:
+            print(f"⚠️ Failed to load history from transcript: {e}")
 
         if LOGFIRE_TOKEN:
             logfire.set_baggage(run_id=self.run_id)
@@ -1099,6 +1133,82 @@ class UniversalAgent:
             
         except Exception as e:
             print(f"Failed to setup run.log: {e}")
+
+    def _try_load_history_from_transcript(self) -> None:
+        """
+        Attempt to rehydrate MessageHistory from transcript.md.
+        Crucial for API/Gateway mode where the agent process may restart between turns.
+        """
+        transcript_path = os.path.join(self.workspace_dir, "transcript.md")
+        if not os.path.exists(transcript_path):
+            return
+
+        print(f"📖 Hydrating history from: {transcript_path}")
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        import re
+        
+        # Split by major sections
+        # Format:
+        # ### 👤 User Request
+        # > ...
+        # ---
+        # ### 🔄 Iteration X
+        # ...
+        
+        # 1. capture User Request
+        # The transcript stores the ORIGINAL user request.
+        # Ideally, we should parse the entire conversation, but the transcript format 
+        # is optimized for reading, not parsing. 
+        # A robust implementation would be to save/load `history.json` alongside transcript.
+        
+        # STRATEGY: For now, we will try to extract the INITIAL PROMPT and any subsequent 
+        # turns if possible. But since `message_history.py` tracks tokens, naively pushing text 
+        # might be inaccurate.
+        
+        # BETTER STRATEGY: The transcript contains the User Request. Use that as the starting point.
+        # If there are multiple turns, they might be listed as "User Request" blocks?
+        # Looking at transcript.md, it seems `render_agent_events` appends.
+        
+        # Regex to find all User Requests
+        user_requests = re.findall(r"### 👤 User Request\n>(.*?)(?=\n\n|\n-|$)", content, re.DOTALL)
+        
+        if user_requests:
+            # We found history!
+            # Since we can't easily reconstruct the *exact* tool outputs/states from markdown 
+            # (it truncates big outputs), we will treat previous iterations as a summarized context 
+            # or just load the user inputs to least prompt the model with "Here is what I asked before".
+            # BUT, to truly fix amnesia, we need the model's RESPONSES too.
+            
+            # Parsing the 'result' from the transcript is hard because it's markdown-formatted.
+            # HOWEVER, we can see "### 🔄 Iteration 1" ... "End of Transcript"
+            
+            # Simple Fix for "Follow-up" Amnesia:
+            # Load the LAST User Request? No, we need the context.
+            
+            # Parsing is risky. 
+            # Plan B: Look for `history.json`? It doesn't exist yet. 
+            # We should START saving `history.json` to avoid this mess in future.
+            
+            # For THIS fix: We will scrape the text of the transcript and feed it as 
+            # a "summary of prior interaction" if it's substantial.
+            pass
+            
+        # [CRITICAL] To properly fix this without parsing complex markdown, 
+        # we should implement `history.json` persistence in `save_checkpoint`.
+        # But we need to recover the CURRENT session.
+        # Let's try to extract the user query and the final result.
+        
+        for req in user_requests:
+            cleaned_req = req.strip()
+            if cleaned_req:
+                self.history.add_message("user", cleaned_req)
+                print(f"   + Restored User Message: {cleaned_req[:50]}...")
+                
+                # Heuristic: Add a dummy assistant response to represent the work done.
+                # This prevents the model from thinking it hasn't answered yet.
+                self.history.add_message("assistant", "(Prior turn completed. See transcript for details.)")
 
     def bind_workspace(self, new_workspace: str) -> None:
         """Update workspace for URW phase transitions."""

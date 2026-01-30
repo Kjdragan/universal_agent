@@ -7588,10 +7588,32 @@ async def main(args: argparse.Namespace):
                         if harness_id_override:
                             run_kwargs["harness_id"] = harness_id_override
 
+
                         if template_file:
                              # Pass as template_file (transcript) for generation
                              run_kwargs["template_file"] = template_file
                              print(f"📋 Running with interview template: {template_file}")
+
+                        # [NEW] Create Boot Log for portability
+                        boot_log_lines = [
+                            "=" * 80,
+                            "Universal Agent Harness - Boot Log (Phase 0 Context)",
+                            "=" * 80,
+                            f"Run ID:         {run_id}",
+                            f"Timestamp:      {timestamp}",
+                            f"Trace ID:       {main_trace_id_hex}",
+                            f"Workspaces:     {workspace_dir}",
+                        ]
+                        if gateway_url:
+                            boot_log_lines.append(f"Gateway URL:    {gateway_url}")
+                        
+                        boot_log_lines.append("")
+                        boot_log_lines.append("To Resume this Harness Session:")
+                        boot_log_lines.append(f"PYTHONPATH=src uv run python -m universal_agent.main --resume --run-id {run_id}")
+                        boot_log_lines.append("=" * 80)
+                        
+                        run_kwargs["boot_log"] = "\n".join(boot_log_lines)
+
 
                         result = await run_harness(**run_kwargs)
                         

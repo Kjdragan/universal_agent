@@ -1,5 +1,9 @@
-run the prompt I did and use the direct terminal approach for me and then you can monitor the activity of what's going on.# Dependency Management Skill
+---
+name: dependency-management
+description: Standardized protocol for managing project dependencies using `uv` and handling system-level requirements.
+---
 
+# Dependency Management Skill
 Standardized protocol for managing project dependencies using `uv` and handling system-level requirements.
 
 ## 🎯 Purpose
