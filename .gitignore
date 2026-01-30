@@ -65,7 +65,11 @@ temp_verify_scholar/
 models.txt
 tools_list.txt
 recovered_plan.json
+search_request.json
+russia_ukraine_war_search_urls.json
 RESEARCH_SPECIALIST_COMPLETION_SUMMARY.txt
+scripts/test_results.json
+
 
 # === OS Specific ===
 .DS_Store
