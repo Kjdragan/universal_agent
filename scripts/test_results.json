@@ -1,0 +1,34 @@
+{
+  "timestamp": "2026-01-26T21:13:20.600909",
+  "summary": {
+    "total": 4,
+    "passed": 4,
+    "failed": 0
+  },
+  "results": {
+    "gateway_session_created": {
+      "passed": true,
+      "details": "session_id=session_20260126_211258_8ce1ceab, engine=process_turn",
+      "error": "",
+      "timestamp": "2026-01-26T21:13:00.405097"
+    },
+    "gateway_uses_process_turn": {
+      "passed": true,
+      "details": "engine=process_turn",
+      "error": "",
+      "timestamp": "2026-01-26T21:13:00.405159"
+    },
+    "gateway_execution_complete": {
+      "passed": true,
+      "details": "events=7, text_preview=Gateway test successfulGateway test successful...",
+      "error": "",
+      "timestamp": "2026-01-26T21:13:20.599703"
+    },
+    "gateway_events_received": {
+      "passed": true,
+      "details": "Event types: {<EventType.SESSION_INFO: 'session_info'>, <EventType.TEXT: 'text'>, <EventType.ITERATION_END: 'iteration_end'>, <EventType.STATUS: 'status'>}",
+      "error": "",
+      "timestamp": "2026-01-26T21:13:20.599894"
+    }
+  }
+}
