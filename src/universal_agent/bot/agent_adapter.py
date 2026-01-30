@@ -78,7 +78,13 @@ class AgentAdapter:
         except ValueError:
             # Create new if not found
             print(f"🆕 Creating new session for {user_id}...")
-            return await self.gateway.create_session(user_id=f"telegram_{user_id}", workspace_dir=None)
+            
+            # Fix Session Amnesia:
+            # We must provide a workspace_dir ending in our desired session_id (tg_{user_id})
+            # so that InProcessGateway uses that ID instead of generating a random one.
+            workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", session_id)
+            
+            return await self.gateway.create_session(user_id=f"telegram_{user_id}", workspace_dir=workspace_dir)
 
     async def _client_actor_loop(self):
         """Background task that processes requests sequentially."""
