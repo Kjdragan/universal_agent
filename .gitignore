@@ -1,4 +1,4 @@
-# Python
+# === Python ===
 __pycache__/
 *.pyc
 *.pyo
@@ -9,60 +9,65 @@ venv/
 .venv/
 pip-log.txt
 pip-delete-this-directory.txt
+.pytest_cache/
+*.egg-info/
+uv.lock
 
-# Environments
+# === Environments & IDs ===
 .env
 .env.local
 .env.*.local
+identity_registry.json
 
-# IDEs
+# === IDEs ===
 .vscode/
 .idea/
+.windsurf/
+*.code-workspace
 
-# Project specific
+# === Databases & State ===
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+Memory_System/data/
+Memory_System_Data/
+src/universal_agent/Memory_System_Data/
+letta/
+.letta/
+
+# === Project Workspaces & Artifacts ===
 AGENT_RUN_WORKSPACES/
-.agent/
-tmp/
-TMP
-TMP.txt
-*.log
+urw_sessions/
+urw_smoke_workspace*/
+urw_phase*_workspace*/
+urw_real_workspace_run*/
 downloads/
 work_products/
-.uv-cache/
-urw_smoke_workspace/
-urw_smoke_workspace_run*/
-urw_phase*_workspace_run*/
-urw_real_workspace_run*/
+search_results/
+processed_json/
+src/SAVED_REPORTS/
+remotion_projects/
+test-remotion-project/
+media/
+00_Kev_Temp/
 
-# Temporary files
+# === Logs & Temp Files ===
+*.log
+tmp/
+TMP/
+TMP.txt
 input.txt
 input_v2.txt
 stress_test_input.txt
 temp.md
 temp_verify_scholar/
-
-# URW session workspaces (contain nested git repos for checkpointing)
-urw_sessions/
-urw_phase*_workspace/
-
-search_results/processed_json/
-AGENT_RUN_WORKSPACES/
-search_results/
-Memory_System_Data/
-src/SAVED_REPORTS/
-
-# Run Artifacts
-hello.txt
-RUSSIA_UKRAINE_WAR_*.md
-russia_ukraine_war_*.json
-russia_ukraine_war_*.md
-tasks/
-test-remotion-project
-remotion_projects/
-*.db
-*.db-shm
-*.db-wal
 models.txt
+tools_list.txt
+recovered_plan.json
+RESEARCH_SPECIALIST_COMPLETION_SUMMARY.txt
 
-src/universal_agent.egg-info/
-scripts/test_results.json
+# === OS Specific ===
+.DS_Store
+Thumbs.db
+*.Zone.Identifier
