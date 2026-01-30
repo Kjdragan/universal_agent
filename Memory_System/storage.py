@@ -56,6 +56,21 @@ class StorageManager:
         ''')
         
         conn.commit()
+        
+        # Table for Archival FTS (Keyword Search)
+        # Using FTS5 (assuming modern SQLite)
+        try:
+            cursor.execute('''
+            CREATE VIRTUAL TABLE IF NOT EXISTS archival_fts USING fts5(
+                item_id UNINDEXED,
+                content,
+                tags
+            )
+            ''')
+        except sqlite3.OperationalError:
+            # Fallback for older SQLite if FTS5 missing (unlikely in this env)
+            pass
+
         conn.close()
 
     # =========================================================================
@@ -167,6 +182,9 @@ class StorageManager:
             ids=[item_id]
         )
         
+        # Sync to FTS
+        self._update_fts(item_id, item.content, metadata["tags"])
+        
         return item_id
 
     def search_archival(self, query: str, limit: int = 5) -> List[ArchivalItem]:
@@ -198,4 +216,105 @@ class StorageManager:
                     item_id=ids[i]
                 ))
                 
+        return items
+
+    # =========================================================================
+    # HYBRID SEARCH METHODS (Vector + FTS5)
+    # =========================================================================
+
+    def _update_fts(self, item_id: str, content: str, tags: str):
+        """Sync item to SQLite FTS index."""
+        conn = sqlite3.connect(self.sqlite_path)
+        cursor = conn.cursor()
+        
+        # FTS5 doesn't support INSERT OR REPLACE directly in same way, but DELETE+INSERT works
+        cursor.execute("DELETE FROM archival_fts WHERE item_id = ?", (item_id,))
+        cursor.execute("INSERT INTO archival_fts (item_id, content, tags) VALUES (?, ?, ?)", 
+                      (item_id, content, tags))
+        
+        conn.commit()
+        conn.close()
+
+    def search_archival_hybrid(self, query: str, limit: int = 5) -> List[ArchivalItem]:
+        """
+        Hybrid search combining Vector (Chroma) and Keyword (SQLite FTS5).
+        Uses Reciprocal Rank Fusion (RRF) to combine results.
+        """
+        # 1. Vector Search
+        vector_results = self.collection.query(
+            query_texts=[query],
+            n_results=limit * 2  # Fetch more for fusion
+        )
+        
+        vector_ids = []
+        if vector_results['ids'] and len(vector_results['ids']) > 0:
+            vector_ids = vector_results['ids'][0]
+            
+        # 2. Keyword Search (FTS)
+        conn = sqlite3.connect(self.sqlite_path)
+        cursor = conn.cursor()
+        
+        # Simple FTS query
+        # Sanitize query for FTS5 (remove special chars that might break syntax)
+        safe_query = '"' + query.replace('"', '""') + '"'
+        
+        try:
+            cursor.execute(f"""
+                SELECT item_id, rank 
+                FROM archival_fts 
+                WHERE archival_fts MATCH ? 
+                ORDER BY rank 
+                LIMIT ?
+            """, (safe_query, limit * 2))
+            fts_rows = cursor.fetchall()
+            fts_ids = [r[0] for r in fts_rows]
+        except sqlite3.OperationalError:
+            # Fallback if FTS fails (e.g. syntax error in query)
+            fts_ids = []
+            
+        conn.close()
+        
+        # 3. Reciprocal Rank Fusion
+        # RRF(d) = sum(1 / (k + rank(d)))
+        k = 60
+        scores = {}
+        
+        for rank, vid in enumerate(vector_ids):
+            scores[vid] = scores.get(vid, 0) + (1 / (k + rank + 1))
+            
+        for rank, fid in enumerate(fts_ids):
+            scores[fid] = scores.get(fid, 0) + (1 / (k + rank + 1))
+            
+        # Sort by score desc
+        sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)[:limit]
+        
+        if not sorted_ids:
+            return []
+            
+        # 4. Fetch final items from Chroma (as valid source of truth for content)
+        final_results = self.collection.get(ids=sorted_ids)
+        
+        items = []
+        # Re-order according to sorted_ids (Chroma .get doesn't guarantee order)
+        # Create a map for O(1) lookup
+        if final_results['ids']:
+            id_map = {id: idx for idx, id in enumerate(final_results['ids'])}
+            
+            for sid in sorted_ids:
+                if sid in id_map:
+                    idx = id_map[sid]
+                    meta = final_results['metadatas'][idx] if final_results['metadatas'] else {}
+                    doc = final_results['documents'][idx] if final_results['documents'] else ""
+                    
+                    tags = meta.get("tags", "").split(",") if meta.get("tags") else []
+                    timestamp_str = meta.get("timestamp")
+                    timestamp = datetime.fromisoformat(timestamp_str) if timestamp_str else datetime.now()
+                    
+                    items.append(ArchivalItem(
+                        content=doc,
+                        tags=[t for t in tags if t],
+                        timestamp=timestamp,
+                        item_id=sid
+                    ))
+                    
         return items

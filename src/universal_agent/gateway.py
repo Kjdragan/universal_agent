@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -65,8 +66,15 @@ class GatewayRequest:
 class GatewayResult:
     response_text: str
     tool_calls: int = 0
+    execution_time: float = 0.0
+    code_execution_used: bool = False
     trace_id: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    # Alias for backward compatibility with telegram_formatter expectation
+    @property
+    def execution_time_seconds(self) -> float:
+        return self.execution_time
 
 
 class Gateway:
@@ -95,15 +103,6 @@ class Gateway:
 class InProcessGateway(Gateway):
     """
     In-process gateway that uses the unified execution engine (ProcessTurnAdapter).
-    
-    This gateway runs the agent in the same process, using the battle-tested
-    CLI process_turn path for consistent behavior across all interfaces.
-    
-    Args:
-        use_legacy_bridge: If True, use the old AgentBridge path (deprecated).
-                          Default is False, which uses ProcessTurnAdapter.
-        hooks: Optional hooks for the legacy bridge (only used if use_legacy_bridge=True).
-        workspace_base: Base directory for session workspaces.
     """
     
     def __init__(
@@ -162,6 +161,8 @@ class InProcessGateway(Gateway):
         
         # Store adapter and session
         self._adapters[session_id] = adapter
+        
+        config_metadata = getattr(config, "metadata", {})
         
         session = GatewaySession(
             session_id=session_id,
@@ -301,15 +302,20 @@ class InProcessGateway(Gateway):
     async def run_query(
         self, session: GatewaySession, request: GatewayRequest
     ) -> GatewayResult:
+        start_time = time.time()
         response_text = ""
         tool_calls = 0
         trace_id = None
+        code_execution_used = False
         
         async for event in self.execute(session, request):
             if event.type == EventType.TEXT:
                 response_text += event.data.get("text", "")
             if event.type == EventType.TOOL_CALL:
                 tool_calls += 1
+                tool_name = (event.data.get("name") or "").upper()
+                if any(x in tool_name for x in ["CODE", "EXECUTE", "BASH", "PYTHON"]):
+                    code_execution_used = True
             if event.type == EventType.ITERATION_END:
                 trace_id = event.data.get("trace_id")
         
@@ -318,9 +324,13 @@ class InProcessGateway(Gateway):
             if self._bridge.current_agent and hasattr(self._bridge.current_agent, "trace"):
                 trace_id = self._bridge.current_agent.trace.get("trace_id")
         
+        duration = time.time() - start_time
+        
         return GatewayResult(
             response_text=response_text,
             tool_calls=tool_calls,
+            execution_time=duration,
+            code_execution_used=code_execution_used,
             trace_id=trace_id,
         )
 

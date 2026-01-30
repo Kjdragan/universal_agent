@@ -2,27 +2,37 @@ import os
 import sys
 import asyncio
 import uuid
-from typing import Optional, Any
+import logging
+from typing import Optional, Any, AsyncIterator
 from dataclasses import dataclass
-from .execution_logger import ExecutionLogger
-from universal_agent.execution_session import ExecutionSession
+from .config import UA_GATEWAY_URL
+from universal_agent.gateway import (
+    Gateway, 
+    InProcessGateway, 
+    ExternalGateway, 
+    GatewayRequest, 
+    GatewaySession
+)
+from universal_agent.agent_core import AgentEvent, EventType, UniversalAgent
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 @dataclass
 class AgentRequest:
     prompt: str
-    workspace_dir: str
+    user_id: str
+    workspace_dir: Optional[str]
     reply_future: asyncio.Future
 
 class AgentAdapter:
+    """
+    Adapts the Telegram Bot to the Universal Agent Gateway.
+    Acts as a client, whether the Gateway is in-process or external.
+    """
     def __init__(self):
+        self.gateway: Optional[Gateway] = None
         self.initialized = False
-        self.options = None
-        self.session = None
-        self.user_id = None
-        self.workspace_dir = None
-        self.trace = None
-        self.execution_session = None
-        self.execution_session: Optional[ExecutionSession] = None
         
         # Async Actor state
         self.request_queue = asyncio.Queue()
@@ -30,190 +40,119 @@ class AgentAdapter:
         self._shutdown_event = asyncio.Event()
 
     async def initialize(self):
-        """Initialize a fresh agent session and start background worker."""
+        """Initialize Connection to Gateway."""
         if self.initialized:
             return
 
-        from universal_agent.main import setup_session
+        print("🤖 Initializing Agent Gateway Connection...")
         
-        print("🤖 Initializing Agent Session...")
-        self.options, self.session, self.user_id, self.workspace_dir, self.trace = await setup_session()
-        run_id = None
-        if isinstance(self.trace, dict):
-            run_id = self.trace.get("run_id")
-        if not run_id:
-            run_id = str(uuid.uuid4())
-            if isinstance(self.trace, dict):
-                self.trace["run_id"] = run_id
-        self.execution_session = ExecutionSession(
-            workspace_dir=self.workspace_dir,
-            run_id=run_id,
-            trace=self.trace if isinstance(self.trace, dict) else None,
-            runtime_db_conn=None,
-        )
-        
+        if UA_GATEWAY_URL:
+            print(f"🌍 Connecting to External Gateway at {UA_GATEWAY_URL}...")
+            self.gateway = ExternalGateway(base_url=UA_GATEWAY_URL)
+            # Verify connection
+            if not await self.gateway.health_check():
+                print("⚠️  Warning: External Gateway health check failed.")
+        else:
+            print("🏠 Starting In-Process Gateway...")
+            self.gateway = InProcessGateway()
+            
         # Start background worker loop
         self._shutdown_event.clear()
         self.worker_task = asyncio.create_task(self._client_actor_loop())
         
         self.initialized = True
-        print(f"🤖 Agent Session Initialized. Workspace: {self.workspace_dir}")
+        print("✅ Agent Adapter Initialized")
+
+    async def _get_or_create_session(self, user_id: str) -> GatewaySession:
+        """
+        Map Telegram User ID to a consistent Gateway Session.
+        Format: tg_{user_id}
+        """
+        # We use a deterministic session ID so the user resumes the same "chat"
+        # In the future, we could support multiple sessions per user via commands
+        session_id = f"tg_{user_id}"
+        
+        try:
+            # Try to resume first
+            return await self.gateway.resume_session(session_id)
+        except ValueError:
+            # Create new if not found
+            print(f"🆕 Creating new session for {user_id}...")
+            return await self.gateway.create_session(user_id=f"telegram_{user_id}", workspace_dir=None)
 
     async def _client_actor_loop(self):
-        """Background task that keeps Client context alive."""
-        from universal_agent.main import ClaudeSDKClient, process_turn
-        
+        """Background task that processes requests sequentially."""
         print("🧵 Agent Client Actor Loop Started")
         try:
-            # Proper context usage within a single task
-            async with ClaudeSDKClient(self.options) as client:
-                while not self._shutdown_event.is_set():
-                    # Wait for next request
-                    # We use a timeout to allow checking shutdown event occasionally if needed,
-                    # though queue.get() is cancellable so it's fine.
-                    try:
-                        request: AgentRequest = await self.request_queue.get()
-                    except asyncio.CancelledError:
-                        break
+            while not self._shutdown_event.is_set():
+                try:
+                    request: AgentRequest = await self.request_queue.get()
+                except asyncio.CancelledError:
+                    break
+                    
+                if request is None: # Sentinel for shutdown
+                    self.request_queue.task_done()
+                    break
+                    
+                try:
+                    print(f"🧵 Actor processing prompt from {request.user_id}: {request.prompt[:50]}...")
+                    
+                    if not self.gateway:
+                        raise RuntimeError("Gateway not initialized")
+
+                    # 1. Get Session
+                    session = await self._get_or_create_session(request.user_id)
+                    
+                    # 2. Execute Request
+                    gw_req = GatewayRequest(
+                        user_input=request.prompt,
+                        force_complex=False, # Could expose via command
+                        metadata={"source": "telegram"}
+                    )
+                    
+                    # 3. Collect Response (Accumulate streaming events for now, or unified result)
+                    # The Gateway.run_query convenience method is perfect for non-streaming bot logic
+                    # But we might want streaming later. For now, let's use run_query for simplicity
+                    # to match the expected "reply_future.set_result(execution_summary)" interface
+                    # required by the Task Manager for notification formatting.
+                    
+                    result = await self.gateway.run_query(session, gw_req)
+                    
+                    # 4. Return Result
+                    # The TaskManager expects an object with .response_text and .tool_calls etc.
+                    # GatewayResult matches this duck-typing mostly, but let's verify.
+                    # GatewayResult(response_text, tool_calls, trace_id, metadata)
+                    # ExecutionResult(response_text, execution_time...)
+                    # We might need to map it or ensure format_telegram_response handles it.
+                    
+                    if not request.reply_future.done():
+                        request.reply_future.set_result(result)
                         
-                    if request is None: # Sentinel for shutdown
-                        self.request_queue.task_done()
-                        break
-                        
-                    try:
-                        print(f"🧵 Actor processing prompt: {request.prompt[:50]}...")
-                        result = await process_turn(
-                            client,
-                            request.prompt,
-                            request.workspace_dir,
-                            execution_session=self.execution_session,
-                        )
-                        if not request.reply_future.done():
-                            request.reply_future.set_result(result)
-                    except Exception as e:
-                        print(f"🔥 Actor Error: {e}")
-                        if not request.reply_future.done():
-                            request.reply_future.set_exception(e)
-                    finally:
-                        self.request_queue.task_done()
+                except Exception as e:
+                    print(f"🔥 Actor Error: {e}")
+                    if not request.reply_future.done():
+                        request.reply_future.set_exception(e)
+                finally:
+                    self.request_queue.task_done()
                         
         except asyncio.CancelledError:
             print("🧵 Agent Client Actor Loop Cancelled")
         except Exception as e:
             print(f"🔥 Agent Client Actor Loop Crashing: {e}")
-            # If the loop crashes, we can't serve requests anymore.
-            # We might want to set initialized=False?
             import traceback
             traceback.print_exc()
         finally:
              print("🧵 Agent Client Actor Loop Exiting")
+             # Clean up external gateway resources if needed
+             if isinstance(self.gateway, ExternalGateway):
+                 await self.gateway.close()
 
-    async def reinitialize(self):
-        """Force a fresh session."""
-        print("🔄 Reinitializing Agent Session (fresh start)...")
-        await self.shutdown()
-        
-        # Reset state
-        self.initialized = False
-        self.options = None
-        self.session = None
-        self.user_id = None
-        self.workspace_dir = None
-        self.trace = None
-        
-        # Fresh init
-        await self.initialize()
-
-    async def execute(self, task, continue_session: bool = False):
-        """
-        Executes a task using the agent via the background actor.
-        """
-        # Session management
-        if not continue_session or not self.initialized:
-            await self.reinitialize()
-        else:
-            print("🔗 Continuing in existing session...")
-
-        # Setup Logging
-        log_file_name = f"task_{task.id}.log"
-        log_file_path = os.path.join(self.workspace_dir, log_file_name)
-        task.log_file = log_file_path
-        task.workspace = self.workspace_dir
-        
-        # Setup logging context wraps the WAIT for result, not the execution itself
-        # This means logging inside process_turn matches the ACTOR's stdout/stderr context?
-        # WARNING: ExecutionLogger redirects sys.stdout. If we redirect in THIS task (main thread),
-        # but the ACTOR is running in background... stdout capture works globally for the process mostly?
-        # Actually Python's sys.stdout is global. So if we redirect here, and await the future...
-        # The ACTOR printing in background WILL be captured by THIS redirection because it happens in same process/time.
-        # Provided we await the result while the context is active.
-        
-        with ExecutionLogger(log_file_path):
-            print(f"=== Task Execution Start: {task.id} ===")
-            print(f"User ID: {task.user_id}")
-            print(f"Prompt: {task.prompt}")
-            print("-" * 50)
-            
-            # Create Future for result
-            reply_future = asyncio.get_running_loop().create_future()
-            req = AgentRequest(
-                prompt=task.prompt,
-                workspace_dir=self.workspace_dir,
-                reply_future=reply_future
-            )
-            
-            try:
-                # Health Check: Ensure worker is alive
-                if self.worker_task and self.worker_task.done():
-                    print("🔥 Worker task found dead! Force re-initializing...")
-                    # If worker died, previous loop is gone. We must restart.
-                    # Retrying this specific task might require re-queuing logic, 
-                    # but for now let's just fail fast-ish or try to recover?
-                    # The queue is likely dead or pointing to old loop.
-                    await self.reinitialize()
-                    # Re-create items (queue is new now)
-                    reply_future = asyncio.get_running_loop().create_future()
-                    req = AgentRequest(prompt=task.prompt, workspace_dir=self.workspace_dir, reply_future=reply_future)
-                
-                # Send to actor
-                await self.request_queue.put(req)
-                
-                # Wait for result with TIMEOUT (Prevent infinite hang)
-                try:
-                    # 5 minutes max for any single turn
-                    result = await asyncio.wait_for(reply_future, timeout=300.0)
-                except asyncio.TimeoutError:
-                    print("⏰ Agent Execution Timed Out (>300s). Killing session.")
-                    self.initialized = False # Mark as dead so next run re-inits
-                    # Cancel the future so we don't leak?
-                    req.reply_future.cancel()
-                    raise TimeoutError("Agent execution timed out")
-                
-                # Store data
-                task.execution_summary = result
-                task.result = result.response_text
-                
-                if not task.result:
-                    task.result = "(No text response returned by agent)"
-
-            except Exception as e:
-                print(f"🔥 Critical Error during execution: {e}")
-                task.status = "error"
-                task.result = f"Error: {e}"
-                # If actor crashed or timed out, force reinit on next run
-                self.initialized = False
-            
-            print("-" * 50)
-            print(f"=== Task Execution End: {task.id} ===")
-            
     async def shutdown(self):
         """Cleanup resources."""
         self._shutdown_event.set()
         if self.worker_task and not self.worker_task.done():
-            # Send sentinel
             await self.request_queue.put(None)
             try:
-                # Wait for graceful exit
                 await asyncio.wait_for(self.worker_task, timeout=5.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self.worker_task.cancel()
@@ -222,4 +161,44 @@ class AgentAdapter:
                 except asyncio.CancelledError:
                     pass
         self.worker_task = None
-        self.request_queue = asyncio.Queue() # Clear queue
+        self.initialized = False
+
+    async def execute(self, task, continue_session: bool = False):
+        """
+        Executes a task using the agent via the background actor.
+        Matches the interface expected by TaskManager.
+        """
+        if not self.initialized:
+            await self.initialize()
+
+        # Create Future for result
+        reply_future = asyncio.get_running_loop().create_future()
+        req = AgentRequest(
+            prompt=task.prompt,
+            user_id=str(task.user_id),
+            workspace_dir=None, # Managed by Session mappings now
+            reply_future=reply_future
+        )
+        
+        try:
+            # Send to actor
+            await self.request_queue.put(req)
+            
+            # Wait for result with TIMEOUT
+            # 5 minutes max for any single turn
+            result = await asyncio.wait_for(reply_future, timeout=300.0)
+            
+            # Store data
+            task.execution_summary = result
+            task.result = result.response_text
+            
+            # Helper for logging (Gateway Result might not have path)
+            # We could fetch session info to get path if needed for logging artifact sending
+            
+            if not task.result:
+                task.result = "(No text response returned by agent)"
+
+        except Exception as e:
+            print(f"🔥 Critical Error during execution: {e}")
+            task.status = "error"
+            task.result = f"Error: {e}"

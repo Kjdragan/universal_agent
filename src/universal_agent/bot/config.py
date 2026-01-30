@@ -31,4 +31,10 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", "8000"))
 
 # Task Queue Settings
+# Task Queue Settings
 MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "1"))
+
+# Gateway Configuration
+# If set, the bot acts as a client to an external Gateway.
+# If unset, it runs an In-Process Gateway.
+UA_GATEWAY_URL = os.getenv("UA_GATEWAY_URL")

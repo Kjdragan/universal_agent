@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -24,6 +25,8 @@ from typing import Any, AsyncIterator, Callable, Optional
 
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -186,6 +189,18 @@ class ProcessTurnAdapter:
             except Exception:
                 pass
         
+        # Optional: capture Claude CLI stderr for gateway debugging
+        if self._options is not None and os.getenv("UA_CLAUDE_CLI_STDERR", "1").lower() in {"1", "true", "yes"}:
+            def _stderr_line(line: str) -> None:
+                logger.warning("Claude CLI stderr: %s", line)
+            self._options.stderr = _stderr_line
+
+        # Optional: enable Claude CLI debug categories (comma-separated)
+        if self._options is not None:
+            debug_flag = os.getenv("UA_CLAUDE_CLI_DEBUG", "").strip()
+            if debug_flag:
+                self._options.extra_args.setdefault("debug", debug_flag)
+
         # Run process_turn with event callback
         async with ClaudeSDKClient(self._options) as client:
             # Create task to run process_turn
@@ -215,10 +230,27 @@ class ProcessTurnAdapter:
             
             # Start engine task
             engine_task = asyncio.create_task(run_engine())
+            max_runtime_s = float(os.getenv("UA_PROCESS_TURN_TIMEOUT_SECONDS", "0") or 0)
+            deadline = (time.time() + max_runtime_s) if max_runtime_s > 0 else None
             
             # Yield events as they come in
             while True:
                 try:
+                    if deadline and time.time() > deadline:
+                        logger.error("ProcessTurnAdapter timed out after %.1fs", max_runtime_s)
+                        engine_task.cancel()
+                        try:
+                            await engine_task
+                        except Exception:
+                            pass
+                        yield AgentEvent(
+                            type=EventType.ERROR,
+                            data={
+                                "message": f"Execution timed out after {max_runtime_s:.1f}s",
+                                "duration_seconds": round(time.time() - start_ts, 2),
+                            },
+                        )
+                        break
                     event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
                     
                     if event.data.get("status") == "engine_complete":
@@ -239,7 +271,8 @@ class ProcessTurnAdapter:
                     continue
             
             # Wait for engine to complete
-            await engine_task
+            if not engine_task.done():
+                await engine_task
         
         # Emit results from the execution
         if result_holder.get("success"):
