@@ -22,6 +22,8 @@ export type EventType =
   | "pong"
   | "query"
   | "approval"
+  | "input_required"
+  | "input_response"
   | "ping";
 
 // =============================================================================
@@ -48,6 +50,7 @@ export type EventData =
   | WorkProductEventData
   | ConnectedEventData
   | QueryCompleteEventData
+  | InputRequiredEventData
   | Record<string, unknown>;
 
 // =============================================================================
@@ -308,4 +311,15 @@ export interface ApprovalResponse {
   phase_id: string;
   approved: boolean;
   followup_input?: string;
+}
+
+// =============================================================================
+// Input Required Types
+// =============================================================================
+
+export interface InputRequiredEventData {
+  input_id: string;
+  question: string;
+  category: string;
+  options: string[];
 }

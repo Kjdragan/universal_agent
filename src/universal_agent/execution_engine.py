@@ -25,6 +25,8 @@ from typing import Any, AsyncIterator, Callable, Optional
 
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id
+from universal_agent.api.input_bridge import set_input_handler
+from universal_agent.api.events import create_input_required_event
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,7 @@ class ProcessTurnAdapter:
         self._options: Optional[Any] = None
         self._session: Optional[Any] = None
         self._event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        self._pending_inputs: dict[str, asyncio.Future[str]] = {}
         self._trace: dict[str, Any] = {}
         
     @property
@@ -229,6 +232,31 @@ class ProcessTurnAdapter:
                     ))
             
             # Start engine task
+            # Define input proxy for remote bridge
+            async def remote_input_proxy(question: str, category: str, options: Optional[List[str]]) -> str:
+                # 1. Create a future locally to wait for
+                input_id = f"input_{uuid.uuid4().hex[:8]}"
+                future = asyncio.get_running_loop().create_future()
+                
+                # 2. Emit an AgentEvent (canonical format)
+                # This ensures the gateway sees it as a proper event
+                input_event = AgentEvent(
+                    type=EventType.INPUT_REQUIRED,
+                    data={
+                        "input_id": input_id,
+                        "question": question,
+                        "category": category,
+                        "options": options or [],
+                    }
+                )
+                event_callback(input_event)
+                
+                # Store in a temporary map for this execution
+                self._pending_inputs[input_id] = future
+                return await future
+
+            set_input_handler(remote_input_proxy)
+            
             engine_task = asyncio.create_task(run_engine())
             max_runtime_s = float(os.getenv("UA_PROCESS_TURN_TIMEOUT_SECONDS", "0") or 0)
             deadline = (time.time() + max_runtime_s) if max_runtime_s > 0 else None
@@ -273,6 +301,10 @@ class ProcessTurnAdapter:
             # Wait for engine to complete
             if not engine_task.done():
                 await engine_task
+            
+            # Clear handler
+            set_input_handler(None)
+            self._pending_inputs.clear()
         
         # Emit results from the execution
         if result_holder.get("success"):

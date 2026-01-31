@@ -25,8 +25,10 @@ from claude_agent_sdk import (
     AssistantMessage,
     TextBlock,
 )
+from universal_agent.api.input_bridge import request_user_input
 
 from universal_agent.prompt_assets import discover_skills
+from universal_agent.utils.json_utils import extract_json_payload
 from .plan_schema import Plan, Phase, AtomicTask, TaskStatus
 
 
@@ -123,14 +125,12 @@ async def ask_user_tool(args: Dict[str, Any]) -> Dict[str, Any]:
             print(f"   {i}. {opt}")
         print("   (or type your own answer)")
     
-    # asyncio.to_thread prevents blocking the event loop
-    answer = await asyncio.to_thread(input, "\n👤 Your answer: ")
+    # Use the remote-aware input bridge
+    answer = await request_user_input(question, category=category, options=options)
     
-    # Handle numeric selection
-    if options and answer.isdigit():
-        idx = int(answer) - 1
-        if 0 <= idx < len(options):
-            answer = options[idx]
+    # Emit status for answering
+    from universal_agent.hooks import emit_status_event
+    emit_status_event(f"User responded to: {question[:30]}...", is_log=True)
     
     return {"content": [{"type": "text", "text": f"User answered: {answer}"}]}
 
@@ -199,9 +199,10 @@ The final response must contain NOTHING but the structured plan.
 class InterviewConductor:
     """Conducts the planning interview and produces a structured Plan."""
     
-    def __init__(self, harness_dir: Path, harness_id: str):
+    def __init__(self, harness_dir: Path, harness_id: str, event_callback: Optional[Callable[[AgentEvent], None]] = None):
         self.harness_dir = Path(harness_dir)
         self.harness_id = harness_id
+        self.event_callback = event_callback
         self.state = InterviewState()
     
     def _get_interview_options(self) -> ClaudeAgentOptions:
@@ -245,17 +246,17 @@ class InterviewConductor:
         if isinstance(data, dict):
             new_data = {}
             key_map = {
-                "planTitle": "name", "planName": "name", "title": "name",
-                "planDescription": "description", "desc": "description",
-                "phaseId": "id", "phaseName": "name", "phaseDescription": "description",
-                "taskId": "id", "taskName": "name", "taskDescription": "description",
-                "estimatedDurationMinutes": "estimated_duration_minutes",
+                "planTitle": "name", "planName": "name", "title": "name", "plan_title": "name", "plan_name": "name",
+                "planDescription": "description", "desc": "description", "plan_description": "description",
+                "phaseId": "id", "phaseName": "name", "phaseDescription": "description", "phase_id": "id", "phase_name": "name", "phase_description": "description",
+                "taskId": "id", "taskName": "name", "taskDescription": "description", "task_id": "id", "task_name": "name", "task_description": "description",
+                "estimatedDurationMinutes": "estimated_duration_minutes", "estimated_duration_minutes": "estimated_duration_minutes",
                 "duration": "estimated_duration_minutes",
-                "estimatedDuration": "estimated_duration_minutes",
-                "successCriteria": "success_criteria", "criteria": "success_criteria",
+                "estimatedDuration": "estimated_duration_minutes", "estimated_duration": "estimated_duration_minutes",
+                "successCriteria": "success_criteria", "criteria": "success_criteria", "success_criteria": "success_criteria",
                 "acceptanceCriteria": "success_criteria", "requirements": "success_criteria",
-                "useCase": "use_case", "intent": "use_case",
-                "phaseNumber": "order"
+                "useCase": "use_case", "intent": "use_case", "use_case": "use_case",
+                "phaseNumber": "order", "phase_number": "order", "order": "order"
             }
             for k, v in data.items():
                 new_key = key_map.get(k, k)
@@ -278,87 +279,103 @@ class InterviewConductor:
     def _extract_plan_from_text(self, text: str) -> Optional[Plan]:
         """Attempt to extract and parse JSON Plan from text with normalization."""
         try:
-            # Look for JSON code block (optional "json" tag)
-            match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-            if not match:
-                # Look for just JSON object start/end
-                match = re.search(r"(\{.*\})", text, re.DOTALL)
+            # Use the layered repair system
+            # We don't pass the model here because we still need to run normalization logic
+            # on the raw dict before Pydantic validation.
+            data = extract_json_payload(text)
+            if not data:
+                return None
+
+            # Normalize keys (handles phase_number vs phaseNumber etc)
+            data = self._normalize_plan_data(data)
             
-            if match:
-                json_str = match.group(1)
-                data = json.loads(json_str)
-                data = self._normalize_plan_data(data)
-                
-                # Heuristic: Inject default Plan name if missing
-                if not data.get("name"):
-                    data["name"] = "Generated Plan"
-                
-                # Heuristic: Collapse "Task-like Phases" into a single Phase
-                phases = data.get("phases", [])
-                if phases and isinstance(phases, list):
-                    # Check if first phase has NO tasks (implying the phases ARE the tasks)
-                    first_phase = phases[0]
-                    if not first_phase.get("tasks"):
-                        print("⚠️  Detecting Task-like Phases. Collapsing into single Execution Phase...")
-                        new_tasks = []
-                        for i, p in enumerate(phases):
-                            # Map Phase fields to AtomicTask fields
-                            task = {
-                                "id": p.get("id", str(i+1)),
-                                "name": p.get("name", f"Task {i+1}"),
-                                "description": p.get("description", p.get("name", "")),
-                                # Important: User wants 'prompt' details as 'use_use' (subatomic details)
-                                "use_case": p.get("prompt") or p.get("description") or "",
-                                "success_criteria": p.get("success_criteria", []),
-                                "estimated_duration_minutes": p.get("estimated_duration_minutes"),
-                                "status": "pending"
-                            }
-                            new_tasks.append(task)
-                        
-                        # Replace phases list with single consolidated phase
-                        data["phases"] = [{
-                            "name": "Execution Phase",
-                            "description": "Auto-consolidated phase from task list",
-                            "order": 0,
-                            "tasks": new_tasks,
+            # Heuristic: Inject default Plan name if missing
+            if not data.get("name"):
+                data["name"] = "Generated Plan"
+            
+            # Heuristic: Collapse "Task-like Phases" into a single Phase
+            phases = data.get("phases", [])
+            if phases and isinstance(phases, list):
+                # Check if first phase has NO tasks (implying the phases ARE the tasks)
+                first_phase = phases[0] if phases else {}
+                if isinstance(first_phase, dict) and not first_phase.get("tasks"):
+                    print("⚠️ Detectable Task-like Phases. Collapsing into single Execution Phase...")
+                    new_tasks = []
+                    for i, p in enumerate(phases):
+                        if not isinstance(p, dict): continue
+                        # Map Phase fields to AtomicTask fields
+                        task = {
+                            "id": p.get("id", str(i+1)),
+                            "name": p.get("name", f"Task {i+1}"),
+                            "description": p.get("description", p.get("name", "")),
+                            # Important: User wants 'prompt' details as 'use_case' (subatomic details)
+                            "use_case": p.get("prompt") or p.get("description") or "",
+                            "success_criteria": p.get("success_criteria", []),
+                            "estimated_duration_minutes": p.get("estimated_duration_minutes"),
                             "status": "pending"
-                        }]
-                
-                # Force 0-indexed sequential order for all phases
-                if "phases" in data and isinstance(data["phases"], list):
-                    for i, p in enumerate(data["phases"]):
+                        }
+                        new_tasks.append(task)
+                    
+                    # Replace phases list with single consolidated phase
+                    data["phases"] = [{
+                        "name": "Execution Phase",
+                        "description": "Auto-consolidated phase from task list",
+                        "order": 0,
+                        "tasks": new_tasks,
+                        "status": "pending"
+                    }]
+            
+            # Force 0-indexed sequential order for all phases
+            if "phases" in data and isinstance(data["phases"], list):
+                for i, p in enumerate(data["phases"]):
+                    if isinstance(p, dict):
                         p["order"] = i
-                
-                return Plan.model_validate(data)
+            
+            return Plan.model_validate(data)
         except Exception as e:
-            # Silent fail on regex miss is fine, just logging for debug
-            # print(f"⚠️ JSON extraction failed: {e}")
-            pass
-        return None
+            print(f"⚠️ Plan extraction/validation failed: {e}")
+            return None
 
     async def conduct_interview(self, massive_request: str) -> Optional[Plan]:
         """
         Conduct the planning interview and return a structured Plan.
-        
-        Args:
-            massive_request: The user's original massive request
-            
-        Returns:
-            Plan object with phases and atomic tasks, or None if failed
         """
-        print("\n" + "=" * 60)
-        print("🎯 HARNESS PLANNING INTERVIEW")
-        print("=" * 60)
-        print(f"\nMassive request: {massive_request[:200]}...")
-        print("\nThe planning agent will ask you questions to understand your requirements.\n")
+        log_msgs = [
+            "\n" + "=" * 60,
+            "🎯 HARNESS PLANNING INTERVIEW",
+            "=" * 60,
+            f"\nMassive request: {massive_request[:200]}...",
+            "\nThe planning agent will ask you questions to understand your requirements.\n"
+        ]
+        
+        for msg in log_msgs:
+            print(msg)
+            if self.event_callback:
+                try:
+                    from universal_agent.agent_core import AgentEvent, EventType
+                    self.event_callback(AgentEvent(type=EventType.TEXT, data={"text": msg + "\n"}))
+                except Exception:
+                    pass
         
         options = self._get_interview_options()
         plan = None
         
         try:
             async with ClaudeSDKClient(options=options) as client:
+                if self.event_callback:
+                    try:
+                        from universal_agent.agent_core import AgentEvent, EventType
+                        self.event_callback(AgentEvent(type=EventType.STATUS, data={"status": "Planning Agent Initialized", "is_log": True}))
+                    except Exception: pass
+
                 # 1. Primary Interview Loop
                 with logfire.span("llm_api_wait", context="interview_conduct"):
+                    if self.event_callback:
+                        try:
+                            from universal_agent.agent_core import AgentEvent, EventType
+                            self.event_callback(AgentEvent(type=EventType.STATUS, data={"status": "Generating research plan...", "is_log": True}))
+                        except Exception: pass
+
                     await client.query(
                         f"User's massive task:\n\n{massive_request}\n\n"
                         "Begin the planning interview. Ask clarifying questions to understand "
@@ -382,8 +399,23 @@ class InterviewConductor:
                             # Print assistant messages for visibility
                             if isinstance(message, AssistantMessage):
                                 for block in message.content:
+                                    if hasattr(block, 'thinking') and block.thinking:
+                                        msg = f"\n🤔 {block.thinking}"
+                                        print(msg)
+                                        if self.event_callback:
+                                            try:
+                                                from universal_agent.agent_core import AgentEvent, EventType
+                                                self.event_callback(AgentEvent(type=EventType.THINKING, data={"thinking": block.thinking}))
+                                            except Exception: pass
+
                                     if isinstance(block, TextBlock):
-                                        print(f"\n🤖 {block.text}")
+                                        msg = f"\n🤖 {block.text}"
+                                        print(msg)
+                                        if self.event_callback:
+                                            try:
+                                                from universal_agent.agent_core import AgentEvent, EventType
+                                                self.event_callback(AgentEvent(type=EventType.TEXT, data={"text": block.text + "\n"}))
+                                            except Exception: pass
                                     
                                         # Fallback: parse plan from markdown text
                                         if not plan:
@@ -521,7 +553,8 @@ class InterviewConductor:
 async def run_planning_interview(
     harness_dir: Path,
     harness_id: str,
-    massive_request: str
+    massive_request: str,
+    event_callback: Optional[Callable[[AgentEvent], None]] = None,
 ) -> Optional[Plan]:
     """
     Run a planning interview for a massive request.
@@ -534,7 +567,7 @@ async def run_planning_interview(
     Returns:
         Structured Plan object, or None if interview failed
     """
-    conductor = InterviewConductor(harness_dir, harness_id)
+    conductor = InterviewConductor(harness_dir, harness_id, event_callback=event_callback)
     return await conductor.conduct_interview(massive_request)
 
 

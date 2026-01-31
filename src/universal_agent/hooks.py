@@ -38,20 +38,24 @@ import logfire
 logger = logging.getLogger(__name__)
 
 # Constants
+from contextvars import ContextVar
+from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.constants import DISALLOWED_TOOLS
 
 # -----------------------------------------------------------------------------
 
-_TOOL_EVENT_CALLBACK: Optional[Callable[[AgentEvent], None]] = None
-_TOOL_EVENT_START_TS: Optional[float] = None
-_EMITTED_TOOL_CALL_IDS: set[str] = set()
-_EMITTED_TOOL_RESULT_IDS: set[str] = set()
+# Context-local event callback to support nested/concurrent runs
+_TOOL_EVENT_CALLBACK_VAR: ContextVar[Optional[Callable[[AgentEvent], None]]] = ContextVar("_TOOL_EVENT_CALLBACK", default=None)
+
+# Context-local sets to prevent duplicate event emission within a single turn
+_EMITTED_TOOL_CALL_IDS_VAR: ContextVar[set] = ContextVar("_EMITTED_TOOL_CALL_IDS", default=set())
+_EMITTED_TOOL_RESULT_IDS_VAR: ContextVar[set] = ContextVar("_EMITTED_TOOL_RESULT_IDS", default=set())
+_EMITTED_ITERATION_END_VAR: ContextVar[bool] = ContextVar("_EMITTED_ITERATION_END", default=False)
 
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
-    """Register a callback for streaming tool events (gateway/UI)."""
-    global _TOOL_EVENT_CALLBACK
-    _TOOL_EVENT_CALLBACK = callback
+    """Set the context-local callback for tool events."""
+    _TOOL_EVENT_CALLBACK_VAR.set(callback)
 
 
 def set_event_start_ts(start_ts: Optional[float]) -> None:
@@ -61,16 +65,26 @@ def set_event_start_ts(start_ts: Optional[float]) -> None:
 
 
 def reset_tool_event_tracking() -> None:
-    """Clear per-turn tool event dedupe caches."""
-    _EMITTED_TOOL_CALL_IDS.clear()
-    _EMITTED_TOOL_RESULT_IDS.clear()
+    """
+    Reset context-local deduplication sets for a new turn.
+    """
+    _EMITTED_TOOL_CALL_IDS_VAR.set(set())
+    _EMITTED_TOOL_RESULT_IDS_VAR.set(set())
+    _EMITTED_ITERATION_END_VAR.set(False)
+
+
+def _clear_hook_events() -> None:
+    """Clear callback and tracking for current context."""
+    _TOOL_EVENT_CALLBACK_VAR.set(None)
+    reset_tool_event_tracking()
 
 
 def _emit_event(event: AgentEvent) -> None:
-    if _TOOL_EVENT_CALLBACK is None:
+    callback = _TOOL_EVENT_CALLBACK_VAR.get()
+    if callback is None:
         return
     try:
-        _TOOL_EVENT_CALLBACK(event)
+        callback(event)
     except Exception:
         pass
 
@@ -102,9 +116,13 @@ def emit_tool_call_event(
 ) -> bool:
     """Emit a TOOL_CALL event if not already emitted for this tool_use_id."""
     tool_id = _normalize_tool_use_id(tool_use_id, input_data)
-    if not tool_id or tool_id in _EMITTED_TOOL_CALL_IDS:
+    emitted_calls = _EMITTED_TOOL_CALL_IDS_VAR.get()
+    if not tool_id or tool_id in emitted_calls:
         return False
-    _EMITTED_TOOL_CALL_IDS.add(tool_id)
+    
+    # Update local set
+    emitted_calls.add(tool_id)
+    _EMITTED_TOOL_CALL_IDS_VAR.set(emitted_calls)
     input_payload = tool_input if isinstance(tool_input, dict) else {"value": tool_input}
     _emit_event(
         AgentEvent(
@@ -183,9 +201,13 @@ def emit_tool_result_event(
 ) -> bool:
     """Emit a TOOL_RESULT event if not already emitted for this tool_use_id."""
     tool_id = _normalize_tool_use_id(tool_use_id, input_data)
-    if not tool_id or tool_id in _EMITTED_TOOL_RESULT_IDS:
+    emitted_results = _EMITTED_TOOL_RESULT_IDS_VAR.get()
+    if not tool_id or tool_id in emitted_results:
         return False
-    _EMITTED_TOOL_RESULT_IDS.add(tool_id)
+    
+    # Update local set
+    emitted_results.add(tool_id)
+    _EMITTED_TOOL_RESULT_IDS_VAR.set(emitted_results)
     content_text = _extract_tool_result_text(tool_result)
     _emit_event(
         AgentEvent(
@@ -612,19 +634,6 @@ def emit_text_event(text: str) -> None:
 
 def emit_thinking_event(thinking: str, signature: Optional[str] = None) -> None:
     """Emit a THINKING event."""
-    _emit_event(
-        AgentEvent(
-            type=EventType.THINKING,
-            data={
-                "thinking": thinking,
-                "signature": signature,
-                "time_offset": _tool_time_offset(),
-            },
-        )
-    )
-
-def emit_thinking_event(thinking: str, signature: Optional[str] = None) -> None:
-    """Emit a THINKING event."""
     # We do not dedup thinking events as they are sequential parts of the stream
     _emit_event(
         AgentEvent(
@@ -637,16 +646,19 @@ def emit_thinking_event(thinking: str, signature: Optional[str] = None) -> None:
         )
     )
 
-def emit_status_event(status: str, level: str = "INFO", prefix: str = "") -> None:
-    """Emit a STATUS event for logs/messages."""
+def emit_status_event(message: str, level: str = "INFO", prefix: Optional[str] = None, is_log: bool = True) -> None:
+    """
+    Emit a status event.
+    By default is_log=True so it shows in the UI Activity Log panel.
+    """
     _emit_event(
         AgentEvent(
             type=EventType.STATUS,
             data={
-                "status": status,
+                "status": message,
                 "level": level,
                 "prefix": prefix,
-                "is_log": True,
+                "is_log": is_log,
                 "time_offset": _tool_time_offset(),
             },
         )

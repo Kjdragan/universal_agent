@@ -119,9 +119,11 @@ class HarnessOrchestrator:
         self,
         workspaces_root: Path,
         config: Optional[HarnessConfig] = None,
+        event_callback: Optional[Callable[[AgentEvent], None]] = None,
     ):
         self.workspaces_root = Path(workspaces_root)
         self.config = config or HarnessConfig()
+        self.event_callback = event_callback
         
         # Initialize on first run
         self.session_manager: Optional[HarnessSessionManager] = None
@@ -186,12 +188,25 @@ class HarnessOrchestrator:
         tool_calls = []
         
         async for event in gateway.execute(self._gateway_session, request):
+            # Relay event to the primary UI callback
+            if self.event_callback:
+                try:
+                    self.event_callback(event)
+                except Exception:
+                    pass
+
             if event.type == EventType.TEXT:
                 text = event.data.get("text", "")
                 if text:
                     output_chunks.append(text)
             elif event.type == EventType.TOOL_CALL:
                 tool_calls.append(event.data)
+            elif event.type == EventType.THINKING:
+                # Accumulate or process thinking if needed
+                pass
+            elif event.type == EventType.STATUS:
+                # Status events are already relayed, but we track them here if needed
+                pass
 
         response_text = "".join(output_chunks)
         
@@ -202,9 +217,28 @@ class HarnessOrchestrator:
     
     def _log(self, message: str) -> None:
         """Log with timestamp."""
+        ts = datetime.now().strftime("%H:%M:%S")
+        log_msg = f"[Harness {ts}] {message}"
         if self.config.verbose:
-            ts = datetime.now().strftime("%H:%M:%S")
-            print(f"[Harness {ts}] {message}", flush=True)
+            print(log_msg, flush=True)
+            
+        if self.event_callback:
+            try:
+                # 1. Emit as TEXT event so it shows in chat console
+                self.event_callback(AgentEvent(type=EventType.TEXT, data={"text": log_msg + "\n"}))
+                
+                # 2. Emit as STATUS event so it shows in Activity & Logs panel
+                self.event_callback(AgentEvent(
+                    type=EventType.STATUS, 
+                    data={
+                        "status": message, 
+                        "prefix": "Harness", 
+                        "is_log": True,
+                        "level": "INFO"
+                    }
+                ))
+            except Exception:
+                pass
     
     async def run(
         self,
@@ -276,6 +310,7 @@ class HarnessOrchestrator:
                 harness_dir=harness_dir,
                 harness_id=harness_id,
                 massive_request=massive_request,
+                event_callback=self.event_callback,
             )
         
         if not self.plan:
@@ -292,10 +327,18 @@ class HarnessOrchestrator:
         # 3. Execute each phase
         self.status = HarnessStatus.EXECUTING
         
-        # 3. Execute each phase
-        self.status = HarnessStatus.EXECUTING
-        
+        # Execution
+        processed_phases = []
+        if self.event_callback:
+            self.event_callback(AgentEvent(type=EventType.STATUS, data={"status": "Starting Phase Execution", "is_log": True}))
+
         for phase in self.plan.phases:
+            self._log(f"🚀 EXECUTING PHASE: {phase.id} - {phase.name}")
+            if self.event_callback:
+                self.event_callback(AgentEvent(
+                    type=EventType.STATUS, 
+                    data={"status": f"Phase {phase.id} started", "phase_id": phase.id, "is_log": True}
+                ))
             # Check if using resume and phase is already done
             if phase.status == "completed":
                 self._log(f"Skipping completed phase: {phase.name}")
@@ -357,6 +400,16 @@ class HarnessOrchestrator:
                 # Check Completion
                 if eval_result.is_complete:
                     self._log(f"Phase {phase.name} PASSED verification! Score: {eval_result.overall_score:.2f}")
+                    if self.event_callback:
+                        self.event_callback(AgentEvent(
+                            type=EventType.STATUS, 
+                            data={
+                                "status": f"Phase {phase.id} PASSED", 
+                                "phase_id": phase.id, 
+                                "score": eval_result.overall_score,
+                                "is_log": True
+                            }
+                        ))
                     result.success = True
                     result.evaluation_notes = f"Passed with score {eval_result.overall_score:.2f}"
                     phase_success = True
@@ -365,6 +418,16 @@ class HarnessOrchestrator:
                 else:
                     self._log(f"Phase {phase.name} FAILED verification. Score: {eval_result.overall_score:.2f}")
                     self._log(f"Missing: {eval_result.missing_elements}")
+                    if self.event_callback:
+                        self.event_callback(AgentEvent(
+                            type=EventType.STATUS, 
+                            data={
+                                "status": f"Phase {phase.id} FAILED (Attempt {retry_count})", 
+                                "phase_id": phase.id, 
+                                "level": "WARNING",
+                                "is_log": True
+                            }
+                        ))
                     
                     # Prepare feedback for next iteration
                     retry_count += 1
@@ -585,6 +648,7 @@ PLEASE FIX THESE ISSUES AND RE-SUBMIT ARTIFACTS.
                         current_prompt,
                         session_path,
                         max_iterations=self.config.max_iterations,
+                        event_callback=self.event_callback,
                     )
                 
                 # Capture output
@@ -1055,6 +1119,7 @@ async def run_harness(
     max_iterations: int = 20,
     harness_id: Optional[str] = None,
     boot_log: Optional[str] = None,
+    event_callback: Optional[Callable[[AgentEvent], None]] = None,
 ) -> Dict[str, Any]:
     """
     Run the complete harness flow.
@@ -1071,7 +1136,7 @@ async def run_harness(
         # Override if passed explicitly
         config.max_iterations = max_iterations
 
-    orchestrator = HarnessOrchestrator(workspaces_root, config)
+    orchestrator = HarnessOrchestrator(workspaces_root, config, event_callback=event_callback)
     try:
         return await orchestrator.run(
             massive_request, 

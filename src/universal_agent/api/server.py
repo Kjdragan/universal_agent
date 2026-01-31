@@ -359,15 +359,32 @@ async def websocket_agent(websocket: WebSocket):
                 if client_event.type == WSEventType.QUERY:
                     query = client_event.data.get("text", "")
                     if query.strip():
-                        # Stream agent events
-                        async for agent_event in bridge.execute_query(query):
-                            await manager.send_event(connection_id, agent_event)
+                        # Run query in background task to avoid deadlocking the message loop.
+                        # This allows us to receive INPUT_RESPONSE while the query is still active.
+                        async def stream_query():
+                            try:
+                                async for agent_event in bridge.execute_query(query):
+                                    await manager.send_event(connection_id, agent_event)
+                            except Exception as e:
+                                logger.error(f"Error streaming query: {e}")
+                                await manager.send_event(connection_id, create_error_event(str(e)))
+                        
+                        asyncio.create_task(stream_query())
 
-                elif client_event.type == WSEventType.APPROVAL:
-                    # Handle approval response
-                    phase_id = client_event.data.get("phase_id")
-                    approved = client_event.data.get("approved", True)
-                    # TODO: Integrate with URW orchestrator
+                elif client_event.type == WSEventType.INPUT_RESPONSE:
+                    # Handle interactive input response from Web UI
+                    input_id = client_event.data.get("input_id")
+                    response = client_event.data.get("response", "")
+                    if input_id:
+                        from universal_agent.api.gateway_bridge import GatewayBridge
+                        from universal_agent.api.process_turn_bridge import ProcessTurnBridge
+                        if isinstance(bridge, GatewayBridge):
+                            await bridge.send_input_response(input_id, response)
+                        elif isinstance(bridge, ProcessTurnBridge):
+                            await bridge.send_input_response(input_id, response)
+                        else:
+                            # Legacy local mode - no input bridge available
+                            pass
 
                 elif client_event.type == WSEventType.PING:
                     # Send pong

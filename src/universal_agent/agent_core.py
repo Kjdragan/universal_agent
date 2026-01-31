@@ -92,6 +92,8 @@ class EventType(str, Enum):
     URW_PHASE_COMPLETE = "urw_phase_complete"
     URW_PHASE_FAILED = "urw_phase_failed"
     URW_EVALUATION = "urw_evaluation"
+    INPUT_REQUIRED = "input_required"
+    INPUT_RESPONSE = "input_response"
 
 
 class HarnessError(Exception):
@@ -1133,6 +1135,37 @@ class UniversalAgent:
             
         except Exception as e:
             print(f"Failed to setup run.log: {e}")
+
+    async def close(self) -> None:
+        """Clean up resources before shutdown."""
+        if not self._initialized:
+            return
+
+        # 1. Clean up logging to prevent 'Event loop is closed' errors during shutdown
+        try:
+            if hasattr(self, 'file_handler') and self.file_handler:
+                root_logger = logging.getLogger()
+                root_logger.removeHandler(self.file_handler)
+                
+                # Also remove from specific loggers where it might have been added
+                logger = logging.getLogger("universal_agent")
+                logger.removeHandler(self.file_handler)
+                
+                for lib in ["httpx", "httpcore"]:
+                    lib_logger = logging.getLogger(lib)
+                    lib_logger.removeHandler(self.file_handler)
+                
+                self.file_handler.close()
+                self.file_handler = None
+        except Exception as e:
+            # Non-fatal during shutdown
+            pass
+
+        # 2. Clear session references
+        self.session = None
+        self.composio = None
+        self.client = None
+        self._initialized = False
 
     def _try_load_history_from_transcript(self) -> None:
         """

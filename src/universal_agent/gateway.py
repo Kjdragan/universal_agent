@@ -45,6 +45,7 @@ class GatewaySession:
     user_id: str
     workspace_dir: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    pending_inputs: dict[str, asyncio.Future[str]] = field(default_factory=dict, repr=False)
 
 
 @dataclass
@@ -334,6 +335,18 @@ class InProcessGateway(Gateway):
             trace_id=trace_id,
         )
 
+    async def resolve_input(self, session_id: str, input_id: str, response: str) -> bool:
+        """Resolve a pending input request for a session."""
+        session = self._sessions.get(session_id)
+        if not session or input_id not in session.pending_inputs:
+            return False
+        
+        future = session.pending_inputs.pop(input_id)
+        if not future.done():
+            future.set_result(response)
+            return True
+        return False
+
     def list_sessions(self) -> list[GatewaySessionSummary]:
         summaries: list[GatewaySessionSummary] = []
         
@@ -385,6 +398,28 @@ class InProcessGateway(Gateway):
                     )
         
         return summaries[:50]  # Limit to 50 sessions
+
+    async def close(self) -> None:
+        """Clean up all active adapters and sessions."""
+        # 1. Close all active adapters
+        for session_id in list(self._adapters.keys()):
+            adapter = self._adapters.pop(session_id)
+            try:
+                await adapter.close()
+            except Exception:
+                pass
+        
+        # 2. Close legacy bridge if it exists
+        if self._bridge:
+            # AgentBridge doesn't currently have a close but we'll add one
+            if hasattr(self._bridge, "close"):
+                try:
+                    await self._bridge.close()
+                except Exception:
+                    pass
+            self._bridge = None
+        
+        self._sessions.clear()
 
 
 class ExternalGateway(Gateway):
