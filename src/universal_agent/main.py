@@ -29,6 +29,7 @@ import json
 import re
 import uuid
 import inspect
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Callable
@@ -46,6 +47,10 @@ from universal_agent.tools.research_bridge import (
     crawl_parallel_wrapper,
     run_research_phase_wrapper,
     run_report_generation_wrapper,
+    generate_outline_wrapper,
+    draft_report_parallel_wrapper,
+    cleanup_report_wrapper,
+    compile_report_wrapper,
 )
 from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
 from universal_agent import hooks as hook_events
@@ -5600,6 +5605,14 @@ def _is_memory_intent(query: str) -> bool:
     return any(phrase in lowered for phrase in memory_phrases)
 
 
+def _is_context_only_intent(query: str) -> bool:
+    lowered = query.lower()
+    # Short context-referential questions that should be answered from chat history
+    if "filename" in lowered or "file name" in lowered:
+        return True
+    return False
+
+
 async def classify_query(client: ClaudeSDKClient, query: str) -> str:
     """Determine if a query is SIMPLE (direct answer) or COMPLEX (needs tools)."""
     if _is_memory_intent(query):
@@ -5612,13 +5625,23 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
                 raw_response="HEURISTIC_MEMORY_INTENT",
             )
         return "SIMPLE"
+    if _is_context_only_intent(query):
+        print("\n🤔 Query Classification: SIMPLE (Heuristic: context_only_intent)")
+        if LOGFIRE_TOKEN:
+            logfire.info(
+                "query_classification",
+                query=query,
+                decision="SIMPLE",
+                raw_response="HEURISTIC_CONTEXT_ONLY",
+            )
+        return "SIMPLE"
 
     # Classification logic with definition-based prompting
     classification_prompt = (
         f"Classify the following user query as either 'SIMPLE' or 'COMPLEX'.\n"
         f"Query: {query}\n\n"
         f"Definitions:\n"
-        f"- SIMPLE: Can be answered directly by your foundational knowledge (e.g., 'Capital of France', 'Explain concept') WITHOUT any context from previous turns.\n"
+        f"- SIMPLE: Can be answered directly by your foundational knowledge OR from the conversation history above, without using external tools (e.g., 'Capital of France', 'Explain concept', 'What was the filename I just asked you to create?').\n"
         f"- COMPLEX: Requires external tools, searching the web, executing code, checking real-time data, sending emails, OR confirming/continuing a previous multi-step workflow (e.g., 'yes', 'proceed', 'continue').\n\n"
         f"Respond with ONLY 'SIMPLE' or 'COMPLEX'."
     )
@@ -6394,10 +6417,11 @@ async def setup_session(
                 name="internal",
                 version="1.0.0",
                 tools=[
-                    run_research_pipeline_wrapper,
-                    crawl_parallel_wrapper,
-                    run_research_phase_wrapper,
                     run_report_generation_wrapper,
+                    generate_outline_wrapper,
+                    draft_report_parallel_wrapper,
+                    cleanup_report_wrapper,
+                    compile_report_wrapper,
                 ]
             ),
         },
@@ -6502,6 +6526,14 @@ async def process_turn(
     trace["query"] = user_input
     trace["start_time"] = datetime.now().isoformat()
     start_ts = time.time()
+    
+    # Helper to emit events via callback (defined early for all paths)
+    def emit_event(event: AgentEvent) -> None:
+        if event_callback:
+            try:
+                event_callback(event)
+            except Exception:
+                pass
 
     # Register gateway/UI event callback for hook-based tool streaming
     hook_events.set_event_callback(event_callback)
@@ -6516,14 +6548,33 @@ async def process_turn(
         logfire.info("query_started", query=user_input)
 
     # 1a. Check for /harness command (massive request handler)
-    if user_input.strip().startswith("/harness "):
+    clean_input = user_input.strip()
+    if clean_input.startswith("/harness"):
         from .urw.harness_orchestrator import run_harness
         
-        massive_request = user_input.strip()[9:]  # Strip "/harness " prefix
+        # Strip "/harness" and any following space
+        massive_request = clean_input[8:].lstrip()
+        
+        if not massive_request:
+            from .api.input_bridge import request_user_input
+            massive_request = await request_user_input(
+                "Please state your objective for the harness run:",
+                category="harness_init"
+            )
+            if not massive_request or massive_request.strip() == "":
+                return ExecutionResult(
+                    response_text="Harness run cancelled: Objective is required.",
+                    execution_time_seconds=round(time.time() - start_ts, 2),
+                    workspace_path=workspace_dir,
+                )
+
         print(f"\n{'=' * 60}")
         print("🎯 HARNESS MODE ACTIVATED")
         print(f"{'=' * 60}")
         print(f"Request: {massive_request[:100]}...")
+        
+        # Emit status for UI Activity Log
+        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "Harness Mode Activated", "is_log": True}))
         
         workspaces_root = Path(workspace_dir).parent
         
@@ -6533,17 +6584,16 @@ async def process_turn(
                 workspaces_root=workspaces_root,
                 process_turn=process_turn,
                 client=client,
-                max_iterations=args.max_iterations,
+                max_iterations=max_iterations,
+                event_callback=event_callback,
             )
             
             summary = f"Harness complete: {result.get('phases_completed', 0)} phases completed"
             _clear_hook_events()
             return ExecutionResult(
-                success=result.get("status") == "complete",
-                final_output=summary,
-                query=user_input,
-                time_taken=time.time() - start_ts,
-                error=result.get("error"),
+                response_text=summary,
+                execution_time_seconds=round(time.time() - start_ts, 2),
+                workspace_path=workspace_dir,
             )
         except Exception as e:
             print(f"\n❌ Harness error: {e}")
@@ -6551,11 +6601,9 @@ async def process_turn(
             traceback.print_exc()
             _clear_hook_events()
             return ExecutionResult(
-                success=False,
-                final_output="",
-                query=user_input,
-                time_taken=time.time() - start_ts,
-                error=str(e),
+                response_text=f"Harness error: {e}",
+                execution_time_seconds=round(time.time() - start_ts, 2),
+                workspace_path=workspace_dir,
             )
 
     # 2. Determine Complexity
@@ -6568,14 +6616,6 @@ async def process_turn(
 
     final_response_text = ""
     
-    # Helper to emit events via callback (defined early for both paths)
-    def emit_event(event: AgentEvent) -> None:
-        if event_callback:
-            try:
-                event_callback(event)
-            except Exception:
-                pass
-
     if is_simple:
         # Try Fast Path
         emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "fast"}))
@@ -8195,16 +8235,17 @@ async def main(args: argparse.Namespace):
                                 print("ℹ️  Mission complete.")
                                 
                                 # Continuity Latch: Ask user if they want to keep context
-                                latch_choice = await asyncio.get_running_loop().run_in_executor(
-                                    None, 
-                                    input, 
-                                    "\n❓ Keep session history for follow-up? (Y/n) > "
-                                )
-                                if latch_choice.strip().lower() in ("n", "no", "clear"):
-                                    if safe_clear_history(client):
-                                         print("🧹 Client history cleared. Starting fresh.")
-                                else:
-                                    print("💾 Session history preserved for follow-up.")
+                                if sys.stdin.isatty():
+                                    latch_choice = await asyncio.get_running_loop().run_in_executor(
+                                        None,
+                                        input,
+                                        "\n❓ Keep session history for follow-up? (Y/n) > "
+                                    )
+                                    if latch_choice.strip().lower() in ("n", "no", "clear"):
+                                        if safe_clear_history(client):
+                                             print("🧹 Client history cleared. Starting fresh.")
+                                    else:
+                                        print("💾 Session history preserved for follow-up.")
                                     
                                 # Do not break here; allow loop to continue for user input.
                                     print("💾 Session history preserved for follow-up.")
@@ -8225,7 +8266,7 @@ async def main(args: argparse.Namespace):
 
                          # Let's add it here if it wasn't already triggered above.
                          # Check if we already asked (via latch_choice inside action block)
-                         if 'latch_choice' not in locals():
+                         if 'latch_choice' not in locals() and sys.stdin.isatty():
                             # Only ask if we actually did something (tool calls > 0 or result exists)
                             if (result and hasattr(result, "tool_calls") and result.tool_calls) or (result and hasattr(result, "response_text") and result.response_text):
                                 print("\n" + "-" * 40)

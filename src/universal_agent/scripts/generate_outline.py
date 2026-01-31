@@ -3,47 +3,28 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+from pydantic import BaseModel, Field
 
 from anthropic import AsyncAnthropic
 
 from universal_agent.rate_limiter import ZAIRateLimiter
+from universal_agent.utils.json_utils import extract_json_payload
 
 # Configuration
 API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 MODEL = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-4.7")
 
-def extract_json_payload(text: str) -> Dict[str, Any]:
-    """Extract JSON from potential markdown wrapping"""
-    text = text.strip()
-    # Remove markdown code blocks if present
-    if text.startswith("```"):
-        lines = text.splitlines()
-        # Find start and end of code block
-        if lines[0].startswith("```"):
-            start_idx = 1
-            if lines[0].strip() == "```json":
-                 start_idx = 1
-            
-            # Find closing fence
-            end_idx = len(lines)
-            for i in range(start_idx, len(lines)):
-                if lines[i].strip() == "```":
-                    end_idx = i
-                    break
-            
-            text = "\n".join(lines[start_idx:end_idx]).strip()
+class OutlineSection(BaseModel):
+    id: str = Field(..., description="Unique slug like '01_executive_summary'")
+    title: str = Field(..., description="Human readable title")
+    description: str = Field(..., description="Detailed instructions for writing this section")
+    filename: str = Field(..., description="Target markdown filename (e.g., '01_executive_summary.md')")
 
-    # Find first { and last }
-    start = text.find("{")
-    end = text.rfind("}")
-    
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("No JSON object found in response")
-        
-    payload = text[start : end + 1]
-    return json.loads(payload)
+class ReportOutline(BaseModel):
+    title: str = Field(..., description="Clear Report Title")
+    sections: List[OutlineSection]
 
 async def generate_outline_async(workspace_path: Path, task_name: str, topic: str) -> str:
     """
@@ -60,49 +41,43 @@ async def generate_outline_async(workspace_path: Path, task_name: str, topic: st
     corpus_path = task_dir / "refined_corpus.md"
     
     if not corpus_path.exists():
-        # Fallback to research_overview.md if refined corpus missing (e.g. not generated yet)
-        # But optimize_research_pipeline should ensure it exists.
         return f"Error: refined_corpus.md not found at {corpus_path}. Did you run finalize_research?"
 
     corpus_content = corpus_path.read_text(encoding="utf-8")
     
     # Truncate corpus if too massive for prompt (safety limit)
-    # GLM-4 is 128k, let's keep it under 50k chars to be safe/fast
     if len(corpus_content) > 100000:
         corpus_content = corpus_content[:100000] + "\n...[TRUNCATED]..."
 
-    prompt = f"""You are an expert research analyst. Create a comprehensive report outline based on the provided research corpus.
+    prompt = f"""You are a professional research analyst. Your task is to generate a structured JSON outline for a research report based ON THE PROVIDED CORPUS.
 
 TOPIC: {topic}
 
 CORPUS:
 {corpus_content}
 
-INSTRUCTIONS:
-1. Create a logical structure for a detailed research report.
-2. The report must include an "Executive Summary" as the first section.
-3. Include 3-6 other substantive sections based on the corpus data.
-4. Each section should have a clear, descriptive title and a brief description of what it will cover.
-5. Identify specific filenames for each section (e.g., "01_executive_summary.md", "02_background.md").
+Strict Instructions:
+1. Logic: Group the corpus facts into 4-7 logical, high-impact sections.
+2. Structure: The FIRST section must be a slug '01_executive_summary' with title 'Executive Summary'.
+3. Detail: For each section, provide a concise 'description' summarizing what MUST be covered based on the corpus.
+4. Format: You MUST return ONLY a valid JSON object. No explanation, no markdown text outside the block, no HTML.
+5. Reliability: Ensure internal consistency in section IDs and filenames (format: XX_slug.md).
 
-OUTPUT FORMAT (JSON ONLY):
+SCHEMA:
 {{
-  "title": "Report Title",
+  "title": "Clear Report Title",
   "sections": [
     {{
       "id": "01_executive_summary",
       "title": "Executive Summary",
-      "description": "Synthesize key findings...",
+      "description": "...",
       "filename": "01_executive_summary.md"
     }},
-    {{
-      "id": "02_section_slug",
-      "title": "Section Title",
-      "description": "Covering...",
-      "filename": "02_section_slug.md"
-    }}
+    ...
   ]
 }}
+
+RESPONSE:
 """
 
     # Use centralized rate limiter with SDK retries disabled
@@ -146,7 +121,9 @@ OUTPUT FORMAT (JSON ONLY):
     response_text = resp.content[0].text
     
     try:
-        data = extract_json_payload(response_text)
+        # Layered recovery and Pydantic validation
+        outline_obj = extract_json_payload(response_text, model=ReportOutline)
+        data = outline_obj.model_dump()
     except Exception as exc:
         return f"Error parsing JSON from LLM: {exc}\nRaw output: {response_text[:200]}..."
 

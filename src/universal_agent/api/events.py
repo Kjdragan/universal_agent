@@ -28,6 +28,8 @@ class EventType(str, Enum):
     SESSION_INFO = "session_info"
     ITERATION_END = "iteration_end"
     WORK_PRODUCT = "work_product"
+    INPUT_REQUIRED = "input_required"
+    INPUT_RESPONSE = "input_response"
 
     # Server -> Client control events
     CONNECTED = "connected"
@@ -223,4 +225,24 @@ def create_approval_required_event(phase_id: str, phase_name: str, phase_descrip
             "phase_description": phase_description,
             "tasks": tasks,
         },
+    )
+
+
+def create_input_required_event(question: str, category: str = "general", options: list = None) -> WebSocketEvent:
+    """Create an input request event."""
+    return WebSocketEvent(
+        type=EventType.INPUT_REQUIRED,
+        data={
+            "question": question,
+            "category": category,
+            "options": options or [],
+        },
+    )
+
+
+def create_input_response_event(response: str) -> WebSocketEvent:
+    """Create an input response event from client."""
+    return WebSocketEvent(
+        type=EventType.INPUT_RESPONSE,
+        data={"response": response},
     )

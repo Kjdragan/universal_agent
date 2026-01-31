@@ -235,6 +235,20 @@ export class AgentWebSocket {
     this.ws.send(JSON.stringify(event));
   }
 
+  sendInputResponse(input_id: string, response: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket is not connected");
+    }
+
+    const event: WebSocketEvent = {
+      type: "input_response",
+      data: { input_id, response },
+      timestamp: Date.now(),
+    };
+
+    this.ws.send(JSON.stringify(event));
+  }
+
   sendPing(): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;

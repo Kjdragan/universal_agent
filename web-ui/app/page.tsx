@@ -17,6 +17,7 @@ import { processWebSocketEvent } from "@/lib/store";
 import { ConnectionStatus, WebSocketEvent } from "@/types/agent";
 import { formatDuration, formatFileSize } from "@/lib/utils";
 import { ApprovalModal, useApprovalModal } from "@/components/approvals/ApprovalModal";
+import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
 
 // Icons (using emoji for now - replace with lucide-react in production)
@@ -840,6 +841,7 @@ export default function HomePage() {
 
   // Approval modal hook
   const { pendingApproval, handleApprove, handleReject } = useApprovalModal();
+  const { pendingInput, handleSubmit: handleInputSubmit, handleCancel: handleInputCancel } = useInputModal();
 
   useEffect(() => {
     // Connect to WebSocket on mount
@@ -958,6 +960,11 @@ export default function HomePage() {
         request={pendingApproval}
         onApprove={handleApprove}
         onReject={handleReject}
+      />
+      <InputModal
+        request={pendingInput}
+        onSubmit={handleInputSubmit}
+        onCancel={handleInputCancel}
       />
     </div>
   );

@@ -481,26 +481,58 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         metadata=msg.get("data", {}).get("metadata", {}),
                     )
 
-                    # Execute the request and stream back to THIS connection
-                    # We continue to use send_json here for the active command response
-                    # Broadcast can be used later for side-effects or heartbeat events
-                    async for event in gateway.execute(session, request):
-                        await manager.send_json(connection_id, agent_event_to_wire(event))
+                    async def run_execution():
+                        try:
+                            # Execute the request and stream back to THIS connection
+                            async for event in gateway.execute(session, request):
+                                await manager.send_json(connection_id, agent_event_to_wire(event))
 
-                    await manager.send_json(
-                        connection_id,
-                        {
-                            "type": "query_complete",
-                            "data": {},
-                            "timestamp": datetime.now().isoformat(),
-                        },
-                    )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "query_complete",
+                                    "data": {},
+                                    "timestamp": datetime.now().isoformat(),
+                                },
+                            )
 
-                elif msg_type == "ping":
-                    await manager.send_json(
-                        connection_id,
-                        {"type": "pong", "data": {}, "timestamp": datetime.now().isoformat()},
-                    )
+                            await manager.send_json(
+                                connection_id,
+                                {"type": "pong", "data": {}, "timestamp": datetime.now().isoformat()},
+                            )
+                        except Exception as e:
+                            logger.error(f"Execution error for session {session_id}: {e}", exc_info=True)
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "error",
+                                    "data": {"message": str(e)},
+                                    "timestamp": datetime.now().isoformat(),
+                                },
+                            )
+                    
+                    asyncio.create_task(run_execution())
+                
+                elif msg_type == "input_response":
+                    input_id = msg.get("data", {}).get("input_id", "default")
+                    response = msg.get("data", {}).get("response", "")
+                    
+                    # 1. Try to resolve via gateway session (new path)
+                    success = await gateway.resolve_input(session_id, input_id, response)
+                    
+                    # 2. Try to resolve via active adapter (in-process path)
+                    if not success:
+                         adapter = gateway._adapters.get(session_id)
+                         if adapter and input_id in adapter._pending_inputs:
+                             future = adapter._pending_inputs.pop(input_id)
+                             if not future.done():
+                                 future.set_result(response)
+                                 success = True
+                    
+                    if not success:
+                         logger.warning(f"Failed to resolve input {input_id} for session {session_id}")
+                    else:
+                         logger.info(f"Resolved input {input_id} for session {session_id}")
                 
                 elif msg_type == "broadcast_test":
                      # Test event to verify broadcast capability (Phase 1 verification)

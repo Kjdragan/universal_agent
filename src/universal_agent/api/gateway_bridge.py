@@ -140,6 +140,11 @@ class GatewayBridge:
                         if ws_event:
                             yield ws_event
                         
+                        # Handle interactive input response from Web UI
+                        if event_type_str == "input_required":
+                            # Store the websocket for this session to allow sending responses back
+                            self._current_ws = ws
+                        
                         # Check for completion
                         if event_type_str == "query_complete":
                             break
@@ -174,6 +179,8 @@ class GatewayBridge:
                 "connected": WSEventType.CONNECTED,
                 "query_complete": WSEventType.QUERY_COMPLETE,
                 "pong": WSEventType.PONG,
+                "input_required": WSEventType.INPUT_REQUIRED,
+                "input_response": WSEventType.INPUT_RESPONSE,
             }
             
             ws_type = type_map.get(event_type)
@@ -190,6 +197,26 @@ class GatewayBridge:
         except Exception as e:
             logger.error(f"Failed to convert gateway event: {e}")
             return None
+
+    async def send_input_response(self, input_id: str, response: str) -> bool:
+        """Send user input response back to the gateway."""
+        if not hasattr(self, "_current_ws") or self._current_ws is None:
+            logger.error("No active Gateway WebSocket to send input response")
+            return False
+        
+        try:
+            msg = {
+                "type": "input_response",
+                "data": {
+                    "input_id": input_id,
+                    "response": response
+                }
+            }
+            await self._current_ws.send(json.dumps(msg))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send input response to gateway: {e}")
+            return False
 
     def get_current_workspace(self) -> Optional[str]:
         """Get current workspace directory."""

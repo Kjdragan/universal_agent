@@ -31,6 +31,10 @@ from universal_agent.tools.research_bridge import (
     crawl_parallel_wrapper,
     run_report_generation_wrapper,
     run_research_phase_wrapper,
+    generate_outline_wrapper,
+    draft_report_parallel_wrapper,
+    cleanup_report_wrapper,
+    compile_report_wrapper,
 )
 from universal_agent.tools.memory import ua_memory_get
 from universal_agent.execution_context import bind_workspace_env
@@ -490,6 +494,10 @@ class AgentSetup:
                     run_research_pipeline_wrapper, 
                     crawl_parallel_wrapper, 
                     run_research_phase_wrapper,
+                    generate_outline_wrapper,
+                    draft_report_parallel_wrapper,
+                    cleanup_report_wrapper,
+                    compile_report_wrapper,
                 ] + ([ua_memory_get] if self.enable_memory else [])
             ),
             "taskwarrior": {

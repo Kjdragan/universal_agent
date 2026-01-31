@@ -132,3 +132,58 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result_str = await report_gen_core(query, task_name, corpus_data=corpus_data)
     return {"content": [{"type": "text", "text": result_str}]}
+
+@tool(
+    name="generate_outline",
+    description="Generate a report outline from the refined corpus.",
+    input_schema={
+        "topic": str,
+        "task_name": str
+    }
+)
+async def generate_outline_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    from mcp_server import generate_outline
+    topic = args.get("topic")
+    task_name = resolve_best_task_match(args.get("task_name", "default"))
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result = await generate_outline(topic, task_name)
+    return {"content": [{"type": "text", "text": result}]}
+
+@tool(
+    name="draft_report_parallel",
+    description="Execute the parallel drafting system to generate report sections.",
+    input_schema={
+        "task_name": str
+    }
+)
+async def draft_report_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    from mcp_server import draft_report_parallel
+    task_name = resolve_best_task_match(args.get("task_name", "default"))
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result = await draft_report_parallel(task_name=task_name)
+    return {"content": [{"type": "text", "text": result}]}
+
+@tool(
+    name="cleanup_report",
+    description="Run a cleanup pass over drafted report sections.",
+    input_schema={}
+)
+async def cleanup_report_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    from mcp_server import cleanup_report
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result = await cleanup_report()
+    return {"content": [{"type": "text", "text": result}]}
+
+@tool(
+    name="compile_report",
+    description="Compile all section markdown files into a single HTML report.",
+    input_schema={
+        "theme": str
+    }
+)
+async def compile_report_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    from mcp_server import compile_report
+    theme = args.get("theme", "modern")
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result = await compile_report(theme=theme)
+    return {"content": [{"type": "text", "text": result}]}
