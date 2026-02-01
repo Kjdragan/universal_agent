@@ -3199,45 +3199,67 @@ async def _run_research_pipeline_legacy(query: str, task_name: str = "default") 
     try:
         mcp_log("[Pipeline] Step 1/5: Crawling & Refining (this may take 30-60s)...", level="INFO")
         res = await finalize_research(session_dir=workspace, task_name=task_name)
-        if "error" in res.lower() and "status" not in res.lower():
-             return f"❌ Pipeline Failed at Finalize Step: {res}"
     except Exception as e:
-        return f"❌ Pipeline Failed at Finalize Step: {e}"
+        return json.dumps({
+            "status": "error",
+            "phase": "finalize_research",
+            "message": f"Pipeline Failed at Finalize Step: {e}"
+        }, indent=2)
 
     # 2. OUTLINE
     try:
         mcp_log("[Pipeline] Step 2/5: Generating Outline...", level="INFO")
         res = await generate_outline(topic=query, task_name=task_name)
-        if "Error" in res:
-             return f"❌ Pipeline Failed at Outline Step: {res}"
     except Exception as e:
-        return f"❌ Pipeline Failed at Outline Step: {e}"
+        return json.dumps({
+            "status": "error",
+            "phase": "generate_outline",
+            "message": f"Pipeline Failed at Outline Step: {e}"
+        }, indent=2)
 
     # 3. DRAFT
     try:
         mcp_log("[Pipeline] Step 3/5: Drafting Sections (Parallel)...", level="INFO")
         res = await draft_report_parallel(task_name=task_name)
-        if "Error" in res:
-             return f"❌ Pipeline Failed at Drafting Step: {res}"
     except Exception as e:
-         return f"❌ Pipeline Failed at Drafting Step: {e}"
+         return json.dumps({
+            "status": "error",
+            "phase": "draft_report_parallel",
+            "message": f"Pipeline Failed at Drafting Step: {e}"
+        }, indent=2)
 
     # 4. CLEANUP
     try:
         mcp_log("[Pipeline] Step 4/5: Cleaning & Synthesizing (LLM Audit)...", level="INFO")
         res = await cleanup_report()
-        if "Error" in res:
-             return f"❌ Pipeline Failed at Cleanup Step: {res}"
     except Exception as e:
-         return f"❌ Pipeline Failed at Cleanup Step: {e}"
+         return json.dumps({
+            "status": "error",
+            "phase": "cleanup_report",
+            "message": f"Pipeline Failed at Cleanup Step: {e}"
+        }, indent=2)
 
     # 5. COMPILE
     try:
         mcp_log("[Pipeline] Step 5/5: Compiling HTML...", level="INFO")
         res = compile_report(theme="modern")
-        return f"✅ Pipeline Complete!\n\n{res}"
+        
+        return json.dumps({
+            "status": "success",
+            "message": "Unified Research Pipeline Complete!",
+            "workspace": workspace,
+            "outputs": {
+                "report_html": os.path.join(workspace, "work_products", "report.html"),
+                "refined_corpus": os.path.join(workspace, "tasks", task_name, "refined_corpus.md")
+            },
+            "summary": res
+        }, indent=2)
     except Exception as e:
-        return f"❌ Pipeline Failed at Compile Step: {e}"
+        return json.dumps({
+            "status": "error",
+            "phase": "compile",
+            "message": str(e)
+        }, indent=2)
 
 
 
@@ -3278,9 +3300,22 @@ async def _run_research_phase_legacy(query: str, task_name: str = "default") -> 
         if "error" in res.lower() and "status" not in res.lower():
              return f"❌ Research Phase Failed: {res}"
     except Exception as e:
-        return f"❌ Research Phase Failed: {e}"
+        return json.dumps({
+            "status": "error",
+            "phase": "research",
+            "message": str(e)
+        }, indent=2)
         
-    return f"✅ Research Phase Complete! Refined corpus available in {os.path.join(workspace, 'tasks', task_name, 'refined_corpus.md')}"
+    corpus_path = os.path.join(workspace, 'tasks', task_name, 'refined_corpus.md')
+    return json.dumps({
+        "status": "success",
+        "message": "Research Phase Complete! Refined corpus created.",
+        "workspace": workspace,
+        "outputs": {
+            "refined_corpus": corpus_path
+        },
+        "next_step_suggestion": "run_report_generation"
+    }, indent=2)
 
 
 @mcp.tool()
@@ -3342,18 +3377,33 @@ async def _run_report_generation_legacy(query: str, task_name: str = "default", 
     try:
         mcp_log("[Report Gen] Step 3/4: Cleaning & Synthesizing (LLM Audit)...", level="INFO")
         res = await cleanup_report()
-        if "Error" in res:
-             return f"❌ Report Gen Failed at Cleanup Step: {res}"
     except Exception as e:
-         return f"❌ Report Gen Failed at Cleanup Step: {e}"
+         return json.dumps({
+            "status": "error",
+            "phase": "cleanup",
+            "message": str(e)
+        }, indent=2)
 
     # 4. COMPILE
     try:
         mcp_log("[Report Gen] Step 4/4: Compiling HTML...", level="INFO")
         res = compile_report(theme="modern")
-        return f"✅ Report Generation Complete!\n\n{res}"
+        
+        return json.dumps({
+            "status": "success",
+            "message": "Report Generation Phase Complete!",
+            "workspace": workspace,
+            "outputs": {
+                "report_html": os.path.join(workspace, "work_products", "report.html")
+            },
+            "summary": res
+        }, indent=2)
     except Exception as e:
-        return f"❌ Report Gen Failed at Compile Step: {e}"
+         return json.dumps({
+            "status": "error",
+            "phase": "compile",
+            "message": str(e)
+        }, indent=2)
 
 
 if __name__ == "__main__":

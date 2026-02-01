@@ -24,6 +24,9 @@
   "task_name": "task_identifier_string"
 }
 ```
+> [!IMPORTANT]
+> This is the **STANDARD EFFICIENCY PATH**. Use this to execute the entire Crawl -> Refine -> Report flow in one turn. Avoid calling individual phases unless recovering from a specific failure.
+
 
 ## mcp__local_toolkit__append_to_file
 ```json
