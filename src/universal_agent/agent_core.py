@@ -44,7 +44,11 @@ from universal_agent.durable.tool_gateway import (
     parse_malformed_tool_name,
 )
 from universal_agent.guardrails.tool_schema import validate_tool_input
-from universal_agent.prompt_assets import get_tool_knowledge_block
+from universal_agent.prompt_assets import (
+    get_tool_knowledge_block,
+    discover_skills,
+    generate_skills_xml,
+)
 from universal_agent.utils.message_history import MessageHistory, TRUNCATION_THRESHOLD
 
 DEFAULT_AGENT_NAME = "Primary Agent"
@@ -1385,6 +1389,9 @@ class UniversalAgent:
             "You are a **Research Specialist** sub-agent.\n"
             "**Goal:** Execute the COMPLETE research pipeline from web search to corpus finalization.\n"
             "**You do NOT write reports.** You gather and organize data for the Writer agent.\n\n"
+            "## EFFICIENCY & FLOW (MANDATORY)\n"
+            "1. **No Agentic Chatter**: Do not use Bash, `pwd`, or `ls` to 'scout' the workspace. If a tool result gives you a path, trust it and use it.\n"
+            "2. **Atomic Actions**: Complete Step 1 fully before moving to Step 2. Do not hesitate between tools.\n\n"
             "## MANDATORY WORKFLOW (2 Steps ONLY)\n\n"
             "### Step 1: Search & Discovery\n"
             "**Determine Research Depth:**\n"
@@ -1426,8 +1433,13 @@ class UniversalAgent:
             "- `finalize_research`: Process ALL search results → crawl → filter → overview\n"
         )
         tool_knowledge = get_tool_knowledge_block()
+        skills = discover_skills()
+        skills_xml = generate_skills_xml(skills)
+        
         if tool_knowledge:
             prompt += f"\n\n{tool_knowledge}"
+        if skills_xml:
+            prompt += f"\n\n{skills_xml}"
         return prompt
 
     def _build_report_writer_prompt(self, workspace_path: str, cached_corpus: str = None) -> str:
@@ -1441,11 +1453,24 @@ class UniversalAgent:
         prompt = (
             f"{temporal_line}\n"
             f"**Workspace:** `{workspace_path}`\n\n"
+            "## EFFICIENCY & FLOW\n"
+            "- **Prioritize Unified Tools**: Use `run_report_generation` as the default path for producing the report.\n"
+            "- **Zero-Turn Verification**: Do NOT use Bash or `list_directory` to 'confirm' file existence before calling a report tool. The tools have built-in validation.\n\n"
             "---\n\n"
             "# 📝 REPORT WRITER AGENT\n\n"
             "You create professional HTML research reports using a deterministic 5-phase workflow.\n\n"
         )
         
+        # Inject Skill Knowledge for subagents
+        tool_knowledge = get_tool_knowledge_block()
+        skills = discover_skills()
+        skills_xml = generate_skills_xml(skills)
+        
+        if tool_knowledge:
+            prompt += f"\n\n{tool_knowledge}"
+        if skills_xml:
+            prompt += f"\n\n{skills_xml}"
+
         # If we have cached corpus, inject it directly to skip tool calls
         if cached_corpus:
             prompt += (
