@@ -3,6 +3,11 @@
 > [!IMPORTANT]
 > **MANDATORY DELEGATION**: All research tasks (web search, news search, deep dives) MUST start by delegating to the `research-specialist` sub-agent.
 > Do NOT use search tools directly in the primary agent. Use the `Task` tool to delegate.
+> 
+> [!CAUTION]
+> **REMOTE WORKBENCH (PRIMARY AGENT)**: The Primary Agent is FORBIDDEN from using `COMPOSIO_REMOTE_WORKBENCH` directly.
+> It should only be used by specialists (research-specialist, etc.) for browsing or code execution.
+> If the Primary Agent needs to execute code, it should use local Python/Bash tools unless absolute isolation is required.
 
 ## GMAIL_SEND_EMAIL
 

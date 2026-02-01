@@ -141,6 +141,15 @@ class ProcessTurnAdapter:
         self._initialized = True
         return self.session_info  # type: ignore
     
+    async def _ensure_client(self) -> Any:
+        """Lazily initialize and enter the persistent SDK client."""
+        if self._client is None:
+            from claude_agent_sdk.client import ClaudeSDKClient
+            self._client = ClaudeSDKClient(self._options)
+            # Enter the context manager manually
+            await self._client.__aenter__()
+        return self._client
+    
     async def execute(self, user_input: str) -> AsyncIterator[AgentEvent]:
         """
         Execute a query and yield AgentEvents.
@@ -204,112 +213,123 @@ class ProcessTurnAdapter:
             if debug_flag:
                 self._options.extra_args.setdefault("debug", debug_flag)
 
-        # Run process_turn with event callback
-        async with ClaudeSDKClient(self._options) as client:
-            # Create task to run process_turn
-            result_holder: dict[str, Any] = {}
+        # 1. Ensure client is initialized and persistent
+        client = await self._ensure_client()
+        
+        # 2. Run process_turn using the persistent client
+        start_ts = time.time()
+        
+        # Create event callback for real-time streaming
+        event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        
+        def event_callback(event: AgentEvent) -> None:
+            """Callback to capture events from process_turn."""
+            try:
+                event_queue.put_nowait(event)
+            except Exception:
+                pass
+        
+        # Setup input proxy
+        async def remote_input_proxy(question: str, category: str, options: Optional[List[str]]) -> str:
+            input_id = f"input_{uuid.uuid4().hex[:8]}"
+            future = asyncio.get_running_loop().create_future()
             
-            async def run_engine():
-                try:
-                    result = await process_turn(
-                        client=client,
-                        user_input=user_input,
-                        workspace_dir=self.config.workspace_dir,
-                        force_complex=self.config.force_complex,
-                        max_iterations=self.config.max_iterations,
-                        event_callback=event_callback,
-                    )
-                    result_holder["result"] = result
-                    result_holder["success"] = True
-                except Exception as e:
-                    result_holder["error"] = str(e)
-                    result_holder["success"] = False
-                finally:
-                    # Signal completion
-                    await event_queue.put(AgentEvent(
-                        type=EventType.STATUS,
-                        data={"status": "engine_complete"},
-                    ))
-            
-            # Start engine task
-            # Define input proxy for remote bridge
-            async def remote_input_proxy(question: str, category: str, options: Optional[List[str]]) -> str:
-                # 1. Create a future locally to wait for
-                input_id = f"input_{uuid.uuid4().hex[:8]}"
-                future = asyncio.get_running_loop().create_future()
-                
-                # 2. Emit an AgentEvent (canonical format)
-                # This ensures the gateway sees it as a proper event
-                input_event = AgentEvent(
-                    type=EventType.INPUT_REQUIRED,
-                    data={
-                        "input_id": input_id,
-                        "question": question,
-                        "category": category,
-                        "options": options or [],
-                    }
-                )
-                event_callback(input_event)
-                
-                # Store in a temporary map for this execution
-                self._pending_inputs[input_id] = future
-                return await future
+            input_event = AgentEvent(
+                type=EventType.INPUT_REQUIRED,
+                data={
+                    "input_id": input_id,
+                    "question": question,
+                    "category": category,
+                    "options": options or [],
+                }
+            )
+            event_callback(input_event)
+            self._pending_inputs[input_id] = future
+            return await future
 
-            set_input_handler(remote_input_proxy)
-            
-            engine_task = asyncio.create_task(run_engine())
-            max_runtime_s = float(os.getenv("UA_PROCESS_TURN_TIMEOUT_SECONDS", "0") or 0)
-            deadline = (time.time() + max_runtime_s) if max_runtime_s > 0 else None
-            
-            # Yield events as they come in
-            while True:
-                try:
-                    if deadline and time.time() > deadline:
-                        logger.error("ProcessTurnAdapter timed out after %.1fs", max_runtime_s)
-                        engine_task.cancel()
-                        try:
-                            await engine_task
-                        except Exception:
-                            pass
-                        yield AgentEvent(
-                            type=EventType.ERROR,
-                            data={
-                                "message": f"Execution timed out after {max_runtime_s:.1f}s",
-                                "duration_seconds": round(time.time() - start_ts, 2),
-                            },
-                        )
-                        break
-                    event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
-                    
-                    if event.data.get("status") == "engine_complete":
-                        break
-                    
-                    # print(f"DEBUG ProcessTurnAdapter: yielding event type={event.type}")
-                    yield event
-                    
-                except asyncio.TimeoutError:
-                    # Check if engine task is done
-                    if engine_task.done():
-                        # Drain remaining events
-                        while not event_queue.empty():
-                            event = event_queue.get_nowait()
-                            if event.data.get("status") != "engine_complete":
-                                yield event
-                        break
-                    continue
-            
-            # Wait for engine to complete
-            if not engine_task.done():
-                await engine_task
-            
-            # Clear handler
-            set_input_handler(None)
-            self._pending_inputs.clear()
+        set_input_handler(remote_input_proxy)
+        
+        # Create task to run process_turn
+        result_holder: dict[str, Any] = {}
+        
+        async def run_engine():
+            try:
+                from universal_agent.main import process_turn
+                result = await process_turn(
+                    client=client,
+                    user_input=user_input,
+                    workspace_dir=self.config.workspace_dir,
+                    force_complex=self.config.force_complex,
+                    max_iterations=self.config.max_iterations,
+                    event_callback=event_callback,
+                )
+                result_holder["result"] = result
+                result_holder["success"] = True
+            except Exception as e:
+                logger.error(f"Engine error: {e}", exc_info=True)
+                result_holder["error"] = str(e)
+                result_holder["success"] = False
+            finally:
+                # Signal completion
+                await event_queue.put(AgentEvent(
+                    type=EventType.STATUS,
+                    data={"status": "engine_complete"},
+                ))
+        
+        engine_task = asyncio.create_task(run_engine())
+        max_runtime_s = float(os.getenv("UA_PROCESS_TURN_TIMEOUT_SECONDS", "0") or 0)
+        deadline = (time.time() + max_runtime_s) if max_runtime_s > 0 else None
+        
+        # Yield events as they come in
+        while True:
+            try:
+                if deadline and time.time() > deadline:
+                    logger.error("ProcessTurnAdapter timed out after %.1fs", max_runtime_s)
+                    engine_task.cancel()
+                    try:
+                        await engine_task
+                    except Exception:
+                        pass
+                    yield AgentEvent(
+                        type=EventType.ERROR,
+                        data={
+                            "message": f"Execution timed out after {max_runtime_s:.1f}s",
+                            "duration_seconds": round(time.time() - start_ts, 2),
+                        },
+                    )
+                    break
+                event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                
+                if event.data.get("status") == "engine_complete":
+                    break
+                
+                yield event
+                
+            except asyncio.TimeoutError:
+                if engine_task.done():
+                    while not event_queue.empty():
+                        event = event_queue.get_nowait()
+                        if event.data.get("status") != "engine_complete":
+                            yield event
+                    break
+                continue
+        
+        # Wait for engine to complete
+        if not engine_task.done():
+            await engine_task
+        
+        # Clear handler
+        set_input_handler(None)
+        self._pending_inputs.clear()
         
         # Emit results from the execution
         if result_holder.get("success"):
             result = result_holder.get("result")
             if result:
+                # 0. Handle session reset request
+                if getattr(result, "reset_session", False):
+                    await self.reset()
+
                 # Emit tool call summary
                 if hasattr(result, 'tool_calls') and result.tool_calls:
                     yield AgentEvent(
@@ -395,10 +415,20 @@ class ProcessTurnAdapter:
             "success": error is None,
         }
     
+    async def reset(self) -> None:
+        """Clear the persistent SDK client and history."""
+        if self._client:
+            try:
+                await self._client.__aexit__(None, None, None)
+            except Exception:
+                pass
+            self._client = None
+        logger.info("Session reset: client history cleared")
+
     async def close(self) -> None:
         """Clean up resources."""
+        await self.reset()
         self._initialized = False
-        self._client = None
         self._options = None
         self._session = None
 

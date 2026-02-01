@@ -16,6 +16,7 @@ from universal_agent.agent_core import (
     EventType,
     pre_compact_context_capture_hook,
 )
+from universal_agent.execution_context import get_current_workspace
 from universal_agent.guardrails.tool_schema import pre_tool_use_schema_guardrail
 from universal_agent.guardrails.workspace_guard import (
     validate_tool_paths,
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 from contextvars import ContextVar
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.constants import DISALLOWED_TOOLS
+_TOOL_EVENT_START_TS: Optional[float] = None
 
 # -----------------------------------------------------------------------------
 
@@ -338,7 +340,8 @@ class AgentHookSet:
 
     async def on_pre_tool_use_workspace_guard(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
         """PreToolUse hook to enforce workspace-scoped file paths for WRITE operations only."""
-        if not self.workspace_dir:
+        current_workspace = get_current_workspace()
+        if not current_workspace:
             return {}  # No workspace bound yet
         
         tool_name = input_data.get("tool_name", "")

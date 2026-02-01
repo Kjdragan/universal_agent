@@ -19,4 +19,6 @@ DISALLOWED_TOOLS = [
     "mcp__composio__COMPOSIO_SEARCH_TOOLS",
     "mcp__composio__COMPOSIO_SEARCH_NEWS",
     "mcp__composio__COMPOSIO_SEARCH_WEB",
+    # 🚫 PRIMARY AGENT FORBIDDEN: NEVER use remote workbench directly. Delegate instead.
+    "mcp__composio__COMPOSIO_REMOTE_WORKBENCH",
 ]
