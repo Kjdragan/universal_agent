@@ -95,6 +95,7 @@ class ExecutionResult:
     follow_up_suggestions: list = field(
         default_factory=list
     )  # Extracted follow-up options
+    reset_session: bool = False  # Whether the caller should reset/clear the client
 
 
 
@@ -6547,6 +6548,23 @@ async def process_turn(
     if LOGFIRE_TOKEN:
         logfire.info("query_started", query=user_input)
 
+    # 1. Check for session reset commands
+    clean_input = user_input.strip().lower()
+    if clean_input in ["/reset", "/clear", "/new"]:
+        if event_callback:
+            event_callback(AgentEvent(
+                type=EventType.STATUS, 
+                data={"status": "session_reset", "is_log": True, "message": "Clearing conversation history..."}
+            ))
+        
+        _clear_hook_events()
+        return ExecutionResult(
+            response_text="🔄 Session reset! I've cleared the conversation history.",
+            execution_time_seconds=round(time.time() - start_ts, 2),
+            workspace_path=workspace_dir,
+            reset_session=True
+        )
+
     # 1a. Check for /harness command (massive request handler)
     clean_input = user_input.strip()
     if clean_input.startswith("/harness"):
@@ -7827,6 +7845,13 @@ async def main(args: argparse.Namespace):
                                 execution_session=current_execution_session,
                                 max_iterations=args.max_iterations,
                             )
+                        
+                        # Handle session reset request
+                        if result and getattr(result, "reset_session", False):
+                            if safe_clear_history(client):
+                                print("🧹 Client history cleared.")
+                            else:
+                                print("⚠️ Failed to clear client history.")
                     except HarnessError as he:
                         # [Harness Error Recovery]
                         # 1. Capture context
