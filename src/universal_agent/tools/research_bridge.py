@@ -25,7 +25,7 @@ from universal_agent.hooks import StdoutToEventStream
 
 @tool(
     name="run_research_pipeline", 
-    description="Execute the Post-Search Research Pipeline: Crawl -> Refine -> Outline -> Draft -> Cleanup -> Compile.",
+    description="Execute the UNIFIED Research & Reporting Pipeline. Handles Search -> Crawl -> Refine -> Outline -> Draft -> Compile in one Turn. EFFICIENCY: Use this to avoid fragmented tool calls. TRUST the JSON success receipt; DO NOT call Bash/ls after this.",
     input_schema={
         "query": str, 
         "task_name": str
@@ -89,7 +89,7 @@ async def crawl_parallel_wrapper(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     name="run_research_phase",
-    description="Execute Phase 1 of Research: Crawl & Refine. Produces refined_corpus.md.",
+    description="Execute Phase 1 of Research: Crawl & Refine. Produces refined_corpus.md. EFFICIENCY: Trust the output path in the JSON response. Do NOT call 'ls' to verify.",
     input_schema={
         "query": str, 
         "task_name": str
@@ -111,7 +111,7 @@ async def run_research_phase_wrapper(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     name="run_report_generation",
-    description="Execute Phase 2 of Research: Outline -> Draft -> Cleanup -> Compile Report.",
+    description="Execute Phase 2 of Research: Outline -> Draft -> Compile. Produces report.html. EFFICIENCY: Unified turn. Do NOT use Bash to check for the report file after this.",
     input_schema={
         "query": str, 
         "task_name": str,

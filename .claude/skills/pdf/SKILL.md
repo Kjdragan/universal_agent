@@ -279,6 +279,8 @@ with open("encrypted.pdf", "wb") as output:
     writer.write(output)
 ```
 
+
+
 ## Quick Reference
 
 | Task | Best Tool | Command/Code |
