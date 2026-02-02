@@ -52,7 +52,23 @@ from universal_agent.tools.research_bridge import (
     cleanup_report_wrapper,
     compile_report_wrapper,
 )
-from universal_agent.tools.local_toolkit_bridge import upload_to_composio_wrapper
+from universal_agent.tools.local_toolkit_bridge import (
+    upload_to_composio_wrapper,
+    list_directory_wrapper,
+    append_to_file_wrapper,
+    finalize_research_wrapper,
+    generate_image_wrapper,
+    describe_image_wrapper,
+    preview_image_wrapper,
+    core_memory_replace_wrapper,
+    core_memory_append_wrapper,
+    archival_memory_insert_wrapper,
+    archival_memory_search_wrapper,
+    get_core_memory_blocks_wrapper,
+    ask_user_questions_wrapper,
+    batch_tool_execute_wrapper,
+)
+from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
 from universal_agent import hooks as hook_events
 from universal_agent.hooks import AgentHookSet
@@ -213,7 +229,11 @@ def build_cli_hooks() -> dict:
             HookMatcher(matcher=None, hooks=[on_pre_tool_use_ledger]),
             HookMatcher(
                 matcher="Bash",
-                hooks=[on_pre_bash_block_composio_sdk, on_pre_bash_skill_hint],
+                hooks=[
+                    on_pre_bash_block_composio_sdk,
+                    on_pre_bash_block_playwright_non_html,
+                    on_pre_bash_skill_hint,
+                ],
             ),
             HookMatcher(matcher="Task", hooks=[on_pre_task_skill_awareness]),
         ],
@@ -2269,8 +2289,7 @@ async def on_pre_bash_block_composio_sdk(
                 "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                 "**USE MCP TOOLS INSTEAD:**\n"
                 "- For email: Use `GMAIL_SEND_EMAIL` tool directly.\n"
-                "- For file upload: `mcp__local_toolkit__upload_to_composio`\n"
-                "- Fallback upload (if local_toolkit unavailable): `mcp__internal__upload_to_composio`\n"
+                "- For file upload: `mcp__internal__upload_to_composio`\n"
                 "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool.\n\n"
                 "The Composio SDK is not available in the Bash environment. "
                 "All actions must go through specific MCP tools which handle auth automatically.\n\n"
@@ -2284,6 +2303,42 @@ async def on_pre_bash_block_composio_sdk(
         }
 
     return {}
+
+
+async def on_pre_bash_block_playwright_non_html(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """
+    PreToolUse Hook: Block Playwright-based PDF conversion for non-HTML inputs.
+    HTML -> PDF should use Chrome headless (Playwright) only when HTML is explicit.
+    """
+    command = str(input_data.get("command", "") or "")
+    command_lower = command.lower()
+
+    if "playwright" not in command_lower:
+        return {}
+
+    # Only gate PDF conversion attempts
+    if "pdf" not in command_lower:
+        return {}
+
+    # Allow when HTML is explicit
+    html_markers = ["file://", ".html", "html_path"]
+    if any(marker in command_lower for marker in html_markers):
+        return {}
+
+    return {
+        "systemMessage": (
+            "🚫 BLOCKED: Playwright should be used for HTML → PDF only.\n\n"
+            "For Markdown/other → PDF, use WeasyPrint (Python-native) or the "
+            "`mcp__internal__html_to_pdf` tool after converting to HTML.\n"
+        ),
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "Playwright PDF conversion without explicit HTML input.",
+        },
+    }
 
 
 # Prompt keywords that suggest skill-relevant tasks
@@ -5730,11 +5785,11 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
     if disable_local_memory:
         ignored_tool_names.update(
             [
-                "mcp__local_toolkit__core_memory_replace",
-                "mcp__local_toolkit__core_memory_append",
-                "mcp__local_toolkit__archival_memory_insert",
-                "mcp__local_toolkit__archival_memory_search",
-                "mcp__local_toolkit__get_core_memory_blocks",
+                "mcp__internal__core_memory_replace",
+                "mcp__internal__core_memory_append",
+                "mcp__internal__archival_memory_insert",
+                "mcp__internal__archival_memory_search",
+                "mcp__internal__get_core_memory_blocks",
             ]
         )
 
@@ -6165,9 +6220,9 @@ async def setup_session(
     else:
         print(f"✅ Discovered Active Composio Apps: {ALLOWED_APPS}")
 
-    # 2. Local MCP Discovery
+    # 2. In-process MCP Discovery
     local_tools = get_local_tools()
-    print(f"✅ Active Local MCP Tools: {local_tools}")
+    print(f"✅ Active In-Process MCP Tools: {local_tools}")
 
     # 3. External MCP Servers (registered in mcp_servers config)
     external_mcps = [
@@ -6248,11 +6303,11 @@ async def setup_session(
     if disable_local_memory:
         disallowed_tools.extend(
             [
-                "mcp__local_toolkit__core_memory_replace",
-                "mcp__local_toolkit__core_memory_append",
-                "mcp__local_toolkit__archival_memory_insert",
-                "mcp__local_toolkit__archival_memory_search",
-                "mcp__local_toolkit__get_core_memory_blocks",
+                "mcp__internal__core_memory_replace",
+                "mcp__internal__core_memory_append",
+                "mcp__internal__archival_memory_insert",
+                "mcp__internal__archival_memory_search",
+                "mcp__internal__get_core_memory_blocks",
             ]
         )
 
@@ -6335,14 +6390,14 @@ async def setup_session(
             "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject next steps.\n"
             "     Wait for this message before proceeding with upload/email.\n"
             "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
-            "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
-            "   - Fallback if local_toolkit is unavailable: `mcp__internal__upload_to_composio(path='...', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
+            "   - For email attachments, call `mcp__internal__upload_to_composio(path='/local/path/to/file', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
             "   - This tool handles EVERYTHING: local→remote→S3 in ONE call.\n"
             "   - It returns `s3_key` which you pass to GMAIL_SEND_EMAIL's `attachment.s3key` field.\n"
             "   - DO NOT manually call workbench_upload + REMOTE_WORKBENCH. That's the old, broken way.\n"
             "   - 🚫 NEVER use the Composio Python SDK in Bash for uploads. Use the MCP tool above.\n"
             "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
-            "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by local_toolkit tools.\n"
+            "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by in-process tools.\n"
+            "   - ALWAYS build paths using `CURRENT_SESSION_WORKSPACE`; do NOT guess the workspace root.\n"
             "   - REMOTE paths: `/home/user/...` - only accessible inside COMPOSIO_REMOTE_WORKBENCH sandbox.\n"
             "7. 📁 WORK PRODUCTS - MANDATORY AUTO-SAVE:\n"
             "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
@@ -6382,19 +6437,7 @@ async def setup_session(
                 "url": session.mcp.url,
                 "headers": {"x-api-key": os.environ["COMPOSIO_API_KEY"]},
             },
-            "local_toolkit": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [
-                    os.path.join(
-                        os.path.dirname(os.path.dirname(__file__)), "mcp_server.py"
-                    )
-                ],
-                # Pass Logfire token for observability
-                "env": {
-                    "LOGFIRE_TOKEN": os.environ.get("LOGFIRE_TOKEN", ""),
-                },
-            },
+            # local_toolkit subprocess disabled in favor of in-process tools
             # External MCP: SEC Edgar Tools for financial research
             "edgartools": {
                 "type": "stdio",
@@ -6448,12 +6491,26 @@ async def setup_session(
                     cleanup_report_wrapper,
                     compile_report_wrapper,
                     upload_to_composio_wrapper,
+                    list_directory_wrapper,
+                    append_to_file_wrapper,
+                    finalize_research_wrapper,
+                    generate_image_wrapper,
+                    describe_image_wrapper,
+                    preview_image_wrapper,
+                    html_to_pdf_wrapper,
+                    core_memory_replace_wrapper,
+                    core_memory_append_wrapper,
+                    archival_memory_insert_wrapper,
+                    archival_memory_search_wrapper,
+                    get_core_memory_blocks_wrapper,
+                    ask_user_questions_wrapper,
+                    batch_tool_execute_wrapper,
                 ]
             ),
         },
         # NOTE: Do NOT set allowed_tools here - that would restrict to ONLY those tools.
         # The agent needs access to BOTH Composio tools (COMPOSIO_SEARCH_NEWS, etc.)
-        # AND local_toolkit tools (crawl_parallel, read_local_file, etc.)
+        # AND in-process tools (crawl_parallel, report generation, etc.)
         # Sub-agents inherit all tools via model="inherit".
 
         hooks=hooks_manager.build_hooks(),
@@ -6486,6 +6543,11 @@ async def setup_session(
     # Setup Output Logging
     log_file = open_run_log(workspace_dir)
     attach_run_log(log_file)
+    try:
+        local_tools = get_local_tools()
+        print(f"✅ Active In-Process MCP Tools: {local_tools}")
+    except Exception as e:
+        print(f"⚠️ Failed to list in-process MCP tools: {e}")
 
     # Inject Workspace Path into System Prompt for Sub-Agents
     abs_workspace_path = os.path.abspath(workspace_dir)

@@ -36,7 +36,23 @@ from universal_agent.tools.research_bridge import (
     cleanup_report_wrapper,
     compile_report_wrapper,
 )
-from universal_agent.tools.local_toolkit_bridge import upload_to_composio_wrapper
+from universal_agent.tools.local_toolkit_bridge import (
+    upload_to_composio_wrapper,
+    list_directory_wrapper,
+    append_to_file_wrapper,
+    finalize_research_wrapper,
+    generate_image_wrapper,
+    describe_image_wrapper,
+    preview_image_wrapper,
+    core_memory_replace_wrapper,
+    core_memory_append_wrapper,
+    archival_memory_insert_wrapper,
+    archival_memory_search_wrapper,
+    get_core_memory_blocks_wrapper,
+    ask_user_questions_wrapper,
+    batch_tool_execute_wrapper,
+)
+from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 from universal_agent.tools.memory import ua_memory_get
 from universal_agent.execution_context import bind_workspace_env
 from universal_agent.feature_flags import memory_index_enabled
@@ -298,11 +314,11 @@ class AgentSetup:
         disallowed_tools = list(DISALLOWED_TOOLS)
         if not self.enable_memory:
             disallowed_tools.extend([
-                "mcp__local_toolkit__core_memory_replace",
-                "mcp__local_toolkit__core_memory_append",
-                "mcp__local_toolkit__archival_memory_insert",
-                "mcp__local_toolkit__archival_memory_search",
-                "mcp__local_toolkit__get_core_memory_blocks",
+                "mcp__internal__core_memory_replace",
+                "mcp__internal__core_memory_append",
+                "mcp__internal__archival_memory_insert",
+                "mcp__internal__archival_memory_search",
+                "mcp__internal__get_core_memory_blocks",
             ])
 
         return ClaudeAgentOptions(
@@ -399,14 +415,14 @@ class AgentSetup:
             "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject next steps.\n"
             "     Wait for this message before proceeding with upload/email.\n"
             "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
-            "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
-            "   - Fallback if local_toolkit is unavailable: `mcp__internal__upload_to_composio(path='...', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
+            "   - For email attachments, call `mcp__internal__upload_to_composio(path='/local/path/to/file', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
             "   - This tool handles EVERYTHING: local→remote→S3 in ONE call.\n"
             "   - It returns `s3_key` which you pass to GMAIL_SEND_EMAIL's `attachment.s3key` field.\n"
             "   - DO NOT manually call workbench_upload + REMOTE_WORKBENCH. That's the old, broken way.\n"
             "   - 🚫 NEVER use the Composio Python SDK in Bash for uploads. Use the MCP tool above.\n"
             "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
-            "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by local_toolkit tools.\n"
+            "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by in-process tools.\n"
+            "   - ALWAYS build paths using `CURRENT_SESSION_WORKSPACE`; do NOT guess the workspace root.\n"
             "   - REMOTE paths: `/home/user/...` - only accessible inside COMPOSIO_REMOTE_WORKBENCH sandbox.\n"
             "7. 📁 WORK PRODUCTS (EPHEMERAL DATA):\n"
             "   - Definition: Intermediate task data, crawl results, search outputs, and draft findings.\n"
@@ -450,19 +466,7 @@ class AgentSetup:
                 "url": self._session.mcp.url,
                 "headers": {"x-api-key": os.environ.get("COMPOSIO_API_KEY", "")},
             },
-            "local_toolkit": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [
-                    "-u",
-                    os.path.join(
-                        os.path.dirname(os.path.dirname(__file__)), "mcp_server.py"
-                    )
-                ],
-                "env": {
-                    "LOGFIRE_TOKEN": os.environ.get("LOGFIRE_TOKEN", ""),
-                },
-            },
+            # local_toolkit subprocess disabled in favor of in-process tools
             # "edgartools": {
             #     "type": "stdio",
             #     "command": sys.executable,
@@ -501,6 +505,20 @@ class AgentSetup:
                     cleanup_report_wrapper,
                     compile_report_wrapper,
                     upload_to_composio_wrapper,
+                    list_directory_wrapper,
+                    append_to_file_wrapper,
+                    finalize_research_wrapper,
+                    generate_image_wrapper,
+                    describe_image_wrapper,
+                    preview_image_wrapper,
+                    html_to_pdf_wrapper,
+                    core_memory_replace_wrapper,
+                    core_memory_append_wrapper,
+                    archival_memory_insert_wrapper,
+                    archival_memory_search_wrapper,
+                    get_core_memory_blocks_wrapper,
+                    ask_user_questions_wrapper,
+                    batch_tool_execute_wrapper,
                 ] + ([ua_memory_get] if self.enable_memory else [])
             ),
             "taskwarrior": {

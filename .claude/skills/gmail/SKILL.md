@@ -44,7 +44,7 @@ For critical or sensitive emails, prefer creating a draft first (`GMAIL_CREATE_E
 3.  **Send**:
     ```json
     // 1) Upload the local file to Composio for attachment
-    mcp__local_toolkit__upload_to_composio({
+    mcp__internal__upload_to_composio({
       "path": "/path/to/report.pdf",
       "tool_slug": "GMAIL_SEND_EMAIL",
       "toolkit_slug": "gmail"
@@ -62,7 +62,7 @@ For critical or sensitive emails, prefer creating a draft first (`GMAIL_CREATE_E
       }
     )
     ```
-    - If `mcp__local_toolkit__upload_to_composio` is unavailable, use `mcp__internal__upload_to_composio` with the same arguments.
+    - Use `mcp__internal__upload_to_composio` for attachment uploads.
 
 ### Responding to a Thread
 

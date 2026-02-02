@@ -15,21 +15,35 @@ try:
 except ImportError:
     Composio = None
 
-# Hardcoded definition of tools exposed by src/mcp_server.py
-# Note: File read/write now uses native Claude SDK tools (Read/Write), not MCP
-# Note: read_research_files removed - use refined_corpus.md from finalize_research instead
-LOCAL_MCP_TOOLS = [
-    "mcp__local_toolkit__crawl_parallel",
-    "mcp__local_toolkit__finalize_research",
-    "mcp__local_toolkit__list_directory",
-    "mcp__local_toolkit__upload_to_composio",
-    "mcp__local_toolkit__append_to_file",
-    "mcp__local_toolkit__generate_image",
+INPROCESS_MCP_TOOLS = [
+    "mcp__internal__run_research_pipeline",
+    "mcp__internal__run_research_phase",
+    "mcp__internal__crawl_parallel",
+    "mcp__internal__run_report_generation",
+    "mcp__internal__generate_outline",
+    "mcp__internal__draft_report_parallel",
+    "mcp__internal__cleanup_report",
+    "mcp__internal__compile_report",
+    "mcp__internal__upload_to_composio",
+    "mcp__internal__list_directory",
+    "mcp__internal__append_to_file",
+    "mcp__internal__finalize_research",
+    "mcp__internal__generate_image",
+    "mcp__internal__describe_image",
+    "mcp__internal__preview_image",
+    "mcp__internal__html_to_pdf",
+    "mcp__internal__batch_tool_execute",
+    "mcp__internal__core_memory_replace",
+    "mcp__internal__core_memory_append",
+    "mcp__internal__archival_memory_insert",
+    "mcp__internal__archival_memory_search",
+    "mcp__internal__get_core_memory_blocks",
+    "mcp__internal__ask_user_questions",
 ]
 
 def get_local_tools() -> List[str]:
-    """Return the list of tools available in the Local MCP Toolkit."""
-    return LOCAL_MCP_TOOLS
+    """Return the list of tools available in the in-process MCP Toolkit."""
+    return INPROCESS_MCP_TOOLS
 
 
 def discover_connected_toolkits(composio_client: Any, user_id: str) -> List[str]:
@@ -105,4 +119,3 @@ def discover_composio_apps(composio_client: Any) -> List[str]:
         return []
         
     return discovered_apps
-

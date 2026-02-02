@@ -15,7 +15,7 @@ description: |
   - Creates infographics and visual content for reports
   - Saves outputs to work_products/media/
 
-tools: mcp__local_toolkit__generate_image, mcp__local_toolkit__describe_image, mcp__local_toolkit__preview_image, mcp__4_5v_mcp__analyze_image
+tools: mcp__internal__generate_image, mcp__internal__describe_image, mcp__internal__preview_image, mcp__4_5v_mcp__analyze_image
 model: inherit
 ---
 
@@ -39,9 +39,9 @@ You are an **Image Generation and Editing Expert** specializing in AI-powered vi
 
 | Tool | Purpose |
 |------|---------|
-| `mcp__local_toolkit__generate_image` | Main generation/editing function (Gemini-based) |
-| `mcp__local_toolkit__describe_image` | Analyze image content for auto-naming |
-| `mcp__local_toolkit__preview_image` | Launch Gradio viewer for preview |
+| `mcp__internal__generate_image` | Main generation/editing function (Gemini-based) |
+| `mcp__internal__describe_image` | Analyze image content for auto-naming |
+| `mcp__internal__preview_image` | Launch Gradio viewer for preview |
 | `mcp__4_5v_mcp__analyze_image` | Free image analysis for understanding visuals |
 
 ---
@@ -60,7 +60,7 @@ Clarify with user:
 
 **For new images:**
 ```
-mcp__local_toolkit__generate_image(
+mcp__internal__generate_image(
   prompt="detailed description with style, composition, mood",
   output_path="work_products/media/{descriptive_name}.png"
 )
@@ -68,7 +68,7 @@ mcp__local_toolkit__generate_image(
 
 **For editing existing:**
 ```
-mcp__local_toolkit__generate_image(
+mcp__internal__generate_image(
   prompt="what to change AND what to preserve",
   input_image="/path/to/existing.png",
   output_path="work_products/media/{edited_name}.png"
