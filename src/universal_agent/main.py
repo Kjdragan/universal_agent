@@ -52,6 +52,7 @@ from universal_agent.tools.research_bridge import (
     cleanup_report_wrapper,
     compile_report_wrapper,
 )
+from universal_agent.tools.local_toolkit_bridge import upload_to_composio_wrapper
 from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
 from universal_agent import hooks as hook_events
 from universal_agent.hooks import AgentHookSet
@@ -2269,6 +2270,7 @@ async def on_pre_bash_block_composio_sdk(
                 "**USE MCP TOOLS INSTEAD:**\n"
                 "- For email: Use `GMAIL_SEND_EMAIL` tool directly.\n"
                 "- For file upload: `mcp__local_toolkit__upload_to_composio`\n"
+                "- Fallback upload (if local_toolkit unavailable): `mcp__internal__upload_to_composio`\n"
                 "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool.\n\n"
                 "The Composio SDK is not available in the Bash environment. "
                 "All actions must go through specific MCP tools which handle auth automatically.\n\n"
@@ -6334,6 +6336,7 @@ async def setup_session(
             "     Wait for this message before proceeding with upload/email.\n"
             "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
             "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
+            "   - Fallback if local_toolkit is unavailable: `mcp__internal__upload_to_composio(path='...', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
             "   - This tool handles EVERYTHING: local→remote→S3 in ONE call.\n"
             "   - It returns `s3_key` which you pass to GMAIL_SEND_EMAIL's `attachment.s3key` field.\n"
             "   - DO NOT manually call workbench_upload + REMOTE_WORKBENCH. That's the old, broken way.\n"
@@ -6444,6 +6447,7 @@ async def setup_session(
                     draft_report_parallel_wrapper,
                     cleanup_report_wrapper,
                     compile_report_wrapper,
+                    upload_to_composio_wrapper,
                 ]
             ),
         },

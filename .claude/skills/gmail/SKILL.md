@@ -62,6 +62,7 @@ For critical or sensitive emails, prefer creating a draft first (`GMAIL_CREATE_E
       }
     )
     ```
+    - If `mcp__local_toolkit__upload_to_composio` is unavailable, use `mcp__internal__upload_to_composio` with the same arguments.
 
 ### Responding to a Thread
 

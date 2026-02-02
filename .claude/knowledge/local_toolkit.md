@@ -45,6 +45,7 @@
 }
 ```
 > Use the returned `s3key` in `GMAIL_SEND_EMAIL.attachment`. Never call the Composio SDK in Bash/Python for uploads.
+> If this tool is unavailable, use `mcp__internal__upload_to_composio` with the same arguments.
 
 ## mcp__local_toolkit__ask_user_questions
 ```json
