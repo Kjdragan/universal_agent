@@ -38,3 +38,7 @@ MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "1"))
 # If set, the bot acts as a client to an external Gateway.
 # If unset, it runs an In-Process Gateway.
 UA_GATEWAY_URL = os.getenv("UA_GATEWAY_URL")
+
+# Telegram Gateway Mode
+# If UA_GATEWAY_URL is unset, allow in-process execution only when this is true.
+UA_TELEGRAM_ALLOW_INPROCESS = os.getenv("UA_TELEGRAM_ALLOW_INPROCESS", "0") == "1"
