@@ -728,17 +728,21 @@ function WorkProductViewer() {
         // Merge and filter
         // 1. Root files: Filtered (logs, transcript, reports)
         const relevantRootFiles = filesRoot.filter((f: any) =>
-          f.name.endsWith('.log') ||
-          f.name === 'transcript.md' ||
-          f.name.startsWith('report') ||
-          f.name.endsWith('.pdf') ||
-          f.name.endsWith('.html') ||
-          f.name.endsWith('.md')
+          !f.is_dir && (
+            f.name.endsWith('.log') ||
+            f.name === 'transcript.md' ||
+            f.name.startsWith('report') ||
+            f.name.endsWith('.pdf') ||
+            f.name.endsWith('.html') ||
+            f.name.endsWith('.md')
+          )
         );
 
         // 2. Work Products: Include ALL files from work_products directory
         // We assume anything the agent put there is important
-        const relevantWorkProducts = filesWp.map((f: any) => ({ ...f, source: 'work_product' }));
+        const relevantWorkProducts = filesWp
+          .filter((f: any) => !f.is_dir)
+          .map((f: any) => ({ ...f, source: 'work_product' }));
 
         const interesting = [...relevantRootFiles, ...relevantWorkProducts];
 

@@ -24,11 +24,13 @@ interface ToolEntry {
 }
 
 type ActivityItem = LogEntry | ToolEntry;
+type ExpandMode = 'collapsed' | 'open' | 'expanded';
 
 export function CombinedActivityLog() {
     const logs = useAgentStore((state) => state.logs);
     const toolCalls = useAgentStore((state) => state.toolCalls);
     const scrollRef = useRef<HTMLDivElement>(null);
+    const [expandMode, setExpandMode] = React.useState<ExpandMode>('expanded');
 
     // Merge and sort
     const items: ActivityItem[] = useMemo(() => {
@@ -58,13 +60,29 @@ export function CombinedActivityLog() {
                     <Terminal className="w-4 h-4" />
                     Activity & Logs
                 </h3>
-                <span className="text-xs text-muted-foreground">{items.length} events</span>
+                <div className="flex items-center gap-2">
+                    <button
+                        type="button"
+                        className="text-[10px] px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+                        title="Toggle activity panel expansion"
+                        onClick={() => {
+                            setExpandMode((prev) => {
+                                if (prev === 'expanded') return 'collapsed';
+                                if (prev === 'collapsed') return 'open';
+                                return 'expanded';
+                            });
+                        }}
+                    >
+                        {expandMode === 'expanded' ? 'Expanded' : expandMode === 'open' ? 'Open' : 'Collapsed'}
+                    </button>
+                    <span className="text-xs text-muted-foreground">{items.length} events</span>
+                </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 scrollbar-thin" ref={scrollRef}>
                 <div className="space-y-3">
                     {items.map((item) => (
-                        <ActivityItemRow key={item.id} item={item} />
+                        <ActivityItemRow key={item.id} item={item} expandMode={expandMode} />
                     ))}
                     {items.length === 0 && (
                         <div className="text-center text-muted-foreground py-8 text-sm">
@@ -77,21 +95,25 @@ export function CombinedActivityLog() {
     );
 }
 
-function ActivityItemRow({ item }: { item: ActivityItem }) {
+function ActivityItemRow({ item, expandMode }: { item: ActivityItem; expandMode: ExpandMode }) {
     if (item.type === 'tool') {
-        return <ToolRow tool={item as ToolEntry} />;
+        return <ToolRow tool={item as ToolEntry} expandMode={expandMode} />;
     }
-    return <LogRow log={item as LogEntry} />;
+    return <LogRow log={item as LogEntry} expandMode={expandMode} />;
 }
 
-const CollapsibleData = ({ label, data, isError = false }: { label: string, data: any, isError?: boolean }) => {
-    const [expanded, setExpanded] = React.useState(false);
+const CollapsibleData = ({ label, data, isError = false, expandMode }: { label: string, data: any, isError?: boolean, expandMode: ExpandMode }) => {
+    const [expanded, setExpanded] = React.useState(expandMode === 'expanded');
     const jsonString = useMemo(() => JSON.stringify(data, null, 2), [data]);
     const preview = useMemo(() => {
         if (typeof data === 'string') return data.slice(0, 60) + (data.length > 60 ? '...' : '');
         if (typeof data === 'object') return Object.keys(data).join(', ').slice(0, 60) + '...';
         return String(data);
     }, [data]);
+
+    useEffect(() => {
+        setExpanded(expandMode === 'expanded');
+    }, [expandMode]);
 
     // Calculate approximate size for the label
     const size = useMemo(() => {
@@ -128,8 +150,12 @@ const CollapsibleData = ({ label, data, isError = false }: { label: string, data
     );
 };
 
-function ToolRow({ tool }: { tool: ToolEntry }) {
-    const [isOpen, setIsOpen] = React.useState(false);
+function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode }) {
+    const [isOpen, setIsOpen] = React.useState(expandMode !== 'collapsed');
+
+    useEffect(() => {
+        setIsOpen(expandMode !== 'collapsed');
+    }, [expandMode]);
 
     return (
         <div className="border rounded-md bg-card/50 text-sm overflow-hidden">
@@ -165,12 +191,13 @@ function ToolRow({ tool }: { tool: ToolEntry }) {
 
             {isOpen && (
                 <div className="p-2 bg-muted/20 border-t space-y-2">
-                    <CollapsibleData label="Input" data={tool.input} />
+                    <CollapsibleData label="Input" data={tool.input} expandMode={expandMode} />
                     {tool.result && (
                         <CollapsibleData
                             label="Result"
                             data={tool.result}
                             isError={tool.status === 'error'}
+                            expandMode={expandMode}
                         />
                     )}
                 </div>
@@ -179,13 +206,21 @@ function ToolRow({ tool }: { tool: ToolEntry }) {
     );
 }
 
-function LogRow({ log }: { log: LogEntry }) {
-    const [isOpen, setIsOpen] = React.useState(false);
+function LogRow({ log, expandMode }: { log: LogEntry; expandMode: ExpandMode }) {
+    const [isOpen, setIsOpen] = React.useState(expandMode !== 'collapsed');
     const isError = log.level === 'ERROR' || log.level === 'CRITICAL';
 
     // Truncate long log messages for the header
     const headerPreview = log.message.split('\n')[0].slice(0, 100);
     const hasMore = log.message.length > 100 || log.message.includes('\n');
+
+    useEffect(() => {
+        if (!hasMore) {
+            setIsOpen(false);
+            return;
+        }
+        setIsOpen(expandMode !== 'collapsed');
+    }, [expandMode, hasMore]);
 
     return (
         <div className={cn(

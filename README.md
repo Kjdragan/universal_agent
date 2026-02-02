@@ -40,8 +40,11 @@ cp .env.sample .env  # Configure your API keys
 
 ### Running Locally
 ```bash
-# Standard local dev loop
-./start_local.sh
+# Standard local dev loop (recommended)
+./start_cli_dev.sh
+
+# Production-like stack (Gateway + API + Web UI)
+./start_gateway.sh
 
 # Or direct invocation via uv
 uv run python src/universal_agent/main.py --task "Research quantum computing trends"

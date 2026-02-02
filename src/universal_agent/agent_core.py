@@ -1961,6 +1961,7 @@ class UniversalAgent:
                             tool_use_id = getattr(block, "tool_use_id", None)
                             is_error = getattr(block, "is_error", False)
                             block_content = getattr(block, "content", "")
+                            content_str = str(block_content)
                             
                             result_record = {
                                 "run_id": self.run_id,
@@ -1976,11 +1977,39 @@ class UniversalAgent:
                                 data={
                                     "tool_use_id": tool_use_id,
                                     "is_error": is_error,
-                                    "content_preview": str(block_content)[:2000],
+                                    "content_preview": content_str[:2000],
                                     "content_raw": block_content,
                                 },
                             )
-                            # (Observer logic omitted for brevity, assuming observers fire via hooks or separate mechanism)
+                            # Fire observers (search results + workbench activity)
+                            tool_name = None
+                            tool_input = None
+                            for tc in tool_calls_this_iter:
+                                if tc.get("id") == tool_use_id:
+                                    tool_name = tc.get("name")
+                                    tool_input = tc.get("input", {})
+                                    break
+
+                            if tool_name and self.workspace_dir:
+                                await observe_and_save_search_results(
+                                    tool_name, block_content, self.workspace_dir
+                                )
+                                asyncio.create_task(
+                                    observe_and_save_workbench_activity(
+                                        tool_name,
+                                        tool_input or {},
+                                        content_str,
+                                        self.workspace_dir,
+                                    )
+                                )
+                                asyncio.create_task(
+                                    observe_and_enrich_corpus(
+                                        tool_name,
+                                        tool_input or {},
+                                        block_content,
+                                        self.workspace_dir,
+                                    )
+                                )
 
         iter_record = {
             "run_id": self.run_id,

@@ -1,4 +1,5 @@
 from typing import Any
+from pathlib import Path
 from claude_agent_sdk import tool
 import sys
 import os
@@ -125,6 +126,21 @@ async def run_report_generation_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     query = args.get("query")
     raw_task_name = args.get("task_name", "default")
     corpus_data = args.get("corpus_data")
+
+    # If corpus_data is an existing refined_corpus.md path, align task_name to it
+    if isinstance(corpus_data, str) and corpus_data.strip():
+        candidate = Path(corpus_data.strip())
+        if not candidate.is_absolute():
+            workspace = os.getenv("CURRENT_SESSION_WORKSPACE")
+            if workspace:
+                candidate = Path(workspace) / candidate
+        if candidate.exists():
+            parts = candidate.parts
+            if "tasks" in parts and candidate.name == "refined_corpus.md":
+                task_index = parts.index("tasks") + 1
+                if task_index < len(parts):
+                    raw_task_name = parts[task_index]
+                    corpus_data = None
     
     # Apply Guardrail
     task_name = resolve_best_task_match(raw_task_name)
