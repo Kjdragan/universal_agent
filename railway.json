@@ -1,6 +1,9 @@
 {
     "$schema": "https://railway.app/railway.schema.json",
     "build": {
+        "args": {
+            "CACHE_BUST": "20260202-2335"
+        },
         "watchPatterns": [
             "src/**",
             "AgentCollege/**",
