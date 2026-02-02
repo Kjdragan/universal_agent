@@ -18,7 +18,7 @@ description: |
   - Saves final outputs to work_products/media/
   
   Main agent should pass video paths and desired operations in task description.
-tools: mcp__youtube__download_video, mcp__youtube__download_audio, mcp__youtube__get_metadata, mcp__youtube__download_subtitles, mcp__youtube__download_thumbnail, mcp__video_audio__trim_video, mcp__video_audio__concatenate_videos, mcp__video_audio__extract_audio, mcp__video_audio__convert_video, mcp__video_audio__add_text_overlay, mcp__video_audio__add_image_overlay, mcp__video_audio__add_basic_transitions, mcp__video_audio__reverse_video, mcp__video_audio__compress_video, mcp__video_audio__rotate_video, mcp__video_audio__change_video_speed, mcp__video_audio__health_check, mcp__local_toolkit__read_local_file, mcp__local_toolkit__write_local_file, mcp__local_toolkit__list_directory, Bash
+tools: mcp__youtube__download_video, mcp__youtube__download_audio, mcp__youtube__get_metadata, mcp__youtube__download_subtitles, mcp__youtube__download_thumbnail, mcp__video_audio__trim_video, mcp__video_audio__concatenate_videos, mcp__video_audio__extract_audio, mcp__video_audio__convert_video, mcp__video_audio__add_text_overlay, mcp__video_audio__add_image_overlay, mcp__video_audio__add_basic_transitions, mcp__video_audio__reverse_video, mcp__video_audio__compress_video, mcp__video_audio__rotate_video, mcp__video_audio__change_video_speed, mcp__video_audio__health_check, mcp__internal__list_directory, Read, Write, Bash
 model: inherit
 ---
 
@@ -69,7 +69,7 @@ mcp__youtube__get_metadata(url="...")  # Get duration, title
 
 **For local files:**
 ```
-mcp__local_toolkit__list_directory(path="downloads/videos/")
+mcp__internal__list_directory(path="downloads/videos/")
 # Confirm file exists before processing
 ```
 

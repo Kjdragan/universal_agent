@@ -10,6 +10,13 @@ license: Proprietary. LICENSE.txt has complete terms
 
 This guide covers essential PDF processing operations using Python libraries and command-line tools. For advanced features, JavaScript libraries, and detailed examples, see reference.md. If you need to fill out a PDF form, read forms.md and follow its instructions.
 
+## Preferred Conversion Paths
+
+- **HTML → PDF:** Use **Chrome headless** (best fidelity for complex HTML/CSS).
+- **Markdown/other → PDF:** Use **WeasyPrint** (Python‑native).
+
+If HTML conversion via Chrome headless is unavailable, fall back to WeasyPrint.
+
 ## Quick Start
 
 > [!IMPORTANT]

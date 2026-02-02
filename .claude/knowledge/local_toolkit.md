@@ -1,19 +1,19 @@
-# Local Toolkit Tool Schemas
+# In-Process Toolkit Tool Schemas
 
-## mcp__local_toolkit__list_directory
+## mcp__internal__list_directory
 ```json
 {
   "path": "/absolute/or/relative/path"
 }
 ```
 
-## mcp__local_toolkit__read_research_files
+## mcp__internal__finalize_research
 ```json
 {
-  "file_paths": [
-    "/path/to/tasks/ai_news/filtered_corpus/article_001.md",
-    "/path/to/tasks/ai_news/filtered_corpus/article_002.md"
-  ]
+  "session_dir": "/path/to/session",
+  "task_name": "ai_news",
+  "enable_topic_filter": true,
+  "retry_id": null
 }
 ```
 
@@ -28,7 +28,7 @@
 > This is the **STANDARD EFFICIENCY PATH**. Use this to execute the entire Crawl -> Refine -> Report flow in one turn. Avoid calling individual phases unless recovering from a specific failure.
 
 
-## mcp__local_toolkit__append_to_file
+## mcp__internal__append_to_file
 ```json
 {
   "path": "/home/.../work_products/report.html",
@@ -36,7 +36,7 @@
 }
 ```
 
-## mcp__local_toolkit__upload_to_composio
+## mcp__internal__upload_to_composio
 ```json
 {
   "path": "/home/.../work_products/report.pdf",
@@ -45,9 +45,16 @@
 }
 ```
 > Use the returned `s3key` in `GMAIL_SEND_EMAIL.attachment`. Never call the Composio SDK in Bash/Python for uploads.
-> If this tool is unavailable, use `mcp__internal__upload_to_composio` with the same arguments.
 
-## mcp__local_toolkit__ask_user_questions
+## mcp__internal__html_to_pdf
+```json
+{
+  "html_path": "/home/.../work_products/report.html",
+  "pdf_path": "/home/.../work_products/report.pdf"
+}
+```
+
+## mcp__internal__ask_user_questions
 ```json
 {
   "questions": [

@@ -19,7 +19,7 @@ description: |
   - Create React-based video compositions
   - Programmatic rendering with dynamic props
   - Cloud rendering (AWS Lambda) setup and execution
-tools: mcp__local_toolkit__read_local_file, mcp__local_toolkit__write_local_file, mcp__local_toolkit__list_directory, Bash, mcp__local_toolkit__find_by_name
+tools: Read, Write, mcp__internal__list_directory, Bash
 model: inherit
 ---
 

@@ -19,6 +19,26 @@ class WorkspaceGuardError(Exception):
     pass
 
 
+def normalize_workspace_path(file_path: Union[str, Path], workspace_root: Path) -> Path:
+    """
+    Normalize common workspace path typos (e.g., AGENT_RUNWORKSPACES -> AGENT_RUN_WORKSPACES).
+    Returns a Path (may be unchanged).
+    """
+    if isinstance(file_path, Path):
+        path_str = str(file_path)
+    else:
+        path_str = str(file_path or "")
+
+    if not path_str:
+        return Path(path_str)
+
+    # Fix missing underscore in workspace root segment
+    if "AGENT_RUNWORKSPACES" in path_str:
+        path_str = path_str.replace("AGENT_RUNWORKSPACES", "AGENT_RUN_WORKSPACES")
+
+    return Path(path_str)
+
+
 def enforce_workspace_path(
     file_path: Union[str, Path],
     workspace_root: Path,
@@ -127,6 +147,8 @@ def validate_tool_paths(
             "path",
             "file_path",
             "filepath",
+            "html_path",
+            "pdf_path",
             "destination",
             "output_path",
             "output",
@@ -140,8 +162,11 @@ def validate_tool_paths(
     for key in path_keys:
         if key in modified and isinstance(modified[key], str):
             original = modified[key]
+            normalized = normalize_workspace_path(original, workspace_root)
+            if str(normalized) != original:
+                modified[key] = str(normalized)
             try:
-                scoped = workspace_scoped_path(original, workspace_root)
+                scoped = workspace_scoped_path(modified[key], workspace_root)
                 modified[key] = str(scoped)
             except WorkspaceGuardError:
                 # Re-raise with more context

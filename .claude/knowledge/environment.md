@@ -14,8 +14,8 @@
 3. **System Binaries**:
     - Tools like `pandoc`, `ffmpeg`, `chrome` are system binaries, NOT Python packages.
     - You cannot install them via `uv` or `pip`.
-    - If a system binary is missing, **FAIL GRACEFULLY** and try a pure-Python alternative (e.g., use `reportlab`, `weasyprint`, or `pythonhtml` conversion instead of `pandoc`).
-    - The "Happy Path" for this agent is **Python-native tools** whenever possible.
+    - If a system binary is missing, **FAIL GRACEFULLY** and try a pure-Python alternative (e.g., use `reportlab` or `weasyprint` instead of `pandoc`).
+    - **PDF Preferences:** Use **Chrome headless** for HTML → PDF. Use **WeasyPrint** for Markdown/other → PDF.
 
 4. **Python Execution Rule**:
     - When running Python scripts via `Bash`, **ALWAYS use `python`** (which points to the active venv) or `sys.executable`.

@@ -1,7 +1,7 @@
 ---
 name: report-writer
 description: Multi-phase research report generator.
-tools: mcp__internal__run_report_generation, mcp__internal__run_research_pipeline, mcp__local_toolkit__list_directory, mcp__composio__Bash
+tools: mcp__internal__run_report_generation, mcp__internal__run_research_pipeline, mcp__internal__list_directory, mcp__composio__Bash
 model: inherit
 ---
 

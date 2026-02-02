@@ -47,8 +47,7 @@
 ### Attachment format (CRITICAL)
 - `attachment` must be a **DICT**, not a list
 - Format: `{"name": str, "mimetype": str, "s3key": str}`
-- Get `s3key` from `mcp__local_toolkit__upload_to_composio` first
-- If `mcp__local_toolkit__upload_to_composio` is unavailable, use `mcp__internal__upload_to_composio`
+- Get `s3key` from `mcp__internal__upload_to_composio` first
 
 ### Common Mistakes (WRONG)
 ```json
@@ -94,8 +93,7 @@ mcp__composio__COMPOSIO_SEARCH_NEWSquery</arg_key><arg_value>Russia Ukraine
 - Returns the `s3key` needed for `GMAIL_SEND_EMAIL` attachments
 - Always call this BEFORE attempting to send email with attachments
 - The returned `s3key` is used directly in the attachment dict
-- Preferred tool: `mcp__local_toolkit__upload_to_composio`
-- In-process fallback: `mcp__internal__upload_to_composio`
+- Preferred tool: `mcp__internal__upload_to_composio`
 
 ## COMPOSIO_MULTI_EXECUTE_TOOL
 

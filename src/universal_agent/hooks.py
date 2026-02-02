@@ -287,7 +287,11 @@ class AgentHookSet:
                 # Bash Skills
                 HookMatcher(
                     matcher="Bash",
-                    hooks=[self.on_pre_bash_block_composio_sdk, self.on_pre_bash_skill_hint],
+                    hooks=[
+                        self.on_pre_bash_block_composio_sdk,
+                        self.on_pre_bash_block_playwright_non_html,
+                        self.on_pre_bash_skill_hint,
+                    ],
                 ),
                 # Task Skills
                 HookMatcher(matcher="Task", hooks=[self.on_pre_task_skill_awareness]),
@@ -351,7 +355,7 @@ class AgentHookSet:
         
         # Read-only tools are allowed to access paths outside workspace
         READ_ONLY_TOOLS = {
-            "mcp__local_toolkit__list_directory",
+            "mcp__internal__list_directory",
             "Read",
             "View",
             "ListDir",
@@ -490,7 +494,7 @@ class AgentHookSet:
                     "⚠️ BLOCK: Do not use the `composio` Python SDK or CLI directly from Bash. "
                     "Your environment is NOT configured for direct SDK usage.\n"
                     "✅ REQUIRED PATH (attachments):\n"
-                    "1) Upload local file with `mcp__local_toolkit__upload_to_composio({path, tool_slug:'GMAIL_SEND_EMAIL', toolkit_slug:'gmail'})`\n"
+                    "1) Upload local file with `mcp__internal__upload_to_composio({path, tool_slug:'GMAIL_SEND_EMAIL', toolkit_slug:'gmail'})`\n"
                     "2) Send with `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` using `GMAIL_SEND_EMAIL` and the returned `attachment.s3key`\n"
                     "Use MCP tools only; they are pre-authenticated and reliable."
                 ),
@@ -502,6 +506,39 @@ class AgentHookSet:
                 },
             }
         return {}
+
+    async def on_pre_bash_block_playwright_non_html(
+        self, input_data: dict, tool_use_id: object, context: dict
+    ) -> dict:
+        """
+        PreToolUse Hook: Block Playwright-based PDF conversion for non-HTML inputs.
+        HTML -> PDF should use Chrome headless (Playwright) only when HTML is explicit.
+        """
+        command = str(input_data.get("command", "") or "")
+        command_lower = command.lower()
+
+        if "playwright" not in command_lower:
+            return {}
+
+        if "pdf" not in command_lower:
+            return {}
+
+        html_markers = ["file://", ".html", "html_path"]
+        if any(marker in command_lower for marker in html_markers):
+            return {}
+
+        return {
+            "systemMessage": (
+                "🚫 BLOCKED: Playwright should be used for HTML → PDF only.\n\n"
+                "For Markdown/other → PDF, use WeasyPrint (Python-native) or the "
+                "`mcp__internal__html_to_pdf` tool after converting to HTML.\n"
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Playwright PDF conversion without explicit HTML input.",
+            },
+        }
 
     async def on_pre_bash_skill_hint(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
         """
