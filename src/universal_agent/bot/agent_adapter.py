@@ -5,7 +5,7 @@ import uuid
 import logging
 from typing import Optional, Any, AsyncIterator
 from dataclasses import dataclass
-from .config import UA_GATEWAY_URL
+from .config import UA_GATEWAY_URL, UA_TELEGRAM_ALLOW_INPROCESS
 from universal_agent.gateway import (
     Gateway, 
     InProcessGateway, 
@@ -45,7 +45,7 @@ class AgentAdapter:
             return
 
         print("🤖 Initializing Agent Gateway Connection...")
-        
+
         if UA_GATEWAY_URL:
             print(f"🌍 Connecting to External Gateway at {UA_GATEWAY_URL}...")
             self.gateway = ExternalGateway(base_url=UA_GATEWAY_URL)
@@ -53,7 +53,13 @@ class AgentAdapter:
             if not await self.gateway.health_check():
                 print("⚠️  Warning: External Gateway health check failed.")
         else:
-            print("🏠 Starting In-Process Gateway...")
+            if not UA_TELEGRAM_ALLOW_INPROCESS:
+                raise RuntimeError(
+                    "UA_GATEWAY_URL is not set. "
+                    "Set UA_GATEWAY_URL to use the external gateway, "
+                    "or set UA_TELEGRAM_ALLOW_INPROCESS=1 for local dev."
+                )
+            print("🏠 Starting In-Process Gateway (local dev override enabled)...")
             self.gateway = InProcessGateway()
             
         # Start background worker loop

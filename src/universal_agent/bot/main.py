@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from telegram.request import HTTPXRequest
 import os
 
-from .config import TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, WEBHOOK_URL, PORT
+from .config import TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, WEBHOOK_URL, PORT, UA_GATEWAY_URL, UA_TELEGRAM_ALLOW_INPROCESS
 from .task_manager import TaskManager
 from .agent_adapter import AgentAdapter
 from .telegram_handlers import start_command, help_command, status_command, agent_command, continue_command, new_command, handle_message
@@ -42,6 +42,8 @@ async def lifespan(app: FastAPI):
     print(f"   WEBHOOK_SECRET: {'***SET***' if WEBHOOK_SECRET else 'NOT SET'}")
     print(f"   TELEGRAM_BOT_TOKEN: {'***SET***' if TELEGRAM_BOT_TOKEN else 'NOT SET'}")
     print(f"   PORT: {PORT}")
+    print(f"   UA_GATEWAY_URL: {UA_GATEWAY_URL or 'NOT SET'}")
+    print(f"   UA_TELEGRAM_ALLOW_INPROCESS: {UA_TELEGRAM_ALLOW_INPROCESS}")
     print("=" * 60)
 
     agent_adapter = AgentAdapter()

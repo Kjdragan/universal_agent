@@ -8,12 +8,16 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 # - libcairo2, libpango* (WeasyPrint)
 # - curl, gnupg, wget, unzip (Utils)
 RUN apt-get update && apt-get install -y \
+    build-essential \
+    pkg-config \
     ffmpeg \
     wget \
     gnupg \
     unzip \
     curl \
+    libcairo2-dev \
     libcairo2 \
+    libpango1.0-dev \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
     libgdk-pixbuf2.0-0 \

@@ -17,6 +17,8 @@ cd "$PROJECT_DIR"
 
 echo "🚀 Starting Universal Agent Telegram Bot..."
 echo "============================================"
+echo "ℹ️  Local dev override: enabling in-process gateway."
+export UA_TELEGRAM_ALLOW_INPROCESS=1
 
 # --- Step 1: Kill any existing ngrok ---
 echo "🔪 Stopping any existing ngrok processes..."
