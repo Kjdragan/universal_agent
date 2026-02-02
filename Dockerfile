@@ -50,7 +50,9 @@ COPY .claude/ ./.claude/
 
 # Copy start script
 COPY start.sh ./
+COPY start_gateway.sh ./
 RUN chmod +x start.sh
+RUN chmod +x start_gateway.sh
 
 # Environment variables
 ENV PATH="/app/.venv/bin:$PATH"
