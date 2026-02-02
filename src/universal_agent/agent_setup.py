@@ -36,6 +36,7 @@ from universal_agent.tools.research_bridge import (
     cleanup_report_wrapper,
     compile_report_wrapper,
 )
+from universal_agent.tools.local_toolkit_bridge import upload_to_composio_wrapper
 from universal_agent.tools.memory import ua_memory_get
 from universal_agent.execution_context import bind_workspace_env
 from universal_agent.feature_flags import memory_index_enabled
@@ -399,6 +400,7 @@ class AgentSetup:
             "     Wait for this message before proceeding with upload/email.\n"
             "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
             "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
+            "   - Fallback if local_toolkit is unavailable: `mcp__internal__upload_to_composio(path='...', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
             "   - This tool handles EVERYTHING: local→remote→S3 in ONE call.\n"
             "   - It returns `s3_key` which you pass to GMAIL_SEND_EMAIL's `attachment.s3key` field.\n"
             "   - DO NOT manually call workbench_upload + REMOTE_WORKBENCH. That's the old, broken way.\n"
@@ -498,6 +500,7 @@ class AgentSetup:
                     draft_report_parallel_wrapper,
                     cleanup_report_wrapper,
                     compile_report_wrapper,
+                    upload_to_composio_wrapper,
                 ] + ([ua_memory_get] if self.enable_memory else [])
             ),
             "taskwarrior": {

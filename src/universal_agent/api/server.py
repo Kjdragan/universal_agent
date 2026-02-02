@@ -8,6 +8,7 @@ Server runs on port 8001 by default (configurable via PORT env var).
 """
 
 import asyncio
+import time
 import json
 import logging
 import mimetypes
@@ -339,6 +340,9 @@ async def websocket_agent(websocket: WebSocket):
 
     await manager.connect(connection_id, websocket)
     bridge = get_agent_bridge()
+    in_flight = False
+    last_query_text: Optional[str] = None
+    last_query_ts: Optional[float] = None
 
     try:
         # Send connected event
@@ -359,6 +363,16 @@ async def websocket_agent(websocket: WebSocket):
                 if client_event.type == WSEventType.QUERY:
                     query = client_event.data.get("text", "")
                     if query.strip():
+                        now_ts = time.time()
+                        if in_flight:
+                            logger.warning("Duplicate query ignored (in_flight)", extra={"query": query[:200]})
+                            continue
+                        if last_query_text == query and last_query_ts and (now_ts - last_query_ts) < 2.0:
+                            logger.warning("Duplicate query ignored (recent)", extra={"query": query[:200]})
+                            continue
+                        in_flight = True
+                        last_query_text = query
+                        last_query_ts = now_ts
                         # Run query in background task to avoid deadlocking the message loop.
                         # This allows us to receive INPUT_RESPONSE while the query is still active.
                         async def stream_query():
@@ -368,6 +382,9 @@ async def websocket_agent(websocket: WebSocket):
                             except Exception as e:
                                 logger.error(f"Error streaming query: {e}")
                                 await manager.send_event(connection_id, create_error_event(str(e)))
+                            finally:
+                                nonlocal in_flight
+                                in_flight = False
                         
                         asyncio.create_task(stream_query())
 
