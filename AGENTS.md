@@ -326,15 +326,21 @@ Manages context across phases:
 
 ## 🚀 Quick Start
 
-### CLI Mode
+### Recommended CLI (Direct)
 
 ```bash
-./start_terminal.sh
+./start_cli_dev.sh
 ```
 
-This starts:
-1. Agent College sidecar (port 8001)
-2. Universal Agent CLI (interactive)
+Fastest local dev loop, no gateway overhead.
+
+### Recommended Full Stack (Gateway + API + UI)
+
+```bash
+./start_gateway.sh
+```
+
+Production-like stack with shared execution engine.
 
 ### Direct CLI
 

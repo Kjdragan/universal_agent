@@ -44,6 +44,7 @@
   "toolkit_slug": "gmail"
 }
 ```
+> Use the returned `s3key` in `GMAIL_SEND_EMAIL.attachment`. Never call the Composio SDK in Bash/Python for uploads.
 
 ## mcp__local_toolkit__ask_user_questions
 ```json

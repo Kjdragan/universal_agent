@@ -42,17 +42,24 @@ For critical or sensitive emails, prefer creating a draft first (`GMAIL_CREATE_E
 1.  **Generate Content**: Create the file (e.g., PDF report).
 2.  **Verify Files**: Ensure the file exists and you have the path.
 3.  **Send**:
-    ```python
-    # Example pseudocode for tool call
+    ```json
+    // 1) Upload the local file to Composio for attachment
+    mcp__local_toolkit__upload_to_composio({
+      "path": "/path/to/report.pdf",
+      "tool_slug": "GMAIL_SEND_EMAIL",
+      "toolkit_slug": "gmail"
+    })
+
+    // 2) Use the returned s3key in the email attachment
     GMAIL_SEND_EMAIL(
-        recipient_email="user@example.com",
-        subject="Weekly Report",
-        body="Here is your report.",
-        attachment={
-            "s3key": "/path/to/report.pdf", # Or absolute path depending on environment
-            "name": "report.pdf",
-            "mimetype": "application/pdf"
-        }
+      recipient_email="user@example.com",
+      subject="Weekly Report",
+      body="Here is your report.",
+      attachment={
+        "s3key": "<from upload_to_composio>",
+        "name": "report.pdf",
+        "mimetype": "application/pdf"
+      }
     )
     ```
 
@@ -66,3 +73,4 @@ For critical or sensitive emails, prefer creating a draft first (`GMAIL_CREATE_E
 
 *   **"Attachment Error"**: If sending fails with an attachment error, verify you aren't passing a list to a singular field.
 *   **"Authentication Error"**: Ensure the `user_id` is set to 'me' or the correct email address.
+*   **"Composio SDK Error"**: Do NOT call `from composio import ...` in Bash/Python. Always use the MCP tools.

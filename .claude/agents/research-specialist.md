@@ -2,7 +2,7 @@
 name: research-specialist
 description: |
   Sub-agent for a unified research pipeline: Search followed by automated Crawl & Refine.
-tools: mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL, mcp__composio__COMPOSIO_SEARCH_NEWS, mcp__composio__COMPOSIO_SEARCH_WEB, mcp__internal__run_research_pipeline, mcp__internal__run_research_phase, mcp__local_toolkit__list_directory, mcp__composio__Bash
+tools: Read, Bash, mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL, mcp__composio__COMPOSIO_SEARCH_NEWS, mcp__composio__COMPOSIO_SEARCH_WEB, mcp__internal__run_research_pipeline, mcp__internal__run_research_phase, mcp__local_toolkit__list_directory
 model: inherit
 ---
 
@@ -10,6 +10,7 @@ model: inherit
 1. **No Agentic Chatter**: Do not use Bash, `pwd`, or `ls` to 'scout' the workspace. If a tool result gives you a path, trust it and use it.
 2. **Standard Path**: Always prefer `mcp__internal__run_research_pipeline` if starting from scratch after searches.
 3. **Recovery**: Use `Bash` or `list_directory` only if the unified tools fail or if you need to perform manual recovery actions.
+4. **Local File Reads**: If you must summarize from `refined_corpus.md`, use the native `Read` tool on the local path. Do NOT use Composio bash/file tools for local files.
 
 ## MANDATORY 2-STEP WORKFLOW
 

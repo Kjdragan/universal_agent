@@ -1158,6 +1158,23 @@ async def on_pre_tool_use_ledger(
                 updated_tool_input = normalized_input
                 tool_input = normalized_input
 
+    # Keep Bash relative paths scoped to the active session workspace to avoid
+    # accidentally reading repo-root work_products from prior runs.
+    if tool_name == "Bash" and isinstance(tool_input, dict):
+        bash_workspace = OBSERVER_WORKSPACE_DIR or os.getenv("CURRENT_SESSION_WORKSPACE")
+        if bash_workspace:
+            cmd = tool_input.get("command") or tool_input.get("cmd")
+            if isinstance(cmd, str):
+                cmd_stripped = cmd.lstrip()
+                uses_session_paths = bool(
+                    re.search(r"(^|\\s)(work_products|tasks|search_results|downloads|memory|\\.prompt_history)/", cmd)
+                )
+                has_cd_prefix = cmd_stripped.startswith(("cd ", "pushd ", "popd "))
+                if uses_session_paths and not has_cd_prefix:
+                    updated_tool_input = dict(tool_input)
+                    updated_tool_input["command"] = f"cd {bash_workspace} && {cmd}"
+                    tool_input = updated_tool_input
+
     raw_tool_input = tool_input if isinstance(tool_input, dict) else {}
     email_updated_input, email_errors, email_replacements = resolve_email_recipients(
         tool_name,
@@ -6316,10 +6333,11 @@ async def setup_session(
             "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject next steps.\n"
             "     Wait for this message before proceeding with upload/email.\n"
             "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
-            "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', session_id='xxx')`\n"
+            "   - For email attachments, call `mcp__local_toolkit__upload_to_composio(path='/local/path/to/file', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
             "   - This tool handles EVERYTHING: local→remote→S3 in ONE call.\n"
             "   - It returns `s3_key` which you pass to GMAIL_SEND_EMAIL's `attachment.s3key` field.\n"
             "   - DO NOT manually call workbench_upload + REMOTE_WORKBENCH. That's the old, broken way.\n"
+            "   - 🚫 NEVER use the Composio Python SDK in Bash for uploads. Use the MCP tool above.\n"
             "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
             "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by local_toolkit tools.\n"
             "   - REMOTE paths: `/home/user/...` - only accessible inside COMPOSIO_REMOTE_WORKBENCH sandbox.\n"
@@ -6418,6 +6436,9 @@ async def setup_session(
                 name="internal",
                 version="1.0.0",
                 tools=[
+                    run_research_pipeline_wrapper,
+                    run_research_phase_wrapper,
+                    crawl_parallel_wrapper,
                     run_report_generation_wrapper,
                     generate_outline_wrapper,
                     draft_report_parallel_wrapper,

@@ -489,8 +489,10 @@ class AgentHookSet:
                 "systemMessage": (
                     "⚠️ BLOCK: Do not use the `composio` Python SDK or CLI directly from Bash. "
                     "Your environment is NOT configured for direct SDK usage.\n"
-                    "INSTEAD: Use the available MCP tools (e.g., `mcp__composio__...`) which are "
-                    "pre-authenticated and reliable."
+                    "✅ REQUIRED PATH (attachments):\n"
+                    "1) Upload local file with `mcp__local_toolkit__upload_to_composio({path, tool_slug:'GMAIL_SEND_EMAIL', toolkit_slug:'gmail'})`\n"
+                    "2) Send with `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` using `GMAIL_SEND_EMAIL` and the returned `attachment.s3key`\n"
+                    "Use MCP tools only; they are pre-authenticated and reliable."
                 ),
                 "decision": "block",
                 "hookSpecificOutput": {
