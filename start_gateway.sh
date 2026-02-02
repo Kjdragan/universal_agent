@@ -85,10 +85,14 @@ case "$MODE" in
         echo "   PID: $API_PID (Logs: tail -f api.log)"
         sleep 2
         
-        # Start Web UI
+        # Start Web UI (optional)
         echo "💻 Starting Web UI (Port 3000)..."
-        cd web-ui
-        npm run dev
+        if [ -d "web-ui" ] && command -v npm >/dev/null 2>&1; then
+            cd web-ui
+            npm run dev
+        else
+            echo "⚠️  Web UI skipped (missing web-ui directory or npm)."
+        fi
         ;;
 
     full|*)
@@ -139,12 +143,16 @@ case "$MODE" in
         echo "   PID: $API_PID (Logs: tail -f api.log)"
         sleep 2
         
-        # 3. Start Web UI (foreground)
+        # 3. Start Web UI (foreground, optional)
         echo "💻 Starting Web UI (Port 3000)..."
         echo "---------------------------------------------------"
         echo "   Use Ctrl+C to stop all services."
         echo ""
-        cd web-ui
-        npm run dev
+        if [ -d "web-ui" ] && command -v npm >/dev/null 2>&1; then
+            cd web-ui
+            npm run dev
+        else
+            echo "⚠️  Web UI skipped (missing web-ui directory or npm)."
+        fi
         ;;
 esac
