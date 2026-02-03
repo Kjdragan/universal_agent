@@ -113,6 +113,21 @@ _sessions: dict[str, GatewaySession] = {}
 _heartbeat_service: Optional[HeartbeatService] = None
 
 
+def _read_run_log_tail(workspace_dir: str, max_bytes: int = 4096) -> Optional[str]:
+    log_path = Path(workspace_dir) / "run.log"
+    if not log_path.exists():
+        return None
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(size - max_bytes, 0))
+            return handle.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        logger.warning("Failed to read run.log tail: %s", e)
+        return None
+
+
 def get_gateway() -> InProcessGateway:
     global _gateway
     if _gateway is None:
@@ -499,6 +514,15 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             # Execute the request and stream back to THIS connection
                             async for event in gateway.execute(session, request):
                                 if event.type == EventType.ERROR:
+                                    log_tail = None
+                                    if session.workspace_dir:
+                                        log_tail = _read_run_log_tail(session.workspace_dir)
+                                    # Normalize error payload for clients
+                                    if isinstance(event.data, dict):
+                                        if "message" not in event.data and "error" in event.data:
+                                            event.data["message"] = event.data.get("error")
+                                        if log_tail and "log_tail" not in event.data:
+                                            event.data["log_tail"] = log_tail
                                     logger.error(
                                         "Agent error event (session=%s): %s",
                                         session.session_id,
