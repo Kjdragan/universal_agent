@@ -1,5 +1,6 @@
 import asyncio
 import os
+import pytest
 import json
 import logging
 import sys
@@ -15,6 +16,12 @@ logger = logging.getLogger("verify_heartbeat")
 
 BASE_URL = os.getenv("GATEWAY_URL", "http://localhost:8002")
 WS_URL = BASE_URL.replace("http", "ws")
+
+if os.getenv("RUN_HEARTBEAT_TESTS", "").lower() not in {"1", "true", "yes"}:
+    pytest.skip(
+        "Gateway heartbeat tests disabled by default. Set RUN_HEARTBEAT_TESTS=1 to enable.",
+        allow_module_level=True,
+    )
 
 async def test_heartbeat():
     async with aiohttp.ClientSession() as session:

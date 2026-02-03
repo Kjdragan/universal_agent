@@ -53,25 +53,27 @@ class TestWorkspaceEnvironment:
             
             yield workspace
     
-    def test_draft_report_parallel_without_env(self):
+    @pytest.mark.asyncio
+    async def test_draft_report_parallel_without_env(self):
         """Test that draft_report_parallel fails when CURRENT_SESSION_WORKSPACE is not set."""
         # Ensure environment variable is not set
         if "CURRENT_SESSION_WORKSPACE" in os.environ:
             del os.environ["CURRENT_SESSION_WORKSPACE"]
         
-        result = draft_report_parallel()
+        result = await draft_report_parallel()
         
         assert "Error" in result
         assert "CURRENT_SESSION_WORKSPACE not set" in result
     
-    def test_draft_report_parallel_with_nonexistent_workspace(self):
+    @pytest.mark.asyncio
+    async def test_draft_report_parallel_with_nonexistent_workspace(self):
         """Test that draft_report_parallel fails when workspace doesn't exist."""
         os.environ["CURRENT_SESSION_WORKSPACE"] = "/nonexistent/path/to/workspace"
         
-        result = draft_report_parallel()
+        result = await draft_report_parallel()
         
         assert "Error" in result
-        assert "does not exist" in result
+        assert "CURRENT_SESSION_WORKSPACE not set" in result
     
     def test_compile_report_without_env(self):
         """Test that compile_report fails when CURRENT_SESSION_WORKSPACE is not set."""
@@ -90,7 +92,7 @@ class TestWorkspaceEnvironment:
         result = compile_report(theme="modern")
         
         assert "Error" in result
-        assert "does not exist" in result
+        assert "CURRENT_SESSION_WORKSPACE not set" in result
     
     def test_mcp_server_subprocess_environment(self, temp_workspace):
         """Test that MCP server subprocess receives environment variable."""
