@@ -25,15 +25,25 @@ export UV_CACHE_DIR="$(pwd)/.uv-cache"
 
 # Composio cache directory (must be writable when running as appuser)
 if [ -z "$COMPOSIO_CACHE_DIR" ]; then
-    export COMPOSIO_CACHE_DIR="/app/data/.composio"
+    if [ -d /app ] && [ -w /app ]; then
+        export COMPOSIO_CACHE_DIR="/app/data/.composio"
+    else
+        export COMPOSIO_CACHE_DIR="$(pwd)/.cache/composio"
+    fi
 fi
 mkdir -p "$COMPOSIO_CACHE_DIR" 2>/dev/null || true
 chown -R appuser:appuser "$COMPOSIO_CACHE_DIR" 2>/dev/null || true
 
 # Ensure appuser has a writable HOME and XDG dirs for CLI caches/config
-export HOME="/app"
-export XDG_CACHE_HOME="/app/.cache"
-export XDG_CONFIG_HOME="/app/.config"
+if [ -d /app ] && [ -w /app ]; then
+    export HOME="/app"
+    export XDG_CACHE_HOME="/app/.cache"
+    export XDG_CONFIG_HOME="/app/.config"
+else
+    export HOME="${HOME:-$(pwd)}"
+    export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+    export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+fi
 mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" 2>/dev/null || true
 chown -R appuser:appuser "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" 2>/dev/null || true
 
@@ -57,7 +67,7 @@ MODE="${1:-full}"
 run_gateway_foreground() {
     if [ "$(id -u)" -eq 0 ] && id -u appuser >/dev/null 2>&1; then
         echo "👤 Running gateway as appuser (via su)"
-        su -m -s /bin/bash appuser -c "export HOME=/app XDG_CACHE_HOME=/app/.cache XDG_CONFIG_HOME=/app/.config; PYTHONPATH=src uv run python -m universal_agent.gateway_server"
+        su -m -s /bin/bash appuser -c "PYTHONPATH=src uv run python -m universal_agent.gateway_server"
     else
         echo "👤 Running gateway as $(id -un)"
         PYTHONPATH=src uv run python -m universal_agent.gateway_server
@@ -67,7 +77,7 @@ run_gateway_foreground() {
 run_gateway_background() {
     if [ "$(id -u)" -eq 0 ] && id -u appuser >/dev/null 2>&1; then
         echo "👤 Running gateway as appuser (via su)"
-        su -m -s /bin/bash appuser -c "export HOME=/app XDG_CACHE_HOME=/app/.cache XDG_CONFIG_HOME=/app/.config; PYTHONPATH=src uv run python -m universal_agent.gateway_server" > gateway.log 2>&1 &
+        su -m -s /bin/bash appuser -c "PYTHONPATH=src uv run python -m universal_agent.gateway_server" > gateway.log 2>&1 &
     else
         echo "👤 Running gateway as $(id -un)"
         PYTHONPATH=src uv run python -m universal_agent.gateway_server > gateway.log 2>&1 &
