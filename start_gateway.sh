@@ -40,6 +40,22 @@ fi
 
 MODE="${1:-full}"
 
+run_gateway_foreground() {
+    if [ "$(id -u)" -eq 0 ] && id -u appuser >/dev/null 2>&1; then
+        su -m -s /bin/bash appuser -c "PYTHONPATH=src uv run python -m universal_agent.gateway_server"
+    else
+        PYTHONPATH=src uv run python -m universal_agent.gateway_server
+    fi
+}
+
+run_gateway_background() {
+    if [ "$(id -u)" -eq 0 ] && id -u appuser >/dev/null 2>&1; then
+        su -m -s /bin/bash appuser -c "PYTHONPATH=src uv run python -m universal_agent.gateway_server" > gateway.log 2>&1 &
+    else
+        PYTHONPATH=src uv run python -m universal_agent.gateway_server > gateway.log 2>&1 &
+    fi
+}
+
 cleanup() {
     echo ""
     echo "🛑 Shutting down..."
@@ -64,7 +80,7 @@ case "$MODE" in
         echo "║    UA_GATEWAY_URL=http://localhost:${UA_GATEWAY_PORT} ./start_cli_dev.sh   ║"
         echo "╚══════════════════════════════════════════════════════════════╝"
         echo ""
-        PYTHONPATH=src uv run python -m universal_agent.gateway_server
+        run_gateway_foreground
         ;;
 
     --ui)
@@ -129,7 +145,7 @@ case "$MODE" in
         
         # 1. Start Gateway Server (background)
         echo "🚀 Starting Gateway Server (Port ${UA_GATEWAY_PORT})..."
-        PYTHONPATH=src uv run python -m universal_agent.gateway_server > gateway.log 2>&1 &
+        run_gateway_background
         GATEWAY_PID=$!
         echo "   PID: $GATEWAY_PID (Logs: tail -f gateway.log)"
         
