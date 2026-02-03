@@ -34,7 +34,7 @@ import anthropic
 
 AGENT_NAME = "test_memory_agent"
 
-def test_1_create_agent():
+def _run_create_agent() -> bool:
     """Test 1: Create or retrieve agent."""
     print("=" * 60)
     print("Test 1: Create/Retrieve Agent")
@@ -65,7 +65,7 @@ def test_1_create_agent():
         return False
 
 
-def test_2_memory_blocks():
+def _run_memory_blocks() -> bool:
     """Test 2: Create and read memory blocks."""
     print("\n" + "=" * 60)
     print("Test 2: Memory Block Operations")
@@ -98,7 +98,7 @@ def test_2_memory_blocks():
         return False
 
 
-def test_3_learning_context():
+def _run_learning_context() -> bool:
     """Test 3: Test learning() context with Anthropic API."""
     print("\n" + "=" * 60)
     print("Test 3: Learning Context with Anthropic")
@@ -154,7 +154,7 @@ def test_3_learning_context():
         return False
 
 
-def test_4_message_history():
+def _run_message_history() -> bool:
     """Test 4: Check message history in Letta."""
     print("\n" + "=" * 60)
     print("Test 4: Message History")
@@ -178,6 +178,26 @@ def test_4_message_history():
         return False
 
 
+def test_1_create_agent():
+    """Test 1: Create or retrieve agent."""
+    assert _run_create_agent()
+
+
+def test_2_memory_blocks():
+    """Test 2: Create and read memory blocks."""
+    assert _run_memory_blocks()
+
+
+def test_3_learning_context():
+    """Test 3: Test learning() context with Anthropic API."""
+    assert _run_learning_context()
+
+
+def test_4_message_history():
+    """Test 4: Check message history in Letta."""
+    assert _run_message_history()
+
+
 def main():
     print("\n" + "=" * 60)
     print("LETTA LEARNING SDK FULL TEST SUITE")
@@ -185,10 +205,10 @@ def main():
     
     results = []
     
-    results.append(("Create Agent", test_1_create_agent()))
-    results.append(("Memory Blocks", test_2_memory_blocks()))
-    results.append(("Learning Context", test_3_learning_context()))
-    results.append(("Message History", test_4_message_history()))
+    results.append(("Create Agent", _run_create_agent()))
+    results.append(("Memory Blocks", _run_memory_blocks()))
+    results.append(("Learning Context", _run_learning_context()))
+    results.append(("Message History", _run_message_history()))
     
     print("\n" + "=" * 60)
     print("TEST RESULTS SUMMARY")

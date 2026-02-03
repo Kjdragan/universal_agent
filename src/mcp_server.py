@@ -11,7 +11,7 @@ import re
 import logging
 import inspect
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 import traceback
 
 # UA_LOG_LEVEL Control (INFO by default)
@@ -2273,7 +2273,7 @@ async def finalize_research(
         filtered_lookup = {f["url"]: f for f in filtered_files if f.get("url")}
         overview_lines = []
         overview_lines.append(f"# Research Sources Overview (Task: {task_name})")
-        overview_lines.append(f"**Generated:** {datetime.utcnow().isoformat()}Z")
+        overview_lines.append(f"**Generated:** {datetime.now(timezone.utc).isoformat()}Z")
         overview_lines.append(
             f"**Search Inputs:** {scanned_files} files (Archived to `processed_json/`)"
         )

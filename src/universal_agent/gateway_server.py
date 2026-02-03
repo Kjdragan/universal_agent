@@ -510,6 +510,8 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     )
 
                     async def run_execution():
+                        if _heartbeat_service:
+                            _heartbeat_service.busy_sessions.add(session.session_id)
                         try:
                             # Execute the request and stream back to THIS connection
                             async for event in gateway.execute(session, request):
@@ -554,6 +556,9 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "timestamp": datetime.now().isoformat(),
                                 },
                             )
+                        finally:
+                            if _heartbeat_service:
+                                _heartbeat_service.busy_sessions.discard(session.session_id)
                     
                     asyncio.create_task(run_execution())
                 
