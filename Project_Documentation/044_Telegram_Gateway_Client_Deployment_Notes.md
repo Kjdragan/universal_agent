@@ -9,6 +9,7 @@ Operational notes for running the Telegram bot as a **true gateway client** (Opt
 - `WEBHOOK_URL` — Public URL for Telegram webhooks (e.g., `https://<bot-host>/webhook`)
 - `WEBHOOK_SECRET` — Secret token for webhook validation
 - `ALLOWED_USER_IDS` — Comma‑separated Telegram user IDs
+- `UA_ALLOWED_USERS` (gateway service) — Optional allowlist for gateway access. For Telegram, include either `telegram_<id>` or the numeric Telegram user ID; both are accepted.
 
 ## Local Dev Override
 - `UA_TELEGRAM_ALLOW_INPROCESS=1` allows the bot to run an in‑process gateway.
