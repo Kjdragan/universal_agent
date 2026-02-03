@@ -488,6 +488,7 @@ class ExternalGateway(Gateway):
     ) -> AsyncIterator[AgentEvent]:
         ws_url = self._base_url.replace("http://", "ws://").replace("https://", "wss://")
         ws_url = f"{ws_url}/api/v1/sessions/{session.session_id}/stream"
+        completed = False
 
         async with websockets.connect(ws_url) as ws:
             connected_msg = await ws.recv()
@@ -512,11 +513,17 @@ class ExternalGateway(Gateway):
                     event_type_str = data.get("type", "")
 
                     if event_type_str == "query_complete":
+                        completed = True
                         break
                     if event_type_str == "error":
                         err_data = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
                         err_msg = err_data.get("message") or err_data.get("error") or "Unknown error"
-                        raise RuntimeError(err_msg)
+                        parts = [err_msg]
+                        if err_data.get("detail"):
+                            parts.append(f"Detail: {err_data['detail']}")
+                        if err_data.get("log_tail"):
+                            parts.append("Log tail:\n" + err_data["log_tail"])
+                        raise RuntimeError("\n".join(parts))
 
                     try:
                         event_type = EventType(event_type_str)
@@ -525,7 +532,9 @@ class ExternalGateway(Gateway):
 
                     yield AgentEvent(type=event_type, data=data.get("data", {}))
 
-                except websockets.exceptions.ConnectionClosed:
+                except websockets.exceptions.ConnectionClosed as e:
+                    if not completed:
+                        raise RuntimeError(f"WebSocket closed before completion (code={e.code}, reason={e.reason})")
                     break
 
     async def run_query(
