@@ -6,8 +6,8 @@
 # Both CLI and Web UI connect to the same gateway for unified execution.
 #
 # Architecture:
-#   Gateway Server (8002) <-- CLI client (terminal)
-#                         <-- Web UI (api.server:8001 + frontend:3000)
+#   Gateway Server (UA_GATEWAY_PORT) <-- CLI client (terminal)
+#                                   <-- Web UI (api.server:8001 + frontend:3000)
 #
 # Usage:
 #   ./start_gateway.sh              # Gateway + Web UI
@@ -23,8 +23,20 @@ cd "$(dirname "$0")"
 # Keep uv cache inside repo
 export UV_CACHE_DIR="$(pwd)/.uv-cache"
 
-# Gateway URL for all clients
-export UA_GATEWAY_URL="http://localhost:8002"
+# Gateway bind settings
+# In Railway (or other PaaS), use PORT if provided so the public URL routes correctly.
+if [ -n "$PORT" ]; then
+    export UA_GATEWAY_PORT="$PORT"
+    export UA_GATEWAY_HOST="${UA_GATEWAY_HOST:-0.0.0.0}"
+else
+    export UA_GATEWAY_PORT="${UA_GATEWAY_PORT:-8002}"
+    export UA_GATEWAY_HOST="${UA_GATEWAY_HOST:-0.0.0.0}"
+fi
+
+# Gateway URL for local clients (do not override if already set)
+if [ -z "$UA_GATEWAY_URL" ]; then
+    export UA_GATEWAY_URL="http://localhost:${UA_GATEWAY_PORT}"
+fi
 
 MODE="${1:-full}"
 
@@ -33,7 +45,7 @@ cleanup() {
     echo "🛑 Shutting down..."
     [ -n "$GATEWAY_PID" ] && kill $GATEWAY_PID 2>/dev/null
     [ -n "$API_PID" ] && kill $API_PID 2>/dev/null
-    fuser -k 8002/tcp 2>/dev/null
+    fuser -k "${UA_GATEWAY_PORT}"/tcp 2>/dev/null
     fuser -k 8001/tcp 2>/dev/null
     fuser -k 3000/tcp 2>/dev/null
     echo "✅ Done."
@@ -46,10 +58,10 @@ case "$MODE" in
         echo "╔══════════════════════════════════════════════════════════════╗"
         echo "║         GATEWAY SERVER ONLY                                  ║"
         echo "╠══════════════════════════════════════════════════════════════╣"
-        echo "║  Gateway:   http://localhost:8002                            ║"
+        echo "║  Gateway:   http://localhost:${UA_GATEWAY_PORT}                            ║"
         echo "║                                                              ║"
         echo "║  CLI client (separate terminal):                             ║"
-        echo "║    UA_GATEWAY_URL=http://localhost:8002 ./start_cli_dev.sh   ║"
+        echo "║    UA_GATEWAY_URL=http://localhost:${UA_GATEWAY_PORT} ./start_cli_dev.sh   ║"
         echo "╚══════════════════════════════════════════════════════════════╝"
         echo ""
         PYTHONPATH=src uv run python -m universal_agent.gateway_server
@@ -66,12 +78,12 @@ case "$MODE" in
         echo ""
         
         # Check if gateway is running
-        if ! curl -s http://localhost:8002/api/v1/health > /dev/null 2>&1; then
-            echo "❌ Gateway server not running on port 8002"
+        if ! curl -s "http://localhost:${UA_GATEWAY_PORT}/api/v1/health" > /dev/null 2>&1; then
+            echo "❌ Gateway server not running on port ${UA_GATEWAY_PORT}"
             echo "   Start it first with: ./start_gateway.sh --server"
             exit 1
         fi
-        echo "✅ Gateway server detected on port 8002"
+        echo "✅ Gateway server detected on port ${UA_GATEWAY_PORT}"
         
         # Clean up existing processes
         fuser -k 8001/tcp 2>/dev/null
@@ -80,7 +92,7 @@ case "$MODE" in
         
         # Start API server (connects to gateway)
         echo "🔌 Starting API Server (Port 8001)..."
-        UA_GATEWAY_URL=http://localhost:8002 PYTHONPATH=src uv run python -m universal_agent.api.server > api.log 2>&1 &
+        UA_GATEWAY_URL="http://localhost:${UA_GATEWAY_PORT}" PYTHONPATH=src uv run python -m universal_agent.api.server > api.log 2>&1 &
         API_PID=$!
         echo "   PID: $API_PID (Logs: tail -f api.log)"
         sleep 2
@@ -99,24 +111,24 @@ case "$MODE" in
         echo "╔══════════════════════════════════════════════════════════════╗"
         echo "║         GATEWAY MODE - FULL STACK                            ║"
         echo "╠══════════════════════════════════════════════════════════════╣"
-        echo "║  Gateway:   http://localhost:8002                            ║"
+        echo "║  Gateway:   http://localhost:${UA_GATEWAY_PORT}                            ║"
         echo "║  API:       http://localhost:8001                            ║"
         echo "║  Web UI:    http://localhost:3000                            ║"
         echo "║                                                              ║"
         echo "║  CLI client (separate terminal):                             ║"
-        echo "║    UA_GATEWAY_URL=http://localhost:8002 ./start_cli_dev.sh   ║"
+        echo "║    UA_GATEWAY_URL=http://localhost:${UA_GATEWAY_PORT} ./start_cli_dev.sh   ║"
         echo "╚══════════════════════════════════════════════════════════════╝"
         echo ""
         
         # Clean up existing processes
         echo "🧹 Cleaning up existing processes..."
-        fuser -k 8002/tcp 2>/dev/null
+        fuser -k "${UA_GATEWAY_PORT}"/tcp 2>/dev/null
         fuser -k 8001/tcp 2>/dev/null
         fuser -k 3000/tcp 2>/dev/null
         sleep 1
         
         # 1. Start Gateway Server (background)
-        echo "🚀 Starting Gateway Server (Port 8002)..."
+        echo "🚀 Starting Gateway Server (Port ${UA_GATEWAY_PORT})..."
         PYTHONPATH=src uv run python -m universal_agent.gateway_server > gateway.log 2>&1 &
         GATEWAY_PID=$!
         echo "   PID: $GATEWAY_PID (Logs: tail -f gateway.log)"
@@ -124,7 +136,7 @@ case "$MODE" in
         # Wait for gateway to be ready
         echo "⏳ Waiting for Gateway..."
         for i in {1..30}; do
-            if curl -s http://localhost:8002/api/v1/health > /dev/null 2>&1; then
+            if curl -s "http://localhost:${UA_GATEWAY_PORT}/api/v1/health" > /dev/null 2>&1; then
                 echo "   ✅ Gateway ready"
                 break
             fi
@@ -138,7 +150,7 @@ case "$MODE" in
         
         # 2. Start API Server (background, connects to gateway)
         echo "🔌 Starting API Server (Port 8001)..."
-        UA_GATEWAY_URL=http://localhost:8002 PYTHONPATH=src uv run python -m universal_agent.api.server > api.log 2>&1 &
+        UA_GATEWAY_URL="http://localhost:${UA_GATEWAY_PORT}" PYTHONPATH=src uv run python -m universal_agent.api.server > api.log 2>&1 &
         API_PID=$!
         echo "   PID: $API_PID (Logs: tail -f api.log)"
         sleep 2
