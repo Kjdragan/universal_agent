@@ -161,6 +161,8 @@ from universal_agent.feature_flags import (
     memory_enabled,
     memory_index_mode,
     memory_max_tokens,
+    memory_flush_on_exit,
+    memory_flush_max_chars,
 )
 
 
@@ -6917,6 +6919,21 @@ async def process_turn(
         except Exception as e:
             # Don't let transcript failure crash the agent
             print(f"⚠️ Failed to save intermediate transcript: {e}")
+
+        # NEW: Optional post-run memory flush for short sessions
+        if memory_enabled(default=False) and memory_flush_on_exit(default=False):
+            try:
+                from universal_agent.memory.memory_flush import flush_pre_compact_memory
+
+                flush_pre_compact_memory(
+                    workspace_dir=workspace_dir,
+                    session_id=trace.get("session_id") or trace.get("run_id"),
+                    transcript_path=os.path.join(workspace_dir, "transcript.md"),
+                    trigger="exit",
+                    max_chars=memory_flush_max_chars(default=4000),
+                )
+            except Exception as e:
+                print(f"⚠️ Failed to flush memory on exit: {e}")
 
         # NEW: Incremental Trace JSON Save (for live debugging)
         try:

@@ -53,7 +53,7 @@ from universal_agent.tools.local_toolkit_bridge import (
     batch_tool_execute_wrapper,
 )
 from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
-from universal_agent.tools.memory import ua_memory_get
+from universal_agent.tools.memory import ua_memory_get_wrapper
 from universal_agent.execution_context import bind_workspace_env
 from universal_agent.feature_flags import (
     memory_enabled,
@@ -534,7 +534,7 @@ class AgentSetup:
                     get_core_memory_blocks_wrapper,
                     ask_user_questions_wrapper,
                     batch_tool_execute_wrapper,
-                ] + ([ua_memory_get] if self.enable_memory else [])
+                ] + ([ua_memory_get_wrapper] if self.enable_memory else [])
             ),
             "taskwarrior": {
                 "type": "stdio",

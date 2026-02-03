@@ -65,3 +65,23 @@ def memory_max_tokens(default: int = 800) -> int:
         return max(0, int(raw))
     except ValueError:
         return default
+
+
+def memory_flush_on_exit(default: bool = False) -> bool:
+    """Return True when post-run memory flush is enabled."""
+    if _is_truthy(os.getenv("UA_DISABLE_MEMORY_FLUSH_ON_EXIT")):
+        return False
+    if _is_truthy(os.getenv("UA_MEMORY_FLUSH_ON_EXIT")):
+        return True
+    return default
+
+
+def memory_flush_max_chars(default: int = 4000) -> int:
+    """Return max chars for memory flush content."""
+    raw = os.getenv("UA_MEMORY_FLUSH_MAX_CHARS")
+    if not raw:
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default

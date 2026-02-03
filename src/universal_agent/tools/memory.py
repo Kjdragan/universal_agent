@@ -4,6 +4,9 @@ Memory tool implementation for safe file retrieval.
 
 import os
 from pathlib import Path
+from typing import Any
+
+from claude_agent_sdk import tool
 
 def ua_memory_get(path: str, line_start: int = 1, num_lines: int = 100) -> str:
     """
@@ -76,3 +79,25 @@ def ua_memory_get(path: str, line_start: int = 1, num_lines: int = 100) -> str:
         return content
     except Exception as e:
         return f"Error reading file: {e}"
+
+
+@tool(
+    name="ua_memory_get",
+    description=(
+        "Read content from the agent's memory files. Only allows 'MEMORY.md' "
+        "or files under the 'memory/' directory in the current workspace."
+    ),
+    input_schema={
+        "path": str,
+        "line_start": int,
+        "num_lines": int,
+    },
+)
+async def ua_memory_get_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    """Claude SDK tool wrapper for ua_memory_get."""
+    content = ua_memory_get(
+        path=args.get("path", "MEMORY.md"),
+        line_start=args.get("line_start", 1),
+        num_lines=args.get("num_lines", 100),
+    )
+    return {"content": [{"type": "text", "text": content}]}

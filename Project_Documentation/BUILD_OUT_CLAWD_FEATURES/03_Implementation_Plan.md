@@ -88,7 +88,8 @@
 
 #### E) Tests / Validation
 - [x] Unit tests for memory store + index update.
-- [ ] Integration test: CLI run → memory flush → retrieval in next run.
+- [x] Workspace environment tests updated for async tool APIs.
+- [x] Integration test: CLI run → memory flush → retrieval in next run.
 
 ### 2.5 Success Criteria (Phase 1)
 - Memory persists across restarts.
@@ -146,19 +147,26 @@ Increase Telegram reliability and formatting parity.
 ---
 
 ## 6) Current Status
-**Phase 1:** In progress (file memory + pre‑compaction flush implemented).\
-**Phase 2:** Not started.\
-**Phase 3:** Not started.\
-**Phase 4:** In progress (Telegram reliability debugging), but will be paused until Phase 1 stabilizes.
+**Phase 1:** In progress (file memory + pre‑compaction flush implemented; async tool tests aligned; CLI memory integration test passing).\
+**Phase 2:** Complete (heartbeat summary MVP + busy‑skip + empty‑skip + WS test).\
+**Phase 3:** Complete (delivery routing + visibility policy + dedupe + indicator + tests).\
+**Phase 4:** Paused (Telegram reliability work gated; tests disabled by default).
 
 ---
 
 ## 7) Next Actions (Immediate)
-1. Add integration test: CLI run → memory flush → retrieval on next run.
-2. Decide default enablement (dev vs prod) and update .env templates.
-3. Validate gateway/Telegram memory injection in a real session.
+1. Phase 4 kickoff (Memory Phase 2): vector index MVP (async build + search).
+2. Add memory search tests and update the testing guide.
 
 ---
 
 ## 8) Changelog
 - 2026‑02‑03: Created implementation plan; Phase 1 (Memory) prioritized.
+- 2026‑02‑03: Updated tests to align with async tools; added test gating for Telegram/heartbeat and Composio uploads.
+- 2026‑02‑03: Completed CLI memory integration test (flush → retrieve) and marked Phase 1 validation step done.
+- 2026‑02‑03: Added `.env.sample` template with memory defaults (dev on, prod optional).
+- 2026‑02‑03: Validated gateway memory injection with a seeded workspace (file memory retrieved via gateway session).
+- 2026‑02‑03: Test suite signal stabilized (warnings resolved; clean pytest run).
+- 2026‑02‑03: Heartbeat MVP gating wired (enable flag + busy skip + empty‑skip) and heartbeat envs added to `.env.sample`.
+- 2026‑02‑03: Heartbeat MVP summary test added and passing (gateway WS broadcast).
+- 2026‑02‑03: Phase 3 delivery policy complete (delivery routing + visibility + dedupe + indicator); policy tests added.

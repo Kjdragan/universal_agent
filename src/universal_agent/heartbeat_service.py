@@ -27,13 +27,14 @@ HEARTBEAT_EXECUTION_TIMEOUT = int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT", "45"))
 @dataclass
 class HeartbeatDeliveryConfig:
     mode: str = "last"  # last | explicit | none
-    # Future: channel, to, etc.
+    explicit_session_ids: list[str] = field(default_factory=list)
 
 @dataclass
 class HeartbeatVisibilityConfig:
     show_ok: bool = False
     show_alerts: bool = True
     dedupe_window_seconds: int = 86400  # 24 hours
+    use_indicator: bool = False
 
 @dataclass
 class HeartbeatState:
@@ -68,12 +69,18 @@ class HeartbeatService:
         
         # MOCK CONFIG (In future, load from session config)
         self.default_delivery = HeartbeatDeliveryConfig(
-            mode=os.getenv("UA_HB_DELIVERY_MODE", "last")
+            mode=os.getenv("UA_HB_DELIVERY_MODE", "last"),
+            explicit_session_ids=[
+                s.strip()
+                for s in os.getenv("UA_HB_EXPLICIT_SESSION_IDS", "").split(",")
+                if s.strip()
+            ],
         )
         self.default_visibility = HeartbeatVisibilityConfig(
             show_ok=os.getenv("UA_HB_SHOW_OK", "false").lower() == "true",
             show_alerts=os.getenv("UA_HB_SHOW_ALERTS", "true").lower() == "true",
-            dedupe_window_seconds=int(os.getenv("UA_HB_DEDUPE_WINDOW", "86400"))
+            dedupe_window_seconds=int(os.getenv("UA_HB_DEDUPE_WINDOW", "86400")),
+            use_indicator=os.getenv("UA_HB_USE_INDICATOR", "false").lower() == "true",
         )
 
     async def start(self):
@@ -241,6 +248,7 @@ class HeartbeatService:
             
             # Policy 1: Visibility (showOk)
             suppress_ok = ok_only and not visibility.show_ok
+            suppress_alerts = (not ok_only) and not visibility.show_alerts
             
             # Policy 2: Deduplication
             if not ok_only: # Only dedupe alerts, not OKs (OKs handled by showOk)
@@ -257,24 +265,61 @@ class HeartbeatService:
             elif suppress_ok:
                 should_send = False
                 logger.info(f"Suppressed OK heartbeat for {session.session_id} (show_ok=False)")
+            elif suppress_alerts:
+                should_send = False
+                logger.info(f"Suppressed alert heartbeat for {session.session_id} (show_alerts=False)")
             elif is_duplicate:
                 should_send = False
+
+            delivery_targets = []
+            if delivery.mode == "last":
+                delivery_targets = [session.session_id]
+            elif delivery.mode == "explicit":
+                for target in delivery.explicit_session_ids:
+                    if target.upper() == "CURRENT":
+                        delivery_targets.append(session.session_id)
+                    else:
+                        delivery_targets.append(target)
+
+            if not delivery_targets:
+                should_send = False
+
+            # Allow indicator-only event when OK is suppressed but indicators are enabled.
+            allow_indicator = ok_only and suppress_ok and visibility.use_indicator
+            if allow_indicator:
+                should_send = True
             
             if should_send:
-                summary_event = {
-                    "type": "heartbeat_summary",
-                    "data": {
-                        "text": full_response,
-                        "timestamp": datetime.now().isoformat(),
-                        "ok_only": ok_only,
-                        # Add extra metadata for UI awareness
-                        "delivered": {
-                            "mode": delivery.mode,
-                            "is_duplicate": is_duplicate, # Should be false if sent
-                        }
-                    },
-                }
-                await self.connection_manager.broadcast(session.session_id, summary_event)
+                if allow_indicator:
+                    summary_event = {
+                        "type": "heartbeat_indicator",
+                        "data": {
+                            "timestamp": datetime.now().isoformat(),
+                            "ok_only": True,
+                            "delivered": {
+                                "mode": delivery.mode,
+                                "targets": delivery_targets,
+                            },
+                        },
+                    }
+                else:
+                    summary_event = {
+                        "type": "heartbeat_summary",
+                        "data": {
+                            "text": full_response,
+                            "timestamp": datetime.now().isoformat(),
+                            "ok_only": ok_only,
+                            # Add extra metadata for UI awareness
+                            "delivered": {
+                                "mode": delivery.mode,
+                                "targets": delivery_targets,
+                                "is_duplicate": is_duplicate, # Should be false if sent
+                            },
+                        },
+                    }
+
+                for target_session_id in delivery_targets:
+                    await self.connection_manager.broadcast(target_session_id, summary_event)
                 
                 # Update last message state only if sent (so we don't dedupe against something we never showed)
                 # Actually, for dedupe, if we suppressed A because it was A, we keep the OLD timestamp (so window doesn't reset).
