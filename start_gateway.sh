@@ -42,16 +42,20 @@ MODE="${1:-full}"
 
 run_gateway_foreground() {
     if [ "$(id -u)" -eq 0 ] && id -u appuser >/dev/null 2>&1; then
+        echo "👤 Running gateway as appuser (via su)"
         su -m -s /bin/bash appuser -c "PYTHONPATH=src uv run python -m universal_agent.gateway_server"
     else
+        echo "👤 Running gateway as $(id -un)"
         PYTHONPATH=src uv run python -m universal_agent.gateway_server
     fi
 }
 
 run_gateway_background() {
     if [ "$(id -u)" -eq 0 ] && id -u appuser >/dev/null 2>&1; then
+        echo "👤 Running gateway as appuser (via su)"
         su -m -s /bin/bash appuser -c "PYTHONPATH=src uv run python -m universal_agent.gateway_server" > gateway.log 2>&1 &
     else
+        echo "👤 Running gateway as $(id -un)"
         PYTHONPATH=src uv run python -m universal_agent.gateway_server > gateway.log 2>&1 &
     fi
 }
