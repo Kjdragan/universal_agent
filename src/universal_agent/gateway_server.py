@@ -467,6 +467,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
             try:
                 msg = json.loads(data)
                 msg_type = msg.get("type", "")
+                logger.info("WS message received (session=%s): %s", session_id, msg_type)
 
                 if msg_type == "execute":
                     user_input = msg.get("data", {}).get("user_input", "")
@@ -485,6 +486,12 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         user_input=user_input,
                         force_complex=msg.get("data", {}).get("force_complex", False),
                         metadata=msg.get("data", {}).get("metadata", {}),
+                    )
+                    logger.info(
+                        "WS execute start (session=%s, user_id=%s, len=%s)",
+                        session_id,
+                        session.user_id,
+                        len(user_input),
                     )
 
                     async def run_execution():
@@ -512,8 +519,9 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 connection_id,
                                 {"type": "pong", "data": {}, "timestamp": datetime.now().isoformat()},
                             )
+                            logger.info("WS execute complete (session=%s)", session_id)
                         except Exception as e:
-                            logger.error(f"Execution error for session {session_id}: {e}", exc_info=True)
+                            logger.error("Execution error for session %s: %s", session_id, e, exc_info=True)
                             await manager.send_json(
                                 connection_id,
                                 {
