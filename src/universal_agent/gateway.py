@@ -514,7 +514,9 @@ class ExternalGateway(Gateway):
                     if event_type_str == "query_complete":
                         break
                     if event_type_str == "error":
-                        raise RuntimeError(data.get("data", {}).get("message", "Unknown error"))
+                        err_data = data.get("data", {}) if isinstance(data.get("data"), dict) else {}
+                        err_msg = err_data.get("message") or err_data.get("error") or "Unknown error"
+                        raise RuntimeError(err_msg)
 
                     try:
                         event_type = EventType(event_type_str)
