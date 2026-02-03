@@ -23,6 +23,13 @@ cd "$(dirname "$0")"
 # Keep uv cache inside repo
 export UV_CACHE_DIR="$(pwd)/.uv-cache"
 
+# Composio cache directory (must be writable when running as appuser)
+if [ -z "$COMPOSIO_CACHE_DIR" ]; then
+    export COMPOSIO_CACHE_DIR="/app/data/.composio"
+fi
+mkdir -p "$COMPOSIO_CACHE_DIR" 2>/dev/null || true
+chown -R appuser:appuser "$COMPOSIO_CACHE_DIR" 2>/dev/null || true
+
 # Gateway bind settings
 # In Railway (or other PaaS), use PORT if provided so the public URL routes correctly.
 if [ -n "$PORT" ]; then
