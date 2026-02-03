@@ -155,7 +155,13 @@ from universal_agent.cli_io import (
 from universal_agent.execution_context import bind_workspace
 from universal_agent.execution_session import ExecutionSession
 from universal_agent.trace_utils import write_trace
-from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled
+from universal_agent.feature_flags import (
+    heartbeat_enabled,
+    memory_index_enabled,
+    memory_enabled,
+    memory_index_mode,
+    memory_max_tokens,
+)
 
 
 # Global State Initialization
@@ -175,6 +181,7 @@ current_step_id = None
 # Feature flags (placeholders for future gating; no behavior change yet)
 HEARTBEAT_ENABLED = heartbeat_enabled()
 MEMORY_INDEX_ENABLED = memory_index_enabled()
+MEMORY_ENABLED = memory_enabled()
 
 
 class BudgetExceeded(RuntimeError):
@@ -6262,23 +6269,31 @@ async def setup_session(
         "true",
         "yes",
     }
-    if disable_local_memory:
-        print("⚠️ Local memory system disabled via UA_DISABLE_LOCAL_MEMORY.")
+    if disable_local_memory or not MEMORY_ENABLED:
+        print("⚠️ Local memory system disabled.")
     else:
         try:
             from Memory_System.manager import MemoryManager
             from universal_agent.agent_college.integration import setup_agent_college
+            from universal_agent.memory.memory_context import build_file_memory_context
+            from universal_agent.memory.memory_store import ensure_memory_scaffold
 
-            # Initialize strictly for reading context (shared storage) - Use src_dir (Repo Root)
             storage_path = os.getenv(
                 "PERSIST_DIRECTORY", os.path.join(src_dir, "Memory_System_Data")
             )
-            mem_mgr = MemoryManager(storage_dir=storage_path)
-
-            # Initialize Agent College (Sandbox)
+            ensure_memory_scaffold(str(workspace_dir))
+            mem_mgr = MemoryManager(storage_dir=storage_path, workspace_dir=str(workspace_dir))
             setup_agent_college(mem_mgr)
 
             memory_context_str = mem_mgr.get_system_prompt_addition()
+            file_context = build_file_memory_context(
+                str(workspace_dir),
+                max_tokens=memory_max_tokens(),
+                index_mode=memory_index_mode(),
+                recent_limit=int(os.getenv("UA_MEMORY_RECENT_ENTRIES", "8")),
+            )
+            if file_context:
+                memory_context_str = f"{memory_context_str}\n{file_context}\n"
             print(f"🧠 Injected Core Memory Context ({len(memory_context_str)} chars)")
         except Exception as e:
             print(f"⚠️ Failed to load Memory Context/Agent College: {e}")
@@ -6300,7 +6315,7 @@ async def setup_session(
     tomorrow_str = (user_now + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
     disallowed_tools = list(DISALLOWED_TOOLS)
-    if disable_local_memory:
+    if disable_local_memory or not MEMORY_ENABLED:
         disallowed_tools.extend(
             [
                 "mcp__internal__core_memory_replace",

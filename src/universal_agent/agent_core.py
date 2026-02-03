@@ -636,6 +636,33 @@ async def pre_compact_context_capture_hook(
                 compaction_event["transcript_size_bytes"] = size
         except Exception:
             pass
+
+    # Flush memory snapshot before compaction (best-effort)
+    try:
+        from universal_agent.feature_flags import memory_enabled
+        if memory_enabled():
+            from universal_agent.execution_context import get_current_workspace
+            from universal_agent.memory.memory_flush import flush_pre_compact_memory
+
+            workspace_dir = get_current_workspace()
+            if not workspace_dir and transcript_path:
+                workspace_dir = os.path.dirname(transcript_path)
+
+            if workspace_dir:
+                max_chars_raw = os.getenv("UA_MEMORY_FLUSH_MAX_CHARS", "4000")
+                try:
+                    max_chars = int(max_chars_raw)
+                except ValueError:
+                    max_chars = 4000
+                flush_pre_compact_memory(
+                    workspace_dir=workspace_dir,
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    trigger=trigger,
+                    max_chars=max_chars,
+                )
+    except Exception as e:
+        print(f"⚠️ Memory flush failed: {e}")
     
     # Return continue signal - let compaction proceed
     # We could inject a systemMessage here if we wanted to influence
@@ -1061,7 +1088,7 @@ class UniversalAgent:
             workspace_dir=self.workspace_dir,
             user_id=self.user_id,
             enable_skills=True,
-            enable_memory=False,  # URW/API may not need memory
+            enable_memory=None,  # defer to UA_MEMORY_ENABLED
             verbose=True,
         )
         if self._hooks:

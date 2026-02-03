@@ -27,8 +27,7 @@ class TestMemoryTool(unittest.TestCase):
     def test_scaffolding(self):
         """Verify AgentSetup creates memory files when enabled."""
         # Mock dependencies to avoid full agent startup
-        with patch.dict(os.environ, {"UA_DISABLE_LOCAL_MEMORY": "false"}), \
-             patch("universal_agent.agent_setup.memory_index_enabled", return_value=True):
+        with patch.dict(os.environ, {"UA_DISABLE_LOCAL_MEMORY": "false"}):
             
             setup = AgentSetup(
                 workspace_dir=self.workspace_dir,

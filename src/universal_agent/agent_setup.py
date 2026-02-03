@@ -55,7 +55,11 @@ from universal_agent.tools.local_toolkit_bridge import (
 from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 from universal_agent.tools.memory import ua_memory_get
 from universal_agent.execution_context import bind_workspace_env
-from universal_agent.feature_flags import memory_index_enabled
+from universal_agent.feature_flags import (
+    memory_enabled,
+    memory_index_mode,
+    memory_max_tokens,
+)
 
 
 # Get project directories
@@ -83,7 +87,7 @@ class AgentSetup:
         workspace_dir: str,
         user_id: Optional[str] = None,
         enable_skills: bool = True,
-        enable_memory: bool = False,
+        enable_memory: Optional[bool] = None,
         verbose: bool = True,
     ):
         self.workspace_dir = workspace_dir
@@ -92,7 +96,10 @@ class AgentSetup:
         self.user_id = resolve_user_id(user_id)
         self.enable_skills = enable_skills
         disable_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
-        self.enable_memory = enable_memory and memory_index_enabled() and not disable_memory
+        resolved_enable_memory = memory_enabled() if enable_memory is None else enable_memory
+        self.enable_memory = resolved_enable_memory and not disable_memory
+        self.memory_index_mode = memory_index_mode()
+        self.memory_max_tokens = memory_max_tokens()
         self.verbose = verbose
         
         self.run_id = str(uuid.uuid4())
@@ -204,7 +211,7 @@ class AgentSetup:
 
         # Load memory context
         if self.enable_memory:
-            self._memory_context = await self._load_memory_context()
+            self._memory_context = self._load_memory_context()
         
         # Load soul/persona
         self._load_soul_context()
@@ -224,18 +231,27 @@ class AgentSetup:
             self._log(f"⚠️ App discovery failed: {e}")
             return []
 
-    async def _load_memory_context(self) -> str:
+    def _load_memory_context(self) -> str:
         """Load memory context for system prompt."""
         try:
             from Memory_System.manager import MemoryManager
             from universal_agent.agent_college.integration import setup_agent_college
+            from universal_agent.memory.memory_context import build_file_memory_context
 
             storage_path = os.getenv(
                 "PERSIST_DIRECTORY", os.path.join(self.src_dir, "Memory_System_Data")
             )
-            mem_mgr = MemoryManager(storage_dir=storage_path)
+            mem_mgr = MemoryManager(storage_dir=storage_path, workspace_dir=self.workspace_dir)
             setup_agent_college(mem_mgr)
             context = mem_mgr.get_system_prompt_addition()
+            file_context = build_file_memory_context(
+                self.workspace_dir,
+                max_tokens=self.memory_max_tokens,
+                index_mode=self.memory_index_mode,
+                recent_limit=int(os.getenv("UA_MEMORY_RECENT_ENTRIES", "8")),
+            )
+            if file_context:
+                context = f"{context}\n{file_context}\n"
             self._log(f"🧠 Injected Core Memory Context ({len(context)} chars)")
             return context
         except Exception as e:
@@ -281,6 +297,8 @@ class AgentSetup:
         self.workspace_dir = new_workspace
         bind_workspace_env(new_workspace)
         self._setup_workspace_dirs()
+        if self.enable_memory:
+            self._memory_context = self._load_memory_context()
         
         # Rebuild options with new workspace
         if self._initialized:
@@ -296,11 +314,8 @@ class AgentSetup:
         
         # Memory scaffolding
         if self.enable_memory:
-            os.makedirs(os.path.join(self.workspace_dir, "memory"), exist_ok=True)
-            memory_file = os.path.join(self.workspace_dir, "MEMORY.md")
-            if not os.path.exists(memory_file):
-                with open(memory_file, "w") as f:
-                    f.write("# Agent Memory\n\nPersistent context for the agent.\n")
+            from universal_agent.memory.memory_store import ensure_memory_scaffold
+            ensure_memory_scaffold(self.workspace_dir)
 
     def _build_options(self) -> ClaudeAgentOptions:
         """Build ClaudeAgentOptions with full configuration."""

@@ -135,7 +135,7 @@ class UniversalAgentAdapter(BaseAgentAdapter):
             self._setup = AgentSetup(
                 workspace_dir=workspace_dir,
                 enable_skills=True,
-                enable_memory=False,
+                enable_memory=None,
                 verbose=self.config.get("verbose", False),
             )
             await self._setup.initialize()

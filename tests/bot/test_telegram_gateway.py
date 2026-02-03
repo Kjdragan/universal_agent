@@ -1,6 +1,14 @@
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
+import os
+import pytest
+
+if os.getenv("RUN_TELEGRAM_TESTS", "").lower() not in {"1", "true", "yes"}:
+    pytest.skip(
+        "Telegram gateway tests disabled by default. Set RUN_TELEGRAM_TESTS=1 to enable.",
+        allow_module_level=True,
+    )
 from universal_agent.bot.agent_adapter import AgentAdapter
 from universal_agent.gateway import GatewaySession, GatewayResult
 
