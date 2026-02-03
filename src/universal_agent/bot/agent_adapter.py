@@ -197,8 +197,9 @@ class AgentAdapter:
             await self.request_queue.put(req)
             
             # Wait for result with TIMEOUT
-            # 5 minutes max for any single turn
-            result = await asyncio.wait_for(reply_future, timeout=300.0)
+            # Default 15 minutes; override with UA_TELEGRAM_TASK_TIMEOUT_SECONDS
+            timeout_s = float(os.getenv("UA_TELEGRAM_TASK_TIMEOUT_SECONDS", "900"))
+            result = await asyncio.wait_for(reply_future, timeout=timeout_s)
             
             # Store data
             task.execution_summary = result
@@ -210,7 +211,17 @@ class AgentAdapter:
             if not task.result:
                 task.result = "(No text response returned by agent)"
 
-        except Exception as e:
-            print(f"🔥 Critical Error during execution: {e}")
+        except asyncio.TimeoutError:
+            print("🔥 Critical Error during execution: timeout waiting for gateway result")
             task.status = "error"
-            task.result = f"Error: {e}"
+            task.result = (
+                "Error: request timed out waiting for the agent response. "
+                "Try a shorter prompt or increase UA_TELEGRAM_TASK_TIMEOUT_SECONDS."
+            )
+        except Exception as e:
+            msg = str(e)
+            if not msg:
+                msg = repr(e)
+            print(f"🔥 Critical Error during execution: {msg}")
+            task.status = "error"
+            task.result = f"Error: {msg}"
