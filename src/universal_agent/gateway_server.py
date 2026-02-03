@@ -133,7 +133,13 @@ def is_user_allowed(user_id: str) -> bool:
     """Check if user_id is in the allowlist (if active)."""
     if not ALLOWED_USERS:
         return True
-    return user_id in ALLOWED_USERS
+    if user_id in ALLOWED_USERS:
+        return True
+    # Support numeric Telegram IDs in allowlist (e.g., "7843395933")
+    if user_id.startswith("telegram_"):
+        telegram_id = user_id.split("telegram_", 1)[1]
+        return telegram_id in ALLOWED_USERS
+    return False
 
 
 # =============================================================================
