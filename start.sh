@@ -10,6 +10,20 @@ chown -R appuser:appuser /app/data
 mkdir -p /app/AGENT_RUN_WORKSPACES
 chown -R appuser:appuser /app/AGENT_RUN_WORKSPACES
 
+# Composio cache directory (must be writable when running as appuser)
+if [ -z "$COMPOSIO_CACHE_DIR" ]; then
+    export COMPOSIO_CACHE_DIR="/app/data/.composio"
+fi
+mkdir -p "$COMPOSIO_CACHE_DIR" 2>/dev/null || true
+chown -R appuser:appuser "$COMPOSIO_CACHE_DIR" 2>/dev/null || true
+
+# Ensure appuser has a writable HOME and XDG dirs for CLI caches/config
+export HOME="/app"
+export XDG_CACHE_HOME="/app/.cache"
+export XDG_CONFIG_HOME="/app/.config"
+mkdir -p "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" 2>/dev/null || true
+chown -R appuser:appuser "$XDG_CACHE_HOME" "$XDG_CONFIG_HOME" 2>/dev/null || true
+
 # ==========================================
 # START SERVICES AS APPUSER
 # ==========================================
