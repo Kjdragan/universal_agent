@@ -8,6 +8,10 @@ from typing import Any
 
 from claude_agent_sdk import tool
 
+from universal_agent.feature_flags import memory_index_mode
+from universal_agent.memory.memory_index import search_entries
+from universal_agent.memory.memory_vector_index import search_vectors
+
 def ua_memory_get(path: str, line_start: int = 1, num_lines: int = 100) -> str:
     """
     Read content from the agent's memory files.
@@ -100,4 +104,45 @@ async def ua_memory_get_wrapper(args: dict[str, Any]) -> dict[str, Any]:
         line_start=args.get("line_start", 1),
         num_lines=args.get("num_lines", 100),
     )
+    return {"content": [{"type": "text", "text": content}]}
+
+
+def ua_memory_search(query: str, limit: int = 5) -> str:
+    """Search memory index (vector or json) for matching entries."""
+    workspace_dir = os.environ.get("AGENT_WORKSPACE_DIR", os.getcwd())
+    root = Path(workspace_dir).resolve()
+    memory_dir = root / "memory"
+    index_mode = memory_index_mode()
+
+    if index_mode == "vector":
+        db_path = memory_dir / "vector_index.sqlite"
+        results = search_vectors(str(db_path), query, limit=limit)
+    else:
+        index_path = memory_dir / "index.json"
+        results = search_entries(str(index_path), query, limit=limit)
+
+    if not results:
+        return "No memory matches found."
+
+    lines = ["# Memory Search Results", ""]
+    for item in results:
+        ts = item.get("timestamp", "")
+        summary = item.get("summary") or item.get("preview") or ""
+        score = item.get("score")
+        if score is not None:
+            lines.append(f"- {ts}: {summary} (score: {score:.3f})")
+        else:
+            lines.append(f"- {ts}: {summary}")
+    return "\n".join(lines)
+
+
+@tool(
+    name="ua_memory_search",
+    description="Search the memory index for relevant entries.",
+    input_schema={"query": str, "limit": int},
+)
+async def ua_memory_search_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    query = args.get("query", "")
+    limit = args.get("limit", 5)
+    content = ua_memory_search(query=query, limit=limit)
     return {"content": [{"type": "text", "text": content}]}

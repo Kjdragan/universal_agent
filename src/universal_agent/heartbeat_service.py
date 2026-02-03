@@ -17,12 +17,20 @@ logger = logging.getLogger(__name__)
 import hashlib
 import re
 
+import pytz
+
 # Constants
 HEARTBEAT_FILE = "HEARTBEAT.md"
 HEARTBEAT_STATE_FILE = "heartbeat_state.json"
-DEFAULT_INTERVAL = int(os.getenv("UA_HEARTBEAT_INTERVAL", "300"))  # 5 minutes default
+DEFAULT_HEARTBEAT_PROMPT = (
+    "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
+    "Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+)
+DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default (Clawdbot parity)
 BUSY_RETRY_DELAY = 10  # Seconds
 HEARTBEAT_EXECUTION_TIMEOUT = int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT", "45"))
+DEFAULT_ACK_MAX_CHARS = 300
+DEFAULT_OK_TOKENS = ["HEARTBEAT_OK", "UA_HEARTBEAT_OK"]
 
 @dataclass
 class HeartbeatDeliveryConfig:
@@ -35,6 +43,18 @@ class HeartbeatVisibilityConfig:
     show_alerts: bool = True
     dedupe_window_seconds: int = 86400  # 24 hours
     use_indicator: bool = False
+
+
+@dataclass
+class HeartbeatScheduleConfig:
+    every_seconds: int = DEFAULT_INTERVAL_SECONDS
+    active_start: Optional[str] = None  # "HH:MM"
+    active_end: Optional[str] = None  # "HH:MM"
+    timezone: str = os.getenv("USER_TIMEZONE", "America/Chicago")
+    require_file: bool = False
+    prompt: str = DEFAULT_HEARTBEAT_PROMPT
+    ack_max_chars: int = DEFAULT_ACK_MAX_CHARS
+    ok_tokens: list[str] = field(default_factory=lambda: DEFAULT_OK_TOKENS.copy())
 
 @dataclass
 class HeartbeatState:
@@ -57,6 +77,180 @@ class HeartbeatState:
             last_message_ts=data.get("last_message_ts", 0.0),
         )
 
+
+def _parse_duration_seconds(raw: str | None, default: int) -> int:
+    if not raw:
+        return default
+    value = raw.strip().lower()
+    if not value:
+        return default
+    match = re.match(r"^(\d+)([smhd]?)$", value)
+    if not match:
+        return default
+    amount = int(match.group(1))
+    unit = match.group(2) or "s"
+    if unit == "s":
+        return amount
+    if unit == "m":
+        return amount * 60
+    if unit == "h":
+        return amount * 3600
+    if unit == "d":
+        return amount * 86400
+    return default
+
+
+def _parse_active_hours(raw: str | None) -> tuple[Optional[str], Optional[str]]:
+    if not raw:
+        return None, None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None, None
+    if "-" not in cleaned:
+        return None, None
+    start, end = [part.strip() for part in cleaned.split("-", 1)]
+    return start or None, end or None
+
+
+def _parse_hhmm(raw: str | None, allow_24: bool) -> Optional[int]:
+    if not raw:
+        return None
+    match = re.match(r"^([01]\d|2[0-3]|24):([0-5]\d)$", raw)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour == 24 and (not allow_24 or minute != 0):
+        return None
+    return hour * 60 + minute
+
+
+def _resolve_active_timezone(raw: str | None) -> str:
+    candidate = (raw or "").strip()
+    if not candidate:
+        return os.getenv("USER_TIMEZONE", "America/Chicago")
+    if candidate.lower() == "user":
+        return os.getenv("USER_TIMEZONE", "America/Chicago")
+    if candidate.lower() == "local":
+        try:
+            return datetime.now().astimezone().tzinfo.key  # type: ignore[attr-defined]
+        except Exception:
+            return os.getenv("USER_TIMEZONE", "America/Chicago")
+    return candidate
+
+
+def _minutes_in_timezone(now_ts: float, tz_name: str) -> Optional[int]:
+    try:
+        tz = pytz.timezone(tz_name)
+        now = datetime.fromtimestamp(now_ts, tz)
+        return now.hour * 60 + now.minute
+    except Exception:
+        return None
+
+
+def _within_active_hours(cfg: HeartbeatScheduleConfig, now_ts: float) -> bool:
+    start_min = _parse_hhmm(cfg.active_start, allow_24=False)
+    end_min = _parse_hhmm(cfg.active_end, allow_24=True)
+    if start_min is None or end_min is None:
+        return True
+    if start_min == end_min:
+        return True
+    current_min = _minutes_in_timezone(now_ts, cfg.timezone)
+    if current_min is None:
+        return True
+    if end_min > start_min:
+        return start_min <= current_min < end_min
+    return current_min >= start_min or current_min < end_min
+
+
+def _is_effectively_empty(content: str) -> bool:
+    lines = content.split("\n")
+    for line in lines:
+        trimmed = line.strip()
+        if not trimmed:
+            continue
+        if re.match(r"^#+(\s|$)", trimmed):
+            continue
+        if re.match(r"^[-*+]\s*(\[[\sXx]?\]\s*)?$", trimmed):
+            continue
+        return False
+    return True
+
+
+def _strip_markup_edges(text: str) -> str:
+    return (
+        re.sub(r"<[^>]*>", " ", text)
+        .replace("&nbsp;", " ")
+        .strip("*`~_ ")
+    )
+
+
+def _strip_token_at_edges(text: str, token: str) -> tuple[str, bool]:
+    value = text.strip()
+    if token not in value:
+        return value, False
+    did_strip = False
+    changed = True
+    while changed:
+        changed = False
+        next_value = value.strip()
+        if next_value.startswith(token):
+            value = next_value[len(token):].lstrip()
+            did_strip = True
+            changed = True
+            continue
+        if next_value.endswith(token):
+            value = next_value[: max(0, len(next_value) - len(token))].rstrip()
+            did_strip = True
+            changed = True
+    return re.sub(r"\s+", " ", value).strip(), did_strip
+
+
+def _strip_heartbeat_tokens(text: str, tokens: list[str], max_ack_chars: int) -> dict:
+    if not text or not text.strip():
+        return {"ok_only": True, "text": "", "token": None}
+    raw = text.strip()
+    normalized = _strip_markup_edges(raw)
+    tokens_sorted = sorted(tokens, key=len, reverse=True)
+    for token in tokens_sorted:
+        if token not in raw and token not in normalized:
+            continue
+        stripped_raw, did_raw = _strip_token_at_edges(raw, token)
+        stripped_norm, did_norm = _strip_token_at_edges(normalized, token)
+        candidate = stripped_raw if did_raw and stripped_raw else stripped_norm
+        did_strip = did_raw or did_norm
+        if not did_strip:
+            continue
+        if not candidate:
+            return {"ok_only": True, "text": "", "token": token}
+        if len(candidate) <= max_ack_chars:
+            return {"ok_only": True, "text": "", "token": token}
+        return {"ok_only": False, "text": candidate, "token": token}
+    return {"ok_only": False, "text": raw, "token": None}
+
+
+def _parse_ok_tokens(raw: Optional[str]) -> list[str]:
+    if raw:
+        tokens = [t.strip() for t in re.split(r"[,\n]", raw) if t.strip()]
+        if tokens:
+            return tokens
+    return DEFAULT_OK_TOKENS.copy()
+
+
+def _parse_int(raw: Optional[str], default: int) -> int:
+    if not raw:
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
+def _parse_bool(raw: Optional[str], default: bool = False) -> bool:
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
 class HeartbeatService:
     def __init__(self, gateway: InProcessGateway, connection_manager):
         self.gateway = gateway
@@ -66,6 +260,8 @@ class HeartbeatService:
         self.active_sessions: Dict[str, GatewaySession] = {}
         # Simple tracking of busy sessions (primitive lock)
         self.busy_sessions: set[str] = set()
+        self.wake_sessions: set[str] = set()
+        self.last_wake_reason: Dict[str, str] = {}
         
         # MOCK CONFIG (In future, load from session config)
         self.default_delivery = HeartbeatDeliveryConfig(
@@ -81,6 +277,29 @@ class HeartbeatService:
             show_alerts=os.getenv("UA_HB_SHOW_ALERTS", "true").lower() == "true",
             dedupe_window_seconds=int(os.getenv("UA_HB_DEDUPE_WINDOW", "86400")),
             use_indicator=os.getenv("UA_HB_USE_INDICATOR", "false").lower() == "true",
+        )
+        active_start = os.getenv("UA_HEARTBEAT_ACTIVE_START")
+        active_end = os.getenv("UA_HEARTBEAT_ACTIVE_END")
+        if os.getenv("UA_HEARTBEAT_ACTIVE_HOURS") and not (active_start or active_end):
+            parsed_start, parsed_end = _parse_active_hours(os.getenv("UA_HEARTBEAT_ACTIVE_HOURS"))
+            active_start = parsed_start or active_start
+            active_end = parsed_end or active_end
+
+        ok_tokens = _parse_ok_tokens(os.getenv("UA_HEARTBEAT_OK_TOKENS"))
+        legacy_ok = os.getenv("UA_HEARTBEAT_OK_TOKEN") or os.getenv("UA_HEARTBEAT_OK")
+        if legacy_ok:
+            ok_tokens = [legacy_ok] + [t for t in ok_tokens if t != legacy_ok]
+
+        interval_raw = os.getenv("UA_HEARTBEAT_EVERY") or os.getenv("UA_HEARTBEAT_INTERVAL")
+        self.default_schedule = HeartbeatScheduleConfig(
+            every_seconds=_parse_duration_seconds(interval_raw, DEFAULT_INTERVAL_SECONDS),
+            active_start=active_start or None,
+            active_end=active_end or None,
+            timezone=_resolve_active_timezone(os.getenv("UA_HEARTBEAT_TIMEZONE")),
+            require_file=_parse_bool(os.getenv("UA_HEARTBEAT_REQUIRE_FILE"), default=False),
+            prompt=os.getenv("UA_HEARTBEAT_PROMPT", DEFAULT_HEARTBEAT_PROMPT),
+            ack_max_chars=_parse_int(os.getenv("UA_HEARTBEAT_ACK_MAX_CHARS"), DEFAULT_ACK_MAX_CHARS),
+            ok_tokens=ok_tokens,
         )
 
     async def start(self):
@@ -110,6 +329,11 @@ class HeartbeatService:
         if session_id in self.active_sessions:
             del self.active_sessions[session_id]
 
+    def request_heartbeat_now(self, session_id: str, reason: str = "wake") -> None:
+        self.wake_sessions.add(session_id)
+        self.last_wake_reason[session_id] = reason
+        logger.info("Heartbeat wake requested for %s (%s)", session_id, reason)
+
     async def _scheduler_loop(self):
         """Main loop that checks sessions periodically."""
         logger.info("Heartbeat scheduler loop starting")
@@ -130,9 +354,10 @@ class HeartbeatService:
                     except Exception as e:
                         logger.error(f"Error processing heartbeat for {session_id}: {e}")
                 
-                # Sleep remainder of tick
+                # Sleep remainder of tick (cap at 5s, but respect shorter heartbeat intervals)
                 elapsed = time.time() - start_time
-                sleep_time = max(1.0, 5.0 - elapsed) # Reduced to 5s for test
+                tick_interval = max(1.0, min(5.0, float(self.default_schedule.every_seconds)))
+                sleep_time = max(0.5, tick_interval - elapsed)
                 await asyncio.sleep(sleep_time)
             except Exception as e:
                 logger.critical(f"Scheduler loop crash: {e}", exc_info=True)
@@ -155,24 +380,41 @@ class HeartbeatService:
             except Exception as e:
                 logger.warning(f"Failed to load heartbeat state for {session.session_id}: {e}")
 
-        # Check schedule (MVP: fixed 5m interval)
+        schedule = self.default_schedule
         now = time.time()
-        elapsed = now - state.last_run
-        if elapsed < DEFAULT_INTERVAL:
+        wake_requested = session.session_id in self.wake_sessions
+        wake_reason = None
+        if wake_requested:
+            self.wake_sessions.discard(session.session_id)
+            wake_reason = self.last_wake_reason.pop(session.session_id, None)
+
+        if not wake_requested:
+            elapsed = now - state.last_run
+            if elapsed < schedule.every_seconds:
+                return
+
+        if not _within_active_hours(schedule, now):
             return
 
-        # Check HEARTBEAT.md
+        # Check HEARTBEAT.md (optional)
         hb_file = workspace / HEARTBEAT_FILE
-        if not hb_file.exists():
-            return
-            
-        content = hb_file.read_text().strip()
-        if not content:
+        heartbeat_content = ""
+        if hb_file.exists():
+            heartbeat_content = hb_file.read_text()
+            if _is_effectively_empty(heartbeat_content):
+                state.last_run = now
+                with open(state_path, "w") as f:
+                    json.dump(state.to_dict(), f)
+                return
+        elif schedule.require_file:
             return
 
-        # Ready to run
-        logger.info(f"💓 Triggering heartbeat for {session.session_id}")
-        await self._run_heartbeat(session, state, state_path, content)
+        logger.info(
+            "💓 Triggering heartbeat for %s%s",
+            session.session_id,
+            f" (wake={wake_reason})" if wake_requested and wake_reason else "",
+        )
+        await self._run_heartbeat(session, state, state_path, heartbeat_content, schedule)
 
     async def _run_heartbeat(
         self,
@@ -180,6 +422,7 @@ class HeartbeatService:
         state: HeartbeatState,
         state_path: Path,
         heartbeat_content: str,
+        schedule: HeartbeatScheduleConfig,
     ):
         """Execute the heartbeat using the gateway engine."""
         self.busy_sessions.add(session.session_id)
@@ -190,21 +433,20 @@ class HeartbeatService:
         
         def _mock_heartbeat_response(content: str) -> str:
             # Deterministic response for tests/CI (no external calls).
-            for token in ("UA_HEARTBEAT_OK", "ALERT_TEST_A", "ALERT_TEST_B"):
+            ok_tokens_sorted = sorted(schedule.ok_tokens, key=len, reverse=True)
+            for token in ok_tokens_sorted + ["ALERT_TEST_A", "ALERT_TEST_B"]:
                 if token in content:
                     return token
             match = re.search(r"'([^']+)'", content)
             if match:
                 return match.group(1)
-            return "UA_HEARTBEAT_OK"
+            return schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
 
         try:
-            # Construct prompt based on HEARTBEAT.md (already verified existing/non-empty)
-            prompt = (
-                "SYSTEM HEARTBEAT EVENT:\n"
-                f"Please read {HEARTBEAT_FILE} to check for any pending instructions or context updates. "
-                "If there is nothing new to do, reply with 'UA_HEARTBEAT_OK'."
-            )
+            prompt = schedule.prompt.strip() or DEFAULT_HEARTBEAT_PROMPT
+            if "{ok_token}" in prompt:
+                ok_token = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
+                prompt = prompt.replace("{ok_token}", ok_token)
             
             request = GatewayRequest(
                 user_input=prompt,
@@ -240,10 +482,16 @@ class HeartbeatService:
             logger.info(f"Heartbeat response for {session.session_id}: '{full_response}'")
 
             # --- Phase 3 Logic ---
-            
-            ok_only = "UA_HEARTBEAT_OK" in full_response
+            strip_result = _strip_heartbeat_tokens(
+                full_response,
+                schedule.ok_tokens,
+                schedule.ack_max_chars,
+            )
+            ok_only = strip_result["ok_only"]
+            response_text = strip_result["text"] or ""
+            ok_token = strip_result["token"] or (schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0])
             is_duplicate = False
-            msg_hash = hashlib.sha256(full_response.encode()).hexdigest()
+            msg_hash = hashlib.sha256((response_text or full_response).encode()).hexdigest()
             now = time.time()
             
             # Policy 1: Visibility (showOk)
@@ -284,11 +532,19 @@ class HeartbeatService:
             if not delivery_targets:
                 should_send = False
 
+            connected_targets = [
+                target for target in delivery_targets
+                if target in self.connection_manager.session_connections
+            ]
+            if should_send and not connected_targets:
+                should_send = False
+
             # Allow indicator-only event when OK is suppressed but indicators are enabled.
             allow_indicator = ok_only and suppress_ok and visibility.use_indicator
-            if allow_indicator:
+            if allow_indicator and connected_targets:
                 should_send = True
             
+            sent_any = False
             if should_send:
                 if allow_indicator:
                     summary_event = {
@@ -306,7 +562,7 @@ class HeartbeatService:
                     summary_event = {
                         "type": "heartbeat_summary",
                         "data": {
-                            "text": full_response,
+                            "text": ok_token if ok_only else response_text or full_response,
                             "timestamp": datetime.now().isoformat(),
                             "ok_only": ok_only,
                             # Add extra metadata for UI awareness
@@ -318,13 +574,14 @@ class HeartbeatService:
                         },
                     }
 
-                for target_session_id in delivery_targets:
+                for target_session_id in connected_targets:
                     await self.connection_manager.broadcast(target_session_id, summary_event)
+                    sent_any = True
                 
                 # Update last message state only if sent (so we don't dedupe against something we never showed)
                 # Actually, for dedupe, if we suppressed A because it was A, we keep the OLD timestamp (so window doesn't reset).
                 # But if we sent it, we update.
-                if not ok_only:
+                if sent_any and not ok_only:
                     state.last_message_hash = msg_hash
                     state.last_message_ts = now
 

@@ -104,6 +104,11 @@ class GatewayEventWire(BaseModel):
     timestamp: str
 
 
+class HeartbeatWakeRequest(BaseModel):
+    session_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
 # =============================================================================
 # Gateway Singleton
 # =============================================================================
@@ -388,6 +393,21 @@ async def list_sessions():
             for s in summaries
         ]
     }
+
+
+@app.post("/api/v1/heartbeat/wake")
+async def wake_heartbeat(request: HeartbeatWakeRequest):
+    if not _heartbeat_service:
+        raise HTTPException(status_code=400, detail="Heartbeat service not available.")
+
+    reason = request.reason or "wake"
+    if request.session_id:
+        _heartbeat_service.request_heartbeat_now(request.session_id, reason=reason)
+        return {"status": "queued", "session_id": request.session_id, "reason": reason}
+
+    for session_id in list(_sessions.keys()):
+        _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
+    return {"status": "queued", "count": len(_sessions), "reason": reason}
 
 
 @app.get("/api/v1/sessions/{session_id}")

@@ -6,7 +6,9 @@ from datetime import datetime
 from typing import Optional
 
 from .memory_models import MemoryEntry
-from .memory_index import append_index_entry, recent_entries
+from .memory_index import append_index_entry, recent_entries, _content_hash
+from .memory_vector_index import schedule_vector_upsert
+from universal_agent.feature_flags import memory_index_mode
 
 
 @dataclass
@@ -91,6 +93,18 @@ def append_memory_entry(
     append_index_entry(paths.index_path, entry, daily_path, preview)
 
     update_recent_context_section(paths, max_entries=10)
+
+    if memory_index_mode() == "vector":
+        vector_db = os.path.join(paths.memory_dir, "vector_index.sqlite")
+        schedule_vector_upsert(
+            vector_db,
+            entry.entry_id,
+            _content_hash(entry.content),
+            entry.timestamp,
+            entry.summary or "",
+            preview,
+            entry.content,
+        )
     return paths
 
 

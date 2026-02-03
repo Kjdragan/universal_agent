@@ -45,11 +45,11 @@ def memory_enabled(default: bool = False) -> bool:
 
 
 def memory_index_mode(default: str = "json") -> str:
-    """Return the configured memory index mode (json|fts|off)."""
+    """Return the configured memory index mode (json|vector|fts|off)."""
     mode = (os.getenv("UA_MEMORY_INDEX") or "").strip().lower()
     if mode in {"off", "false", "0"}:
         return "off"
-    if mode in {"json", "fts"}:
+    if mode in {"json", "vector", "fts"}:
         return mode
     if memory_index_enabled(default=False):
         return default
