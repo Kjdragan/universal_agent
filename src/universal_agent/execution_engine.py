@@ -18,6 +18,7 @@ import os
 import time
 import logging
 import uuid
+import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -266,8 +267,9 @@ class ProcessTurnAdapter:
                 result_holder["result"] = result
                 result_holder["success"] = True
             except Exception as e:
-                logger.error(f"Engine error: {e}", exc_info=True)
+                logger.error("Engine error: %s", e, exc_info=True)
                 result_holder["error"] = str(e)
+                result_holder["error_detail"] = traceback.format_exc()
                 result_holder["success"] = False
             finally:
                 # Signal completion
@@ -374,10 +376,27 @@ class ProcessTurnAdapter:
                 )
         else:
             # Emit error
+            error_message = result_holder.get("error", "Unknown error")
+            error_detail = result_holder.get("error_detail")
+            log_tail = None
+            log_path = Path(self.config.workspace_dir) / "run.log"
+            if log_path.exists():
+                try:
+                    # Read the last ~4KB to surface stderr/context without huge payloads
+                    with log_path.open("rb") as handle:
+                        handle.seek(0, os.SEEK_END)
+                        size = handle.tell()
+                        handle.seek(max(size - 4096, 0))
+                        log_tail = handle.read().decode("utf-8", errors="replace")
+                except Exception as e:
+                    logger.warning("Failed to read run.log tail: %s", e)
+            logger.error("Execution engine error: %s", error_message)
             yield AgentEvent(
                 type=EventType.ERROR,
                 data={
-                    "message": result_holder.get("error", "Unknown error"),
+                    "message": error_message,
+                    "detail": error_detail,
+                    "log_tail": log_tail,
                     "duration_seconds": round(time.time() - start_ts, 2),
                 },
             )

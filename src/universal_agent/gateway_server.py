@@ -491,6 +491,12 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         try:
                             # Execute the request and stream back to THIS connection
                             async for event in gateway.execute(session, request):
+                                if event.type == EventType.ERROR:
+                                    logger.error(
+                                        "Agent error event (session=%s): %s",
+                                        session.session_id,
+                                        event.data,
+                                    )
                                 await manager.send_json(connection_id, agent_event_to_wire(event))
 
                             await manager.send_json(
