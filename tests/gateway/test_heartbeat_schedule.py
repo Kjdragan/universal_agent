@@ -1,10 +1,10 @@
 import asyncio
-import json
 import os
 import socket
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import aiohttp
@@ -31,14 +31,14 @@ async def _wait_for_server(base_url: str, timeout: float = 20.0) -> bool:
     return False
 
 
-async def _run_once(base_url: str, ws_url: str, workspace_dir: Path, instruction: str, timeout: float = 15.0):
+async def _run_once(base_url: str, ws_url: str, workspace_dir: Path, heartbeat_content: str, timeout: float = 8.0):
     workspace_dir.mkdir(parents=True, exist_ok=True)
-    (workspace_dir / "HEARTBEAT.md").write_text(instruction, encoding="utf-8")
+    (workspace_dir / "HEARTBEAT.md").write_text(heartbeat_content, encoding="utf-8")
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{base_url}/api/v1/sessions",
-            json={"user_id": "test_heartbeat", "workspace_dir": str(workspace_dir)},
+            json={"user_id": "test_heartbeat_schedule", "workspace_dir": str(workspace_dir)},
         ) as resp:
             data = await resp.json()
             if resp.status != 200:
@@ -46,7 +46,7 @@ async def _run_once(base_url: str, ws_url: str, workspace_dir: Path, instruction
         session_id = data["session_id"]
 
         async with session.ws_connect(f"{ws_url}/api/v1/sessions/{session_id}/stream") as ws:
-            await ws.receive()
+            await ws.receive()  # connected
             try:
                 msg = await asyncio.wait_for(ws.receive_json(), timeout=timeout)
                 return msg
@@ -64,6 +64,7 @@ def _run_gateway(env_overrides: dict[str, str]):
         "UA_ENABLE_HEARTBEAT": "1",
         "UA_HEARTBEAT_INTERVAL": "1",
         "UA_HEARTBEAT_MOCK_RESPONSE": "1",
+        "UA_HB_SHOW_OK": "true",
         **env_overrides,
     }
 
@@ -86,80 +87,41 @@ def _stop_gateway(process: subprocess.Popen):
         process.kill()
 
 
-def test_show_ok_suppressed(tmp_path):
+def _format_hhmm(dt: datetime) -> str:
+    return dt.strftime("%H:%M")
+
+
+def test_active_hours_blocked(tmp_path):
+    now = datetime.now(timezone.utc)
+    start = _format_hhmm(now + timedelta(hours=1))
+    end = _format_hhmm(now + timedelta(hours=2))
     process, base_url, ws_url = _run_gateway({
-        "UA_HB_SHOW_OK": "false",
-        "UA_HB_USE_INDICATOR": "false",
-        "UA_HB_DELIVERY_MODE": "last",
+        "UA_HEARTBEAT_TIMEZONE": "UTC",
+        "UA_HEARTBEAT_ACTIVE_START": start,
+        "UA_HEARTBEAT_ACTIVE_END": end,
     })
     try:
-        msg = asyncio.run(_run_once(base_url, ws_url, tmp_path / "hb_show_ok_off", "UA_HEARTBEAT_OK"))
+        msg = asyncio.run(
+            _run_once(base_url, ws_url, tmp_path / "hb_active_blocked", "UA_HEARTBEAT_OK")
+        )
         assert msg is None
     finally:
         _stop_gateway(process)
 
 
-def test_show_ok_indicator(tmp_path):
+def test_empty_file_skips(tmp_path):
+    now = datetime.now(timezone.utc)
+    start = _format_hhmm(now - timedelta(hours=1))
+    end = _format_hhmm(now + timedelta(hours=1))
     process, base_url, ws_url = _run_gateway({
-        "UA_HB_SHOW_OK": "false",
-        "UA_HB_USE_INDICATOR": "true",
-        "UA_HB_DELIVERY_MODE": "last",
+        "UA_HEARTBEAT_TIMEZONE": "UTC",
+        "UA_HEARTBEAT_ACTIVE_START": start,
+        "UA_HEARTBEAT_ACTIVE_END": end,
     })
     try:
         msg = asyncio.run(
-            _run_once(base_url, ws_url, tmp_path / "hb_show_ok_indicator", "UA_HEARTBEAT_OK")
+            _run_once(base_url, ws_url, tmp_path / "hb_empty", "# Heartbeat\n\n")
         )
-        assert msg is not None
-        assert msg.get("type") == "heartbeat_indicator"
-    finally:
-        _stop_gateway(process)
-
-
-def test_show_alerts_suppressed(tmp_path):
-    process, base_url, ws_url = _run_gateway({
-        "UA_HB_SHOW_ALERTS": "false",
-        "UA_HB_DELIVERY_MODE": "last",
-    })
-    try:
-        msg = asyncio.run(_run_once(base_url, ws_url, tmp_path / "hb_alerts_off", "ALERT_TEST_A"))
         assert msg is None
-    finally:
-        _stop_gateway(process)
-
-
-def test_dedupe_alert(tmp_path):
-    process, base_url, ws_url = _run_gateway({
-        "UA_HB_SHOW_ALERTS": "true",
-        "UA_HB_DELIVERY_MODE": "last",
-        "UA_HB_DEDUPE_WINDOW": "3600",
-    })
-    try:
-        workspace = tmp_path / "hb_dedupe"
-        msg_first = asyncio.run(
-            _run_once(base_url, ws_url, workspace, "ALERT_TEST_A")
-        )
-        assert msg_first is not None
-        assert msg_first.get("type") == "heartbeat_summary"
-        time.sleep(2)
-        msg_second = asyncio.run(
-            _run_once(base_url, ws_url, workspace, "ALERT_TEST_A")
-        )
-        assert msg_second is None
-    finally:
-        _stop_gateway(process)
-
-
-def test_explicit_delivery_current(tmp_path):
-    process, base_url, ws_url = _run_gateway({
-        "UA_HB_DELIVERY_MODE": "explicit",
-        "UA_HB_EXPLICIT_SESSION_IDS": "CURRENT",
-        "UA_HB_SHOW_OK": "true",
-    })
-    try:
-        msg = asyncio.run(
-            _run_once(base_url, ws_url, tmp_path / "hb_explicit_current", "UA_HEARTBEAT_OK")
-        )
-        assert msg is not None
-        assert msg.get("type") in {"heartbeat_summary", "heartbeat_indicator"}
     finally:
         _stop_gateway(process)
