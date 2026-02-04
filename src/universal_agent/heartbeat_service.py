@@ -559,7 +559,7 @@ class HeartbeatService:
                 
                 count = len(self.active_sessions)
                 if count > 0:
-                    logger.info(f"Heartbeat tick: {count} active sessions")
+                    logger.debug(f"Heartbeat tick: {count} active sessions")
                     # import sys; sys.stderr.write(f"DEBUG: TICK {count}\n") # Removed noisy debug
                 
                 # Use list snapshot to avoid runtime errors
@@ -571,7 +571,8 @@ class HeartbeatService:
                 
                 # Sleep remainder of tick (cap at 5s, but respect shorter heartbeat intervals)
                 elapsed = time.time() - start_time
-                tick_interval = max(1.0, min(5.0, float(self.default_schedule.every_seconds)))
+                # Tick interval cap increased to 30s for less noise; respects shorter intervals if configured
+                tick_interval = max(1.0, min(30.0, float(self.default_schedule.every_seconds)))
                 sleep_time = max(0.5, tick_interval - elapsed)
                 await asyncio.sleep(sleep_time)
             except Exception as e:

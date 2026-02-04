@@ -610,3 +610,6 @@ Generate elements in this order:
 Save as: `[process-name]-swimlane.excalidraw`
 
 Example: `customer-onboarding-swimlane.excalidraw`
+
+**Write-only rule:** Use the `Write` tool to save the JSON to
+`work_products/<name>.excalidraw`. Do not paste JSON into chat.
