@@ -232,6 +232,7 @@ class CronService:
         workspaces_dir: Path,
         event_sink: Optional[Callable[[dict[str, Any]], None]] = None,
         wake_callback: Optional[Callable[[str, str, str], None]] = None,
+        system_event_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
     ):
         self.gateway = gateway
         self.workspaces_dir = workspaces_dir
@@ -243,6 +244,7 @@ class CronService:
         self._semaphore = asyncio.Semaphore(self.max_concurrency)
         self.event_sink = event_sink
         self.wake_callback = wake_callback
+        self.system_event_callback = system_event_callback
 
         jobs_path = workspaces_dir / "cron_jobs.json"
         runs_path = workspaces_dir / "cron_runs.jsonl"
@@ -463,6 +465,25 @@ class CronService:
                 self.running_jobs.discard(job.job_id)
                 self.store.append_run(record)
                 self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
+                
+                # Enqueue system event for target session (if wake_heartbeat configured)
+                metadata = job.metadata or {}
+                target_session = metadata.get("target_session") or metadata.get("session_id")
+                if target_session:
+                    event_text = f"Cron job '{job.command[:50]}...' completed with status={record.status}"
+                    if record.error:
+                        event_text += f", error: {record.error[:100]}"
+                    elif record.output_preview:
+                        event_text += f", output: {record.output_preview[:100]}..."
+                    self._emit_system_event(target_session, {
+                        "type": "cron_completed",
+                        "job_id": job.job_id,
+                        "status": record.status,
+                        "output_preview": record.output_preview,
+                        "error": record.error,
+                        "text": event_text,
+                    })
+                
                 self._maybe_wake_heartbeat(job, reason)
                 
                 # One-shot: delete job after successful run if configured
@@ -478,6 +499,15 @@ class CronService:
             self.event_sink(payload)
         except Exception as exc:
             logger.warning("Cron event sink failed: %s", exc)
+
+    def _emit_system_event(self, session_id: str, event: dict[str, Any]) -> None:
+        """Enqueue a system event for the given session (surfaced in next heartbeat)."""
+        if not self.system_event_callback:
+            return
+        try:
+            self.system_event_callback(session_id, event)
+        except Exception as exc:
+            logger.warning("Cron system event callback failed: %s", exc)
 
     def _maybe_wake_heartbeat(self, job: CronJob, reason: str) -> None:
         if not self.wake_callback:
