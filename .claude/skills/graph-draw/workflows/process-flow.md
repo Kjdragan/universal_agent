@@ -497,3 +497,6 @@ Use the JSON format from `references/json-format.md`.
 Save as: `[process-name]-flow.excalidraw`
 
 Example: `order-processing-flow.excalidraw`
+
+**Write-only rule:** Use the `Write` tool to save the JSON to
+`work_products/<name>.excalidraw`. Do not paste JSON into chat.

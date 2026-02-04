@@ -40,7 +40,7 @@ from universal_agent.utils.message_history import (
 )
 import glob
 from universal_agent.harness.verifier import TaskVerifier
-from universal_agent.agent_core import UniversalAgent, AgentEvent, EventType
+from universal_agent.agent_core import UniversalAgent, AgentEvent, EventType, HarnessError
 from claude_agent_sdk import create_sdk_mcp_server, HookMatcher
 from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
@@ -116,13 +116,10 @@ class ExecutionResult:
 
 
 
-from dotenv import load_dotenv
-
-# Load environment FIRST
-load_dotenv()
 
 import sys
 import argparse
+
 
 # prompt_toolkit for better terminal input (arrow keys, history, multiline)
 from universal_agent.prompt_assets import (
@@ -478,13 +475,7 @@ from universal_agent.harness.verifier import TaskVerifier
 # Durable runtime support
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
-import logging
-import sys
-from universal_agent.agent_core import (
-    UniversalAgent,
-    EventType,
-    HarnessError,
-)
+
 from universal_agent.utils.log_bridge import LogBridgeHandler, StdoutInterceptor
 
 
@@ -570,14 +561,7 @@ from universal_agent.harness import ask_user_questions, present_plan_summary
 # Global Memory Manager is not needed here as it is used locally for prompt injection
 # MEMORY_MANAGER = None
 
-# =============================================================================
-# MEMORY SYSTEM INTEGRATION
-# =============================================================================
-from Memory_System.manager import MemoryManager
-from Memory_System.tools import get_memory_tool_map
 
-# Global Memory Manager Instance
-MEMORY_MANAGER = None
 
 # =============================================================================
 # LETTA LEARNING SDK INTEGRATION

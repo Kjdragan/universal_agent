@@ -540,6 +540,7 @@ function ChatMessage({ message }: { message: any }) {
 function ChatInterface() {
   const messages = useAgentStore((s) => s.messages);
   const toolCalls = useAgentStore((s) => s.toolCalls);
+  const logs = useAgentStore((s) => s.logs);
   const currentStreamingMessage = useAgentStore((s) => s.currentStreamingMessage);
   const currentThinking = useAgentStore((s) => s.currentThinking);
   const currentAuthor = useAgentStore((s) => s.currentAuthor);
@@ -682,6 +683,27 @@ function ChatInterface() {
                         </>
                       );
                     }
+
+                    // Check for recent active logs (last 5 seconds)
+                    // This captures "Step 1/4" or "Local Toolkit" updates that aren't formal tool calls
+                    const now = Date.now();
+                    const recentLog = logs
+                      .slice()
+                      .reverse()
+                      .find((l: any) =>
+                        (now - l.timestamp < 5000) &&
+                        (l.message.includes("Step") || l.prefix.includes("Toolkit") || l.message.includes("Generating"))
+                      );
+
+                    if (recentLog) {
+                      return (
+                        <>
+                          <span className="text-lg">⚡</span>
+                          <span className="truncate max-w-[500px]">{recentLog.prefix}: {recentLog.message}</span>
+                        </>
+                      );
+                    }
+
                     // Default fallback
                     return (
                       <>

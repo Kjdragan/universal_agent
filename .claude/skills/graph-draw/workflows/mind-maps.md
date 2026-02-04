@@ -618,3 +618,6 @@ For a "Morning Routine" mind map with 6 branches:
 Save as: `[topic]-mindmap.excalidraw`
 
 Example: `morning-routine-mindmap.excalidraw`
+
+**Write-only rule:** Use the `Write` tool to save the JSON to
+`work_products/<name>.excalidraw`. Do not paste JSON into chat.

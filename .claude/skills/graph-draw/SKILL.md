@@ -102,6 +102,10 @@ Each workflow file contains:
 
 Claude saves diagrams as `.excalidraw` files.
 
+**CRITICAL OUTPUT RULE:** Never paste raw Excalidraw JSON into the chat.
+Always write the JSON to a file using the `Write` tool, then respond with a short confirmation and the file path.
+Recommended path: `work_products/<name>.excalidraw`
+
 **Naming convention:**
 - `[topic]-mindmap.excalidraw`
 - `[process]-swimlane.excalidraw`
