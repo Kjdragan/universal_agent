@@ -1391,6 +1391,21 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     )
                                 await manager.send_json(connection_id, agent_event_to_wire(event))
 
+                            # Generate checkpoint for next session/follow-up
+                            try:
+                                from universal_agent.session_checkpoint import SessionCheckpointGenerator
+                                workspace_path = Path(session.workspace_dir)
+                                generator = SessionCheckpointGenerator(workspace_path)
+                                checkpoint = generator.generate_from_result(
+                                    session_id=session.session_id,
+                                    original_request=user_input,
+                                    result=None,  # Events were streamed, not collected
+                                )
+                                generator.save(checkpoint)
+                                logger.info(f"✅ Saved session checkpoint: {workspace_path / 'session_checkpoint.json'}")
+                            except Exception as ckpt_err:
+                                logger.warning(f"⚠️ Failed to save checkpoint: {ckpt_err}")
+
                             await manager.send_json(
                                 connection_id,
                                 {
