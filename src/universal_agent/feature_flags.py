@@ -33,6 +33,15 @@ def memory_index_enabled(default: bool = False) -> bool:
     return default
 
 
+def cron_enabled(default: bool = False) -> bool:
+    """Return True only when cron is explicitly enabled."""
+    if _is_truthy(os.getenv("UA_DISABLE_CRON")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_CRON")):
+        return True
+    return default
+
+
 def memory_enabled(default: bool = False) -> bool:
     """Return True only when memory is explicitly enabled (or index enabled)."""
     if _is_truthy(os.getenv("UA_DISABLE_MEMORY")) or _is_truthy(os.getenv("UA_DISABLE_LOCAL_MEMORY")):

@@ -89,6 +89,38 @@ def _check_skill_requirements(frontmatter: dict) -> tuple[bool, str]:
         return True, ""  # Default to allowing on error to avoid blocking valid skills
 
 
+def _normalize_skill_key(value: str) -> str:
+    return value.strip().lower()
+
+
+def _load_skill_overrides() -> dict[str, bool]:
+    overrides: dict[str, bool] = {}
+    env_disabled = os.getenv("UA_SKILLS_DISABLED", "")
+    if env_disabled:
+        for raw in env_disabled.split(","):
+            key = _normalize_skill_key(raw)
+            if key:
+                overrides[key] = False
+    try:
+        from universal_agent.ops_config import load_ops_config
+
+        cfg = load_ops_config()
+        entries = cfg.get("skills", {}).get("entries", {})
+        if isinstance(entries, dict):
+            for key, payload in entries.items():
+                norm = _normalize_skill_key(str(key))
+                enabled = None
+                if isinstance(payload, dict):
+                    enabled = payload.get("enabled")
+                elif isinstance(payload, bool):
+                    enabled = payload
+                if isinstance(enabled, bool):
+                    overrides[norm] = enabled
+    except Exception:
+        pass
+    return overrides
+
+
 def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
     """
     Scan .claude/skills/ directory and parse SKILL.md frontmatter.
@@ -99,9 +131,10 @@ def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
     import yaml
 
     if skills_dir is None:
-        skills_dir = os.path.join(_PROJECT_ROOT, ".claude", "skills")
+        skills_dir = os.getenv("UA_SKILLS_DIR") or os.path.join(_PROJECT_ROOT, ".claude", "skills")
 
     skills: list[dict] = []
+    overrides = _load_skill_overrides()
 
     if not os.path.exists(skills_dir):
         return skills
@@ -121,6 +154,9 @@ def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
                     if len(parts) >= 3:
                         frontmatter = yaml.safe_load(parts[1])
                         if frontmatter and isinstance(frontmatter, dict):
+                            skill_key = _normalize_skill_key(frontmatter.get("name", skill_name))
+                            if overrides.get(skill_key) is False:
+                                continue
                             # GATING CHECK
                             is_avail, reason = _check_skill_requirements(frontmatter)
                             if is_avail:

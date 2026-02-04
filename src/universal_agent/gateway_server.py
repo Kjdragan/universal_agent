@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -19,12 +20,13 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
+import httpx
 
 # Load .env early so SDK/CLI subprocesses inherit API keys and settings.
 BASE_DIR = Path(__file__).parent.parent.parent
 load_dotenv(BASE_DIR / ".env", override=False)
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -35,17 +37,27 @@ from universal_agent.gateway import (
     GatewaySessionSummary,
 )
 from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled
+from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled, cron_enabled
 from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.heartbeat_service import HeartbeatService
+from universal_agent.cron_service import CronService
+from universal_agent.ops_config import (
+    apply_merge_patch,
+    load_ops_config,
+    ops_config_hash,
+    ops_config_schema,
+    write_ops_config,
+)
+from universal_agent.approvals import list_approvals, update_approval, upsert_approval
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Feature flags (placeholders, no runtime behavior changes yet)
 HEARTBEAT_ENABLED = heartbeat_enabled()
+CRON_ENABLED = cron_enabled()
 MEMORY_INDEX_ENABLED = memory_index_enabled()
 
 # 1. Configurable Workspaces Directory
@@ -66,6 +78,9 @@ if _allowed_users_str:
     logger.info(f"🔒 Authenticated Access Only. Allowed Users: {len(ALLOWED_USERS)}")
 else:
     logger.info("🔓 Public Access Mode (No Allowlist configured)")
+
+# Ops access token (optional hard gate for /api/v1/ops/* endpoints)
+OPS_TOKEN = os.getenv("UA_OPS_TOKEN", "").strip()
 
 
 # =============================================================================
@@ -107,6 +122,80 @@ class GatewayEventWire(BaseModel):
 class HeartbeatWakeRequest(BaseModel):
     session_id: Optional[str] = None
     reason: Optional[str] = None
+    mode: Optional[str] = None  # now | next
+
+
+class CronJobCreateRequest(BaseModel):
+    user_id: Optional[str] = None
+    workspace_dir: Optional[str] = None
+    command: str
+    every: Optional[str] = None
+    enabled: bool = True
+    metadata: dict = {}
+
+
+class CronJobUpdateRequest(BaseModel):
+    command: Optional[str] = None
+    every: Optional[str] = None
+    enabled: Optional[bool] = None
+    workspace_dir: Optional[str] = None
+    user_id: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class SystemEventRequest(BaseModel):
+    session_id: Optional[str] = None
+    event_type: Optional[str] = None
+    payload: Optional[dict] = None
+    wake_heartbeat: Optional[str] = None  # now | next | truthy
+    wake_mode: Optional[str] = None
+
+
+class SystemPresenceRequest(BaseModel):
+    node_id: Optional[str] = None
+    status: Optional[str] = None
+    reason: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class OpsConfigRequest(BaseModel):
+    config: dict = {}
+    base_hash: Optional[str] = None
+
+
+class OpsConfigPatchRequest(BaseModel):
+    patch: dict = {}
+    base_hash: Optional[str] = None
+
+
+class OpsSkillUpdateRequest(BaseModel):
+    enabled: Optional[bool] = None
+
+
+class OpsApprovalCreateRequest(BaseModel):
+    approval_id: Optional[str] = None
+    phase_id: Optional[str] = None
+    status: Optional[str] = None
+    summary: Optional[str] = None
+    requested_by: Optional[str] = None
+    metadata: dict = {}
+
+
+class OpsApprovalUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class OpsSessionResetRequest(BaseModel):
+    clear_logs: bool = True
+    clear_memory: bool = True
+    clear_work_products: bool = False
+
+
+class OpsSessionCompactRequest(BaseModel):
+    max_lines: int = 400
+    max_bytes: int = 200_000
 
 
 # =============================================================================
@@ -116,6 +205,62 @@ class HeartbeatWakeRequest(BaseModel):
 _gateway: Optional[InProcessGateway] = None
 _sessions: dict[str, GatewaySession] = {}
 _heartbeat_service: Optional[HeartbeatService] = None
+_cron_service: Optional[CronService] = None
+_system_events: dict[str, list[dict]] = {}
+_system_presence: dict[str, dict] = {}
+_system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
+_channel_probe_results: dict[str, dict] = {}
+
+
+def _emit_cron_event(payload: dict) -> None:
+    event = {
+        "type": payload.get("type", "cron_event"),
+        "data": payload,
+        "timestamp": datetime.now().isoformat(),
+    }
+    for session_id in list(manager.session_connections.keys()):
+        asyncio.create_task(manager.broadcast(session_id, event))
+
+
+def _cron_wake_callback(session_id: str, mode: str, reason: str) -> None:
+    if not _heartbeat_service:
+        return
+    if mode == "next":
+        _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
+    else:
+        _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
+
+
+def _enqueue_system_event(session_id: str, event: dict) -> None:
+    queue = _system_events.setdefault(session_id, [])
+    queue.append(event)
+    if len(queue) > _system_events_max:
+        _system_events[session_id] = queue[-_system_events_max:]
+
+
+def _drain_system_events(session_id: str) -> list[dict]:
+    events = _system_events.get(session_id, [])
+    _system_events[session_id] = []
+    return events
+
+
+def _broadcast_system_event(session_id: str, event: dict) -> None:
+    payload = {
+        "type": "system_event",
+        "data": event,
+        "timestamp": datetime.now().isoformat(),
+    }
+    asyncio.create_task(manager.broadcast(session_id, payload))
+
+
+def _broadcast_presence(payload: dict) -> None:
+    event = {
+        "type": "system_presence",
+        "data": payload,
+        "timestamp": datetime.now().isoformat(),
+    }
+    for session_id in list(manager.session_connections.keys()):
+        asyncio.create_task(manager.broadcast(session_id, event))
 
 
 def _read_run_log_tail(workspace_dir: str, max_bytes: int = 4096) -> Optional[str]:
@@ -131,6 +276,227 @@ def _read_run_log_tail(workspace_dir: str, max_bytes: int = 4096) -> Optional[st
     except Exception as e:
         logger.warning("Failed to read run.log tail: %s", e)
         return None
+
+
+def _read_heartbeat_state(workspace_dir: str) -> Optional[dict]:
+    state_path = Path(workspace_dir) / "heartbeat_state.json"
+    if not state_path.exists():
+        return None
+    try:
+        return json.loads(state_path.read_text())
+    except Exception as exc:
+        logger.warning("Failed to read heartbeat_state.json: %s", exc)
+        return None
+
+
+def _resolve_workspace_path(session_id: str) -> Path:
+    return WORKSPACES_DIR / session_id
+
+
+def _clamp(value: int, min_value: int, max_value: int) -> int:
+    return max(min_value, min(max_value, value))
+
+
+def _read_tail_lines(
+    file_path: Path, cursor: Optional[int] = None, limit: int = 200, max_bytes: int = 250_000
+) -> dict:
+    if not file_path.exists():
+        return {"cursor": 0, "size": 0, "lines": [], "truncated": False, "reset": False}
+    size = file_path.stat().st_size
+    max_bytes = _clamp(max_bytes, 1, 1_000_000)
+    limit = _clamp(limit, 1, 5_000)
+    reset = False
+    truncated = False
+    if cursor is None:
+        start = max(0, size - max_bytes)
+        truncated = start > 0
+    else:
+        cursor = max(0, min(int(cursor), size))
+        if cursor > size or size - cursor > max_bytes:
+            reset = True
+            start = max(0, size - max_bytes)
+            truncated = start > 0
+        else:
+            start = cursor
+
+    if size == 0 or size <= start:
+        return {"cursor": size, "size": size, "lines": [], "truncated": truncated, "reset": reset}
+
+    with file_path.open("rb") as handle:
+        if start > 0:
+            handle.seek(start - 1)
+            prefix = handle.read(1)
+        else:
+            prefix = b""
+        handle.seek(start)
+        blob = handle.read(size - start)
+
+    text = blob.decode("utf-8", errors="replace")
+    lines = text.split("\n")
+    if start > 0 and prefix != b"\n":
+        lines = lines[1:]
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    if len(lines) > limit:
+        lines = lines[-limit:]
+    return {
+        "cursor": size,
+        "size": size,
+        "lines": lines,
+        "truncated": truncated,
+        "reset": reset,
+    }
+
+
+def _load_skill_catalog() -> list[dict]:
+    skills_dir = os.getenv("UA_SKILLS_DIR") or str(BASE_DIR / ".claude" / "skills")
+    overrides = load_ops_config().get("skills", {}).get("entries", {})
+    normalized_overrides = {}
+    if isinstance(overrides, dict):
+        for key, payload in overrides.items():
+            enabled = None
+            if isinstance(payload, dict):
+                enabled = payload.get("enabled")
+            elif isinstance(payload, bool):
+                enabled = payload
+            if isinstance(enabled, bool):
+                normalized_overrides[str(key).strip().lower()] = enabled
+
+    entries: list[dict] = []
+    try:
+        import yaml
+        from universal_agent.prompt_assets import _check_skill_requirements
+    except Exception:
+        yaml = None
+        _check_skill_requirements = None  # type: ignore
+
+    if not os.path.isdir(skills_dir) or yaml is None or _check_skill_requirements is None:
+        return entries
+
+    for skill_name in os.listdir(skills_dir):
+        skill_path = os.path.join(skills_dir, skill_name)
+        skill_md = os.path.join(skill_path, "SKILL.md")
+        if not os.path.isdir(skill_path) or not os.path.exists(skill_md):
+            continue
+        try:
+            content = Path(skill_md).read_text(encoding="utf-8")
+            if not content.startswith("---"):
+                continue
+            parts = content.split("---", 2)
+            if len(parts) < 3:
+                continue
+            frontmatter = yaml.safe_load(parts[1]) or {}
+            name = frontmatter.get("name", skill_name)
+            description = frontmatter.get("description", "No description")
+            key = str(name).strip().lower()
+            enabled_override = normalized_overrides.get(key)
+            enabled = True if enabled_override is None else enabled_override
+            available, reason = _check_skill_requirements(frontmatter)
+            entries.append(
+                {
+                    "name": name,
+                    "description": description,
+                    "path": skill_md,
+                    "enabled": enabled,
+                    "available": available,
+                    "disabled_reason": None if enabled else "disabled_by_ops_config",
+                    "unavailable_reason": None if available else reason,
+                }
+            )
+        except Exception:
+            continue
+    return entries
+
+
+def _load_channel_status() -> list[dict]:
+    overrides = load_ops_config().get("channels", {}).get("entries", {})
+    normalized = {}
+    if isinstance(overrides, dict):
+        for key, payload in overrides.items():
+            enabled = None
+            if isinstance(payload, dict):
+                enabled = payload.get("enabled")
+            elif isinstance(payload, bool):
+                enabled = payload
+            if isinstance(enabled, bool):
+                normalized[str(key).strip().lower()] = enabled
+
+    channels = [
+        {
+            "id": "cli",
+            "label": "CLI",
+            "configured": True,
+            "note": "Local CLI entrypoint",
+        },
+        {
+            "id": "web",
+            "label": "Web UI",
+            "configured": (BASE_DIR / "web-ui").exists(),
+            "note": "Gateway + Web UI stack",
+        },
+        {
+            "id": "gateway",
+            "label": "Gateway",
+            "configured": True,
+            "note": "FastAPI gateway service",
+        },
+        {
+            "id": "telegram",
+            "label": "Telegram",
+            "configured": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+            "note": "Telegram bot integration",
+        },
+    ]
+    for channel in channels:
+        override = normalized.get(channel["id"])
+        if override is None:
+            channel["enabled"] = channel["configured"]
+        else:
+            channel["enabled"] = override
+        channel["probe"] = _channel_probe_results.get(channel["id"])
+    return channels
+
+
+async def _probe_channel(channel_id: str, timeout: float = 4.0) -> dict:
+    normalized = channel_id.strip().lower()
+    checked_at = datetime.now().isoformat()
+    base = {"id": normalized, "checked_at": checked_at}
+
+    if normalized in {"gateway", "cli"}:
+        return {**base, "status": "ok", "detail": "local"}
+
+    if normalized == "web":
+        url = os.getenv("UA_WEB_UI_URL", "").strip()
+        if not url:
+            return {**base, "status": "unknown", "detail": "UA_WEB_UI_URL not set"}
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(url)
+            return {
+                **base,
+                "status": "ok" if resp.status_code < 500 else "error",
+                "http_status": resp.status_code,
+            }
+        except Exception as exc:
+            return {**base, "status": "error", "detail": str(exc)}
+
+    if normalized == "telegram":
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        if not token:
+            return {**base, "status": "not_configured"}
+        url = f"https://api.telegram.org/bot{token}/getMe"
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.get(url)
+            return {
+                **base,
+                "status": "ok" if resp.status_code == 200 else "error",
+                "http_status": resp.status_code,
+            }
+        except Exception as exc:
+            return {**base, "status": "error", "detail": str(exc)}
+
+    return {**base, "status": "unknown", "detail": "unsupported_channel"}
 
 
 def get_gateway() -> InProcessGateway:
@@ -160,6 +526,19 @@ def is_user_allowed(user_id: str) -> bool:
         telegram_id = user_id.split("telegram_", 1)[1]
         return telegram_id in ALLOWED_USERS
     return False
+
+
+def _require_ops_auth(request: Request) -> None:
+    if not OPS_TOKEN:
+        return
+    header = request.headers.get("authorization", "")
+    token = ""
+    if header.lower().startswith("bearer "):
+        token = header.split(" ", 1)[1].strip()
+    if not token:
+        token = request.headers.get("x-ua-ops-token", "").strip()
+    if token != OPS_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 # =============================================================================
@@ -249,19 +628,33 @@ async def lifespan(app: FastAPI):
     main_module.budget_config = main_module.load_budget_config()
     
     # Initialize Heartbeat Service
-    global _heartbeat_service
+    global _heartbeat_service, _cron_service
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
         _heartbeat_service = HeartbeatService(get_gateway(), manager)
         await _heartbeat_service.start()
     else:
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
+
+    if CRON_ENABLED:
+        logger.info("⏱️ Cron Service ENABLED")
+        _cron_service = CronService(
+            get_gateway(),
+            WORKSPACES_DIR,
+            event_sink=_emit_cron_event,
+            wake_callback=_cron_wake_callback,
+        )
+        await _cron_service.start()
+    else:
+        logger.info("⏲️ Cron Service DISABLED (feature flag)")
     
     yield
     
     # Cleanup
     if _heartbeat_service:
         await _heartbeat_service.stop()
+    if _cron_service:
+        await _cron_service.stop()
         
     if main_module.runtime_db_conn:
         main_module.runtime_db_conn.close()
@@ -306,10 +699,6 @@ async def root():
         },
     }
 
-
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Response, status
-
-# ... (imports)
 
 @app.get("/api/v1/health")
 async def health(response: Response):
@@ -401,13 +790,204 @@ async def wake_heartbeat(request: HeartbeatWakeRequest):
         raise HTTPException(status_code=400, detail="Heartbeat service not available.")
 
     reason = request.reason or "wake"
+    mode = (request.mode or "now").strip().lower()
     if request.session_id:
-        _heartbeat_service.request_heartbeat_now(request.session_id, reason=reason)
-        return {"status": "queued", "session_id": request.session_id, "reason": reason}
+        if mode == "next":
+            _heartbeat_service.request_heartbeat_next(request.session_id, reason=reason)
+        else:
+            _heartbeat_service.request_heartbeat_now(request.session_id, reason=reason)
+        return {"status": "queued", "session_id": request.session_id, "reason": reason, "mode": mode}
 
     for session_id in list(_sessions.keys()):
-        _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
-    return {"status": "queued", "count": len(_sessions), "reason": reason}
+        if mode == "next":
+            _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
+        else:
+            _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
+    return {"status": "queued", "count": len(_sessions), "reason": reason, "mode": mode}
+
+
+@app.get("/api/v1/heartbeat/last")
+async def get_last_heartbeat(session_id: Optional[str] = None):
+    if not _heartbeat_service:
+        raise HTTPException(status_code=400, detail="Heartbeat service not available.")
+
+    if session_id:
+        session = get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        state = _read_heartbeat_state(session.workspace_dir) or {}
+        return {
+            "session_id": session_id,
+            "last_run": state.get("last_run"),
+            "last_summary": state.get("last_summary"),
+        }
+
+    payload: dict[str, dict] = {}
+    for sid, session in _sessions.items():
+        state = _read_heartbeat_state(session.workspace_dir) or {}
+        if not state:
+            continue
+        payload[sid] = {
+            "last_run": state.get("last_run"),
+            "last_summary": state.get("last_summary"),
+        }
+    return {"heartbeats": payload}
+
+
+@app.post("/api/v1/system/event")
+async def post_system_event(request: SystemEventRequest):
+    event_type = (request.event_type or "system_event").strip() or "system_event"
+    event = {
+        "event_id": f"evt_{int(time.time() * 1000)}",
+        "type": event_type,
+        "payload": request.payload or {},
+        "created_at": datetime.now().isoformat(),
+    }
+
+    target_sessions: list[str]
+    if request.session_id:
+        if request.session_id not in _sessions:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        target_sessions = [request.session_id]
+    else:
+        target_sessions = list(_sessions.keys())
+
+    for sid in target_sessions:
+        _enqueue_system_event(sid, event)
+        if sid in manager.session_connections:
+            _broadcast_system_event(sid, event)
+
+    wake_flag = request.wake_heartbeat or request.wake_mode
+    if wake_flag and _heartbeat_service and target_sessions:
+        mode = "next"
+        if isinstance(wake_flag, str):
+            mode = wake_flag.strip().lower() or mode
+        if mode not in {"now", "next"}:
+            mode = "next"
+        for sid in target_sessions:
+            if mode == "next":
+                _heartbeat_service.request_heartbeat_next(sid, reason=f"system_event:{event_type}")
+            else:
+                _heartbeat_service.request_heartbeat_now(sid, reason=f"system_event:{event_type}")
+
+    return {"status": "queued", "count": len(target_sessions), "event": event}
+
+
+@app.get("/api/v1/system/events")
+async def list_system_events(session_id: str):
+    if session_id not in _sessions:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return {"session_id": session_id, "events": _system_events.get(session_id, [])}
+
+
+@app.post("/api/v1/system/presence")
+async def set_system_presence(request: SystemPresenceRequest):
+    node_id = request.node_id or "gateway"
+    presence = {
+        "node_id": node_id,
+        "status": request.status or "online",
+        "reason": request.reason,
+        "metadata": request.metadata or {},
+        "updated_at": datetime.now().isoformat(),
+    }
+    _system_presence[node_id] = presence
+    _broadcast_presence(presence)
+    return {"status": "ok", "presence": presence}
+
+
+@app.get("/api/v1/system/presence")
+async def get_system_presence():
+    return {"nodes": list(_system_presence.values())}
+
+
+@app.get("/api/v1/cron/jobs")
+async def list_cron_jobs():
+    if not _cron_service:
+        raise HTTPException(status_code=400, detail="Cron service not available.")
+    return {"jobs": [job.to_dict() for job in _cron_service.list_jobs()]}
+
+
+@app.post("/api/v1/cron/jobs")
+async def create_cron_job(request: CronJobCreateRequest):
+    if not _cron_service:
+        raise HTTPException(status_code=400, detail="Cron service not available.")
+    try:
+        job = _cron_service.add_job(
+            user_id=request.user_id or "cron",
+            workspace_dir=request.workspace_dir,
+            command=request.command,
+            every_raw=request.every,
+            enabled=request.enabled,
+            metadata=request.metadata or {},
+        )
+        return {"job": job.to_dict()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/v1/cron/jobs/{job_id}")
+async def get_cron_job(job_id: str):
+    if not _cron_service:
+        raise HTTPException(status_code=400, detail="Cron service not available.")
+    job = _cron_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Cron job not found")
+    return {"job": job.to_dict()}
+
+
+@app.put("/api/v1/cron/jobs/{job_id}")
+async def update_cron_job(job_id: str, request: CronJobUpdateRequest):
+    if not _cron_service:
+        raise HTTPException(status_code=400, detail="Cron service not available.")
+    job = _cron_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Cron job not found")
+    updates = {
+        "command": request.command,
+        "every": request.every,
+        "enabled": request.enabled,
+        "workspace_dir": request.workspace_dir,
+        "user_id": request.user_id,
+        "metadata": request.metadata,
+    }
+    job = _cron_service.update_job(job_id, updates)
+    return {"job": job.to_dict()}
+
+
+@app.delete("/api/v1/cron/jobs/{job_id}")
+async def delete_cron_job(job_id: str):
+    if not _cron_service:
+        raise HTTPException(status_code=400, detail="Cron service not available.")
+    job = _cron_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Cron job not found")
+    _cron_service.delete_job(job_id)
+    return {"status": "deleted", "job_id": job_id}
+
+
+@app.post("/api/v1/cron/jobs/{job_id}/run")
+async def run_cron_job(job_id: str):
+    if not _cron_service:
+        raise HTTPException(status_code=400, detail="Cron service not available.")
+    job = _cron_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Cron job not found")
+    record = await _cron_service.run_job_now(job_id, reason="manual")
+    return {"run": record.to_dict()}
+
+
+@app.get("/api/v1/cron/jobs/{job_id}/runs")
+async def list_cron_job_runs(job_id: str, limit: int = 200):
+    if not _cron_service:
+        raise HTTPException(status_code=400, detail="Cron service not available.")
+    return {"runs": _cron_service.list_runs(job_id=job_id, limit=limit)}
+
+
+@app.get("/api/v1/cron/runs")
+async def list_cron_runs(limit: int = 200):
+    if not _cron_service:
+        raise HTTPException(status_code=400, detail="Cron service not available.")
+    return {"runs": _cron_service.list_runs(limit=limit)}
 
 
 @app.get("/api/v1/sessions/{session_id}")
@@ -440,6 +1020,308 @@ async def delete_session(session_id: str):
     if session_id in _sessions:
         del _sessions[session_id]
     return {"status": "deleted", "session_id": session_id}
+
+
+# =============================================================================
+# Ops / Control Plane Endpoints
+# =============================================================================
+
+
+def _build_session_summary(session_path: Path) -> dict:
+    session_id = session_path.name
+    status = "active" if session_id in _sessions else "idle"
+    last_modified = datetime.fromtimestamp(session_path.stat().st_mtime).isoformat()
+    journal_path = session_path / "activity_journal.log"
+    run_log_path = session_path / "run.log"
+    last_activity = last_modified
+    if journal_path.exists():
+        last_activity = datetime.fromtimestamp(journal_path.stat().st_mtime).isoformat()
+    summary = {
+        "session_id": session_id,
+        "workspace_dir": str(session_path),
+        "status": status,
+        "last_modified": last_modified,
+        "last_activity": last_activity,
+        "has_run_log": run_log_path.exists(),
+        "has_activity_journal": journal_path.exists(),
+        "has_memory": (session_path / "MEMORY.md").exists() or (session_path / "memory").exists(),
+    }
+    heartbeat_state = _read_heartbeat_state(str(session_path))
+    if heartbeat_state:
+        summary["heartbeat_last"] = heartbeat_state.get("last_run")
+        summary["heartbeat_summary"] = heartbeat_state.get("last_summary")
+    return summary
+
+
+@app.get("/api/v1/ops/sessions")
+async def ops_list_sessions(
+    request: Request, limit: int = 100, offset: int = 0, status: str = "all"
+):
+    _require_ops_auth(request)
+    session_dirs = [p for p in WORKSPACES_DIR.iterdir() if p.is_dir()]
+    session_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    summaries = [_build_session_summary(p) for p in session_dirs]
+    if status != "all":
+        summaries = [s for s in summaries if s["status"] == status]
+    return {
+        "sessions": summaries[offset : offset + limit],
+        "total": len(summaries),
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@app.get("/api/v1/ops/sessions/{session_id}")
+async def ops_get_session(request: Request, session_id: str):
+    _require_ops_auth(request)
+    session_path = _resolve_workspace_path(session_id)
+    if not session_path.exists():
+        raise HTTPException(status_code=404, detail="Session not found")
+    summary = _build_session_summary(session_path)
+    return {"session": summary}
+
+
+@app.get("/api/v1/ops/sessions/{session_id}/preview")
+async def ops_session_preview(
+    request: Request, session_id: str, limit: int = 200, max_bytes: int = 200_000
+):
+    _require_ops_auth(request)
+    session_path = _resolve_workspace_path(session_id)
+    journal_path = session_path / "activity_journal.log"
+    if not journal_path.exists():
+        return {"session_id": session_id, "lines": [], "cursor": 0, "size": 0}
+    result = _read_tail_lines(journal_path, limit=limit, max_bytes=max_bytes)
+    return {"session_id": session_id, **result}
+
+
+@app.post("/api/v1/ops/sessions/{session_id}/reset")
+async def ops_session_reset(
+    request: Request, session_id: str, payload: OpsSessionResetRequest
+):
+    _require_ops_auth(request)
+    session_path = _resolve_workspace_path(session_id)
+    if not session_path.exists():
+        raise HTTPException(status_code=404, detail="Session not found")
+    archive_dir = session_path / "archive" / datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    moved: list[str] = []
+
+    def _move_if_exists(path: Path) -> None:
+        if path.exists():
+            shutil.move(str(path), str(archive_dir / path.name))
+            moved.append(path.name)
+
+    if payload.clear_logs:
+        _move_if_exists(session_path / "run.log")
+        _move_if_exists(session_path / "activity_journal.log")
+    if payload.clear_memory:
+        _move_if_exists(session_path / "MEMORY.md")
+        _move_if_exists(session_path / "memory")
+    if payload.clear_work_products:
+        _move_if_exists(session_path / "work_products")
+
+    return {"status": "reset", "archived": moved, "archive_dir": str(archive_dir)}
+
+
+@app.post("/api/v1/ops/sessions/{session_id}/compact")
+async def ops_session_compact(
+    request: Request, session_id: str, payload: OpsSessionCompactRequest
+):
+    _require_ops_auth(request)
+    session_path = _resolve_workspace_path(session_id)
+    if not session_path.exists():
+        raise HTTPException(status_code=404, detail="Session not found")
+    journal_path = session_path / "activity_journal.log"
+    run_log_path = session_path / "run.log"
+    compacted = {}
+    if journal_path.exists():
+        result = _read_tail_lines(
+            journal_path, limit=payload.max_lines, max_bytes=payload.max_bytes
+        )
+        journal_path.write_text("\n".join(result["lines"]) + ("\n" if result["lines"] else ""))
+        compacted["activity_journal.log"] = len(result["lines"])
+    if run_log_path.exists():
+        result = _read_tail_lines(
+            run_log_path, limit=payload.max_lines, max_bytes=payload.max_bytes
+        )
+        run_log_path.write_text("\n".join(result["lines"]) + ("\n" if result["lines"] else ""))
+        compacted["run.log"] = len(result["lines"])
+    return {"status": "compacted", "files": compacted}
+
+
+@app.delete("/api/v1/ops/sessions/{session_id}")
+async def ops_delete_session(request: Request, session_id: str, confirm: bool = False):
+    _require_ops_auth(request)
+    if not confirm:
+        raise HTTPException(status_code=400, detail="confirm=true is required")
+    session_path = _resolve_workspace_path(session_id)
+    if not session_path.exists():
+        raise HTTPException(status_code=404, detail="Session not found")
+    shutil.rmtree(session_path)
+    _sessions.pop(session_id, None)
+    return {"status": "deleted", "session_id": session_id}
+
+
+@app.get("/api/v1/ops/logs/tail")
+async def ops_logs_tail(
+    request: Request,
+    session_id: Optional[str] = None,
+    path: Optional[str] = None,
+    cursor: Optional[int] = None,
+    limit: int = 200,
+    max_bytes: int = 250_000,
+):
+    _require_ops_auth(request)
+    if session_id:
+        file_path = _resolve_workspace_path(session_id) / "run.log"
+    elif path:
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = (BASE_DIR / candidate).resolve()
+        if not (
+            str(candidate).startswith(str(WORKSPACES_DIR))
+            or str(candidate).startswith(str(BASE_DIR))
+        ):
+            raise HTTPException(status_code=400, detail="Invalid log path")
+        file_path = candidate
+    else:
+        raise HTTPException(status_code=400, detail="session_id or path required")
+
+    result = _read_tail_lines(file_path, cursor=cursor, limit=limit, max_bytes=max_bytes)
+    return {"file": str(file_path), **result}
+
+
+@app.get("/api/v1/ops/skills")
+async def ops_skills_status(request: Request):
+    _require_ops_auth(request)
+    return {"skills": _load_skill_catalog()}
+
+
+@app.patch("/api/v1/ops/skills/{skill_key}")
+async def ops_skill_update(request: Request, skill_key: str, payload: OpsSkillUpdateRequest):
+    _require_ops_auth(request)
+    config = load_ops_config()
+    skills_cfg = config.get("skills", {})
+    entries = skills_cfg.get("entries", {})
+    if not isinstance(entries, dict):
+        entries = {}
+    normalized = skill_key.strip().lower()
+    entry = entries.get(normalized, {})
+    if not isinstance(entry, dict):
+        entry = {}
+    if payload.enabled is not None:
+        entry["enabled"] = payload.enabled
+    entries[normalized] = entry
+    skills_cfg["entries"] = entries
+    config["skills"] = skills_cfg
+    write_ops_config(config)
+    return {"status": "updated", "skill": normalized, "config": entry}
+
+
+@app.get("/api/v1/ops/channels")
+async def ops_channels_status(request: Request):
+    _require_ops_auth(request)
+    return {"channels": _load_channel_status()}
+
+
+@app.post("/api/v1/ops/channels/{channel_id}/probe")
+async def ops_channels_probe(request: Request, channel_id: str, timeout: float = 4.0):
+    _require_ops_auth(request)
+    result = await _probe_channel(channel_id, timeout=timeout)
+    _channel_probe_results[channel_id.strip().lower()] = result
+    return {"probe": result}
+
+
+@app.post("/api/v1/ops/channels/{channel_id}/logout")
+async def ops_channels_logout(request: Request, channel_id: str):
+    _require_ops_auth(request)
+    config = load_ops_config()
+    channels_cfg = config.get("channels", {})
+    entries = channels_cfg.get("entries", {})
+    if not isinstance(entries, dict):
+        entries = {}
+    normalized = channel_id.strip().lower()
+    entry = entries.get(normalized, {})
+    if not isinstance(entry, dict):
+        entry = {}
+    entry["enabled"] = False
+    entries[normalized] = entry
+    channels_cfg["entries"] = entries
+    config["channels"] = channels_cfg
+    write_ops_config(config)
+    return {"status": "disabled", "channel": normalized}
+
+
+@app.get("/api/v1/ops/config")
+async def ops_config_get(request: Request):
+    _require_ops_auth(request)
+    config = load_ops_config()
+    return {"config": config, "base_hash": ops_config_hash(config)}
+
+
+@app.get("/api/v1/ops/config/schema")
+async def ops_config_schema_get(request: Request):
+    _require_ops_auth(request)
+    return {"schema": ops_config_schema()}
+
+
+@app.post("/api/v1/ops/config")
+async def ops_config_set(request: Request, payload: OpsConfigRequest):
+    _require_ops_auth(request)
+    current = load_ops_config()
+    if payload.base_hash and payload.base_hash != ops_config_hash(current):
+        raise HTTPException(status_code=409, detail="Config changed; reload and retry")
+    write_ops_config(payload.config or {})
+    updated = load_ops_config()
+    return {"config": updated, "base_hash": ops_config_hash(updated)}
+
+
+@app.patch("/api/v1/ops/config")
+async def ops_config_patch(request: Request, payload: OpsConfigPatchRequest):
+    _require_ops_auth(request)
+    current = load_ops_config()
+    if payload.base_hash and payload.base_hash != ops_config_hash(current):
+        raise HTTPException(status_code=409, detail="Config changed; reload and retry")
+    updated = apply_merge_patch(current, payload.patch or {})
+    write_ops_config(updated)
+    return {"config": updated, "base_hash": ops_config_hash(updated)}
+
+
+@app.get("/api/v1/ops/approvals")
+async def ops_approvals_list(request: Request, status: Optional[str] = None):
+    _require_ops_auth(request)
+    return {"approvals": list_approvals(status=status)}
+
+
+@app.post("/api/v1/ops/approvals")
+async def ops_approvals_create(request: Request, payload: OpsApprovalCreateRequest):
+    _require_ops_auth(request)
+    record = upsert_approval(payload.model_dump(exclude_none=True))
+    return {"approval": record}
+
+
+@app.patch("/api/v1/ops/approvals/{approval_id}")
+async def ops_approvals_update(
+    request: Request, approval_id: str, payload: OpsApprovalUpdateRequest
+):
+    _require_ops_auth(request)
+    record = update_approval(approval_id, payload.model_dump(exclude_none=True))
+    if record is None:
+        raise HTTPException(status_code=404, detail="Approval not found")
+    return {"approval": record}
+
+
+@app.get("/api/v1/ops/models")
+async def ops_models_list(request: Request):
+    _require_ops_auth(request)
+    models = []
+    sonnet = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL")
+    haiku = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+    if sonnet:
+        models.append({"id": sonnet, "label": "default-sonnet"})
+    if haiku:
+        models.append({"id": haiku, "label": "default-haiku"})
+    return {"models": models}
 
 
 # =============================================================================
@@ -517,10 +1399,17 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         )
                         continue
 
+                    metadata = msg.get("data", {}).get("metadata", {}) or {}
+                    if not isinstance(metadata, dict):
+                        metadata = {"raw": metadata}
+                    system_events = _drain_system_events(session_id)
+                    if system_events:
+                        metadata = {**metadata, "system_events": system_events}
+
                     request = GatewayRequest(
                         user_input=user_input,
                         force_complex=msg.get("data", {}).get("force_complex", False),
-                        metadata=msg.get("data", {}).get("metadata", {}),
+                        metadata=metadata,
                     )
                     logger.info(
                         "WS execute start (session=%s, user_id=%s, len=%s)",

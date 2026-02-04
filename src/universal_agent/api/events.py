@@ -30,6 +30,8 @@ class EventType(str, Enum):
     WORK_PRODUCT = "work_product"
     INPUT_REQUIRED = "input_required"
     INPUT_RESPONSE = "input_response"
+    SYSTEM_EVENT = "system_event"
+    SYSTEM_PRESENCE = "system_presence"
 
     # Server -> Client control events
     CONNECTED = "connected"

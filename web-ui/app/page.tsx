@@ -19,6 +19,7 @@ import { formatDuration, formatFileSize } from "@/lib/utils";
 import { ApprovalModal, useApprovalModal } from "@/components/approvals/ApprovalModal";
 import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
+import { OpsPanel } from "@/components/OpsPanel";
 
 // Icons (using emoji for now - replace with lucide-react in production)
 const ICONS = {
@@ -46,20 +47,20 @@ function FileViewer() {
   const viewingFile = useAgentStore((s) => s.viewingFile);
   const setViewingFile = useAgentStore((s) => s.setViewingFile);
 
-  if (!viewingFile) return null;
-
-  const isHtml = viewingFile.name.endsWith(".html");
-  const isPdf = viewingFile.name.endsWith(".pdf");
-  const isImage = viewingFile.name.match(/\.(png|jpg|jpeg|gif|webp)$/i);
+  const isHtml = viewingFile?.name.endsWith(".html") ?? false;
+  const isPdf = viewingFile?.name.endsWith(".pdf") ?? false;
+  const isImage = viewingFile?.name.match(/\.(png|jpg|jpeg|gif|webp)$/i) ?? false;
 
   // For PDF/HTML, we use the server's get_file endpoint.
   // Endpoint: /api/files/{session_id}/{file_path}
   const currentSession = useAgentStore.getState().currentSession;
-  const fileUrl = `${API_BASE}/api/files/${currentSession?.session_id}/${viewingFile.path}`;
+  const fileUrl = viewingFile && currentSession?.session_id
+    ? `${API_BASE}/api/files/${currentSession.session_id}/${viewingFile.path}`
+    : "";
 
   // Fetch content if missing and not an iframe type
   useEffect(() => {
-    if (!viewingFile || isHtml || isPdf || isImage || viewingFile.content) return;
+    if (!viewingFile || !fileUrl || isHtml || isPdf || isImage || viewingFile.content) return;
 
     fetch(fileUrl)
       .then(res => res.text())
@@ -77,6 +78,8 @@ function FileViewer() {
       })
       .catch(err => console.error("Failed to fetch file content:", err));
   }, [viewingFile, fileUrl, isHtml, isPdf, isImage]);
+
+  if (!viewingFile) return null;
 
   return (
     <div className="flex flex-col h-full bg-background animate-in fade-in zoom-in-95 duration-200">
@@ -195,6 +198,7 @@ function FileExplorer() {
   useEffect(() => {
     if (!currentSession?.session_id) return;
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     fetch(`${API_BASE}/api/files?session_id=${currentSession.session_id}&path=${encodeURIComponent(path)}`)
       .then(res => res.json())
@@ -309,10 +313,7 @@ function HeaderMetrics() {
   const [duration, setDuration] = useState(0);
 
   useEffect(() => {
-    if (!startTime) {
-      setDuration(0);
-      return;
-    }
+    if (!startTime) return;
     const interval = setInterval(() => {
       setDuration((Date.now() - startTime) / 1000);
     }, 1000); // Update every second
@@ -341,7 +342,7 @@ function HeaderMetrics() {
       <div className="w-px h-3 bg-border/50" />
       <div className="flex items-center gap-2 text-[10px] tracking-wide">
         <span className="text-muted-foreground font-semibold">TIME</span>
-        <span className="font-mono">{formatDuration(duration)}</span>
+        <span className="font-mono">{formatDuration(startTime ? duration : 0)}</span>
       </div>
       <div className="w-px h-3 bg-border/50" />
       <div className="flex items-center gap-2 text-[10px] tracking-wide">
@@ -431,16 +432,12 @@ function ThinkingBubble({ content }: { content: string }) {
 
 function ChatMessage({ message }: { message: any }) {
   const isUser = message.role === "user";
-  const [formattedDelta, setFormattedDelta] = useState("");
-
-  // Format delta time on client
-  useEffect(() => {
+  const formattedDelta = React.useMemo(() => {
     const delta = message.time_offset;
     if (delta !== undefined) {
-      setFormattedDelta(delta > 0 ? `+${delta.toFixed(1)}s` : `0s`);
-    } else {
-      setFormattedDelta(new Date(message.timestamp).toLocaleTimeString());
+      return delta > 0 ? `+${delta.toFixed(1)}s` : `0s`;
     }
+    return new Date(message.timestamp).toLocaleTimeString();
   }, [message.time_offset, message.timestamp]);
 
   // Split content by distinct sections (double newlines)
@@ -815,32 +812,58 @@ export default function HomePage() {
   // Layout State
   const [leftWidth, setLeftWidth] = useState(260);
   const [rightWidth, setRightWidth] = useState(600); // Wider default (600px) as requested
+  const [activityLogWidth, setActivityLogWidth] = useState(40); // % of center area
 
   // Resizing Logic
-  const startResizing = (direction: 'left' | 'right') => (mouseDownEvent: React.MouseEvent) => {
+  const startResizing = (direction: 'left' | 'right' | 'center') => (mouseDownEvent: React.MouseEvent) => {
     mouseDownEvent.preventDefault();
     const startX = mouseDownEvent.clientX;
-    const startWidth = direction === 'left' ? leftWidth : rightWidth;
 
-    const onMouseMove = (mouseMoveEvent: MouseEvent) => {
-      const delta = mouseMoveEvent.clientX - startX;
-      const newWidth = direction === 'left'
-        ? Math.max(200, Math.min(600, startWidth + delta))
-        : Math.max(300, Math.min(800, startWidth - delta));
+    if (direction === 'center') {
+      // For center divider, we need to calculate based on the center panel's total width
+      const centerPanel = (mouseDownEvent.target as HTMLElement).closest('main');
+      if (!centerPanel) return;
 
-      if (direction === 'left') setLeftWidth(newWidth);
-      else setRightWidth(newWidth);
-    };
+      const onMouseMove = (mouseMoveEvent: MouseEvent) => {
+        const rect = centerPanel.getBoundingClientRect();
+        const relativeX = mouseMoveEvent.clientX - rect.left;
+        const percentage = Math.max(20, Math.min(80, (relativeX / rect.width) * 100));
+        setActivityLogWidth(percentage);
+      };
 
-    const onMouseUp = () => {
-      document.body.style.cursor = 'default';
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-    };
+      const onMouseUp = () => {
+        document.body.style.cursor = 'default';
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+      };
 
-    document.body.style.cursor = 'col-resize';
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
+      document.body.style.cursor = 'col-resize';
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    } else {
+      // Original sidebar resizing logic
+      const startWidth = direction === 'left' ? leftWidth : rightWidth;
+
+      const onMouseMove = (mouseMoveEvent: MouseEvent) => {
+        const delta = mouseMoveEvent.clientX - startX;
+        const newWidth = direction === 'left'
+          ? Math.max(200, Math.min(600, startWidth + delta))
+          : Math.max(300, Math.min(800, startWidth - delta));
+
+        if (direction === 'left') setLeftWidth(newWidth);
+        else setRightWidth(newWidth);
+      };
+
+      const onMouseUp = () => {
+        document.body.style.cursor = 'default';
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+      };
+
+      document.body.style.cursor = 'col-resize';
+      document.addEventListener("mousemove", onMouseMove);
+      document.addEventListener("mouseup", onMouseUp);
+    }
   };
 
   // Approval modal hook
@@ -879,6 +902,8 @@ export default function HomePage() {
       "query_complete",
       "error",
       "iteration_end",
+      "system_event",
+      "system_presence",
     ];
 
     eventTypes.forEach((eventType) => {
@@ -894,7 +919,7 @@ export default function HomePage() {
     return () => {
       unsubscribes.forEach((unsub) => unsub());
     };
-  }, []);
+  }, [ws]);
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
@@ -935,16 +960,47 @@ export default function HomePage() {
           />
         </aside>
 
-        {/* Center - Chat Interface OR File Viewer */}
-        <main className="flex-1 border-r border-border/50 min-w-0 bg-background/50">
+        {/* Center - Split: Activity Log (left) + Chat Interface (right) OR File Viewer */}
+        <main className="flex-1 border-r border-border/50 min-w-0 bg-background/50 flex relative">
           {viewingFile ? (
             <FileViewer />
           ) : (
-            <ChatInterface />
+            <>
+              {/* Activity Log - Left side (resizable) */}
+              <div
+                className="min-h-0 border-r border-border/50 bg-background/30 relative"
+                style={{ width: `${activityLogWidth}%` }}
+              >
+                <div className="h-full flex flex-col">
+                  <div className="p-2 border-b border-border/50 bg-secondary/10">
+                    <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
+                      {ICONS.activity} Activity Log
+                    </h2>
+                  </div>
+                  <div className="flex-1 overflow-hidden">
+                    <CombinedActivityLog />
+                  </div>
+                </div>
+
+                {/* Draggable Divider */}
+                <div
+                  className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 transition-colors z-20"
+                  onMouseDown={startResizing('center')}
+                />
+              </div>
+
+              {/* Chat Interface - Right side (fills remaining space) */}
+              <div
+                className="min-h-0 flex-1"
+                style={{ width: `${100 - activityLogWidth}%` }}
+              >
+                <ChatInterface />
+              </div>
+            </>
           )}
         </main>
 
-        {/* Right Sidebar - Monitoring & Workspace */}
+        {/* Right Sidebar - Ops Panel */}
         <aside
           className="shrink-0 flex flex-col h-full overflow-hidden relative bg-background/30 backdrop-blur-sm"
           style={{ width: rightWidth }}
@@ -955,7 +1011,9 @@ export default function HomePage() {
             onMouseDown={startResizing('right')}
           />
 
-          <CombinedActivityLog />
+          <div className="flex flex-col h-full overflow-y-auto scrollbar-thin">
+            <OpsPanel />
+          </div>
         </aside>
       </div>
 

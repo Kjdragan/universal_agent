@@ -39,7 +39,7 @@ export function CombinedActivityLog() {
         const toolItems: ToolEntry[] = toolCalls.map(t => ({
             ...t,
             type: 'tool' as const,
-            timestamp: t.timestamp || Date.now()
+            timestamp: t.timestamp ?? 0
         }));
 
         return [...logItems, ...toolItems].sort((a, b) => a.timestamp - b.timestamp);
@@ -103,17 +103,14 @@ function ActivityItemRow({ item, expandMode }: { item: ActivityItem; expandMode:
 }
 
 const CollapsibleData = ({ label, data, isError = false, expandMode }: { label: string, data: any, isError?: boolean, expandMode: ExpandMode }) => {
-    const [expanded, setExpanded] = React.useState(expandMode === 'expanded');
+    const [expanded, setExpanded] = React.useState(false);
     const jsonString = useMemo(() => JSON.stringify(data, null, 2), [data]);
     const preview = useMemo(() => {
         if (typeof data === 'string') return data.slice(0, 60) + (data.length > 60 ? '...' : '');
         if (typeof data === 'object') return Object.keys(data).join(', ').slice(0, 60) + '...';
         return String(data);
     }, [data]);
-
-    useEffect(() => {
-        setExpanded(expandMode === 'expanded');
-    }, [expandMode]);
+    const effectiveExpanded = expandMode === 'collapsed' ? false : expandMode === 'expanded' ? true : expanded;
 
     // Calculate approximate size for the label
     const size = useMemo(() => {
@@ -126,17 +123,20 @@ const CollapsibleData = ({ label, data, isError = false, expandMode }: { label: 
         <div className="border rounded bg-background/50 overflow-hidden">
             <div
                 className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors text-xs"
-                onClick={() => setExpanded(!expanded)}
+                onClick={() => {
+                    if (expandMode === 'expanded') return;
+                    setExpanded(!effectiveExpanded);
+                }}
             >
                 <span className="text-muted-foreground">
-                    {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                    {effectiveExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                 </span>
                 <span className="font-semibold text-muted-foreground">{label}</span>
                 <span className="text-[10px] text-muted-foreground/60 font-mono">({size})</span>
-                {!expanded && <span className="ml-auto text-muted-foreground/50 font-mono truncate max-w-[200px]">{preview}</span>}
+                {!effectiveExpanded && <span className="ml-auto text-muted-foreground/50 font-mono truncate max-w-[200px]">{preview}</span>}
             </div>
 
-            {expanded && (
+            {effectiveExpanded && (
                 <div className="border-t bg-background p-0">
                     <pre className={cn(
                         "p-2 text-xs font-mono whitespace-pre-wrap break-words",
@@ -151,11 +151,8 @@ const CollapsibleData = ({ label, data, isError = false, expandMode }: { label: 
 };
 
 function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode }) {
-    const [isOpen, setIsOpen] = React.useState(expandMode !== 'collapsed');
-
-    useEffect(() => {
-        setIsOpen(expandMode !== 'collapsed');
-    }, [expandMode]);
+    const [isOpen, setIsOpen] = React.useState(true);
+    const effectiveOpen = expandMode === 'collapsed' ? false : expandMode === 'expanded' ? true : isOpen;
 
     return (
         <div className="border rounded-md bg-card/50 text-sm overflow-hidden">
@@ -166,10 +163,13 @@ function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode
                     tool.status === 'complete' && "bg-green-500/5 border-l-2 border-l-green-500",
                     tool.status === 'error' && "bg-red-500/5 border-l-2 border-l-red-500"
                 )}
-                onClick={() => setIsOpen(!isOpen)}
+                onClick={() => {
+                    if (expandMode === 'expanded') return;
+                    setIsOpen(!effectiveOpen);
+                }}
             >
                 <div className="text-muted-foreground">
-                    {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    {effectiveOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                 </div>
 
                 <div className="flex items-center justify-center w-6 h-6 rounded-full bg-background border shrink-0">
@@ -189,7 +189,7 @@ function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode
                 </div>
             </div>
 
-            {isOpen && (
+            {effectiveOpen && (
                 <div className="p-2 bg-muted/20 border-t space-y-2">
                     <CollapsibleData label="Input" data={tool.input} expandMode={expandMode} />
                     {tool.result && (
@@ -207,20 +207,13 @@ function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode
 }
 
 function LogRow({ log, expandMode }: { log: LogEntry; expandMode: ExpandMode }) {
-    const [isOpen, setIsOpen] = React.useState(expandMode !== 'collapsed');
+    const [isOpen, setIsOpen] = React.useState(false);
     const isError = log.level === 'ERROR' || log.level === 'CRITICAL';
 
     // Truncate long log messages for the header
     const headerPreview = log.message.split('\n')[0].slice(0, 100);
     const hasMore = log.message.length > 100 || log.message.includes('\n');
-
-    useEffect(() => {
-        if (!hasMore) {
-            setIsOpen(false);
-            return;
-        }
-        setIsOpen(expandMode !== 'collapsed');
-    }, [expandMode, hasMore]);
+    const effectiveOpen = hasMore && (expandMode === 'expanded' ? true : expandMode === 'collapsed' ? false : isOpen);
 
     return (
         <div className={cn(
@@ -232,7 +225,10 @@ function LogRow({ log, expandMode }: { log: LogEntry; expandMode: ExpandMode }) 
                     "flex items-start gap-2 cursor-pointer hover:opacity-80",
                     isError ? "text-red-600 dark:text-red-400" : "text-foreground"
                 )}
-                onClick={() => hasMore && setIsOpen(!isOpen)}
+                onClick={() => {
+                    if (!hasMore || expandMode === 'expanded') return;
+                    setIsOpen(!effectiveOpen);
+                }}
             >
                 <span className="text-muted-foreground min-w-[80px] shrink-0">
                     {format(log.timestamp, 'HH:mm:ss.SSS')}
@@ -246,11 +242,11 @@ function LogRow({ log, expandMode }: { log: LogEntry; expandMode: ExpandMode }) 
                 <div className="flex-1 whitespace-pre-wrap break-words">
                     {log.prefix && <span className="text-blue-500 mr-1">{log.prefix}</span>}
                     {headerPreview}
-                    {hasMore && !isOpen && <span className="text-muted-foreground ml-1">...</span>}
+                    {hasMore && !effectiveOpen && <span className="text-muted-foreground ml-1">...</span>}
                 </div>
             </div>
 
-            {isOpen && hasMore && (
+            {effectiveOpen && hasMore && (
                 <div className="mt-1 pl-[110px] text-muted-foreground whitespace-pre-wrap break-words">
                     {log.message}
                 </div>

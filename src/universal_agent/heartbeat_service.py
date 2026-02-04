@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
@@ -61,12 +61,14 @@ class HeartbeatState:
     last_run: float = 0.0
     last_message_hash: Optional[str] = None
     last_message_ts: float = 0.0
+    last_summary: Optional[dict] = None
     
     def to_dict(self):
         return {
             "last_run": self.last_run,
             "last_message_hash": self.last_message_hash,
             "last_message_ts": self.last_message_ts,
+            "last_summary": self.last_summary,
         }
 
     @classmethod
@@ -75,6 +77,7 @@ class HeartbeatState:
             last_run=data.get("last_run", 0.0),
             last_message_hash=data.get("last_message_hash"),
             last_message_ts=data.get("last_message_ts", 0.0),
+            last_summary=data.get("last_summary"),
         )
 
 
@@ -251,6 +254,59 @@ def _parse_bool(raw: Optional[str], default: bool = False) -> bool:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
+
+def _coerce_bool(value: Optional[object], default: Optional[bool] = None) -> Optional[bool]:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def _coerce_int(value: Optional[object], default: Optional[int] = None) -> Optional[int]:
+    if value is None:
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return default
+
+
+def _coerce_list(value: Optional[object]) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in re.split(r"[,\n]", value) if item.strip()]
+    value_str = str(value).strip()
+    return [value_str] if value_str else []
+
+
+def _load_json_overrides(workspace: Path) -> dict:
+    for name in ("HEARTBEAT.json", "heartbeat.json", ".heartbeat.json"):
+        path = workspace / name
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except Exception as exc:
+            logger.warning("Failed to parse %s: %s", path, exc)
+            return {}
+        if isinstance(payload, dict):
+            return payload
+        logger.warning("Heartbeat override file %s is not a JSON object", path)
+        return {}
+    return {}
+
 class HeartbeatService:
     def __init__(self, gateway: InProcessGateway, connection_manager):
         self.gateway = gateway
@@ -261,6 +317,7 @@ class HeartbeatService:
         # Simple tracking of busy sessions (primitive lock)
         self.busy_sessions: set[str] = set()
         self.wake_sessions: set[str] = set()
+        self.wake_next_sessions: set[str] = set()
         self.last_wake_reason: Dict[str, str] = {}
         
         # MOCK CONFIG (In future, load from session config)
@@ -302,6 +359,142 @@ class HeartbeatService:
             ok_tokens=ok_tokens,
         )
 
+    def _resolve_schedule(self, overrides: dict) -> HeartbeatScheduleConfig:
+        schedule = replace(self.default_schedule)
+        schedule.ok_tokens = list(schedule.ok_tokens)
+        schedule_data: dict = {}
+        heartbeat_block = overrides.get("heartbeat")
+        if isinstance(heartbeat_block, dict):
+            schedule_data.update(heartbeat_block)
+        if isinstance(overrides.get("schedule"), dict):
+            schedule_data.update(overrides["schedule"])
+        for key in (
+            "every",
+            "every_seconds",
+            "interval",
+            "active_hours",
+            "active_start",
+            "active_end",
+            "timezone",
+            "require_file",
+            "prompt",
+            "ack_max_chars",
+            "ok_tokens",
+        ):
+            if key in overrides:
+                schedule_data.setdefault(key, overrides[key])
+
+        interval_raw = (
+            schedule_data.get("every")
+            or schedule_data.get("every_seconds")
+            or schedule_data.get("interval")
+        )
+        if interval_raw is not None:
+            schedule.every_seconds = _parse_duration_seconds(str(interval_raw), schedule.every_seconds)
+
+        active_start = schedule_data.get("active_start") or schedule_data.get("activeStart")
+        active_end = schedule_data.get("active_end") or schedule_data.get("activeEnd")
+        active_hours = schedule_data.get("active_hours") or schedule_data.get("activeHours")
+        if active_hours and not (active_start or active_end):
+            parsed_start, parsed_end = _parse_active_hours(str(active_hours))
+            active_start = parsed_start or active_start
+            active_end = parsed_end or active_end
+        if active_start is not None:
+            schedule.active_start = str(active_start)
+        if active_end is not None:
+            schedule.active_end = str(active_end)
+
+        if schedule_data.get("timezone") is not None:
+            schedule.timezone = _resolve_active_timezone(str(schedule_data.get("timezone")))
+
+        require_file = _coerce_bool(schedule_data.get("require_file"))
+        if require_file is not None:
+            schedule.require_file = require_file
+
+        prompt = schedule_data.get("prompt")
+        if prompt is not None:
+            schedule.prompt = str(prompt)
+
+        ack_max_chars = _coerce_int(schedule_data.get("ack_max_chars"))
+        if ack_max_chars is not None:
+            schedule.ack_max_chars = ack_max_chars
+
+        ok_tokens = schedule_data.get("ok_tokens") or schedule_data.get("okTokens")
+        if ok_tokens is not None:
+            if isinstance(ok_tokens, list):
+                schedule.ok_tokens = _coerce_list(ok_tokens)
+            else:
+                schedule.ok_tokens = _parse_ok_tokens(str(ok_tokens))
+
+        return schedule
+
+    def _resolve_delivery(self, overrides: dict, session_id: str) -> HeartbeatDeliveryConfig:
+        delivery = HeartbeatDeliveryConfig(
+            mode=self.default_delivery.mode,
+            explicit_session_ids=list(self.default_delivery.explicit_session_ids),
+        )
+        delivery_data: dict = {}
+        if isinstance(overrides.get("delivery"), dict):
+            delivery_data.update(overrides["delivery"])
+        if "delivery_mode" in overrides:
+            delivery_data.setdefault("mode", overrides["delivery_mode"])
+        if "explicit_session_ids" in overrides:
+            delivery_data.setdefault("explicit_session_ids", overrides["explicit_session_ids"])
+        if "explicit" in overrides:
+            delivery_data.setdefault("explicit_session_ids", overrides["explicit"])
+
+        mode = str(delivery_data.get("mode", delivery.mode)).strip().lower()
+        if mode not in {"last", "explicit", "none"}:
+            logger.warning("Unknown heartbeat delivery mode '%s'; defaulting to 'last'", mode)
+            mode = "last"
+        delivery.mode = mode
+
+        if delivery.mode == "explicit":
+            explicit_ids = delivery_data.get("explicit_session_ids") or delivery_data.get("targets")
+            if explicit_ids is not None:
+                delivery.explicit_session_ids = _coerce_list(explicit_ids)
+
+            valid_sessions = set(self.active_sessions.keys())
+            cleaned: list[str] = []
+            for target in delivery.explicit_session_ids:
+                if target.upper() == "CURRENT":
+                    cleaned.append("CURRENT")
+                    continue
+                if target == session_id:
+                    cleaned.append(target)
+                    continue
+                if target in valid_sessions:
+                    cleaned.append(target)
+                    continue
+                logger.warning("Heartbeat delivery target '%s' not active; skipping", target)
+            delivery.explicit_session_ids = cleaned
+
+        return delivery
+
+    def _resolve_visibility(self, overrides: dict) -> HeartbeatVisibilityConfig:
+        visibility = replace(self.default_visibility)
+        visibility_data: dict = {}
+        if isinstance(overrides.get("visibility"), dict):
+            visibility_data.update(overrides["visibility"])
+        for key in ("show_ok", "show_alerts", "dedupe_window_seconds", "use_indicator"):
+            if key in overrides:
+                visibility_data.setdefault(key, overrides[key])
+
+        show_ok = _coerce_bool(visibility_data.get("show_ok"))
+        if show_ok is not None:
+            visibility.show_ok = show_ok
+        show_alerts = _coerce_bool(visibility_data.get("show_alerts"))
+        if show_alerts is not None:
+            visibility.show_alerts = show_alerts
+        dedupe_window = _coerce_int(visibility_data.get("dedupe_window_seconds"))
+        if dedupe_window is not None:
+            visibility.dedupe_window_seconds = dedupe_window
+        use_indicator = _coerce_bool(visibility_data.get("use_indicator"))
+        if use_indicator is not None:
+            visibility.use_indicator = use_indicator
+
+        return visibility
+
     async def start(self):
         if self.running:
             return
@@ -333,6 +526,11 @@ class HeartbeatService:
         self.wake_sessions.add(session_id)
         self.last_wake_reason[session_id] = reason
         logger.info("Heartbeat wake requested for %s (%s)", session_id, reason)
+
+    def request_heartbeat_next(self, session_id: str, reason: str = "wake_next") -> None:
+        self.wake_next_sessions.add(session_id)
+        self.last_wake_reason[session_id] = reason
+        logger.info("Heartbeat wake-next requested for %s (%s)", session_id, reason)
 
     async def _scheduler_loop(self):
         """Main loop that checks sessions periodically."""
@@ -380,21 +578,46 @@ class HeartbeatService:
             except Exception as e:
                 logger.warning(f"Failed to load heartbeat state for {session.session_id}: {e}")
 
-        schedule = self.default_schedule
+        overrides = _load_json_overrides(workspace)
+        schedule = self._resolve_schedule(overrides)
+        delivery = self._resolve_delivery(overrides, session.session_id)
+        visibility = self._resolve_visibility(overrides)
         now = time.time()
         wake_requested = session.session_id in self.wake_sessions
         wake_reason = None
         if wake_requested:
             self.wake_sessions.discard(session.session_id)
             wake_reason = self.last_wake_reason.pop(session.session_id, None)
+        wake_next = session.session_id in self.wake_next_sessions
 
         if not wake_requested:
             elapsed = now - state.last_run
             if elapsed < schedule.every_seconds:
+                if wake_next:
+                    return
                 return
+            if wake_next:
+                self.wake_next_sessions.discard(session.session_id)
+                wake_reason = self.last_wake_reason.pop(session.session_id, wake_reason)
 
         if not _within_active_hours(schedule, now):
             return
+
+        # If delivery is explicit and no targets are currently connected,
+        # skip the heartbeat run to avoid burning cycles before a client attaches.
+        if not wake_requested and not wake_next and delivery.mode == "explicit":
+            delivery_targets = []
+            for target in delivery.explicit_session_ids:
+                if target.upper() == "CURRENT":
+                    delivery_targets.append(session.session_id)
+                else:
+                    delivery_targets.append(target)
+            connected_targets = [
+                target for target in delivery_targets
+                if target in self.connection_manager.session_connections
+            ]
+            if not connected_targets:
+                return
 
         # Check HEARTBEAT.md (optional)
         hb_file = workspace / HEARTBEAT_FILE
@@ -414,7 +637,15 @@ class HeartbeatService:
             session.session_id,
             f" (wake={wake_reason})" if wake_requested and wake_reason else "",
         )
-        await self._run_heartbeat(session, state, state_path, heartbeat_content, schedule)
+        await self._run_heartbeat(
+            session,
+            state,
+            state_path,
+            heartbeat_content,
+            schedule,
+            delivery,
+            visibility,
+        )
 
     async def _run_heartbeat(
         self,
@@ -423,13 +654,11 @@ class HeartbeatService:
         state_path: Path,
         heartbeat_content: str,
         schedule: HeartbeatScheduleConfig,
+        delivery: HeartbeatDeliveryConfig,
+        visibility: HeartbeatVisibilityConfig,
     ):
         """Execute the heartbeat using the gateway engine."""
         self.busy_sessions.add(session.session_id)
-        
-        # Use simple mock configs (MVP)
-        delivery = self.default_delivery
-        visibility = self.default_visibility
         
         def _mock_heartbeat_response(content: str) -> str:
             # Deterministic response for tests/CI (no external calls).
@@ -508,16 +737,21 @@ class HeartbeatService:
             
             # Policy 3: Delivery Mode
             should_send = True
+            suppressed_reason: Optional[str] = None
             if delivery.mode == "none":
                 should_send = False
+                suppressed_reason = "delivery_none"
             elif suppress_ok:
                 should_send = False
+                suppressed_reason = "ok_suppressed"
                 logger.info(f"Suppressed OK heartbeat for {session.session_id} (show_ok=False)")
             elif suppress_alerts:
                 should_send = False
+                suppressed_reason = "alerts_suppressed"
                 logger.info(f"Suppressed alert heartbeat for {session.session_id} (show_alerts=False)")
             elif is_duplicate:
                 should_send = False
+                suppressed_reason = "dedupe"
 
             delivery_targets = []
             if delivery.mode == "last":
@@ -531,6 +765,7 @@ class HeartbeatService:
 
             if not delivery_targets:
                 should_send = False
+                suppressed_reason = suppressed_reason or "no_targets"
 
             connected_targets = [
                 target for target in delivery_targets
@@ -538,13 +773,16 @@ class HeartbeatService:
             ]
             if should_send and not connected_targets:
                 should_send = False
+                suppressed_reason = suppressed_reason or "no_connected_targets"
 
             # Allow indicator-only event when OK is suppressed but indicators are enabled.
             allow_indicator = ok_only and suppress_ok and visibility.use_indicator
             if allow_indicator and connected_targets:
                 should_send = True
+                suppressed_reason = None
             
             sent_any = False
+            summary_text = ok_token if ok_only else (response_text or full_response)
             if should_send:
                 if allow_indicator:
                     summary_event = {
@@ -562,7 +800,7 @@ class HeartbeatService:
                     summary_event = {
                         "type": "heartbeat_summary",
                         "data": {
-                            "text": ok_token if ok_only else response_text or full_response,
+                            "text": summary_text,
                             "timestamp": datetime.now().isoformat(),
                             "ok_only": ok_only,
                             # Add extra metadata for UI awareness
@@ -584,6 +822,21 @@ class HeartbeatService:
                 if sent_any and not ok_only:
                     state.last_message_hash = msg_hash
                     state.last_message_ts = now
+
+            state.last_summary = {
+                "timestamp": datetime.now().isoformat(),
+                "ok_only": ok_only,
+                "text": summary_text,
+                "token": ok_token if ok_only else None,
+                "sent": sent_any,
+                "delivery": {
+                    "mode": delivery.mode,
+                    "targets": delivery_targets,
+                    "connected_targets": connected_targets,
+                    "indicator_only": allow_indicator,
+                },
+                "suppressed_reason": suppressed_reason,
+            }
 
             # Always update last_run to respect interval
             state.last_run = now

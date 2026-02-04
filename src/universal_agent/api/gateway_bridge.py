@@ -181,6 +181,8 @@ class GatewayBridge:
                 "pong": WSEventType.PONG,
                 "input_required": WSEventType.INPUT_REQUIRED,
                 "input_response": WSEventType.INPUT_RESPONSE,
+                "system_event": WSEventType.SYSTEM_EVENT,
+                "system_presence": WSEventType.SYSTEM_PRESENCE,
             }
             
             ws_type = type_map.get(event_type)
