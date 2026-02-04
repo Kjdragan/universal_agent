@@ -94,6 +94,39 @@ interface AgentStore {
   addLog: (log: { message: string; level: string; prefix: string }) => void;
   clearLogs: () => void;
 
+  // System events + presence
+  systemEvents: Array<{
+    id: string;
+    event_type: string;
+    payload: Record<string, unknown>;
+    created_at?: string;
+    session_id?: string;
+    timestamp: number;
+  }>;
+  addSystemEvent: (event: {
+    event_type: string;
+    payload: Record<string, unknown>;
+    created_at?: string;
+    session_id?: string;
+  }) => void;
+  clearSystemEvents: () => void;
+  systemPresence: Array<{
+    node_id: string;
+    status: string;
+    reason?: string | null;
+    metadata?: Record<string, unknown>;
+    updated_at?: string;
+    timestamp: number;
+  }>;
+  setSystemPresence: (presence: {
+    node_id: string;
+    status: string;
+    reason?: string | null;
+    metadata?: Record<string, unknown>;
+    updated_at?: string;
+  }) => void;
+  clearSystemPresence: () => void;
+
   // Reset
   reset: () => void;
 }
@@ -235,6 +268,41 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   })),
   clearLogs: () => set({ logs: [] }),
 
+  // System events + presence
+  systemEvents: [],
+  addSystemEvent: (event) => set((state) => ({
+    systemEvents: [
+      ...state.systemEvents,
+      {
+        id: generateId(),
+        event_type: event.event_type,
+        payload: event.payload,
+        created_at: event.created_at,
+        session_id: event.session_id,
+        timestamp: Date.now(),
+      },
+    ].slice(-200),
+  })),
+  clearSystemEvents: () => set({ systemEvents: [] }),
+  systemPresence: [],
+  setSystemPresence: (presence) => set((state) => {
+    const existing = state.systemPresence.filter((node) => node.node_id !== presence.node_id);
+    return {
+      systemPresence: [
+        ...existing,
+        {
+          node_id: presence.node_id,
+          status: presence.status,
+          reason: presence.reason,
+          metadata: presence.metadata,
+          updated_at: presence.updated_at,
+          timestamp: Date.now(),
+        },
+      ],
+    };
+  }),
+  clearSystemPresence: () => set({ systemPresence: [] }),
+
   // Reset
   reset: () => set({
     messages: [],
@@ -242,6 +310,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     toolCalls: [],
     workProducts: [],
     logs: [],
+    systemEvents: [],
+    systemPresence: [],
     currentThinking: "",
     tokenUsage: { input: 0, output: 0, total: 0 },
     startTime: null,
@@ -375,6 +445,31 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
     case "error": {
       const data = event.data as Record<string, unknown>;
       store.setLastError((data.message as string) ?? "Unknown error");
+      break;
+    }
+
+    case "system_event": {
+      const data = event.data as Record<string, unknown>;
+      const currentSession = store.currentSession?.session_id;
+      store.addSystemEvent({
+        event_type: (data.type as string) ?? "system_event",
+        payload: (data.payload as Record<string, unknown>) ?? data,
+        created_at: (data.created_at as string) ?? undefined,
+        session_id: (data.session_id as string) ?? currentSession,
+      });
+      break;
+    }
+
+    case "system_presence": {
+      const data = event.data as Record<string, unknown>;
+      const nodeId = (data.node_id as string) ?? "gateway";
+      store.setSystemPresence({
+        node_id: nodeId,
+        status: (data.status as string) ?? "online",
+        reason: (data.reason as string) ?? undefined,
+        metadata: (data.metadata as Record<string, unknown>) ?? {},
+        updated_at: (data.updated_at as string) ?? undefined,
+      });
       break;
     }
   }

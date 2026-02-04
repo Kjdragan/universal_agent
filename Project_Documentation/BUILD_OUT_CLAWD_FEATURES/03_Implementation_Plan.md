@@ -142,6 +142,7 @@ We keep UA’s gateway and event model intact, but mirror Clawdbot semantics:
   - `UA_HEARTBEAT_INCLUDE_REASONING`
   - Per‑channel visibility defaults: `UA_HB_SHOW_OK`, `UA_HB_SHOW_ALERTS`, `UA_HB_USE_INDICATOR`
 - Honor `HEARTBEAT.md` in workspace, but do not hard‑require it.
+- Per‑agent overrides via `HEARTBEAT.json` (`schedule`, `delivery`, `visibility` blocks).
 
 **Heartbeat runner (UA)**
 - Add heartbeat loop in gateway process only (single runner).
@@ -163,8 +164,8 @@ We keep UA’s gateway and event model intact, but mirror Clawdbot semantics:
 
 #### A) Config + Validation
 - [x] Add heartbeat config schema and env vars to `.env.sample` + docs.
-- [ ] Support per‑agent overrides (defaults + per‑agent).
-- [ ] Validate heartbeat target: `last`, `none`, or known channel id.
+- [x] Support per‑agent overrides (defaults + per‑agent).
+- [x] Validate heartbeat target: `last`, `none`, or known channel id.
 
 #### B) Heartbeat Prompt + ACK Logic
 - [x] Implement `HEARTBEAT_OK` stripping and max‑chars ACK suppression.
@@ -176,23 +177,29 @@ We keep UA’s gateway and event model intact, but mirror Clawdbot semantics:
 - [x] Busy‑lane gating + backoff on errors.
 - [x] Resolve delivery target (last channel, explicit channel, none).
 - [x] Emit heartbeat event payloads + indicator type.
-- [ ] Surface last‑heartbeat via gateway API.
+- [x] Surface last‑heartbeat via gateway API.
 
 #### D) Wake Hooks
-- [ ] Implement “wake now” and “wake next heartbeat” API.
+- [x] Implement “wake now / wake next” API (`/api/v1/heartbeat/wake`).
 - [x] Internal wake signal plumbing (gateway‑local).
-- [ ] Allow cron + system events to trigger a heartbeat wake.
+- [x] Allow cron to trigger heartbeat wake (system events pending).
 
 #### E) Cron Service (Proactive Loop)
-- [ ] Add cron storage and service with CRUD + run + history.
-- [ ] Run jobs in isolated session with `cron` lane (no overlap with main lane).
-- [ ] Emit cron events to WS + append run logs.
+- [x] Add cron storage and service with CRUD + run + history.
+- [x] Run jobs in isolated session (per‑job workspace + `cron` user id).
+- [x] Emit cron events to WS + append run logs.
 
 #### F) Tests
 - [x] Heartbeat: ACK strip + visibility modes (existing gateway heartbeat tests).
-- [ ] Heartbeat: active‑hours window + empty file skip.
-- [ ] Wake: now vs next heartbeat coalescing.
-- [ ] Cron: CRUD, auto‑run due jobs, run log entries.
+- [x] Heartbeat: active‑hours window + empty file skip.
+- [x] Wake: now vs next heartbeat coalescing.
+- [x] Cron: CRUD + run log entries (API tests, mock response).
+- [x] Cron: auto‑run due jobs (scheduler) coverage.
+
+#### G) System Events + Presence
+- [x] Add system event queue + API (post/list).
+- [x] Inject queued system events into next gateway execute.
+- [x] Add system presence API + WS broadcast.
 
 ### 3.4 Deliverables
 - Heartbeat runner parity with Clawdbot semantics.
@@ -200,8 +207,8 @@ We keep UA’s gateway and event model intact, but mirror Clawdbot semantics:
 - Heartbeat events visible via WS + API.
 
 ### 3.5 Status
-- **Current:** MVP heartbeat exists, but not full Clawdbot parity. Cron + system events/presence are missing.
-- **Target:** Full parity for heartbeat + cron behavior.
+- **Current:** Heartbeat + cron + system events/presence parity implemented. Delivery policy uses explicit targets correctly (defaults preserved). Heartbeat/cron/system tests pass.
+- **Target:** Maintain parity and harden ops UX (optional: richer metrics + durability polish).
 
 ---
 
@@ -231,6 +238,83 @@ We define a minimal “Ops API” set and keep it stable:
   - tail with cursor + file selection
 - Config:
   - get / set / patch / schema (read‑only in prod by default)
+
+### 4.3 Clawdbot Parity Notes (Behavior to Mirror)
+Key Clawdbot behavior we should mirror where feasible:
+- Logs: `logs.tail` supports `cursor`, `limit`, `maxBytes`, and returns `reset` + `truncated` flags.
+- Sessions:
+  - `sessions.list` uses a stable store (not just in‑memory).
+  - `sessions.preview` reads last N transcript lines for UI previews.
+  - `sessions.reset/delete/compact` mutate session stores safely.
+- Channels: status includes “configured” + “enabled” (per account), with optional probe/audit.
+- Skills: supports enable/disable, install/update, and “missing bins” reporting.
+- Config: GET + PATCH + SET + SCHEMA with base hash to prevent stale writes.
+- Control UI: gateway serves a static Ops UI that consumes the control plane.
+
+### 4.4 UA Implementation Strategy (Concrete)
+We **don’t** copy Clawdbot wholesale; we re‑map to UA primitives:
+
+**Ops Config Storage (UA)**
+- Introduce `ops_config.json` stored under `AGENT_RUN_WORKSPACES/` (git‑ignored).
+- Env override: `UA_OPS_CONFIG_PATH`, optional `UA_OPS_TOKEN` for auth.
+- Base‑hash strategy for safe updates.
+- Skills/channel enable/disable stored here and applied at runtime.
+
+**Session Control**
+- List workspace directories as persisted session sources.
+- Provide preview via `activity_journal.log` tail.
+- Reset = archive logs/memory; Compact = tail logs to last N lines; Delete = remove workspace.
+
+**Logs**
+- Tail any `run.log` (per session) with cursor/limit/maxBytes.
+
+**Skills**
+- Catalog from `.claude/skills` with gating (missing bins).
+- Ops overrides: disable by name in `ops_config.json` or `UA_SKILLS_DISABLED`.
+
+**Channels**
+- Report CLI/Web/Gateway/Telegram status from env + ops overrides.
+- “Logout” = disable in ops config (requires restart to take effect).
+
+**Config**
+- Use ops config as the mutable control surface; keep `.env` untouched.
+- `config.get/set/patch` operate on `ops_config.json` only.
+
+**Models**
+- Expose the configured default model IDs from env.
+
+### 4.5 Implementation Steps (Phase 3)
+
+#### A) Ops API (Backend)
+- [x] Add `/api/v1/ops/*` endpoints (sessions, logs, skills, channels, config, models).
+- [x] Add `UA_OPS_TOKEN` gate (optional) for ops endpoints.
+- [x] Add `ops_config.json` read/write + base hash.
+
+#### B) Skills Overrides + Gating
+- [x] Add ops overrides loader (disable skills by name).
+- [x] Respect overrides in skill discovery (CLI + Gateway).
+
+#### C) Session Controls
+- [x] List sessions from workspace dirs (not just in‑memory).
+- [x] Preview from `activity_journal.log`.
+- [x] Reset/compact/delete operations (safe archiving).
+
+#### D) Logs Tail
+- [x] Tail `run.log` with cursor/limit/maxBytes + truncated/reset flags.
+
+#### E) UI Integration (Web UI)
+- [x] Minimal Ops panel (Sessions, Logs, Skills).
+- [x] Show system presence + system events.
+- [x] Add “safe” config editor (ops_config.json only).
+
+#### F) Tests
+- [x] Ops API tests for sessions/logs/skills.
+- [x] Safety tests for compact + reset (basic coverage).
+
+### 4.6 Deliverables
+- Stable Ops API endpoints for observability + control.
+- Ops config file wired to runtime for skills/channels toggles.
+- UI hooks ready to surface status and quick actions.
 
 **Nice‑to‑Have (Phase 3.5)**
 - Exec approvals status + request/resolve
@@ -273,8 +357,8 @@ We define a minimal “Ops API” set and keep it stable:
 - [ ] Enforce read‑only mode in production unless explicitly allowed.
 
 #### F) UI Panel
-- [ ] Add a small Ops tab in Web UI that consumes above endpoints.
-- [ ] Show heartbeat state + last heartbeat event.
+- [x] Add a small Ops panel in Web UI that consumes above endpoints.
+- [x] Show heartbeat state + last heartbeat event.
 
 ### 4.4 Status
 - **Current:** minimal status endpoints exist; no unified ops surface.
@@ -297,16 +381,16 @@ Increase Telegram reliability and formatting parity.
 
 ## 6) Current Status
 **Phase 1:** In progress (file memory + pre‑compaction flush implemented; async tool tests aligned; CLI memory integration test passing).\
-**Phase 2:** MVP done, Clawdbot parity pending (cron + full heartbeat config/targets/visibility + system presence).\
-**Phase 3:** MVP done, Clawdbot parity pending (ops endpoints breadth + UI panel).\
+**Phase 2:** Heartbeat + cron + system events/presence parity implemented; tests passing (heartbeat/cron/system).\
+**Phase 3:** Ops API + UI panel in place (sessions/logs/skills, system presence/events, ops config editor, channel probes, approvals control, config schema).\
 **Phase 4:** Paused (Telegram reliability work gated; tests disabled by default).
 
 ---
 
 ## 7) Next Actions (Immediate)
 1. Expand Phase 2 to full Clawdbot parity (heartbeat + cron + system events).
-2. Expand Phase 3 Ops API + minimal UI panel.
-3. Add memory search tests and update the testing guide.
+2. Add memory search tests and update the testing guide.
+3. Resume Phase 4 (Telegram reliability) when the channel is unblocked.
 
 ---
 
@@ -320,3 +404,6 @@ Increase Telegram reliability and formatting parity.
 - 2026‑02‑03: Heartbeat MVP gating wired (enable flag + busy skip + empty‑skip) and heartbeat envs added to `.env.sample`.
 - 2026‑02‑03: Heartbeat MVP summary test added and passing (gateway WS broadcast).
 - 2026‑02‑03: Phase 3 delivery policy complete (delivery routing + visibility + dedupe + indicator); policy tests added.
+- 2026‑02‑03: Ops UI extended with system presence/events + ops_config editor; gateway bridge + UI event types updated.
+- 2026‑02‑03: Fixed heartbeat explicit delivery defaults; heartbeat/cron/system test subset passing.
+- 2026‑02‑03: Added ops config schema endpoint + approvals control + channel probes (API + UI + tests).

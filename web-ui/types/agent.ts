@@ -24,7 +24,9 @@ export type EventType =
   | "approval"
   | "input_required"
   | "input_response"
-  | "ping";
+  | "ping"
+  | "system_event"
+  | "system_presence";
 
 // =============================================================================
 // WebSocket Event
@@ -51,6 +53,8 @@ export type EventData =
   | ConnectedEventData
   | QueryCompleteEventData
   | InputRequiredEventData
+  | SystemEventData
+  | SystemPresenceData
   | Record<string, unknown>;
 
 // =============================================================================
@@ -322,4 +326,23 @@ export interface InputRequiredEventData {
   question: string;
   category: string;
   options: string[];
+}
+
+// =============================================================================
+// System Events / Presence
+// =============================================================================
+
+export interface SystemEventData {
+  event_id?: string;
+  type?: string;
+  payload?: Record<string, unknown>;
+  created_at?: string;
+}
+
+export interface SystemPresenceData {
+  node_id?: string;
+  status?: string;
+  reason?: string | null;
+  metadata?: Record<string, unknown>;
+  updated_at?: string;
 }
