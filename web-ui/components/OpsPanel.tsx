@@ -89,6 +89,7 @@ export function OpsPanel() {
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [logTail, setLogTail] = useState<string>("");
+  const [activityTail, setActivityTail] = useState<string>("");
   const [loading, setLoading] = useState(false);
 
   const systemEvents = useAgentStore((state) => state.systemEvents);
@@ -314,6 +315,91 @@ export function OpsPanel() {
     }
   }, []);
 
+  const fetchActivityLog = useCallback(async (sessionId: string) => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/ops/sessions/${encodeURIComponent(sessionId)}/preview`,
+        { headers: buildHeaders() },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setActivityTail((data.lines || []).join("\n"));
+      } else {
+        setActivityTail("(Activity log unavailable)");
+      }
+    } catch (err) {
+      console.error("Ops activity fetch failed", err);
+      setActivityTail("(Error fetching activity log)");
+    }
+  }, []);
+
+  const deleteSession = useCallback(async (sessionId: string) => {
+    if (!sessionId) return;
+    if (!confirm(`Permanently delete session ${sessionId}?`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/sessions/${sessionId}?confirm=true`, {
+        method: "DELETE",
+        headers: buildHeaders(),
+      });
+      if (res.ok) {
+        setSelected(null);
+        fetchSessions();
+      } else {
+        alert("Delete failed: " + res.statusText);
+      }
+    } catch (err) {
+      console.error("Delete session failed", err);
+      alert("Delete failed");
+    }
+  }, [fetchSessions]);
+
+  const resetSession = useCallback(async (sessionId: string) => {
+    if (!sessionId) return;
+    if (!confirm(`Reset session ${sessionId}? This will archive state.`)) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/sessions/${sessionId}/reset`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildHeaders(),
+        },
+        body: JSON.stringify({ clear_logs: true }),
+      });
+      if (res.ok) {
+        fetchSessions(); // Status might change
+        alert("Session reset successfully");
+      } else {
+        alert("Reset failed: " + res.statusText);
+      }
+    } catch (err) {
+      console.error("Reset session failed", err);
+      alert("Reset failed");
+    }
+  }, [fetchSessions]);
+
+  const compactLogs = useCallback(async (sessionId: string) => {
+    if (!sessionId) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/sessions/${sessionId}/compact`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...buildHeaders(),
+        },
+        body: JSON.stringify({ max_lines: 500, max_bytes: 250000 }),
+      });
+      if (res.ok) {
+        alert("Logs compacted");
+        if (selected === sessionId) fetchLogs(sessionId);
+      } else {
+        alert("Compact failed: " + res.statusText);
+      }
+    } catch (err) {
+      console.error("Compact logs failed", err);
+      alert("Compact failed");
+    }
+  }, [selected, fetchLogs]);
+
   const loadOpsSchema = useCallback(async () => {
     setOpsSchemaStatus("Loading...");
     try {
@@ -399,10 +485,11 @@ export function OpsPanel() {
   useEffect(() => {
     if (selected) {
       fetchLogs(selected);
+      fetchActivityLog(selected);
       fetchSystemEvents(selected);
       fetchHeartbeat(selected);
     }
-  }, [selected, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
+  }, [selected, fetchLogs, fetchSystemEvents, fetchHeartbeat, fetchActivityLog]);
 
   return (
     <div className="flex flex-col border rounded-lg bg-background/60 overflow-hidden mb-3">
@@ -419,6 +506,7 @@ export function OpsPanel() {
             loadOpsSchema();
             if (selected) {
               fetchLogs(selected);
+              fetchActivityLog(selected);
               fetchSystemEvents(selected);
               fetchHeartbeat(selected);
             }
@@ -442,8 +530,8 @@ export function OpsPanel() {
                 key={session.session_id}
                 onClick={() => setSelected(session.session_id)}
                 className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === session.session_id
-                    ? "border-primary text-primary"
-                    : "border-border/50 text-muted-foreground"
+                  ? "border-primary text-primary"
+                  : "border-border/50 text-muted-foreground"
                   }`}
               >
                 <div className="font-mono truncate">{session.session_id}</div>
@@ -469,8 +557,8 @@ export function OpsPanel() {
                 <span className="truncate">{skill.name}</span>
                 <span
                   className={`text-[10px] px-1.5 py-0.5 rounded ${skill.enabled && skill.available
-                      ? "bg-emerald-500/10 text-emerald-500"
-                      : "bg-amber-500/10 text-amber-500"
+                    ? "bg-emerald-500/10 text-emerald-500"
+                    : "bg-amber-500/10 text-amber-500"
                     }`}
                 >
                   {skill.enabled && skill.available ? "enabled" : "disabled"}
@@ -494,8 +582,8 @@ export function OpsPanel() {
                   <span className="font-mono">{channel.id}</span>
                   <span
                     className={`text-[10px] px-1.5 py-0.5 rounded ${channel.enabled
-                        ? "bg-emerald-500/10 text-emerald-500"
-                        : "bg-amber-500/10 text-amber-500"
+                      ? "bg-emerald-500/10 text-emerald-500"
+                      : "bg-amber-500/10 text-amber-500"
                       }`}
                   >
                     {channel.enabled ? "enabled" : "disabled"}
@@ -632,6 +720,43 @@ export function OpsPanel() {
               )}
             </div>
           )}
+        </div>
+      </div>
+
+      {selected && (
+        <div className="px-3 pb-3 text-xs">
+          <div className="border rounded bg-background/40 p-2">
+            <div className="font-semibold mb-2">Session Actions</div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => compactLogs(selected)}
+                className="px-2 py-1 rounded border bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
+              >
+                Compact Logs
+              </button>
+              <button
+                onClick={() => resetSession(selected)}
+                className="px-2 py-1 rounded border bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
+              >
+                Reset Session
+              </button>
+              <button
+                onClick={() => deleteSession(selected)}
+                className="px-2 py-1 rounded border bg-red-500/10 text-red-500 hover:bg-red-500/20"
+              >
+                Delete Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="px-3 pb-3 text-xs">
+        <div className="border rounded bg-background/40 p-2">
+          <div className="font-semibold mb-2">Activity Log (Preview)</div>
+          <pre className="text-[10px] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border">
+            {selected ? activityTail || "(empty)" : "Select a session"}
+          </pre>
         </div>
       </div>
 

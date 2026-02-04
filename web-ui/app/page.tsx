@@ -539,6 +539,7 @@ function ChatMessage({ message }: { message: any }) {
 
 function ChatInterface() {
   const messages = useAgentStore((s) => s.messages);
+  const toolCalls = useAgentStore((s) => s.toolCalls);
   const currentStreamingMessage = useAgentStore((s) => s.currentStreamingMessage);
   const currentThinking = useAgentStore((s) => s.currentThinking);
   const currentAuthor = useAgentStore((s) => s.currentAuthor);
@@ -660,6 +661,32 @@ function ChatInterface() {
                             </div>
                           </div>
                         </div>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+            {/* Active Process Indicator */}
+            {connectionStatus === "processing" && !currentStreamingMessage && (
+              <div className="flex justify-start mb-4">
+                <div className="flex items-center gap-2 text-muted-foreground bg-secondary/10 px-4 py-2 rounded-xl text-xs animate-pulse">
+                  {(() => {
+                    // Check for running tools
+                    const runningTool = toolCalls.find((tc: any) => tc.status === 'running');
+                    if (runningTool) {
+                      return (
+                        <>
+                          <span className="text-lg">⚙️</span>
+                          <span>Executing: <span className="font-mono text-primary">{runningTool.name}</span>...</span>
+                        </>
+                      );
+                    }
+                    // Default fallback
+                    return (
+                      <>
+                        <span className="text-lg">🧠</span>
+                        <span>Thinking...</span>
                       </>
                     );
                   })()}
