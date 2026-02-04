@@ -52,24 +52,24 @@
 
 ### 2.3 Proposed Design (UA‑native, not Clawdbot‑copy)
 
-**Memory Files**
+#### Memory Files
 
 - `AGENT_RUN_WORKSPACES/<session_id>/MEMORY.md` (primary running memory)
 - `AGENT_RUN_WORKSPACES/<session_id>/memory/YYYY‑MM‑DD.md` (daily append)
 
-**Index**
+#### Index
 
 - Lightweight index per session (SQLite FTS or JSON with timestamps + tags).\
 - Index updates only when memory is appended/updated.
 
-**Memory Flush Hook**
+#### Memory Flush Hook
 
 - Hook before compaction or session close:\
   - Summarize last N turns to memory.\
   - Append to daily memory file.\
   - Update `MEMORY.md` (curated/structured).\
 
-**Retrieval**
+#### Retrieval
 
 - Simple “retrieve memory” step in prompt assembly when available.\
 - Use “recency + tag” first, then semantic/FTS search when required.
@@ -157,7 +157,7 @@ Key behavior to match:
 
 We keep UA’s gateway and event model intact, but mirror Clawdbot semantics:
 
-**Config surface (UA)**
+#### Config Surface (UA)
 
 - Add UA‑side config schema for heartbeat parity:
   - `UA_HEARTBEAT_EVERY`, `UA_HEARTBEAT_ACTIVE_HOURS`, `UA_HEARTBEAT_TIMEZONE`
@@ -168,21 +168,21 @@ We keep UA’s gateway and event model intact, but mirror Clawdbot semantics:
 - Honor `HEARTBEAT.md` in workspace, but do not hard‑require it.
 - Per‑agent overrides via `HEARTBEAT.json` (`schedule`, `delivery`, `visibility` blocks).
 
-**Heartbeat runner (UA)**
+#### Heartbeat Runner (UA)
 
 - Add heartbeat loop in gateway process only (single runner).
 - Use queue/busy gating to skip heartbeats when main lane is busy.
 - Implement ACK stripping and “empty heartbeat” skip (Clawdbot’s `HEARTBEAT_OK` + `ackMaxChars`).
 - Emit events and last heartbeat cache for UI/API (`/api/v1/heartbeat/last` or WS event).
 
-**Cron (UA)**
+#### Cron (UA)
 
 - Introduce lightweight cron store + run log (json + jsonl) to mirror Clawdbot:
   - CRUD: list/add/update/remove/run/status/runs
   - Run in isolated agent session with `cron:<jobId>` session key and dedicated lane
   - Persist run log entries
 
-**System events + presence (UA)**
+#### System Events and Presence (UA)
 
 - Add a short in‑memory system event queue (session‑scoped) to include in next prompt.
 - Add “presence” updates from gateway (node metadata + reason), broadcast to WS.
@@ -300,7 +300,7 @@ cron_service.add_job(
 
 ## 4) Phase 3 — Gateway Ops / Control Plane (Clawdbot‑Aligned Plan)
 
-### Objective
+### Phase 3 Objective
 
 Expose operational control + visibility in a minimal, reliable way, aligned with Clawdbot’s gateway methods but integrated into UA’s API + UI stack.
 
@@ -317,7 +317,7 @@ We don’t need all of it, but the structure and boundaries are useful.
 
 We define a minimal “Ops API” set and keep it stable:
 
-**Required Ops Methods (Phase 3)**
+#### Required Ops Methods (Phase 3)
 
 - Sessions:
   - list / status / preview / reset / delete / compact
@@ -348,39 +348,39 @@ Key Clawdbot behavior we should mirror where feasible:
 
 We **don’t** copy Clawdbot wholesale; we re‑map to UA primitives:
 
-**Ops Config Storage (UA)**
+#### Ops Config Storage (UA)
 
 - Introduce `ops_config.json` stored under `AGENT_RUN_WORKSPACES/` (git‑ignored).
 - Env override: `UA_OPS_CONFIG_PATH`, optional `UA_OPS_TOKEN` for auth.
 - Base‑hash strategy for safe updates.
 - Skills/channel enable/disable stored here and applied at runtime.
 
-**Session Control**
+#### Session Control
 
 - List workspace directories as persisted session sources.
 - Provide preview via `activity_journal.log` tail.
 - Reset = archive logs/memory; Compact = tail logs to last N lines; Delete = remove workspace.
 
-**Logs**
+#### Logs
 
 - Tail any `run.log` (per session) with cursor/limit/maxBytes.
 
-**Skills**
+#### Skills
 
 - Catalog from `.claude/skills` with gating (missing bins).
 - Ops overrides: disable by name in `ops_config.json` or `UA_SKILLS_DISABLED`.
 
-**Channels**
+#### Channels
 
 - Report CLI/Web/Gateway/Telegram status from env + ops overrides.
 - “Logout” = disable in ops config (requires restart to take effect).
 
-**Config**
+#### Config
 
 - Use ops config as the mutable control surface; keep `.env` untouched.
 - `config.get/set/patch` operate on `ops_config.json` only.
 
-**Models**
+#### Models
 
 - Expose the configured default model IDs from env.
 
@@ -413,7 +413,7 @@ We **don’t** copy Clawdbot wholesale; we re‑map to UA primitives:
 - [x] Show system presence + system events.
 - [x] Add “safe” config editor (ops_config.json only).
 
-#### F) Tests
+#### F) Phase 3 Tests
 
 - [x] Ops API tests for sessions/logs/skills.
 - [x] Safety tests for compact + reset (basic coverage).
@@ -424,14 +424,14 @@ We **don’t** copy Clawdbot wholesale; we re‑map to UA primitives:
 - Ops config file wired to runtime for skills/channels toggles.
 - UI hooks ready to surface status and quick actions.
 
-**Nice‑to‑Have (Phase 3.5)**
+#### Nice-to-Have (Phase 3.5)
 
 - Exec approvals status + request/resolve
 - Models list + default selection
 - System presence + last heartbeat
 - Node + device pairing hooks (if we ever distribute runtimes)
 
-**UI (Ops Panel)**
+#### UI (Ops Panel)
 
 - Minimal “Ops” panel in Web UI:
   - Sessions list + last activity
@@ -485,7 +485,7 @@ We **don’t** copy Clawdbot wholesale; we re‑map to UA primitives:
 
 ## 5) Phase 4 — Telegram Parity Improvements (Outline)
 
-### Objective
+### Phase 4 Objective
 
 Increase Telegram reliability and formatting parity.
 

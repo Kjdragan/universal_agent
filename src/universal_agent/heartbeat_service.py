@@ -32,6 +32,17 @@ HEARTBEAT_EXECUTION_TIMEOUT = int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT", "45"))
 DEFAULT_ACK_MAX_CHARS = 300
 DEFAULT_OK_TOKENS = ["HEARTBEAT_OK", "UA_HEARTBEAT_OK"]
 
+# Specialized prompt for exec completion events (Clawdbot parity)
+EXEC_EVENT_PROMPT = (
+    "An async command you ran earlier has completed. The result is shown in the system messages above. "
+    "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. "
+    "If it failed, explain what went wrong."
+)
+
+# Type alias for system event provider callbacks
+from typing import Callable
+SystemEventProvider = Callable[[str], list[dict]]  # (session_id) -> list of event dicts
+
 @dataclass
 class HeartbeatDeliveryConfig:
     mode: str = "last"  # last | explicit | none
@@ -308,9 +319,15 @@ def _load_json_overrides(workspace: Path) -> dict:
     return {}
 
 class HeartbeatService:
-    def __init__(self, gateway: InProcessGateway, connection_manager):
+    def __init__(
+        self,
+        gateway: InProcessGateway,
+        connection_manager,
+        system_event_provider: Optional[SystemEventProvider] = None,
+    ):
         self.gateway = gateway
         self.connection_manager = connection_manager
+        self.system_event_provider = system_event_provider
         self.running = False
         self.task: Optional[asyncio.Task] = None
         self.active_sessions: Dict[str, GatewaySession] = {}
@@ -672,15 +689,38 @@ class HeartbeatService:
             return schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
 
         try:
-            prompt = schedule.prompt.strip() or DEFAULT_HEARTBEAT_PROMPT
-            if "{ok_token}" in prompt:
-                ok_token = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
-                prompt = prompt.replace("{ok_token}", ok_token)
+            # Drain pending system events for this session
+            system_events: list[dict] = []
+            if self.system_event_provider:
+                system_events = self.system_event_provider(session.session_id)
+            
+            # Check if any event indicates an exec/cron completion
+            has_exec_completion = any(
+                ("exec" in str(evt).lower() and "finish" in str(evt).lower()) or
+                ("cron" in str(evt).lower() and "complete" in str(evt).lower())
+                for evt in system_events
+            )
+            
+            # Use exec prompt for async completions, standard heartbeat otherwise
+            if has_exec_completion:
+                prompt = EXEC_EVENT_PROMPT
+                logger.info("Using EXEC_EVENT_PROMPT for session %s (exec completion detected)", session.session_id)
+            else:
+                prompt = schedule.prompt.strip() or DEFAULT_HEARTBEAT_PROMPT
+                if "{ok_token}" in prompt:
+                    ok_token = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
+                    prompt = prompt.replace("{ok_token}", ok_token)
+            
+            # Build metadata with system events
+            metadata: dict = {"source": "heartbeat"}
+            if system_events:
+                metadata["system_events"] = system_events
+                logger.info("Injecting %d system events into heartbeat for %s", len(system_events), session.session_id)
             
             request = GatewayRequest(
                 user_input=prompt,
                 force_complex=False,
-                metadata={"source": "heartbeat"}
+                metadata=metadata,
             )
             
             full_response = ""

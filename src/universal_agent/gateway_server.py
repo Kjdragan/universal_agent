@@ -641,7 +641,11 @@ async def lifespan(app: FastAPI):
     global _heartbeat_service, _cron_service
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
-        _heartbeat_service = HeartbeatService(get_gateway(), manager)
+        _heartbeat_service = HeartbeatService(
+            get_gateway(),
+            manager,
+            system_event_provider=_drain_system_events,
+        )
         await _heartbeat_service.start()
     else:
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
@@ -653,6 +657,7 @@ async def lifespan(app: FastAPI):
             WORKSPACES_DIR,
             event_sink=_emit_cron_event,
             wake_callback=_cron_wake_callback,
+            system_event_callback=_enqueue_system_event,
         )
         await _cron_service.start()
     else:
