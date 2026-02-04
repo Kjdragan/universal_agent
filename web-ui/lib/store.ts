@@ -198,9 +198,27 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   // Tool calls
   toolCalls: [],
-  addToolCall: (toolCall) => set((state) => ({
-    toolCalls: [...state.toolCalls, { ...toolCall, status: "pending", timestamp: Date.now() }],
-  })),
+  addToolCall: (toolCall) => set((state) => {
+    // Tool call IDs are expected to be unique (tool_use_id / call_...).
+    // In practice we can receive duplicates (reconnects, retries, WS replay).
+    // Deduplicate by id to avoid React "duplicate key" errors and state bloat.
+    const id = toolCall.id || generateId();
+    const existingIdx = state.toolCalls.findIndex((tc) => tc.id === id);
+    if (existingIdx >= 0) {
+      const next = [...state.toolCalls];
+      next[existingIdx] = {
+        ...next[existingIdx],
+        ...toolCall,
+        id,
+        // Preserve the original "first seen" timestamp unless absent.
+        timestamp: next[existingIdx].timestamp ?? Date.now(),
+      };
+      return { toolCalls: next };
+    }
+    return {
+      toolCalls: [...state.toolCalls, { ...toolCall, id, status: "pending", timestamp: Date.now() }],
+    };
+  }),
   updateToolCall: (id, updates) => set((state) => ({
     toolCalls: state.toolCalls.map((tc) =>
       tc.id === id ? { ...tc, ...updates } : tc
@@ -367,7 +385,7 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
 
       const data = event.data as Record<string, unknown>;
       store.addToolCall({
-        id: (data.id as string) ?? "",
+        id: (data.id as string) ?? generateId(),
         name: (data.name as string) ?? "",
         input: (data.input as Record<string, unknown>) ?? {},
         time_offset: (data.time_offset as number) ?? 0,

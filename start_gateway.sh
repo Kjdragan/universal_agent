@@ -20,6 +20,15 @@
 
 cd "$(dirname "$0")"
 
+# Load repo .env if present so subprocesses (e.g., Claude Code CLI) inherit settings.
+# This avoids surprising defaults like the 8192 output token cap.
+if [ -f .env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+
 # Keep uv cache inside repo
 export UV_CACHE_DIR="$(pwd)/.uv-cache"
 

@@ -51,22 +51,33 @@ function FileViewer() {
   const isPdf = viewingFile?.name.endsWith(".pdf") ?? false;
   const isImage = viewingFile?.name.match(/\.(png|jpg|jpeg|gif|webp)$/i) ?? false;
 
+  const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
+
   // For PDF/HTML, we use the server's get_file endpoint.
   // Endpoint: /api/files/{session_id}/{file_path}
   const currentSession = useAgentStore.getState().currentSession;
-  const fileUrl = viewingFile && currentSession?.session_id
-    ? `${API_BASE}/api/files/${currentSession.session_id}/${viewingFile.path}`
+  const fileUrl = viewingFile
+    ? (viewingFile.type === "artifact"
+      ? `${API_BASE}/api/artifacts/files/${encodePath(viewingFile.path)}`
+      : (currentSession?.session_id
+        ? `${API_BASE}/api/files/${currentSession.session_id}/${encodePath(viewingFile.path)}`
+        : ""))
     : "";
 
   // Fetch content if missing and not an iframe type
   useEffect(() => {
     if (!viewingFile || !fileUrl || isHtml || isPdf || isImage || viewingFile.content) return;
 
-    fetch(fileUrl)
+    // Important: if the user closes the viewer while a fetch is in-flight, the old
+    // promise can resolve and re-open the file (because it captured a stale viewingFile).
+    // Use an AbortController + "is still current" check to prevent that.
+    const controller = new AbortController();
+
+    fetch(fileUrl, { signal: controller.signal })
       .then(res => res.text())
       .then(text => {
         // Auto-format if JSON or similar
-        if (viewingFile.name.endsWith('.json')) {
+        if (viewingFile.name.endsWith(".json")) {
           try {
             const obj = JSON.parse(text);
             text = JSON.stringify(obj, null, 2);
@@ -74,9 +85,18 @@ function FileViewer() {
             // Keep original text on parse error
           }
         }
+
+        const current = useAgentStore.getState().viewingFile;
+        if (!current || current.path !== viewingFile.path) return;
         useAgentStore.getState().setViewingFile({ ...viewingFile, content: text });
       })
-      .catch(err => console.error("Failed to fetch file content:", err));
+      .catch(err => {
+        // Abort is expected on close/unmount; ignore it.
+        if (err?.name === "AbortError") return;
+        console.error("Failed to fetch file content:", err);
+      });
+
+    return () => controller.abort();
   }, [viewingFile, fileUrl, isHtml, isPdf, isImage]);
 
   if (!viewingFile) return null;
@@ -190,30 +210,35 @@ const API_BASE = "";
 function FileExplorer() {
   const currentSession = useAgentStore((s) => s.currentSession);
   const setViewingFile = useAgentStore((s) => s.setViewingFile);
+  const [mode, setMode] = useState<"session" | "artifacts">("session");
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   useEffect(() => {
-    if (!currentSession?.session_id) return;
+    const sessionId = currentSession?.session_id;
+    if (mode === "session" && !sessionId) return;
 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
-    fetch(`${API_BASE}/api/files?session_id=${currentSession.session_id}&path=${encodeURIComponent(path)}`)
+    const url = mode === "artifacts"
+      ? `${API_BASE}/api/artifacts?path=${encodeURIComponent(path)}`
+      : `${API_BASE}/api/files?session_id=${sessionId}&path=${encodeURIComponent(path)}`;
+    fetch(url)
       .then(res => res.json())
       .then(data => {
         setFiles(data.files || []);
       })
       .catch(err => console.error("Failed to fetch files:", err))
       .finally(() => setLoading(false));
-  }, [currentSession?.session_id, path]);
+  }, [currentSession?.session_id, path, mode]);
 
   const handleNavigate = (itemName: string, isDir: boolean) => {
     if (!isDir) {
       // Open file preview
       const fullPath = path ? `${path}/${itemName}` : itemName;
-      setViewingFile({ name: itemName, path: fullPath, type: 'file' });
+      setViewingFile({ name: itemName, path: fullPath, type: mode === "artifacts" ? "artifact" : "file" });
       return;
     }
     setPath(prev => prev ? `${prev}/${itemName}` : itemName);
@@ -239,18 +264,38 @@ function FileExplorer() {
         <div className="flex items-center gap-2 overflow-hidden">
           <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}>▼</span>
           <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider truncate" title={currentSession?.session_id}>
-            {ICONS.folder} {path ? `.../${path.split("/").pop()}` : "Files"}
+            {ICONS.folder} {mode === "artifacts" ? (path ? `Artifacts/.../${path.split("/").pop()}` : "Artifacts") : (path ? `.../${path.split("/").pop()}` : "Files")}
           </h2>
         </div>
-        {!isCollapsed && path && (
-          <button onClick={handleUp} className="text-xs hover:bg-black/20 p-1 rounded" title="Go Up">
-            ⬆️
-          </button>
+        {!isCollapsed && (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => { setMode("session"); setPath(""); }}
+              className={`text-[10px] px-2 py-1 rounded border ${mode === "session" ? "bg-primary/20 text-primary border-primary/30" : "bg-background/40 text-muted-foreground border-border/50 hover:bg-background/60"}`}
+              title="Browse session files"
+            >
+              Session
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode("artifacts"); setPath(""); }}
+              className={`text-[10px] px-2 py-1 rounded border ${mode === "artifacts" ? "bg-primary/20 text-primary border-primary/30" : "bg-background/40 text-muted-foreground border-border/50 hover:bg-background/60"}`}
+              title="Browse persistent artifacts"
+            >
+              Artifacts
+            </button>
+            {path && (
+              <button onClick={handleUp} className="text-xs hover:bg-black/20 p-1 rounded" title="Go Up">
+                ⬆️
+              </button>
+            )}
+          </div>
         )}
       </div>
       {!isCollapsed && (
         <div className="flex-1 overflow-y-auto scrollbar-thin p-1">
-          {!currentSession ? (
+          {mode === "session" && !currentSession ? (
             <div className="text-xs text-muted-foreground text-center py-4">No active session</div>
           ) : loading ? (
             <div className="text-xs text-muted-foreground text-center py-4">Loading...</div>

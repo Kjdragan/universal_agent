@@ -23,14 +23,7 @@ def upsert_run(
     total_tokens: int = 0,
     status: str = "running",
 ) -> None:
-    print(f"DEBUG: Inside upsert_run for {run_id} path={conn}", flush=True)
     now = _now()
-    try:
-        # Attempt to add total_tokens column if it doesn't exist (Schema Migration)
-        conn.execute("ALTER TABLE runs ADD COLUMN total_tokens INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass # Column already exists
-
     conn.execute(
         """
         INSERT OR IGNORE INTO runs (
@@ -133,7 +126,6 @@ def start_step(
     step_index: int,
     phase: str = "unspecified",
 ) -> None:
-    print(f"DEBUG: start_step {step_id} for run {run_id} phase={phase}", flush=True)
     now = _now()
     conn.execute(
         """
@@ -332,4 +324,3 @@ def get_iteration_info(conn: sqlite3.Connection, run_id: str) -> dict[str, Any]:
         (run_id,),
     ).fetchone()
     return dict(row) if row else {"iteration_count": 0, "max_iterations": None, "completion_promise": None, "run_spec_json": "{}"}
-

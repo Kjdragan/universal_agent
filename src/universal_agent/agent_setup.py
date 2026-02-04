@@ -40,6 +40,7 @@ from universal_agent.tools.local_toolkit_bridge import (
     upload_to_composio_wrapper,
     list_directory_wrapper,
     append_to_file_wrapper,
+    write_text_file_wrapper,
     finalize_research_wrapper,
     generate_image_wrapper,
     describe_image_wrapper,
@@ -344,6 +345,14 @@ class AgentSetup:
             env={
                 "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.getenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000"),
                 "MAX_MCP_OUTPUT_TOKENS": os.getenv("MAX_MCP_OUTPUT_TOKENS", "64000"),
+                "CURRENT_SESSION_WORKSPACE": os.path.abspath(self.workspace_dir),
+                # Durable outputs should go here; session workspace is scratch.
+                "UA_ARTIFACTS_DIR": os.path.abspath(
+                    os.getenv(
+                        "UA_ARTIFACTS_DIR",
+                        str((Path(__file__).resolve().parent.parent.parent / "artifacts")),
+                    )
+                ),
             },
             system_prompt=system_prompt,
             mcp_servers=mcp_servers,
@@ -372,12 +381,31 @@ class AgentSetup:
         # Inject Soul if present
         soul_section = f"\n\n{self._soul_context}\n\n" if self._soul_context else ""
 
+        artifacts_dir = os.path.abspath(
+            os.getenv(
+                "UA_ARTIFACTS_DIR",
+                str((Path(__file__).resolve().parent.parent.parent / "artifacts")),
+            )
+        )
+        fs_policy = (
+            "\nFILESYSTEM OUTPUT POLICY:\n"
+            f"- Ephemeral scratch workspace: CURRENT_SESSION_WORKSPACE={os.path.abspath(self.workspace_dir)}\n"
+            f"- Persistent artifacts root:   UA_ARTIFACTS_DIR={artifacts_dir}\n"
+            "- Default: write durable deliverables (docs/code/diagrams) under UA_ARTIFACTS_DIR.\n"
+            "- Use the session workspace for caches, downloads, and intermediate pipeline steps.\n"
+            "- For each artifact run, prefer: artifacts/<skill_name>/<YYYY-MM-DD>/<slug>__<HHMMSS>/\n"
+            "- Always write a small manifest.json in the artifact run directory.\n"
+            "- If something is safe to delete later, mark it as retention=temp in the manifest.\n"
+            "- When writing under UA_ARTIFACTS_DIR, prefer `mcp__internal__write_text_file` over native `Write`.\n"
+        )
+
         return (
             f"{soul_section}"
             f"Current Date: {today_str}\n"
             f"Tomorrow is: {tomorrow_str}\n"
             f"{self._memory_context}\n"
             f"{tool_knowledge_block}\n"
+            f"{fs_policy}\n"
             "TEMPORAL CONTEXT: Use the current date above as authoritative. "
             "Do not treat post-training dates as hallucinations if they are supported by tool results. "
             "If sources are older or dated, note that explicitly rather than dismissing them.\n\n"
@@ -522,6 +550,7 @@ class AgentSetup:
                     upload_to_composio_wrapper,
                     list_directory_wrapper,
                     append_to_file_wrapper,
+                    write_text_file_wrapper,
                     finalize_research_wrapper,
                     generate_image_wrapper,
                     describe_image_wrapper,
@@ -556,6 +585,16 @@ class AgentSetup:
                 "env": {
                     "TELEGRAM_BOT_TOKEN": os.environ.get("TELEGRAM_BOT_TOKEN", ""),
                     "TELEGRAM_ALLOWED_USER_IDS": os.environ.get("TELEGRAM_ALLOWED_USER_IDS", ""),
+                },
+            },
+            # External MCP: Z.AI Vision (GLM-4.6V) for image/video analysis (optional)
+            "zai_vision": {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["-y", "@z_ai/mcp-server"],
+                "env": {
+                    "Z_AI_API_KEY": os.environ.get("Z_AI_API_KEY", ""),
+                    "Z_AI_MODE": os.environ.get("Z_AI_MODE", "ZAI"),
                 },
             },
         }

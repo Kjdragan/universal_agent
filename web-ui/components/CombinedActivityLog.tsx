@@ -82,7 +82,7 @@ export function CombinedActivityLog() {
             <div className="flex-1 overflow-y-auto p-4 scrollbar-thin" ref={scrollRef}>
                 <div className="space-y-3">
                     {items.map((item) => (
-                        <ActivityItemRow key={item.id} item={item} expandMode={expandMode} />
+                        <ActivityItemRow key={`${item.type}:${item.id}:${item.timestamp}`} item={item} expandMode={expandMode} />
                     ))}
                     {items.length === 0 && (
                         <div className="text-center text-muted-foreground py-8 text-sm">

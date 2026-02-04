@@ -54,6 +54,14 @@ _TOOL_SCHEMAS: dict[str, ToolSchema] = {
         example="append_to_file({path: '/tmp/report.html', content: '<html>...</html>'})",
         content_min_length={"content": 10},
     ),
+    "write_text_file": ToolSchema(
+        required=("path", "content"),
+        example=(
+            "write_text_file({path: '/abs/path/inside/session/or/artifacts.txt', content: '...', overwrite: true})"
+        ),
+        # Allow small files (e.g. manifest.json) but prevent empty writes from schema mistakes.
+        content_min_length={"content": 1},
+    ),
     "finalize_research": ToolSchema(
         required=("session_dir",),
         example="finalize_research({session_dir: '/tmp/session_20260101_120000', task_name: 'ai_news'})",

@@ -2,9 +2,6 @@ import os
 import sqlite3
 from typing import Optional
 
-from .migrations import ensure_schema
-
-
 DEFAULT_DB_FILENAME = "runtime_state.db"
 
 
@@ -23,9 +20,12 @@ def get_runtime_db_path() -> str:
 
 def connect_runtime_db(db_path: Optional[str] = None) -> sqlite3.Connection:
     path = db_path or get_runtime_db_path()
-    conn = sqlite3.connect(path, timeout=60.0)
+    # NOTE: Multiple UA processes can be running (gateway, CLI, worker).
+    # - Use a generous busy timeout for lock contention.
+    # - Disable same-thread checks because the gateway can dispatch work
+    #   across async tasks and libraries that may use background threads.
+    conn = sqlite3.connect(path, timeout=60.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
-    ensure_schema(conn)
+    conn.execute("PRAGMA busy_timeout=60000;")
     return conn

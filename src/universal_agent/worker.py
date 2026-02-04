@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from universal_agent.durable.db import connect_runtime_db
+from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
     acquire_run_lease,
     heartbeat_run_lease,
@@ -44,6 +45,7 @@ def _run_once(
     lease_owner: str, lease_ttl_seconds: int, heartbeat_seconds: int
 ) -> bool:
     conn = connect_runtime_db()
+    ensure_schema(conn)
     candidates = list_runs_with_status(conn, ("queued", "running"), limit=10)
     if not candidates:
         return False

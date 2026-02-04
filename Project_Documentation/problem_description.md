@@ -57,3 +57,48 @@ We have implemented the alignment fix. A verification script (`verify_fix.py`) h
 - The `version` metadata is present.
 
 The system is now ready for a full-stack restart and verification.
+
+---
+
+## 🔄 Update (2026-02-04): Root Cause Was Broader Than SESSION_INFO
+
+After additional investigation of live runs (notably `session_20260203_233426_fea06c93`),
+we found the primary regressions were caused by **cross-session global state**, not
+only `SESSION_INFO` metadata.
+
+### Evidence
+
+- A `Bash` tool call inside session `session_20260203_233426_fea06c93` resolved
+  `CURRENT_SESSION_WORKSPACE/work_products` to *another* session directory:
+  `session_20260203_233417_92eefd38`.
+- `run.log` and `activity_journal.log` for one session contained interleaved
+  log lines from other sessions (especially heartbeat executions).
+
+### Root Causes
+
+1. **Execution engine detection fell back to legacy**:
+   `InProcessGateway` used legacy `AgentBridge` because `EXECUTION_ENGINE_AVAILABLE`
+   was `False` on first import due to an import-cycle via `universal_agent.api.__init__`.
+2. **Concurrency-unsafe globals**:
+   - Workspace routing relied on `os.environ["CURRENT_SESSION_WORKSPACE"]` (global).
+   - Stdio/log capture was implemented via process-wide redirection (global).
+   - Heartbeats for *other* sessions were running concurrently and stomping this state.
+
+### Fixes Implemented
+
+- **Import-cycle fix**: `src/universal_agent/api/__init__.py` is now lightweight and
+  lazily resolves exports to avoid importing gateway/bridges at package import time.
+- **Gateway serialization**: `InProcessGateway` now serializes `create_session`,
+  `resume_session`, and `execute` behind an asyncio lock to prevent cross-session
+  contamination.
+- **Scoped stdio capture**:
+  `setup_session(attach_stdio=False)` in gateway mode; `ProcessTurnAdapter` redirects
+  stdout/stderr to the correct session `run.log` only for the duration of a turn.
+- **Heartbeat safety**:
+  Heartbeat runs are deferred while *any* session is busy to avoid interleaving
+  with active executions.
+
+### Related UI/UX Fixes
+
+- OpsPanel heartbeat summary rendering now safely stringifies non-string payloads.
+- Heartbeat REST endpoint supports inactive sessions when a workspace exists on disk.

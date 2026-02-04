@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 # Project paths
 BASE_DIR = Path(__file__).parent.parent.parent.parent
 WORKSPACES_DIR = BASE_DIR / "AGENT_RUN_WORKSPACES"
+ARTIFACTS_DIR = Path(os.getenv("UA_ARTIFACTS_DIR", str(BASE_DIR / "artifacts"))).expanduser()
+ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Import agent bridge
 from universal_agent.api.agent_bridge import get_agent_bridge
@@ -309,6 +311,87 @@ async def get_file(session_id: str, file_path: str):
         return Response(content=content, media_type="text/plain")
 
     # Default: return as download
+    return Response(content=content, media_type=content_type)
+
+
+@app.get("/api/artifacts")
+async def list_artifacts(path: str = ""):
+    """List files under the persistent artifacts root."""
+    root = ARTIFACTS_DIR
+    target_path = root / path if path else root
+
+    # Security check
+    try:
+        target_path = target_path.resolve()
+        root_resolved = root.resolve()
+        if not str(target_path).startswith(str(root_resolved)):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not target_path.exists():
+        return {"files": [], "path": path, "artifacts_root": str(root)}
+
+    if target_path.is_file():
+        return {"files": [], "path": path, "is_file": True, "artifacts_root": str(root)}
+
+    files = []
+    for item in sorted(target_path.iterdir()):
+        try:
+            stat = item.stat()
+            files.append(
+                {
+                    "name": item.name,
+                    "path": str(item.relative_to(root)),
+                    "is_dir": item.is_dir(),
+                    "size": stat.st_size if item.is_file() else None,
+                    "modified": stat.st_mtime,
+                }
+            )
+        except Exception:
+            pass
+
+    return {"files": files, "path": path, "artifacts_root": str(root)}
+
+
+@app.get("/api/artifacts/files/{file_path:path}")
+async def get_artifact_file(file_path: str):
+    """Get file content from the persistent artifacts root."""
+    root = ARTIFACTS_DIR
+    target = (root / file_path)
+
+    # Security check
+    try:
+        target_resolved = target.resolve()
+        root_resolved = root.resolve()
+        if not str(target_resolved).startswith(str(root_resolved)):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    if not target_resolved.exists() or not target_resolved.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    content = target_resolved.read_bytes()
+    mime, _ = mimetypes.guess_type(str(target_resolved))
+    content_type = mime or "application/octet-stream"
+
+    filename = target_resolved.name
+    if filename.endswith(".html"):
+        return Response(content=content, media_type="text/html")
+    if filename.endswith(".json"):
+        try:
+            data = json.loads(content.decode("utf-8"))
+            return Response(content=json.dumps(data, indent=2), media_type="application/json")
+        except Exception:
+            pass
+    if filename.endswith((".txt", ".md", ".log", ".py", ".js", ".ts", ".tsx", ".css")):
+        return Response(content=content, media_type="text/plain")
+
     return Response(content=content, media_type=content_type)
 
 

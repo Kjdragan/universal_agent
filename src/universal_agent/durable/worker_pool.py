@@ -31,6 +31,7 @@ from .state import (
     update_run_status,
 )
 from .db import connect_runtime_db
+from .migrations import ensure_schema
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +268,7 @@ class WorkerPoolManager:
         
         # Get database connection
         self.conn = connect_runtime_db(self.pool_config.db_path)
+        ensure_schema(self.conn)
         
         # Start minimum number of workers
         for i in range(self.pool_config.min_workers):
