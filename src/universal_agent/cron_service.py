@@ -5,8 +5,12 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Iterable, Callable
+
+import pytz
+from croniter import croniter
 
 from universal_agent.gateway import InProcessGateway, GatewayRequest, GatewaySession
 from universal_agent.heartbeat_service import _parse_duration_seconds
@@ -14,13 +18,53 @@ from universal_agent.heartbeat_service import _parse_duration_seconds
 logger = logging.getLogger(__name__)
 
 
+def parse_run_at(value: str | float | None, now: float | None = None) -> float | None:
+    """Parse run_at value to absolute timestamp.
+    
+    Accepts:
+    - None: returns None
+    - float: absolute timestamp (returned as-is)
+    - str: relative duration like "20m", "2h", "1d" OR absolute ISO timestamp
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    
+    value = value.strip()
+    if not value:
+        return None
+    
+    now_ts = now if now is not None else time.time()
+    
+    # Try relative duration first (e.g., "20m", "2h")
+    duration = _parse_duration_seconds(value, 0)
+    if duration > 0:
+        return now_ts + duration
+    
+    # Try ISO timestamp
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return dt.timestamp()
+    except Exception:
+        pass
+    
+    return None
+
 @dataclass
 class CronJob:
     job_id: str
     user_id: str
     workspace_dir: str
     command: str
-    every_seconds: int
+    every_seconds: int = 0  # Simple interval (mutually exclusive with cron_expr)
+    cron_expr: Optional[str] = None  # 5-field cron expression (e.g., "0 7 * * 1")
+    timezone: str = "UTC"  # Timezone for cron expression
+    run_at: Optional[float] = None  # One-shot: absolute timestamp to run at
+    delete_after_run: bool = False  # One-shot: delete job after successful run
+    model: Optional[str] = None  # Model override for this job
     enabled: bool = True
     created_at: float = field(default_factory=lambda: time.time())
     last_run_at: Optional[float] = None
@@ -34,6 +78,11 @@ class CronJob:
             "workspace_dir": self.workspace_dir,
             "command": self.command,
             "every_seconds": self.every_seconds,
+            "cron_expr": self.cron_expr,
+            "timezone": self.timezone,
+            "run_at": self.run_at,
+            "delete_after_run": self.delete_after_run,
+            "model": self.model,
             "enabled": self.enabled,
             "created_at": self.created_at,
             "last_run_at": self.last_run_at,
@@ -49,6 +98,11 @@ class CronJob:
             workspace_dir=data["workspace_dir"],
             command=data["command"],
             every_seconds=int(data.get("every_seconds", 0)),
+            cron_expr=data.get("cron_expr"),
+            timezone=data.get("timezone", "UTC"),
+            run_at=data.get("run_at"),
+            delete_after_run=bool(data.get("delete_after_run", False)),
+            model=data.get("model"),
             enabled=bool(data.get("enabled", True)),
             created_at=float(data.get("created_at", time.time())),
             last_run_at=data.get("last_run_at"),
@@ -57,11 +111,43 @@ class CronJob:
         )
 
     def schedule_next(self, now: float) -> None:
+        """Calculate next run time based on scheduling type."""
+        # One-shot: run_at is the only run time (no rescheduling)
+        if self.run_at is not None:
+            if self.last_run_at is None:
+                self.next_run_at = self.run_at
+            else:
+                # Already ran, no next run
+                self.next_run_at = None
+            return
+
+        # Cron expression takes precedence over interval
+        if self.cron_expr:
+            try:
+                tz = pytz.timezone(self.timezone)
+                base_dt = datetime.fromtimestamp(now, tz)
+                cron = croniter(self.cron_expr, base_dt)
+                next_dt = cron.get_next(datetime)
+                self.next_run_at = next_dt.timestamp()
+            except Exception as exc:
+                logger.warning("Invalid cron expression '%s': %s", self.cron_expr, exc)
+                # Fall back to interval if cron fails
+                if self.every_seconds > 0:
+                    self.next_run_at = now + self.every_seconds
+                else:
+                    self.next_run_at = None
+            return
+
+        # Simple interval scheduling
+        if self.every_seconds <= 0:
+            self.next_run_at = None
+            return
         base = self.last_run_at or self.created_at
         candidate = base + self.every_seconds
         if candidate <= now:
             candidate = now + self.every_seconds
         self.next_run_at = candidate
+
 
 
 @dataclass
@@ -196,13 +282,34 @@ class CronService:
         user_id: str,
         workspace_dir: Optional[str],
         command: str,
-        every_raw: Optional[str],
+        every_raw: Optional[str] = None,
+        cron_expr: Optional[str] = None,
+        timezone: str = "UTC",
+        run_at: Optional[float] = None,
+        delete_after_run: bool = False,
+        model: Optional[str] = None,
         enabled: bool = True,
         metadata: Optional[dict[str, Any]] = None,
     ) -> CronJob:
-        every_seconds = _parse_duration_seconds(every_raw, 0)
-        if every_seconds <= 0:
-            raise ValueError("every_seconds must be > 0")
+        every_seconds = _parse_duration_seconds(every_raw, 0) if every_raw else 0
+        
+        # Validate scheduling - must have at least one method
+        if every_seconds <= 0 and not cron_expr and run_at is None:
+            raise ValueError("Must provide at least one of: every, cron_expr, or run_at")
+        
+        # Validate cron expression if provided
+        if cron_expr:
+            try:
+                croniter(cron_expr)
+            except Exception as exc:
+                raise ValueError(f"Invalid cron expression '{cron_expr}': {exc}")
+        
+        # Validate timezone
+        try:
+            pytz.timezone(timezone)
+        except Exception:
+            raise ValueError(f"Invalid timezone '{timezone}'")
+        
         job_id = uuid.uuid4().hex[:10]
         workspace = workspace_dir or str(self.workspaces_dir / f"cron_{job_id}")
         job = CronJob(
@@ -211,6 +318,11 @@ class CronService:
             workspace_dir=workspace,
             command=command,
             every_seconds=every_seconds,
+            cron_expr=cron_expr,
+            timezone=timezone,
+            run_at=run_at,
+            delete_after_run=delete_after_run,
+            model=model,
             enabled=enabled,
             metadata=metadata or {},
         )
@@ -229,6 +341,27 @@ class CronService:
         if "every" in updates or "every_seconds" in updates:
             raw = updates.get("every") or updates.get("every_seconds")
             job.every_seconds = _parse_duration_seconds(str(raw), job.every_seconds)
+        if "cron_expr" in updates:
+            cron_expr = updates["cron_expr"]
+            if cron_expr:
+                try:
+                    croniter(cron_expr)
+                except Exception as exc:
+                    raise ValueError(f"Invalid cron expression '{cron_expr}': {exc}")
+            job.cron_expr = cron_expr
+        if "timezone" in updates:
+            tz = updates["timezone"]
+            try:
+                pytz.timezone(tz)
+            except Exception:
+                raise ValueError(f"Invalid timezone '{tz}'")
+            job.timezone = tz
+        if "run_at" in updates:
+            job.run_at = updates["run_at"]
+        if "delete_after_run" in updates:
+            job.delete_after_run = bool(updates["delete_after_run"])
+        if "model" in updates:
+            job.model = updates["model"]
         if "workspace_dir" in updates:
             job.workspace_dir = updates["workspace_dir"]
         if "user_id" in updates:
@@ -303,10 +436,19 @@ class CronService:
                         user_id=job.user_id,
                         workspace_dir=job.workspace_dir,
                     )
+                    # Build request metadata with optional model override
+                    request_metadata: dict[str, Any] = {
+                        "source": "cron",
+                        "job_id": job.job_id,
+                        "reason": reason,
+                    }
+                    if job.model:
+                        request_metadata["model"] = job.model
+                    
                     request = GatewayRequest(
                         user_input=job.command,
                         force_complex=False,
-                        metadata={"source": "cron", "job_id": job.job_id, "reason": reason},
+                        metadata=request_metadata,
                     )
                     result = await self.gateway.run_query(session, request)
                     record.status = "success"
@@ -322,6 +464,11 @@ class CronService:
                 self.store.append_run(record)
                 self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
                 self._maybe_wake_heartbeat(job, reason)
+                
+                # One-shot: delete job after successful run if configured
+                if job.delete_after_run and record.status == "success":
+                    logger.info("Deleting one-shot cron job %s after successful run", job.job_id)
+                    self.delete_job(job.job_id)
             return record
 
     def _emit_event(self, payload: dict[str, Any]) -> None:

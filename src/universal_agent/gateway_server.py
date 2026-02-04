@@ -129,7 +129,12 @@ class CronJobCreateRequest(BaseModel):
     user_id: Optional[str] = None
     workspace_dir: Optional[str] = None
     command: str
-    every: Optional[str] = None
+    every: Optional[str] = None  # Simple interval (e.g., "30m", "1h")
+    cron_expr: Optional[str] = None  # 5-field cron expression (e.g., "0 7 * * 1")
+    timezone: str = "UTC"  # Timezone for cron expression
+    run_at: Optional[str] = None  # One-shot: relative ("20m") or absolute ISO timestamp
+    delete_after_run: bool = False  # One-shot: delete after successful run
+    model: Optional[str] = None  # Model override for this job
     enabled: bool = True
     metadata: dict = {}
 
@@ -137,6 +142,11 @@ class CronJobCreateRequest(BaseModel):
 class CronJobUpdateRequest(BaseModel):
     command: Optional[str] = None
     every: Optional[str] = None
+    cron_expr: Optional[str] = None
+    timezone: Optional[str] = None
+    run_at: Optional[str] = None
+    delete_after_run: Optional[bool] = None
+    model: Optional[str] = None
     enabled: Optional[bool] = None
     workspace_dir: Optional[str] = None
     user_id: Optional[str] = None
@@ -912,11 +922,21 @@ async def create_cron_job(request: CronJobCreateRequest):
     if not _cron_service:
         raise HTTPException(status_code=400, detail="Cron service not available.")
     try:
+        from universal_agent.cron_service import parse_run_at
+        
+        # Parse run_at (handles relative like "20m" or absolute ISO)
+        run_at_ts = parse_run_at(request.run_at) if request.run_at else None
+        
         job = _cron_service.add_job(
             user_id=request.user_id or "cron",
             workspace_dir=request.workspace_dir,
             command=request.command,
             every_raw=request.every,
+            cron_expr=request.cron_expr,
+            timezone=request.timezone,
+            run_at=run_at_ts,
+            delete_after_run=request.delete_after_run,
+            model=request.model,
             enabled=request.enabled,
             metadata=request.metadata or {},
         )
@@ -942,16 +962,39 @@ async def update_cron_job(job_id: str, request: CronJobUpdateRequest):
     job = _cron_service.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Cron job not found")
-    updates = {
-        "command": request.command,
-        "every": request.every,
-        "enabled": request.enabled,
-        "workspace_dir": request.workspace_dir,
-        "user_id": request.user_id,
-        "metadata": request.metadata,
-    }
-    job = _cron_service.update_job(job_id, updates)
-    return {"job": job.to_dict()}
+    
+    from universal_agent.cron_service import parse_run_at
+    
+    # Build updates dict, only including non-None values
+    updates: dict = {}
+    if request.command is not None:
+        updates["command"] = request.command
+    if request.every is not None:
+        updates["every"] = request.every
+    if request.cron_expr is not None:
+        updates["cron_expr"] = request.cron_expr
+    if request.timezone is not None:
+        updates["timezone"] = request.timezone
+    if request.run_at is not None:
+        updates["run_at"] = parse_run_at(request.run_at)
+    if request.delete_after_run is not None:
+        updates["delete_after_run"] = request.delete_after_run
+    if request.model is not None:
+        updates["model"] = request.model
+    if request.enabled is not None:
+        updates["enabled"] = request.enabled
+    if request.workspace_dir is not None:
+        updates["workspace_dir"] = request.workspace_dir
+    if request.user_id is not None:
+        updates["user_id"] = request.user_id
+    if request.metadata is not None:
+        updates["metadata"] = request.metadata
+    
+    try:
+        job = _cron_service.update_job(job_id, updates)
+        return {"job": job.to_dict()}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.delete("/api/v1/cron/jobs/{job_id}")

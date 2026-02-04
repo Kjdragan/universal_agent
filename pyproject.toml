@@ -59,6 +59,7 @@ dependencies = [
     "watchdog>=6.0.0",
     "json-repair>=0.55.1",
     "json5>=0.13.0",
+    "croniter>=6.0.0",
 ]
 
 
