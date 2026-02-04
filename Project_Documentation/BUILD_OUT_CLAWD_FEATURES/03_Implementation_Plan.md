@@ -271,6 +271,20 @@ We keep UA’s gateway and event model intact, but mirror Clawdbot semantics:
 - [x] Pass model to gateway request metadata when running job
 - [x] API endpoints accept and persist model override
 
+#### K) System Event Injection (Async Relay)
+
+- [x] Added `EXEC_EVENT_PROMPT` for async command completion relay
+- [x] Wired `system_event_provider` to HeartbeatService
+- [x] Added `_emit_system_event` to CronService for completion events
+- [x] Heartbeat loop detects exec/cron events and uses specialized prompt
+
+#### L) Per-Agent Heartbeat Config
+
+- [x] Verified `HEARTBEAT.json` loading and merging logic
+- [x] Verified env var defaults (`UA_HEARTBEAT_INTERVAL`, `UA_HEARTBEAT_TIMEZONE`)
+- [x] Confirmed `HEARTBEAT.md` fallback behavior
+- [x] Added integration tests for config resolution logic
+
 **Usage Examples:**
 
 ```python
