@@ -302,10 +302,19 @@ export function OpsPanel() {
         return;
       }
       const data = await res.json();
+      const summaryRaw = data.last_summary;
+      let summaryText: string | undefined;
+      if (typeof summaryRaw === "string" || summaryRaw == null) {
+        summaryText = summaryRaw ?? undefined;
+      } else if (typeof summaryRaw === "object") {
+        summaryText = (summaryRaw as { text?: string }).text ?? JSON.stringify(summaryRaw, null, 2);
+      } else {
+        summaryText = String(summaryRaw);
+      }
       setHeartbeatState({
         status: "OK",
         last_run: data.last_run,
-        last_summary: data.last_summary,
+        last_summary: summaryText,
       });
     } catch (err) {
       setHeartbeatState({

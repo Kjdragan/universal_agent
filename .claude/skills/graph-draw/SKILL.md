@@ -104,7 +104,8 @@ Claude saves diagrams as `.excalidraw` files.
 
 **CRITICAL OUTPUT RULE:** Never paste raw Excalidraw JSON into the chat.
 Always write the JSON to a file using the `Write` tool, then respond with a short confirmation and the file path.
-Recommended path: `work_products/<name>.excalidraw`
+Recommended path (durable): `UA_ARTIFACTS_DIR/excalidraw/{YYYY-MM-DD}/{slug}__{HHMMSS}/<name>.excalidraw`
+If the user explicitly wants a temporary output for the current run only, write it under `CURRENT_SESSION_WORKSPACE/`.
 
 **Naming convention:**
 - `[topic]-mindmap.excalidraw`

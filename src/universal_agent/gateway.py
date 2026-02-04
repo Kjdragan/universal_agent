@@ -115,6 +115,10 @@ class InProcessGateway(Gateway):
         self._use_legacy = use_legacy_bridge or not EXECUTION_ENGINE_AVAILABLE
         self._hooks = hooks
         self._workspace_base = workspace_base or Path("AGENT_RUN_WORKSPACES")
+        # process_turn (and parts of the legacy bridge) rely on global process state
+        # (stdout/stderr redirection, env vars, module-level globals). Serialize
+        # all gateway execution to prevent cross-session contamination.
+        self._execution_lock = asyncio.Lock()
         
         # Legacy bridge (deprecated)
         self._bridge: Optional[AgentBridge] = None
@@ -129,54 +133,55 @@ class InProcessGateway(Gateway):
     async def create_session(
         self, user_id: str, workspace_dir: Optional[str] = None
     ) -> GatewaySession:
-        if self._use_legacy:
-            return await self._create_session_legacy(user_id, workspace_dir)
+        async with self._execution_lock:
+            if self._use_legacy:
+                return await self._create_session_legacy(user_id, workspace_dir)
         
-        # === NEW UNIFIED PATH ===
-        # Generate session ID
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        session_id = f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
-        
-        # Create workspace directory
-        if workspace_dir:
-            workspace_path = Path(workspace_dir).resolve()
-        else:
-            workspace_path = self._workspace_base / session_id
-        
-        workspace_path.mkdir(parents=True, exist_ok=True)
-        (workspace_path / "work_products").mkdir(exist_ok=True)
-        
-        # Update session_id to match workspace name if custom workspace provided
-        if workspace_dir:
-            session_id = workspace_path.name
-        
-        # Create adapter with unified engine config
-        config = EngineConfig(
-            workspace_dir=str(workspace_path),
-            user_id=user_id,
-        )
-        adapter = ProcessTurnAdapter(config)
-        
-        # Initialize adapter
-        await adapter.initialize()
-        
-        # Store adapter and session
-        self._adapters[session_id] = adapter
-        
-        config_metadata = getattr(config, "metadata", {})
-        
-        session = GatewaySession(
-            session_id=session_id,
-            user_id=user_id,
-            workspace_dir=str(workspace_path),
-            metadata={
-                "engine": "process_turn",
-                "logfire_enabled": bool(os.getenv("LOGFIRE_TOKEN")),
-            },
-        )
-        self._sessions[session_id] = session
-        
-        return session
+            # === NEW UNIFIED PATH ===
+            # Generate session ID
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            session_id = f"session_{timestamp}_{uuid.uuid4().hex[:8]}"
+            
+            # Create workspace directory
+            if workspace_dir:
+                workspace_path = Path(workspace_dir).resolve()
+            else:
+                workspace_path = self._workspace_base / session_id
+            
+            workspace_path.mkdir(parents=True, exist_ok=True)
+            (workspace_path / "work_products").mkdir(exist_ok=True)
+            
+            # Update session_id to match workspace name if custom workspace provided
+            if workspace_dir:
+                session_id = workspace_path.name
+            
+            # Create adapter with unified engine config
+            config = EngineConfig(
+                workspace_dir=str(workspace_path),
+                user_id=user_id,
+            )
+            adapter = ProcessTurnAdapter(config)
+            
+            # Initialize adapter
+            await adapter.initialize()
+            
+            # Store adapter and session
+            self._adapters[session_id] = adapter
+            
+            config_metadata = getattr(config, "metadata", {})
+            
+            session = GatewaySession(
+                session_id=session_id,
+                user_id=user_id,
+                workspace_dir=str(workspace_path),
+                metadata={
+                    "engine": "process_turn",
+                    "logfire_enabled": bool(os.getenv("LOGFIRE_TOKEN")),
+                },
+            )
+            self._sessions[session_id] = session
+            
+            return session
 
     async def _create_session_legacy(
         self, user_id: str, workspace_dir: Optional[str] = None
@@ -203,31 +208,35 @@ class InProcessGateway(Gateway):
         )
 
     async def resume_session(self, session_id: str) -> GatewaySession:
-        if self._use_legacy:
-            return await self._resume_session_legacy(session_id)
-        
+        async with self._execution_lock:
+            if self._use_legacy:
+                return await self._resume_session_legacy(session_id)
+            return await self._resume_session_new(session_id)
+
+    async def _resume_session_new(self, session_id: str) -> GatewaySession:
+        """Resume a session on the unified engine path. Caller must hold _execution_lock."""
         # === NEW UNIFIED PATH ===
         # Check if session exists in memory
         if session_id in self._sessions:
             return self._sessions[session_id]
-        
+
         # Try to find workspace on disk
         workspace_path = self._workspace_base / session_id
         if not workspace_path.exists():
             raise ValueError(f"Unknown session_id: {session_id}")
-        
+
         # Recreate adapter for existing workspace
         from universal_agent.identity import resolve_user_id
-        
+
         config = EngineConfig(
             workspace_dir=str(workspace_path),
             user_id=resolve_user_id(),
         )
         adapter = ProcessTurnAdapter(config)
         await adapter.initialize()
-        
+
         self._adapters[session_id] = adapter
-        
+
         session = GatewaySession(
             session_id=session_id,
             user_id=config.user_id or "unknown",
@@ -238,7 +247,7 @@ class InProcessGateway(Gateway):
             },
         )
         self._sessions[session_id] = session
-        
+
         return session
 
     async def _resume_session_legacy(self, session_id: str) -> GatewaySession:
@@ -263,24 +272,25 @@ class InProcessGateway(Gateway):
     async def execute(
         self, session: GatewaySession, request: GatewayRequest
     ) -> AsyncIterator[AgentEvent]:
-        if self._use_legacy:
-            async for event in self._execute_legacy(session, request):
-                yield event
-            return
-        
-        # === NEW UNIFIED PATH ===
-        adapter = self._adapters.get(session.session_id)
-        if not adapter:
-            # Try to resume session
-            await self.resume_session(session.session_id)
+        async with self._execution_lock:
+            if self._use_legacy:
+                async for event in self._execute_legacy(session, request):
+                    yield event
+                return
+            
+            # === NEW UNIFIED PATH ===
             adapter = self._adapters.get(session.session_id)
-        
-        if not adapter:
-            raise RuntimeError(f"No adapter for session: {session.session_id}")
-        
-        # Execute through unified engine
-        async for event in adapter.execute(request.user_input):
-            yield event
+            if not adapter:
+                # Try to resume session (lock already held)
+                await self._resume_session_new(session.session_id)
+                adapter = self._adapters.get(session.session_id)
+            
+            if not adapter:
+                raise RuntimeError(f"No adapter for session: {session.session_id}")
+            
+            # Execute through unified engine
+            async for event in adapter.execute(request.user_input):
+                yield event
 
     async def _execute_legacy(
         self, session: GatewaySession, request: GatewayRequest

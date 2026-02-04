@@ -10,6 +10,7 @@ import ast
 import re
 from typing import Any, Optional, Callable
 from dataclasses import dataclass
+import shlex
 from claude_agent_sdk import HookMatcher
 from universal_agent.agent_core import (
     AgentEvent,
@@ -288,6 +289,8 @@ class AgentHookSet:
                 HookMatcher(
                     matcher="Bash",
                     hooks=[
+                        self.on_pre_bash_inject_workspace_env,
+                        self.on_pre_bash_warn_dependency_installs,
                         self.on_pre_bash_block_composio_sdk,
                         self.on_pre_bash_block_playwright_non_html,
                         self.on_pre_bash_skill_hint,
@@ -377,7 +380,65 @@ class AgentHookSet:
         
         if is_read_only:
             return {}  # Allow reads from anywhere
-        
+
+        # Special-case: `mcp__internal__write_text_file` is explicitly designed to write
+        # to either the session workspace *or* the durable artifacts root. It performs its
+        # own allowlist enforcement in the tool implementation, so we must not rewrite its
+        # paths to be workspace-scoped. However, we still block obvious escapes for safety.
+        tool_lower = tool_name.lower()
+        if tool_lower.endswith("write_text_file"):
+            raw_path = tool_input.get("path")
+            if isinstance(raw_path, str) and raw_path:
+                from pathlib import Path
+                from universal_agent.artifacts import resolve_artifacts_dir
+
+                ws_root = Path(self.workspace_dir or current_workspace).resolve()
+                # Always allow the default artifacts root, even if UA_ARTIFACTS_DIR isn't present
+                # in this process environment (it may exist only in the agent subprocess env).
+                artifacts_root = resolve_artifacts_dir()
+
+                path_obj = Path(raw_path)
+                if path_obj.is_absolute():
+                    resolved = path_obj.resolve()
+                    allowed = False
+                    try:
+                        resolved.relative_to(ws_root)
+                        allowed = True
+                    except Exception:
+                        pass
+                    if not allowed:
+                        try:
+                            resolved.relative_to(artifacts_root)
+                            allowed = True
+                        except Exception:
+                            pass
+                    if not allowed:
+                        msg = (
+                            f"Tool input 'path' contains path '{raw_path}' which is outside the "
+                            "session workspace and UA_ARTIFACTS_DIR."
+                        )
+                        logfire.warning(
+                            "workspace_guard_blocked",
+                            error=msg,
+                            tool_use_id=str(tool_use_id),
+                            tool_name=tool_name,
+                        )
+                        return {
+                            "systemMessage": f"⚠️ {msg}",
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": msg,
+                            },
+                        }
+
+                    # Allow absolute paths under workspace or artifacts as-is (no rewrite).
+                    return {}
+
+            # For relative paths (or missing), fall back to workspace scoping to avoid
+            # accidental repo-root writes due to tool cwd.
+
         try:
             from pathlib import Path
             workspace_path = Path(self.workspace_dir)
@@ -578,6 +639,72 @@ class AgentHookSet:
         return {}
 
     async def on_pre_task_skill_awareness(self, input_data: dict, *args) -> dict:
+        return {}
+
+    async def on_pre_bash_inject_workspace_env(
+        self, input_data: dict, tool_use_id: object, context: dict
+    ) -> dict:
+        """
+        Ensure Bash has stable access to our key per-run environment variables.
+
+        In some gateway/SDK configurations, the Bash execution environment can miss
+        variables that were injected into the agent subprocess environment.
+
+        This hook makes Bash commands resilient by prefixing:
+        - CURRENT_SESSION_WORKSPACE
+        - UA_ARTIFACTS_DIR (defaulting to <repo>/artifacts if env not set)
+        """
+        tool_input = input_data.get("tool_input", {})
+        if not isinstance(tool_input, dict):
+            return {}
+
+        command = str(tool_input.get("command", "") or "")
+        if not command.strip():
+            return {}
+
+        # Avoid repeated injection if already present.
+        if "UA_ARTIFACTS_DIR=" in command or "CURRENT_SESSION_WORKSPACE=" in command:
+            return {}
+
+        try:
+            ws = get_current_workspace() or self.workspace_dir or ""
+            if not ws:
+                return {}
+            from universal_agent.artifacts import resolve_artifacts_dir
+
+            artifacts_root = str(resolve_artifacts_dir())
+            prefix = (
+                f"export CURRENT_SESSION_WORKSPACE={shlex.quote(ws)}; "
+                f"export UA_ARTIFACTS_DIR={shlex.quote(artifacts_root)}; "
+            )
+            updated = dict(tool_input)
+            updated["command"] = prefix + command
+            return {"tool_input": updated}
+        except Exception:
+            return {}
+
+    async def on_pre_bash_warn_dependency_installs(
+        self, input_data: dict, tool_use_id: object, context: dict
+    ) -> dict:
+        """
+        Gentle guardrail: discourage mutating the repo's Python environment during runs.
+        Prefer PEP 723 + `uv run` for runnable artifacts.
+        """
+        tool_input = input_data.get("tool_input", {})
+        if not isinstance(tool_input, dict):
+            return {}
+        command = str(tool_input.get("command", "") or "")
+        if not command.strip():
+            return {}
+
+        cmd_lower = command.lower()
+        if "pip install" in cmd_lower or "uv pip install" in cmd_lower or "uv add" in cmd_lower:
+            return {
+                "systemMessage": (
+                    "⚠️ Dependency install detected in Bash. Prefer PEP 723 inline dependencies "
+                    "+ `uv run <script>.py` so artifacts are runnable without mutating the repo environment."
+                )
+            }
         return {}
         
     async def on_post_tool_use_emit_event(self, input_data: dict, tool_use_id: object, context: dict) -> dict:

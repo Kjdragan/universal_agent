@@ -2,7 +2,15 @@ import json
 from typing import Any, Iterable, Optional
 
 from ..durable.db import connect_runtime_db
+from ..durable.migrations import ensure_schema
 from ..durable.state import request_run_cancel
+
+
+def _connect() -> Any:
+    conn = connect_runtime_db()
+    # Operator commands should work even if the runtime DB hasn't been initialized yet.
+    ensure_schema(conn)
+    return conn
 
 
 def _load_run_spec(raw: str) -> dict[str, Any]:
@@ -27,167 +35,197 @@ def list_runs(
     statuses: Optional[Iterable[str]] = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    conn = connect_runtime_db()
-    where_clause = ""
-    params: list[Any] = []
-    status_list = [status for status in (statuses or []) if status]
-    if status_list:
-        placeholders = ", ".join("?" for _ in status_list)
-        where_clause = f"WHERE status IN ({placeholders})"
-        params.extend(status_list)
-    params.append(limit)
-    rows = conn.execute(
-        f"""
-        SELECT run_id, created_at, updated_at, status, run_mode, job_path, run_spec_json
-        FROM runs
-        {where_clause}
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        params,
-    ).fetchall()
-    results = []
-    for row in rows:
-        results.append(
-            {
-                "run_id": row["run_id"],
-                "created_at": row["created_at"],
-                "updated_at": row["updated_at"],
-                "status": row["status"],
-                "run_mode": row["run_mode"],
-                "job_path": row["job_path"],
-                "workspace_dir": _extract_workspace_dir(row["run_spec_json"]),
-            }
-        )
-    return results
+    conn = _connect()
+    try:
+        where_clause = ""
+        params: list[Any] = []
+        status_list = [status for status in (statuses or []) if status]
+        if status_list:
+            placeholders = ", ".join("?" for _ in status_list)
+            where_clause = f"WHERE status IN ({placeholders})"
+            params.extend(status_list)
+        params.append(limit)
+        rows = conn.execute(
+            f"""
+            SELECT run_id, created_at, updated_at, status, run_mode, job_path, run_spec_json
+            FROM runs
+            {where_clause}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        results = []
+        for row in rows:
+            results.append(
+                {
+                    "run_id": row["run_id"],
+                    "created_at": row["created_at"],
+                    "updated_at": row["updated_at"],
+                    "status": row["status"],
+                    "run_mode": row["run_mode"],
+                    "job_path": row["job_path"],
+                    "workspace_dir": _extract_workspace_dir(row["run_spec_json"]),
+                }
+            )
+        return results
+    finally:
+        conn.close()
 
 
 def get_run(run_id: str) -> Optional[dict[str, Any]]:
-    conn = connect_runtime_db()
-    row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-    if not row:
-        return None
-    run_spec_json = row["run_spec_json"]
-    return {
-        **dict(row),
-        "workspace_dir": _extract_workspace_dir(run_spec_json),
-        "run_spec": _load_run_spec(run_spec_json),
-    }
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        if not row:
+            return None
+        run_spec_json = row["run_spec_json"]
+        return {
+            **dict(row),
+            "workspace_dir": _extract_workspace_dir(run_spec_json),
+            "run_spec": _load_run_spec(run_spec_json),
+        }
+    finally:
+        conn.close()
 
 
 def get_last_checkpoint(run_id: str) -> Optional[dict[str, Any]]:
-    conn = connect_runtime_db()
-    row = conn.execute(
-        """
-        SELECT checkpoint_id, created_at, checkpoint_type, step_id
-        FROM checkpoints
-        WHERE run_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-        """,
-        (run_id,),
-    ).fetchone()
-    return dict(row) if row else None
+    conn = _connect()
+    try:
+        row = conn.execute(
+            """
+            SELECT checkpoint_id, created_at, checkpoint_type, step_id
+            FROM checkpoints
+            WHERE run_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (run_id,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def list_tool_calls(run_id: str, limit: int = 10) -> list[dict[str, Any]]:
-    conn = connect_runtime_db()
-    rows = conn.execute(
-        """
-        SELECT tool_call_id, created_at, updated_at, raw_tool_name, tool_name, tool_namespace,
-               status, replay_policy, idempotency_key
-        FROM tool_calls
-        WHERE run_id = ?
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        (run_id, limit),
-    ).fetchall()
-    return [dict(row) for row in rows]
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT tool_call_id, created_at, updated_at, raw_tool_name, tool_name, tool_namespace,
+                   status, replay_policy, idempotency_key
+            FROM tool_calls
+            WHERE run_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def list_receipt_tool_calls(run_id: str) -> list[dict[str, Any]]:
-    conn = connect_runtime_db()
-    rows = conn.execute(
-        """
-        SELECT tool_call_id, created_at, raw_tool_name, tool_name, tool_namespace,
-               side_effect_class, replay_policy, status, idempotency_key,
-               response_ref, external_correlation_id
-        FROM tool_calls
-        WHERE run_id = ? AND side_effect_class != 'read_only'
-        ORDER BY created_at ASC
-        """,
-        (run_id,),
-    ).fetchall()
-    return [dict(row) for row in rows]
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT tool_call_id, created_at, raw_tool_name, tool_name, tool_namespace,
+                   side_effect_class, replay_policy, status, idempotency_key,
+                   response_ref, external_correlation_id
+            FROM tool_calls
+            WHERE run_id = ? AND side_effect_class != 'read_only'
+            ORDER BY created_at ASC
+            """,
+            (run_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def policy_counts_by_side_effect() -> list[dict[str, Any]]:
-    conn = connect_runtime_db()
-    rows = conn.execute(
-        """
-        SELECT side_effect_class, COUNT(*) AS count
-        FROM tool_calls
-        GROUP BY side_effect_class
-        ORDER BY count DESC
-        """
-    ).fetchall()
-    return [dict(row) for row in rows]
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT side_effect_class, COUNT(*) AS count
+            FROM tool_calls
+            GROUP BY side_effect_class
+            ORDER BY count DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def policy_unknown_tools(limit: int = 50) -> list[dict[str, Any]]:
-    conn = connect_runtime_db()
-    rows = conn.execute(
-        """
-        SELECT tool_namespace, tool_name, raw_tool_name, COUNT(*) AS count
-        FROM tool_calls
-        WHERE policy_matched IS NULL OR policy_matched = 0
-        GROUP BY tool_namespace, tool_name, raw_tool_name
-        ORDER BY count DESC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
-    return [dict(row) for row in rows]
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT tool_namespace, tool_name, raw_tool_name, COUNT(*) AS count
+            FROM tool_calls
+            WHERE policy_matched IS NULL OR policy_matched = 0
+            GROUP BY tool_namespace, tool_name, raw_tool_name
+            ORDER BY count DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def policy_input_variance(limit: int = 50) -> list[dict[str, Any]]:
-    conn = connect_runtime_db()
-    rows = conn.execute(
-        """
-        SELECT tool_namespace, tool_name,
-               COUNT(DISTINCT normalized_args_hash) AS distinct_inputs,
-               COUNT(DISTINCT run_id) AS distinct_runs
-        FROM tool_calls
-        GROUP BY tool_namespace, tool_name
-        HAVING distinct_inputs > 1
-        ORDER BY distinct_inputs DESC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
-    return [dict(row) for row in rows]
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT tool_namespace, tool_name,
+                   COUNT(DISTINCT normalized_args_hash) AS distinct_inputs,
+                   COUNT(DISTINCT run_id) AS distinct_runs
+            FROM tool_calls
+            GROUP BY tool_namespace, tool_name
+            HAVING distinct_inputs > 1
+            ORDER BY distinct_inputs DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
 
 
 def request_cancel(run_id: str, reason: Optional[str]) -> bool:
-    conn = connect_runtime_db()
-    row = conn.execute("SELECT run_id FROM runs WHERE run_id = ?", (run_id,)).fetchone()
-    if not row:
-        return False
-    request_run_cancel(conn, run_id, reason)
-    return True
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT run_id FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+        if not row:
+            return False
+        request_run_cancel(conn, run_id, reason)
+        return True
+    finally:
+        conn.close()
 
 
 def tail_tool_calls(run_id: str, limit: int = 20) -> list[dict[str, Any]]:
-    conn = connect_runtime_db()
-    rows = conn.execute(
-        """
-        SELECT tool_call_id, created_at, raw_tool_name, tool_name, tool_namespace, status, replay_policy
-        FROM tool_calls
-        WHERE run_id = ?
-        ORDER BY created_at DESC
-        LIMIT ?
-        """,
-        (run_id, limit),
-    ).fetchall()
-    return [dict(row) for row in reversed(rows)]
+    conn = _connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT tool_call_id, created_at, raw_tool_name, tool_name, tool_namespace, status, replay_policy
+            FROM tool_calls
+            WHERE run_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (run_id, limit),
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+    finally:
+        conn.close()

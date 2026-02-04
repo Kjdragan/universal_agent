@@ -585,6 +585,12 @@ class HeartbeatService:
             # logger.info(f"Session {session.session_id} is busy.")
             return  # Skip if busy executing normal request
 
+        # process_turn + legacy paths still rely on global process state (stdio/env/globals).
+        # If *any* session is currently busy, defer all heartbeat work to avoid
+        # cross-session contamination and spurious timeouts.
+        if self.busy_sessions:
+            return
+
         # Load state
         workspace = Path(session.workspace_dir)
         state_path = workspace / HEARTBEAT_STATE_FILE

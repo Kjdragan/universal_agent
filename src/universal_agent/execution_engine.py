@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import time
 import logging
 import uuid
 import traceback
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -27,9 +29,67 @@ from typing import Any, AsyncIterator, Callable, Optional
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id
 from universal_agent.api.input_bridge import set_input_handler
-from universal_agent.api.events import create_input_required_event
 
 logger = logging.getLogger(__name__)
+
+
+class _TeeWriter:
+    """Mirror writes to both a file handle and an underlying stream."""
+
+    def __init__(self, file_handle, stream):
+        self._file = file_handle
+        self._stream = stream
+
+    def write(self, data: str) -> None:
+        self._stream.write(data)
+        self._stream.flush()
+        self._file.write(data)
+        self._file.flush()
+
+    def flush(self) -> None:
+        self._stream.flush()
+        self._file.flush()
+
+    def isatty(self) -> bool:
+        return bool(getattr(self._stream, "isatty", lambda: False)())
+
+    def fileno(self) -> int:
+        return int(getattr(self._stream, "fileno")())
+
+
+@contextmanager
+def _redirect_stdio_to_run_log(workspace_dir: str) -> Any:
+    """
+    Redirect process-wide stdout/stderr to the session's run.log for the duration
+    of a single turn, then restore.
+
+    NOTE: This is intentionally process-wide. In gateway mode we serialize
+    execution (see InProcessGateway) to avoid cross-session contamination.
+    """
+
+    log_path = Path(workspace_dir) / "run.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    old_stdout = sys.stdout
+    old_stderr = sys.stderr
+    handle = log_path.open("a", encoding="utf-8", errors="replace")
+
+    try:
+        sys.stdout = _TeeWriter(handle, old_stdout)  # type: ignore[assignment]
+        sys.stderr = _TeeWriter(handle, old_stderr)  # type: ignore[assignment]
+        yield
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:
+            pass
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+        try:
+            handle.close()
+        except Exception:
+            pass
 
 
 @dataclass
@@ -133,6 +193,7 @@ class ProcessTurnAdapter:
         self._options, self._session, user_id, workspace_dir, self._trace, _agent = await setup_session(
             run_id_override=self.config.run_id,
             workspace_dir_override=self.config.workspace_dir,
+            attach_stdio=False,
         )
         
         # Update config with resolved values
@@ -181,15 +242,12 @@ class ProcessTurnAdapter:
         from claude_agent_sdk.client import ClaudeSDKClient
         from universal_agent.main import process_turn, budget_state
         
-        # Initialize budget state for gateway execution if missing
-        if "start_ts" not in budget_state:
-            budget_state["start_ts"] = time.time()
-        if "steps" not in budget_state:
-            budget_state["steps"] = 0
-        if "tool_calls" not in budget_state:
-            budget_state["tool_calls"] = 0
+        # Reset budget state per execution (CLI entrypoint manages this separately).
+        budget_state["start_ts"] = time.time()
+        budget_state["steps"] = 0
+        budget_state["tool_calls"] = 0
         
-        start_ts = time.time()
+        start_ts = budget_state["start_ts"]
         
         # Create event callback for real-time streaming
         event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
@@ -255,15 +313,27 @@ class ProcessTurnAdapter:
         
         async def run_engine():
             try:
+                from universal_agent.execution_session import ExecutionSession
                 from universal_agent.main import process_turn
-                result = await process_turn(
-                    client=client,
-                    user_input=user_input,
+                import universal_agent.main as main_module
+
+                execution_session = ExecutionSession(
                     workspace_dir=self.config.workspace_dir,
-                    force_complex=self.config.force_complex,
-                    max_iterations=self.config.max_iterations,
-                    event_callback=event_callback,
+                    run_id=self.config.run_id,
+                    trace=self._trace,
+                    runtime_db_conn=getattr(main_module, "runtime_db_conn", None),
                 )
+
+                with _redirect_stdio_to_run_log(self.config.workspace_dir):
+                    result = await process_turn(
+                        client=client,
+                        user_input=user_input,
+                        workspace_dir=self.config.workspace_dir,
+                        force_complex=self.config.force_complex,
+                        execution_session=execution_session,
+                        max_iterations=self.config.max_iterations,
+                        event_callback=event_callback,
+                    )
                 result_holder["result"] = result
                 result_holder["success"] = True
             except Exception as e:

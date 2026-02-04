@@ -978,6 +978,74 @@ def append_to_file(path: str, content: str) -> str:
         return f"Error appending to file: {str(e)}"
 
 
+def _repo_root() -> str:
+    # src/mcp_server.py -> repo root is parent of src/
+    return str(Path(__file__).resolve().parent.parent)
+
+
+def _resolve_artifacts_root() -> str:
+    """
+    Resolve persistent artifacts root.
+
+    Config: UA_ARTIFACTS_DIR
+    Default: <repo-root>/artifacts
+    """
+    raw = (os.getenv("UA_ARTIFACTS_DIR") or "").strip()
+    if raw:
+        return str(Path(raw).expanduser().resolve())
+    return str((Path(_repo_root()) / "artifacts").resolve())
+
+
+def _is_within_root(root: str, path: str) -> bool:
+    try:
+        root_resolved = str(Path(root).resolve())
+        path_resolved = str(Path(path).resolve())
+        return path_resolved.startswith(root_resolved)
+    except Exception:
+        return False
+
+
+@mcp.tool()
+@trace_tool_output
+def write_text_file(path: str, content: str, overwrite: bool = True) -> str:
+    """
+    Write a UTF-8 text file.
+
+    Security: only allows writing under:
+    - CURRENT_SESSION_WORKSPACE (ephemeral scratch)
+    - UA_ARTIFACTS_DIR (durable artifacts)
+    """
+    try:
+        if content is None:
+            return "Error: content is required"
+
+        abs_path = os.path.abspath(fix_path_typos(path))
+        ws = _resolve_workspace()
+        artifacts_root = _resolve_artifacts_root()
+
+        allowed = False
+        if ws and _is_within_root(ws, abs_path):
+            allowed = True
+        if _is_within_root(artifacts_root, abs_path):
+            allowed = True
+
+        if not allowed:
+            return (
+                "Error: write denied. Path must be within CURRENT_SESSION_WORKSPACE "
+                f"or UA_ARTIFACTS_DIR. Got: {abs_path}"
+            )
+
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        if (not overwrite) and os.path.exists(abs_path):
+            return f"Error: file exists and overwrite=false: {abs_path}"
+
+        with open(abs_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return f"File written: {abs_path} ({len(content)} chars)"
+    except Exception as e:
+        return f"Error writing file: {str(e)}"
+
+
 @mcp.tool()
 @trace_tool_output
 def list_directory(path: str) -> str:

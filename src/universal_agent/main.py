@@ -6,6 +6,7 @@ Traces are sent to Logfire for observability.
 
 import sys
 import os
+import logging
 
 # Add 'src' to sys.path to allow imports from universal_agent package
 # This ensures functional imports regardless of invocation directory
@@ -56,6 +57,7 @@ from universal_agent.tools.local_toolkit_bridge import (
     upload_to_composio_wrapper,
     list_directory_wrapper,
     append_to_file_wrapper,
+    write_text_file_wrapper,
     finalize_research_wrapper,
     generate_image_wrapper,
     describe_image_wrapper,
@@ -897,7 +899,10 @@ async def on_pre_tool_use_ledger(
         runtime_db_conn
     if tool_ledger is None or run_id is None:
         return {}
-    if runtime_db_conn and run_id and is_cancel_requested(runtime_db_conn, run_id):
+    # Prefer the ledger's connection for run state checks; this avoids cross-thread
+    # SQLite usage issues in tests and keeps the hook self-contained.
+    conn_for_run = getattr(tool_ledger, "conn", None) or runtime_db_conn
+    if conn_for_run and run_id and is_cancel_requested(conn_for_run, run_id):
         return {
             "systemMessage": (
                 "⚠️ Run cancellation requested. "
@@ -6039,7 +6044,8 @@ async def setup_session(
     run_id_override: Optional[str] = None,
     workspace_dir_override: Optional[str] = None,
     session_prefix: str = "session_",
-) -> tuple[ClaudeAgentOptions, Any, str, str, dict]:
+    attach_stdio: bool = True,
+) -> tuple[ClaudeAgentOptions, Any, str, str, dict, Any]:
     """
     Initialize the agent session, tools, and options.
     Returns: (options, session, user_id, workspace_dir, trace)
@@ -6312,6 +6318,9 @@ async def setup_session(
             ]
         )
 
+    # Normalize workspace early for env injection (Claude CLI + Bash tool calls).
+    abs_workspace_path = os.path.abspath(workspace_dir)
+
     # Unify architecture: Use shared hooks from hooks.py
     # Initialize hooks manager (passing global run context)
     hooks_manager = AgentHookSet(
@@ -6323,7 +6332,8 @@ async def setup_session(
     )
 
     agent = UniversalAgent(workspace_dir=workspace_dir)
-    setup_log_bridge(agent)
+    if attach_stdio:
+        setup_log_bridge(agent)
     options = ClaudeAgentOptions(
         model="claude-3-5-sonnet-20241022",
         add_dirs=[os.path.join(src_dir, ".claude")],
@@ -6333,6 +6343,13 @@ async def setup_session(
         env={
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.getenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000"),
             "MAX_MCP_OUTPUT_TOKENS": os.getenv("MAX_MCP_OUTPUT_TOKENS", "64000"),
+            "CURRENT_SESSION_WORKSPACE": abs_workspace_path,
+            "UA_ARTIFACTS_DIR": os.path.abspath(
+                os.getenv(
+                    "UA_ARTIFACTS_DIR",
+                    str((Path(__file__).resolve().parent.parent.parent / "artifacts")),
+                )
+            ),
         },
         system_prompt=(
             f"{load_soul_context(workspace_dir, src_dir)}\n\n"
@@ -6400,16 +6417,18 @@ async def setup_session(
             "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by in-process tools.\n"
             "   - ALWAYS build paths using `CURRENT_SESSION_WORKSPACE`; do NOT guess the workspace root.\n"
             "   - REMOTE paths: `/home/user/...` - only accessible inside COMPOSIO_REMOTE_WORKBENCH sandbox.\n"
-            "7. 📁 WORK PRODUCTS - MANDATORY AUTO-SAVE:\n"
-            "   🚨 BEFORE responding with ANY significant output, you MUST save it first.\n"
-            "   - TRIGGERS: Tables, summaries, analyses, code generated for user, extracted data.\n"
-            "   - EXCEPTION: Do NOT use this for 'Reports'. Delegate Reports to the 'Report Creation Expert' (Rule 4).\n"
+            "7. 📦 ARTIFACTS vs SESSION SCRATCH (OUTPUT POLICY):\n"
+            "   - Session workspace is ephemeral scratch: CURRENT_SESSION_WORKSPACE\n"
+            "     Use it for caches, downloads, intermediate pipeline steps.\n"
+            "   - Durable deliverables are artifacts: UA_ARTIFACTS_DIR\n"
+            "     Use it for docs/code/diagrams you may want to revisit later.\n"
+            "   - BEFORE responding with ANY significant durable output, save it as an artifact first.\n"
             "   - HOW: Use the native `Write` tool with:\n"
-            "     - `file_path`: CURRENT_SESSION_WORKSPACE + '/work_products/' + descriptive_name\n"
+            "     - `file_path`: UA_ARTIFACTS_DIR + '/<skill_or_topic>/<YYYY-MM-DD>/<slug>__<HHMMSS>/' + filename\n"
             "     - `content`: The full output you're about to show the user\n"
-            "   - NAMING: `dependency_summary.md`, `calendar_events.txt`, `generated_script.py`\n"
-            "   - `work_products` dir is auto-created. Just save there.\n"
-            "     Wait for 'File saved...' confirmation before proceeding.\n\n"
+            "   - NOTE: If native `Write` is restricted to the session workspace, use `mcp__internal__write_text_file`.\n"
+            "   - ALWAYS write a small `manifest.json` in the artifact directory.\n"
+            "   - Mark deletable outputs as retention=temp inside the manifest.\n\n"
             "9. 🔗 MANDATORY REPORT DELEGATION (YOU MUST DELEGATE):\n"
             "   🚨 TRIGGER KEYWORDS REQUIRING DELEGATION: 'report', 'comprehensive', 'detailed', 'in-depth', 'analysis', 'research'.\n"
             "   IF the user query contains ANY of these keywords, you MUST delegate to 'report-creation-expert'.\n"
@@ -6494,6 +6513,7 @@ async def setup_session(
                     upload_to_composio_wrapper,
                     list_directory_wrapper,
                     append_to_file_wrapper,
+                    write_text_file_wrapper,
                     finalize_research_wrapper,
                     generate_image_wrapper,
                     describe_image_wrapper,
@@ -6543,7 +6563,11 @@ async def setup_session(
 
     # Setup Output Logging
     log_file = open_run_log(workspace_dir)
-    attach_run_log(log_file)
+    if attach_stdio:
+        attach_run_log(log_file)
+    else:
+        # Ensure run.log exists, but do not redirect process-wide stdio (gateway mode).
+        log_file.close()
     try:
         local_tools = get_local_tools()
         print(f"✅ Active In-Process MCP Tools: {local_tools}")
@@ -6551,7 +6575,6 @@ async def setup_session(
         print(f"⚠️ Failed to list in-process MCP tools: {e}")
 
     # Inject Workspace Path into System Prompt for Sub-Agents
-    abs_workspace_path = os.path.abspath(workspace_dir)
     # Safely append to system_prompt (ensure it's a string)
     if options.system_prompt and isinstance(options.system_prompt, str):
         options.system_prompt += (
@@ -6971,7 +6994,6 @@ async def main(args: argparse.Namespace):
 
     budget_config = load_budget_config()
     db_path = get_runtime_db_path()
-    print(f"DEBUG: Connecting to DB at {db_path}", flush=True)
     runtime_db_conn = connect_runtime_db(db_path)
     ensure_schema(runtime_db_conn)
     validate_tool_policies()

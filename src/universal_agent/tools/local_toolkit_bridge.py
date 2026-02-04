@@ -11,6 +11,7 @@ try:
         upload_to_composio as upload_to_composio_core,
         list_directory as list_directory_core,
         append_to_file as append_to_file_core,
+        write_text_file as write_text_file_core,
         generate_image as generate_image_core,
         finalize_research as finalize_research_core,
         describe_image as describe_image_core,
@@ -28,6 +29,7 @@ except ImportError:
         upload_to_composio as upload_to_composio_core,
         list_directory as list_directory_core,
         append_to_file as append_to_file_core,
+        write_text_file as write_text_file_core,
         generate_image as generate_image_core,
         finalize_research as finalize_research_core,
         describe_image as describe_image_core,
@@ -101,6 +103,20 @@ async def append_to_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     content = args.get("content", "")
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result_str = append_to_file_core(path, content)
+    return {"content": [{"type": "text", "text": result_str}]}
+
+
+@tool(
+    name="write_text_file",
+    description="Write a UTF-8 text file under CURRENT_SESSION_WORKSPACE or UA_ARTIFACTS_DIR (in-process).",
+    input_schema={"path": str, "content": str, "overwrite": bool},
+)
+async def write_text_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    path = args.get("path")
+    content = args.get("content", "")
+    overwrite = args.get("overwrite", True)
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result_str = write_text_file_core(path, content, overwrite=overwrite)
     return {"content": [{"type": "text", "text": result_str}]}
 
 

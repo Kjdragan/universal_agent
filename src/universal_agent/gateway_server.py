@@ -774,9 +774,14 @@ async def get_last_heartbeat(session_id: Optional[str] = None):
 
     if session_id:
         session = get_session(session_id)
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found.")
-        state = _read_heartbeat_state(session.workspace_dir) or {}
+        if session:
+            state = _read_heartbeat_state(session.workspace_dir) or {}
+        else:
+            # Allow heartbeat lookup for inactive sessions if workspace still exists.
+            workspace_dir = WORKSPACES_DIR / session_id
+            if not workspace_dir.exists():
+                raise HTTPException(status_code=404, detail="Session not found.")
+            state = _read_heartbeat_state(str(workspace_dir)) or {}
         return {
             "session_id": session_id,
             "last_run": state.get("last_run"),
