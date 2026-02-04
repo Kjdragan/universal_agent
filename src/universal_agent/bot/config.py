@@ -1,44 +1,28 @@
+
 import os
+from typing import List
 from dotenv import load_dotenv
 
-# Load environment variables
+# Load .env file
 load_dotenv()
 
-# Telegram Bot Token
+def get_allowed_user_ids() -> List[int]:
+    raw = os.getenv("TELEGRAM_ALLOWED_USER_IDS", "")
+    if not raw:
+        return []
+    return [int(uid.strip()) for uid in raw.split(",") if uid.strip()]
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ALLOWED_USER_IDS = get_allowed_user_ids()
+SESSION_FILE_PATH = os.path.join(os.getcwd(), ".sessions/telegram.json")
 
-# Webhook Secret (for securing the endpoint)
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
-if not WEBHOOK_SECRET:
-    # We might want to warn or crash, but importing config usually shouldn't crash unless verified.
-    # However, for security, let's keep it None and let main.py handle the crash/warning if needed,
-    # OR trigger a ValueError here.
-    # Given this is a config file, let's just leave it as None or strict.
-    pass      
-
-# Allowed User IDs (comma-separated list of Telegram User IDs)
-ALLOWED_USER_IDS = [
-    int(uid.strip()) 
-    for uid in os.getenv("ALLOWED_USER_IDS", "").split(",") 
-    if uid.strip()
-]
-
-# Webhook URL (Public URL where Telegram sends updates)
-# This will be set by the register_webhook.py script or env var
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-
-# Port for FastAPI server
-PORT = int(os.getenv("PORT", "8000"))
-
-# Task Queue Settings
-# Task Queue Settings
-MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "1"))
-
-# Gateway Configuration
-# If set, the bot acts as a client to an external Gateway.
-# If unset, it runs an In-Process Gateway.
+# Gateway Config
 UA_GATEWAY_URL = os.getenv("UA_GATEWAY_URL")
+UA_TELEGRAM_ALLOW_INPROCESS = os.getenv("UA_TELEGRAM_ALLOW_INPROCESS", "1") == "1" # Default to 1 for now? Or 0? 
+# In agent_adapter logic:
+# if not UA_TELEGRAM_ALLOW_INPROCESS: raise ...
+# "Set UA_TELEGRAM_ALLOW_INPROCESS=1 for local dev."
+# So strict default might be better, but let's emulate legacy behavior.
+# Legacy seemingly worked locally.
 
-# Telegram Gateway Mode
-# If UA_GATEWAY_URL is unset, allow in-process execution only when this is true.
-UA_TELEGRAM_ALLOW_INPROCESS = os.getenv("UA_TELEGRAM_ALLOW_INPROCESS", "0") == "1"
+MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "5"))

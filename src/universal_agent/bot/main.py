@@ -1,277 +1,137 @@
-import asyncio
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
-from telegram.request import HTTPXRequest
-import os
 
-from .config import TELEGRAM_BOT_TOKEN, WEBHOOK_SECRET, WEBHOOK_URL, PORT, UA_GATEWAY_URL, UA_TELEGRAM_ALLOW_INPROCESS
+import asyncio
+import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, TypeHandler
+from .config import TELEGRAM_BOT_TOKEN
+from .core.runner import UpdateRunner
+from .core.context import BotContext
+from .core.middleware import MiddlewareChain
+from .core.session import FileSessionStore
+from .core.middleware_impl import logging_middleware, auth_middleware, SessionMiddleware
+from .plugins.onboarding import onboarding_middleware
+from .plugins.commands import commands_middleware
 from .task_manager import TaskManager
 from .agent_adapter import AgentAdapter
-from .telegram_handlers import start_command, help_command, status_command, agent_command, continue_command, new_command, handle_message
-from .telegram_formatter import format_telegram_response
-# nest_asyncio removed to avoid conflict with uvicorn loop_factory in Python 3.13
+from .normalization.formatting import format_telegram_response
+from telegram import Bot
 
 
-# Global Objects
-ptb_app = None
-agent_adapter = None
-task_manager = None
+# Setup Logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global ptb_app, agent_adapter, task_manager
+async def run_bot():
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN not set!")
+        return
+
+    # 1. Initialize Core Components
+    session_store = FileSessionStore()
+    middleware_chain = MiddlewareChain()
     
-    # 1. Initialize Agent
-    print("🚀 Starting Universal Agent Bot...")
-    
-    # DEBUG: Check Network/DNS
-    import socket
-    try:
-        ip = socket.gethostbyname("api.telegram.org")
-        print(f"📡 DNS RESOLVED: api.telegram.org -> {ip}")
-    except Exception as e:
-        print(f"❌ DNS FAILED: {e}")
-    
-    # DEBUG: Print critical environment variables
-    print("=" * 60)
-    print("🔍 STARTUP DEBUG INFO")
-    print("=" * 60)
-    print(f"   WEBHOOK_URL: {WEBHOOK_URL}")
-    print(f"   WEBHOOK_SECRET: {'***SET***' if WEBHOOK_SECRET else 'NOT SET'}")
-    print(f"   TELEGRAM_BOT_TOKEN: {'***SET***' if TELEGRAM_BOT_TOKEN else 'NOT SET'}")
-    print(f"   PORT: {PORT}")
-    print(f"   UA_GATEWAY_URL: {UA_GATEWAY_URL or 'NOT SET'}")
-    print(f"   UA_TELEGRAM_ALLOW_INPROCESS: {UA_TELEGRAM_ALLOW_INPROCESS}")
-    print("=" * 60)
+    # 2. Setup Middleware Pipeline
+    middleware_chain.use(logging_middleware)
+    middleware_chain.use(auth_middleware)
+    middleware_chain.use(SessionMiddleware(session_store))
+    middleware_chain.use(onboarding_middleware)
+    middleware_chain.use(commands_middleware)
 
+    # 3. Setup Agent Components
     agent_adapter = AgentAdapter()
-    await agent_adapter.initialize()
     
-    # 2. Initialize Telegram Bot with increased timeouts
-    # Custom request with longer timeouts to avoid TimedOut errors
-    request = HTTPXRequest(
-        connect_timeout=60.0,
-        read_timeout=60.0,
-        write_timeout=60.0,
-        pool_timeout=60.0,
-        http_version="1.1",  # Force HTTP/1.1 to avoid HTTP/2 hangs
-    )
-    # Note: HTTPXRequest in PTB doesn't expose trust_env directly in constructor in older versions, 
-    # but let's check if we can pass it via connection_pool_kwargs or similar if needed.
-    # Actually, PTB 20+ passes arbitrary kwargs to httpx.AsyncClient? No, it uses restricted args.
-    # Let's double check PTB docs / code if needed. 
-    # For now, we rely on the fact that if we don't set proxy_url, it defaults to None.
-    # But trust_env=False is safer.
+    # Status Callback for TaskManager
+    # We need a bot instance to send messages. We can use the app.bot later, 
+    # or create a temporary one if needed, but better to use the app's bot.
+    # However, 'app' isn't built yet.
+    # We can define the callback to use a captured 'app' reference that is set later.
     
-    # PTB's HTTPXRequest wrapper is specific.
-    # Let's try to inject it if possible, otherwise we skip for now to avoid AttributeError.
-    # Instead, let's verify if `connect_timeout` is actually being respected.
+    app_ref = {"bot": None}
     
-    ptb_app = (
-        Application.builder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .request(request)
-        .get_updates_request(request)  # Also for receiving updates
-        .build()
-    )
-    
-    # 3. Setup Task Manager with Notification Callback (with retry)
-    async def send_split_message(bot, chat_id, text):
-        """
-        Send a message to a user, splitting it if it exceeds Telegram's 4096 char limit.
-        Tries MarkdownV2 first, falls back to plain text on error.
-        """
-        MAX_LENGTH = 4000  # Leave some buffer for safety
-        
-        # Simple chunking by newlines eventually, but strict length first
-        chunks = []
-        while text:
-            if len(text) <= MAX_LENGTH:
-                chunks.append(text)
-                break
+    async def task_status_callback(task):
+        bot = app_ref["bot"]
+        if not bot:
+            return
             
-            # Find a smart split point
-            split_idx = text.rfind('\n', 0, MAX_LENGTH)
-            if split_idx == -1:
-                split_idx = text.rfind(' ', 0, MAX_LENGTH)
-            if split_idx == -1:
-                split_idx = MAX_LENGTH
-                
-            chunks.append(text[:split_idx])
-            text = text[split_idx:].lstrip()
-            
-        for chunk in chunks:
-            try:
-                # Try MarkdownV2
-                await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="MarkdownV2")
-            except Exception as e_md:
-                print(f"⚠️ MarkdownV2 failed for chunk, trying plain text: {e_md}")
-                try:
-                    # Fallback to plain text
-                    # We might want to strip markdown chars here if we were fancy, 
-                    # but sending raw is better than nothing.
-                    await bot.send_message(chat_id=chat_id, text=chunk, parse_mode=None)
-                except Exception as e_plain:
-                    print(f"❌ Failed to send chunk: {e_plain}")
-
-    async def notify_user(task):
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                if task.status == "completed":
-                    # Use rich formatter for completed tasks
-                    # Prefer execution_summary (ExecutionResult object) if available
-                    result_to_format = task.execution_summary if task.execution_summary else task.result
-                    formatted_msg = format_telegram_response(result_to_format)
-                    msg = f"✅ *Task Completed*\n\n{formatted_msg}"
-                    
-                elif task.status == "error":
-                    msg = f"❌ *Task Failed*\n\nError: {task.result}"
-                else:
-                    # Updates for running/pending
-                    msg = f"Task Update: `{task.id[:8]}`\nStatus: {task.status.upper()}"
-
-                # Use robust sender
-                await send_split_message(ptb_app.bot, task.user_id, msg)
-                
-                # Send Log File if completed or error
-                if task.status in ["completed", "error"] and task.log_file and os.path.exists(task.log_file):
-                    try:
-                         await ptb_app.bot.send_document(
-                            chat_id=task.user_id,
-                            document=open(task.log_file, 'rb'),
-                            filename=f"task_{task.id[:8]}.log",
-                            caption=f"📝 Execution Log for {task.id[:8]}"
-                        )
-                    except Exception as e:
-                        print(f"⚠️ Failed to send log: {e}")
-                
-                # Success - break retry loop
-                break
-
-            except Exception as e:
-                print(f"⚠️ Notification attempt {attempt + 1}/{max_retries} failed: {e}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2)  # Wait before retry
-                else:
-                    print(f"❌ All notification attempts failed for task {task.id[:8]}")
-
-    task_manager = TaskManager(status_callback=notify_user)
-    
-    # 4. Register Telegram Handlers
-    ptb_app.add_handler(CommandHandler("start", start_command))
-    ptb_app.add_handler(CommandHandler("help", help_command))
-    ptb_app.add_handler(CommandHandler("status", status_command))
-    ptb_app.add_handler(CommandHandler("agent", agent_command))
-    ptb_app.add_handler(CommandHandler("continue", continue_command))
-    ptb_app.add_handler(CommandHandler("new", new_command))
-    
-    # Handle text messages as agent prompts
-    ptb_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Store Task Manager in bot_data for handlers
-    ptb_app.bot_data["task_manager"] = task_manager
-    
-    # Initialize Bot App - ALWAYS do this first (doesn't need network)
-    print("🔄 Initializing PTB Application...")
-    try:
-        await ptb_app.initialize()
-        print("✅ PTB Application initialized")
-    except Exception as e:
-        print(f"❌ CRITICAL: Failed to initialize PTB: {e}")
-        # If we can't even initialize, something is very wrong
-        raise e
-    
-    # Try to register webhook (this is what might timeout due to network)
-    # We do this with retries, but if it fails, we continue anyway
-    webhook_registered = False
-    max_retries = 3
-    
-    for attempt in range(max_retries):
         try:
-            print(f"🔄 Webhook registration attempt {attempt + 1}/{max_retries}...")
-            if WEBHOOK_URL:
-                print(f"🌍 Registering webhook: {WEBHOOK_URL}")
-                await ptb_app.bot.set_webhook(url=WEBHOOK_URL, secret_token=WEBHOOK_SECRET)
-                webhook_registered = True
-                print("✅ Webhook registered successfully!")
-                break
-            else:
-                # Polling mode - requires delete_webhook which also needs network
-                print("📡 Polling Mode - deleting any existing webhook...")
-                await ptb_app.bot.delete_webhook()
-                await ptb_app.updater.start_polling()
-                webhook_registered = True
-                break
+            # Determine text
+            text = f"📝 Task Update: {task.status.upper()}\n"
+            if task.status == "completed":
+                # Use formatter
+                result = task.execution_summary if task.execution_summary else task.result
+                text = format_telegram_response(result)
+            elif task.status == "error":
+                text = f"❌ Task Failed:\n{task.result}"
+            elif task.status == "running":
+                text = f"🚀 Task Started: `{task.id}`"
+            
+            # Send (assuming user_id is chat_id for DM)
+            # In future, we might need a mapping if they are in a group 
+            # (but task.user_id comes from update.effective_user.id)
+            # If we want to support group replies, Task object should store chat_id too.
+            # For now, simplistic approach: send to user_id.
+            
+            await bot.send_message(chat_id=task.user_id, text=text, parse_mode="Markdown")
+            
         except Exception as e:
-            print(f"⚠️ Webhook registration attempt {attempt + 1} failed: {e}")
-            if attempt < max_retries - 1:
-                print("⏳ Retrying in 5 seconds...")
-                await asyncio.sleep(5)
-    
-    if not webhook_registered:
-        print("=" * 60)
-        print("⚠️ WEBHOOK REGISTRATION FAILED - RUNNING IN DEGRADED MODE")
-        print("=" * 60)
-        print("")
-        print("📋 MANUAL FIX: Register webhook from your local machine:")
-        print(f"   curl 'https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook?url={WEBHOOK_URL}&secret_token={WEBHOOK_SECRET}'")
-        print("")
-        print("ℹ️  Bot is still running and will accept webhooks if already registered")
-        print("=" * 60)
-    
-    # Start the bot - this should always work since we initialized above
-    try:
-        await ptb_app.start()
-        print("✅ Bot is running!" + (" (degraded - webhook not registered)" if not webhook_registered else ""))
-    except Exception as e:
-        print(f"❌ Failed to start bot: {e}")
-        raise e
+            logger.error(f"Failed to send status update: {e}")
 
-    # 5. Start Worker
-    worker_task = asyncio.create_task(task_manager.worker(agent_adapter))
+    task_manager = TaskManager(status_callback=task_status_callback)
+
+    # 4. Define Process Callback for Runner
+    async def process_update_callback(update: Update, ptb_context: ContextTypes.DEFAULT_TYPE):
+        # Create Context
+        ctx = BotContext(
+            update=update, 
+            ptb_context=ptb_context,
+            task_manager=task_manager
+        )
+        # Run Middleware Chain
+        await middleware_chain.run(ctx)
+
+    # 4. Initialize Runner
+    runner = UpdateRunner(process_callback=process_update_callback)
+
+    # 6. Setup PTB Application
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app_ref["bot"] = app.bot
+
+    # 6. Global Helper to feed the runner
+    async def feed_runner(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await runner.enqueue(update, context)
+
+    # Register a catch-all handler that feeds everything to our runner
+    app.add_handler(TypeHandler(Update, feed_runner))
+
+    logger.info("Bot starting... (New Architecture)")
     
-    yield
-    
-    # Shutdown
-    if agent_adapter:
-        print("🛑 Shutting down Agent Adapter...")
-        await agent_adapter.shutdown()
+    # Initialize Agent Adapter & Task Worker
+    await agent_adapter.initialize()
+    task_worker = asyncio.create_task(task_manager.worker(agent_adapter))
+
+    # 8. Run
+    async with app:
+        await app.start()
+        await app.updater.start_polling()
         
-    print("👋 Bot shutting down...")
-    worker_task.cancel()
-    await ptb_app.stop()
-    await ptb_app.shutdown()
-
-
-app = FastAPI(lifespan=lifespan)
-
-@app.post("/webhook")
-async def telegram_webhook(request: Request):
-    """
-    Handle incoming Telegram updates.
-    """
-    # Verify Secret Token (Recommended)
-    secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-    if secret_token != WEBHOOK_SECRET:
-         return {"detail": "Unauthorized"}
-    
-    data = await request.json()
-    update = Update.de_json(data, ptb_app.bot)
-    await ptb_app.process_update(update)
-    return {"status": "ok"}
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "tasks_active": task_manager.active_tasks if task_manager else 0}
-
-@app.get("/")
-async def root():
-    """Root endpoint for basic health check"""
-    return {"status": "Universal Agent Bot Running", "version": "1.0.0"}
+        # Keep running until cancelled
+        try:
+            while True:
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await app.updater.stop()
+            await app.stop()
+            await runner.stop()
+            task_worker.cancel()
+            await agent_adapter.shutdown()
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("universal_agent.bot.main:app", host="0.0.0.0", port=PORT, reload=True)
+    try:
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        pass
