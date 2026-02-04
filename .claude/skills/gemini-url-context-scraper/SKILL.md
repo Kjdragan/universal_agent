@@ -36,6 +36,20 @@ This skill's bundled script is designed to be resilient:
 - Never hardcode API keys into scripts or artifacts.
 - Scripts must auto-load `.env` via `python-dotenv` and read keys from env vars only.
 
+## ⚠️ CONTEXT TOKEN PRESERVATION (CRITICAL)
+
+**DO NOT READ THE OUTPUT FILE BACK INTO CONTEXT!**
+
+- The script outputs the file path (e.g., `/path/to/answer.md`).
+- **Report this path to the user** - do NOT use `Read` to load it into your context window.
+- If the user needs a summary, provide a 2-3 sentence summary based on the question asked.
+- The full content is saved to disk; the user can access it directly.
+
+**WHY**: PDF/URL scraping can produce 50K+ tokens. Loading this into context causes token overflow errors.
+
+**CORRECT**: "✅ Scraped content saved to `/path/to/answer.md`. The paper discusses [brief summary]."
+**WRONG**: Using `Read` tool on `answer.md` and dumping 50KB into the chat.
+
 ## Primary Tooling
 
 - Script runner: `uv run` + PEP 723 inline dependencies.

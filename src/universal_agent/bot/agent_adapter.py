@@ -3,6 +3,7 @@ import sys
 import asyncio
 import uuid
 import logging
+from pathlib import Path
 from typing import Optional, Any, AsyncIterator
 from dataclasses import dataclass
 from .config import UA_GATEWAY_URL, UA_TELEGRAM_ALLOW_INPROCESS
@@ -14,6 +15,7 @@ from universal_agent.gateway import (
     GatewaySession
 )
 from universal_agent.agent_core import AgentEvent, EventType, UniversalAgent
+from universal_agent.session_checkpoint import SessionCheckpointGenerator
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -69,28 +71,45 @@ class AgentAdapter:
         self.initialized = True
         print("✅ Agent Adapter Initialized")
 
-    async def _get_or_create_session(self, user_id: str) -> GatewaySession:
+    async def _get_or_create_session(self, user_id: str, user_prompt: str = "") -> GatewaySession:
         """
-        Map Telegram User ID to a consistent Gateway Session.
-        Format: tg_{user_id}
-        """
-        # We use a deterministic session ID so the user resumes the same "chat"
-        # In the future, we could support multiple sessions per user via commands
-        session_id = f"tg_{user_id}"
+        Create a fresh session for each query to prevent context overflow.
+        Injects checkpoint from prior session to preserve continuity.
         
-        try:
-            # Try to resume first
-            return await self.gateway.resume_session(session_id)
-        except ValueError:
-            # Create new if not found
-            print(f"🆕 Creating new session for {user_id}...")
-            
-            # Fix Session Amnesia:
-            # We must provide a workspace_dir ending in our desired session_id (tg_{user_id})
-            # so that InProcessGateway uses that ID instead of generating a random one.
-            workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", session_id)
-            
-            return await self.gateway.create_session(user_id=f"telegram_{user_id}", workspace_dir=workspace_dir)
+        Strategy: Fresh session per query + checkpoint injection
+        - Prevents context token accumulation across multiple messages
+        - Preserves continuity via structured checkpoint (~2-4k tokens)
+        """
+        session_id = f"tg_{user_id}"
+        workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", session_id)
+        workspace_path = Path(workspace_dir)
+        
+        # Load prior checkpoint if exists
+        prior_checkpoint_context = ""
+        if workspace_path.exists():
+            try:
+                generator = SessionCheckpointGenerator(workspace_path)
+                checkpoint = generator.load_latest()
+                if checkpoint:
+                    prior_checkpoint_context = checkpoint.to_markdown()
+                    print(f"📋 Loaded prior checkpoint for {user_id} ({len(prior_checkpoint_context)} chars)")
+            except Exception as e:
+                print(f"⚠️ Failed to load checkpoint: {e}")
+        
+        # Always create fresh session (clears Claude SDK context)
+        print(f"🆕 Creating fresh session for {user_id}...")
+        session = await self.gateway.create_session(
+            user_id=f"telegram_{user_id}", 
+            workspace_dir=workspace_dir
+        )
+        
+        # Inject prior checkpoint as context if available
+        if prior_checkpoint_context:
+            # Prefix the user's prompt with checkpoint context
+            session._injected_context = prior_checkpoint_context
+            print(f"📋 Will inject checkpoint context into first message")
+        
+        return session
 
     async def _client_actor_loop(self):
         """Background task that processes requests sequentially."""
@@ -112,31 +131,45 @@ class AgentAdapter:
                     if not self.gateway:
                         raise RuntimeError("Gateway not initialized")
 
-                    # 1. Get Session
-                    session = await self._get_or_create_session(request.user_id)
+                    # 1. Get Session (fresh per query, with checkpoint injection)
+                    session = await self._get_or_create_session(request.user_id, request.prompt)
                     
-                    # 2. Execute Request
+                    # 2. Build Request (inject checkpoint context if available)
+                    user_input = request.prompt
+                    if hasattr(session, '_injected_context') and session._injected_context:
+                        # Prepend checkpoint context to user's prompt
+                        user_input = (
+                            f"<prior_session_context>\n"
+                            f"{session._injected_context}\n"
+                            f"</prior_session_context>\n\n"
+                            f"**New Request:**\n{request.prompt}"
+                        )
+                        print(f"📋 Injected checkpoint context into prompt")
+                    
                     gw_req = GatewayRequest(
-                        user_input=request.prompt,
-                        force_complex=False, # Could expose via command
-                        metadata={"source": "telegram"}
+                        user_input=user_input,
+                        force_complex=False,
+                        metadata={"source": "telegram", "original_prompt": request.prompt}
                     )
                     
-                    # 3. Collect Response (Accumulate streaming events for now, or unified result)
-                    # The Gateway.run_query convenience method is perfect for non-streaming bot logic
-                    # But we might want streaming later. For now, let's use run_query for simplicity
-                    # to match the expected "reply_future.set_result(execution_summary)" interface
-                    # required by the Task Manager for notification formatting.
-                    
+                    # 3. Execute
                     result = await self.gateway.run_query(session, gw_req)
                     
-                    # 4. Return Result
-                    # The TaskManager expects an object with .response_text and .tool_calls etc.
-                    # GatewayResult matches this duck-typing mostly, but let's verify.
-                    # GatewayResult(response_text, tool_calls, trace_id, metadata)
-                    # ExecutionResult(response_text, execution_time...)
-                    # We might need to map it or ensure format_telegram_response handles it.
+                    # 4. Generate Checkpoint for next session
+                    try:
+                        workspace_path = Path(session.workspace_dir)
+                        generator = SessionCheckpointGenerator(workspace_path)
+                        checkpoint = generator.generate_from_result(
+                            session_id=session.session_id,
+                            original_request=request.prompt,
+                            result=result,
+                        )
+                        generator.save(checkpoint)
+                        print(f"✅ Saved session checkpoint: {workspace_path / 'session_checkpoint.json'}")
+                    except Exception as ckpt_err:
+                        print(f"⚠️ Failed to save checkpoint: {ckpt_err}")
                     
+                    # 5. Return Result
                     if not request.reply_future.done():
                         request.reply_future.set_result(result)
                         
