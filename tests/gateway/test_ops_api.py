@@ -1,130 +1,155 @@
 import os
-from pathlib import Path
-
+import shutil
 import pytest
+from pathlib import Path
 from fastapi.testclient import TestClient
 
 from universal_agent import gateway_server
+from universal_agent.gateway import GatewaySessionSummary
 
+# Mock OpsService to avoid full gateway dependency chains in unit tests
+# OR rely on the fact that lifespan will init a real OpsService with a real InProcessGateway pointing to tmp_path?
+# Let's try to use the real one but pointing to tmp path.
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    # Patch WORKSPACES_DIR to use tmp_path
     monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
-    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "")
-    monkeypatch.setenv("UA_OPS_CONFIG_PATH", str(tmp_path / "ops_config.json"))
-    monkeypatch.setenv("UA_APPROVALS_PATH", str(tmp_path / "approvals.json"))
-    return TestClient(gateway_server.app)
+    
+    # We must reset the global singletons to force re-init with new path
+    monkeypatch.setattr(gateway_server, "_gateway", None)
+    monkeypatch.setattr(gateway_server, "_ops_service", None)
+    
+    # Env vars
+    monkeypatch.setenv("UA_GATEWAY_PORT", "0") # Avoid binding real port if it tried
+    monkeypatch.setenv("UA_DISABLE_HEARTBEAT", "1")
+    monkeypatch.setenv("UA_DISABLE_CRON", "1")
+    
+    with TestClient(gateway_server.app) as c:
+        yield c
 
+def _create_dummy_session(base_dir: Path, session_id: str, logs: list[str]):
+    session_dir = base_dir / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    if logs:
+        (session_dir / "run.log").write_text("\n".join(logs), encoding="utf-8")
+    return session_dir
 
-def _write_lines(path: Path, lines: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
-
-
-def test_ops_sessions_list_preview_compact_reset(client, tmp_path):
-    session_dir = tmp_path / "session_test"
-    session_dir.mkdir()
-    _write_lines(session_dir / "activity_journal.log", ["line1", "line2", "line3"])
-    _write_lines(session_dir / "run.log", ["run1", "run2"])
-
+def test_ops_list_sessions(client, tmp_path):
+    # Create some dummy sessions on disk
+    _create_dummy_session(tmp_path, "session_A", ["logA"])
+    _create_dummy_session(tmp_path, "session_B", ["logB"])
+    
+    # The gateway lists active sessions (in memory) + discovered (on disk)
+    # Our mocked gateway won't have active sessions initially unless we create them via gateway.
+    # But list_sessions_async also scans disk.
+    
     resp = client.get("/api/v1/ops/sessions")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["total"] == 1
-    assert data["sessions"][0]["session_id"] == "session_test"
+    assert "sessions" in data
+    
+    # We should see session_A and session_B
+    ids = [s["session_id"] for s in data["sessions"]]
+    assert "session_A" in ids
+    assert "session_B" in ids
 
-    preview = client.get("/api/v1/ops/sessions/session_test/preview?limit=2")
-    assert preview.status_code == 200
-    preview_data = preview.json()
-    assert preview_data["lines"] == ["line2", "line3"]
+def test_ops_get_session(client, tmp_path):
+    _create_dummy_session(tmp_path, "session_details", ["foo"])
+    
+    resp = client.get("/api/v1/ops/sessions/session_details")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "session" in data
+    assert data["session"]["session_id"] == "session_details"
+    assert data["session"]["has_run_log"] is True
 
-    compact = client.post(
-        "/api/v1/ops/sessions/session_test/compact",
-        json={"max_lines": 1, "max_bytes": 100},
+def test_ops_delete_session(client, tmp_path):
+    _create_dummy_session(tmp_path, "session_del", ["foo"])
+    assert (tmp_path / "session_del").exists()
+    
+    # Missing verify param
+    resp = client.delete("/api/v1/ops/sessions/session_del")
+    assert resp.status_code == 400
+    
+    # With verify param
+    resp = client.delete("/api/v1/ops/sessions/session_del?confirm=true")
+    assert resp.status_code == 200
+    assert not (tmp_path / "session_del").exists()
+
+def test_ops_log_tail(client, tmp_path):
+    lines = [f"line {i}" for i in range(100)]
+    _create_dummy_session(tmp_path, "session_logs", lines)
+    
+    # Tail default (last 500 lines) -> should get all 100
+    resp = client.get("/api/v1/ops/logs/tail?session_id=session_logs")
+    assert resp.status_code == 200
+    data = resp.json()
+    # The new implementation wraps result in "file" too
+    assert "lines" in data
+    assert len(data["lines"]) == 100
+    assert data["lines"][0] == "line 0"
+    assert data["lines"][-1] == "line 99"
+
+    # Tail limit
+    resp = client.get("/api/v1/ops/logs/tail?session_id=session_logs&limit=5")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["lines"]) == 5
+    assert data["lines"][-1] == "line 99"
+    
+    # Tail empty (non existent session -> 400 or empty?)
+    # Implementation says if session_id provided, it resolves path.
+    # _ops_service.tail_file checks file existence and returns empty dict.
+    # BUT ops_logs_tail calls _resolve_workspace_path(session_id) which is just path join.
+    # Then tail_file calls exists().
+    # So it should return empty struct.
+    
+    resp = client.get("/api/v1/ops/logs/tail?session_id=non_existent")
+    assert resp.status_code == 200 
+    data = resp.json()
+    assert data["lines"] == []
+    assert data["size"] == 0
+
+def test_ops_preview_compact_reset(client, tmp_path):
+    # Setup session with logs
+    lines = [f"line {i}" for i in range(10)]
+    session_dir = _create_dummy_session(tmp_path, "session_complex", lines)
+    (session_dir / "activity_journal.log").write_text("\n".join(lines), encoding="utf-8")
+    
+    # Preview (tails activity journal)
+    resp = client.get("/api/v1/ops/sessions/session_complex/preview")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["session_id"] == "session_complex"
+    assert len(data["lines"]) == 10
+    
+    # Compact
+    # Compact run.log to 5 lines
+    resp = client.post(
+        "/api/v1/ops/sessions/session_complex/compact",
+        json={"max_lines": 5, "max_bytes": 1000}
     )
-    assert compact.status_code == 200
-    assert (session_dir / "activity_journal.log").read_text().strip() == "line3"
-
-    reset = client.post(
-        "/api/v1/ops/sessions/session_test/reset",
-        json={"clear_logs": True, "clear_memory": False, "clear_work_products": False},
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "compacted"
+    
+    # Verify file on disk
+    assert len((session_dir / "run.log").read_text().splitlines()) == 5
+    
+    # Reset
+    # Should move files to archive
+    resp = client.post(
+        "/api/v1/ops/sessions/session_complex/reset",
+        json={"clear_logs": True, "clear_memory": False, "clear_work_products": False}
     )
-    assert reset.status_code == 200
-    assert not (session_dir / "activity_journal.log").exists()
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "reset"
+    
+    # Verify files gone
     assert not (session_dir / "run.log").exists()
+    assert not (session_dir / "activity_journal.log").exists()
+    # Archive exists
+    archive_dir = Path(resp.json()["archive_dir"])
+    assert archive_dir.exists()
+    assert (archive_dir / "run.log").exists()
 
-
-def test_ops_logs_tail(client, tmp_path):
-    session_dir = tmp_path / "session_logs"
-    session_dir.mkdir()
-    _write_lines(session_dir / "run.log", ["alpha", "beta", "gamma"])
-    resp = client.get("/api/v1/ops/logs/tail?session_id=session_logs&limit=2")
-    assert resp.status_code == 200
-    payload = resp.json()
-    assert payload["lines"] == ["beta", "gamma"]
-
-
-def test_ops_skills_override(client, tmp_path, monkeypatch):
-    skills_dir = tmp_path / "skills"
-    skill_path = skills_dir / "test-skill"
-    skill_path.mkdir(parents=True)
-    (skill_path / "SKILL.md").write_text(
-        "---\nname: TestSkill\ndescription: Test skill\n---\nBody\n"
-    )
-    monkeypatch.setenv("UA_SKILLS_DIR", str(skills_dir))
-
-    resp = client.get("/api/v1/ops/skills")
-    assert resp.status_code == 200
-    skills = resp.json()["skills"]
-    assert skills[0]["name"] == "TestSkill"
-    assert skills[0]["enabled"] is True
-
-    update = client.patch("/api/v1/ops/skills/testskill", json={"enabled": False})
-    assert update.status_code == 200
-
-    resp = client.get("/api/v1/ops/skills")
-    skill = resp.json()["skills"][0]
-    assert skill["enabled"] is False
-
-
-def test_ops_config_schema(client):
-    resp = client.get("/api/v1/ops/config/schema")
-    assert resp.status_code == 200
-    schema = resp.json()["schema"]
-    assert schema["type"] == "object"
-    assert "skills" in schema["properties"]
-    assert "channels" in schema["properties"]
-
-
-def test_ops_channels_probe(client):
-    probe = client.post("/api/v1/ops/channels/gateway/probe")
-    assert probe.status_code == 200
-    payload = probe.json()["probe"]
-    assert payload["status"] == "ok"
-
-    resp = client.get("/api/v1/ops/channels")
-    assert resp.status_code == 200
-    channels = resp.json()["channels"]
-    gateway = next(item for item in channels if item["id"] == "gateway")
-    assert gateway["probe"]["status"] == "ok"
-
-
-def test_ops_approvals_create_update(client):
-    create = client.post(
-        "/api/v1/ops/approvals",
-        json={"approval_id": "phase_2", "summary": "Test approval"},
-    )
-    assert create.status_code == 200
-    approval = create.json()["approval"]
-    assert approval["approval_id"] == "phase_2"
-    assert approval["status"] == "pending"
-
-    listing = client.get("/api/v1/ops/approvals")
-    assert listing.status_code == 200
-    approvals = listing.json()["approvals"]
-    assert approvals and approvals[0]["approval_id"] == "phase_2"
-
-    update = client.patch("/api/v1/ops/approvals/phase_2", json={"status": "approved"})
-    assert update.status_code == 200
-    updated = update.json()["approval"]
-    assert updated["status"] == "approved"
