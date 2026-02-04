@@ -1,7 +1,7 @@
 # Build‑Out Plan — Clawdbot Feature Parity (Living Plan)
 
 **Owner:** kjdragan + Codex
-**Last updated:** 2026‑02‑03
+**Last updated:** 2026‑02‑04
 **Scope:** Post‑MVP feature build‑out. This plan is the single source of truth for what is in scope, what’s done, and what’s next.
 
 ---
@@ -453,48 +453,6 @@ We **don’t** copy Clawdbot wholesale; we re‑map to UA primitives:
   - Logs tail window
   - Heartbeat status
 
-### 4.3 Implementation Steps (Detailed)
-
-#### A) Gateway Ops API
-
-- [ ] Add REST/WS routes in UA gateway for:
-  - `sessions.list`, `sessions.preview`, `sessions.reset`, `sessions.delete`, `sessions.compact`
-  - `channels.status`, `channels.logout`
-  - `skills.status`, `skills.update`
-  - `logs.tail`
-  - `config.get`, `config.schema`
-- [ ] Add consistent response envelope + error codes.
-
-#### B) Logs Tail (Clawdbot pattern)
-
-- [ ] Implement cursor‑based tail with max bytes and rolling log file resolution.
-- [ ] Hard caps to prevent large reads.
-
-#### C) Channels Status + Probes
-
-- [ ] Build channel probes that can run on demand with timeout.
-- [ ] Return last inbound/outbound activity and account status.
-
-#### D) Skills Ops
-
-- [ ] Report workspace skill status.
-- [ ] Support enable/disable + env injection (without restarting gateway).
-
-#### E) Config Schema
-
-- [ ] Expose config schema for UI.
-- [ ] Enforce read‑only mode in production unless explicitly allowed.
-
-#### F) UI Panel
-
-- [x] Add a small Ops panel in Web UI that consumes above endpoints.
-- [x] Show heartbeat state + last heartbeat event.
-
-### 4.4 Status
-
-- **Current:** minimal status endpoints exist; no unified ops surface.
-- **Target:** stable Ops API + basic UI parity with Clawdbot control‑ui features.
-
 ---
 
 ## 5) Phase 4 — Telegram Parity Improvements (Outline)
@@ -514,18 +472,17 @@ Increase Telegram reliability and formatting parity.
 
 ## 6) Current Status
 
-**Phase 1:** In progress (file memory + pre‑compaction flush implemented; async tool tests aligned; CLI memory integration test passing).\
-**Phase 2:** Heartbeat + cron + system events/presence parity implemented; tests passing (heartbeat/cron/system).\
-**Phase 3:** Ops API + UI panel in place (sessions/logs/skills, system presence/events, ops config editor, channel probes, approvals control, config schema).\
+**Phase 1:** Complete (file memory + pre‑compaction flush implemented; async tool tests aligned; CLI memory integration test passing).
+**Phase 2:** Complete (Heartbeat + cron + system events/presence parity implemented).
+**Phase 3:** Complete (Ops API + UI panel in place, including session management, logs, skills, system presence/events, ops config editor, channel probes, approvals control, config schema).
 **Phase 4:** Paused (Telegram reliability work gated; tests disabled by default).
 
 ---
 
 ## 7) Next Actions (Immediate)
 
-1. Expand Phase 2 to full Clawdbot parity (heartbeat + cron + system events).
-2. Add memory search tests and update the testing guide.
-3. Resume Phase 4 (Telegram reliability) when the channel is unblocked.
+1. Proceed to Phase 4 (Telegram reliability) when unblocked.
+2. Monitor system usage and gather feedback on Ops UI.
 
 ---
 
@@ -543,3 +500,4 @@ Increase Telegram reliability and formatting parity.
 - 2026‑02‑03: Ops UI extended with system presence/events + ops_config editor; gateway bridge + UI event types updated.
 - 2026‑02‑03: Fixed heartbeat explicit delivery defaults; heartbeat/cron/system test subset passing.
 - 2026‑02‑03: Added ops config schema endpoint + approvals control + channel probes (API + UI + tests).
+- 2026-02-04: Completed Phase 3 (Ops UI Session Management integration). Marked Phase 1 & 2 as complete. Removed duplicate Phase 3 task list.

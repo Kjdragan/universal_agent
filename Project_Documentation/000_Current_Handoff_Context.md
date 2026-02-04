@@ -1,6 +1,6 @@
 # 000 — Current Handoff Context (Comprehensive)
 
-**Date:** 2026-02-04
+**Date:** 2026-02-03
 **Project:** Universal Agent
 **Primary Repo:** `/home/kjdragan/lrepos/universal_agent`
 **Reference Repo:** `/home/kjdragan/lrepos/clawdbot`
@@ -8,234 +8,146 @@
 ---
 
 ## 1) Purpose of this document
-This is the authoritative handoff for a new agent to take over the work. It captures:
-- What has been implemented and why.
-- What remains to be done.
-- Where the reference materials live.
-- How to verify current work (including Web UI checks).
-- How we are using Clawdbot for parity without copying blindly.
 
-If you only read one file, read this one.
+This is the authoritative handoff for a new agent to take over the work. It captures:
+
+- **Ops API Completion**: We have fully implemented the Gateway Ops API for Session and Log management, matching Clawdbot parity.
+- **Architecture Updates**: A new `OpsService` layer has been introduced.
+- **Next Tactical Steps**: Verify/Update Web UI to utilize these new Ops endpoints.
+- **Strategic Roadmap**: Proceed to Phase-2 Heartbeat/Proactive Loop implementation.
 
 ---
 
 ## 2) Executive Summary (where we are)
-We implemented a Phase‑3 Ops/Control Plane slice to close parity gaps with Clawdbot. That work is complete and tested. The web UI has been updated to surface Ops features. Lint issues were addressed.
 
-We explicitly **paused Telegram** work (do not test Telegram). The immediate next big effort is **Phase‑2 Heartbeat/Proactive Loop**, which is still a detailed‑plan gap. We need to expand the plan by reviewing Clawdbot’s actual implementation and then integrate into Universal Agent.
+We have successfully implemented the core **Gateway Ops API** for **Session and Log Management**. This closes a major parity gap with Clawdbot.
+
+- **Completed**: OpsService (`ops_service.py`) handling List, Get, Preview (Tail), Reset (Archive), Compact, Delete, and Log Tailing.
+- **Refactored**: `gateway_server.py` delegates all Ops logic to the service layer.
+- **Verified**: Detailed unit/integration tests in `tests/gateway/test_ops_api.py`.
+- **Documented**: Architecture in `Project_Documentation/048_Gateway_Ops_Service_Architecture.md`.
 
 **Current status:**
-- Ops/Control Plane API endpoints added + UI wiring.
-- Ops tests passing.
-- UI lint clean.
-- Documentation updated (plan + ops doc + architecture + functionality).
-- Telegram excluded from testing for now.
+
+- Backend Ops API is **complete** and **tested**.
+- Web UI (Session Management) needs verification/implementation to match backend capabilities.
+- Telegram work remains **paused**.
 
 ---
 
 ## 3) Primary Repos & References
 
 ### 3.1 Universal Agent repo
+
 `/home/kjdragan/lrepos/universal_agent`
 
-#### Key files (code)
-- `src/universal_agent/gateway_server.py`
-  - Ops endpoints added.
-- `src/universal_agent/approvals.py`
-  - Approvals store (new).
-- `src/universal_agent/ops_config.py`
-  - `ops_config_schema()` for UI.
+#### Key files (New/Modified)
 
-#### Key files (web UI)
-- `web-ui/components/OpsPanel.tsx`
-  - Channels list + probe, approvals list, schema viewer.
-- `web-ui/app/page.tsx`
-  - Hook order fixes.
-- `web-ui/components/CombinedActivityLog.tsx`
-  - Derived state changes to satisfy lint.
-- `web-ui/eslint.config.mjs`
-  - ESLint v9 flat config.
-- `web-ui/package.json`
-  - `lint` script set to `eslint .`.
+- **`src/universal_agent/ops_service.py`** (NEW)
+  - Core logic for session operations, log tailing, and maintenance.
+- **`src/universal_agent/gateway_server.py`** (MODIFIED)
+  - Routes Ops API requests to `OpsService`.
+  - Removed ad-hoc logic in favor of service layer.
+- **`tests/gateway/test_ops_api.py`** (UPDATED)
+  - Comprehensive tests for all Ops endpoints.
+
+#### Key files (Existing/Context)
+
+- `src/universal_agent/approvals.py` (Approvals store)
+- `web-ui/components/OpsPanel.tsx` (Existing Ops UI - likely needs update for Sessions)
 
 #### Key docs
-- `Project_Documentation/047_Ops_Control_Plane.md` (Ops API + UI details)
-- `Project_Documentation/045_Technical_Architecture_Overview.md`
-- `Project_Documentation/046_Functionality_Catalog.md`
+
+- **`Project_Documentation/048_Gateway_Ops_Service_Architecture.md`** (Architecture of new features)
+- `Project_Documentation/047_Ops_Control_Plane.md` (Overview of Ops Control Plane)
 - `Project_Documentation/BUILD_OUT_CLAWD_FEATURES/03_Implementation_Plan.md`
 
-#### Env samples
-- `.env.sample` updated with:
-  - `UA_APPROVALS_PATH`
-  - `UA_WEB_UI_URL`
-
 ### 3.2 Clawdbot repo (parity reference)
+
 `/home/kjdragan/lrepos/clawdbot`
 
-**Use‑case:** feature parity reference. We are not opposed to verbatim functionality, but it must integrate cleanly into Universal Agent’s architecture and code style.
+- Reference for Session/Log management logic (now matched in `ops_service.py`).
+- Reference for future Heartbeat implementation.
 
 ---
 
-## 4) Implemented Ops/Control Plane Slice (Phase‑3)
+## 4) Implemented Ops Features (Phase-3 Slice)
 
-### 4.1 Gateway Ops API endpoints (new)
-- `POST /api/v1/ops/channels/{channel_id}/probe`
-  - Probes channel health. Implemented for `gateway`, `cli`, `web` (uses `UA_WEB_UI_URL`), and `telegram` (best‑effort).
-- `GET /api/v1/ops/config/schema`
-  - Returns JSON Schema for ops config.
-- `GET /api/v1/ops/approvals`
-  - Lists approvals.
-- `POST /api/v1/ops/approvals`
-  - Creates/updates approvals.
-- `PATCH /api/v1/ops/approvals/{approval_id}`
-  - Partial approval updates (approve/reject/comment).
+We have gone beyond the initial control plane (Channels/Approvals) to include full **Session & Log Operations**:
 
-### 4.2 Approvals store
-**File:** `src/universal_agent/approvals.py`
-- Stored in `AGENT_RUN_WORKSPACES/approvals.json`.
-- Override via `UA_APPROVALS_PATH`.
+### 4.1 Session Management
 
-### 4.3 Ops config schema
-**File:** `src/universal_agent/ops_config.py`
-- `ops_config_schema()` returns JSON Schema for UI.
+- **List Sessions**: `GET /api/v1/ops/sessions` (filtered by status)
+- **Session Details**: `GET /api/v1/ops/sessions/{id}` (includes heartbeat state, memory checks)
+- **Delete Session**: `DELETE /api/v1/ops/sessions/{id}?confirm=true`
+- **Reset Session**: `POST .../reset` (Archives logs/memory/artifacts)
+- **Compact Logs**: `POST .../compact` (Truncates logs to specified limit)
 
-### 4.4 Web UI Ops Panel
-**File:** `web-ui/components/OpsPanel.tsx`
-- Channel list + probe button.
-- Approvals list + approve/reject.
-- Schema viewer.
+### 4.2 Log Tailing & Preview
 
-### 4.5 Lint fixes
-- `web-ui/app/page.tsx` and `CombinedActivityLog.tsx` updated to avoid conditional hooks and setState in derived state.
-- ESLint v9 config added.
+- **Preview**: `GET /api/v1/ops/sessions/{id}/preview` (Tails `activity_journal.log` for UI)
+- **Log Tail**: `GET /api/v1/ops/logs/tail` (Tails `run.log` or arbitrary paths with cursor support)
+
+### 4.3 Architecture
+
+-Logic centralized in `OpsService`.
+
+- Uses `shutil` for file ops and robust streaming logic for logs.
 
 ---
 
 ## 5) Testing & Verification
 
-### 5.1 Gateway Ops tests
+### 5.1 Ops API Tests
+
+Verify the backend implementation:
+
 ```bash
-uv run pytest tests/gateway/test_ops_api.py -q
+uv run pytest tests/gateway/test_ops_api.py -v
 ```
 
-### 5.2 Web UI lint
-```bash
-cd web-ui
-npm run lint
-```
+All tests should pass (list, get, delete, tail, preview, reset, compact).
 
-### 5.3 Web UI manual check (use browser)
-Open the Web UI and verify:
-1) **Ops Panel** loads.
-2) **Channels list** appears; click **Probe** on `gateway` → status updates.
-3) **Approvals** list shows; approve/reject buttons update state.
-4) **Ops config schema** renders JSON.
-5) No hook/lint errors in console.
+### 5.2 Web UI Verification (Next Step)
 
-> Important: Do **not** run Telegram tests. Telegram is explicitly out‑of‑scope.
+The frontend (`web-ui`) likely needs to be updated or verified to consume these new endpoints.
+
+- Check if `OpsPanel.tsx` or a "Sessions" page exists and uses these APIs.
+- If not, implement the UI components to utilize `OpsService`.
 
 ---
 
-## 6) Known Issues / Non‑Goals
+## 6) Immediate Next Steps (Action Plan)
 
-- **Telegram integration**: off‑limits for testing right now. Known instability.
-- **Logfire 401s**: tokens may be invalid. Does not block core ops.
-- **Heartbeat/Proactive Loop**: plan is outline‑only; must be expanded against Clawdbot.
-- **Approvals**: no auth gating yet.
-
----
-
-## 7) Phase‑2 (Heartbeat) — Required next work
-
-We only have outline notes. The next agent should:
-
-1) Review Clawdbot’s heartbeat/proactive loop implementation.
-2) Extract:
-   - scheduling mechanism
-   - policy gating (time windows, limits, allowlists)
-   - configuration source and format
-   - logging/telemetry patterns
-3) Expand detailed tasks in:
-   - `Project_Documentation/BUILD_OUT_CLAWD_FEATURES/03_Implementation_Plan.md`
-4) Implement in Universal Agent (likely in gateway), add tests, update docs.
+1. **Backend Commit**: Completed (`dev-telegram` branch).
+2. **Web UI Integration**:
+    - Inspect `web-ui` for Session Management components.
+    - Wire up the new endpoints (`/api/v1/ops/sessions`, etc.) to the UI.
+    - Ensure "Live Log" features use the cursor-based `tail` endpoint.
+3. **Phase-2 Heartbeat**:
+    - Once Ops UI is solid, move to designing the Heartbeat/Proactive system (referencing Clawdbot).
 
 ---
 
-## 8) Phase‑3 Follow‑Ups (beyond current slice)
+## 7) Known Issues / Constraints
 
-Potential follow‑ups:
-- Expanded channel probes (latency, last‑seen, error counters).
-- Session health endpoints.
-- Log tail endpoint.
-- Ops UI improvements (filters, search, per‑channel indicators).
+- **Telegram**: Still paused. Do not test.
+- **Security**: `UA_OPS_TOKEN` exists but is currently basic checks in `gateway_server`. UI might need to handle token injection.
 
 ---
 
-## 9) Clawdbot Parity Guidance
+## 8) Quick Start
 
-We **can** copy functionality verbatim if required, but must integrate cleanly:
-- Align with existing gateway architecture and event stream.
-- Keep Universal Agent’s conventions (logging, env vars, folder structure).
-- Document divergences or intentional changes.
+**Start Gateway:**
 
----
-
-## 10) Quick Start Commands
-
-From `/home/kjdragan/lrepos/universal_agent`:
-
-**Gateway (full stack):**
 ```bash
 ./start_gateway.sh
 ```
 
-**CLI dev:**
+**Run Tests:**
+
 ```bash
-./start_cli_dev.sh
+uv run pytest tests/gateway/test_ops_api.py
 ```
-
-**Ops tests:**
-```bash
-uv run pytest tests/gateway/test_ops_api.py -q
-```
-
-**UI lint:**
-```bash
-cd web-ui && npm run lint
-```
-
----
-
-## 11) Where to look in Clawdbot
-
-Reference repo: `/home/kjdragan/lrepos/clawdbot`
-
-Focus on:
-- Heartbeat/proactive scheduling logic.
-- Approvals or policy gating.
-- Ops/Control features and UI.
-
-The parity plan should adapt those ideas into Universal Agent (not a direct fork).
-
----
-
-## 12) Immediate Next Steps (for new agent)
-
-1) Confirm ops tests still pass.
-2) Run UI lint.
-3) Manual check Ops Panel in Web UI.
-4) Expand Phase‑2 heartbeat plan using Clawdbot’s implementation.
-5) Implement heartbeat scheduler + policy gating in gateway.
-6) Update docs and tests accordingly.
-
----
-
-## 13) Additional Notes
-
-- **Do not run Telegram tests** right now.
-- If Logfire tokens are invalid, either update or set `UA_DISABLE_LOGFIRE=1` to reduce noise.
-- Keep updates reflected in `Project_Documentation/BUILD_OUT_CLAWD_FEATURES/03_Implementation_Plan.md`.
-
----
 
 End of handoff.
