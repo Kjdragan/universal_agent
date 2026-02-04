@@ -43,6 +43,7 @@ from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.heartbeat_service import HeartbeatService
 from universal_agent.cron_service import CronService
+from universal_agent.ops_service import OpsService
 from universal_agent.ops_config import (
     apply_merge_patch,
     load_ops_config,
@@ -216,6 +217,7 @@ _gateway: Optional[InProcessGateway] = None
 _sessions: dict[str, GatewaySession] = {}
 _heartbeat_service: Optional[HeartbeatService] = None
 _cron_service: Optional[CronService] = None
+_ops_service: Optional[OpsService] = None
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
@@ -297,65 +299,6 @@ def _read_heartbeat_state(workspace_dir: str) -> Optional[dict]:
     except Exception as exc:
         logger.warning("Failed to read heartbeat_state.json: %s", exc)
         return None
-
-
-def _resolve_workspace_path(session_id: str) -> Path:
-    return WORKSPACES_DIR / session_id
-
-
-def _clamp(value: int, min_value: int, max_value: int) -> int:
-    return max(min_value, min(max_value, value))
-
-
-def _read_tail_lines(
-    file_path: Path, cursor: Optional[int] = None, limit: int = 200, max_bytes: int = 250_000
-) -> dict:
-    if not file_path.exists():
-        return {"cursor": 0, "size": 0, "lines": [], "truncated": False, "reset": False}
-    size = file_path.stat().st_size
-    max_bytes = _clamp(max_bytes, 1, 1_000_000)
-    limit = _clamp(limit, 1, 5_000)
-    reset = False
-    truncated = False
-    if cursor is None:
-        start = max(0, size - max_bytes)
-        truncated = start > 0
-    else:
-        cursor = max(0, min(int(cursor), size))
-        if cursor > size or size - cursor > max_bytes:
-            reset = True
-            start = max(0, size - max_bytes)
-            truncated = start > 0
-        else:
-            start = cursor
-
-    if size == 0 or size <= start:
-        return {"cursor": size, "size": size, "lines": [], "truncated": truncated, "reset": reset}
-
-    with file_path.open("rb") as handle:
-        if start > 0:
-            handle.seek(start - 1)
-            prefix = handle.read(1)
-        else:
-            prefix = b""
-        handle.seek(start)
-        blob = handle.read(size - start)
-
-    text = blob.decode("utf-8", errors="replace")
-    lines = text.split("\n")
-    if start > 0 and prefix != b"\n":
-        lines = lines[1:]
-    if lines and lines[-1] == "":
-        lines = lines[:-1]
-    if len(lines) > limit:
-        lines = lines[-limit:]
-    return {
-        "cursor": size,
-        "size": size,
-        "lines": lines,
-        "truncated": truncated,
-        "reset": reset,
-    }
 
 
 def _load_skill_catalog() -> list[dict]:
@@ -638,7 +581,7 @@ async def lifespan(app: FastAPI):
     main_module.budget_config = main_module.load_budget_config()
     
     # Initialize Heartbeat Service
-    global _heartbeat_service, _cron_service
+    global _heartbeat_service, _cron_service, _ops_service
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
         _heartbeat_service = HeartbeatService(
@@ -663,6 +606,9 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("⏲️ Cron Service DISABLED (feature flag)")
     
+    # Always enabled Ops Service
+    _ops_service = OpsService(get_gateway(), WORKSPACES_DIR)
+
     yield
     
     # Cleanup
@@ -1075,42 +1021,14 @@ async def delete_session(session_id: str):
 # =============================================================================
 
 
-def _build_session_summary(session_path: Path) -> dict:
-    session_id = session_path.name
-    status = "active" if session_id in _sessions else "idle"
-    last_modified = datetime.fromtimestamp(session_path.stat().st_mtime).isoformat()
-    journal_path = session_path / "activity_journal.log"
-    run_log_path = session_path / "run.log"
-    last_activity = last_modified
-    if journal_path.exists():
-        last_activity = datetime.fromtimestamp(journal_path.stat().st_mtime).isoformat()
-    summary = {
-        "session_id": session_id,
-        "workspace_dir": str(session_path),
-        "status": status,
-        "last_modified": last_modified,
-        "last_activity": last_activity,
-        "has_run_log": run_log_path.exists(),
-        "has_activity_journal": journal_path.exists(),
-        "has_memory": (session_path / "MEMORY.md").exists() or (session_path / "memory").exists(),
-    }
-    heartbeat_state = _read_heartbeat_state(str(session_path))
-    if heartbeat_state:
-        summary["heartbeat_last"] = heartbeat_state.get("last_run")
-        summary["heartbeat_summary"] = heartbeat_state.get("last_summary")
-    return summary
-
-
 @app.get("/api/v1/ops/sessions")
 async def ops_list_sessions(
     request: Request, limit: int = 100, offset: int = 0, status: str = "all"
 ):
     _require_ops_auth(request)
-    session_dirs = [p for p in WORKSPACES_DIR.iterdir() if p.is_dir()]
-    session_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    summaries = [_build_session_summary(p) for p in session_dirs]
-    if status != "all":
-        summaries = [s for s in summaries if s["status"] == status]
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    summaries = _ops_service.list_sessions(status_filter=status)
     return {
         "sessions": summaries[offset : offset + limit],
         "total": len(summaries),
@@ -1122,11 +1040,12 @@ async def ops_list_sessions(
 @app.get("/api/v1/ops/sessions/{session_id}")
 async def ops_get_session(request: Request, session_id: str):
     _require_ops_auth(request)
-    session_path = _resolve_workspace_path(session_id)
-    if not session_path.exists():
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    details = _ops_service.get_session_details(session_id)
+    if not details:
         raise HTTPException(status_code=404, detail="Session not found")
-    summary = _build_session_summary(session_path)
-    return {"session": summary}
+    return details
 
 
 @app.get("/api/v1/ops/sessions/{session_id}/preview")
@@ -1134,11 +1053,9 @@ async def ops_session_preview(
     request: Request, session_id: str, limit: int = 200, max_bytes: int = 200_000
 ):
     _require_ops_auth(request)
-    session_path = _resolve_workspace_path(session_id)
-    journal_path = session_path / "activity_journal.log"
-    if not journal_path.exists():
-        return {"session_id": session_id, "lines": [], "cursor": 0, "size": 0}
-    result = _read_tail_lines(journal_path, limit=limit, max_bytes=max_bytes)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    result = _ops_service.tail_file(session_id, "activity_journal.log", limit=limit, max_bytes=max_bytes)
     return {"session_id": session_id, **result}
 
 
@@ -1147,28 +1064,17 @@ async def ops_session_reset(
     request: Request, session_id: str, payload: OpsSessionResetRequest
 ):
     _require_ops_auth(request)
-    session_path = _resolve_workspace_path(session_id)
-    if not session_path.exists():
-        raise HTTPException(status_code=404, detail="Session not found")
-    archive_dir = session_path / "archive" / datetime.now().strftime("%Y%m%d_%H%M%S")
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    moved: list[str] = []
-
-    def _move_if_exists(path: Path) -> None:
-        if path.exists():
-            shutil.move(str(path), str(archive_dir / path.name))
-            moved.append(path.name)
-
-    if payload.clear_logs:
-        _move_if_exists(session_path / "run.log")
-        _move_if_exists(session_path / "activity_journal.log")
-    if payload.clear_memory:
-        _move_if_exists(session_path / "MEMORY.md")
-        _move_if_exists(session_path / "memory")
-    if payload.clear_work_products:
-        _move_if_exists(session_path / "work_products")
-
-    return {"status": "reset", "archived": moved, "archive_dir": str(archive_dir)}
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    result = _ops_service.reset_session(
+        session_id,
+        clear_logs=payload.clear_logs,
+        clear_memory=payload.clear_memory,
+        clear_work_products=payload.clear_work_products,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 @app.post("/api/v1/ops/sessions/{session_id}/compact")
@@ -1176,25 +1082,12 @@ async def ops_session_compact(
     request: Request, session_id: str, payload: OpsSessionCompactRequest
 ):
     _require_ops_auth(request)
-    session_path = _resolve_workspace_path(session_id)
-    if not session_path.exists():
-        raise HTTPException(status_code=404, detail="Session not found")
-    journal_path = session_path / "activity_journal.log"
-    run_log_path = session_path / "run.log"
-    compacted = {}
-    if journal_path.exists():
-        result = _read_tail_lines(
-            journal_path, limit=payload.max_lines, max_bytes=payload.max_bytes
-        )
-        journal_path.write_text("\n".join(result["lines"]) + ("\n" if result["lines"] else ""))
-        compacted["activity_journal.log"] = len(result["lines"])
-    if run_log_path.exists():
-        result = _read_tail_lines(
-            run_log_path, limit=payload.max_lines, max_bytes=payload.max_bytes
-        )
-        run_log_path.write_text("\n".join(result["lines"]) + ("\n" if result["lines"] else ""))
-        compacted["run.log"] = len(result["lines"])
-    return {"status": "compacted", "files": compacted}
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    result = _ops_service.compact_session(session_id, payload.max_lines, payload.max_bytes)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
 
 
 @app.delete("/api/v1/ops/sessions/{session_id}")
@@ -1202,11 +1095,12 @@ async def ops_delete_session(request: Request, session_id: str, confirm: bool = 
     _require_ops_auth(request)
     if not confirm:
         raise HTTPException(status_code=400, detail="confirm=true is required")
-    session_path = _resolve_workspace_path(session_id)
-    if not session_path.exists():
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    
+    deleted = _ops_service.delete_session(session_id)
+    if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
-    shutil.rmtree(session_path)
-    _sessions.pop(session_id, None)
     return {"status": "deleted", "session_id": session_id}
 
 
@@ -1220,8 +1114,13 @@ async def ops_logs_tail(
     max_bytes: int = 250_000,
 ):
     _require_ops_auth(request)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+
     if session_id:
-        file_path = _resolve_workspace_path(session_id) / "run.log"
+        result = _ops_service.tail_file(session_id, "run.log", cursor=cursor, limit=limit, max_bytes=max_bytes)
+        file_path = str(_ops_service.workspaces_dir / session_id / "run.log")
+        return {"file": file_path, **result}
     elif path:
         candidate = Path(path)
         if not candidate.is_absolute():
@@ -1231,12 +1130,10 @@ async def ops_logs_tail(
             or str(candidate).startswith(str(BASE_DIR))
         ):
             raise HTTPException(status_code=400, detail="Invalid log path")
-        file_path = candidate
+        result = _ops_service.read_log_slice(candidate, cursor=cursor, limit=limit, max_bytes=max_bytes)
+        return {"file": str(candidate), **result}
     else:
         raise HTTPException(status_code=400, detail="session_id or path required")
-
-    result = _read_tail_lines(file_path, cursor=cursor, limit=limit, max_bytes=max_bytes)
-    return {"file": str(file_path), **result}
 
 
 @app.get("/api/v1/ops/skills")
