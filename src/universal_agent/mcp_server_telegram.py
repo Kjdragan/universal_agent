@@ -44,17 +44,15 @@ async def telegram_send_message(chat_id: int, text: str) -> str:
 @mcp.tool()
 async def telegram_get_updates(limit: int = 5) -> str:
     """
-    Get recent messages sent to the bot (via getUpdates).
-    Note: This consumes the updates, so they won't appear again.
-    
-    Args:
-        limit: Number of updates to retrieve.
+    [DEPRECATED] Get recent messages. 
+    WARNING: Do not use this if the main Bot is running, as it will conflict with the update poller.
+    This tool exists only for debugging when the main bot is stopped.
     """
     _validate_config()
     try:
         bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        # get_updates returns a list of Update objects
-        updates = await bot.get_updates(limit=limit, timeout=10)
+        # Note: This might fail if another poller is active
+        updates = await bot.get_updates(limit=limit, timeout=5)
         
         if not updates:
             return "No new messages."
@@ -72,7 +70,7 @@ async def telegram_get_updates(limit: int = 5) -> str:
         return "\n".join(result) if result else "No relevant messages found."
 
     except Exception as e:
-        return f"Error getting updates: {str(e)}"
+        return f"Error getting updates (likely conflict with running Bot): {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()

@@ -5,7 +5,7 @@ import os
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
-from universal_agent.bot.telegram_formatter import format_telegram_response
+from universal_agent.bot.normalization.formatting import format_telegram_response
 
 
 @dataclass
