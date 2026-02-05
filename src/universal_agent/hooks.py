@@ -381,6 +381,21 @@ class AgentHookSet:
         if is_read_only:
             return {}  # Allow reads from anywhere
 
+        # Whitelist the /memory directory for heartbeat-related writes
+        # This allows the heartbeat system to update HEARTBEAT.md and create briefing markers
+        from pathlib import Path
+        file_path = tool_input.get("file_path") or tool_input.get("path") or ""
+        if isinstance(file_path, str) and file_path:
+            path_obj = Path(file_path).resolve()
+            # Get the repo root (parent of AGENT_RUN_WORKSPACES)
+            repo_root = Path(current_workspace).parent.parent
+            memory_dir = (repo_root / "memory").resolve()
+            try:
+                path_obj.relative_to(memory_dir)
+                return {}  # Allow writes to /memory directory
+            except ValueError:
+                pass  # Not in memory dir, continue with normal checks
+
         # Special-case: `mcp__internal__write_text_file` is explicitly designed to write
         # to either the session workspace *or* the durable artifacts root. It performs its
         # own allowlist enforcement in the tool implementation, so we must not rewrite its
