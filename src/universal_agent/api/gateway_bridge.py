@@ -285,14 +285,52 @@ class GatewayBridge:
         if not session_dir.exists():
             return None
         
-        file_full = session_dir / file_path
-        try:
-            file_full = file_full.resolve()
-            if not str(file_full).startswith(str(session_dir.resolve())):
-                return None
-            if not file_full.exists():
-                return None
+        logger.info(f"DEBUG: get_session_file path={file_path} session_dir={session_dir}")
+
+        # Try session directory first
+        file_full = (session_dir / file_path).resolve()
+        
+        # Check if valid session path
+        if str(file_full).startswith(str(session_dir.resolve())) and file_full.exists() and file_full.is_file():
+            pass
+        else:
+             # Fallback: Check project root.
+             # Handle API stripping leading slash from absolute paths (browser normalizes // to /)
+             path_str = str(file_path)
+             session_dir_str = str(session_dir)
+             
+             if not path_str.startswith("/"):
+                 # Check if it matches session_dir stripped
+                 session_no_slash = session_dir_str.lstrip("/")
+                 if path_str.startswith(session_no_slash):
+                     path_str = "/" + path_str
+                 elif path_str.startswith("home/") or path_str.startswith("Users/"): 
+                     path_str = "/" + path_str
+             
+             file_chk = Path(path_str)
+             
+             rel_path = None
+             try:
+                 # Check if the requested path is relative to session_dir
+                 rel_path = file_chk.relative_to(session_dir)
+             except ValueError:
+                 pass
             
+             base_resolved = base_dir.resolve()
+             file_project = None
+
+             if rel_path:
+                 file_project = (base_dir / rel_path).resolve()
+             elif not file_chk.is_absolute():
+                 # Maybe request was just "web-ui/page.tsx" (relative)
+                 file_project = (base_dir / file_path).resolve()
+
+             if file_project and str(file_project).startswith(str(base_resolved)) and file_project.exists() and file_project.is_file():
+                 file_full = file_project
+             else:
+                 return None
+
+        try:
             import mimetypes
             content_type, _ = mimetypes.guess_type(str(file_full))
             content_type = content_type or "application/octet-stream"

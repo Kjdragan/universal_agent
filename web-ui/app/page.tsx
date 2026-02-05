@@ -20,6 +20,8 @@ import { ApprovalModal, useApprovalModal } from "@/components/approvals/Approval
 import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
 import { OpsPanel } from "@/components/OpsPanel";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 // Icons (using emoji for now - replace with lucide-react in production)
 const ICONS = {
@@ -447,6 +449,102 @@ function ToolCallCard({ toolCall }: { toolCall: any }) {
   );
 }
 
+// --- Markdown Helper ---
+const PathLink = ({ path }: { path: string }) => {
+  const setViewingFile = useAgentStore((s) => s.setViewingFile);
+  const currentSession = useAgentStore((s) => s.currentSession);
+
+  return (
+    <span
+      onClick={(e) => {
+        e.stopPropagation();
+        let fullPath = path;
+        // Resolve relative paths
+        if (!path.startsWith("/") && !path.match(/^[a-zA-Z]:\\/)) {
+          if (currentSession?.workspace) {
+            // Handle ./ prefix
+            const cleanPath = path.replace(/^\.\//, "");
+            // Simple join (not robust path generic, but works for linux/web)
+            const workspace = currentSession.workspace.endsWith("/")
+              ? currentSession.workspace
+              : currentSession.workspace + "/";
+            fullPath = workspace + cleanPath;
+          }
+        }
+
+        const name = path.split("/").pop() || path;
+        setViewingFile({ name, path: fullPath, type: "file" });
+      }}
+      className="text-primary hover:underline cursor-pointer break-all font-mono bg-primary/10 px-1 rounded mx-0.5"
+      title="Open file preview"
+    >
+      {path}
+    </span>
+  );
+};
+
+const markdownComponents: any = {
+  // Override paragraph to linkify file paths in text
+  p: ({ children }: any) => {
+    return (
+      <div className="whitespace-pre-wrap mb-2 last:mb-0">
+        {React.Children.map(children, (child) => {
+          if (typeof child === "string") {
+            // Match absolute paths OR relative paths.
+            // Absolute: Starts with / (and has at least one more segment e.g. /etc/hosts)
+            // Relative explicit: Starts with ./ or ../
+            // Relative implicit: folder/file.ext (must have simple extension to avoid "and/or")
+            const regex = /((?:(?:\/|\.\.?\/)[a-zA-Z0-9._/-]+)|(?:[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+\.[a-zA-Z0-9]+))/g;
+            const parts = child.split(regex);
+            return parts.map((part, i) => {
+              if (i % 2 === 1) return <PathLink key={i} path={part} />;
+              return part;
+            });
+          }
+          return child;
+        })}
+      </div>
+    );
+  },
+  // Ensure links open in new tab
+  a: ({ href, children }: any) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-primary hover:underline font-medium"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+    </a>
+  ),
+  // Style lists
+  ul: ({ children }: any) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
+  ol: ({ children }: any) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
+  li: ({ children }: any) => <li className="mb-0.5">{children}</li>,
+  // Style headers
+  h1: ({ children }: any) => <h1 className="text-xl font-bold mb-2 mt-4">{children}</h1>,
+  h2: ({ children }: any) => <h2 className="text-lg font-bold mb-2 mt-3">{children}</h2>,
+  h3: ({ children }: any) => <h3 className="text-md font-bold mb-1 mt-2">{children}</h3>,
+  // Style code
+  code: ({ className, children, ...props }: any) => {
+    // If inline code, also try to linkify if it looks like a path? 
+    // Usually paths in backticks `path/to/file` are common.
+    // But let's keep it simple for now. 
+    const match = /language-(\w+)/.exec(className || "");
+    const isInline = !match && !String(children).includes("\n");
+    return (
+      <code
+        className={`${isInline ? "bg-black/20 text-primary px-1 rounded font-mono text-xs" : "block bg-black/30 p-2 rounded font-mono text-xs overflow-x-auto"}`}
+        {...props}
+      >
+        {children}
+      </code>
+    );
+  },
+  pre: ({ children }: any) => <pre className="my-2">{children}</pre>,
+};
+
 function ThinkingBubble({ content }: { content: string }) {
   const [isExpanded, setIsExpanded] = useState(true);
 
@@ -500,7 +598,13 @@ function ChatMessage({ message }: { message: any }) {
             </div>
           </div>
           <div className="bg-primary/10 border border-primary/20 text-foreground rounded-xl p-4 shadow-sm text-sm">
-            <div className="whitespace-pre-wrap">{message.content}</div>
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={markdownComponents}
+              className="prose prose-sm dark:prose-invert max-w-none"
+            >
+              {message.content}
+            </ReactMarkdown>
           </div>
         </div>
       </div>
@@ -572,7 +676,13 @@ function ChatMessage({ message }: { message: any }) {
                 </div>
               </div>
               <div className="bg-card border border-border/50 shadow-md rounded-xl p-4 text-sm leading-relaxed">
-                <div className="whitespace-pre-wrap">{segment}</div>
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={markdownComponents}
+                  className="prose prose-sm dark:prose-invert max-w-none"
+                >
+                  {segment}
+                </ReactMarkdown>
               </div>
             </div>
           </div>
@@ -809,7 +919,7 @@ function ChatInterface() {
             </button>
           ) : (
             <button
-              onClick={handleSend}
+              onClick={() => handleSend()}
               disabled={connectionStatus !== "connected" || isSending || !input.trim()}
               className="bg-primary hover:bg-primary/90 disabled:bg-primary/30 text-primary-foreground px-4 py-2 rounded-lg transition-colors"
             >
