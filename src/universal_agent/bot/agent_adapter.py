@@ -49,21 +49,39 @@ class AgentAdapter:
         print("🤖 Initializing Agent Gateway Connection...")
 
         if UA_GATEWAY_URL:
+            # External gateway path (Heartbeat managed externally)
             print(f"🌍 Connecting to External Gateway at {UA_GATEWAY_URL}...")
             self.gateway = ExternalGateway(base_url=UA_GATEWAY_URL)
-            # Verify connection
             if not await self.gateway.health_check():
                 print("⚠️  Warning: External Gateway health check failed.")
         else:
+            # In-Process Gateway path
             if not UA_TELEGRAM_ALLOW_INPROCESS:
-                raise RuntimeError(
-                    "UA_GATEWAY_URL is not set. "
-                    "Set UA_GATEWAY_URL to use the external gateway, "
-                    "or set UA_TELEGRAM_ALLOW_INPROCESS=1 for local dev."
-                )
-            print("🏠 Starting In-Process Gateway (local dev override enabled)...")
+                raise RuntimeError("UA_GATEWAY_URL not set or In-Process mode not allowed.")
+            
+            print("🏠 Starting In-Process Gateway...")
             self.gateway = InProcessGateway()
             
+            # [Heartbeat Integration]
+            from universal_agent.feature_flags import heartbeat_enabled
+            if heartbeat_enabled():
+                from universal_agent.heartbeat_service import HeartbeatService
+                from .heartbeat_adapter import BotConnectionAdapter
+                
+                # Check if we have the send callback
+                if not hasattr(self, 'send_message_callback'):
+                    print("⚠️ Heartbeat enabled but no send_message_callback provided to AgentAdapter")
+                else:
+                    self.connection_adapter = BotConnectionAdapter(self.send_message_callback)
+                    # For Telegram, we don't have a system event provider yet, passing None
+                    self.heartbeat_service = HeartbeatService(
+                        self.gateway, 
+                        self.connection_adapter,
+                        system_event_provider=None 
+                    )
+                    await self.heartbeat_service.start()
+                    print("💓 Telegram Heartbeat Service Started")
+
         # Start background worker loop
         self._shutdown_event.clear()
         self.worker_task = asyncio.create_task(self._client_actor_loop())
@@ -108,6 +126,13 @@ class AgentAdapter:
             # Prefix the user's prompt with checkpoint context
             session._injected_context = prior_checkpoint_context
             print(f"📋 Will inject checkpoint context into first message")
+        
+        # [Heartbeat] Register session for proactive checks
+        if hasattr(self, 'heartbeat_service') and self.heartbeat_service:
+            self.heartbeat_service.register_session(session)
+            if hasattr(self, 'connection_adapter'):
+                self.connection_adapter.register_active_session(session.session_id)
+            print(f"💓 Registered session {session.session_id} for heartbeat")
         
         return session
 
@@ -195,6 +220,12 @@ class AgentAdapter:
     async def shutdown(self):
         """Cleanup resources."""
         self._shutdown_event.set()
+        
+        # [Heartbeat] Shutdown
+        if hasattr(self, 'heartbeat_service') and self.heartbeat_service:
+            await self.heartbeat_service.stop()
+            print("💔 Telegram Heartbeat Service Stopped")
+
         if self.worker_task and not self.worker_task.done():
             await self.request_queue.put(None)
             try:

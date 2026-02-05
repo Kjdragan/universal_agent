@@ -7,9 +7,11 @@ Tracks per-message token counts and truncates oldest pairs when over threshold.
 
 import logfire
 
+import os
+
 # Constants
-CONTEXT_WINDOW_TOKENS = 200000  # Claude Sonnet 4.0 context window
-TRUNCATION_THRESHOLD = 150000   # User Target 2026-01-26 - trigger handoff at 150k
+CONTEXT_WINDOW_TOKENS = int(os.environ.get("UA_CONTEXT_WINDOW", 200000))  # Claude Sonnet 4.0 context window
+TRUNCATION_THRESHOLD = int(os.environ.get("UA_TRUNCATION_THRESHOLD", 150000))   # trigger handoff
 TRUNCATION_NOTICE_TOKENS = 25   # Tokens for truncation notice
 
 TRUNCATION_MESSAGE = {
