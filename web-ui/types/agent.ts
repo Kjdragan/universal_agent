@@ -25,6 +25,8 @@ export type EventType =
   | "input_required"
   | "input_response"
   | "ping"
+  | "cancel"
+  | "cancelled"
   | "system_event"
   | "system_presence";
 
