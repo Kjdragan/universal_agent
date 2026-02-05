@@ -65,6 +65,7 @@ export interface TextEventData {
   text: string;
   author?: string;
   time_offset?: number;
+  final?: boolean;
 }
 
 // =============================================================================

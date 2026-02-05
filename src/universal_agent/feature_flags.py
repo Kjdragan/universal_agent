@@ -65,6 +65,19 @@ def memory_index_mode(default: str = "json") -> str:
     return "off"
 
 
+def memory_backend(default: str = "chromadb") -> str:
+    """Return the configured memory backend (chromadb|lancedb|sqlite).
+    
+    chromadb: Uses ChromaDB with real embeddings for semantic search (default, CPU-compatible)
+    lancedb: Uses LanceDB with real embeddings (requires AVX2 CPU instructions)
+    sqlite: Uses SQLite with hash-based embeddings (legacy)
+    """
+    backend = (os.getenv("UA_MEMORY_BACKEND") or "").strip().lower()
+    if backend in {"chromadb", "lancedb", "sqlite"}:
+        return backend
+    return default
+
+
 def memory_max_tokens(default: int = 800) -> int:
     """Return max tokens allowed for memory injection."""
     raw = os.getenv("UA_MEMORY_MAX_TOKENS")

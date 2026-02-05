@@ -8,7 +8,28 @@ from typing import Optional
 from .memory_models import MemoryEntry
 from .memory_index import append_index_entry, recent_entries, _content_hash
 from .memory_vector_index import schedule_vector_upsert
-from universal_agent.feature_flags import memory_index_mode
+from universal_agent.feature_flags import memory_index_mode, memory_backend
+
+# Lazy import for vector memory backend to avoid heavy dependencies at module load
+_vector_memory = None
+
+
+def _get_vector_memory(workspace_dir: str):
+    """Lazy-load vector memory instance (ChromaDB or LanceDB based on config)."""
+    global _vector_memory
+    if _vector_memory is None:
+        backend = memory_backend()
+        if backend == "lancedb":
+            # LanceDB requires AVX2 CPU instructions - may not work on all systems
+            from .lancedb_backend import LanceDBMemory
+            db_path = os.path.join(workspace_dir, "memory", "lancedb")
+            _vector_memory = LanceDBMemory(db_path)
+        else:
+            # ChromaDB is the default - works on all CPUs
+            from .chromadb_backend import ChromaDBMemory
+            db_path = os.path.join(workspace_dir, "memory", "chromadb")
+            _vector_memory = ChromaDBMemory(db_path)
+    return _vector_memory
 
 
 @dataclass
@@ -94,18 +115,52 @@ def append_memory_entry(
 
     update_recent_context_section(paths, max_entries=10)
 
+    # Vector indexing: use configured backend or legacy
     if memory_index_mode() == "vector":
-        vector_db = os.path.join(paths.memory_dir, "vector_index.sqlite")
-        schedule_vector_upsert(
-            vector_db,
-            entry.entry_id,
-            _content_hash(entry.content),
-            entry.timestamp,
-            entry.summary or "",
-            preview,
-            entry.content,
-        )
+        backend = memory_backend()
+        if backend in ("lancedb", "chromadb"):
+            try:
+                # Use real semantic vector memory
+                mem = _get_vector_memory(workspace_dir)
+                mem.store(
+                    text=entry.content,
+                    importance=0.7,
+                    category=_detect_category(entry.content),
+                    session_id=entry.session_id,
+                    source=entry.source,
+                    timestamp=entry.timestamp,
+                    check_duplicates=True,
+                )
+            except Exception:
+                # Backend initialization usually warned already, safe to suppress here
+                pass
+        else:
+            # Legacy SQLite with hash-based embeddings
+            vector_db = os.path.join(paths.memory_dir, "vector_index.sqlite")
+            schedule_vector_upsert(
+                vector_db,
+                entry.entry_id,
+                _content_hash(entry.content),
+                entry.timestamp,
+                entry.summary or "",
+                preview,
+                entry.content,
+            )
     return paths
+
+
+def _detect_category(text: str) -> str:
+    """Detect memory category from text content (ported from Clawdbot)."""
+    lower = text.lower()
+    if any(w in lower for w in ("prefer", "like", "love", "hate", "want")):
+        return "preference"
+    if any(w in lower for w in ("decided", "will use", "chose", "selected")):
+        return "decision"
+    if "@" in text or any(c.isdigit() for c in text[:20]):
+        return "entity"
+    if any(w in lower for w in ("is", "are", "has", "have")):
+        return "fact"
+    return "other"
 
 
 def _summarize_content(content: str, max_len: int = 240) -> str:

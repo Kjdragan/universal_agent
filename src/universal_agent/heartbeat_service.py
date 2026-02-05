@@ -23,12 +23,23 @@ import pytz
 HEARTBEAT_FILE = "HEARTBEAT.md"
 HEARTBEAT_STATE_FILE = "heartbeat_state.json"
 DEFAULT_HEARTBEAT_PROMPT = (
-    "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
-    "Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."
+    "Read HEARTBEAT.md (workspace context). This is your checklist.\n"
+    "\n"
+    "Checkbox meaning (IMPORTANT):\n"
+    "- [ ] = ACTIVE / PENDING (eligible to run if conditions match)\n"
+    "- [x] = COMPLETED / DISABLED (do not run)\n"
+    "\n"
+    "Steps:\n"
+    "1) Check the current time (use `date`).\n"
+    "2) Evaluate ONLY the ACTIVE / PENDING items (`- [ ] ...`). If any match current time/conditions, execute them now.\n"
+    "3) If and only if NO items match, reply with EXACTLY: HEARTBEAT_OK\n"
+    "   - No extra words.\n"
+    "   - No markdown.\n"
+    "   - No explanations.\n"
 )
 DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default (Clawdbot parity)
 BUSY_RETRY_DELAY = 10  # Seconds
-HEARTBEAT_EXECUTION_TIMEOUT = int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT", "45"))
+HEARTBEAT_EXECUTION_TIMEOUT = int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT", "300"))
 DEFAULT_ACK_MAX_CHARS = 300
 DEFAULT_OK_TOKENS = ["HEARTBEAT_OK", "UA_HEARTBEAT_OK"]
 
@@ -226,7 +237,21 @@ def _strip_heartbeat_tokens(text: str, tokens: list[str], max_ack_chars: int) ->
     raw = text.strip()
     normalized = _strip_markup_edges(raw)
     tokens_sorted = sorted(tokens, key=len, reverse=True)
+    # Heuristic: if a known OK token appears anywhere AND the surrounding text
+    # is clearly a no-op checklist/summary, treat as OK-only to avoid accidental
+    # unsuppressed "wall of text" no-op heartbeats.
+    noop_markers = [
+        "no tasks match current conditions",
+        "checking heartbeat.md tasks",
+        "no tasks match current condition",
+        "no tasks match",
+    ]
+    normalized_lower = normalized.lower()
     for token in tokens_sorted:
+        if token in raw or token in normalized:
+            if any(marker in normalized_lower for marker in noop_markers):
+                return {"ok_only": True, "text": "", "token": token}
+
         if token not in raw and token not in normalized:
             continue
         stripped_raw, did_raw = _strip_token_at_edges(raw, token)
@@ -696,6 +721,19 @@ class HeartbeatService:
             return schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
 
         try:
+            async def _broadcast_wire(event_type: str, data: dict) -> None:
+                try:
+                    payload = {
+                        "type": event_type,
+                        "data": data,
+                        "timestamp": datetime.now().isoformat(),
+                        "time_offset": data.get("time_offset") if isinstance(data, dict) else None,
+                    }
+                    await self.connection_manager.broadcast(session.session_id, payload)
+                except Exception:
+                    # Heartbeat should not fail due to UI broadcast issues.
+                    pass
+
             # Drain pending system events for this session
             system_events: list[dict] = []
             if self.system_event_provider:
@@ -731,6 +769,30 @@ class HeartbeatService:
             )
             
             full_response = ""
+            streamed_chunks: list[str] = []
+            final_text: Optional[str] = None
+            saw_streaming_text = False
+
+            # Track artifacts/commands for UI + last_summary
+            write_paths: list[str] = []
+            bash_commands: list[str] = []
+            work_product_paths: list[str] = []
+
+            # UI: mark background activity as "processing" when a client is attached.
+            await _broadcast_wire(
+                "status",
+                {"status": "processing", "source": "heartbeat"},
+            )
+            await _broadcast_wire(
+                "status",
+                {
+                    "status": "Heartbeat started",
+                    "is_log": True,
+                    "level": "INFO",
+                    "prefix": "HEARTBEAT",
+                    "source": "heartbeat",
+                },
+            )
 
             if os.getenv("UA_HEARTBEAT_MOCK_RESPONSE", "0").lower() in {"1", "true", "yes"}:
                 full_response = _mock_heartbeat_response(heartbeat_content)
@@ -738,7 +800,54 @@ class HeartbeatService:
             else:
                 async def _collect_events() -> None:
                     nonlocal full_response
+                    nonlocal saw_streaming_text, final_text
                     async for event in self.gateway.execute(session, request):
+                        # Broadcast agent events into the session stream so connected UIs
+                        # can see heartbeat activity in real time.
+                        try:
+                            # Avoid duplicating the final, aggregated response_text when streaming chunks exist.
+                            if event.type == EventType.TEXT and isinstance(event.data, dict):
+                                text = event.data.get("text", "") or ""
+                                has_offset = "time_offset" in event.data
+                                if has_offset:
+                                    saw_streaming_text = True
+                                    streamed_chunks.append(text)
+                                else:
+                                    final_text = text
+                                    if saw_streaming_text:
+                                        # Skip broadcasting the replay text (UI already has streamed chunks).
+                                        continue
+
+                            elif event.type == EventType.TEXT and isinstance(event.data, str):
+                                final_text = event.data
+                                if saw_streaming_text:
+                                    continue
+
+                            if event.type == EventType.TOOL_CALL and isinstance(event.data, dict):
+                                tool_name = str(event.data.get("name") or "")
+                                tool_input = event.data.get("input") if isinstance(event.data.get("input"), dict) else {}
+                                if tool_name == "Write":
+                                    fp = tool_input.get("file_path")
+                                    if isinstance(fp, str) and fp:
+                                        write_paths.append(fp)
+                                if tool_name == "Bash":
+                                    cmd = tool_input.get("command")
+                                    if isinstance(cmd, str) and cmd:
+                                        bash_commands.append(cmd)
+
+                            if event.type == EventType.WORK_PRODUCT and isinstance(event.data, dict):
+                                wp = event.data.get("path")
+                                if isinstance(wp, str) and wp:
+                                    work_product_paths.append(wp)
+
+                            await _broadcast_wire(
+                                event.type.value if hasattr(event.type, "value") else str(event.type),
+                                event.data if isinstance(event.data, dict) else {"value": event.data},
+                            )
+                        except Exception:
+                            pass
+
+                        # Collect response text for OK-token stripping / suppression logic.
                         if event.type == EventType.TEXT:
                             if isinstance(event.data, dict):
                                 full_response += event.data.get("text", "")
@@ -754,10 +863,25 @@ class HeartbeatService:
                         session.session_id,
                     )
                     full_response = "UA_HEARTBEAT_TIMEOUT"
+                    await _broadcast_wire(
+                        "status",
+                        {
+                            "status": f"Heartbeat timed out after {HEARTBEAT_EXECUTION_TIMEOUT}s",
+                            "is_log": True,
+                            "level": "ERROR",
+                            "prefix": "HEARTBEAT",
+                            "source": "heartbeat",
+                        },
+                    )
 
             logger.info(f"Heartbeat response for {session.session_id}: '{full_response}'")
 
             # --- Phase 3 Logic ---
+            # Prefer the non-streaming final text (when present) to avoid duplicated aggregation.
+            if final_text is not None:
+                full_response = final_text
+            elif streamed_chunks:
+                full_response = "".join(streamed_chunks)
             strip_result = _strip_heartbeat_tokens(
                 full_response,
                 schedule.ok_tokens,
@@ -833,29 +957,38 @@ class HeartbeatService:
             if should_send:
                 if allow_indicator:
                     summary_event = {
-                        "type": "heartbeat_indicator",
+                        "type": "system_event",
                         "data": {
-                            "timestamp": datetime.now().isoformat(),
-                            "ok_only": True,
-                            "delivered": {
-                                "mode": delivery.mode,
-                                "targets": delivery_targets,
+                            "type": "heartbeat_indicator",
+                            "payload": {
+                                "timestamp": datetime.now().isoformat(),
+                                "ok_only": True,
+                                "delivered": {
+                                    "mode": delivery.mode,
+                                    "targets": delivery_targets,
+                                },
                             },
+                            "created_at": datetime.now().isoformat(),
+                            "session_id": session.session_id,
                         },
                     }
                 else:
                     summary_event = {
-                        "type": "heartbeat_summary",
+                        "type": "system_event",
                         "data": {
-                            "text": summary_text,
-                            "timestamp": datetime.now().isoformat(),
-                            "ok_only": ok_only,
-                            # Add extra metadata for UI awareness
-                            "delivered": {
-                                "mode": delivery.mode,
-                                "targets": delivery_targets,
-                                "is_duplicate": is_duplicate, # Should be false if sent
+                            "type": "heartbeat_summary",
+                            "payload": {
+                                "text": summary_text,
+                                "timestamp": datetime.now().isoformat(),
+                                "ok_only": ok_only,
+                                "delivered": {
+                                    "mode": delivery.mode,
+                                    "targets": delivery_targets,
+                                    "is_duplicate": is_duplicate,
+                                },
                             },
+                            "created_at": datetime.now().isoformat(),
+                            "session_id": session.session_id,
                         },
                     }
 
@@ -876,6 +1009,11 @@ class HeartbeatService:
                 "text": summary_text,
                 "token": ok_token if ok_only else None,
                 "sent": sent_any,
+                "artifacts": {
+                    "writes": write_paths[-50:],
+                    "work_products": work_product_paths[-50:],
+                    "bash_commands": bash_commands[-50:],
+                },
                 "delivery": {
                     "mode": delivery.mode,
                     "targets": delivery_targets,
@@ -884,6 +1022,20 @@ class HeartbeatService:
                 },
                 "suppressed_reason": suppressed_reason,
             }
+
+            await _broadcast_wire(
+                "status",
+                {
+                    "status": "Heartbeat complete",
+                    "is_log": True,
+                    "level": "INFO",
+                    "prefix": "HEARTBEAT",
+                    "source": "heartbeat",
+                },
+            )
+            await _broadcast_wire(
+                "query_complete", {}
+            )
 
             # Always update last_run to respect interval
             state.last_run = now

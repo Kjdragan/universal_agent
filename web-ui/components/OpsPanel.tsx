@@ -107,8 +107,10 @@ export function OpsPanel() {
   const [opsSchemaStatus, setOpsSchemaStatus] = useState<string>("Not loaded");
   const [heartbeatState, setHeartbeatState] = useState<{
     status: string;
-    last_run?: string;
-    last_summary?: string;
+    busy?: boolean;
+    last_run?: number | string;
+    last_summary_raw?: unknown;
+    last_summary_text?: string;
     error?: string;
   }>({ status: "Not loaded" });
 
@@ -313,8 +315,10 @@ export function OpsPanel() {
       }
       setHeartbeatState({
         status: "OK",
+        busy: Boolean(data.busy),
         last_run: data.last_run,
-        last_summary: summaryText,
+        last_summary_raw: summaryRaw,
+        last_summary_text: summaryText,
       });
     } catch (err) {
       setHeartbeatState({
@@ -717,13 +721,58 @@ export function OpsPanel() {
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Last run</span>
                 <span className="font-mono text-[11px]">
-                  {heartbeatState.last_run ?? "--"}
+                  {typeof heartbeatState.last_run === "number"
+                    ? new Date(heartbeatState.last_run * 1000).toLocaleString()
+                    : heartbeatState.last_run ?? "--"}
                 </span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Running</span>
+                <span className="font-mono text-[11px]">{heartbeatState.busy ? "yes" : "no"}</span>
+              </div>
+              {heartbeatState.last_summary_raw && typeof heartbeatState.last_summary_raw === "object" && (
+                <>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Delivered</span>
+                    <span className="font-mono text-[11px]">
+                      {(heartbeatState.last_summary_raw as any).sent ? "yes" : "no"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Suppressed</span>
+                    <span className="font-mono text-[11px]">
+                      {(heartbeatState.last_summary_raw as any).suppressed_reason ?? "--"}
+                    </span>
+                  </div>
+                </>
+              )}
               <div className="text-muted-foreground">Last summary</div>
               <div className="text-[11px] font-mono whitespace-pre-wrap">
-                {heartbeatState.last_summary ?? "(none)"}
+                {heartbeatState.last_summary_text ?? "(none)"}
               </div>
+              {heartbeatState.last_summary_raw && typeof heartbeatState.last_summary_raw === "object" && (
+                (() => {
+                  const artifacts = (heartbeatState.last_summary_raw as any).artifacts;
+                  const writes = artifacts?.writes as string[] | undefined;
+                  const workProducts = artifacts?.work_products as string[] | undefined;
+                  if ((!writes || writes.length === 0) && (!workProducts || workProducts.length === 0)) return null;
+                  return (
+                    <div className="space-y-1">
+                      <div className="text-muted-foreground">Artifacts</div>
+                      {writes && writes.length > 0 && (
+                        <div className="text-[10px] font-mono whitespace-pre-wrap">
+                          {"writes:\n" + writes.slice(-5).join("\n")}
+                        </div>
+                      )}
+                      {workProducts && workProducts.length > 0 && (
+                        <div className="text-[10px] font-mono whitespace-pre-wrap">
+                          {"work_products:\n" + workProducts.slice(-5).join("\n")}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
+              )}
               {heartbeatState.error && (
                 <div className="text-[10px] text-amber-500">{heartbeatState.error}</div>
               )}
