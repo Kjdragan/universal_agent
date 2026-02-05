@@ -5053,7 +5053,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 runtime_db_conn, run_id, trace["token_usage"]["total"]
                             )
 
-                        # Emit token usage for UI consumers (CLI/harness path)
+                        # Emit token usage for UI consumers (CLI/harness/gateway path)
+                        if event_callback:
+                            event_callback(AgentEvent(
+                                type=EventType.STATUS,
+                                data={"token_usage": trace.get("token_usage")},
+                            ))
+
+                        # Fallback: Emit to legacy agent if present (for backward compat)
                         if "agent" in globals() and agent is not None:
                             try:
                                 await agent.send_agent_event(
@@ -7229,11 +7236,40 @@ async def main(args: argparse.Namespace):
     resume_source_row = run_row if args.resume else base_run_row
     if resume_source_row and "provider_session_id" in resume_source_row.keys():
         provider_session_id = resume_source_row["provider_session_id"]
-    if args.resume and provider_session_id:
+    
+    # NEW: Checkpoint-based resume - inject prior context instead of provider session resume
+    checkpoint_context = None
+    if args.resume and workspace_dir:
+        try:
+            from pathlib import Path
+            from universal_agent.session_checkpoint import SessionCheckpointGenerator
+            ws_path = Path(workspace_dir)
+            if ws_path.exists():
+                generator = SessionCheckpointGenerator(ws_path)
+                checkpoint = generator.load()
+                if checkpoint:
+                    checkpoint_context = generator.to_markdown(checkpoint)
+                    print(f"✅ Loaded session checkpoint from prior run")
+                    print(f"   Original request: {checkpoint.original_request[:80]}..." if len(checkpoint.original_request) > 80 else f"   Original request: {checkpoint.original_request}")
+                    print(f"   Tasks completed: {len(checkpoint.completed_tasks)}")
+                    print(f"   Artifacts: {len(checkpoint.artifacts)}")
+                else:
+                    print("ℹ️ No session checkpoint found; starting fresh")
+        except Exception as ckpt_err:
+            print(f"⚠️ Failed to load checkpoint: {ckpt_err}")
+    
+    # DEPRECATED: Provider session resume (kept for --fork only)
+    # For --resume, we use checkpoint injection instead for consistency with Telegram/Gateway
+    if args.resume and provider_session_id and not checkpoint_context:
+        # Fallback to provider session resume only if no checkpoint available
         options.continue_conversation = True
         options.resume = provider_session_id
-        print(f"✅ Using provider session resume: {provider_session_id}")
+        print(f"⚠️ Falling back to provider session resume: {provider_session_id}")
         trace["provider_session_id"] = provider_session_id
+    elif checkpoint_context:
+        # Inject checkpoint into system prompt for fresh session
+        print("🔄 Using fresh session with checkpoint context injection")
+        trace["checkpoint_injected"] = True
     if args.fork and base_provider_session_id:
         options.continue_conversation = True
         options.resume = base_provider_session_id
@@ -7463,6 +7499,13 @@ async def main(args: argparse.Namespace):
         run_failed = False
         if args.harness_objective:
             pending_prompt = f"/harness {args.harness_objective}"
+        elif checkpoint_context and args.resume:
+            # Inject checkpoint context for fresh session resume
+            pending_prompt = (
+                f"<prior_session_context>\n{checkpoint_context}\n</prior_session_context>\n\n"
+                f"The above context summarizes my prior session. Please acknowledge you understand this context "
+                f"and are ready to continue where I left off."
+            )
         else:
             pending_prompt = (
                 job_prompt if job_prompt and not args.resume and not args.fork else None
@@ -7977,6 +8020,22 @@ async def main(args: argparse.Namespace):
                                 print("🧹 Client history cleared.")
                             else:
                                 print("⚠️ Failed to clear client history.")
+                        
+                        # Generate session checkpoint for context continuity
+                        try:
+                            from pathlib import Path
+                            from universal_agent.session_checkpoint import SessionCheckpointGenerator
+                            ws_path = Path(gateway_session.workspace_dir if gateway_session else workspace_dir)
+                            checkpoint_gen = SessionCheckpointGenerator(ws_path)
+                            checkpoint = checkpoint_gen.generate_from_result(
+                                session_id=gateway_session.session_id if gateway_session else run_id,
+                                original_request=user_input,
+                                result=result,
+                            )
+                            checkpoint_gen.save(checkpoint)
+                            print(f"✅ Session checkpoint saved: {ws_path / 'session_checkpoint.json'}")
+                        except Exception as ckpt_err:
+                            print(f"⚠️ Failed to save checkpoint: {ckpt_err}")
                     except HarnessError as he:
                         # [Harness Error Recovery]
                         # 1. Capture context
@@ -8384,53 +8443,12 @@ async def main(args: argparse.Namespace):
                                 print("✅ Verification Passed.")
                                 print("ℹ️  Mission complete.")
                                 
-                                # Continuity Latch: Ask user if they want to keep context
-                                if sys.stdin.isatty():
-                                    latch_choice = await asyncio.get_running_loop().run_in_executor(
-                                        None,
-                                        input,
-                                        "\n❓ Keep session history for follow-up? (Y/n) > "
-                                    )
-                                    if latch_choice.strip().lower() in ("n", "no", "clear"):
-                                        if safe_clear_history(client):
-                                             print("🧹 Client history cleared. Starting fresh.")
-                                    else:
-                                        print("💾 Session history preserved for follow-up.")
-                                    
-                                # Do not break here; allow loop to continue for user input.
-                                    print("💾 Session history preserved for follow-up.")
-                                    
+                                # NOTE: Session history prompt removed - now using checkpoint injection
+                                # Checkpoints are automatically saved after each task for context continuity
                                 # Do not break here; allow loop to continue for user input.
 
-                    # [Generic Continuity Latch]
-                    # If we finished a turn (and didn't crash/restart), offer to clear history
-                    # But ONLY if we aren't mid-harness (which might be annoying)
-                    # For now, we apply it if 'action' wasn't triggered (Standard flows)
-                    if not pending_prompt and not interrupt_requested:
-                         pass 
-                         # Actually, wait. The user prompt ("Enter your request") happens at the TOP of the loop.
-                         # If we prompt HERE, we can clear BEFORE the top of the loop.
-                         # But we want to be less intrusive?
-                         # The user asked for an OPTION.
-                         # A separate prompt "Keep session history?" is valid.
-
-                         # Let's add it here if it wasn't already triggered above.
-                         # Check if we already asked (via latch_choice inside action block)
-                         if 'latch_choice' not in locals() and sys.stdin.isatty():
-                            # Only ask if we actually did something (tool calls > 0 or result exists)
-                            if (result and hasattr(result, "tool_calls") and result.tool_calls) or (result and hasattr(result, "response_text") and result.response_text):
-                                print("\n" + "-" * 40)
-                                latch = await asyncio.get_running_loop().run_in_executor(
-                                    None, 
-                                    input, 
-                                    "❓ Task Complete. Keep session history? (Y/n) [Default: Yes] > "
-                                )
-                                if latch.strip().lower() in ("n", "no", "clear"):
-                                    if safe_clear_history(client):
-                                        print("🧹 Client history cleared.")
-                                else:
-                                    print("💾 Session history preserved.")
-                                print("-" * 40)
+                    # NOTE: Generic session history prompt removed - now using checkpoint injection
+                    # Checkpoints capture task state and are injected into fresh sessions on resume
 
                     if run_mode == "job" and args.job_path:
                         if runtime_db_conn and run_id:
