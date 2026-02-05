@@ -157,7 +157,7 @@ export class AgentWebSocket {
       // Handle connection-specific events
       if (event.type === "connected") {
         console.log("Connection confirmed:", event.data);
-      } else if (event.type === "query_complete") {
+      } else if (event.type === "query_complete" || event.type === "cancelled") {
         this.updateStatus("connected");
       } else if (event.type === "status") {
         const statusData = event.data as Record<string, unknown>;
@@ -260,6 +260,22 @@ export class AgentWebSocket {
       timestamp: Date.now(),
     };
 
+    this.ws.send(JSON.stringify(event));
+  }
+
+  sendCancel(reason?: string): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn("[AgentWebSocket] Cannot send cancel, socket not open");
+      return;
+    }
+
+    const event: WebSocketEvent = {
+      type: "cancel",
+      data: { reason: reason || "User requested stop" },
+      timestamp: Date.now(),
+    };
+
+    console.log("[AgentWebSocket] Sending cancel request");
     this.ws.send(JSON.stringify(event));
   }
 

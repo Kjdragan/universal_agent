@@ -772,18 +772,28 @@ function ChatInterface() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && handleSend()}
-            placeholder="Enter your query..."
-            disabled={connectionStatus !== "connected" || isSending}
+            onKeyPress={(e) => e.key === "Enter" && connectionStatus === "connected" && handleSend()}
+            placeholder={connectionStatus === "processing" ? "Type to redirect after stopping..." : "Enter your query..."}
+            disabled={connectionStatus === "disconnected" || connectionStatus === "connecting"}
             className="flex-1 bg-background/50 border border-border rounded-lg px-4 py-2 focus:outline-none focus:border-primary disabled:opacity-50"
           />
-          <button
-            onClick={handleSend}
-            disabled={connectionStatus !== "connected" || isSending || !input.trim()}
-            className="bg-primary hover:bg-primary/90 disabled:bg-primary/30 text-primary-foreground px-4 py-2 rounded-lg transition-colors"
-          >
-            {ICONS.send}
-          </button>
+          {connectionStatus === "processing" ? (
+            <button
+              onClick={() => ws.sendCancel()}
+              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+              title="Stop the current agent run"
+            >
+              ⏹ Stop
+            </button>
+          ) : (
+            <button
+              onClick={handleSend}
+              disabled={connectionStatus !== "connected" || isSending || !input.trim()}
+              className="bg-primary hover:bg-primary/90 disabled:bg-primary/30 text-primary-foreground px-4 py-2 rounded-lg transition-colors"
+            >
+              {ICONS.send}
+            </button>
+          )}
         </div>
       </div>
     </div>

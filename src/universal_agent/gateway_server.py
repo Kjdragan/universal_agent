@@ -1485,6 +1485,34 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                      # Broadcast to ALL connections for this session
                      await manager.broadcast(session_id, payload)
 
+                elif msg_type == "cancel":
+                    # User requested to stop the current agent run
+                    reason = msg.get("data", {}).get("reason", "User requested stop")
+                    run_id = session.metadata.get("run_id")
+                    logger.info("Cancel request received (session=%s, run=%s, reason=%s)", session_id, run_id, reason)
+                    
+                    # Mark the run as cancel_requested in the durable DB
+                    if run_id:
+                        try:
+                            import universal_agent.main as main_module
+                            from universal_agent.durable.state import request_run_cancel
+                            if main_module.runtime_db_conn:
+                                request_run_cancel(main_module.runtime_db_conn, run_id, reason)
+                                logger.info("Marked run %s as cancel_requested", run_id)
+                        except Exception as cancel_err:
+                            logger.warning("Failed to mark run as cancelled: %s", cancel_err)
+                    
+                    # Broadcast cancelled event to all connections for this session
+                    await manager.broadcast(session_id, {
+                        "type": "cancelled",
+                        "data": {
+                            "reason": reason,
+                            "run_id": run_id,
+                            "session_id": session_id,
+                        },
+                        "timestamp": datetime.now().isoformat(),
+                    })
+
                 else:
                     await manager.send_json(
                         connection_id,
