@@ -13,5 +13,9 @@ Last Run: 2026-02-05 02:00:00
 ✅ Running The Agent
 ✅ Skill Development
 ✅ Testing Strategy
+✅ Soul Architecture
+✅ UI Architecture
+✅ Ops API Reference
+✅ Tool Architecture ADR
 ✅ Glossary
 ✅ Root README
