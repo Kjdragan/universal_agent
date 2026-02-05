@@ -592,15 +592,16 @@ function ChatInterface() {
   const setStartTime = useAgentStore((s) => s.setStartTime);
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
 
-  const handleSend = async () => {
-    if (!input.trim() || isSending) return;
+  const handleSend = async (textOverride?: string) => {
+    const query = textOverride ?? input;
+    if (!query.trim() || (isSending && !textOverride)) return;
 
     setIsSending(true);
-    const query = input;
-    setInput("");
+    if (!textOverride) setInput("");
 
     // Set Start Time if not already set (new run)
     if (!useAgentStore.getState().startTime) {
@@ -621,9 +622,19 @@ function ChatInterface() {
       console.error("Failed to send query:", error);
       useAgentStore.getState().setLastError("Failed to send query. Check connection.");
     } finally {
+
       setIsSending(false);
     }
   };
+
+  // Handle pending query after cancellation
+  useEffect(() => {
+    if (connectionStatus === "connected" && pendingQuery) {
+      const query = pendingQuery;
+      setPendingQuery(null);
+      handleSend(query);
+    }
+  }, [connectionStatus, pendingQuery]);
 
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
 
@@ -772,8 +783,19 @@ function ChatInterface() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === "Enter" && connectionStatus === "connected" && handleSend()}
-            placeholder={connectionStatus === "processing" ? "Type to redirect after stopping..." : "Enter your query..."}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                if (connectionStatus === "connected") {
+                  handleSend();
+                } else if (connectionStatus === "processing" && input.trim()) {
+                  // Stop & Send
+                  setPendingQuery(input);
+                  setInput("");
+                  ws.sendCancel(`Interrupted by user query: ${input}`);
+                }
+              }
+            }}
+            placeholder={connectionStatus === "processing" ? "Type to redirect (Enter to stop & send)..." : "Enter your query..."}
             disabled={connectionStatus === "disconnected" || connectionStatus === "connecting"}
             className="flex-1 bg-background/50 border border-border rounded-lg px-4 py-2 focus:outline-none focus:border-primary disabled:opacity-50"
           />
