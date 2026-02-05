@@ -213,6 +213,21 @@ class InProcessGateway(Gateway):
                 return await self._resume_session_legacy(session_id)
             return await self._resume_session_new(session_id)
 
+    def _read_token_usage_from_trace(self, workspace_path: Path) -> dict:
+        """Helper to read token usage from trace.json safely."""
+        try:
+            trace_path = workspace_path / "trace.json"
+            if trace_path.exists():
+                # Read specific fields efficiently if possible, or just load
+                # Given trace.json can be large, we might want to optimize this later
+                # For now, just try to read it
+                with open(trace_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    return data.get("token_usage", {})
+        except Exception:
+            pass
+        return {}
+
     async def _resume_session_new(self, session_id: str) -> GatewaySession:
         """Resume a session on the unified engine path. Caller must hold _execution_lock."""
         # === NEW UNIFIED PATH ===
@@ -237,6 +252,8 @@ class InProcessGateway(Gateway):
 
         self._adapters[session_id] = adapter
 
+        token_usage = self._read_token_usage_from_trace(workspace_path)
+        
         session = GatewaySession(
             session_id=session_id,
             user_id=config.user_id or "unknown",
@@ -244,6 +261,7 @@ class InProcessGateway(Gateway):
             metadata={
                 "engine": "process_turn",
                 "resumed": True,
+                "usage": token_usage,
             },
         )
         self._sessions[session_id] = session
@@ -290,6 +308,12 @@ class InProcessGateway(Gateway):
             
             # Execute through unified engine
             async for event in adapter.execute(request.user_input):
+                # Capture token usage for session metadata
+                if event.type == EventType.STATUS and isinstance(event.data, dict):
+                    if "token_usage" in event.data:
+                        # Update the in-memory session metadata
+                        session.metadata["usage"] = event.data["token_usage"]
+                        
                 yield event
 
     async def _execute_legacy(

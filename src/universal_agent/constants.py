@@ -30,7 +30,7 @@ DISALLOWED_TOOLS = [
     "mcp__local_toolkit__get_core_memory_blocks",
     "mcp__local_toolkit__batch_tool_execute",
     # Force delegation to research-specialist for search/research tasks
-    "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+    # mcp__composio__COMPOSIO_SEARCH_TOOLS is ALLOWED for tool discovery
     "mcp__composio__COMPOSIO_SEARCH_NEWS",
     "mcp__composio__COMPOSIO_SEARCH_WEB",
     # 🚫 PRIMARY AGENT FORBIDDEN: NEVER use remote workbench directly. Delegate instead.
