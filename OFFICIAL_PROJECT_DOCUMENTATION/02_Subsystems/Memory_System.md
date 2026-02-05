@@ -59,7 +59,20 @@ The central coordinator for saving memories.
 3. **Index**: Updates the `index.json` and recent benchmarks in `MEMORY.md`.
 4. **Vectorize**: (Async) Generates embeddings and upserts to the vector database.
 
-## 4. Configuration
+## 4. Auto-Flush Mechanism
+
+To prevent "content blindness" and handle context window limits (typically 200k tokens), the system implements an **Auto-Flush** loop.
+
+### How it works
+
+1. **Detection**: When the active context reaches a configurable threshold (e.g., `UA_TRUNCATION_THRESHOLD` at 150k tokens), the system triggers a memory flush.
+2. **Analysis**: A specialized internal loop analyzes the current transcript for facts, decisions, and outcomes.
+3. **Persistence**: The agent use tools like `archival_memory_insert` to save these findings to the daily Markdown logs and vector store.
+4. **Reset**: The active session context is then safely truncated or summarized, ensuring the agent remains high-velocity without losing critical history.
+
+---
+
+## 5. Configuration & Backend
 
 Memory behavior is controlled via environment variables:
 

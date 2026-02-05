@@ -6,31 +6,38 @@ Welcome to the official technical documentation for the **Universal Agent**. Thi
 
 ### 1. [Architecture](01_Architecture)
 
-- **[System Overview](01_Architecture/System_Overview.md)**: High-level component map and core philosophy.
-- **[Core Classes](01_Architecture/Core_Classes.md)**: Deep dive into `UniversalAgent`, `HeartbeatService`, and `Gateway`.
+- **[System Overview](01_Architecture/System_Overview.md)**: High-level component map.
+- **[Core Classes](01_Architecture/Core_Classes.md)**: `UniversalAgent`, `HeartbeatService`, and `Gateway`.
+- **[Soul Architecture](01_Architecture/Soul_Architecture.md)**: Identity and persona injection.
+- **[UI Architecture](01_Architecture/UI_Architecture.md)**: Next.js, Zustand, and WebSocket flows.
 
 ### 2. [Subsystems](02_Subsystems)
 
-- **[Memory System](02_Subsystems/Memory_System.md)**: Tiered memory (SQLite, Vector, Archival).
-- **[Heartbeat Service](02_Subsystems/Heartbeat_Service.md)**: Autonomic cycle and background monitoring.
-- **[Durable Execution](02_Subsystems/Durable_Execution.md)**: Resiliency through checkpointing and state snapshots.
-- **[URW Orchestration](02_Subsystems/URW_Orchestration.md)**: Complex reasoning and multi-phase task management.
+- **[Memory System](02_Subsystems/Memory_System.md)**: Tiered memory & Auto-Flush.
+- **[Heartbeat Service](02_Subsystems/Heartbeat_Service.md)**: Autonomic cycle.
+- **[Durable Execution](02_Subsystems/Durable_Execution.md)**: Resilience features.
+- **[URW Orchestration](02_Subsystems/URW_Orchestration.md)**: Multi-phase tasks.
 
 ### 3. [Flows](02_Flows)
 
-- **[Event Streaming](02_Flows/Event_Streaming_Flow.md)**: Life of a conversation turn from thought to UI.
-- **[Resource Guardrails](02_Flows/Resource_Guardrails.md)**: Security, workspace boundaries, and tool blocking.
+- **[Event Streaming](02_Flows/Event_Streaming_Flow.md)**: Turn lifecycle.
+- **[Resource Guardrails](02_Flows/Resource_Guardrails.md)**: Workspace security.
 
 ### 4. [Operations](03_Operations)
 
-- **[Configuration Guide](03_Operations/Configuration_Guide.md)**: Environment variables and feature flags.
-- **[Running the Agent](03_Operations/Running_The_Agent.md)**: Modes of operation (CLI, Web, Telegram).
-- **[Skill Development](03_Operations/Skill_Development.md)**: How to add new capabilities and tools.
-- **[Testing Strategy](03_Operations/Testing_Strategy.md)**: Unit tests, LLM markers, and CI.
+- **[Configuration Guide](03_Operations/Configuration_Guide.md)**: Env vars & flags.
+- **[Running the Agent](03_Operations/Running_The_Agent.md)**: CLI, Web, Telegram.
+- **[Skill Development](03_Operations/Skill_Development.md)**: Developing tools.
+- **[Testing Strategy](03_Operations/Testing_Strategy.md)**: QA and CI.
 
-### 5. [Glossary](Glossary.md)
+### 5. [API Reference](04_API_Reference)
 
-- Definitions of common terms like URW, Heartbeat, OK Token, and Artifacts.
+- **[Gateway Ops API](04_API_Reference/Ops_API.md)**: Session and log management endpoints.
+
+### 6. [Archive](05_Archive)
+
+- **[Decisions](05_Archive/Decisions)**: Critical architectural decision records (ADRs).
+- **[Glossary.md](Glossary.md)**: Project terminology.
 
 ---
 
