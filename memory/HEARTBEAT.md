@@ -14,13 +14,16 @@ This file controls the agent's proactive behavior. The agent checks this file ev
 
 ## Current Active Monitors
 
-- [ ] **OpenClaw Research**: Investigate the `clawdbot` repository (OpenClaw, formerly Moltbot) for advanced capabilities/skills we are missing. Do not implement them yet. Create a detailed `OpenClaw_Research_Report.md` describing interesting features to consider for our roadmap.
-- [ ] **Official Documentation**: At 11:00 PM (User Time), execute the documentation automation script: `uv run scripts/generate_official_docs.py`. This will generate the `OFFICIAL_PROJECT_DOCUMENTATION` folder.
+- [x] **OpenClaw Research**: Investigate the `clawdbot` repository (OpenClaw, formerly Moltbot) for advanced capabilities/skills we are missing. Do not implement them yet. Create a detailed `OpenClaw_Research_Report.md` describing interesting features to consider for our roadmap.
+- [x] **Official Documentation**: If it is 11:30 PM or later (User Time), execute the documentation automation script: `uv run scripts/generate_official_docs.py`. This will generate the `OFFICIAL_PROJECT_DOCUMENTATION` folder.
 - [ ] **Morning Briefing**: If it is between 7:00 AM and 10:00 AM (User Time), check if you have already sent a briefing today. If not, generate a concise summary of any overnight alerts, system status, and pending tasks, then mark this done for the day.
 - [ ] (Example) Check if `run.log` shows a "Connection Failed" error.
 - [ ] (Example) Remind me to commit code if I haven't in 4 hours.
 
 <!-- 
-To enable these, change "[ ]" to "[x]" or add new lines.
+Checkbox meaning:
+- [ ] = ACTIVE / PENDING (eligible to run if conditions match)
+- [x] = COMPLETED / DISABLED (do not run)
+
 If this file is effectively empty (just comments), the agent will skip the check to save tokens.
 -->

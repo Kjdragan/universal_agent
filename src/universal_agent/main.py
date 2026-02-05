@@ -227,8 +227,17 @@ def load_budget_config() -> dict:
 
 
 def _resolve_global_memory_dir() -> str:
-    """Resolve the global memory directory (<REPO_ROOT>/memory)."""
-    # src_dir is defined at module level
+    """
+    Resolve the global memory directory.
+    Checks <REPO_ROOT>/memory (dev mode) first, then <PKG_DIR>/memory (installed mode).
+    """
+    # src_dir is '.../src/universal_agent'
+    # Repo root is '.../src/universal_agent/../../'
+    repo_memory = os.path.abspath(os.path.join(src_dir, "..", "..", "memory"))
+    if os.path.isdir(repo_memory):
+        return repo_memory
+    
+    # Fallback to package directory
     return os.path.join(src_dir, "memory")
 
 
@@ -251,6 +260,14 @@ def _inject_global_memory(workspace_dir: str) -> None:
             session_core_mem = os.path.join(workspace_dir, "MEMORY.md")
             shutil.copy2(global_core_mem, session_core_mem)
             print(f"🧠 Global Memory injected: {global_core_mem} -> {session_core_mem}")
+
+        # 1b. Copy HEARTBEAT.md (Proactive Instructions) -> Workspace Root
+        # HeartbeatService looks for it in the workspace root.
+        global_heartbeat = os.path.join(global_mem_dir, "HEARTBEAT.md")
+        if os.path.exists(global_heartbeat):
+            session_heartbeat = os.path.join(workspace_dir, "HEARTBEAT.md")
+            shutil.copy2(global_heartbeat, session_heartbeat)
+            print(f"💓 Heartbeat Instructions injected: {global_heartbeat} -> {session_heartbeat}")
 
         # 2. Copy daily memory logs (memory/*.md)
         # Note: In repo root, MEMORY.md is in memory/, but daily logs might be there too?

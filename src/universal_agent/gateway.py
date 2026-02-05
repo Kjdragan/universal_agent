@@ -345,7 +345,10 @@ class InProcessGateway(Gateway):
         
         async for event in self.execute(session, request):
             if event.type == EventType.TEXT:
-                response_text += event.data.get("text", "")
+                if isinstance(event.data, dict) and event.data.get("final") is True:
+                    response_text = event.data.get("text", "")
+                else:
+                    response_text += event.data.get("text", "")
             if event.type == EventType.TOOL_CALL:
                 tool_calls += 1
                 tool_name = (event.data.get("name") or "").upper()

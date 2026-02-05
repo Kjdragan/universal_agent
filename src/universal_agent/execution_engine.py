@@ -416,7 +416,7 @@ class ProcessTurnAdapter:
                 if hasattr(result, 'response_text') and result.response_text:
                     yield AgentEvent(
                         type=EventType.TEXT,
-                        data={"text": result.response_text},
+                        data={"text": result.response_text, "final": True},
                     )
                 
                 # Emit work products

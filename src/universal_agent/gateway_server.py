@@ -782,10 +782,12 @@ async def get_last_heartbeat(session_id: Optional[str] = None):
             if not workspace_dir.exists():
                 raise HTTPException(status_code=404, detail="Session not found.")
             state = _read_heartbeat_state(str(workspace_dir)) or {}
+        busy = bool(_heartbeat_service and session_id in _heartbeat_service.busy_sessions)
         return {
             "session_id": session_id,
             "last_run": state.get("last_run"),
             "last_summary": state.get("last_summary"),
+            "busy": busy,
         }
 
     payload: dict[str, dict] = {}
@@ -793,9 +795,11 @@ async def get_last_heartbeat(session_id: Optional[str] = None):
         state = _read_heartbeat_state(session.workspace_dir) or {}
         if not state:
             continue
+        busy = bool(_heartbeat_service and sid in _heartbeat_service.busy_sessions)
         payload[sid] = {
             "last_run": state.get("last_run"),
             "last_summary": state.get("last_summary"),
+            "busy": busy,
         }
     return {"heartbeats": payload}
 
@@ -1369,11 +1373,25 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     )
 
                     async def run_execution():
+                        saw_streaming_text = False
                         if _heartbeat_service:
                             _heartbeat_service.busy_sessions.add(session.session_id)
                         try:
                             # Execute the request and stream back to THIS connection
                             async for event in gateway.execute(session, request):
+                                if (
+                                    event.type == EventType.TEXT
+                                    and isinstance(event.data, dict)
+                                    and event.data.get("final") is True
+                                    and saw_streaming_text
+                                ):
+                                    continue
+                                if (
+                                    event.type == EventType.TEXT
+                                    and isinstance(event.data, dict)
+                                    and event.data.get("time_offset") is not None
+                                ):
+                                    saw_streaming_text = True
                                 if event.type == EventType.ERROR:
                                     log_tail = None
                                     if session.workspace_dir:

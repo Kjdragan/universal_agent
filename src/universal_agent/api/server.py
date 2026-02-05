@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import websockets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -426,6 +427,7 @@ async def websocket_agent(websocket: WebSocket):
     in_flight = False
     last_query_text: Optional[str] = None
     last_query_ts: Optional[float] = None
+    gateway_forward_task: Optional[asyncio.Task] = None
 
     try:
         # Send connected event
@@ -434,6 +436,51 @@ async def websocket_agent(websocket: WebSocket):
             connection_id,
             create_connected_event(session_info),
         )
+
+        # In gateway mode, keep a passive subscription to the gateway session stream
+        # so background broadcasts (heartbeat, system events) appear in the Web UI.
+        gateway_url = os.getenv("UA_GATEWAY_URL")
+        if gateway_url:
+            from universal_agent.api.gateway_bridge import GatewayBridge
+
+            converter = GatewayBridge(gateway_url)
+            session_id = session_info.session_id
+            ws_endpoint = f"{converter.ws_url}/api/v1/sessions/{session_id}/stream"
+
+            async def _forward_gateway_broadcasts() -> None:
+                while True:
+                    try:
+                        async with websockets.connect(ws_endpoint) as ws:
+                            # Initial "connected" message from the gateway stream
+                            try:
+                                initial_msg = await asyncio.wait_for(ws.recv(), timeout=10.0)
+                                initial_data = json.loads(initial_msg)
+                                if initial_data.get("type") != "connected":
+                                    logger.warning("Unexpected gateway handshake message: %s", initial_data)
+                            except Exception:
+                                # Best-effort handshake; continue anyway.
+                                pass
+
+                            async for message in ws:
+                                try:
+                                    event_data = json.loads(message)
+                                except json.JSONDecodeError:
+                                    continue
+
+                                event_type = (event_data.get("type") or "").strip()
+                                if not event_type or event_type == "connected":
+                                    continue
+
+                                ws_event = converter._convert_gateway_event(event_type, event_data)
+                                if ws_event:
+                                    await manager.send_event(connection_id, ws_event)
+                    except asyncio.CancelledError:
+                        return
+                    except Exception as exc:
+                        logger.warning("Gateway broadcast forwarder error: %s", exc)
+                        await asyncio.sleep(1.0)
+
+            gateway_forward_task = asyncio.create_task(_forward_gateway_broadcasts())
 
         # Main message loop
         while True:
@@ -512,6 +559,13 @@ async def websocket_agent(websocket: WebSocket):
     except Exception as e:
         manager.disconnect(connection_id)
         logger.error(f"WebSocket error: {e}")
+    finally:
+        if gateway_forward_task:
+            gateway_forward_task.cancel()
+            try:
+                await gateway_forward_task
+            except Exception:
+                pass
 
 
 # =============================================================================

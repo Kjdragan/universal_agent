@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from typing import AsyncGenerator, Optional
 from pathlib import Path
 
@@ -114,6 +115,7 @@ class GatewayBridge:
             return
 
         ws_endpoint = f"{self.ws_url}/api/v1/sessions/{self.current_session_id}/stream"
+        saw_streaming_text = False
         
         try:
             async with websockets.connect(ws_endpoint) as ws:
@@ -135,6 +137,12 @@ class GatewayBridge:
                     try:
                         event_data = json.loads(message)
                         event_type_str = event_data.get("type", "")
+                        if event_type_str == "text":
+                            data_obj = event_data.get("data", {}) if isinstance(event_data.get("data"), dict) else {}
+                            if event_data.get("time_offset") is not None:
+                                saw_streaming_text = True
+                            if saw_streaming_text and data_obj.get("final") is True:
+                                continue
                         # Convert gateway event to Web UI event
                         ws_event = self._convert_gateway_event(event_type_str, event_data)
                         if ws_event:
@@ -164,6 +172,18 @@ class GatewayBridge:
     def _convert_gateway_event(self, event_type: str, event_data: dict) -> Optional[WebSocketEvent]:
         """Convert gateway event format to Web UI WebSocketEvent."""
         try:
+            if event_type in {"heartbeat_summary", "heartbeat_indicator"}:
+                payload = event_data.get("data", {}) if isinstance(event_data.get("data"), dict) else {}
+                return WebSocketEvent(
+                    type=WSEventType.SYSTEM_EVENT,
+                    data={
+                        "type": event_type,
+                        "payload": payload,
+                        "created_at": event_data.get("timestamp"),
+                    },
+                    timestamp=time.time(),
+                )
+
             # Map gateway event types to Web UI event types
             type_map = {
                 "text": WSEventType.TEXT,

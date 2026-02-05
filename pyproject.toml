@@ -60,6 +60,8 @@ dependencies = [
     "json-repair>=0.55.1",
     "json5>=0.13.0",
     "croniter>=6.0.0",
+    "lancedb>=0.27.1",
+    "nano-pdf>=0.2.1",
 ]
 
 
