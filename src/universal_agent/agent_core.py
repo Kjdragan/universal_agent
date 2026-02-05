@@ -55,6 +55,7 @@ from universal_agent import transcript_builder
 DEFAULT_AGENT_NAME = "Primary Agent"
 SEARCH_AGENT_NAME = "Research Specialist"
 WRITER_AGENT_NAME = "Report Author"
+TREND_AGENT_NAME = "Trend Specialist"
 
 # Local MCP server provides: crawl_parallel, finalize_research, append_to_file, etc.
 # Note: read_research_files is deprecated - use refined_corpus.md from finalize_research
