@@ -7,6 +7,7 @@ Traces are sent to Logfire for observability.
 import sys
 import os
 import logging
+import shutil
 
 # Add 'src' to sys.path to allow imports from universal_agent package
 # This ensures functional imports regardless of invocation directory
@@ -223,6 +224,104 @@ def load_budget_config() -> dict:
         "max_steps": _get_env_int("UA_MAX_STEPS", 50),
         "max_tool_calls": _get_env_int("UA_MAX_TOOL_CALLS", 250),
     }
+
+
+def _resolve_global_memory_dir() -> str:
+    """Resolve the global memory directory (<REPO_ROOT>/memory)."""
+    # src_dir is defined at module level
+    return os.path.join(src_dir, "memory")
+
+
+def _inject_global_memory(workspace_dir: str) -> None:
+    """
+    Copy global memory files into the session workspace at startup.
+    This creates the 'Brain Transplant' effect.
+    """
+    if not workspace_dir or not os.path.exists(workspace_dir):
+        return
+
+    global_mem_dir = _resolve_global_memory_dir()
+    if not os.path.exists(global_mem_dir):
+        return
+
+    try:
+        # 1. Copy MEMORY.md (Core Memory)
+        global_core_mem = os.path.join(global_mem_dir, "MEMORY.md")
+        if os.path.exists(global_core_mem):
+            session_core_mem = os.path.join(workspace_dir, "MEMORY.md")
+            shutil.copy2(global_core_mem, session_core_mem)
+            print(f"🧠 Global Memory injected: {global_core_mem} -> {session_core_mem}")
+
+        # 2. Copy daily memory logs (memory/*.md)
+        # Note: In repo root, MEMORY.md is in memory/, but daily logs might be there too?
+        # Actually structure is often:
+        # REPO/
+        #   memory/
+        #     MEMORY.md
+        #     2024-01-01.md
+        # OR
+        # REPO/MEMORY.md
+        # 
+        # Based on file listing earlier: /home/kjdragan/lrepos/universal_agent/memory/MEMORY.md exists.
+        # So REPO/memory/ is the container.
+        
+        session_mem_subdir = os.path.join(workspace_dir, "memory")
+        os.makedirs(session_mem_subdir, exist_ok=True)
+
+        for item in os.listdir(global_mem_dir):
+            if item == "MEMORY.md":
+                # Already handled above (copied to workspace root or memory/? 
+                # Clawbot puts MEMORY.md in workspace root usually, checks docs...
+                # Docs say: "memory/YYYY-MM-DD.md" and "MEMORY.md" (in workspace root).
+                # But our global store is REPO/memory/MEMORY.md.
+                # So we copy REPO/memory/MEMORY.md -> WORKSPACE/MEMORY.md
+                continue
+                
+            src_path = os.path.join(global_mem_dir, item)
+            dst_path = os.path.join(session_mem_subdir, item)
+            
+            if os.path.isfile(src_path) and item.endswith(".md"):
+                shutil.copy2(src_path, dst_path)
+                
+        print(f"🧠 Global Memory logs injected into {session_mem_subdir}")
+
+    except Exception as e:
+        print(f"⚠️ Failed to inject global memory: {e}")
+
+
+def _persist_global_memory(workspace_dir: str) -> None:
+    """
+    Copy session memory files back to global storage at shutdown.
+    This ensures learning is preserved.
+    """
+    if not workspace_dir or not os.path.exists(workspace_dir):
+        return
+
+    global_mem_dir = _resolve_global_memory_dir()
+    os.makedirs(global_mem_dir, exist_ok=True)
+
+    try:
+        # 1. Persist MEMORY.md
+        session_core_mem = os.path.join(workspace_dir, "MEMORY.md")
+        if os.path.exists(session_core_mem):
+            global_core_mem = os.path.join(global_mem_dir, "MEMORY.md")
+            # Only copy if changed? For now, blind overwrite is per manual plan.
+            shutil.copy2(session_core_mem, global_core_mem)
+            print(f"💾 Core Memory persisted: {global_core_mem}")
+
+        # 2. Persist daily logs
+        session_mem_subdir = os.path.join(workspace_dir, "memory")
+        if os.path.exists(session_mem_subdir):
+            for item in os.listdir(session_mem_subdir):
+                src_path = os.path.join(session_mem_subdir, item)
+                dst_path = os.path.join(global_mem_dir, item)
+                
+                if os.path.isfile(src_path) and item.endswith(".md"):
+                    shutil.copy2(src_path, dst_path)
+            print(f"💾 Daily Memory logs persisted to {global_mem_dir}")
+
+    except Exception as e:
+        print(f"⚠️ Failed to persist global memory: {e}")
 
 
 def build_cli_hooks() -> dict:
@@ -4922,6 +5021,97 @@ async def continue_job_run(
             )
             continue
 
+async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usage: int) -> None:
+    """
+    Runs a specialized sub-agent to summarize and persist critical information
+    before context is wiped (Auto-Flush).
+    """
+    # Feature Flag Check
+    if os.environ.get("UA_MEMORY_ENABLED") != "1":
+        return
+
+    try:
+        from claude_agent_sdk.client import ClaudeSDKClient
+        
+        # 1. Retrieve Options from Client
+        # Try to get options from client safely
+        options = getattr(client, "options", None)
+        if not options:
+            return
+
+        print(f"\n💾 [Auto-Flush] Initiating Memory Flush Sub-Agent (Triggered by {token_usage} tokens)...")
+
+        # 2. Extract Transcript from History
+        history = getattr(client, "history", [])
+        if not history:
+            print("⚠️ [Auto-Flush] Skipped: No history found")
+            return
+
+        transcript_lines = []
+        for msg in history:
+            role = str(getattr(msg, "role", "unknown")).upper()
+            content = getattr(msg, "content", "")
+            
+            # Handle Block content (Claude SDK specific)
+            text_content = ""
+            if isinstance(content, list):
+                for block in content:
+                    if hasattr(block, "text"):
+                        text_content += block.text
+            elif isinstance(content, str):
+                text_content = content
+            
+            if text_content:
+                # Basic sanitization
+                transcript_lines.append(f"{role}: {text_content}")
+
+        transcript_text = "\n\n".join(transcript_lines)
+        
+        if len(transcript_text) > 400000:
+            transcript_text = transcript_text[-400000:]
+            print(f"⚠️ [Auto-Flush] Transcript truncated to last 400k chars")
+
+        # 3. Construct Prompt (as User Message effectively overriding system context)
+        prompt = (
+            "*** SYSTEM ALERT: MEMORY FLUSH SUB-AGENT ACTIVATED ***\n"
+            "You are an expert Memory Librarian. The active context window is full and about to be wiped.\n"
+            "Your GOAL is to save critical facts from the transcript below to Long-Term Memory.\n\n"
+            "INSTRUCTIONS:\n"
+            "1. Analyze the transcript for user preferences, project decisions, and key facts.\n"
+            "2. Use 'archival_memory_insert' to save these facts.\n"
+            "3. Use 'core_memory_replace' ONLY for permanent instructions (personas, global constraints).\n"
+            "4. Ignore trivial conversation.\n"
+            "5. If nothing needs saving, just respond 'NO_MEMORY_NEEDED'.\n"
+            "6. DO NOT chat or summarize in text. JUST CALL TOOLS.\n\n"
+            f"=== BEGIN TRANSCRIPT ===\n{transcript_text}\n=== END TRANSCRIPT ===\n"
+        )
+
+        # 4. Execute Sub-Agent
+        print(f"   ► Spawning sub-agent...")
+        
+        # We reuse the same options (model, etc)
+        # We assume options is safe to reuse or copy is not needed for simple read
+        sub_client = ClaudeSDKClient(options)
+        async with sub_client:
+            # Reusing run_conversation for the runtime loop (tool execution)
+            # We treat this as a separate independent run
+            # We pass a clean start_ts
+            await run_conversation(
+                sub_client, 
+                prompt, 
+                start_ts=time.time(), 
+                iteration=1, 
+                max_iterations=3 # Strict limit
+            )
+            
+        print("✅ [Auto-Flush] Complete.")
+
+    except Exception as e:
+        print(f"⚠️ [Auto-Flush] Failed: {e}")
+        # import traceback
+        # traceback.print_exc()
+
+
 
 async def run_conversation(client, query: str, start_ts: float, iteration: int = 1, max_iterations: int = 20, event_callback: Optional[Callable[["AgentEvent"], None]] = None):
     """Run a single conversation turn with full tracing.
@@ -5154,7 +5344,11 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
 
                                 pending_prompt = next_prompt
 
+
                                 # 3. Clear Context
+                                # [Auto-Flush] Trigger memory sub-agent before clearing
+                                await _run_memory_flush_subagent(client, workspace_dir, total_tokens)
+
                                 if safe_clear_history(client):
                                     print("🧹 Client history cleared (Context Reset).")
                                 else:
@@ -7141,6 +7335,9 @@ async def main(args: argparse.Namespace):
         session_prefix=session_prefix,
     )
 
+    # [Global Memory Sync] Inject persistent memory (Brain Transplant)
+    _inject_global_memory(workspace_dir)
+
     # Extract harness_id if applicable so Orchestrator reuses this directory
     harness_id_override = None
     if session_prefix == "harness_":
@@ -8660,6 +8857,13 @@ async def main(args: argparse.Namespace):
                 logfire.info("durable_run_completed", run_id=run_id)
 
     finally:
+        # [Global Memory Sync] Persist memory back to global store
+        if 'workspace_dir' in locals() and workspace_dir:
+            try:
+                _persist_global_memory(workspace_dir)
+            except Exception as e:
+                print(f"⚠️ Memory persistence failed: {e}")
+
         # Ensure the client is closed since we manually called __aenter__
         if 'client' in locals() and client:
             try:

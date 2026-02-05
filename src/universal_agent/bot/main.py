@@ -106,8 +106,21 @@ async def run_bot():
     # Register a catch-all handler that feeds everything to our runner
     app.add_handler(TypeHandler(Update, feed_runner))
 
-    logger.info("Bot starting... (New Architecture)")
+    logger.info("Bot starting... (New Architecture WITH Heartbeat)")
     
+    # [Heartbeat] Inject callback for proactive messages
+    async def send_message_callback(user_id: str, text: str):
+        if not app_ref["bot"]:
+            logger.warning("Attempted to send proactive message before bot ready")
+            return
+        try:
+            # Assuming user_id is chat_id for DM
+            await app_ref["bot"].send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Failed to deliver proactive message to {user_id}: {e}")
+
+    agent_adapter.send_message_callback = send_message_callback
+
     # Initialize Agent Adapter & Task Worker
     await agent_adapter.initialize()
     task_worker = asyncio.create_task(task_manager.worker(agent_adapter))
