@@ -2984,8 +2984,8 @@ def generate_image(
     Args:
         prompt: Text description for generation, or edit instruction if input_image provided.
         input_image_path: Optional path to source image (for editing). If None, generates from scratch.
-        output_dir: Directory to save output. Defaults to workspace work_products/media/.
-        output_filename: Optional filename. If None, auto-generates with timestamp.
+        output_dir: Optional preferred directory. Final output is always normalized under session work_products/media.
+        output_filename: Optional filename. Directory components are ignored for safety.
         preview: If True, launches Gradio viewer with the generated image.
         model_name: Gemini model to use. Defaults to "gemini-3-pro-image-preview".
 
@@ -3007,12 +3007,38 @@ def generate_image(
 
         client = genai.Client(api_key=api_key)
 
-        # Determine output directory
-        if not output_dir:
-            # Try to infer from workspace - look for work_products/media
-            output_dir = os.path.join(os.getcwd(), "work_products", "media")
+        # Resolve happy-path output roots:
+        # 1) session workspace work_products/media (primary)
+        # 2) persistent artifacts/media (mirror)
+        workspace = _resolve_workspace()
+        if workspace:
+            session_media_dir = (
+                Path(workspace).resolve() / "work_products" / "media"
+            )
+        else:
+            session_media_dir = (Path(os.getcwd()).resolve() / "work_products" / "media")
+        artifacts_media_dir = Path(_resolve_artifacts_root()).resolve() / "media"
 
+        # Coerce requested output_dir to workspace if it points outside allowed roots.
+        requested_output_dir = (output_dir or "").strip()
+        if requested_output_dir:
+            try:
+                requested_dir = Path(requested_output_dir).expanduser()
+                if not requested_dir.is_absolute():
+                    requested_dir = (Path(os.getcwd()) / requested_dir).resolve()
+                else:
+                    requested_dir = requested_dir.resolve()
+                in_workspace = workspace and _is_within_root(workspace, str(requested_dir))
+                in_artifacts = _is_within_root(str(artifacts_media_dir.parent), str(requested_dir))
+                if not in_workspace and not in_artifacts:
+                    requested_output_dir = ""
+            except Exception:
+                requested_output_dir = ""
+
+        # Always write the primary output into session work_products/media.
+        output_dir = str(session_media_dir)
         os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(artifacts_media_dir, exist_ok=True)
 
         # Prepare content for generation
         parts = []
@@ -3075,7 +3101,12 @@ def generate_image(
                         safe_desc = "_".join(safe_desc.split()[:5])  # First 5 words
                         output_filename = f"{safe_desc}_{timestamp}.png"
 
-                    saved_path = os.path.join(output_dir, output_filename)
+                    # Safety: prevent absolute/path-traversal filename overrides.
+                    safe_output_name = os.path.basename(str(output_filename).strip())
+                    if not safe_output_name:
+                        safe_output_name = f"generated_image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+
+                    saved_path = os.path.join(output_dir, safe_output_name)
                     image.save(saved_path, "PNG")
 
                 elif hasattr(part, "text") and part.text:
@@ -3086,18 +3117,36 @@ def generate_image(
                 {"error": "No image generated", "text_output": text_output}
             )
 
+        # Mirror to persistent artifacts/media with timestamped name.
+        saved_path_obj = Path(saved_path).resolve()
+        persistent_copy = artifacts_media_dir / (
+            f"{saved_path_obj.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{saved_path_obj.suffix}"
+        )
+        try:
+            import shutil
+
+            shutil.copy2(saved_path_obj, persistent_copy)
+        except Exception as exc:
+            persistent_copy = None
+            logger.warning("generate_image_persistent_copy_failed: %s", exc)
+
         result = {
             "success": True,
-            "output_path": saved_path,
+            "output_path": str(saved_path_obj),
             "description": description if "description" in locals() else None,
             "size_bytes": os.path.getsize(saved_path),
             "text_output": text_output if text_output else None,
         }
+        if persistent_copy is not None:
+            result["persistent_path"] = str(persistent_copy)
+        result["session_output_path"] = str(saved_path_obj)
+        if requested_output_dir:
+            result["requested_output_dir"] = requested_output_dir
 
         # Launch preview if requested
         if preview:
             try:
-                viewer_result = preview_image(saved_path)
+                viewer_result = preview_image(str(saved_path_obj))
                 viewer_data = json.loads(viewer_result)
                 if "viewer_url" in viewer_data:
                     result["viewer_url"] = viewer_data["viewer_url"]

@@ -1,10 +1,19 @@
 import os
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 import logging
 import sys
+import re
 
 logger = logging.getLogger(__name__)
+
+def normalize_task_name(task_name: str) -> str:
+    """Normalize task names to snake_case for consistent task directory naming."""
+    if not task_name:
+        return "default"
+    normalized = re.sub(r"[^a-zA-Z0-9]+", "_", task_name)
+    normalized = re.sub(r"_+", "_", normalized).strip("_").lower()
+    return normalized or "default"
 
 def resolve_best_task_match(requested_name: str, workspace_root: Optional[Path] = None) -> str:
     """
@@ -26,6 +35,9 @@ def resolve_best_task_match(requested_name: str, workspace_root: Optional[Path] 
     """
     if not requested_name or requested_name == "default":
         return requested_name
+
+    canonical_requested = normalize_task_name(requested_name)
+    requested_name = canonical_requested
 
     # 1. Determine Workspace Root
     if not workspace_root:

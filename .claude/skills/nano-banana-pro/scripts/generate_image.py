@@ -19,6 +19,8 @@ Multi-image editing (up to 14 images):
 import argparse
 import os
 import sys
+import shutil
+from datetime import datetime
 from pathlib import Path
 
 
@@ -27,6 +29,37 @@ def get_api_key(provided_key: str | None) -> str | None:
     if provided_key:
         return provided_key
     return os.environ.get("GEMINI_API_KEY")
+
+
+def _repo_root() -> Path:
+    # .claude/skills/nano-banana-pro/scripts/generate_image.py -> repo root
+    return Path(__file__).resolve().parents[4]
+
+
+def _resolve_session_media_dir() -> Path:
+    workspace = (os.environ.get("CURRENT_SESSION_WORKSPACE") or "").strip()
+    if workspace:
+        return Path(workspace).expanduser().resolve() / "work_products" / "media"
+    return Path.cwd().resolve() / "work_products" / "media"
+
+
+def _resolve_persistent_media_dir() -> Path:
+    artifacts_root = (os.environ.get("UA_ARTIFACTS_DIR") or "").strip()
+    if artifacts_root:
+        root = Path(artifacts_root).expanduser().resolve()
+    else:
+        root = _repo_root() / "artifacts"
+    return root / "media"
+
+
+def _sanitize_filename(raw_filename: str) -> str:
+    filename = Path(raw_filename or "").name.strip()
+    if not filename:
+        filename = "generated_image.png"
+    # Default to png if no extension provided.
+    if not Path(filename).suffix:
+        filename += ".png"
+    return filename
 
 
 def main():
@@ -80,9 +113,16 @@ def main():
     # Initialise client
     client = genai.Client(api_key=api_key)
 
-    # Set up output path
-    output_path = Path(args.filename)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Enforce happy-path output locations:
+    # - session workspace work_products/media (primary)
+    # - persistent artifacts/media (mirror copy)
+    session_media_dir = _resolve_session_media_dir()
+    persistent_media_dir = _resolve_persistent_media_dir()
+    session_media_dir.mkdir(parents=True, exist_ok=True)
+    persistent_media_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_filename = _sanitize_filename(args.filename)
+    output_path = session_media_dir / safe_filename
 
     # Load input images if provided (up to 14 supported by Nano Banana Pro)
     input_images = []
@@ -168,7 +208,16 @@ def main():
 
         if image_saved:
             full_path = output_path.resolve()
-            print(f"\nImage saved: {full_path}")
+            print(f"\nImage saved (session): {full_path}")
+
+            # Mirror to persistent artifacts directory.
+            persistent_path = (
+                persistent_media_dir
+                / f"{output_path.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{output_path.suffix}"
+            )
+            shutil.copy2(full_path, persistent_path)
+            print(f"Image saved (persistent): {persistent_path.resolve()}")
+
             # OpenClaw parses MEDIA tokens and will attach the file on supported providers.
             print(f"MEDIA: {full_path}")
         else:

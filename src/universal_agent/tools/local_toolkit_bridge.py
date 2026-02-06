@@ -44,6 +44,7 @@ except ImportError:
     )
 
 from universal_agent.hooks import StdoutToEventStream
+from universal_agent.utils.task_guardrails import resolve_best_task_match
 
 
 @tool(
@@ -132,7 +133,7 @@ async def write_text_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:
 )
 async def finalize_research_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     session_dir = args.get("session_dir")
-    task_name = args.get("task_name", "default")
+    task_name = resolve_best_task_match(args.get("task_name", "default"))
     enable_topic_filter = args.get("enable_topic_filter", True)
     retry_id = args.get("retry_id")
     with StdoutToEventStream(prefix="[Local Toolkit]"):
