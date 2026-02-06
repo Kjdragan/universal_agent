@@ -39,7 +39,8 @@ DEFAULT_HEARTBEAT_PROMPT = (
 )
 DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default (Clawdbot parity)
 BUSY_RETRY_DELAY = 10  # Seconds
-HEARTBEAT_EXECUTION_TIMEOUT = int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT", "300"))
+DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 300
+MIN_HEARTBEAT_EXEC_TIMEOUT = 300
 DEFAULT_ACK_MAX_CHARS = 300
 DEFAULT_OK_TOKENS = ["HEARTBEAT_OK", "UA_HEARTBEAT_OK"]
 
@@ -291,6 +292,18 @@ def _parse_bool(raw: Optional[str], default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _resolve_exec_timeout_seconds() -> int:
+    timeout = _parse_int(os.getenv("UA_HEARTBEAT_EXEC_TIMEOUT"), DEFAULT_HEARTBEAT_EXEC_TIMEOUT)
+    if timeout < MIN_HEARTBEAT_EXEC_TIMEOUT:
+        logger.warning(
+            "UA_HEARTBEAT_EXEC_TIMEOUT=%s is too low for current heartbeat workloads; using %ss",
+            timeout,
+            MIN_HEARTBEAT_EXEC_TIMEOUT,
+        )
+        return MIN_HEARTBEAT_EXEC_TIMEOUT
+    return timeout
+
+
 def _coerce_bool(value: Optional[object], default: Optional[bool] = None) -> Optional[bool]:
     if value is None:
         return default
@@ -353,6 +366,7 @@ class HeartbeatService:
         self.gateway = gateway
         self.connection_manager = connection_manager
         self.system_event_provider = system_event_provider
+        self.execution_timeout_seconds = _resolve_exec_timeout_seconds()
         self.running = False
         self.task: Optional[asyncio.Task] = None
         self.active_sessions: Dict[str, GatewaySession] = {}
@@ -708,6 +722,7 @@ class HeartbeatService:
     ):
         """Execute the heartbeat using the gateway engine."""
         self.busy_sessions.add(session.session_id)
+        keep_busy_until_collect_finishes = False
         
         def _mock_heartbeat_response(content: str) -> str:
             # Deterministic response for tests/CI (no external calls).
@@ -854,19 +869,35 @@ class HeartbeatService:
                             elif isinstance(event.data, str):
                                 full_response += event.data
 
+                collect_task = asyncio.create_task(_collect_events())
                 try:
-                    await asyncio.wait_for(_collect_events(), timeout=HEARTBEAT_EXECUTION_TIMEOUT)
+                    await asyncio.wait_for(collect_task, timeout=self.execution_timeout_seconds)
                 except asyncio.TimeoutError:
                     logger.error(
                         "Heartbeat execution timed out after %ss for %s",
-                        HEARTBEAT_EXECUTION_TIMEOUT,
+                        self.execution_timeout_seconds,
                         session.session_id,
                     )
+                    collect_task.cancel()
+                    try:
+                        await asyncio.wait_for(collect_task, timeout=5)
+                    except asyncio.CancelledError:
+                        pass
+                    except asyncio.TimeoutError:
+                        logger.error(
+                            "Heartbeat collect task did not cancel within 5s for %s; "
+                            "keeping session busy until it exits",
+                            session.session_id,
+                        )
+                        keep_busy_until_collect_finishes = True
+                        collect_task.add_done_callback(
+                            lambda _: self.busy_sessions.discard(session.session_id)
+                        )
                     full_response = "UA_HEARTBEAT_TIMEOUT"
                     await _broadcast_wire(
                         "status",
                         {
-                            "status": f"Heartbeat timed out after {HEARTBEAT_EXECUTION_TIMEOUT}s",
+                            "status": f"Heartbeat timed out after {self.execution_timeout_seconds}s",
                             "is_log": True,
                             "level": "ERROR",
                             "prefix": "HEARTBEAT",
@@ -1046,4 +1077,5 @@ class HeartbeatService:
         except Exception as e:
             logger.error(f"Heartbeat execution failed for {session.session_id}: {e}")
         finally:
-            self.busy_sessions.discard(session.session_id)
+            if not keep_busy_until_collect_finishes:
+                self.busy_sessions.discard(session.session_id)
