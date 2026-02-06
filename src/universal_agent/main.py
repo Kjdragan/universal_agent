@@ -155,6 +155,7 @@ from universal_agent.cli_io import (
 from universal_agent.execution_context import bind_workspace
 from universal_agent.execution_session import ExecutionSession
 from universal_agent.trace_utils import write_trace
+from universal_agent.trace_catalog import emit_trace_catalog, save_trace_catalog_md, enrich_trace_json
 from universal_agent.feature_flags import (
     heartbeat_enabled,
     memory_index_enabled,
@@ -5214,6 +5215,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         iteration=iteration,
         run_id=run_id,
         step_id=step_id,
+        session_id=os.path.basename(workspace_dir) if workspace_dir else None,
+        workspace_dir=workspace_dir,
     ):
         print(f"\n{'=' * 80}")
         print(
@@ -7207,22 +7210,18 @@ async def process_turn(
                     time_offset=tc.get("time_offset_seconds", 0),
                 )
 
-        # Collect and display all trace IDs for debugging
+        # Collect and display all trace IDs via the trace catalog
         local_trace_ids = collect_local_tool_trace_ids(workspace_dir)
-        print("\n=== TRACE IDS (for Logfire debugging) ===")
-        print(f"  Main Agent:     {trace.get('trace_id', 'N/A')}")
-        if local_trace_ids:
-            # Always list all unique local-toolkit trace IDs (don't hide if matches main)
-            print(f"  Local Toolkit:  {', '.join(local_trace_ids[:5])}")
-            if len(local_trace_ids) > 5:
-                print(f"                  (+{len(local_trace_ids) - 5} more)")
-        else:
-            print(f"  Local Toolkit:  (no local tool calls)")
-
-        # Store in trace for transcript/evaluation
         trace["local_toolkit_trace_ids"] = local_trace_ids
 
-        print(f"{'=' * 80}")
+        _catalog = emit_trace_catalog(
+            trace_id=trace.get("trace_id"),
+            run_id=trace.get("run_id") or os.path.basename(workspace_dir),
+            run_source=trace.get("run_source", "user"),
+            local_toolkit_trace_ids=local_trace_ids,
+            workspace_dir=workspace_dir,
+        )
+        enrich_trace_json(trace, _catalog)
 
         # Emit execution summary to Activity Log for UI visibility
         summary_parts = [f"⏱️ {request_duration}s", f"🔧 {len(request_tool_calls)} tools"]
@@ -7335,7 +7334,7 @@ async def main(args: argparse.Namespace):
         current_step_id
 
     # Create main span for entire execution
-    main_span = logfire.span("standalone_composio_test")
+    main_span = logfire.span("ua_cli_session")
     span_ctx = main_span.__enter__()  # Start the span manually
 
     # Extract trace ID for display
@@ -8903,10 +8902,26 @@ async def main(args: argparse.Namespace):
             print(f"Total Tool Calls: {len(trace['tool_calls'])}")
             print(f"{'=' * 80}")
 
-            # Save trace
-            # Save trace to workspace
+            # Save trace (with trace_catalog embedded)
+            if "trace_catalog" not in trace:
+                _local_ids = collect_local_tool_trace_ids(workspace_dir)
+                _cat = emit_trace_catalog(
+                    trace_id=trace.get("trace_id"),
+                    run_id=trace.get("run_id") or os.path.basename(workspace_dir),
+                    run_source=trace.get("run_source", "user"),
+                    local_toolkit_trace_ids=_local_ids,
+                    workspace_dir=workspace_dir,
+                )
+                enrich_trace_json(trace, _cat)
             trace_path = write_trace(trace, workspace_dir)
             print(f"\n📊 Full trace saved to {trace_path}")
+
+            # Save standalone trace_catalog.md for agent discovery
+            try:
+                catalog_path = save_trace_catalog_md(trace.get("trace_catalog", {}), workspace_dir)
+                print(f"📋 Trace catalog saved to {catalog_path}")
+            except Exception as cat_err:
+                print(f"⚠️ Failed to save trace catalog: {cat_err}")
 
             # Save comprehensive session summary
             summary_lines = []

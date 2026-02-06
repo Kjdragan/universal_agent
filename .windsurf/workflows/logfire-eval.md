@@ -4,6 +4,8 @@ description: Evaluate a project run by analyzing Logfire traces. Use this to gen
 
 # Logfire Evaluation Workflow
 
+> **NOTE**: This workflow has been superseded by the **logfire-eval skill** at `.claude/skills/logfire-eval/SKILL.md`. The skill provides a more comprehensive, structured analysis protocol with run_id-based querying, heartbeat analysis, and reference documentation. Use the skill for new evaluations.
+
 This workflow analyzes Universal Agent session traces to produce a comprehensive evaluation report.
 
 ## Key Insight: Focus on the MAIN TRACE

@@ -634,6 +634,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Instrument FastAPI with Logfire for automatic HTTP route tracing
+try:
+    import logfire as _logfire_gw
+    if os.getenv("LOGFIRE_TOKEN") or os.getenv("LOGFIRE_WRITE_TOKEN"):
+        _logfire_gw.instrument_fastapi(app)
+        logger.info("✅ Logfire FastAPI instrumentation enabled for gateway server")
+except Exception as _lf_err:
+    logger.debug("Logfire FastAPI instrumentation not available: %s", _lf_err)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

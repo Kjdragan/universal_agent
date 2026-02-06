@@ -12,6 +12,13 @@ from typing import Optional, Dict
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
 
+try:
+    import logfire
+    _LOGFIRE_AVAILABLE = bool(os.getenv("LOGFIRE_TOKEN") or os.getenv("LOGFIRE_WRITE_TOKEN"))
+except ImportError:
+    logfire = None  # type: ignore
+    _LOGFIRE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 import hashlib
@@ -718,6 +725,20 @@ class HeartbeatService:
         keep_busy_until_collect_finishes = False
         timed_out = False
         
+        # Resolve wake_reason for tracing
+        _wake_reason = self.last_wake_reason.get(session.session_id, "scheduled")
+        
+        # Create parent Logfire span for the entire heartbeat execution
+        _hb_span = None
+        if _LOGFIRE_AVAILABLE and logfire:
+            _hb_span = logfire.span(
+                "heartbeat_run",
+                session_id=session.session_id,
+                run_source="heartbeat",
+                wake_reason=_wake_reason,
+            )
+            _hb_span.__enter__()
+        
         def _mock_heartbeat_response(content: str) -> str:
             # Deterministic response for tests/CI (no external calls).
             ok_tokens_sorted = sorted(schedule.ok_tokens, key=len, reverse=True)
@@ -1053,6 +1074,25 @@ class HeartbeatService:
                 "suppressed_reason": suppressed_reason,
             }
 
+            # Emit Logfire classification marker after heartbeat completes
+            if _LOGFIRE_AVAILABLE and logfire:
+                if not ok_only:
+                    logfire.info(
+                        "heartbeat_significant",
+                        session_id=session.session_id,
+                        run_source="heartbeat",
+                        tools_used=len(write_paths) + len(bash_commands),
+                        artifacts_written=write_paths[-20:],
+                        work_products=work_product_paths[-20:],
+                        response_summary=(summary_text or "")[:500],
+                    )
+                else:
+                    logfire.info(
+                        "heartbeat_ok",
+                        session_id=session.session_id,
+                        run_source="heartbeat",
+                    )
+
             await _broadcast_wire(
                 "status",
                 {
@@ -1084,5 +1124,11 @@ class HeartbeatService:
             except Exception:
                 pass
         finally:
+            # Close the heartbeat Logfire span
+            if _hb_span is not None:
+                try:
+                    _hb_span.__exit__(None, None, None)
+                except Exception:
+                    pass
             if not keep_busy_until_collect_finishes:
                 self.busy_sessions.discard(session.session_id)

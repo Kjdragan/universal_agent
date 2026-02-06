@@ -30,6 +30,13 @@ from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id
 from universal_agent.api.input_bridge import set_input_handler
 
+try:
+    import logfire
+    _LOGFIRE_AVAILABLE = bool(os.getenv("LOGFIRE_TOKEN") or os.getenv("LOGFIRE_WRITE_TOKEN"))
+except ImportError:
+    logfire = None  # type: ignore
+    _LOGFIRE_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -265,6 +272,26 @@ class ProcessTurnAdapter:
         # 2. Run process_turn using the persistent client
         start_ts = time.time()
         
+        # Create a root Logfire span for gateway executions so that
+        # process_turn() inherits span context and trace_id is captured.
+        _gateway_span = None
+        _gateway_span_ctx = None
+        _gateway_trace_id_hex: Optional[str] = None
+        if _LOGFIRE_AVAILABLE and logfire:
+            _gateway_span = logfire.span(
+                "gateway_request",
+                session_id=Path(self.config.workspace_dir).name,
+                run_id=self.config.run_id,
+                run_source=self.config.__dict__.get("_run_source", "user"),
+            )
+            _gateway_span_ctx = _gateway_span.__enter__()
+            try:
+                raw_tid = _gateway_span.get_span_context().trace_id
+                _gateway_trace_id_hex = format(raw_tid, "032x")
+                self._trace["trace_id"] = _gateway_trace_id_hex
+            except Exception:
+                pass
+        
         # Create event callback for real-time streaming
         event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
         
@@ -377,6 +404,13 @@ class ProcessTurnAdapter:
         if not engine_task.done():
             await engine_task
         
+        # Close the gateway Logfire span
+        if _gateway_span is not None:
+            try:
+                _gateway_span.__exit__(None, None, None)
+            except Exception:
+                pass
+        
         # Clear handler
         set_input_handler(None)
         self._pending_inputs.clear()
@@ -424,14 +458,16 @@ class ProcessTurnAdapter:
                                     },
                                 )
                 
-                # Emit completion
+                # Emit completion — prefer the gateway span trace_id over
+                # the result's trace_id (which may be None on gateway path)
+                effective_trace_id = _gateway_trace_id_hex or getattr(result, 'trace_id', None)
                 yield AgentEvent(
                     type=EventType.ITERATION_END,
                     data={
                         "status": "complete",
                         "duration_seconds": round(time.time() - start_ts, 2),
                         "tool_calls": getattr(result, 'tool_calls', 0),
-                        "trace_id": getattr(result, 'trace_id', None),
+                        "trace_id": effective_trace_id,
                     },
                 )
         else:
