@@ -554,6 +554,17 @@ const PathLink = ({ path }: { path: string }) => {
           }
         }
 
+        // Strip session workspace prefix from absolute paths to get relative
+        // paths for the file API. The API expects: /api/files/{session_id}/{relative_path}
+        if (currentSession?.workspace && fullPath.startsWith(currentSession.workspace)) {
+          const wsPrefix = currentSession.workspace.endsWith("/")
+            ? currentSession.workspace
+            : currentSession.workspace + "/";
+          if (fullPath.startsWith(wsPrefix)) {
+            fullPath = fullPath.slice(wsPrefix.length);
+          }
+        }
+
         setViewingFile({ name, path: fullPath, type: "file" });
       }}
       className="text-primary hover:underline cursor-pointer break-all font-mono bg-primary/10 px-1 rounded mx-0.5 text-left"

@@ -320,7 +320,7 @@ class GatewayBridge:
              file_project = None
 
              if rel_path:
-                 file_project = (base_dir / rel_path).resolve()
+                 file_project = (session_dir / rel_path).resolve()
              elif not file_chk.is_absolute():
                  # Maybe request was just "web-ui/page.tsx" (relative)
                  file_project = (base_dir / file_path).resolve()
