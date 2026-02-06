@@ -450,14 +450,61 @@ function ToolCallCard({ toolCall }: { toolCall: any }) {
 }
 
 // --- Markdown Helper ---
+const LINKIFIABLE_TOKEN_REGEX =
+  /(https?:\/\/[^\s<>"'`]+|www\.[^\s<>"'`]+|(?:\/|\.\.?\/)[A-Za-z0-9._~\-\/]+|[A-Za-z]:\\[^\s<>"'`]+|[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.[A-Za-z0-9]+)/g;
+
+const isLikelyUrl = (value: string) =>
+  /^https?:\/\//i.test(value) || /^www\./i.test(value);
+
+const normalizeUrl = (value: string) =>
+  /^www\./i.test(value) ? `https://${value}` : value;
+
+const isLikelyPath = (value: string) => {
+  if (!value) return false;
+  const looksAbsoluteUnix = value.startsWith("/");
+  const looksRelative = value.startsWith("./") || value.startsWith("../");
+  const looksWindows = /^[A-Za-z]:\\/.test(value);
+  const looksArtifacts = value.startsWith("artifacts/");
+  const looksImplicitFile = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.[A-Za-z0-9]+$/.test(value);
+  return looksAbsoluteUnix || looksRelative || looksWindows || looksArtifacts || looksImplicitFile;
+};
+
+const splitTrailingPunctuation = (token: string): [string, string] => {
+  const match = token.match(/^(.*?)([),.;!?]+)$/);
+  if (!match) return [token, ""];
+  return [match[1], match[2]];
+};
+
+const resolveArtifactRelativePath = (path: string): string | null => {
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.startsWith("artifacts/")) {
+    return normalized.slice("artifacts/".length);
+  }
+  const marker = "/artifacts/";
+  const idx = normalized.indexOf(marker);
+  if (idx >= 0) {
+    return normalized.slice(idx + marker.length);
+  }
+  return null;
+};
+
 const PathLink = ({ path }: { path: string }) => {
   const setViewingFile = useAgentStore((s) => s.setViewingFile);
   const currentSession = useAgentStore((s) => s.currentSession);
 
   return (
-    <span
+    <button
+      type="button"
       onClick={(e) => {
         e.stopPropagation();
+        const name = path.split(/[\\/]/).pop() || path;
+
+        const artifactRelativePath = resolveArtifactRelativePath(path);
+        if (artifactRelativePath) {
+          setViewingFile({ name, path: artifactRelativePath, type: "artifact" });
+          return;
+        }
+
         let fullPath = path;
         // Resolve relative paths
         if (!path.startsWith("/") && !path.match(/^[a-zA-Z]:\\/)) {
@@ -472,14 +519,55 @@ const PathLink = ({ path }: { path: string }) => {
           }
         }
 
-        const name = path.split("/").pop() || path;
         setViewingFile({ name, path: fullPath, type: "file" });
       }}
-      className="text-primary hover:underline cursor-pointer break-all font-mono bg-primary/10 px-1 rounded mx-0.5"
+      className="text-primary hover:underline cursor-pointer break-all font-mono bg-primary/10 px-1 rounded mx-0.5 text-left"
       title="Open file preview"
     >
       {path}
-    </span>
+    </button>
+  );
+};
+
+const LinkifiedText = ({ text }: { text: string }) => {
+  const parts = text.split(LINKIFIABLE_TOKEN_REGEX);
+
+  return (
+    <>
+      {parts.map((part, index) => {
+        if (index % 2 === 0) return part;
+        const [token, trailing] = splitTrailingPunctuation(part);
+        if (!token) return part;
+
+        if (isLikelyUrl(token)) {
+          return (
+            <React.Fragment key={`${token}-${index}`}>
+              <a
+                href={normalizeUrl(token)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline font-medium break-all"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {token}
+              </a>
+              {trailing}
+            </React.Fragment>
+          );
+        }
+
+        if (isLikelyPath(token)) {
+          return (
+            <React.Fragment key={`${token}-${index}`}>
+              <PathLink path={token} />
+              {trailing}
+            </React.Fragment>
+          );
+        }
+
+        return part;
+      })}
+    </>
   );
 };
 
@@ -490,16 +578,7 @@ const markdownComponents: any = {
       <div className="whitespace-pre-wrap mb-2 last:mb-0">
         {React.Children.map(children, (child) => {
           if (typeof child === "string") {
-            // Match absolute paths OR relative paths.
-            // Absolute: Starts with / (and has at least one more segment e.g. /etc/hosts)
-            // Relative explicit: Starts with ./ or ../
-            // Relative implicit: folder/file.ext (must have simple extension to avoid "and/or")
-            const regex = /((?:(?:\/|\.\.?\/)[a-zA-Z0-9._/-]+)|(?:[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+\.[a-zA-Z0-9]+))/g;
-            const parts = child.split(regex);
-            return parts.map((part, i) => {
-              if (i % 2 === 1) return <PathLink key={i} path={part} />;
-              return part;
-            });
+            return <LinkifiedText text={child} />;
           }
           return child;
         })}
@@ -521,18 +600,43 @@ const markdownComponents: any = {
   // Style lists
   ul: ({ children }: any) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
   ol: ({ children }: any) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
-  li: ({ children }: any) => <li className="mb-0.5">{children}</li>,
+  li: ({ children }: any) => (
+    <li className="mb-0.5">
+      {React.Children.map(children, (child) => {
+        if (typeof child === "string") {
+          return <LinkifiedText text={child} />;
+        }
+        return child;
+      })}
+    </li>
+  ),
   // Style headers
   h1: ({ children }: any) => <h1 className="text-xl font-bold mb-2 mt-4">{children}</h1>,
   h2: ({ children }: any) => <h2 className="text-lg font-bold mb-2 mt-3">{children}</h2>,
   h3: ({ children }: any) => <h3 className="text-md font-bold mb-1 mt-2">{children}</h3>,
   // Style code
   code: ({ className, children, ...props }: any) => {
-    // If inline code, also try to linkify if it looks like a path? 
-    // Usually paths in backticks `path/to/file` are common.
-    // But let's keep it simple for now. 
     const match = /language-(\w+)/.exec(className || "");
     const isInline = !match && !String(children).includes("\n");
+    const rawCode = String(children).trim();
+    if (isInline && rawCode) {
+      if (isLikelyUrl(rawCode)) {
+        return (
+          <a
+            href={normalizeUrl(rawCode)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-primary hover:underline font-medium break-all"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {rawCode}
+          </a>
+        );
+      }
+      if (isLikelyPath(rawCode)) {
+        return <PathLink path={rawCode} />;
+      }
+    }
     return (
       <code
         className={`${isInline ? "bg-black/20 text-primary px-1 rounded font-mono text-xs" : "block bg-black/30 p-2 rounded font-mono text-xs overflow-x-auto"}`}

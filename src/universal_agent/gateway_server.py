@@ -17,6 +17,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -1374,11 +1375,23 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
 
                     async def run_execution():
                         saw_streaming_text = False
+                        tool_call_count = 0
+                        execution_duration_seconds = 0.0
+                        execution_start_ts = time.time()
                         if _heartbeat_service:
                             _heartbeat_service.busy_sessions.add(session.session_id)
                         try:
                             # Execute the request and stream back to THIS connection
                             async for event in gateway.execute(session, request):
+                                if event.type == EventType.TOOL_CALL:
+                                    tool_call_count += 1
+                                elif event.type == EventType.ITERATION_END and isinstance(event.data, dict):
+                                    execution_duration_seconds = float(
+                                        event.data.get("duration_seconds") or execution_duration_seconds
+                                    )
+                                    # Prefer engine-provided count if available
+                                    if isinstance(event.data.get("tool_calls"), int):
+                                        tool_call_count = int(event.data["tool_calls"])
                                 if (
                                     event.type == EventType.TEXT
                                     and isinstance(event.data, dict)
@@ -1414,10 +1427,16 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 from universal_agent.session_checkpoint import SessionCheckpointGenerator
                                 workspace_path = Path(session.workspace_dir)
                                 generator = SessionCheckpointGenerator(workspace_path)
+                                if execution_duration_seconds <= 0:
+                                    execution_duration_seconds = round(time.time() - execution_start_ts, 3)
+                                checkpoint_result = SimpleNamespace(
+                                    tool_calls=tool_call_count,
+                                    execution_time_seconds=execution_duration_seconds,
+                                )
                                 checkpoint = generator.generate_from_result(
                                     session_id=session.session_id,
                                     original_request=user_input,
-                                    result=None,  # Events were streamed, not collected
+                                    result=checkpoint_result,
                                 )
                                 generator.save(checkpoint)
                                 logger.info(f"✅ Saved session checkpoint: {workspace_path / 'session_checkpoint.json'}")

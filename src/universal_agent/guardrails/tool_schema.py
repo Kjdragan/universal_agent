@@ -7,10 +7,13 @@ that block malformed tool calls while injecting an inline schema/example hint.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 import json
 import os
+import re
 from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
+from zoneinfo import ZoneInfo
 
 from universal_agent.durable.tool_gateway import parse_tool_identity
 
@@ -118,6 +121,39 @@ _TOOL_SCHEMAS: dict[str, ToolSchema] = {
     ),
 }
 
+_NUMBER_WORDS_TO_INT = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "twenty-one": 21,
+    "twenty-two": 22,
+    "twenty-three": 23,
+    "twenty-four": 24,
+    "twenty-five": 25,
+    "twenty-six": 26,
+    "twenty-seven": 27,
+    "twenty-eight": 28,
+    "twenty-nine": 29,
+    "thirty": 30,
+}
+
 
 def _match_schema(tool_name: str) -> Optional[ToolSchema]:
     if not tool_name:
@@ -196,15 +232,197 @@ def _try_parse_json_list(raw_value: object) -> Optional[list]:
     return parsed if isinstance(parsed, list) else None
 
 
+def _try_parse_json_object(raw_value: object) -> Optional[dict]:
+    if not isinstance(raw_value, str):
+        return None
+    stripped = raw_value.strip()
+    if not stripped:
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _to_snake_case(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "_", value or "")
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_").lower()
+    return cleaned or "default"
+
+
+def _rolling_window_label(days: int) -> str:
+    clamped_days = max(1, min(days, 30))
+    tz_name = os.getenv("USER_TIMEZONE", "America/Chicago")
+    try:
+        now = datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        now = datetime.now()
+    end_date = now.date()
+    start_date = end_date - timedelta(days=clamped_days - 1)
+    start_str = start_date.strftime("%B %d, %Y").replace(" 0", " ")
+    end_str = end_date.strftime("%B %d, %Y").replace(" 0", " ")
+    return f"Canonical rolling window (inclusive): {start_str} to {end_str}."
+
+
+def _parse_past_days_token(token: str) -> Optional[int]:
+    cleaned = (token or "").strip().lower()
+    if not cleaned:
+        return None
+    if cleaned.isdigit():
+        return int(cleaned)
+    return _NUMBER_WORDS_TO_INT.get(cleaned)
+
+
+def _looks_like_file_reference(value: str) -> bool:
+    stripped = (value or "").strip()
+    if not stripped:
+        return False
+    if stripped.startswith("file://"):
+        return True
+    if stripped.startswith("/"):
+        return True
+    # Windows-style absolute path
+    if re.match(r"^[A-Za-z]:[\\/]", stripped):
+        return True
+    return False
+
+
+def _resolve_refined_corpus_path(task_name: Optional[str]) -> Optional[str]:
+    workspace = (os.getenv("CURRENT_SESSION_WORKSPACE") or "").strip()
+    if not workspace:
+        return None
+    workspace_path = Path(workspace)
+    candidates: list[Path] = []
+    if task_name and task_name.strip():
+        raw_task = task_name.strip()
+        candidates.append(workspace_path / "tasks" / raw_task / "refined_corpus.md")
+        normalized_task = _to_snake_case(raw_task)
+        if normalized_task != raw_task:
+            candidates.append(
+                workspace_path / "tasks" / normalized_task / "refined_corpus.md"
+            )
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+
+    tasks_dir = workspace_path / "tasks"
+    if tasks_dir.is_dir():
+        try:
+            refined_files = sorted(
+                tasks_dir.glob("*/refined_corpus.md"),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )
+        except Exception:
+            refined_files = []
+        if refined_files:
+            return str(refined_files[0])
+    return None
+
+
 def _normalize_tool_input(tool_name: str, tool_input: dict) -> Optional[dict]:
     normalized_name = (tool_name or "").lower()
+    if normalized_name == "task":
+        subagent_type = str(tool_input.get("subagent_type", "") or "").strip().lower()
+        prompt = tool_input.get("prompt")
+        if subagent_type == "research-specialist" and isinstance(prompt, str):
+            match = re.search(
+                r"\bpast\s+([a-zA-Z0-9-]{1,20})\s+days?\b",
+                prompt,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                parsed_days = _parse_past_days_token(match.group(1))
+                if parsed_days is not None:
+                    window_label = _rolling_window_label(parsed_days)
+                    canonical_range = window_label.replace(
+                        "Canonical rolling window (inclusive): ", ""
+                    ).rstrip(".")
+                    updated_prompt = prompt
+                    phrase_text = match.group(0)
+                    # Replace stale inline date windows like:
+                    # "past three days (January 30-31, February 1, 2026)"
+                    inline_pattern = re.escape(phrase_text) + r"\s*\([^)]*\)"
+                    updated_prompt = re.sub(
+                        inline_pattern,
+                        f"{phrase_text} ({canonical_range})",
+                        updated_prompt,
+                        count=1,
+                        flags=re.IGNORECASE,
+                    )
+                    # Ensure there is an explicit mandatory directive in the prompt.
+                    mandatory_line = (
+                        f"MANDATORY DATE WINDOW: {canonical_range}. "
+                        "Use only this window for all searches and date references."
+                    )
+                    if mandatory_line not in updated_prompt:
+                        updated_prompt = updated_prompt.strip() + "\n\n" + mandatory_line
+                    if updated_prompt != prompt:
+                        updated = dict(tool_input)
+                        updated["prompt"] = updated_prompt
+                        return updated
     if normalized_name.endswith("composio_multi_execute_tool"):
+        # Handle wrapper-shape hallucination:
+        # {"arguments": "{\"tools\": [...], \"session_id\": \"...\"}"}
+        if "tools" not in tool_input:
+            parsed_arguments = _try_parse_json_object(tool_input.get("arguments"))
+            if parsed_arguments is not None:
+                merged = dict(tool_input)
+                merged.pop("arguments", None)
+                merged.update(parsed_arguments)
+                # If tools are already materialized as a list, return immediately.
+                if isinstance(merged.get("tools"), list):
+                    return merged
+                tool_input = merged
+
         tools_value = tool_input.get("tools")
         parsed_tools = _try_parse_json_list(tools_value)
         if parsed_tools is not None:
             updated = dict(tool_input)
             updated["tools"] = parsed_tools
             return updated
+    if (
+        normalized_name.endswith("run_research_phase")
+        or normalized_name.endswith("run_report_generation")
+        or normalized_name.endswith("finalize_research")
+    ):
+        updated = dict(tool_input)
+        changed = False
+        task_name = tool_input.get("task_name")
+        normalized_task_name: Optional[str] = None
+        if isinstance(task_name, str) and task_name.strip():
+            normalized_task = _to_snake_case(task_name)
+            normalized_task_name = normalized_task
+            if normalized_task != task_name:
+                updated["task_name"] = normalized_task
+                changed = True
+        if normalized_name.endswith("run_report_generation"):
+            corpus_data = tool_input.get("corpus_data")
+            if isinstance(corpus_data, str):
+                corpus_stripped = corpus_data.strip()
+                inline_corpus_payload = (
+                    not _looks_like_file_reference(corpus_stripped)
+                    and (len(corpus_stripped) > 300 or "\n" in corpus_stripped)
+                )
+                if inline_corpus_payload:
+                    resolved_path = _resolve_refined_corpus_path(
+                        normalized_task_name or (task_name if isinstance(task_name, str) else None)
+                    )
+                    if resolved_path:
+                        updated["corpus_data"] = resolved_path
+                        changed = True
+        if changed:
+            return updated
+    if normalized_name.endswith("html_to_pdf"):
+        pdf_path = tool_input.get("pdf_path")
+        if isinstance(pdf_path, str) and pdf_path.strip().lower().endswith(".pdf"):
+            candidate = Path(pdf_path)
+            normalized_stem = _to_snake_case(candidate.stem)
+            if normalized_stem and normalized_stem != candidate.stem:
+                updated = dict(tool_input)
+                updated["pdf_path"] = str(candidate.with_name(f"{normalized_stem}.pdf"))
+                return updated
     if normalized_name.endswith("composio_search_tools"):
         queries_value = tool_input.get("queries")
         parsed_queries = _try_parse_json_list(queries_value)
