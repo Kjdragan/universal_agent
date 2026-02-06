@@ -87,12 +87,9 @@ class OpsService:
             return None
         return {"session": self._build_session_summary(workspace)}
 
-    def delete_session(self, session_id: str) -> bool:
-        """Delete a session's workspace directory."""
-        if session_id in self.gateway._sessions:
-             # Just remove reference from gateway memory, assume gateway handles runtime error gracefully
-             # (InProcessGateway doesn't really have 'close_session' exposed nicely yet)
-             self.gateway._sessions.pop(session_id, None)
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session's workspace directory and close its adapter."""
+        await self.gateway.close_session(session_id)
 
         workspace = self.workspaces_dir / session_id
         if workspace.exists() and workspace.is_dir():

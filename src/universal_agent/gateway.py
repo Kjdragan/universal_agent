@@ -436,6 +436,16 @@ class InProcessGateway(Gateway):
         
         return summaries[:50]  # Limit to 50 sessions
 
+    async def close_session(self, session_id: str) -> None:
+        """Close and clean up a single session's adapter and state."""
+        adapter = self._adapters.pop(session_id, None)
+        if adapter:
+            try:
+                await adapter.close()
+            except Exception:
+                pass
+        self._sessions.pop(session_id, None)
+
     async def close(self) -> None:
         """Clean up all active adapters and sessions."""
         # 1. Close all active adapters

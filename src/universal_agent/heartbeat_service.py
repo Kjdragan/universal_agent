@@ -37,7 +37,7 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "   - No markdown.\n"
     "   - No explanations.\n"
 )
-DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default (Clawdbot parity)
+DEFAULT_INTERVAL_SECONDS = 20 * 60  # 20 minutes default (Clawdbot parity)
 BUSY_RETRY_DELAY = 10  # Seconds
 DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 300
 MIN_HEARTBEAT_EXEC_TIMEOUT = 300
@@ -621,14 +621,7 @@ class HeartbeatService:
     async def _process_session(self, session: GatewaySession):
         """Check if a session needs a heartbeat run."""
         if session.session_id in self.busy_sessions:
-            # logger.info(f"Session {session.session_id} is busy.")
             return  # Skip if busy executing normal request
-
-        # process_turn + legacy paths still rely on global process state (stdio/env/globals).
-        # If *any* session is currently busy, defer all heartbeat work to avoid
-        # cross-session contamination and spurious timeouts.
-        if self.busy_sessions:
-            return
 
         # Load state
         workspace = Path(session.workspace_dir)
@@ -723,6 +716,7 @@ class HeartbeatService:
         """Execute the heartbeat using the gateway engine."""
         self.busy_sessions.add(session.session_id)
         keep_busy_until_collect_finishes = False
+        timed_out = False
         
         def _mock_heartbeat_response(content: str) -> str:
             # Deterministic response for tests/CI (no external calls).
@@ -817,6 +811,8 @@ class HeartbeatService:
                     nonlocal full_response
                     nonlocal saw_streaming_text, final_text
                     async for event in self.gateway.execute(session, request):
+                        if timed_out:
+                            return
                         # Broadcast agent events into the session stream so connected UIs
                         # can see heartbeat activity in real time.
                         try:
@@ -873,6 +869,7 @@ class HeartbeatService:
                 try:
                     await asyncio.wait_for(collect_task, timeout=self.execution_timeout_seconds)
                 except asyncio.TimeoutError:
+                    timed_out = True
                     logger.error(
                         "Heartbeat execution timed out after %ss for %s",
                         self.execution_timeout_seconds,
@@ -909,10 +906,12 @@ class HeartbeatService:
 
             # --- Phase 3 Logic ---
             # Prefer the non-streaming final text (when present) to avoid duplicated aggregation.
-            if final_text is not None:
-                full_response = final_text
-            elif streamed_chunks:
-                full_response = "".join(streamed_chunks)
+            # Skip overwrite when timed out — keep "UA_HEARTBEAT_TIMEOUT" as the canonical response.
+            if not timed_out:
+                if final_text is not None:
+                    full_response = final_text
+                elif streamed_chunks:
+                    full_response = "".join(streamed_chunks)
             strip_result = _strip_heartbeat_tokens(
                 full_response,
                 schedule.ok_tokens,
@@ -1076,6 +1075,14 @@ class HeartbeatService:
 
         except Exception as e:
             logger.error(f"Heartbeat execution failed for {session.session_id}: {e}")
+            # Update last_run even on failure to prevent rapid retry loops.
+            # The next scheduled tick will retry after the normal interval.
+            state.last_run = time.time()
+            try:
+                with open(state_path, "w") as f:
+                    json.dump(state.to_dict(), f)
+            except Exception:
+                pass
         finally:
             if not keep_busy_until_collect_finishes:
                 self.busy_sessions.discard(session.session_id)

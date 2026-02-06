@@ -1021,8 +1021,11 @@ async def get_session_info(session_id: str):
 
 @app.delete("/api/v1/sessions/{session_id}")
 async def delete_session(session_id: str):
-    if session_id in _sessions:
-        del _sessions[session_id]
+    _sessions.pop(session_id, None)
+    gateway = get_gateway()
+    await gateway.close_session(session_id)
+    if _heartbeat_service:
+        _heartbeat_service.unregister_session(session_id)
     return {"status": "deleted", "session_id": session_id}
 
 
@@ -1108,7 +1111,7 @@ async def ops_delete_session(request: Request, session_id: str, confirm: bool = 
     if not _ops_service:
         raise HTTPException(status_code=503, detail="Ops service not initialized")
     
-    deleted = _ops_service.delete_session(session_id)
+    deleted = await _ops_service.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"status": "deleted", "session_id": session_id}

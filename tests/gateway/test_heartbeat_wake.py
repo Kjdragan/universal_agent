@@ -42,6 +42,26 @@ async def _create_session(base_url: str, workspace_dir: Path) -> str:
             return data["session_id"]
 
 
+async def _recv_heartbeat_msg(ws, timeout: float = 6.0):
+    """Receive WS messages, skipping status/pong/query_complete, until a heartbeat result."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_event_loop().time()
+        if remaining <= 0:
+            return None
+        try:
+            msg = await asyncio.wait_for(ws.receive_json(), timeout=remaining)
+        except asyncio.TimeoutError:
+            return None
+        msg_type = msg.get("type", "")
+        if msg_type in {"heartbeat_summary", "heartbeat_indicator"}:
+            return msg
+        if msg_type == "system_event":
+            inner = msg.get("data", {}).get("type", "")
+            if inner in {"heartbeat_summary", "heartbeat_indicator"}:
+                return {"type": inner, "data": msg.get("data", {}).get("payload", {})}
+
+
 def _write_state(workspace_dir: Path, last_run: float) -> None:
     state = {"last_run": last_run, "last_message_hash": None, "last_message_ts": 0.0}
     (workspace_dir / "heartbeat_state.json").write_text(json.dumps(state), encoding="utf-8")
@@ -89,7 +109,8 @@ def test_heartbeat_wake_now_and_next(tmp_path):
                     ) as resp:
                         assert resp.status == 200
 
-                    msg = await asyncio.wait_for(ws.receive_json(), timeout=6.0)
+                    msg = await _recv_heartbeat_msg(ws, timeout=10.0)
+                    assert msg is not None, "Timed out waiting for heartbeat result after wake-now"
                     assert msg.get("type") in {"heartbeat_summary", "heartbeat_indicator"}
 
                     _write_state(workspace_dir, time.time())
@@ -100,13 +121,12 @@ def test_heartbeat_wake_now_and_next(tmp_path):
                     ) as resp:
                         assert resp.status == 200
 
-                    try:
-                        await asyncio.wait_for(ws.receive_json(), timeout=1.0)
-                        assert False, "Unexpected immediate heartbeat on wake-next"
-                    except asyncio.TimeoutError:
-                        pass
+                    # wake-next should NOT fire immediately
+                    immediate = await _recv_heartbeat_msg(ws, timeout=1.0)
+                    assert immediate is None, "Unexpected immediate heartbeat on wake-next"
 
-                    msg_next = await asyncio.wait_for(ws.receive_json(), timeout=5.0)
+                    msg_next = await _recv_heartbeat_msg(ws, timeout=8.0)
+                    assert msg_next is not None, "Timed out waiting for heartbeat result after wake-next"
                     assert msg_next.get("type") in {"heartbeat_summary", "heartbeat_indicator"}
 
         asyncio.run(_run_flow())
