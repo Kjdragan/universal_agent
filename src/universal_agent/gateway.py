@@ -16,6 +16,11 @@ except Exception:  # pragma: no cover - import safety for tooling
     AgentEvent = Any  # type: ignore
     EventType = Any  # type: ignore
 
+try:
+    import logfire
+except ImportError:
+    logfire = None  # type: ignore
+
 # Import ProcessTurnAdapter for unified execution engine
 try:
     from universal_agent.execution_engine import ProcessTurnAdapter, EngineConfig
@@ -305,6 +310,12 @@ class InProcessGateway(Gateway):
             
             if not adapter:
                 raise RuntimeError(f"No adapter for session: {session.session_id}")
+            
+            # Propagate request metadata into the adapter config so spans
+            # carry run_source, force_complex, etc.
+            adapter.config.force_complex = request.force_complex
+            run_source = request.metadata.get("source", "user")
+            adapter.config.__dict__["_run_source"] = run_source
             
             # Execute through unified engine
             async for event in adapter.execute(request.user_input):
