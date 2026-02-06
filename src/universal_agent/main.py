@@ -5964,8 +5964,30 @@ def _is_context_only_intent(query: str) -> bool:
     return False
 
 
+def _is_tool_required_intent(query: str) -> bool:
+    """Detect queries that obviously require tools — skip LLM classification."""
+    lowered = query.lower()
+    # Heartbeat prompts always need tools (date check, file reads, monitors)
+    if "read heartbeat" in lowered or "heartbeat_ok" in lowered:
+        return True
+    # Explicit tool/action verbs
+    if any(kw in lowered for kw in ["search for", "send email", "run ", "execute ", "create a report"]):
+        return True
+    return False
+
+
 async def classify_query(client: ClaudeSDKClient, query: str) -> str:
     """Determine if a query is SIMPLE (direct answer) or COMPLEX (needs tools)."""
+    if _is_tool_required_intent(query):
+        print("\n🤔 Query Classification: COMPLEX (Heuristic: tool_required_intent)")
+        if LOGFIRE_TOKEN:
+            logfire.info(
+                "query_classification",
+                query=query,
+                decision="COMPLEX",
+                raw_response="HEURISTIC_TOOL_REQUIRED",
+            )
+        return "COMPLEX"
     if _is_memory_intent(query):
         print("\n🤔 Query Classification: SIMPLE (Heuristic: memory_intent)")
         if LOGFIRE_TOKEN:
