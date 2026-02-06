@@ -47,11 +47,28 @@ async def _run_once(base_url: str, ws_url: str, workspace_dir: Path, instruction
 
         async with session.ws_connect(f"{ws_url}/api/v1/sessions/{session_id}/stream") as ws:
             await ws.receive()
-            try:
-                msg = await asyncio.wait_for(ws.receive_json(), timeout=timeout)
-                return msg
-            except asyncio.TimeoutError:
-                return None
+            # Skip intermediate status/query_complete/pong messages and look for
+            # the heartbeat result (heartbeat_summary, heartbeat_indicator, or
+            # system_event wrapping one of those).
+            deadline = asyncio.get_event_loop().time() + timeout
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    return None
+                try:
+                    msg = await asyncio.wait_for(ws.receive_json(), timeout=remaining)
+                except asyncio.TimeoutError:
+                    return None
+                msg_type = msg.get("type", "")
+                # Return heartbeat result messages
+                if msg_type in {"heartbeat_summary", "heartbeat_indicator"}:
+                    return msg
+                # system_event wrapping a heartbeat payload
+                if msg_type == "system_event":
+                    inner = msg.get("data", {}).get("type", "")
+                    if inner in {"heartbeat_summary", "heartbeat_indicator"}:
+                        return {"type": inner, "data": msg.get("data", {}).get("payload", {})}
+                # Skip status, query_complete, pong, text, etc.
 
 
 def _run_gateway(env_overrides: dict[str, str]):

@@ -224,6 +224,8 @@ export interface TokenUsage {
 
 export type MessageRole = "user" | "assistant" | "system";
 
+export type MessageType = "speech" | "thought";
+
 export interface Message {
   id: string;
   role: MessageRole;
@@ -234,6 +236,7 @@ export interface Message {
   thinking?: string;
   is_complete: boolean;
   author?: string;
+  messageType?: MessageType;
 }
 
 // =============================================================================

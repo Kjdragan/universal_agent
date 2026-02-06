@@ -26,7 +26,7 @@ interface ToolEntry {
 type ActivityItem = LogEntry | ToolEntry;
 type ExpandMode = 'collapsed' | 'open' | 'expanded';
 
-export function CombinedActivityLog() {
+export function CombinedActivityLog({ onCollapse }: { onCollapse?: () => void } = {}) {
     const logs = useAgentStore((state) => state.logs);
     const toolCalls = useAgentStore((state) => state.toolCalls);
     const scrollRef = useRef<HTMLDivElement>(null);
@@ -61,6 +61,16 @@ export function CombinedActivityLog() {
                     Activity & Logs
                 </h3>
                 <div className="flex items-center gap-2">
+                    {onCollapse && (
+                        <button
+                            type="button"
+                            className="text-[10px] px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+                            title="Collapse activity panel"
+                            onClick={onCollapse}
+                        >
+                            ◀
+                        </button>
+                    )}
                     <button
                         type="button"
                         className="text-[10px] px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"

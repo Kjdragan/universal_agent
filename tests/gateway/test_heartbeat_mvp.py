@@ -49,15 +49,24 @@ async def _run_heartbeat_flow(base_url: str, ws_url: str, workspace_dir: Path) -
 
         async with session.ws_connect(f"{ws_url}/api/v1/sessions/{session_id}/stream") as ws:
             await ws.receive()  # connected
-            # Wait for heartbeat summary (scheduler tick)
-            try:
-                msg = await asyncio.wait_for(ws.receive_json(), timeout=20.0)
-            except asyncio.TimeoutError as exc:
-                raise AssertionError("Timed out waiting for heartbeat_summary") from exc
-
-            if msg.get("type") != "heartbeat_summary":
-                raise AssertionError(f"Expected heartbeat_summary, got {msg.get('type')}")
-            return msg
+            # Wait for heartbeat summary (scheduler tick), skipping status events
+            deadline = asyncio.get_event_loop().time() + 20.0
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    raise AssertionError("Timed out waiting for heartbeat_summary")
+                try:
+                    msg = await asyncio.wait_for(ws.receive_json(), timeout=remaining)
+                except asyncio.TimeoutError as exc:
+                    raise AssertionError("Timed out waiting for heartbeat_summary") from exc
+                msg_type = msg.get("type", "")
+                if msg_type == "heartbeat_summary":
+                    return msg
+                if msg_type == "system_event":
+                    inner = msg.get("data", {}).get("type", "")
+                    if inner == "heartbeat_summary":
+                        return {"type": inner, "data": msg.get("data", {}).get("payload", {})}
+                # Skip status, query_complete, pong, text, etc.
 
 
 def test_heartbeat_summary_broadcast(tmp_path):

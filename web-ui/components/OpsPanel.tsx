@@ -82,14 +82,21 @@ function safeJsonParse(value: string): { ok: true; data: Record<string, unknown>
   }
 }
 
-export function OpsPanel() {
+type PanelKey = "core" | "system" | "session";
+
+type OpsPanelProps = {
+  panelOpen?: Record<PanelKey, boolean>;
+  onTogglePanel?: (panel: PanelKey) => void;
+  showPanelToggles?: boolean;
+};
+
+export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelToggles = true }: OpsPanelProps) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [skills, setSkills] = useState<SkillStatus[]>([]);
   const [channels, setChannels] = useState<ChannelStatus[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [logTail, setLogTail] = useState<string>("");
-  const [activityTail, setActivityTail] = useState<string>("");
   const [loading, setLoading] = useState(false);
 
   const systemEvents = useAgentStore((state) => state.systemEvents);
@@ -113,6 +120,22 @@ export function OpsPanel() {
     last_summary_text?: string;
     error?: string;
   }>({ status: "Not loaded" });
+  const [panelOpenState, setPanelOpenState] = useState<Record<PanelKey, boolean>>({
+    core: true,
+    system: true,
+    session: true,
+  });
+  const panelOpen = panelOpenProp ?? panelOpenState;
+  const handleTogglePanel = (panel: PanelKey) => {
+    if (onTogglePanel) {
+      onTogglePanel(panel);
+      return;
+    }
+    setPanelOpenState((prev) => ({
+      ...prev,
+      [panel]: !prev[panel],
+    }));
+  };
 
   const mergedEvents = useMemo(() => {
     const byId = new Map<string, SystemEventItem>();
@@ -328,23 +351,6 @@ export function OpsPanel() {
     }
   }, []);
 
-  const fetchActivityLog = useCallback(async (sessionId: string) => {
-    try {
-      const res = await fetch(
-        `${API_BASE}/api/v1/ops/sessions/${encodeURIComponent(sessionId)}/preview`,
-        { headers: buildHeaders() },
-      );
-      if (res.ok) {
-        const data = await res.json();
-        setActivityTail((data.lines || []).join("\n"));
-      } else {
-        setActivityTail("(Activity log unavailable)");
-      }
-    } catch (err) {
-      console.error("Ops activity fetch failed", err);
-      setActivityTail("(Error fetching activity log)");
-    }
-  }, []);
 
   const deleteSession = useCallback(async (sessionId: string) => {
     if (!sessionId) return;
@@ -498,16 +504,40 @@ export function OpsPanel() {
   useEffect(() => {
     if (selected) {
       fetchLogs(selected);
-      fetchActivityLog(selected);
       fetchSystemEvents(selected);
       fetchHeartbeat(selected);
     }
-  }, [selected, fetchLogs, fetchSystemEvents, fetchHeartbeat, fetchActivityLog]);
+  }, [selected, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
 
   return (
-    <div className="flex flex-col border rounded-lg bg-background/60 overflow-hidden mb-3">
-      <div className="p-3 border-b bg-muted/20 flex items-center justify-between">
-        <h3 className="text-sm font-semibold">Ops Panel</h3>
+    <div className="flex flex-col border border-border/60 rounded-lg bg-card/30 overflow-hidden mb-3 tactical-panel">
+      <div className="p-3 border-b border-border/40 bg-card/40 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">⚙️</span>
+          <h3 className="text-sm font-display font-bold text-foreground/90 tracking-wide">OPS PANEL</h3>
+          {showPanelToggles && (
+            <div className="flex items-center gap-1 ml-2">
+              {([
+                { key: "core", label: "Core" },
+                { key: "system", label: "System" },
+                { key: "session", label: "Session" },
+              ] as const).map((panel) => (
+                <button
+                  key={panel.key}
+                  type="button"
+                  aria-expanded={panelOpen[panel.key]}
+                  onClick={() => handleTogglePanel(panel.key)}
+                  className="text-[10px] px-2 py-1 rounded border border-border/60 bg-card/40 hover:bg-card/60 hover:border-primary/40 transition-all"
+                >
+                  <span className="mr-1">{panel.label}</span>
+                  <span className={panelOpen[panel.key] ? "inline-block rotate-180" : "inline-block"}>
+                    ▾
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <button
           onClick={() => {
             fetchSessions();
@@ -519,348 +549,350 @@ export function OpsPanel() {
             loadOpsSchema();
             if (selected) {
               fetchLogs(selected);
-              fetchActivityLog(selected);
               fetchSystemEvents(selected);
               fetchHeartbeat(selected);
             }
           }}
-          className="text-xs px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+          className="text-[10px] px-3 py-1.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 hover:border-primary/40 transition-all btn-tech"
           disabled={loading}
         >
-          {loading ? "Refreshing..." : "Refresh"}
+          {loading ? "REFRESHING..." : "REFRESH"}
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 p-3 text-xs">
-        <div className="border rounded bg-background/40 p-2">
-          <div className="font-semibold mb-2">Sessions</div>
-          <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
-            {sessions.length === 0 && (
-              <div className="text-muted-foreground">No sessions found</div>
-            )}
-            {sessions.map((session) => (
-              <button
-                key={session.session_id}
-                onClick={() => setSelected(session.session_id)}
-                className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === session.session_id
-                  ? "border-primary text-primary"
-                  : "border-border/50 text-muted-foreground"
-                  }`}
-              >
-                <div className="font-mono truncate">{session.session_id}</div>
-                <div className="flex justify-between">
-                  <span>{session.status}</span>
-                  <span className="opacity-60">
-                    {session.last_activity?.slice(11, 19) ?? "--:--:--"}
-                  </span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="border rounded bg-background/40 p-2">
-          <div className="font-semibold mb-2">Skills</div>
-          <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
-            {skills.length === 0 && (
-              <div className="text-muted-foreground">No skills found</div>
-            )}
-            {skills.map((skill) => (
-              <div key={skill.name} className="flex items-center justify-between">
-                <span className="truncate">{skill.name}</span>
-                <span
-                  className={`text-[10px] px-1.5 py-0.5 rounded ${skill.enabled && skill.available
-                    ? "bg-emerald-500/10 text-emerald-500"
-                    : "bg-amber-500/10 text-amber-500"
-                    }`}
-                >
-                  {skill.enabled && skill.available ? "enabled" : "disabled"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 px-3 pb-3 text-xs">
-        <div className="border rounded bg-background/40 p-2">
-          <div className="font-semibold mb-2">Channels</div>
-          <div className="space-y-2 max-h-40 overflow-y-auto scrollbar-thin">
-            {channels.length === 0 && (
-              <div className="text-muted-foreground">No channels found</div>
-            )}
-            {channels.map((channel) => (
-              <div key={channel.id} className="border rounded px-2 py-1 bg-background/50">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono">{channel.id}</span>
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded ${channel.enabled
-                      ? "bg-emerald-500/10 text-emerald-500"
-                      : "bg-amber-500/10 text-amber-500"
+      {panelOpen.core && (
+        <>
+          <div className="grid grid-cols-2 gap-2 p-3 text-xs">
+            <div className="border rounded bg-background/40 p-2">
+              <div className="font-semibold mb-2">Sessions</div>
+              <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
+                {sessions.length === 0 && (
+                  <div className="text-muted-foreground">No sessions found</div>
+                )}
+                {sessions.map((session) => (
+                  <button
+                    key={session.session_id}
+                    onClick={() => setSelected(session.session_id)}
+                    className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === session.session_id
+                      ? "border-primary text-primary"
+                      : "border-border/50 text-muted-foreground"
                       }`}
                   >
-                    {channel.enabled ? "enabled" : "disabled"}
-                  </span>
-                </div>
-                <div className="text-[10px] text-muted-foreground">{channel.note}</div>
-                <div className="flex items-center justify-between mt-1">
-                  <span className="text-[10px] text-muted-foreground">
-                    probe: {channel.probe?.status ?? "n/a"}
-                  </span>
-                  <button
-                    type="button"
-                    className="text-[10px] px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
-                    onClick={() => probeChannel(channel.id)}
-                  >
-                    Probe
+                    <div className="font-mono truncate">{session.session_id}</div>
+                    <div className="flex justify-between">
+                      <span>{session.status}</span>
+                      <span className="opacity-60">
+                        {session.last_activity?.slice(11, 19) ?? "--:--:--"}
+                      </span>
+                    </div>
                   </button>
-                </div>
-                {channel.probe?.detail && (
-                  <div className="text-[10px] text-muted-foreground mt-1">
-                    {channel.probe.detail}
-                  </div>
-                )}
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
+            </div>
 
-        <div className="border rounded bg-background/40 p-2">
-          <div className="font-semibold mb-2">Approvals</div>
-          <div className="space-y-2 max-h-40 overflow-y-auto scrollbar-thin">
-            {approvals.length === 0 && (
-              <div className="text-muted-foreground">No approvals</div>
-            )}
-            {approvals.map((approval) => (
-              <div key={approval.approval_id} className="border rounded px-2 py-1 bg-background/50">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-[11px] truncate">
-                    {approval.approval_id}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">
-                    {approval.status ?? "unknown"}
-                  </span>
-                </div>
-                {approval.summary && (
-                  <div className="text-[10px] text-muted-foreground">{approval.summary}</div>
+            <div className="border rounded bg-background/40 p-2">
+              <div className="font-semibold mb-2">Skills</div>
+              <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
+                {skills.length === 0 && (
+                  <div className="text-muted-foreground">No skills found</div>
                 )}
-                {approval.status === "pending" && (
-                  <div className="flex gap-2 mt-2">
-                    <button
-                      type="button"
-                      className="text-[10px] px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500"
-                      onClick={() => updateApproval(approval.approval_id, "approved")}
+                {skills.map((skill) => (
+                  <div key={skill.name} className="flex items-center justify-between">
+                    <span className="truncate">{skill.name}</span>
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded ${skill.enabled && skill.available
+                        ? "bg-emerald-500/10 text-emerald-500"
+                        : "bg-amber-500/10 text-amber-500"
+                        }`}
                     >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      className="text-[10px] px-2 py-1 rounded border bg-amber-500/10 text-amber-500"
-                      onClick={() => updateApproval(approval.approval_id, "rejected")}
-                    >
-                      Reject
-                    </button>
+                      {skill.enabled && skill.available ? "enabled" : "disabled"}
+                    </span>
                   </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 px-3 pb-3 text-xs">
+            <div className="border rounded bg-background/40 p-2">
+              <div className="font-semibold mb-2">Channels</div>
+              <div className="space-y-2 max-h-40 overflow-y-auto scrollbar-thin">
+                {channels.length === 0 && (
+                  <div className="text-muted-foreground">No channels found</div>
                 )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 px-3 pb-3 text-xs">
-        <div className="border rounded bg-background/40 p-2">
-          <div className="font-semibold mb-2">System Presence</div>
-          <div className="space-y-1 max-h-36 overflow-y-auto scrollbar-thin">
-            {presenceList.length === 0 && (
-              <div className="text-muted-foreground">No presence updates</div>
-            )}
-            {presenceList.map((node) => (
-              <div key={node.node_id} className="flex items-center justify-between">
-                <span className="truncate font-mono">{node.node_id}</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500">
-                  {node.status}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="border rounded bg-background/40 p-2">
-          <div className="font-semibold mb-2">System Events</div>
-          <div className="space-y-1 max-h-36 overflow-y-auto scrollbar-thin">
-            {mergedEvents.length === 0 && (
-              <div className="text-muted-foreground">No system events</div>
-            )}
-            {mergedEvents.map((event) => (
-              <div key={event.id} className="border rounded px-2 py-1 bg-background/50">
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  <span>{event.event_type}</span>
-                  <span>{event.created_at?.slice(11, 19) ?? "--:--:--"}</span>
-                </div>
-                <div className="font-mono text-[11px] truncate">
-                  {Object.keys(event.payload || {}).join(", ") || "(no payload)"}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="px-3 pb-3 text-xs">
-        <div className="border rounded bg-background/40 p-2">
-          <div className="font-semibold mb-2 flex items-center justify-between">
-            <span>Heartbeat</span>
-            <span className="text-[10px] text-muted-foreground">{heartbeatState.status}</span>
-          </div>
-          {!selected && (
-            <div className="text-muted-foreground">Select a session to view heartbeat.</div>
-          )}
-          {selected && (
-            <div className="space-y-1">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Last run</span>
-                <span className="font-mono text-[11px]">
-                  {typeof heartbeatState.last_run === "number"
-                    ? new Date(heartbeatState.last_run * 1000).toLocaleString()
-                    : heartbeatState.last_run ?? "--"}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Running</span>
-                <span className="font-mono text-[11px]">{heartbeatState.busy ? "yes" : "no"}</span>
-              </div>
-              {(() => {
-                const raw = heartbeatState.last_summary_raw;
-                if (!raw || typeof raw !== "object") return null;
-                const summary = raw as { sent?: boolean; suppressed_reason?: string };
-                return (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Delivered</span>
-                      <span className="font-mono text-[11px]">
-                        {summary.sent ? "yes" : "no"}
+                {channels.map((channel) => (
+                  <div key={channel.id} className="border rounded px-2 py-1 bg-background/50">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono">{channel.id}</span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded ${channel.enabled
+                          ? "bg-emerald-500/10 text-emerald-500"
+                          : "bg-amber-500/10 text-amber-500"
+                          }`}
+                      >
+                        {channel.enabled ? "enabled" : "disabled"}
                       </span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Suppressed</span>
-                      <span className="font-mono text-[11px]">
-                        {summary.suppressed_reason ?? "--"}
+                    <div className="text-[10px] text-muted-foreground">{channel.note}</div>
+                    <div className="flex items-center justify-between mt-1">
+                      <span className="text-[10px] text-muted-foreground">
+                        probe: {channel.probe?.status ?? "n/a"}
                       </span>
+                      <button
+                        type="button"
+                        className="text-[10px] px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+                        onClick={() => probeChannel(channel.id)}
+                      >
+                        Probe
+                      </button>
                     </div>
-                  </>
-                );
-              })()}
-              <div className="text-muted-foreground">Last summary</div>
-              <div className="text-[11px] font-mono whitespace-pre-wrap">
-                {heartbeatState.last_summary_text ?? "(none)"}
-              </div>
-              {(() => {
-                const raw = heartbeatState.last_summary_raw;
-                if (!raw || typeof raw !== "object") return null;
-                const artifacts = (raw as { artifacts?: { writes?: string[]; work_products?: string[] } }).artifacts;
-                const writes = artifacts?.writes;
-                const workProducts = artifacts?.work_products;
-                if ((!writes || writes.length === 0) && (!workProducts || workProducts.length === 0)) return null;
-                return (
-                  <div className="space-y-1">
-                    <div className="text-muted-foreground">Artifacts</div>
-                    {writes && writes.length > 0 && (
-                      <div className="text-[10px] font-mono whitespace-pre-wrap">
-                        {"writes:\n" + writes.slice(-5).join("\n")}
-                      </div>
-                    )}
-                    {workProducts && workProducts.length > 0 && (
-                      <div className="text-[10px] font-mono whitespace-pre-wrap">
-                        {"work_products:\n" + workProducts.slice(-5).join("\n")}
+                    {channel.probe?.detail && (
+                      <div className="text-[10px] text-muted-foreground mt-1">
+                        {channel.probe.detail}
                       </div>
                     )}
                   </div>
-                );
-              })()}
-              {heartbeatState.error && (
-                <div className="text-[10px] text-amber-500">{heartbeatState.error}</div>
-              )}
+                ))}
+              </div>
             </div>
-          )}
-        </div>
-      </div>
 
-      {selected && (
-        <div className="px-3 pb-3 text-xs">
-          <div className="border rounded bg-background/40 p-2">
-            <div className="font-semibold mb-2">Session Actions</div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => compactLogs(selected)}
-                className="px-2 py-1 rounded border bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
-              >
-                Compact Logs
-              </button>
-              <button
-                onClick={() => resetSession(selected)}
-                className="px-2 py-1 rounded border bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
-              >
-                Reset Session
-              </button>
-              <button
-                onClick={() => deleteSession(selected)}
-                className="px-2 py-1 rounded border bg-red-500/10 text-red-500 hover:bg-red-500/20"
-              >
-                Delete Session
-              </button>
+            <div className="border rounded bg-background/40 p-2">
+              <div className="font-semibold mb-2">Approvals</div>
+              <div className="space-y-2 max-h-40 overflow-y-auto scrollbar-thin">
+                {approvals.length === 0 && (
+                  <div className="text-muted-foreground">No approvals</div>
+                )}
+                {approvals.map((approval) => (
+                  <div key={approval.approval_id} className="border rounded px-2 py-1 bg-background/50">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-[11px] truncate">
+                        {approval.approval_id}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">
+                        {approval.status ?? "unknown"}
+                      </span>
+                    </div>
+                    {approval.summary && (
+                      <div className="text-[10px] text-muted-foreground">{approval.summary}</div>
+                    )}
+                    {approval.status === "pending" && (
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          type="button"
+                          className="text-[10px] px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500"
+                          onClick={() => updateApproval(approval.approval_id, "approved")}
+                        >
+                          Approve
+                        </button>
+                        <button
+                          type="button"
+                          className="text-[10px] px-2 py-1 rounded border bg-amber-500/10 text-amber-500"
+                          onClick={() => updateApproval(approval.approval_id, "rejected")}
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
 
-      <div className="px-3 pb-3 text-xs">
-        <div className="border rounded bg-background/40 p-2">
-          <div className="font-semibold mb-2">Activity Log (Preview)</div>
-          <pre className="text-[10px] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border">
-            {selected ? activityTail || "(empty)" : "Select a session"}
-          </pre>
-        </div>
-      </div>
+      {panelOpen.system && (
+        <>
+          <div className="grid grid-cols-2 gap-2 px-3 pb-3 text-xs">
+            <div className="border rounded bg-background/40 p-2">
+              <div className="font-semibold mb-2">System Presence</div>
+              <div className="space-y-1 max-h-36 overflow-y-auto scrollbar-thin">
+                {presenceList.length === 0 && (
+                  <div className="text-muted-foreground">No presence updates</div>
+                )}
+                {presenceList.map((node) => (
+                  <div key={node.node_id} className="flex items-center justify-between">
+                    <span className="truncate font-mono">{node.node_id}</span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500">
+                      {node.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
 
-      <div className="border-t p-3">
-        <div className="font-semibold text-xs mb-2">run.log tail</div>
-        <pre className="text-[10px] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border">
-          {selected ? logTail || "(empty)" : "Select a session"}
-        </pre>
-      </div>
+            <div className="border rounded bg-background/40 p-2">
+              <div className="font-semibold mb-2">System Events</div>
+              <div className="space-y-1 max-h-36 overflow-y-auto scrollbar-thin">
+                {mergedEvents.length === 0 && (
+                  <div className="text-muted-foreground">No system events</div>
+                )}
+                {mergedEvents.map((event) => (
+                  <div key={event.id} className="border rounded px-2 py-1 bg-background/50">
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>{event.event_type}</span>
+                      <span>{event.created_at?.slice(11, 19) ?? "--:--:--"}</span>
+                    </div>
+                    <div className="font-mono text-[11px] truncate">
+                      {Object.keys(event.payload || {}).join(", ") || "(no payload)"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
 
-      <div className="border-t p-3">
-        <div className="flex items-center justify-between mb-2">
-          <div className="font-semibold text-xs">Ops config (ops_config.json)</div>
-          <div className="text-[10px] text-muted-foreground">{opsConfigStatus}</div>
-        </div>
-        <textarea
-          className="w-full min-h-[140px] text-[11px] font-mono p-2 rounded border bg-background/60"
-          value={opsConfigText}
-          onChange={(e) => setOpsConfigText(e.target.value)}
-        />
-        {opsConfigError && (
-          <div className="text-[10px] text-red-500 mt-2">{opsConfigError}</div>
-        )}
-        <div className="flex gap-2 mt-2">
-          <button
-            type="button"
-            className="text-xs px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
-            onClick={loadOpsConfig}
-          >
-            Reload
-          </button>
-          <button
-            type="button"
-            className="text-xs px-2 py-1 rounded border bg-primary/20 text-primary hover:bg-primary/30 transition-colors disabled:opacity-50"
-            onClick={saveOpsConfig}
-            disabled={opsConfigSaving}
-          >
-            {opsConfigSaving ? "Saving..." : "Save"}
-          </button>
-        </div>
-      </div>
+          <div className="px-3 pb-3 text-xs">
+            <div className="border rounded bg-background/40 p-2">
+              <div className="font-semibold mb-2 flex items-center justify-between">
+                <span>Heartbeat</span>
+                <span className="text-[10px] text-muted-foreground">{heartbeatState.status}</span>
+              </div>
+              {!selected && (
+                <div className="text-muted-foreground">Select a session to view heartbeat.</div>
+              )}
+              {selected && (
+                <div className="space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Last run</span>
+                    <span className="font-mono text-[11px]">
+                      {typeof heartbeatState.last_run === "number"
+                        ? new Date(heartbeatState.last_run * 1000).toLocaleString()
+                        : heartbeatState.last_run ?? "--"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Running</span>
+                    <span className="font-mono text-[11px]">{heartbeatState.busy ? "yes" : "no"}</span>
+                  </div>
+                  {(() => {
+                    const raw = heartbeatState.last_summary_raw;
+                    if (!raw || typeof raw !== "object") return null;
+                    const summary = raw as { sent?: boolean; suppressed_reason?: string };
+                    return (
+                      <>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Delivered</span>
+                          <span className="font-mono text-[11px]">
+                            {summary.sent ? "yes" : "no"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Suppressed</span>
+                          <span className="font-mono text-[11px]">
+                            {summary.suppressed_reason ?? "--"}
+                          </span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                  <div className="text-muted-foreground">Last summary</div>
+                  <div className="text-[11px] font-mono whitespace-pre-wrap">
+                    {heartbeatState.last_summary_text ?? "(none)"}
+                  </div>
+                  {(() => {
+                    const raw = heartbeatState.last_summary_raw;
+                    if (!raw || typeof raw !== "object") return null;
+                    const artifacts = (raw as { artifacts?: { writes?: string[]; work_products?: string[] } }).artifacts;
+                    const writes = artifacts?.writes;
+                    const workProducts = artifacts?.work_products;
+                    if ((!writes || writes.length === 0) && (!workProducts || workProducts.length === 0)) return null;
+                    return (
+                      <div className="space-y-1">
+                        <div className="text-muted-foreground">Artifacts</div>
+                        {writes && writes.length > 0 && (
+                          <div className="text-[10px] font-mono whitespace-pre-wrap">
+                            {"writes:\n" + writes.slice(-5).join("\n")}
+                          </div>
+                        )}
+                        {workProducts && workProducts.length > 0 && (
+                          <div className="text-[10px] font-mono whitespace-pre-wrap">
+                            {"work_products:\n" + workProducts.slice(-5).join("\n")}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {heartbeatState.error && (
+                    <div className="text-[10px] text-amber-500">{heartbeatState.error}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {panelOpen.session && (
+        <>
+          {selected && (
+            <div className="px-3 pb-3 text-xs">
+              <div className="border rounded bg-background/40 p-2">
+                <div className="font-semibold mb-2">Session Actions</div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => compactLogs(selected)}
+                    className="px-2 py-1 rounded border bg-blue-500/10 text-blue-500 hover:bg-blue-500/20"
+                  >
+                    Compact Logs
+                  </button>
+                  <button
+                    onClick={() => resetSession(selected)}
+                    className="px-2 py-1 rounded border bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
+                  >
+                    Reset Session
+                  </button>
+                  <button
+                    onClick={() => deleteSession(selected)}
+                    className="px-2 py-1 rounded border bg-red-500/10 text-red-500 hover:bg-red-500/20"
+                  >
+                    Delete Session
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="border-t p-3">
+            <div className="font-semibold text-xs mb-2">run.log tail</div>
+            <pre className="text-[10px] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border">
+              {selected ? logTail || "(empty)" : "Select a session"}
+            </pre>
+          </div>
+
+          <div className="border-t p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="font-semibold text-xs">Ops config (ops_config.json)</div>
+              <div className="text-[10px] text-muted-foreground">{opsConfigStatus}</div>
+            </div>
+            <textarea
+              className="w-full min-h-[140px] text-[11px] font-mono p-2 rounded border bg-background/60"
+              value={opsConfigText}
+              onChange={(e) => setOpsConfigText(e.target.value)}
+            />
+            {opsConfigError && (
+              <div className="text-[10px] text-red-500 mt-2">{opsConfigError}</div>
+            )}
+            <div className="flex gap-2 mt-2">
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+                onClick={loadOpsConfig}
+              >
+                Reload
+              </button>
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border bg-primary/20 text-primary hover:bg-primary/30 transition-colors disabled:opacity-50"
+                onClick={saveOpsConfig}
+                disabled={opsConfigSaving}
+              >
+                {opsConfigSaving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="border-t p-3">
         <div className="flex items-center justify-between mb-2">

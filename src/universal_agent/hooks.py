@@ -498,6 +498,7 @@ class AgentHookSet:
              if is_subagent_context:
                  pass
              else:
+                 emit_status_event(f"Hook: blocked '{tool_name}' for Primary Agent (must delegate)", level="WARNING", prefix="Hook")
                  return {
                     "systemMessage": (
                         f"⚠️ Tool '{tool_name}' is not available for the Primary Agent. "
@@ -560,6 +561,7 @@ class AgentHookSet:
         ]
 
         if any(pattern in command_lower for pattern in composio_sdk_patterns):
+            emit_status_event("Hook: blocked direct Composio SDK usage in Bash", level="WARNING", prefix="Hook")
             logfire.warning(
                 "bash_composio_sdk_blocked",
                 command_preview=command[:200],
@@ -637,8 +639,7 @@ class AgentHookSet:
         
         for skill_name, triggers in DOCUMENT_SKILL_TRIGGERS.items():
             if any(trigger in command for trigger in triggers):
-                # We assume skills are in the standard location relative to repo root
-                # Since we don't assume cwd, we skip file check or keep it simple
+                emit_status_event(f"Hook: skill hint injected for {skill_name.upper()}", prefix="Hook")
                 logfire.info(
                     "skill_hint_injected",
                     skill=skill_name,
@@ -762,6 +763,7 @@ class AgentHookSet:
                          error_text += block.get("text", "")
         
         if is_error and error_text:
+            emit_status_event(f"Hook: tool validation error detected", level="WARNING", prefix="Hook")
             # 1. Detect common schema/validation errors
             validation_hints = {
                 "required parameter": "⚠️ Schema Validation Failed: You missed a mandatory argument.",
@@ -803,20 +805,20 @@ class AgentHookSet:
     async def on_user_prompt_skill_awareness(self, *args) -> dict:
         return {}
 
-def emit_text_event(text: str) -> None:
+def emit_text_event(text: str, author: Optional[str] = None) -> None:
     """Emit a TEXT event."""
     _emit_event(
         AgentEvent(
             type=EventType.TEXT,
             data={
                 "text": text,
-                "author": "Assistant",
+                "author": author or "Primary Agent",
                 "time_offset": _tool_time_offset(),
             },
         )
     )
 
-def emit_thinking_event(thinking: str, signature: Optional[str] = None) -> None:
+def emit_thinking_event(thinking: str, signature: Optional[str] = None, author: Optional[str] = None) -> None:
     """Emit a THINKING event."""
     # We do not dedup thinking events as they are sequential parts of the stream
     _emit_event(
@@ -825,6 +827,7 @@ def emit_thinking_event(thinking: str, signature: Optional[str] = None) -> None:
             data={
                 "thinking": thinking,
                 "signature": signature,
+                "author": author or "Primary Agent",
                 "time_offset": _tool_time_offset(),
             },
         )

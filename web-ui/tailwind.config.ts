@@ -9,8 +9,12 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        mono: ["var(--font-mono)", "monospace"],
+        display: ["var(--font-display)", "sans-serif"],
+      },
       colors: {
-        // AGI-era color palette
+        // Neural Operations Center color palette
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
         primary: {
@@ -52,17 +56,37 @@ const config: Config = {
           "100%": { transform: "translateY(0)", opacity: "1" },
         },
         "pulse-glow": {
-          "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.5" },
+          "0%, 100%": { opacity: "1", boxShadow: "0 0 10px hsl(var(--primary) / 0.5)" },
+          "50%": { opacity: "0.7", boxShadow: "0 0 20px hsl(var(--primary) / 0.8)" },
+        },
+        "scan": {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
+        },
+        "status-pulse": {
+          "0%, 100%": { boxShadow: "0 0 0 0 hsl(var(--status-connected) / 0.7)" },
+          "50%": { boxShadow: "0 0 0 6px hsl(var(--status-connected) / 0)" },
+        },
+        "fade-in-stagger": {
+          "0%": { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
         },
       },
       animation: {
         "fade-in": "fade-in 0.2s ease-out",
         "slide-in": "slide-in 0.3s ease-out",
         "pulse-glow": "pulse-glow 2s ease-in-out infinite",
+        "scan": "scan 3s linear infinite",
+        "status-pulse": "status-pulse 2s ease-out infinite",
+        "fade-in-stagger": "fade-in-stagger 0.3s ease-out both",
       },
       backdropBlur: {
         xs: "2px",
+      },
+      boxShadow: {
+        "glow-sm": "0 0 10px hsl(var(--primary) / 0.3)",
+        "glow-md": "0 0 20px hsl(var(--primary) / 0.4)",
+        "glow-lg": "0 0 30px hsl(var(--primary) / 0.5)",
       },
     },
   },

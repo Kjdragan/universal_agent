@@ -5229,6 +5229,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         needs_user_input = False
         auth_link = None
         final_text = ""  # Buffer to capture final agent response for printing after execution summary
+        # Agent author tracking for sub-agent attribution
+        _tool_name_map: dict[str, str] = {}  # tool_use_id -> resolved agent name
+        _current_author = "Primary Agent"
 
         with logfire.span("llm_response_stream"):
             async for msg in client.receive_response():
@@ -5378,6 +5381,19 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 continue  # Restart inner loop with new prompt
 
                 if isinstance(msg, AssistantMessage):
+                    # Resolve author from sub-agent context
+                    parent_tool_use_id = getattr(msg, "parent_tool_use_id", None)
+                    if not parent_tool_use_id:
+                        parent_tool_use_id = msg.__dict__.get("parent_tool_use_id")
+                    if parent_tool_use_id:
+                        raw_name = _tool_name_map.get(parent_tool_use_id, "Subagent")
+                        if any(x in raw_name for x in ["Specialist", "Author", "Agent", "Writer"]):
+                            _current_author = raw_name
+                        else:
+                            _current_author = f"Subagent: {raw_name}"
+                    else:
+                        _current_author = "Primary Agent"
+
                     # Wrapped in span for full visibility of assistant's turn
                     with logfire.span("assistant_message", model=msg.model):
                         for block in msg.content:
@@ -5484,6 +5500,18 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     )
 
                                     # Sub-agent tagging logic: Entering sub-agent
+                                    # Map tool_use_id to resolved agent name
+                                    resolved_name = block.name
+                                    if block.name == "Task" and hasattr(block, "input") and isinstance(block.input, dict):
+                                        sub_type = block.input.get("subagent_type", "")
+                                        if sub_type:
+                                            resolved_name = f"Subagent: {sub_type}"
+                                    elif "research" in block.name.lower():
+                                        resolved_name = "Research Specialist"
+                                    elif "report" in block.name.lower() or "compile" in block.name.lower():
+                                        resolved_name = "Report Writer"
+                                    _tool_name_map[block.id] = resolved_name
+
                                     if block.name == "Task":
                                         subagent_type = "unknown"
                                         if hasattr(block, "input") and isinstance(
@@ -5533,8 +5561,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     print(f"   ⏳ Waiting for {block.name} response...")
 
                             elif isinstance(block, TextBlock):
-                                # Emit TEXT event for streaming
-                                hook_events.emit_text_event(block.text)
+                                # Emit TEXT event for streaming with author attribution
+                                hook_events.emit_text_event(block.text, author=_current_author)
 
                                 if "connect.composio.dev/link" in block.text:
                                     import re
@@ -5560,8 +5588,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 )
 
                             elif isinstance(block, ThinkingBlock):
-                                # Emit thinking event
-                                hook_events.emit_thinking_event(block.thinking, block.signature)
+                                # Emit thinking event with author attribution
+                                hook_events.emit_thinking_event(block.thinking, block.signature, author=_current_author)
                                 
                                 # Log extended thinking
                                 print(
@@ -7113,11 +7141,9 @@ async def process_turn(
         # Print agent's final response (with follow-up suggestions) AFTER execution summary
         if final_response_text:
             print(f"\n{final_response_text}")
-            # Emit final text event for gateway/adapters
-            emit_event(AgentEvent(
-                type=EventType.TEXT,
-                data={"text": final_response_text},
-            ))
+            # Note: Text was already streamed to the UI via hook_events.emit_text_event()
+            # during run_conversation(). Re-emitting here would cause duplication in the
+            # chat panel. The print() above covers CLI output.
 
         # Extract follow-up suggestions
         suggestions = []

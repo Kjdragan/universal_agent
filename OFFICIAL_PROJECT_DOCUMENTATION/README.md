@@ -22,6 +22,8 @@ Welcome to the official technical documentation for the **Universal Agent**. Thi
 
 - **[Event Streaming](02_Flows/Event_Streaming_Flow.md)**: Turn lifecycle.
 - **[Resource Guardrails](02_Flows/Resource_Guardrails.md)**: Workspace security.
+- **[Chat Panel Communication Layer](02_Flows/04_Chat_Panel_Communication_Layer.md)**: Full pipeline from SDK to chat UI — deduplication, sub-agent attribution, stream coalescing, rendering.
+- **[Activity Log Communication Layer](02_Flows/05_Activity_Log_Communication_Layer.md)**: Full pipeline for operational observability — tool calls, hook activity, stdout capture, MCP detail.
 
 ### 4. [Operations](03_Operations)
 

@@ -19,7 +19,7 @@ import { formatDuration, formatFileSize } from "@/lib/utils";
 import { ApprovalModal, useApprovalModal } from "@/components/approvals/ApprovalModal";
 import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
-import { OpsPanel } from "@/components/OpsPanel";
+import { OpsProvider, SessionsSection, SkillsSection, ChannelsSection, ApprovalsSection, SystemEventsSection, OpsConfigSection, HeartbeatWidget } from "@/components/OpsDropdowns";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -155,48 +155,48 @@ function TaskPanel() {
   const tasks = toolCalls.filter(tc => tc.name === "Task" || tc.name === "task").reverse();
 
   return (
-    <div className={`flex flex-col border-t border-border/50 bg-background/50 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
+    <div className={`flex flex-col border-t border-border/40 bg-card/10 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
       <div
-        className="p-3 bg-secondary/10 border-b border-border/50 cursor-pointer hover:bg-secondary/20 flex items-center justify-between"
+        className="p-3 bg-card/30 border-b border-border/40 cursor-pointer hover:bg-card/40 flex items-center justify-between"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
-        <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-          {ICONS.activity} Tasks
+        <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
+          <span className="text-primary/60">{ICONS.activity}</span>
+          Tasks
           {tasks.length > 0 && !isCollapsed && (
-            <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded-full text-[10px]">{tasks.length}</span>
+            <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded text-[9px] font-mono">{tasks.length}</span>
           )}
         </h2>
-        <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
+        <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
           ▼
         </span>
       </div>
       {!isCollapsed && (
         <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-2">
           {tasks.length === 0 ? (
-            <div className="text-xs text-muted-foreground text-center py-8 italic opacity-50">
-              No active tasks
-            </div>
+            <div className="text-xs text-muted-foreground/50 text-center py-8 font-mono">No active tasks</div>
           ) : (
             tasks.map((task) => {
               const input = task.input as any;
               const subagent = input.subagent_type || "unknown";
               const description = input.description || "No description";
               const statusConfig = {
-                pending: { color: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20", icon: "⏳" },
-                running: { color: "bg-blue-500/10 text-blue-500 border-blue-500/20", icon: "🔄" },
-                complete: { color: "bg-green-500/10 text-green-500 border-green-500/20", icon: "✅" },
-                error: { color: "bg-red-500/10 text-red-500 border-red-500/20", icon: "❌" },
+                pending: { color: "bg-amber-500/10 text-amber-400 border-amber-500/30", icon: "⏳", label: "PENDING" },
+                running: { color: "bg-cyan-500/10 text-cyan-400 border-cyan-500/30", icon: "🔄", label: "RUNNING" },
+                complete: { color: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30", icon: "✅", label: "COMPLETE" },
+                error: { color: "bg-red-500/10 text-red-400 border-red-500/30", icon: "❌", label: "ERROR" },
               };
               const config = statusConfig[task.status as keyof typeof statusConfig] || statusConfig.running;
 
               return (
-                <div key={task.id} className={`rounded-md border p-2 text-xs ${config.color}`}>
+                <div key={task.id} className={`rounded border p-2.5 text-xs ${config.color} bg-card/20`}>
                   <div className="flex items-center justify-between mb-1.5">
-                    <span className="font-semibold capitalize flex items-center gap-1.5">
+                    <span className="font-mono text-[9px] uppercase tracking-wider flex items-center gap-1.5">
                       {config.icon} {subagent.replace("-", " ")}
                     </span>
+                    <span className="text-[8px] uppercase tracking-wider opacity-70">{config.label}</span>
                   </div>
-                  <div className="line-clamp-3 opacity-80 leading-relaxed font-light">{description}</div>
+                  <div className="line-clamp-3 opacity-70 leading-relaxed font-light">{description}</div>
                 </div>
               );
             })
@@ -254,9 +254,9 @@ function FileExplorer() {
   };
 
   return (
-    <div className={`flex flex-col border-b border-border/50 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
+    <div className={`flex flex-col border-b border-border/40 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
       <div
-        className="p-3 border-b border-border/50 bg-secondary/10 flex items-center justify-between cursor-pointer hover:bg-secondary/20"
+        className="p-3 border-b border-border/40 bg-card/30 flex items-center justify-between cursor-pointer hover:bg-card/40"
         onClick={(e) => {
           // Prevent collapse when clicking the 'Up' button
           if ((e.target as HTMLElement).tagName === 'BUTTON') return;
@@ -264,9 +264,10 @@ function FileExplorer() {
         }}
       >
         <div className="flex items-center gap-2 overflow-hidden">
-          <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}>▼</span>
-          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider truncate" title={currentSession?.session_id}>
-            {ICONS.folder} {mode === "artifacts" ? (path ? `Artifacts/.../${path.split("/").pop()}` : "Artifacts") : (path ? `.../${path.split("/").pop()}` : "Files")}
+          <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}>▼</span>
+          <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest truncate" title={currentSession?.session_id}>
+            <span className="text-primary/60 mr-1">{ICONS.folder}</span>
+            {mode === "artifacts" ? (path ? `Artifacts/.../${path.split("/").pop()}` : "Artifacts") : (path ? `.../${path.split("/").pop()}` : "Files")}
           </h2>
         </div>
         {!isCollapsed && (
@@ -274,21 +275,21 @@ function FileExplorer() {
             <button
               type="button"
               onClick={() => { setMode("session"); setPath(""); }}
-              className={`text-[10px] px-2 py-1 rounded border ${mode === "session" ? "bg-primary/20 text-primary border-primary/30" : "bg-background/40 text-muted-foreground border-border/50 hover:bg-background/60"}`}
+              className={`text-[9px] px-2 py-1 rounded border font-medium transition-all ${mode === "session" ? "bg-primary/20 text-primary border-primary/40" : "bg-card/40 text-muted-foreground/70 border-border/40 hover:bg-card/60"}`}
               title="Browse session files"
             >
-              Session
+              SESSION
             </button>
             <button
               type="button"
               onClick={() => { setMode("artifacts"); setPath(""); }}
-              className={`text-[10px] px-2 py-1 rounded border ${mode === "artifacts" ? "bg-primary/20 text-primary border-primary/30" : "bg-background/40 text-muted-foreground border-border/50 hover:bg-background/60"}`}
+              className={`text-[9px] px-2 py-1 rounded border font-medium transition-all ${mode === "artifacts" ? "bg-primary/20 text-primary border-primary/40" : "bg-card/40 text-muted-foreground/70 border-border/40 hover:bg-card/60"}`}
               title="Browse persistent artifacts"
             >
-              Artifacts
+              ARTIFACTS
             </button>
             {path && (
-              <button onClick={handleUp} className="text-xs hover:bg-black/20 p-1 rounded" title="Go Up">
+              <button onClick={handleUp} className="text-xs hover:bg-primary/10 p-1 rounded text-primary" title="Go Up">
                 ⬆️
               </button>
             )}
@@ -298,23 +299,23 @@ function FileExplorer() {
       {!isCollapsed && (
         <div className="flex-1 overflow-y-auto scrollbar-thin p-1">
           {mode === "session" && !currentSession ? (
-            <div className="text-xs text-muted-foreground text-center py-4">No active session</div>
+            <div className="text-xs text-muted-foreground/60 text-center py-4 font-mono">NO ACTIVE SESSION</div>
           ) : loading ? (
-            <div className="text-xs text-muted-foreground text-center py-4">Loading...</div>
+            <div className="text-xs text-muted-foreground/60 text-center py-4 font-mono">LOADING...</div>
           ) : files.length === 0 ? (
-            <div className="text-xs text-muted-foreground text-center py-4">Empty directory</div>
+            <div className="text-xs text-muted-foreground/60 text-center py-4 font-mono">EMPTY DIRECTORY</div>
           ) : (
             <div className="space-y-0.5">
               {files.map((file, i) => (
                 <div
                   key={i}
-                  className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-colors ${file.is_dir ? "hover:bg-primary/10 text-primary" : "hover:bg-accent text-foreground/80"
+                  className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-all ${file.is_dir ? "hover:bg-primary/10 text-primary/80" : "hover:bg-card/60 text-foreground/70"
                     }`}
                   onClick={() => handleNavigate(file.name, file.is_dir)}
                 >
-                  <span>{file.is_dir ? ICONS.folder : ICONS.file}</span>
-                  <span className="truncate flex-1">{file.name}</span>
-                  {file.size && <span className="text-[9px] opacity-50">{formatFileSize(file.size)}</span>}
+                  <span className="opacity-60">{file.is_dir ? ICONS.folder : ICONS.file}</span>
+                  <span className="truncate flex-1 font-mono">{file.name}</span>
+                  {file.size && <span className="text-[9px] opacity-40 font-mono">{formatFileSize(file.size)}</span>}
                 </div>
               ))}
             </div>
@@ -329,22 +330,56 @@ function ConnectionIndicator() {
   const status = useAgentStore((s) => s.connectionStatus);
 
   const statusConfig = {
-    disconnected: { color: "bg-red-500", label: "Disconnected", pulse: false },
-    connecting: { color: "bg-yellow-500", label: "Connecting...", pulse: true },
-    connected: { color: "bg-primary", label: "Connected", pulse: false },
-    processing: { color: "bg-primary", label: "Processing...", pulse: true },
-    error: { color: "bg-red-600", label: "Error", pulse: false },
+    disconnected: {
+      color: "bg-red-500",
+      label: "OFFLINE",
+      pulse: false,
+      textColor: "text-red-400",
+      glow: "shadow-red-500/50"
+    },
+    connecting: {
+      color: "bg-yellow-500",
+      label: "CONNECTING",
+      pulse: true,
+      textColor: "text-yellow-400",
+      glow: "shadow-yellow-500/50"
+    },
+    connected: {
+      color: "bg-primary",
+      label: "ONLINE",
+      pulse: true,
+      textColor: "text-status-connected",
+      glow: "shadow-primary/50"
+    },
+    processing: {
+      color: "bg-primary",
+      label: "PROCESSING",
+      pulse: true,
+      textColor: "text-status-processing",
+      glow: "shadow-primary/50"
+    },
+    error: {
+      color: "bg-red-600",
+      label: "ERROR",
+      pulse: true,
+      textColor: "text-status-error",
+      glow: "shadow-red-500/50"
+    },
   };
 
   const config = statusConfig[status];
 
   return (
-    <div className="flex items-center gap-2 text-sm">
-      <div
-        className={`w-2 h-2 rounded-full ${config.color} ${config.pulse ? "animate-pulse-glow" : ""
-          }`}
-      />
-      <span className="text-muted-foreground">{config.label}</span>
+    <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-card/40 border border-border/60">
+        <div
+          className={`w-2 h-2 rounded-full ${config.color} ${config.pulse ? "status-pulse" : ""
+            }`}
+        />
+        <span className={`text-[10px] font-bold uppercase tracking-widest ${config.textColor}`}>
+          {config.label}
+        </span>
+      </div>
     </div>
   );
 }
@@ -368,32 +403,32 @@ function HeaderMetrics() {
   }, [startTime]);
 
   const currentSession = useAgentStore((s) => s.currentSession);
-  const sessionId = currentSession?.workspace ? currentSession.workspace.split('/').pop() : 'No Session';
+  const sessionId = currentSession?.workspace ? currentSession.workspace.split('/').pop() : 'NO SESSION';
 
   return (
-    <div className="hidden md:flex items-center gap-3 mr-6 bg-secondary/20 px-3 py-1.5 rounded-md border border-border/50">
-      <div className="flex items-center gap-2 text-[10px] tracking-wide">
-        <span className="text-muted-foreground font-semibold">SESSION</span>
-        <span className="font-mono text-primary truncate max-w-[150px]" title={sessionId}>{sessionId}</span>
+    <div className="hidden md:flex items-center gap-4 mr-6 px-4 py-2 rounded-lg bg-card/30 border border-border/40 tactical-panel">
+      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+        <span className="text-muted-foreground/70 font-semibold">SESSION</span>
+        <span className="font-mono text-primary truncate max-w-[120px]" title={sessionId}>{sessionId}</span>
       </div>
-      <div className="w-px h-3 bg-border/50" />
-      <div className="flex items-center gap-2 text-[10px] tracking-wide">
-        <span className="text-muted-foreground font-semibold">TOKENS</span>
+      <div className="w-px h-3 bg-border/40" />
+      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+        <span className="text-muted-foreground/70 font-semibold">TOKENS</span>
         <span className="font-mono">{tokenUsage.total.toLocaleString()}</span>
       </div>
-      <div className="w-px h-3 bg-border/50" />
-      <div className="flex items-center gap-2 text-[10px] tracking-wide">
-        <span className="text-muted-foreground font-semibold">TOOLS</span>
+      <div className="w-px h-3 bg-border/40" />
+      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+        <span className="text-muted-foreground/70 font-semibold">TOOLS</span>
         <span className="font-mono">{toolCallCount}</span>
       </div>
-      <div className="w-px h-3 bg-border/50" />
-      <div className="flex items-center gap-2 text-[10px] tracking-wide">
-        <span className="text-muted-foreground font-semibold">TIME</span>
+      <div className="w-px h-3 bg-border/40" />
+      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+        <span className="text-muted-foreground/70 font-semibold">TIME</span>
         <span className="font-mono">{formatDuration(startTime ? duration : 0)}</span>
       </div>
-      <div className="w-px h-3 bg-border/50" />
-      <div className="flex items-center gap-2 text-[10px] tracking-wide">
-        <span className="text-muted-foreground font-semibold">ITERS</span>
+      <div className="w-px h-3 bg-border/40" />
+      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+        <span className="text-muted-foreground/70 font-semibold">ITERS</span>
         <span className="font-mono">{iterationCount}</span>
       </div>
     </div>
@@ -677,6 +712,33 @@ function ThinkingBubble({ content }: { content: string }) {
   );
 }
 
+// =============================================================================
+// Agent Style Utility — shared between ChatMessage and streaming view
+// =============================================================================
+function getAgentStyle(author: string) {
+  const a = author.toLowerCase();
+  if (a.includes("research")) {
+    return { icon: "🔍", labelColor: "text-purple-400", iconBg: "bg-purple-500/10", iconBorder: "border-purple-500/20", borderAccent: "border-l-purple-500/40" };
+  }
+  if (a.includes("report") || a.includes("writer")) {
+    return { icon: "📝", labelColor: "text-orange-400", iconBg: "bg-orange-500/10", iconBorder: "border-orange-500/20", borderAccent: "border-l-orange-500/40" };
+  }
+  if (a.includes("plan") || a.includes("orchestra")) {
+    return { icon: "🗺️", labelColor: "text-cyan-400", iconBg: "bg-cyan-500/10", iconBorder: "border-cyan-500/20", borderAccent: "border-l-cyan-500/40" };
+  }
+  if (a.includes("verify") || a.includes("test")) {
+    return { icon: "✅", labelColor: "text-green-400", iconBg: "bg-green-500/10", iconBorder: "border-green-500/20", borderAccent: "border-l-green-500/40" };
+  }
+  if (a.includes("image") || a.includes("video")) {
+    return { icon: "🎨", labelColor: "text-pink-400", iconBg: "bg-pink-500/10", iconBorder: "border-pink-500/20", borderAccent: "border-l-pink-500/40" };
+  }
+  if (a.includes("subagent")) {
+    return { icon: "⚙️", labelColor: "text-emerald-400", iconBg: "bg-emerald-500/10", iconBorder: "border-emerald-500/20", borderAccent: "border-l-emerald-500/40" };
+  }
+  // Primary Agent (default)
+  return { icon: "🤖", labelColor: "text-blue-400", iconBg: "bg-blue-500/10", iconBorder: "border-blue-500/20", borderAccent: "border-l-blue-500/40" };
+}
+
 function ChatMessage({ message }: { message: any }) {
   const isUser = message.role === "user";
   const formattedDelta = React.useMemo(() => {
@@ -686,9 +748,6 @@ function ChatMessage({ message }: { message: any }) {
     }
     return new Date(message.timestamp).toLocaleTimeString();
   }, [message.time_offset, message.timestamp]);
-
-  // Split content by distinct sections (double newlines)
-  const contentSegments = message.content.split(/\n\n+/).filter(Boolean);
 
   if (isUser) {
     return (
@@ -715,83 +774,41 @@ function ChatMessage({ message }: { message: any }) {
     );
   }
 
-  // Assistant: Render segments as specific bubbles
+  // Assistant: single consolidated bubble per message
   const author = message.author || "Primary Agent";
-  const isResearch = author.toLowerCase().includes("research");
-  const isSubagent = author.toLowerCase().includes("subagent");
-
-  let icon = "🤖";
-  let labelColor = "text-blue-400";
-  let iconBg = "bg-blue-500/10";
-  let iconBorder = "border-blue-500/20";
-
-  if (isResearch) {
-    icon = "🔍";
-    labelColor = "text-purple-400";
-    iconBg = "bg-purple-500/10";
-    iconBorder = "border-purple-500/20";
-  } else if (author.toLowerCase().includes("report") || author.toLowerCase().includes("writer")) {
-    icon = "📝";
-    labelColor = "text-orange-400";
-    iconBg = "bg-orange-500/10";
-    iconBorder = "border-orange-500/20";
-  } else if (author.toLowerCase().includes("plan") || author.toLowerCase().includes("orchestra")) {
-    icon = "🗺️";
-    labelColor = "text-cyan-400";
-    iconBg = "bg-cyan-500/10";
-    iconBorder = "border-cyan-500/20";
-  } else if (author.toLowerCase().includes("verify") || author.toLowerCase().includes("test")) {
-    icon = "✅";
-    labelColor = "text-green-400";
-    iconBg = "bg-green-500/10";
-    iconBorder = "border-green-500/20";
-  } else if (author.toLowerCase().includes("image") || author.toLowerCase().includes("video")) {
-    icon = "🎨";
-    labelColor = "text-pink-400";
-    iconBg = "bg-pink-500/10";
-    iconBorder = "border-pink-500/20";
-  } else if (isSubagent) {
-    icon = "⚙️";
-    labelColor = "text-emerald-400";
-    iconBg = "bg-emerald-500/10";
-    iconBorder = "border-emerald-500/20";
-  }
+  const style = getAgentStyle(author);
 
   return (
-    <div className="flex flex-col gap-4 mb-8">
-      {/* Historical Thinking Block */}
+    <div className="flex flex-col gap-2 mb-6">
+      {/* Thinking block (collapsible, attached to this message) */}
       {message.thinking && <ThinkingBubble content={message.thinking} />}
 
-      {contentSegments.map((segment: string, i: number) => (
-        <div key={i} className="flex justify-start group">
-          <div className="flex gap-3 max-w-[90%]">
-            {/* Agent Icon per bubble */}
-            <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-lg border ${iconBg} ${iconBorder}`}>
-              {icon}
+      <div className="flex justify-start group">
+        <div className="flex gap-3 max-w-[90%]">
+          <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-lg border ${style.iconBg} ${style.iconBorder}`}>
+            {style.icon}
+          </div>
+          <div className="flex flex-col flex-1">
+            <div className="flex items-center justify-between mb-1">
+              <div className={`text-[10px] uppercase tracking-wider font-medium ${style.labelColor}`}>
+                {author}
+              </div>
+              <div className="text-[9px] text-muted-foreground opacity-50 ml-4">
+                {formattedDelta}
+              </div>
             </div>
-            <div className="flex flex-col flex-1">
-              {/* Top Header: Author on left, Delta on right */}
-              <div className="flex items-center justify-between mb-1">
-                <div className={`text-[10px] uppercase tracking-wider font-medium ${labelColor}`}>
-                  {author}
-                </div>
-                <div className="text-[9px] text-muted-foreground opacity-50">
-                  {formattedDelta}
-                </div>
-              </div>
-              <div className="bg-card border border-border/50 shadow-md rounded-xl p-4 text-sm leading-relaxed">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={markdownComponents}
-                  className="prose prose-sm dark:prose-invert max-w-none"
-                >
-                  {segment}
-                </ReactMarkdown>
-              </div>
+            <div className={`bg-card border border-border/50 border-l-2 ${style.borderAccent} shadow-md rounded-xl p-4 text-sm leading-relaxed`}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={markdownComponents}
+                className="prose prose-sm dark:prose-invert max-w-none"
+              >
+                {message.content}
+              </ReactMarkdown>
             </div>
           </div>
         </div>
-      ))}
+      </div>
     </div>
   );
 }
@@ -861,10 +878,25 @@ function ChatInterface() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto scrollbar-thin p-4">
         {messages.length === 0 && !currentStreamingMessage ? (
-          <div className="text-center text-muted-foreground py-12">
-            <div className="text-4xl mb-4">{ICONS.chat}</div>
-            <div className="text-lg font-semibold mb-2">Universal Agent</div>
-            <div className="text-sm">Enter a query to begin</div>
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center max-w-md">
+              <div className="relative inline-block mb-6">
+                <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/30 flex items-center justify-center mx-auto">
+                  <span className="text-4xl">{ICONS.chat}</span>
+                </div>
+                <div className="absolute inset-0 rounded-2xl animate-ping opacity-5 bg-primary" />
+              </div>
+              <div className="font-display text-lg font-bold text-foreground mb-2 tracking-wide">
+                UNIVERSAL AGENT
+              </div>
+              <div className="text-sm text-muted-foreground/70 font-mono">
+                Initialize your neural query sequence
+              </div>
+              <div className="mt-6 flex items-center justify-center gap-2 text-[9px] text-muted-foreground/50 uppercase tracking-widest">
+                <span>Ready to process</span>
+                <div className="w-1.5 h-1.5 rounded-full bg-primary/60 animate-pulse" />
+              </div>
+            </div>
           </div>
         ) : (
           <>
@@ -874,82 +906,42 @@ function ChatInterface() {
             {/* Streaming Thinking Context */}
             {currentThinking && <ThinkingBubble content={currentThinking} />}
 
-            {currentStreamingMessage && (
-              <div className="flex justify-start mb-4">
-                <div className="flex gap-3 max-w-[90%]">
-                  {(() => {
-                    const author = currentAuthor || "Primary Agent";
-                    let icon = "🤖";
-                    let iconBg = "bg-blue-500/10";
-                    let iconBorder = "border-blue-500/20";
-                    let labelColor = "text-blue-400";
-
-                    if (author.toLowerCase().includes("research")) {
-                      icon = "🔍";
-                      iconBg = "bg-purple-500/10";
-                      iconBorder = "border-purple-500/20";
-                      labelColor = "text-purple-400";
-                    } else if (author.toLowerCase().includes("report") || author.toLowerCase().includes("writer")) {
-                      icon = "📝";
-                      iconBg = "bg-orange-500/10";
-                      iconBorder = "border-orange-500/20";
-                      labelColor = "text-orange-400";
-                    } else if (author.toLowerCase().includes("plan") || author.toLowerCase().includes("orchestra")) {
-                      icon = "🗺️";
-                      iconBg = "bg-cyan-500/10";
-                      iconBorder = "border-cyan-500/20";
-                      labelColor = "text-cyan-400";
-                    } else if (author.toLowerCase().includes("verify") || author.toLowerCase().includes("test")) {
-                      icon = "✅";
-                      iconBg = "bg-green-500/10";
-                      iconBorder = "border-green-500/20";
-                      labelColor = "text-green-400";
-                    } else if (author.toLowerCase().includes("image") || author.toLowerCase().includes("video")) {
-                      icon = "🎨";
-                      iconBg = "bg-pink-500/10";
-                      iconBorder = "border-pink-500/20";
-                      labelColor = "text-pink-400";
-                    } else if (author.toLowerCase().includes("subagent")) {
-                      icon = "⚙️";
-                      iconBg = "bg-emerald-500/10";
-                      iconBorder = "border-emerald-500/20";
-                      labelColor = "text-emerald-400";
-                    }
-
-                    return (
-                      <>
-                        <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-lg border ${iconBg} ${iconBorder}`}>
-                          {icon}
+            {currentStreamingMessage && (() => {
+              const author = currentAuthor || "Primary Agent";
+              const style = getAgentStyle(author);
+              return (
+                <div className="flex justify-start mb-4">
+                  <div className="flex gap-3 max-w-[90%]">
+                    <div className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-lg border ${style.iconBg} ${style.iconBorder}`}>
+                      {style.icon}
+                    </div>
+                    <div className="flex flex-col flex-1">
+                      <div className={`text-[10px] uppercase tracking-wider font-medium mb-1 ${style.labelColor}`}>
+                        {author}
+                      </div>
+                      <div className={`bg-card border border-border/50 border-l-2 ${style.borderAccent} shadow-md rounded-xl p-4 text-sm leading-relaxed`}>
+                        <div className="whitespace-pre-wrap">
+                          {currentStreamingMessage}
+                          <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
                         </div>
-                        <div className="flex flex-col">
-                          <div className={`text-[10px] uppercase tracking-wider font-medium mb-1 ${labelColor}`}>
-                            {author}
-                          </div>
-                          <div className="bg-card border border-border/50 shadow-md rounded-xl p-4 text-sm leading-relaxed">
-                            <div className="whitespace-pre-wrap">
-                              {currentStreamingMessage}
-                              <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
-                            </div>
-                          </div>
-                        </div>
-                      </>
-                    );
-                  })()}
+                      </div>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
             {/* Active Process Indicator */}
             {connectionStatus === "processing" && !currentStreamingMessage && (
               <div className="flex justify-start mb-4">
-                <div className="flex items-center gap-2 text-muted-foreground bg-secondary/10 px-4 py-2 rounded-xl text-xs animate-pulse">
+                <div className="flex items-center gap-3 text-foreground/80 bg-card/40 border border-border/60 px-4 py-2.5 rounded-lg text-xs processing-bar">
                   {(() => {
                     // Check for running tools
                     const runningTool = toolCalls.find((tc: any) => tc.status === 'running');
                     if (runningTool) {
                       return (
                         <>
-                          <span className="text-lg">⚙️</span>
-                          <span>Executing: <span className="font-mono text-primary">{runningTool.name}</span>...</span>
+                          <span className="text-base animate-pulse">⚙️</span>
+                          <span className="uppercase tracking-wider">Executing: <span className="font-mono text-status-processing">{runningTool.name}</span></span>
                         </>
                       );
                     }
@@ -968,8 +960,8 @@ function ChatInterface() {
                     if (recentLog) {
                       return (
                         <>
-                          <span className="text-lg">⚡</span>
-                          <span className="truncate max-w-[500px]">{recentLog.prefix}: {recentLog.message}</span>
+                          <span className="text-base animate-pulse">⚡</span>
+                          <span className="truncate max-w-[500px] uppercase tracking-wider">{recentLog.prefix}: {recentLog.message}</span>
                         </>
                       );
                     }
@@ -977,8 +969,8 @@ function ChatInterface() {
                     // Default fallback
                     return (
                       <>
-                        <span className="text-lg">🧠</span>
-                        <span>Thinking...</span>
+                        <span className="text-base animate-pulse">🧠</span>
+                        <span className="uppercase tracking-wider">Processing neural sequence...</span>
                       </>
                     );
                   })()}
@@ -991,8 +983,8 @@ function ChatInterface() {
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t border-border/50">
-        <div className="flex gap-2">
+      <div className="p-4 border-t border-border/40 bg-card/20">
+        <div className="flex gap-3">
           <input
             type="text"
             value={input}
@@ -1009,25 +1001,26 @@ function ChatInterface() {
                 }
               }
             }}
-            placeholder={connectionStatus === "processing" ? "Type to redirect (Enter to stop & send)..." : "Enter your query..."}
+            placeholder={connectionStatus === "processing" ? "Type to redirect (Enter to stop & send)..." : "Enter your neural query..."}
             disabled={connectionStatus === "disconnected" || connectionStatus === "connecting"}
-            className="flex-1 bg-background/50 border border-border rounded-lg px-4 py-2 focus:outline-none focus:border-primary disabled:opacity-50"
+            className="flex-1 bg-card/40 border border-border/60 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary/60 focus:shadow-glow-sm disabled:opacity-50 transition-all font-mono"
           />
           {connectionStatus === "processing" ? (
             <button
               onClick={() => ws.sendCancel()}
-              className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+              className="bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-400 px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-xs font-bold uppercase tracking-wider"
               title="Stop the current agent run"
             >
-              ⏹ Stop
+              ⏹ Abort
             </button>
           ) : (
             <button
               onClick={() => handleSend()}
               disabled={connectionStatus !== "connected" || isSending || !input.trim()}
-              className="bg-primary hover:bg-primary/90 disabled:bg-primary/30 text-primary-foreground px-4 py-2 rounded-lg transition-colors"
+              className="bg-primary hover:bg-primary/90 disabled:bg-primary/20 disabled:text-primary/40 text-primary-foreground px-5 py-2 rounded-lg transition-all btn-primary text-xs font-bold uppercase tracking-wider flex items-center gap-2"
             >
-              {ICONS.send}
+              <span>Send</span>
+              <span>{ICONS.send}</span>
             </button>
           )}
         </div>
@@ -1101,33 +1094,34 @@ function WorkProductViewer() {
   return (
     <div className={`flex flex-col transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
       <div
-        className="p-3 border-b border-border/50 flex items-center justify-between cursor-pointer hover:bg-secondary/10"
+        className="p-3 border-b border-border/40 flex items-center justify-between cursor-pointer hover:bg-card/30"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
-        <h3 className="text-sm font-semibold flex items-center gap-2">
-          {ICONS.file} Key Work Products
-          <span className="text-xs text-muted-foreground font-normal">({keyFiles.length})</span>
+        <h3 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
+          <span className="text-primary/60">{ICONS.file}</span>
+          Work Products
+          <span className="text-[9px] text-muted-foreground/60 font-normal font-mono">({keyFiles.length})</span>
         </h3>
-        <span className={`text-[10px] text-muted-foreground transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
+        <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
           ▼
         </span>
       </div>
 
       {!isCollapsed && (
-        <div className="flex-1 overflow-y-auto scrollbar-thin bg-secondary/5 p-2 space-y-1">
+        <div className="flex-1 overflow-y-auto scrollbar-thin bg-card/10 p-2 space-y-1">
           {keyFiles.length === 0 ? (
-            <div className="text-xs text-muted-foreground text-center py-4">No key files found</div>
+            <div className="text-xs text-muted-foreground/50 text-center py-4 font-mono">No key files found</div>
           ) : (
             keyFiles.map((file, i) => (
               <button
                 key={i}
                 onClick={() => setViewingFile({ name: file.name, path: file.path, type: 'file' })}
-                className="w-full text-left px-3 py-2 text-xs rounded hover:bg-black/20 transition-colors flex items-center gap-2"
+                className="w-full text-left px-3 py-2 text-xs rounded hover:bg-card/40 transition-all flex items-center gap-2 border border-transparent hover:border-border/40"
               >
-                <span className="text-lg">{file.name.endsWith('pdf') ? '📕' : file.name.endsWith('html') ? '🌐' : '📄'}</span>
+                <span className="text-base opacity-60">{file.name.endsWith('pdf') ? '📕' : file.name.endsWith('html') ? '🌐' : '📄'}</span>
                 <div className="flex-1 min-w-0">
-                  <div className="truncate font-medium">{file.name}</div>
-                  <div className="text-[9px] text-muted-foreground opacity-70">{formatFileSize(file.size)}</div>
+                  <div className="truncate font-medium font-mono">{file.name}</div>
+                  <div className="text-[9px] text-muted-foreground/50 font-mono">{formatFileSize(file.size)}</div>
                 </div>
               </button>
             ))
@@ -1150,12 +1144,13 @@ export default function HomePage() {
   const ws = getWebSocket();
 
   // Layout State
-  const [leftWidth, setLeftWidth] = useState(260);
-  const [rightWidth, setRightWidth] = useState(600); // Wider default (600px) as requested
+  const [leftWidth, setLeftWidth] = useState(320);
   const [activityLogWidth, setActivityLogWidth] = useState(40); // % of center area
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const [activityCollapsed, setActivityCollapsed] = useState(false);
 
   // Resizing Logic
-  const startResizing = (direction: 'left' | 'right' | 'center') => (mouseDownEvent: React.MouseEvent) => {
+  const startResizing = (direction: 'left' | 'center') => (mouseDownEvent: React.MouseEvent) => {
     mouseDownEvent.preventDefault();
     const startX = mouseDownEvent.clientX;
 
@@ -1181,17 +1176,13 @@ export default function HomePage() {
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
     } else {
-      // Original sidebar resizing logic
-      const startWidth = direction === 'left' ? leftWidth : rightWidth;
+      // Original sidebar resizing logic (left only)
+      const startWidth = leftWidth;
 
       const onMouseMove = (mouseMoveEvent: MouseEvent) => {
         const delta = mouseMoveEvent.clientX - startX;
-        const newWidth = direction === 'left'
-          ? Math.max(200, Math.min(600, startWidth + delta))
-          : Math.max(300, Math.min(800, startWidth - delta));
-
-        if (direction === 'left') setLeftWidth(newWidth);
-        else setRightWidth(newWidth);
+        const newWidth = Math.max(200, Math.min(600, startWidth + delta));
+        setLeftWidth(newWidth);
       };
 
       const onMouseUp = () => {
@@ -1262,16 +1253,82 @@ export default function HomePage() {
   }, [ws]);
 
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground">
+    <OpsProvider>
+    <div className="h-screen flex flex-col bg-background text-foreground relative z-10">
       {/* Header */}
-      <header className="h-14 border-b border-border/50 glass-strong flex items-center justify-between px-4 shrink-0 z-10 relative">
-        <div className="flex items-center gap-3">
-          <h1 className="text-lg font-bold gradient-text">Universal Agent</h1>
-          <span className="text-xs text-muted-foreground px-2 py-1 rounded bg-muted">
+      <header className="h-16 border-b border-border/40 glass-strong flex items-center px-6 shrink-0 z-20 relative">
+        {/* Left: Logo & Brand */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            {/* Animated logo icon */}
+            <div className="relative">
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/30 flex items-center justify-center">
+                <span className="text-xl">⚡</span>
+              </div>
+              <div className="absolute inset-0 rounded-lg animate-ping opacity-10 bg-primary" />
+            </div>
+            <div>
+              <h1 className="font-display text-sm font-bold gradient-text tracking-wider">
+                UNIVERSAL AGENT
+              </h1>
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-1.5 rounded-full bg-primary/60" />
+                <span className="text-[9px] text-muted-foreground/60 tracking-widest">NEURAL OPERATIONS CENTER</span>
+              </div>
+            </div>
+          </div>
+          <div className="h-8 w-px bg-border/30" />
+          <span className="text-[9px] text-muted-foreground/70 px-2 py-1 rounded bg-card/40 border border-border/30 font-mono">
             v2.1
           </span>
         </div>
-        <div className="flex items-center gap-4">
+
+        {/* Center: Ops dropdown buttons */}
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="pointer-events-auto flex items-center gap-1">
+            {([
+              { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: 420 },
+              { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: 360 },
+              { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: 380 },
+              { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: 380 },
+              { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection />, width: 400 },
+              { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection />, width: 500 },
+            ] as const).map((item) => (
+              <div key={item.key} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setOpenDropdown((prev) => prev === item.key ? null : item.key)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] uppercase tracking-widest font-semibold transition ${
+                    openDropdown === item.key
+                      ? "border-primary/50 bg-primary/10 text-primary"
+                      : "border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60"
+                  }`}
+                >
+                  <span className="text-xs">{item.icon}</span>
+                  <span>{item.label}</span>
+                  <span className={`text-[8px] transition-transform ${openDropdown === item.key ? "rotate-180" : ""}`}>▾</span>
+                </button>
+                {openDropdown === item.key && (
+                  <div
+                    className="absolute top-full left-1/2 -translate-x-1/2 mt-2 max-h-[70vh] overflow-hidden rounded-lg border border-border/60 bg-background/95 backdrop-blur-xl shadow-2xl z-50"
+                    style={{ width: item.width }}
+                  >
+                    <div className="max-h-[70vh] overflow-y-auto scrollbar-thin">
+                      {item.content}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Click-away overlay to close dropdowns */}
+        {openDropdown && (
+          <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)} />
+        )}
+
+        {/* Right: Metrics, Status */}
+        <div className="ml-auto flex items-center gap-4">
           <HeaderMetrics />
           <ConnectionIndicator />
         </div>
@@ -1281,52 +1338,61 @@ export default function HomePage() {
       <div className="flex-1 flex overflow-hidden relative">
         {/* Left Sidebar - Sessions & Tasks */}
         <aside
-          className="shrink-0 border-r border-border/50 flex flex-col overflow-hidden bg-background/30 backdrop-blur-sm relative"
+          className="shrink-0 border-r border-border/40 flex flex-col overflow-hidden bg-card/20 backdrop-blur-sm relative"
           style={{ width: leftWidth }}
         >
           <div className="flex-1 flex flex-col min-h-0">
             <FileExplorer />
-            <div className="border-t border-border/50 pt-2 flex-1 flex flex-col min-h-0">
+            <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
               <WorkProductViewer />
             </div>
-            <div className="border-t border-border/50 pt-2 h-1/3 flex flex-col min-h-0">
+            <HeartbeatWidget />
+            <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
               <TaskPanel />
             </div>
           </div>
           {/* Resizer */}
           <div
-            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 transition-colors z-20"
+            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/40 transition-colors z-20"
             onMouseDown={startResizing('left')}
           />
         </aside>
 
         {/* Center - Split: Activity Log (left) + Chat Interface (right) OR File Viewer */}
-        <main className="flex-1 border-r border-border/50 min-w-0 bg-background/50 flex relative">
+        <main className="flex-1 border-r border-border/40 min-w-0 bg-background/30 flex relative">
           {viewingFile ? (
             <FileViewer />
           ) : (
             <>
-              {/* Activity Log - Left side (resizable) */}
+              {/* Activity Log - Left side (collapsible + resizable) */}
               <div
-                className="min-h-0 border-r border-border/50 bg-background/30 relative"
-                style={{ width: `${activityLogWidth}%` }}
+                className={`min-h-0 border-r border-border/40 bg-card/10 relative transition-all duration-300 ${activityCollapsed ? 'w-10 shrink-0' : ''}`}
+                style={activityCollapsed ? { width: 40 } : { width: `${activityLogWidth}%` }}
               >
-                <div className="h-full flex flex-col">
-                  <div className="p-2 border-b border-border/50 bg-secondary/10">
-                    <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
-                      {ICONS.activity} Activity Log
-                    </h2>
+                {activityCollapsed ? (
+                  <button
+                    type="button"
+                    onClick={() => setActivityCollapsed(false)}
+                    className="h-full w-full flex items-center justify-center hover:bg-card/30 transition-colors"
+                    title="Expand Activity Log"
+                  >
+                    <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold">{ICONS.activity} Activity</span>
+                  </button>
+                ) : (
+                  <div className="h-full flex flex-col">
+                    <div className="flex-1 overflow-hidden">
+                      <CombinedActivityLog onCollapse={() => setActivityCollapsed(true)} />
+                    </div>
                   </div>
-                  <div className="flex-1 overflow-hidden">
-                    <CombinedActivityLog />
-                  </div>
-                </div>
+                )}
 
-                {/* Draggable Divider */}
-                <div
-                  className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 transition-colors z-20"
-                  onMouseDown={startResizing('center')}
-                />
+                {/* Draggable Divider (only when expanded) */}
+                {!activityCollapsed && (
+                  <div
+                    className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/40 transition-colors z-20"
+                    onMouseDown={startResizing('center')}
+                  />
+                )}
               </div>
 
               {/* Chat Interface - Right side (fills remaining space) */}
@@ -1340,21 +1406,6 @@ export default function HomePage() {
           )}
         </main>
 
-        {/* Right Sidebar - Ops Panel */}
-        <aside
-          className="shrink-0 flex flex-col h-full overflow-hidden relative bg-background/30 backdrop-blur-sm"
-          style={{ width: rightWidth }}
-        >
-          {/* Resizer */}
-          <div
-            className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-primary/50 transition-colors z-20"
-            onMouseDown={startResizing('right')}
-          />
-
-          <div className="flex flex-col h-full overflow-y-auto scrollbar-thin">
-            <OpsPanel />
-          </div>
-        </aside>
       </div>
 
       {/* Approval Modal */}
@@ -1369,5 +1420,6 @@ export default function HomePage() {
         onCancel={handleInputCancel}
       />
     </div>
+    </OpsProvider>
   );
 }

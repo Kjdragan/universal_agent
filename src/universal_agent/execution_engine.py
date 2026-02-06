@@ -247,19 +247,6 @@ class ProcessTurnAdapter:
         budget_state["steps"] = 0
         budget_state["tool_calls"] = 0
         
-        start_ts = budget_state["start_ts"]
-        
-        # Create event callback for real-time streaming
-        event_queue: asyncio.Queue[AgentEvent] = asyncio.Queue()
-        
-        def event_callback(event: AgentEvent) -> None:
-            """Callback to capture events from process_turn."""
-            try:
-                # print(f"DEBUG ProcessTurnAdapter: event_callback received type={event.type}")
-                event_queue.put_nowait(event)
-            except Exception:
-                pass
-        
         # Optional: capture Claude CLI stderr for gateway debugging
         if self._options is not None and os.getenv("UA_CLAUDE_CLI_STDERR", "1").lower() in {"1", "true", "yes"}:
             def _stderr_line(line: str) -> None:
@@ -412,7 +399,10 @@ class ProcessTurnAdapter:
                         },
                     )
                 
-                # Emit final response text
+                # Emit final response text only as a fallback.
+                # In the normal streaming path, text was already emitted via
+                # hook_events.emit_text_event() during run_conversation().
+                # The gateway server also filters final=True when streaming was seen.
                 if hasattr(result, 'response_text') and result.response_text:
                     yield AgentEvent(
                         type=EventType.TEXT,

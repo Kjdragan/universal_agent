@@ -168,11 +168,38 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   currentStreamingMessage: "",
   currentAuthor: undefined,
   currentOffset: undefined,
-  appendToStream: (text, author, offset) => set((state) => ({
-    currentStreamingMessage: state.currentStreamingMessage + text,
-    currentAuthor: author || state.currentAuthor,
-    currentOffset: offset !== undefined ? offset : state.currentOffset,
-  })),
+  appendToStream: (text, author, offset) => set((state) => {
+    const incomingAuthor = author || "Primary Agent";
+    const currentAuthor = state.currentAuthor || incomingAuthor;
+
+    // If the author changed and we have buffered text, finalize the old stream first
+    if (state.currentStreamingMessage.trim() && incomingAuthor !== currentAuthor) {
+      const finishedMessage: Message = {
+        id: generateId(),
+        role: "assistant",
+        content: state.currentStreamingMessage,
+        timestamp: Date.now(),
+        time_offset: state.currentOffset ?? 0,
+        is_complete: true,
+        author: currentAuthor,
+        thinking: state.currentThinking || undefined,
+      };
+      return {
+        messages: [...state.messages, finishedMessage],
+        currentStreamingMessage: text,
+        currentAuthor: incomingAuthor,
+        currentOffset: offset !== undefined ? offset : undefined,
+        currentThinking: "",
+      };
+    }
+
+    // Same author — just append
+    return {
+      currentStreamingMessage: state.currentStreamingMessage + text,
+      currentAuthor: incomingAuthor,
+      currentOffset: offset !== undefined ? offset : state.currentOffset,
+    };
+  }),
   finishStream: () => set((state) => {
     // Add the completed message to the messages list
     if (state.currentStreamingMessage.trim()) {
@@ -380,9 +407,10 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
     }
 
     case "tool_call": {
-      const store = useAgentStore.getState(); // Re-fetch logic if needed, but 'store' is already in scope
-      store.finishStream(); // <--- BREAK THE WALL OF TEXT
-
+      // Tool calls go to the Activity Log only — do NOT finishStream() here.
+      // Fragmenting the chat stream on every tool call was the primary cause of
+      // the "10+ chat bubbles" problem. The stream finalizes on author change
+      // or query_complete instead.
       const data = event.data as Record<string, unknown>;
       store.addToolCall({
         id: (data.id as string) ?? generateId(),
@@ -439,6 +467,15 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
       if (data.token_usage) {
         store.updateTokenUsage(data.token_usage as { input: number; output: number; total: number });
       }
+      // Route to activity log for visibility
+      const toolCalls = (data.tool_calls as number) ?? 0;
+      const duration = (data.duration_seconds as number) ?? 0;
+      const status = (data.status as string) ?? "complete";
+      store.addLog({
+        message: `Iteration ${store.iterationCount} ${status} — ${toolCalls} tool call${toolCalls !== 1 ? "s" : ""}, ${duration.toFixed(1)}s`,
+        level: "INFO",
+        prefix: "Iteration",
+      });
       break;
     }
 
