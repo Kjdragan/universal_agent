@@ -40,7 +40,7 @@ The Claude Agent SDK delivers messages as typed objects during `client.receive_r
 - **`ResultMessage`** — end-of-turn summary with token usage
 - **`UserMessage` / `ToolResultBlock`** — tool result delivery
 
-Only `TextBlock` and `ThinkingBlock` produce chat-bound events. `ToolUseBlock` and `ToolResultBlock` are routed exclusively to the Activity Log.
+Only `TextBlock` and `ThinkingBlock` produce chat-bound events. `ToolUseBlock` and `ToolResultBlock` are routed exclusively to the Activity Log — **except** for `Task` tool results, which contain sub-agent dialogue (see Section 2.4).
 
 ### 2.2 Event Emission: `run_conversation()` in `main.py`
 
@@ -106,7 +106,44 @@ def emit_thinking_event(thinking: str, signature=None, author=None) -> None:
 
 These functions use `ContextVar`-based callbacks set by the gateway at the start of each execution, ensuring no cross-session contamination.
 
-### 2.5 Deduplication: Eliminated Triple Emission
+### 2.4 Sub-Agent Dialogue Extraction from Task Results
+
+The Claude Agent SDK handles sub-agent conversations **internally** when the `Task` tool is called. Sub-agent `TextBlock`s do NOT come through the primary `client.receive_response()` stream — they're processed within the SDK's internal sub-agent loop. The sub-agent's dialogue is only available as the final `ToolResultBlock` content after the sub-agent conversation completes.
+
+To surface sub-agent dialogue in the chat panel, we extract text from the `Task` tool result and emit it as TEXT events:
+
+```
+if tool_name == "Task" and not is_error:
+    # block_content is list of content blocks: [{"type": "text", "text": "..."}, ...]
+    for blk in block_content:
+        text = blk.get("text") or getattr(blk, "text", "")
+        if text and not text.startswith("agentId:"):
+            hook_events.emit_text_event(text, author=resolved_subagent_author)
+```
+
+The author is resolved from `tool_input.subagent_type`:
+- `"research-specialist"` → `"Research Specialist"`
+- `"report-writer"` → `"Report Writer"`
+- Other types → `"Subagent: <type>"`
+
+This means the chat panel shows the sub-agent's final summary (e.g., "Research Complete: Russia-Ukraine War..." from the Research Specialist, "I have successfully generated a comprehensive HTML report..." from the Report Writer) with proper attribution and styling.
+
+### 2.5 In-Process MCP Tool Progress via `mcp_log` Bridge
+
+In-process MCP tools (e.g., `mcp__internal__run_report_generation`) emit progress messages via `mcp_log()` in `mcp_server.py`. A global callback bridge in `process_turn()` routes these to the Activity Log:
+
+```python
+from mcp_server import set_mcp_log_callback
+
+def _mcp_log_bridge(msg, level, prefix=""):
+    emit_event(AgentEvent(type=EventType.STATUS, data={...}))
+
+set_mcp_log_callback(_mcp_log_bridge)
+```
+
+This uses `emit_event()` directly (closure over `event_callback`) rather than `emit_status_event()` (ContextVar-dependent), making it robust even when MCP tools run in child async tasks.
+
+### 2.6 Deduplication: Eliminated Triple Emission
 
 Previously, the same final agent text was emitted **3 times**:
 

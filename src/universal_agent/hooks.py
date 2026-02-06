@@ -524,6 +524,28 @@ class AgentHookSet:
         """Emit TOOL_CALL for UI/gateway streaming once tool use is allowed."""
         tool_name = input_data.get("tool_name", "")
         tool_input = input_data.get("tool_input", {}) or {}
+
+        # Extract sub-agent "thought" fields from tool inputs and emit as
+        # THINKING events to the chat panel. These are the agent's reasoning
+        # about what it's about to do (common in COMPOSIO_MULTI_EXECUTE_TOOL).
+        if isinstance(tool_input, dict):
+            thought = tool_input.get("thought")
+            if thought and isinstance(thought, str) and thought.strip():
+                # Resolve author from sub-agent context
+                parent_tool_use_id = input_data.get("parent_tool_use_id")
+                if parent_tool_use_id:
+                    # Sub-agent thought — try to resolve from transcript path or default
+                    transcript_path = input_data.get("transcript_path", "")
+                    if "research" in transcript_path.lower() if transcript_path else False:
+                        thought_author = "Research Specialist"
+                    elif "report" in transcript_path.lower() if transcript_path else False:
+                        thought_author = "Report Writer"
+                    else:
+                        thought_author = "Subagent"
+                else:
+                    thought_author = "Primary Agent"
+                emit_thinking_event(thought, author=thought_author)
+
         emit_tool_call_event(
             tool_use_id=tool_use_id,
             tool_name=tool_name,

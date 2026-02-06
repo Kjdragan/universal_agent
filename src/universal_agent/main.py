@@ -5753,6 +5753,38 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                 if tool_name == "Task":
                                     logfire.set_baggage(agent="main")
                                     logfire.set_baggage(is_subagent="false")
+
+                                    # Stream sub-agent dialogue to chat panel.
+                                    # The SDK handles sub-agent conversations internally —
+                                    # TextBlocks never come through receive_response().
+                                    # Extract them from the ToolResultBlock and emit as TEXT.
+                                    if not is_error and block_content:
+                                        subagent_type = (tool_input or {}).get("subagent_type", "")
+                                        if "research" in subagent_type.lower():
+                                            sa_author = "Research Specialist"
+                                        elif "report" in subagent_type.lower() or "writ" in subagent_type.lower():
+                                            sa_author = "Report Writer"
+                                        elif subagent_type:
+                                            sa_author = f"Subagent: {subagent_type}"
+                                        else:
+                                            sa_author = "Subagent"
+
+                                        # block_content is list of content blocks (dicts or SDK objects)
+                                        _sa_blocks = block_content if isinstance(block_content, list) else [block_content]
+                                        for _sa_blk in _sa_blocks:
+                                            _sa_text = None
+                                            if isinstance(_sa_blk, dict) and _sa_blk.get("type") == "text":
+                                                _sa_text = _sa_blk.get("text", "")
+                                            elif hasattr(_sa_blk, "text"):
+                                                _sa_text = getattr(_sa_blk, "text", "")
+                                            elif isinstance(_sa_blk, str):
+                                                _sa_text = _sa_blk
+                                            if _sa_text and _sa_text.strip():
+                                                # Skip metadata lines (agentId, etc.)
+                                                if _sa_text.strip().startswith("agentId:"):
+                                                    continue
+                                                hook_events.emit_text_event(_sa_text, author=sa_author)
+
                                     if not is_error and OBSERVER_WORKSPACE_DIR:
                                         paths = _persist_subagent_output(
                                             workspace_dir=OBSERVER_WORKSPACE_DIR,
@@ -6903,9 +6935,41 @@ async def process_turn(
     hook_events.set_event_start_ts(start_ts)
     hook_events.reset_tool_event_tracking()
 
+    # Bridge mcp_server.mcp_log() to the UI event stream so in-process MCP tool
+    # progress (e.g. "Step 1/4: Generating Outline...") appears in the Activity Log.
+    # Uses emit_event() directly (not hook_events.emit_status_event) to avoid
+    # ContextVar dependency — mcp_log fires from tool execution which may run in
+    # a child async task where the hook ContextVar isn't propagated.
+    _mcp_log_callback_set = False
+    try:
+        from mcp_server import set_mcp_log_callback
+
+        def _mcp_log_bridge(msg: str, level: str, prefix: str = "") -> None:
+            emit_event(AgentEvent(
+                type=EventType.STATUS,
+                data={
+                    "status": msg,
+                    "level": level,
+                    "prefix": prefix or "[MCP Tool]",
+                    "is_log": True,
+                    "time_offset": round(time.time() - start_ts, 1) if start_ts else 0,
+                },
+            ))
+
+        set_mcp_log_callback(_mcp_log_bridge)
+        _mcp_log_callback_set = True
+    except ImportError:
+        pass
+
     def _clear_hook_events() -> None:
         hook_events.set_event_callback(None)
         hook_events.set_event_start_ts(None)
+        if _mcp_log_callback_set:
+            try:
+                from mcp_server import set_mcp_log_callback as _clear_cb
+                _clear_cb(None)
+            except ImportError:
+                pass
 
     if LOGFIRE_TOKEN:
         logfire.info("query_started", query=user_input)
@@ -7137,6 +7201,26 @@ async def process_turn(
         trace["local_toolkit_trace_ids"] = local_trace_ids
 
         print(f"{'=' * 80}")
+
+        # Emit execution summary to Activity Log for UI visibility
+        summary_parts = [f"⏱️ {request_duration}s", f"🔧 {len(request_tool_calls)} tools"]
+        if code_exec_used:
+            summary_parts.append("🏭 code exec")
+        hook_events.emit_status_event(
+            f"Execution complete — {' | '.join(summary_parts)}",
+            level="INFO",
+            prefix="Summary",
+        )
+        # Emit compact tool breakdown to Activity Log
+        if tool_breakdown:
+            breakdown_lines = []
+            for tb in tool_breakdown:
+                breakdown_lines.append(f"  {tb['marker']} +{tb['time_offset']:>5.1f}s {tb['name']}")
+            hook_events.emit_status_event(
+                "Tool breakdown:\n" + "\n".join(breakdown_lines),
+                level="INFO",
+                prefix="Summary",
+            )
 
         # Print agent's final response (with follow-up suggestions) AFTER execution summary
         if final_response_text:
