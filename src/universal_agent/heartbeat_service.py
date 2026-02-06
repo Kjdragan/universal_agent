@@ -773,7 +773,7 @@ class HeartbeatService:
             
             request = GatewayRequest(
                 user_input=prompt,
-                force_complex=False,
+                force_complex=True,  # Heartbeat always needs tools — skip classification
                 metadata=metadata,
             )
             
