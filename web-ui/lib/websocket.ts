@@ -43,6 +43,7 @@ export class AgentWebSocket {
 
   // State
   private currentStatus: ConnectionStatus = "disconnected";
+  private sessionIdKey = "universal_agent_session_id"; // Key for localStorage
 
   constructor(url?: string) {
     if (url) {
@@ -83,7 +84,18 @@ export class AgentWebSocket {
     this.updateStatus("connecting");
 
     try {
-      this.ws = new WebSocket(this.url);
+      let wsUrl = this.url;
+      // Append session_id if available to resume session
+      if (typeof window !== "undefined") {
+        const storedSessionId = localStorage.getItem(this.sessionIdKey);
+        if (storedSessionId) {
+          const separator = wsUrl.includes("?") ? "&" : "?";
+          wsUrl += `${separator}session_id=${storedSessionId}`;
+          console.log(`Resuming session: ${storedSessionId}`);
+        }
+      }
+
+      this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         console.log("WebSocket connected");
@@ -157,6 +169,11 @@ export class AgentWebSocket {
       // Handle connection-specific events
       if (event.type === "connected") {
         console.log("Connection confirmed:", event.data);
+        // Save session_id for resumption
+        const sessionData = event.data as SessionInfo;
+        if (sessionData && sessionData.session_id && typeof window !== "undefined") {
+          localStorage.setItem(this.sessionIdKey, sessionData.session_id);
+        }
       } else if (event.type === "query_complete" || event.type === "cancelled") {
         this.updateStatus("connected");
       } else if (event.type === "status") {

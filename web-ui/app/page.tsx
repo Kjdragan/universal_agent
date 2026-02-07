@@ -993,8 +993,8 @@ function ChatInterface() {
         )}
       </div>
 
-      {/* Input */}
-      <div className="p-4 border-t border-border/40 bg-card/20">
+      {/* Input - Floating Bar Style */}
+      <div className="p-4 bg-card/40 border border-border/40 backdrop-blur-md mb-10 mx-6 rounded-2xl shadow-xl">
         <div className="flex gap-3">
           <input
             type="text"
@@ -1149,63 +1149,58 @@ function WorkProductViewer() {
 // Main App Component
 // =============================================================================
 
+import Image from "next/image";
+
+// ... (previous imports)
+
+// =============================================================================
+// Main App Component
+// =============================================================================
+
 export default function HomePage() {
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const viewingFile = useAgentStore((s) => s.viewingFile); // Sub to viewing state
   const ws = getWebSocket();
 
   // Layout State
-  const [leftWidth, setLeftWidth] = useState(320);
-  const [activityLogWidth, setActivityLogWidth] = useState(40); // % of center area
+  // We now have: [Chat (flex)] - [Activity (px)] - [Files (px)]
+  // We track widths for the two right-side panels.
+  const [activityWidth, setActivityWidth] = useState(400);
+  const [filesWidth, setFilesWidth] = useState(320);
+
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [activityCollapsed, setActivityCollapsed] = useState(false);
 
   // Resizing Logic
-  const startResizing = (direction: 'left' | 'center') => (mouseDownEvent: React.MouseEvent) => {
+  // Both resizers are on the LEFT edge of their respective panels, dragging expanding to the LEFT (increasing width).
+  const startResizing = (panel: 'activity' | 'files') => (mouseDownEvent: React.MouseEvent) => {
     mouseDownEvent.preventDefault();
     const startX = mouseDownEvent.clientX;
+    const startWidth = panel === 'activity' ? activityWidth : filesWidth;
 
-    if (direction === 'center') {
-      // For center divider, we need to calculate based on the center panel's total width
-      const centerPanel = (mouseDownEvent.target as HTMLElement).closest('main');
-      if (!centerPanel) return;
+    const onMouseMove = (mouseMoveEvent: MouseEvent) => {
+      // Dragging LEFT (negative delta) should INCREASE width.
+      // delta = current - start. If current < start (moved left), delta is negative.
+      // newWidth = startWidth - delta.
+      const delta = mouseMoveEvent.clientX - startX;
+      const newWidth = Math.max(200, Math.min(800, startWidth - delta));
 
-      const onMouseMove = (mouseMoveEvent: MouseEvent) => {
-        const rect = centerPanel.getBoundingClientRect();
-        const relativeX = mouseMoveEvent.clientX - rect.left;
-        const percentage = Math.max(20, Math.min(80, (relativeX / rect.width) * 100));
-        setActivityLogWidth(percentage);
-      };
+      if (panel === 'activity') {
+        setActivityWidth(newWidth);
+      } else {
+        setFilesWidth(newWidth);
+      }
+    };
 
-      const onMouseUp = () => {
-        document.body.style.cursor = 'default';
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-      };
+    const onMouseUp = () => {
+      document.body.style.cursor = 'default';
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+    };
 
-      document.body.style.cursor = 'col-resize';
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-    } else {
-      // Original sidebar resizing logic (left only)
-      const startWidth = leftWidth;
-
-      const onMouseMove = (mouseMoveEvent: MouseEvent) => {
-        const delta = mouseMoveEvent.clientX - startX;
-        const newWidth = Math.max(200, Math.min(600, startWidth + delta));
-        setLeftWidth(newWidth);
-      };
-
-      const onMouseUp = () => {
-        document.body.style.cursor = 'default';
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-      };
-
-      document.body.style.cursor = 'col-resize';
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
-    }
+    document.body.style.cursor = 'col-resize';
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
   };
 
   // Approval modal hook
@@ -1265,55 +1260,47 @@ export default function HomePage() {
 
   return (
     <OpsProvider>
-    <div className="h-screen flex flex-col bg-background text-foreground relative z-10">
-      {/* Header */}
-      <header className="h-16 border-b border-border/40 glass-strong flex items-center px-6 shrink-0 z-20 relative">
-        {/* Left: Logo & Brand */}
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-3">
-            {/* Animated logo icon */}
-            <div className="relative">
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/30 flex items-center justify-center">
-                <span className="text-xl">⚡</span>
-              </div>
-              <div className="absolute inset-0 rounded-lg animate-ping opacity-10 bg-primary" />
-            </div>
-            <div>
-              <h1 className="font-display text-sm font-bold gradient-text tracking-wider">
-                UNIVERSAL AGENT
-              </h1>
-              <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-primary/60" />
-                <span className="text-[9px] text-muted-foreground/60 tracking-widest">NEURAL OPERATIONS CENTER</span>
-              </div>
-            </div>
-          </div>
-          <div className="h-8 w-px bg-border/30" />
-          <span className="text-[9px] text-muted-foreground/70 px-2 py-1 rounded bg-card/40 border border-border/30 font-mono">
-            v2.1
-          </span>
-        </div>
+      <div className="h-screen flex flex-col bg-background text-foreground relative z-10">
+        {/* Header */}
+        <header className="h-14 border-b border-border/40 glass-strong flex items-center px-4 shrink-0 z-20 relative justify-between gap-4">
 
-        {/* Center: Ops dropdown buttons */}
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          <div className="pointer-events-auto flex items-center gap-1">
+          {/* Left: Logo & Brand */}
+          <div className="flex items-center gap-4 shrink-0">
+            {/* Logo Image */}
+            <div className="relative h-full w-[40rem]">
+              <Image
+                src="/simon_logo_v2.png"
+                alt="Simon"
+                fill
+                className="object-fill"
+                priority
+              />
+            </div>
+
+            <div className="h-8 w-px bg-border/30" />
+            <span className="text-[15px] text-muted-foreground/70 px-3 py-2 rounded bg-card/40 border border-border/30 font-mono font-semibold tracking-wide">
+              v2.1
+            </span>
+          </div>
+
+          {/* Center: Ops dropdown buttons - REPOSITIONED to be part of flow */}
+          <div className="flex items-center gap-0.5 shrink-0">
             {([
-              { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: 420 },
-              { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: 360 },
-              { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: 380 },
-              { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: 380 },
-              { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection />, width: 400 },
-              { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection />, width: 500 },
+              { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: 1200 },
+              { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: 1200 },
+              { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: 800 },
+              { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: 800 },
+              { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection />, width: 900 },
+              { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection />, width: 1200 },
             ] as const).map((item) => (
               <div key={item.key} className="relative">
                 <button
                   type="button"
                   onClick={() => setOpenDropdown((prev) => prev === item.key ? null : item.key)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] uppercase tracking-widest font-semibold transition ${
-                    openDropdown === item.key
-                      ? "border-primary/50 bg-primary/10 text-primary"
-                      : "border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60"
-                  }`}
+                  className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition ${openDropdown === item.key
+                    ? "border-primary/50 bg-primary/10 text-primary"
+                    : "border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60"
+                    }`}
                 >
                   <span className="text-xs">{item.icon}</span>
                   <span>{item.label}</span>
@@ -1321,10 +1308,10 @@ export default function HomePage() {
                 </button>
                 {openDropdown === item.key && (
                   <div
-                    className="absolute top-full left-1/2 -translate-x-1/2 mt-2 max-h-[70vh] overflow-hidden rounded-lg border border-border/60 bg-background/95 backdrop-blur-xl shadow-2xl z-50"
+                    className="absolute top-full left-1/2 -translate-x-1/2 mt-2 max-h-[85vh] overflow-hidden rounded-lg border border-border/60 bg-background/95 backdrop-blur-xl shadow-2xl z-50"
                     style={{ width: item.width }}
                   >
-                    <div className="max-h-[70vh] overflow-y-auto scrollbar-thin">
+                    <div className="max-h-[85vh] overflow-y-auto scrollbar-thin">
                       {item.content}
                     </div>
                   </div>
@@ -1332,111 +1319,112 @@ export default function HomePage() {
               </div>
             ))}
           </div>
-        </div>
-        {/* Click-away overlay to close dropdowns */}
-        {openDropdown && (
-          <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)} />
-        )}
-
-        {/* Right: Metrics, Status */}
-        <div className="ml-auto flex items-center gap-4">
-          <a
-            href="/dashboard"
-            className="rounded-lg border border-border/50 bg-card/40 px-2.5 py-1 text-[10px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
-          >
-            Dashboard Shell
-          </a>
-          <HeaderMetrics />
-          <ConnectionIndicator />
-        </div>
-      </header>
-
-      {/* Main Content */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Left Sidebar - Sessions & Tasks */}
-        <aside
-          className="shrink-0 border-r border-border/40 flex flex-col overflow-hidden bg-card/20 backdrop-blur-sm relative"
-          style={{ width: leftWidth }}
-        >
-          <div className="flex-1 flex flex-col min-h-0">
-            <FileExplorer />
-            <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
-              <WorkProductViewer />
-            </div>
-            <HeartbeatWidget />
-            <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
-              <TaskPanel />
-            </div>
-          </div>
-          {/* Resizer */}
-          <div
-            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/40 transition-colors z-20"
-            onMouseDown={startResizing('left')}
-          />
-        </aside>
-
-        {/* Center - Split: Activity Log (left) + Chat Interface (right) OR File Viewer */}
-        <main className="flex-1 border-r border-border/40 min-w-0 bg-background/30 flex relative">
-          {viewingFile ? (
-            <FileViewer />
-          ) : (
-            <>
-              {/* Activity Log - Left side (collapsible + resizable) */}
-              <div
-                className={`min-h-0 border-r border-border/40 bg-card/10 relative transition-all duration-300 ${activityCollapsed ? 'w-10 shrink-0' : ''}`}
-                style={activityCollapsed ? { width: 40 } : { width: `${activityLogWidth}%` }}
-              >
-                {activityCollapsed ? (
-                  <button
-                    type="button"
-                    onClick={() => setActivityCollapsed(false)}
-                    className="h-full w-full flex items-center justify-center hover:bg-card/30 transition-colors"
-                    title="Expand Activity Log"
-                  >
-                    <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold">{ICONS.activity} Activity</span>
-                  </button>
-                ) : (
-                  <div className="h-full flex flex-col">
-                    <div className="flex-1 overflow-hidden">
-                      <CombinedActivityLog onCollapse={() => setActivityCollapsed(true)} />
-                    </div>
-                  </div>
-                )}
-
-                {/* Draggable Divider (only when expanded) */}
-                {!activityCollapsed && (
-                  <div
-                    className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/40 transition-colors z-20"
-                    onMouseDown={startResizing('center')}
-                  />
-                )}
-              </div>
-
-              {/* Chat Interface - Right side (fills remaining space) */}
-              <div
-                className="min-h-0 flex-1"
-                style={{ width: `${100 - activityLogWidth}%` }}
-              >
-                <ChatInterface />
-              </div>
-            </>
+          {/* Click-away overlay to close dropdowns */}
+          {openDropdown && (
+            <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)} />
           )}
-        </main>
 
-      </div>
+          {/* Right: Metrics, Status */}
+          <div className="ml-auto flex items-center gap-4">
+            <a
+              href="/dashboard"
+              className="rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
+            >
+              Dashboard Shell
+            </a>
+            <HeaderMetrics />
+            <ConnectionIndicator />
+          </div>
+        </header>
 
-      {/* Approval Modal */}
-      <ApprovalModal
-        request={pendingApproval}
-        onApprove={handleApprove}
-        onReject={handleReject}
-      />
-      <InputModal
-        request={pendingInput}
-        onSubmit={handleInputSubmit}
-        onCancel={handleInputCancel}
-      />
-    </div>
-    </OpsProvider>
+        {/* Main Content Area */}
+        {/* Layout: [Chat (Left, Flex)] | [Activity (Center, Fixed)] | [Files (Right, Fixed)] */}
+        <div className="flex-1 flex overflow-hidden relative">
+
+          {viewingFile ? (
+            <div className="flex-1 flex overflow-hidden">
+              {/* If viewing a file, we might want to hide chat or just overlay? 
+                 Current logic expects viewingFile to take over the main area.
+                 Let's keep it simple: if viewingFile, it takes the 'Chat' slot.
+             */}
+              <div className="flex-1 min-w-0 bg-background/30 flex relative">
+                <FileViewer />
+              </div>
+            </div>
+          ) : (
+            <main className="flex-1 min-w-0 bg-background/30 flex relative flex-col border-r border-border/40">
+              <ChatInterface />
+            </main>
+          )}
+
+          {/* Center: Activity Log */}
+          {/* This panel sits between Chat (Left) and Files (Right) */}
+          <div
+            className={`min-h-0 border-r border-border/40 bg-card/10 relative transition-all duration-300 flex flex-col ${activityCollapsed ? 'w-10 shrink-0' : ''}`}
+            style={activityCollapsed ? { width: 40 } : { width: activityWidth }}
+          >
+            {/* Resizer handle on the LEFT edge of this panel */}
+            {!activityCollapsed && (
+              <div
+                className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-primary/40 transition-colors z-20"
+                onMouseDown={startResizing('activity')}
+              />
+            )}
+
+            {activityCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setActivityCollapsed(false)}
+                className="h-full w-full flex items-center justify-center hover:bg-card/30 transition-colors"
+                title="Expand Activity Log"
+              >
+                <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold">{ICONS.activity} Activity</span>
+              </button>
+            ) : (
+              <div className="h-full flex flex-col overflow-hidden">
+                <CombinedActivityLog onCollapse={() => setActivityCollapsed(true)} />
+              </div>
+            )}
+          </div>
+
+          {/* Right Sidebar: Files & Tasks */}
+          <aside
+            className="shrink-0 flex flex-col overflow-hidden bg-card/20 backdrop-blur-sm relative"
+            style={{ width: filesWidth }}
+          >
+            {/* Resizer on the LEFT edge */}
+            <div
+              className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-primary/40 transition-colors z-20"
+              onMouseDown={startResizing('files')}
+            />
+
+            <div className="flex-1 flex flex-col min-h-0 pl-1">
+              {/* Added pl-1 to avoid overlap with resizer */}
+              <FileExplorer />
+              <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
+                <WorkProductViewer />
+              </div>
+              <HeartbeatWidget />
+              <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
+                <TaskPanel />
+              </div>
+            </div>
+          </aside>
+
+        </div>
+
+        {/* Approval Modal */}
+        <ApprovalModal
+          request={pendingApproval}
+          onApprove={handleApprove}
+          onReject={handleReject}
+        />
+        <InputModal
+          request={pendingInput}
+          onSubmit={handleInputSubmit}
+          onCancel={handleInputCancel}
+        />
+      </div >
+    </OpsProvider >
   );
 }
