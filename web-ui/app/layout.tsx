@@ -1,12 +1,6 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Syncopate } from "next/font/google";
+import { Syncopate } from "next/font/google";
 import "./globals.css";
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono",
-  display: "swap",
-});
 
 const syncopate = Syncopate({
   subsets: ["latin"],
@@ -27,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
-      <body className={`${jetbrainsMono.variable} ${syncopate.variable} font-mono`}>
+      <body className={`${syncopate.variable} font-mono`}>
         {children}
       </body>
     </html>
