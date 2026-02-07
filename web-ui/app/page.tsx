@@ -1340,6 +1340,12 @@ export default function HomePage() {
 
         {/* Right: Metrics, Status */}
         <div className="ml-auto flex items-center gap-4">
+          <a
+            href="/dashboard"
+            className="rounded-lg border border-border/50 bg-card/40 px-2.5 py-1 text-[10px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
+          >
+            Dashboard Shell
+          </a>
           <HeaderMetrics />
           <ConnectionIndicator />
         </div>
