@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from universal_agent import gateway_server
 from universal_agent.gateway import GatewaySessionSummary
+from universal_agent.gateway import GatewaySession
 
 # Mock OpsService to avoid full gateway dependency chains in unit tests
 # OR rely on the fact that lifespan will init a real OpsService with a real InProcessGateway pointing to tmp_path?
@@ -164,3 +165,81 @@ def test_ops_preview_compact_reset(client, tmp_path):
     archive_dir = Path(resp.json()["archive_dir"])
     assert archive_dir.exists()
     assert (archive_dir / "run.log").exists()
+
+
+def test_dashboard_summary_and_notifications(client, tmp_path):
+    _create_dummy_session(tmp_path, "session_dash", ["ok"])
+
+    summary = client.get("/api/v1/dashboard/summary")
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert "sessions" in payload
+    assert "notifications" in payload
+    assert payload["sessions"]["total"] >= 1
+
+    list_resp = client.get("/api/v1/dashboard/notifications")
+    assert list_resp.status_code == 200
+    assert "notifications" in list_resp.json()
+
+    from universal_agent import gateway_server
+
+    gateway_server._notifications.append(  # type: ignore[attr-defined]
+        {
+            "id": "ntf_test_1",
+            "kind": "test",
+            "title": "Test",
+            "message": "Test notification",
+            "session_id": "session_dash",
+            "severity": "info",
+            "requires_action": False,
+            "status": "new",
+            "created_at": "2026-02-07T00:00:00",
+            "updated_at": "2026-02-07T00:00:00",
+            "channels": ["dashboard"],
+            "email_targets": [],
+            "metadata": {},
+        }
+    )
+    patch_resp = client.patch("/api/v1/dashboard/notifications/ntf_test_1", json={"status": "read"})
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["notification"]["status"] == "read"
+
+
+def test_session_policy_endpoints_and_resume(client, tmp_path):
+    session_dir = _create_dummy_session(tmp_path, "session_policy", ["run"])
+    session = GatewaySession(
+        session_id="session_policy",
+        user_id="tester",
+        workspace_dir=str(session_dir),
+        metadata={},
+    )
+    gateway_server._sessions["session_policy"] = session
+    gateway_server._pending_gated_requests["session_policy"] = {
+        "session_id": "session_policy",
+        "approval_id": "approval_test_1",
+        "status": "pending",
+        "request": {"user_input": "send an email", "force_complex": False, "metadata": {}},
+    }
+
+    get_resp = client.get("/api/v1/sessions/session_policy/policy")
+    assert get_resp.status_code == 200
+    policy = get_resp.json()["policy"]
+    assert policy["identity_mode"] == "persona"
+
+    patch_resp = client.patch(
+        "/api/v1/sessions/session_policy/policy",
+        json={"patch": {"identity_mode": "operator_proxy", "autonomy_mode": "guarded"}},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["policy"]["identity_mode"] == "operator_proxy"
+
+    pending_resp = client.get("/api/v1/sessions/session_policy/pending")
+    assert pending_resp.status_code == 200
+    assert pending_resp.json()["pending"]["approval_id"] == "approval_test_1"
+
+    resume_resp = client.post(
+        "/api/v1/sessions/session_policy/resume",
+        json={"approval_id": "approval_test_1"},
+    )
+    assert resume_resp.status_code == 200
+    assert resume_resp.json()["pending"]["status"] == "approved"

@@ -65,6 +65,18 @@ def ops_config_schema() -> dict[str, Any]:
                 "properties": {"entries": {"type": "object", "additionalProperties": entry_schema}},
                 "additionalProperties": True,
             },
+            "notifications": {
+                "type": "object",
+                "properties": {
+                    "channels": {"type": "array", "items": {"type": "string"}},
+                    "email_targets": {"type": "array", "items": {"type": "string"}},
+                },
+                "additionalProperties": True,
+            },
+            "session_policy_defaults": {
+                "type": "object",
+                "additionalProperties": True,
+            },
         },
         "additionalProperties": True,
     }

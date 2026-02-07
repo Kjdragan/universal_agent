@@ -59,6 +59,12 @@ from universal_agent.security_paths import (
     resolve_workspace_dir,
     validate_session_id,
 )
+from universal_agent.session_policy import (
+    evaluate_request_against_policy,
+    load_session_policy,
+    save_session_policy,
+    update_session_policy,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -246,6 +252,20 @@ class OpsSessionCompactRequest(BaseModel):
     max_bytes: int = 200_000
 
 
+class NotificationUpdateRequest(BaseModel):
+    status: str
+    note: Optional[str] = None
+
+
+class SessionPolicyPatchRequest(BaseModel):
+    patch: dict = {}
+
+
+class ResumeRequest(BaseModel):
+    approval_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
 # =============================================================================
 # Gateway Singleton
 # =============================================================================
@@ -259,6 +279,9 @@ _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
 _channel_probe_results: dict[str, dict] = {}
+_notifications: list[dict] = []
+_notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
+_pending_gated_requests: dict[str, dict] = {}
 
 
 def _emit_cron_event(payload: dict) -> None:
@@ -300,6 +323,96 @@ def _broadcast_system_event(session_id: str, event: dict) -> None:
         "timestamp": datetime.now().isoformat(),
     }
     asyncio.create_task(manager.broadcast(session_id, payload))
+
+
+def _notification_targets() -> dict:
+    config = load_ops_config()
+    notifications = config.get("notifications", {})
+    if not isinstance(notifications, dict):
+        notifications = {}
+
+    channels = notifications.get("channels")
+    if not isinstance(channels, list) or not channels:
+        channels = ["dashboard", "email", "telegram"]
+    normalized_channels = [str(ch).strip().lower() for ch in channels if str(ch).strip()]
+
+    email_targets = notifications.get("email_targets")
+    if not isinstance(email_targets, list) or not email_targets:
+        fallback_email = (
+            os.getenv("UA_NOTIFICATION_EMAIL")
+            or os.getenv("UA_PRIMARY_EMAIL")
+            or "kevinjdragan@gmail.com"
+        )
+        email_targets = [fallback_email]
+
+    return {
+        "channels": normalized_channels,
+        "email_targets": [str(email).strip() for email in email_targets if str(email).strip()],
+    }
+
+
+def _add_notification(
+    *,
+    kind: str,
+    title: str,
+    message: str,
+    session_id: Optional[str] = None,
+    severity: str = "info",
+    requires_action: bool = False,
+    metadata: Optional[dict] = None,
+) -> dict:
+    notification_id = f"ntf_{int(time.time() * 1000)}_{len(_notifications) + 1}"
+    targets = _notification_targets()
+    timestamp = datetime.now().isoformat()
+    record = {
+        "id": notification_id,
+        "kind": kind,
+        "title": title,
+        "message": message,
+        "session_id": session_id,
+        "severity": severity,
+        "requires_action": requires_action,
+        "status": "new",
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "channels": targets["channels"],
+        "email_targets": targets["email_targets"],
+        "metadata": metadata or {},
+    }
+    _notifications.append(record)
+    if len(_notifications) > _notifications_max:
+        del _notifications[: len(_notifications) - _notifications_max]
+
+    if session_id:
+        event = {
+            "event_id": f"evt_ntf_{notification_id}",
+            "type": "notification",
+            "payload": record,
+            "created_at": timestamp,
+        }
+        _enqueue_system_event(session_id, event)
+        if session_id in manager.session_connections:
+            _broadcast_system_event(session_id, event)
+    return record
+
+
+def _approval_status(approval_id: str) -> Optional[str]:
+    for record in list_approvals():
+        if record.get("approval_id") == approval_id:
+            status = record.get("status")
+            return str(status).lower() if status else None
+    return None
+
+
+def _pending_gate_is_approved(session_id: str) -> bool:
+    pending = _pending_gated_requests.get(session_id)
+    if not pending:
+        return False
+    approval_id = pending.get("approval_id")
+    if not approval_id:
+        return str(pending.get("status", "")).lower() == "approved"
+    status = _approval_status(str(approval_id))
+    return status == "approved"
 
 
 def _broadcast_presence(payload: dict) -> None:
@@ -521,6 +634,16 @@ def _sanitize_workspace_dir_or_400(workspace_dir: Optional[str]) -> Optional[str
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _session_policy(session: GatewaySession) -> dict:
+    policy = load_session_policy(
+        session.workspace_dir,
+        session_id=session.session_id,
+        user_id=session.user_id,
+    )
+    save_session_policy(session.workspace_dir, policy)
+    return policy
 
 
 def is_user_allowed(user_id: str) -> bool:
@@ -778,6 +901,12 @@ async def create_session(request: CreateSessionRequest):
             user_id=final_user_id,
             workspace_dir=workspace_dir,
         )
+        policy = _session_policy(session)
+        session.metadata["policy"] = {
+            "autonomy_mode": policy.get("autonomy_mode"),
+            "identity_mode": policy.get("identity_mode"),
+            "tool_profile": policy.get("tool_profile"),
+        }
         store_session(session)
         if _heartbeat_service:
             _heartbeat_service.register_session(session)
@@ -809,6 +938,84 @@ async def list_sessions():
             for s in summaries
         ]
     }
+
+
+@app.get("/api/v1/dashboard/summary")
+async def dashboard_summary():
+    sessions_total = 0
+    if _ops_service:
+        try:
+            sessions_total = len(_ops_service.list_sessions())
+        except Exception:
+            sessions_total = len(_sessions)
+    else:
+        sessions_total = len(_sessions)
+
+    active_sessions = sum(1 for s in _sessions.values() if s)
+    pending_approvals = len(list_approvals(status="pending"))
+    unread_notifications = sum(
+        1 for item in _notifications if str(item.get("status", "new")).lower() in {"new", "pending"}
+    )
+    cron_total = 0
+    cron_enabled = 0
+    if _cron_service:
+        jobs = _cron_service.list_jobs()
+        cron_total = len(jobs)
+        cron_enabled = sum(1 for job in jobs if bool(getattr(job, "enabled", False)))
+
+    return {
+        "sessions": {
+            "active": active_sessions,
+            "total": sessions_total,
+        },
+        "approvals": {
+            "pending": pending_approvals,
+            "total": len(list_approvals()),
+        },
+        "cron": {
+            "total": cron_total,
+            "enabled": cron_enabled,
+        },
+        "notifications": {
+            "unread": unread_notifications,
+            "total": len(_notifications),
+        },
+        "deployment_profile": _deployment_profile_defaults(),
+    }
+
+
+@app.get("/api/v1/dashboard/notifications")
+async def dashboard_notifications(
+    limit: int = 100,
+    status: Optional[str] = None,
+    session_id: Optional[str] = None,
+):
+    items = list(_notifications)
+    if status:
+        status_norm = status.strip().lower()
+        items = [item for item in items if str(item.get("status", "")).lower() == status_norm]
+    if session_id:
+        safe_session_id = _sanitize_session_id_or_400(session_id)
+        items = [item for item in items if item.get("session_id") == safe_session_id]
+    limit = max(1, min(limit, 500))
+    return {"notifications": items[-limit:][::-1]}
+
+
+@app.patch("/api/v1/dashboard/notifications/{notification_id}")
+async def dashboard_notification_update(notification_id: str, payload: NotificationUpdateRequest):
+    status_value = payload.status.strip().lower()
+    if status_value not in {"new", "read", "acknowledged", "dismissed"}:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    for item in reversed(_notifications):
+        if item.get("id") == notification_id:
+            item["status"] = status_value
+            item["updated_at"] = datetime.now().isoformat()
+            if payload.note:
+                metadata = item.setdefault("metadata", {})
+                if isinstance(metadata, dict):
+                    metadata["note"] = payload.note
+            return {"notification": item}
+    raise HTTPException(status_code=404, detail="Notification not found")
 
 
 @app.post("/api/v1/heartbeat/wake")
@@ -1071,6 +1278,12 @@ async def get_session_info(session_id: str):
         gateway = get_gateway()
         try:
             session = await gateway.resume_session(session_id)
+            policy = _session_policy(session)
+            session.metadata["policy"] = {
+                "autonomy_mode": policy.get("autonomy_mode"),
+                "identity_mode": policy.get("identity_mode"),
+                "tool_profile": policy.get("tool_profile"),
+            }
             store_session(session)
             if _heartbeat_service:
                 _heartbeat_service.register_session(session)
@@ -1089,10 +1302,74 @@ async def get_session_info(session_id: str):
     )
 
 
+@app.get("/api/v1/sessions/{session_id}/policy")
+async def get_session_policy(session_id: str):
+    session_id = _sanitize_session_id_or_400(session_id)
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    policy = _session_policy(session)
+    return {"session_id": session_id, "policy": policy}
+
+
+@app.patch("/api/v1/sessions/{session_id}/policy")
+async def patch_session_policy(session_id: str, payload: SessionPolicyPatchRequest):
+    session_id = _sanitize_session_id_or_400(session_id)
+    session = get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    updated = update_session_policy(
+        session.workspace_dir,
+        payload.patch or {},
+        session_id=session.session_id,
+        user_id=session.user_id,
+    )
+    session.metadata["policy"] = {
+        "autonomy_mode": updated.get("autonomy_mode"),
+        "identity_mode": updated.get("identity_mode"),
+        "tool_profile": updated.get("tool_profile"),
+    }
+    return {"session_id": session_id, "policy": updated}
+
+
+@app.get("/api/v1/sessions/{session_id}/pending")
+async def get_pending_gate(session_id: str):
+    session_id = _sanitize_session_id_or_400(session_id)
+    pending = _pending_gated_requests.get(session_id)
+    return {"session_id": session_id, "pending": pending}
+
+
+@app.post("/api/v1/sessions/{session_id}/resume")
+async def resume_gated_request(session_id: str, payload: ResumeRequest):
+    session_id = _sanitize_session_id_or_400(session_id)
+    pending = _pending_gated_requests.get(session_id)
+    if not pending:
+        raise HTTPException(status_code=404, detail="No pending gated request")
+
+    approval_id = pending.get("approval_id")
+    if payload.approval_id and approval_id and payload.approval_id != approval_id:
+        raise HTTPException(status_code=400, detail="approval_id mismatch")
+
+    approval_record = None
+    if approval_id:
+        approval_record = update_approval(
+            approval_id,
+            {
+                "status": "approved",
+                "notes": payload.reason or "Approved via resume endpoint",
+                "metadata": {"resumed_at": datetime.now().isoformat()},
+            },
+        )
+    pending["status"] = "approved"
+    pending["updated_at"] = datetime.now().isoformat()
+    return {"session_id": session_id, "pending": pending, "approval": approval_record}
+
+
 @app.delete("/api/v1/sessions/{session_id}")
 async def delete_session(session_id: str):
     session_id = _sanitize_session_id_or_400(session_id)
     _sessions.pop(session_id, None)
+    _pending_gated_requests.pop(session_id, None)
     gateway = get_gateway()
     await gateway.close_session(session_id)
     if _heartbeat_service:
@@ -1345,6 +1622,10 @@ async def ops_approvals_update(
     record = update_approval(approval_id, payload.model_dump(exclude_none=True))
     if record is None:
         raise HTTPException(status_code=404, detail="Approval not found")
+    for pending in _pending_gated_requests.values():
+        if pending.get("approval_id") == approval_id:
+            pending["status"] = record.get("status")
+            pending["updated_at"] = datetime.now().isoformat()
     return {"approval": record}
 
 
@@ -1448,9 +1729,134 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     if system_events:
                         metadata = {**metadata, "system_events": system_events}
 
+                    resume_requested = user_input.strip().lower() in {"resume", "continue", "/resume"}
+                    pending_gate = _pending_gated_requests.get(session_id)
+                    clear_pending_gate_on_success = False
+                    if resume_requested and pending_gate:
+                        if not _pending_gate_is_approved(session_id):
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "error",
+                                    "data": {
+                                        "message": "Pending request is not approved yet. Approve it first, then resume."
+                                    },
+                                    "timestamp": datetime.now().isoformat(),
+                                },
+                            )
+                            continue
+                        saved_request = pending_gate.get("request", {})
+                        if not isinstance(saved_request, dict):
+                            saved_request = {}
+                        user_input = str(saved_request.get("user_input") or user_input)
+                        force_complex = bool(saved_request.get("force_complex", msg.get("data", {}).get("force_complex", False)))
+                        saved_metadata = saved_request.get("metadata", {})
+                        if not isinstance(saved_metadata, dict):
+                            saved_metadata = {}
+                        metadata = {
+                            **saved_metadata,
+                            "resumed": True,
+                            "identity_mode": pending_gate.get("identity_mode") or saved_metadata.get("identity_mode", "persona"),
+                        }
+                        clear_pending_gate_on_success = True
+                    else:
+                        policy = _session_policy(session)
+                        metadata = {
+                            **metadata,
+                            "identity_mode": policy.get("identity_mode", "persona"),
+                            "autonomy_mode": policy.get("autonomy_mode", "yolo"),
+                        }
+                        evaluation = evaluate_request_against_policy(
+                            policy,
+                            user_input=user_input,
+                            metadata=metadata,
+                        )
+                        decision = str(evaluation.get("decision", "allow")).lower()
+                        categories = evaluation.get("categories") or []
+                        reasons = evaluation.get("reasons") or []
+
+                        if decision == "deny":
+                            reason_text = "; ".join(str(reason) for reason in reasons) or "Policy denied request."
+                            _add_notification(
+                                kind="policy_denied",
+                                title="Request Blocked",
+                                message=reason_text,
+                                session_id=session_id,
+                                severity="warning",
+                                requires_action=True,
+                                metadata={"categories": categories},
+                            )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "error",
+                                    "data": {"message": reason_text, "categories": categories},
+                                    "timestamp": datetime.now().isoformat(),
+                                },
+                            )
+                            continue
+
+                        if decision == "require_approval":
+                            approval = upsert_approval(
+                                {
+                                    "phase_id": f"session_gate_{session_id}",
+                                    "status": "pending",
+                                    "summary": f"Approval required for request categories: {', '.join(categories) or 'unknown'}",
+                                    "requested_by": session.user_id,
+                                    "metadata": {
+                                        "session_id": session_id,
+                                        "categories": categories,
+                                        "reasons": reasons,
+                                        "user_input": user_input,
+                                    },
+                                }
+                            )
+                            _pending_gated_requests[session_id] = {
+                                "session_id": session_id,
+                                "approval_id": approval.get("approval_id"),
+                                "status": "pending",
+                                "categories": categories,
+                                "reasons": reasons,
+                                "created_at": datetime.now().isoformat(),
+                                "request": {
+                                    "user_input": user_input,
+                                    "force_complex": msg.get("data", {}).get("force_complex", False),
+                                    "metadata": metadata,
+                                },
+                                "identity_mode": policy.get("identity_mode", "persona"),
+                            }
+                            _add_notification(
+                                kind="approval_required",
+                                title="Approval Required",
+                                message=f"Session {session_id} is waiting for approval.",
+                                session_id=session_id,
+                                severity="warning",
+                                requires_action=True,
+                                metadata={
+                                    "approval_id": approval.get("approval_id"),
+                                    "categories": categories,
+                                },
+                            )
+                            await manager.send_json(
+                                connection_id,
+                                {
+                                    "type": "status",
+                                    "data": {
+                                        "status": "approval_required",
+                                        "approval_id": approval.get("approval_id"),
+                                        "categories": categories,
+                                        "reasons": reasons,
+                                    },
+                                    "timestamp": datetime.now().isoformat(),
+                                },
+                            )
+                            continue
+
+                        force_complex = msg.get("data", {}).get("force_complex", False)
+
                     request = GatewayRequest(
                         user_input=user_input,
-                        force_complex=msg.get("data", {}).get("force_complex", False),
+                        force_complex=force_complex,
                         metadata=metadata,
                     )
                     logger.info(
@@ -1530,6 +1936,18 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             except Exception as ckpt_err:
                                 logger.warning(f"⚠️ Failed to save checkpoint: {ckpt_err}")
 
+                            _add_notification(
+                                kind="mission_complete",
+                                title="Mission Completed",
+                                message="Session completed execution successfully.",
+                                session_id=session.session_id,
+                                severity="info",
+                                metadata={
+                                    "tool_calls": tool_call_count,
+                                    "duration_seconds": execution_duration_seconds,
+                                },
+                            )
+
                             await manager.send_json(
                                 connection_id,
                                 {
@@ -1544,8 +1962,18 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 {"type": "pong", "data": {}, "timestamp": datetime.now().isoformat()},
                             )
                             logger.info("WS execute complete (session=%s)", session_id)
+                            if clear_pending_gate_on_success:
+                                _pending_gated_requests.pop(session_id, None)
                         except Exception as e:
                             logger.error("Execution error for session %s: %s", session_id, e, exc_info=True)
+                            _add_notification(
+                                kind="assistance_needed",
+                                title="Session Failed",
+                                message=str(e),
+                                session_id=session.session_id,
+                                severity="error",
+                                requires_action=True,
+                            )
                             await manager.send_json(
                                 connection_id,
                                 {
@@ -1618,6 +2046,13 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         },
                         "timestamp": datetime.now().isoformat(),
                     })
+                    _add_notification(
+                        kind="cancelled",
+                        title="Session Cancelled",
+                        message=reason,
+                        session_id=session_id,
+                        severity="warning",
+                    )
 
                 else:
                     await manager.send_json(
