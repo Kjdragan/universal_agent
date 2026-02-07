@@ -234,6 +234,31 @@ Use explicit state per adapter/backend:
 
 ---
 
+## 4.5.1 Provider vs Backend Separation (Voyage-Informed)
+
+Treat these as separate decisions:
+
+1. **Embedding provider**:
+   - openai, gemini, local, voyage, etc.
+   - Affects how vectors are generated.
+2. **Retrieval backend**:
+   - builtin indexer, QMD, future alternatives.
+   - Affects retrieval engine and ranking strategy.
+
+Design rule:
+
+1. Switching embedding provider must not implicitly change backend behavior.
+2. Switching backend must not require provider contract changes.
+
+Practical implication for UA:
+
+1. Keep provider selection/config in one layer (embedding adapter).
+2. Keep retrieval strategy (semantic/hybrid/rerank) in backend/broker layer.
+
+**Recommendation**: Preserve this boundary as a hard architectural constraint.
+
+---
+
 ## 4.6 Development Anti-Pollution Strategy (Practical)
 
 Problem:
@@ -311,6 +336,54 @@ Semantic search is mandatory in the target design. It should remain first-class 
 
 ---
 
+## 4.8 Voyage-Informed Enhancements (No Architecture Pivot Required)
+
+Voyage-like integration informs implementation details, not a full architecture change.
+
+### 4.8.1 Query vs Document Embedding Modes
+
+Provider contract should support different embedding intent:
+
+1. `embed_query()` for retrieval queries.
+2. `embed_document_batch()` for indexed content.
+
+Why:
+
+1. Retrieval quality can improve when provider receives explicit query/document intent.
+2. Avoids silent quality regression when moving providers.
+
+### 4.8.2 Batch Embedding Policy
+
+Batch indexing should be optional and policy-gated:
+
+1. Enable where stable and cost-effective.
+2. Auto-fallback to non-batch on repeated failures.
+3. Keep indexing continuity as higher priority than batch throughput.
+
+Why:
+
+1. Better resilience during provider/API instability.
+2. Keeps memory pipeline reliable during development and production.
+
+### 4.8.3 Reranking Scope (80/20)
+
+Do not make reranking a day-1 requirement.
+
+1. Day-1: semantic-first retrieval + lexical fallback.
+2. Phase-2+: add rerank stage only if metrics show meaningful recall/precision gain.
+
+Why:
+
+1. Reranking adds latency and complexity.
+2. Most value is usually captured by good embeddings + sensible retrieval fusion.
+
+**Recommendation**:
+
+1. Add provider intent modes now (`query` vs `document` embedding semantics).
+2. Keep reranking behind a separate feature gate and data-driven adoption criteria.
+
+---
+
 ## 5. Recommended Target Architecture
 
 Introduce a **Memory Orchestrator** as control plane, leaving storage/search engines behind adapters.
@@ -329,6 +402,8 @@ Introduce a **Memory Orchestrator** as control plane, leaving storage/search eng
    - Queries multiple sources and merges ranked results.
 6. `MemoryTelemetry`
    - Emits metrics/events for flush/index/search quality and freshness.
+7. `EmbeddingProviderAdapter`
+   - Encapsulates provider selection, auth, and query/document embedding intent handling.
 
 80/20 simplification rule for architecture:
 
@@ -404,7 +479,22 @@ memory:
     enabled: true
     broker: unified
     strategy: semantic_first       # semantic_first | lexical_only | hybrid
+    rerank:
+      enabled: false
+      provider: none               # none | voyage | qmd | other
+      top_k: 20
     max_results: 8
+
+  embeddings:
+    provider: local                # local | openai | gemini | voyage
+    mode:
+      query_intent: true           # provider gets explicit query embedding intent when supported
+      document_intent: true        # provider gets explicit document embedding intent when supported
+    batch:
+      enabled: true
+      auto_disable_on_failures: true
+      failure_threshold: 3
+      fallback_to_non_batch: true
 
   profile:
     mode: dev_standard             # prod | dev_standard | dev_memory_test | dev_no_persist
@@ -426,6 +516,7 @@ memory:
 3. Supports dormant systems without code deletion.
 4. Supports staged rollout by flipping states/modes.
 5. Keeps complexity bounded while preserving semantic retrieval.
+6. Makes provider upgrades (e.g., Voyage) additive rather than architectural rewrites.
 
 ---
 
@@ -439,6 +530,8 @@ memory:
 6. Default session memory: `enabled` (incremental + session-end indexing).
 7. Default retrieval: unified broker using `semantic_first`.
 8. Default profile for day-to-day local dev: `dev_standard`.
+9. Default rerank: `off` (enable only with demonstrated gains).
+10. Provider contract: query/document embedding intent required where supported.
 
 ---
 
@@ -501,6 +594,17 @@ Exit criteria:
 1. Improved recall on memory retrieval scenarios.
 2. Broker logs explain why results were returned.
 
+## Phase 4.5: Provider Intent Hardening
+
+1. Add `embed_query` vs `embed_document_batch` interfaces to provider adapters.
+2. Ensure configured providers respect intent semantics when supported.
+3. Validate retrieval quality against baseline using fixed test set.
+
+Exit criteria:
+
+1. No regression in retrieval quality after provider switch.
+2. Provider-specific behavior is explicit and test-covered.
+
 ## Phase 5: Optional Backend Activation
 
 1. Evaluate Letta or other adapters in `shadow` first.
@@ -531,6 +635,7 @@ Track these minimum metrics:
    - average top score,
    - no-result rate.
    - duplicate-rate in top-K for repetitive dev runs.
+   - provider-switch quality deltas (same query set across providers).
 4. Safety:
    - memory write failures,
    - malformed entries,
@@ -572,10 +677,15 @@ These are the concrete choices needing your approval before implementation:
    - keep `memory_system` in shadow for N weeks.
    - keep `letta` off but registered.
 6. Dev profile defaults and dashboard toggles (which are day-1 vs phase-2).
-7. Unified retrieval broker adoption order (early or after indexing phase).
+7. Provider strategy:
+   - which provider is default day-1 (`local` vs `openai/gemini/voyage`).
+   - whether provider-intent mode is mandatory.
+8. Rerank adoption gate:
+   - metrics threshold required before enabling.
+9. Unified retrieval broker adoption order (early or after indexing phase).
 
 ---
 
 ## 12. Final Recommendation
 
-Adopt the orchestrator + adapter model with hybrid flush and incremental session indexing, while preserving non-active systems as dormant via explicit lifecycle states. Treat session memory and long-term memory as separate first-class concerns. Keep semantic retrieval first-class, and use dev profiles + pruning to prevent test pollution. This yields the best tradeoff across effectiveness, latency, and complexity.
+Adopt the orchestrator + adapter model with hybrid flush and incremental session indexing, while preserving non-active systems as dormant via explicit lifecycle states. Treat session memory and long-term memory as separate first-class concerns. Keep semantic retrieval first-class, enforce provider/backend separation, add query/document embedding intent support, and keep reranking gated behind evidence. Use dev profiles + pruning to prevent test pollution. This yields the best tradeoff across effectiveness, latency, and complexity.
