@@ -10,7 +10,7 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        mono: ["var(--font-mono)", "monospace"],
+        mono: ["'Droid Sans Mono'", "monospace", "monospace"],
         display: ["var(--font-display)", "sans-serif"],
       },
       colors: {
