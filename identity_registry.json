@@ -1,12 +1,22 @@
 {
-    "primary_email": "kevin.dragan@outlook.com",
+    "primary_email": "kevinjdragan@gmail.com",
     "secondary_emails": [
-        "kevin.dragan@gmail.com"
+        "kevin.dragan@outlook.com"
+    ],
+    "trusted_recipients": [
+        "kevinjdragan@gmail.com",
+        "kevin.dragan@outlook.com",
+        "kelsey.scarlet@icloud.com",
+        "gardragan@gmail.com",
+        "mthdragan@gmail.com"
     ],
     "aliases": {
-        "me": "kevin.dragan@outlook.com",
-        "my email": "kevin.dragan@outlook.com",
-        "my outlook": "kevin.dragan@outlook.com",
-        "my gmail": "kevin.dragan@gmail.com"
+        "me": "kevinjdragan@gmail.com",
+        "daughter": "kelsey.scarlet@icloud.com",
+        "kelsey": "kelsey.scarlet@icloud.com",
+        "son": "gardragan@gmail.com",
+        "garrett": "gardragan@gmail.com",
+        "wife": "mthdragan@gmail.com",
+        "marie": "mthdragan@gmail.com"
     }
 }

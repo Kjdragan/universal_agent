@@ -47,7 +47,7 @@ def _env_truthy(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-USE_PROCESS_STDIO_REDIRECT = _env_truthy("UA_GATEWAY_PROCESS_STDIO_REDIRECT", default=False)
+USE_PROCESS_STDIO_REDIRECT = _env_truthy("UA_GATEWAY_PROCESS_STDIO_REDIRECT", default=True)
 
 
 class _TeeWriter:
@@ -79,9 +79,6 @@ def _redirect_stdio_to_run_log(workspace_dir: str) -> Any:
     """
     Redirect process-wide stdout/stderr to the session's run.log for the duration
     of a single turn, then restore.
-
-    NOTE: This is process-wide and is now disabled by default in gateway mode.
-    Use UA_GATEWAY_PROCESS_STDIO_REDIRECT=1 only for targeted debugging.
     """
 
     log_path = Path(workspace_dir) / "run.log"
@@ -94,7 +91,7 @@ def _redirect_stdio_to_run_log(workspace_dir: str) -> Any:
     try:
         sys.stdout = _TeeWriter(handle, old_stdout)  # type: ignore[assignment]
         sys.stderr = _TeeWriter(handle, old_stderr)  # type: ignore[assignment]
-        yield
+        yield handle  # Yield handle to allow explicit writing
     finally:
         try:
             sys.stdout.flush()
@@ -349,7 +346,44 @@ class ProcessTurnAdapter:
                 )
 
                 if USE_PROCESS_STDIO_REDIRECT:
-                    with _redirect_stdio_to_run_log(self.config.workspace_dir):
+                    with _redirect_stdio_to_run_log(self.config.workspace_dir) as log_handle:
+                        # Log user input
+                        try:
+                            ts = datetime.now().strftime("%H:%M:%S")
+                            log_handle.write(f"\n[{ts}] 👤 USER: {user_input}\n")
+                            log_handle.flush()
+                        except Exception:
+                            pass
+
+                        # Wrap callback to log events
+                        def logging_callback(event: AgentEvent) -> None:
+                            try:
+                                if event_callback:
+                                    event_callback(event)
+                                
+                                # Simple plain-text logging of key events
+                                ts = datetime.now().strftime("%H:%M:%S")
+                                if event.type == EventType.TEXT:
+                                    text = event.data.get("text", "")
+                                    if text:
+                                        log_handle.write(f"[{ts}] 🤖 ASSISTANT: {text}\n")
+                                elif event.type == EventType.TOOL_CALL:
+                                    name = event.data.get("name", "unknown")
+                                    log_handle.write(f"\n[{ts}] 🛠️ TOOL CALL: {name}\n")
+                                elif event.type == EventType.TOOL_RESULT:
+                                    log_handle.write(f"[{ts}] 📦 TOOL RESULT\n")
+                                elif event.type == EventType.STATUS:
+                                    status = event.data.get("status", "")
+                                    if status:
+                                        log_handle.write(f"[{ts}] ℹ️ STATUS: {status}\n")
+                                elif event.type == EventType.ERROR:
+                                    msg = event.data.get("message", "")
+                                    log_handle.write(f"[{ts}] ❌ ERROR: {msg}\n")
+                                
+                                log_handle.flush()
+                            except Exception:
+                                pass
+
                         result = await process_turn(
                             client=client,
                             user_input=user_input,
@@ -357,7 +391,7 @@ class ProcessTurnAdapter:
                             force_complex=self.config.force_complex,
                             execution_session=execution_session,
                             max_iterations=self.config.max_iterations,
-                            event_callback=event_callback,
+                            event_callback=logging_callback,
                         )
                 else:
                     result = await process_turn(

@@ -127,6 +127,7 @@ case "$MODE" in
         echo "║  Gateway:   $UA_GATEWAY_URL (must be running)                ║"
         echo "║  API:       http://localhost:8001                            ║"
         echo "║  Web UI:    http://localhost:3000                            ║"
+        echo "║  Dashboard: http://localhost:3000/dashboard                  ║"
         echo "╚══════════════════════════════════════════════════════════════╝"
         echo ""
         
@@ -167,6 +168,7 @@ case "$MODE" in
         echo "║  Gateway:   http://localhost:${UA_GATEWAY_PORT}                            ║"
         echo "║  API:       http://localhost:8001                            ║"
         echo "║  Web UI:    http://localhost:3000                            ║"
+        echo "║  Dashboard: http://localhost:3000/dashboard                  ║"
         echo "║                                                              ║"
         echo "║  CLI client (separate terminal):                             ║"
         echo "║    UA_GATEWAY_URL=http://localhost:${UA_GATEWAY_PORT} ./start_cli_dev.sh   ║"

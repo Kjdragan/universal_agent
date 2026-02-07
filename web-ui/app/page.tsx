@@ -230,7 +230,13 @@ function FileExplorer() {
     fetch(url)
       .then(res => res.json())
       .then(data => {
-        setFiles(data.files || []);
+        const sortedFiles = (data.files || []).sort((a: any, b: any) => {
+          if (a.is_dir === b.is_dir) {
+            return a.name.localeCompare(b.name);
+          }
+          return a.is_dir ? -1 : 1;
+        });
+        setFiles(sortedFiles);
       })
       .catch(err => console.error("Failed to fetch files:", err))
       .finally(() => setLoading(false));
@@ -406,28 +412,28 @@ function HeaderMetrics() {
   const sessionId = currentSession?.workspace ? currentSession.workspace.split('/').pop() : 'NO SESSION';
 
   return (
-    <div className="hidden md:flex items-center gap-4 mr-6 px-4 py-2 rounded-lg bg-card/30 border border-border/40 tactical-panel">
-      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+    <div className="hidden md:flex items-center gap-6 mr-6 px-5 py-2.5 rounded-lg bg-card/30 border border-border/40 tactical-panel">
+      <div className="flex items-center gap-2 text-xs tracking-wider">
         <span className="text-muted-foreground/70 font-semibold">SESSION</span>
         <span className="font-mono text-primary truncate max-w-[120px]" title={sessionId}>{sessionId}</span>
       </div>
-      <div className="w-px h-3 bg-border/40" />
-      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+      <div className="w-px h-4 bg-border/40" />
+      <div className="flex items-center gap-2 text-xs tracking-wider">
         <span className="text-muted-foreground/70 font-semibold">TOKENS</span>
         <span className="font-mono">{tokenUsage.total.toLocaleString()}</span>
       </div>
-      <div className="w-px h-3 bg-border/40" />
-      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+      <div className="w-px h-4 bg-border/40" />
+      <div className="flex items-center gap-2 text-xs tracking-wider">
         <span className="text-muted-foreground/70 font-semibold">TOOLS</span>
         <span className="font-mono">{toolCallCount}</span>
       </div>
-      <div className="w-px h-3 bg-border/40" />
-      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+      <div className="w-px h-4 bg-border/40" />
+      <div className="flex items-center gap-2 text-xs tracking-wider">
         <span className="text-muted-foreground/70 font-semibold">TIME</span>
         <span className="font-mono">{formatDuration(startTime ? duration : 0)}</span>
       </div>
-      <div className="w-px h-3 bg-border/40" />
-      <div className="flex items-center gap-2 text-[9px] tracking-wider">
+      <div className="w-px h-4 bg-border/40" />
+      <div className="flex items-center gap-2 text-xs tracking-wider">
         <span className="text-muted-foreground/70 font-semibold">ITERS</span>
         <span className="font-mono">{iterationCount}</span>
       </div>
@@ -485,6 +491,7 @@ function ToolCallCard({ toolCall }: { toolCall: any }) {
 }
 
 // --- Markdown Helper ---
+// eslint-disable-next-line no-useless-escape
 const LINKIFIABLE_TOKEN_REGEX =
   /(https?:\/\/[^\s<>"'`]+|www\.[^\s<>"'`]+|(?:\/|\.\.?\/)[A-Za-z0-9._~\-\/]+|[A-Za-z]:\\[^\s<>"'`]+|[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+\.[A-Za-z0-9]+)/g;
 
@@ -622,11 +629,11 @@ const markdownComponents: any = {
   p: ({ children }: any) => {
     return (
       <div className="whitespace-pre-wrap mb-2 last:mb-0">
-        {React.Children.map(children, (child) => {
+        {React.Children.map(children, (child, index) => {
           if (typeof child === "string") {
-            return <LinkifiedText text={child} />;
+            return <LinkifiedText key={index} text={child} />;
           }
-          return child;
+          return <React.Fragment key={index}>{child}</React.Fragment>;
         })}
       </div>
     );
@@ -648,11 +655,11 @@ const markdownComponents: any = {
   ol: ({ children }: any) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
   li: ({ children }: any) => (
     <li className="mb-0.5">
-      {React.Children.map(children, (child) => {
+      {React.Children.map(children, (child, index) => {
         if (typeof child === "string") {
-          return <LinkifiedText text={child} />;
+          return <LinkifiedText key={index} text={child} />;
         }
-        return child;
+        return <React.Fragment key={index}>{child}</React.Fragment>;
       })}
     </li>
   ),
@@ -994,7 +1001,7 @@ function ChatInterface() {
       </div>
 
       {/* Input - Floating Bar Style */}
-      <div className="p-4 bg-card/40 border border-border/40 backdrop-blur-md mb-10 mx-6 rounded-2xl shadow-xl">
+      <div className="p-4 bg-card/40 border border-border/40 backdrop-blur-md mb-10 ml-64 mr-6 rounded-2xl shadow-xl">
         <div className="flex gap-3">
           <input
             type="text"
@@ -1262,17 +1269,17 @@ export default function HomePage() {
     <OpsProvider>
       <div className="h-screen flex flex-col bg-background text-foreground relative z-10">
         {/* Header */}
-        <header className="h-14 border-b border-border/40 glass-strong flex items-center px-4 shrink-0 z-20 relative justify-between gap-4">
+        <header className="h-14 border-b border-border/40 glass-strong flex items-center px-4 shrink-0 z-20 relative gap-4">
 
           {/* Left: Logo & Brand */}
-          <div className="flex items-center gap-4 shrink-0">
+          <div className="flex items-center gap-4 shrink-0 h-full">
             {/* Logo Image */}
-            <div className="relative h-full w-[40rem]">
+            <div className="relative h-full w-48">
               <Image
                 src="/simon_logo_v2.png"
                 alt="Simon"
                 fill
-                className="object-fill"
+                className="object-contain"
                 priority
               />
             </div>
