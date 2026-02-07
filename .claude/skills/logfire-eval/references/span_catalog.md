@@ -15,26 +15,26 @@ Every span type emitted by the Universal Agent, organized by source.
 | Span Name | Source | Description | Key Attributes |
 |-----------|--------|-------------|----------------|
 | `conversation_iteration_{N}` | `main.py` | One LLM conversation turn (N = iteration number) | `iteration`, `run_id`, `step_id`, `session_id`, `workspace_dir` |
-| `llm_api_wait` | `main.py` | Time waiting for Claude API to start responding | `query_length` |
-| `llm_response_stream` | `main.py` | Full response stream processing duration | — |
+| `llm_api_wait` | `main.py` | Time waiting for Claude API to start responding | `query_length`, `run_id`, `step_id`, `iteration` |
+| `llm_response_stream` | `main.py` | Full response stream processing duration | `run_id`, `step_id`, `iteration` |
 
 ## Message Spans
 
 | Span Name | Source | Description | Key Attributes |
 |-----------|--------|-------------|----------------|
-| `assistant_message` | `main.py` | Each assistant message block | `model` |
-| `text_block` | `main.py` | Text content block within a message | — |
-| `result_message` | `main.py` | Final result message | — |
+| `assistant_message` | `main.py` | Each assistant message block | `model`, `run_id`, `step_id`, `iteration`, `parent_tool_use_id` |
+| `text_block` | `main.py` | Text content block within a message | `length`, `text_preview`, `run_id`, `step_id`, `iteration`, optional `text_full*` |
+| `result_message` | `main.py` | Final result message | `duration_ms`, `num_turns`, `run_id`, `step_id`, `iteration`, optional `result_full*` |
 
 ## Tool Spans
 
 | Span Name | Source | Description | Key Attributes |
 |-----------|--------|-------------|----------------|
-| `tool_use` | `main.py` | Tool invocation | `tool_name`, `tool_id` |
-| `tool_input` | `main.py` | Tool input parameters (child of tool_use) | — |
-| `tool_result` | `main.py` | Tool result processing | — |
-| `tool_output` | `main.py` | Tool output content (child of tool_result) | — |
-| `tool_execution_completed` | `main.py` | Successful tool completion | `tool_name`, `duration_seconds`, `status` |
+| `tool_use` | `main.py` | Tool invocation | `tool_name`, `tool_id`, `run_id`, `step_id`, `iteration` |
+| `tool_input` | `main.py` | Tool input parameters (child of tool_use) | `tool_name`, `tool_id`, `input_size`, `input_preview`, optional `input_full*` |
+| `tool_result` | `main.py` | Tool result processing | `tool_use_id`, `run_id`, `step_id`, `iteration` |
+| `tool_output` | `main.py` | Tool output content (child of tool_result) | `tool_use_id`, `content_size`, `content_preview`, optional `content_full*` |
+| `tool_execution_completed` | `main.py` | Tool completion event | `tool_name`, `duration_seconds`, `status`, `source` (`post_tool_use_hook` or `stream_tool_result`) |
 
 ## Observer Spans
 
@@ -50,6 +50,7 @@ Every span type emitted by the Universal Agent, organized by source.
 
 | Span Name | Source | Description | Key Attributes |
 |-----------|--------|-------------|----------------|
+| `query_started` | `main.py` | Run turn start marker and payload logging mode state | `run_id`, `step_id`, `payload_full_mode_enabled`, `payload_redact_sensitive`, `payload_redact_emails`, `payload_max_chars` |
 | `query_classification` | `main.py` | SIMPLE/COMPLEX query routing decision | `decision`, `raw_response` |
 | `skill_gated` | `main.py` | Skill routing decision | — |
 
@@ -57,7 +58,7 @@ Every span type emitted by the Universal Agent, organized by source.
 
 | Span Name | Source | Description | Key Attributes |
 |-----------|--------|-------------|----------------|
-| `token_usage_update` | `main.py` | Token accounting per iteration | `run_id` |
+| `token_usage_update` | `main.py` | Token accounting per iteration | `run_id`, `step_id`, `iteration` |
 
 ## Durable Execution Spans
 
