@@ -1,6 +1,8 @@
 "use client";
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { useAgentStore } from "@/lib/store";
 
 const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8002";
@@ -251,21 +253,128 @@ export function SessionsSection() {
 
 export function SkillsSection() {
   const { skills, fetchSkills } = useOps();
+  const [selectedSkill, setSelectedSkill] = useState<SkillStatus | null>(null);
+  const [docContent, setDocContent] = useState<string | null>(null);
+  const [loadingDoc, setLoadingDoc] = useState(false);
+
+  useEffect(() => {
+    if (skills.length > 0 && !selectedSkill) {
+      setSelectedSkill(skills[0]);
+    }
+  }, [skills, selectedSkill]);
+
+  useEffect(() => {
+    async function loadDoc() {
+      if (!selectedSkill) return;
+      setLoadingDoc(true);
+      try {
+        const r = await fetch(`${API_BASE}/api/v1/ops/skills/${encodeURIComponent(selectedSkill.name)}/doc`, { headers: buildHeaders() });
+        if (r.ok) {
+          const d = await r.json();
+          setDocContent(d.content);
+        } else {
+          setDocContent("Documentation not found.");
+        }
+      } catch (e) {
+        setDocContent("Error loading documentation.");
+      } finally {
+        setLoadingDoc(false);
+      }
+    }
+    loadDoc();
+  }, [selectedSkill]);
+
   return (
-    <div className="p-3 text-xs">
-      <div className="border rounded bg-background/40 p-2">
-        <div className="font-semibold mb-2 flex items-center justify-between">
-          <span>Skills</span>
-          <button onClick={fetchSkills} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all">↻</button>
-        </div>
-        <div className="space-y-1 max-h-48 overflow-y-auto scrollbar-thin">
-          {skills.length === 0 && <div className="text-muted-foreground">No skills found</div>}
+    <div className="flex flex-col h-full min-h-[500px]">
+      <div className="p-3 border-b border-border/40 flex items-center justify-between shrink-0">
+        <h2 className="font-semibold text-sm">Skills Management</h2>
+        <button onClick={fetchSkills} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all">↻ Refresh catalog</button>
+      </div>
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left: Skill List */}
+        <div className="w-1/3 border-r border-border/40 overflow-y-auto scrollbar-thin p-2 space-y-1 bg-background/20">
+          {skills.length === 0 && <div className="text-muted-foreground p-2">No skills found</div>}
           {skills.map((s) => (
-            <div key={s.name} className="flex items-center justify-between">
-              <span className="truncate">{s.name}</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded ${s.enabled && s.available ? "bg-emerald-500/10 text-emerald-500" : "bg-amber-500/10 text-amber-500"}`}>{s.enabled && s.available ? "enabled" : "disabled"}</span>
-            </div>
+            <button
+              key={s.name}
+              onClick={() => setSelectedSkill(s)}
+              className={`w-full text-left p-2 rounded-lg border transition-all ${selectedSkill?.name === s.name
+                ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200"
+                : "border-transparent hover:bg-slate-800/40 text-slate-400"
+                }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium truncate">{s.name}</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${s.enabled && s.available ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" : "bg-amber-500/10 text-amber-500 border border-amber-500/20"}`}>
+                  {s.enabled && s.available ? "active" : "disabled"}
+                </span>
+              </div>
+            </button>
           ))}
+        </div>
+        {/* Right: Markdown Preview */}
+        <div className="flex-1 overflow-y-auto p-4 bg-slate-950/30">
+          {loadingDoc ? (
+            <div className="h-full flex items-center justify-center text-slate-500 text-xs italic">Loading documentation...</div>
+          ) : docContent ? (
+            <article className="prose prose-invert prose-sm max-w-none">
+              <div className="mb-4 flex items-center justify-between border-b border-slate-800 pb-2">
+                <h3 className="text-lg font-bold text-slate-100 m-0">{selectedSkill?.name} Documentation</h3>
+                <span className="text-[10px] text-slate-500 font-mono">SKILL.md</span>
+              </div>
+              <div className="markdown-content">
+                {(() => {
+                  try {
+                    const content = docContent || "";
+                    let finalContent = content;
+
+                    // formatting: if frontmatter exists, wrap it in a yaml code block for display
+                    if (content.startsWith("---")) {
+                      const match = content.match(/^---([\s\S]*?)---\s*(.*)$/s);
+                      if (match) {
+                        const frontmatter = match[1];
+                        const body = match[2];
+                        finalContent = "```yaml\n" + frontmatter + "\n```\n\n" + body;
+                      }
+                    }
+
+                    return (
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          code: ({ node, className, children, ...props }: any) => {
+                            const match = /language-(\w+)/.exec(className || '')
+                            return match ? (
+                              <div className="bg-slate-900 rounded p-2 my-2 border border-slate-700 overflow-x-auto">
+                                <code className={className} {...props}>
+                                  {children}
+                                </code>
+                              </div>
+                            ) : (
+                              <code className="bg-slate-800 px-1 py-0.5 rounded text-cyan-300 font-mono text-sm" {...props}>
+                                {children}
+                              </code>
+                            )
+                          },
+                          pre: ({ node, ...props }: any) => <div {...props} />, // let code component handle styling
+                          table: ({ node, ...props }: any) => <table className="border-collapse border border-slate-700 w-full mb-4" {...props} />,
+                          th: ({ node, ...props }: any) => <th className="border border-slate-700 p-2 bg-slate-800 text-slate-200 text-left" {...props} />,
+                          td: ({ node, ...props }: any) => <td className="border border-slate-700 p-2 text-slate-300" {...props} />,
+                          a: ({ node, ...props }: any) => <a className="text-cyan-400 hover:underline" target="_blank" rel="noopener noreferrer" {...props} />
+                        }}
+                      >
+                        {finalContent}
+                      </ReactMarkdown>
+                    );
+                  } catch (e) {
+                    return <pre className="whitespace-pre-wrap">{docContent}</pre>;
+                  }
+                })()}
+              </div>
+            </article>
+          ) : (
+            <div className="h-full flex items-center justify-center text-slate-500 text-xs italic">Select a skill to view details.</div>
+          )}
         </div>
       </div>
     </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
@@ -17,14 +18,21 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100">
-      <div className="mx-auto flex max-w-[1400px] gap-4 p-4 md:p-6">
-        <aside className="w-64 shrink-0 rounded-xl border border-slate-800/80 bg-slate-900/60 p-4 backdrop-blur">
+    <div className="h-screen overflow-hidden bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100">
+      <div className="mx-auto flex h-full max-w-full gap-4 p-4 md:p-6">
+        <aside className="flex w-64 shrink-0 flex-col rounded-xl border border-slate-800/80 bg-slate-900/60 p-4 backdrop-blur">
           <div className="mb-4 border-b border-slate-800 pb-3">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-slate-400">Universal Agent</p>
-            <p className="mt-1 text-sm font-semibold">Operations Dashboard</p>
+            <div className="relative h-12 w-48 mb-2">
+              <Image
+                src="/simon_logo.png"
+                alt="Simon"
+                fill
+                className="object-contain object-left"
+              />
+            </div>
+            <p className="text-sm font-semibold pl-1">Operations Dashboard</p>
           </div>
-          <nav className="space-y-1">
+          <nav className="flex-1 space-y-1 overflow-y-auto">
             {NAV_ITEMS.map((item) => {
               const active = pathname === item.href;
               return (
@@ -44,7 +52,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             })}
           </nav>
         </aside>
-        <main className="min-h-[calc(100vh-3rem)] flex-1 rounded-xl border border-slate-800/80 bg-slate-900/50 p-4 backdrop-blur md:p-6">
+        <main className="flex h-full flex-1 flex-col overflow-hidden rounded-xl border border-slate-800/80 bg-slate-900/50 p-4 backdrop-blur md:p-6">
           {children}
         </main>
       </div>

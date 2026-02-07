@@ -1526,6 +1526,30 @@ async def ops_skill_update(request: Request, skill_key: str, payload: OpsSkillUp
     return {"status": "updated", "skill": normalized, "config": entry}
 
 
+@app.get("/api/v1/ops/skills/{skill_key}/doc")
+async def ops_skill_doc(request: Request, skill_key: str):
+    _require_ops_auth(request)
+    catalog = _load_skill_catalog()
+    normalized = skill_key.strip().lower()
+    logger.info(f"Docs requested for skill: '{skill_key}' (normalized: '{normalized}')")
+    
+    for s in catalog:
+        name_norm = str(s.get("name", "")).strip().lower()
+        if name_norm == normalized:
+            path = s.get("path")
+            logger.info(f"Found match: {s.get('name')} at path: {path}")
+            if path and os.path.exists(path):
+                return {"skill": s.get("name"), "content": Path(path).read_text(encoding="utf-8")}
+            else:
+                logger.warning(f"Skill path does not exist: {path}")
+                # Fallback: check if path is relative to repo root?
+                # The path should be absolute from _load_skill_catalog but let's be sure
+                return {"skill": s.get("name"), "content": f"Use locally at: {path}\n\n(File not found at server runtime)"}
+                
+    logger.warning(f"Skill not found in catalog: {normalized}. Available: {[s.get('name') for s in catalog]}")
+    raise HTTPException(status_code=404, detail="Skill documentation not found")
+
+
 @app.get("/api/v1/ops/channels")
 async def ops_channels_status(request: Request):
     _require_ops_auth(request)

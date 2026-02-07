@@ -412,7 +412,7 @@ async def submit_approval(approval: ApprovalRequest):
 
 
 @app.websocket("/ws/agent")
-async def websocket_agent(websocket: WebSocket):
+async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None):
     """
     WebSocket endpoint for real-time agent communication.
 
@@ -431,7 +431,16 @@ async def websocket_agent(websocket: WebSocket):
 
     try:
         # Send connected event
-        session_info = await bridge.create_session()
+        session_info = None
+        if session_id:
+            logger.info(f"Attempting to resume session: {session_id}")
+            session_info = await bridge.resume_session(session_id)
+            if not session_info:
+                logger.warning(f"Session {session_id} not found, creating new one.")
+
+        if not session_info:
+             session_info = await bridge.create_session()
+
         await manager.send_event(
             connection_id,
             create_connected_event(session_info),
