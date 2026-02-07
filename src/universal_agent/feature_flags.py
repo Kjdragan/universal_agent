@@ -7,6 +7,7 @@ are explicitly enabled. They are intentionally simple and side-effect free.
 from __future__ import annotations
 
 import os
+from typing import Iterable
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -107,3 +108,188 @@ def memory_flush_max_chars(default: int = 4000) -> int:
         return max(0, int(raw))
     except ValueError:
         return default
+
+
+def _read_int(name: str, default: int, minimum: int | None = None) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        value = default
+    else:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+def _read_float(name: str, default: float, minimum: float | None = None) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        value = default
+    else:
+        try:
+            value = float(raw)
+        except ValueError:
+            value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+def _read_choice(name: str, allowed: Iterable[str], default: str) -> str:
+    choices = {item.lower() for item in allowed}
+    value = (os.getenv(name) or "").strip().lower()
+    if value in choices:
+        return value
+    return default
+
+
+def memory_orchestrator_mode(default: str = "legacy") -> str:
+    """Return memory control mode: legacy|unified."""
+    return _read_choice("UA_MEMORY_ORCHESTRATOR_MODE", ("legacy", "unified"), default)
+
+
+def memory_orchestrator_enabled(default: bool = True) -> bool:
+    """Return True when orchestrator is active."""
+    mode = memory_orchestrator_mode(default="legacy")
+    if mode == "unified":
+        return True
+    if _is_truthy(os.getenv("UA_MEMORY_ORCHESTRATOR_ENABLED")):
+        return True
+    if _is_truthy(os.getenv("UA_MEMORY_ORCHESTRATOR_DISABLED")):
+        return False
+    return default and mode != "legacy"
+
+
+def memory_adapter_state(adapter_name: str, default: str = "off") -> str:
+    """Return adapter state: active|shadow|off|deprecated."""
+    normalized = adapter_name.strip().upper().replace("-", "_")
+    key = f"UA_MEMORY_ADAPTER_{normalized}_STATE"
+    return _read_choice(key, ("active", "shadow", "off", "deprecated"), default)
+
+
+def memory_profile_mode(default: str = "dev_standard") -> str:
+    """Return memory profile mode."""
+    return _read_choice(
+        "UA_MEMORY_PROFILE_MODE",
+        ("prod", "dev_standard", "dev_memory_test", "dev_no_persist"),
+        default,
+    )
+
+
+def memory_tag_dev_writes(default: bool = True) -> bool:
+    """Tag writes with profile/env metadata for dev modes."""
+    if _is_truthy(os.getenv("UA_MEMORY_TAG_DEV_WRITES")):
+        return True
+    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_TAG_DEV_WRITES")):
+        return False
+    return default
+
+
+def memory_write_policy_min_importance(default: float = 0.6) -> float:
+    """Minimum importance threshold for long-term writes in development profiles."""
+    return _read_float("UA_MEMORY_WRITE_MIN_IMPORTANCE", default, minimum=0.0)
+
+
+def memory_session_enabled(default: bool = True) -> bool:
+    """Enable session memory indexing/search."""
+    if _is_truthy(os.getenv("UA_MEMORY_SESSION_DISABLED")):
+        return False
+    if _is_truthy(os.getenv("UA_MEMORY_SESSION_ENABLED")):
+        return True
+    return default
+
+
+def memory_session_sources(default: tuple[str, ...] = ("memory", "sessions")) -> list[str]:
+    """Return requested memory sources for broker search."""
+    raw = (os.getenv("UA_MEMORY_SESSION_SOURCES") or "").strip()
+    if not raw:
+        return list(default)
+    parts = [item.strip().lower() for item in raw.split(",") if item.strip()]
+    filtered = [item for item in parts if item in {"memory", "sessions"}]
+    return filtered or list(default)
+
+
+def memory_session_index_on_end(default: bool = True) -> bool:
+    """Run forced session indexing pass on session end."""
+    if _is_truthy(os.getenv("UA_MEMORY_SESSION_INDEX_ON_END")):
+        return True
+    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_SESSION_INDEX_ON_END")):
+        return False
+    return default
+
+
+def memory_session_delta_bytes(default: int = 100_000) -> int:
+    """Minimum appended bytes before background reindex."""
+    return _read_int("UA_MEMORY_SESSION_DELTA_BYTES", default, minimum=0)
+
+
+def memory_session_delta_messages(default: int = 50) -> int:
+    """Minimum appended message lines before background reindex."""
+    return _read_int("UA_MEMORY_SESSION_DELTA_MESSAGES", default, minimum=0)
+
+
+def memory_retrieval_strategy(default: str = "semantic_first") -> str:
+    """Return retrieval strategy: semantic_first|lexical_only|hybrid."""
+    return _read_choice(
+        "UA_MEMORY_RETRIEVAL_STRATEGY",
+        ("semantic_first", "lexical_only", "hybrid"),
+        default,
+    )
+
+
+def memory_rerank_enabled(default: bool = False) -> bool:
+    """Feature gate for explicit rerank stage."""
+    if _is_truthy(os.getenv("UA_MEMORY_RERANK_ENABLED")):
+        return True
+    if _is_truthy(os.getenv("UA_MEMORY_RERANK_DISABLED")):
+        return False
+    return default
+
+
+def memory_embedding_provider(default: str = "local") -> str:
+    """Preferred embedding provider hint for orchestrator."""
+    return _read_choice("UA_MEMORY_EMBEDDING_PROVIDER", ("local", "openai", "gemini", "voyage"), default)
+
+
+def memory_embedding_query_intent(default: bool = True) -> bool:
+    """Enable explicit query-embedding intent when supported."""
+    if _is_truthy(os.getenv("UA_MEMORY_EMBEDDING_QUERY_INTENT")):
+        return True
+    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_EMBEDDING_QUERY_INTENT")):
+        return False
+    return default
+
+
+def memory_embedding_document_intent(default: bool = True) -> bool:
+    """Enable explicit document-embedding intent when supported."""
+    if _is_truthy(os.getenv("UA_MEMORY_EMBEDDING_DOCUMENT_INTENT")):
+        return True
+    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_EMBEDDING_DOCUMENT_INTENT")):
+        return False
+    return default
+
+
+def memory_embedding_batch_enabled(default: bool = True) -> bool:
+    """Enable embedding batch mode where provider supports it."""
+    if _is_truthy(os.getenv("UA_MEMORY_EMBEDDING_BATCH_ENABLED")):
+        return True
+    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_EMBEDDING_BATCH")):
+        return False
+    return default
+
+
+def memory_embedding_batch_failure_threshold(default: int = 3) -> int:
+    """Failure threshold before disabling batch mode."""
+    return _read_int("UA_MEMORY_EMBEDDING_BATCH_FAILURE_THRESHOLD", default, minimum=1)
+
+
+def memory_embedding_fallback_to_non_batch(default: bool = True) -> bool:
+    """Fallback to non-batch embedding mode after batch failures."""
+    if _is_truthy(os.getenv("UA_MEMORY_EMBEDDING_FALLBACK_NON_BATCH")):
+        return True
+    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_EMBEDDING_FALLBACK_NON_BATCH")):
+        return False
+    return default

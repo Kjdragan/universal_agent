@@ -65,7 +65,11 @@ sys.path.append(
 )  # Repo Root
 from universal_agent.search_config import SEARCH_TOOL_CONFIG
 from universal_agent.tools.corpus_refiner import refine_corpus_programmatic
-from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled
+from universal_agent.feature_flags import (
+    heartbeat_enabled,
+    memory_index_enabled,
+    memory_orchestrator_enabled,
+)
 from tools.workbench_bridge import WorkbenchBridge
 from composio import Composio
 
@@ -98,6 +102,12 @@ try:
 except ImportError as e:
     sys.stderr.write(f"[Local Toolkit] Memory System imports failed: {e}\n")
     MEMORY_SYSTEM_AVAILABLE = False
+
+# Backward-compat shim for older tests/codepaths that expect a MEMORY_MANAGER
+# attribute on this module. The unified file memory path does not expose a
+# single manager instance, so we retain a non-None sentinel when local memory
+# is available.
+MEMORY_MANAGER = None if (disable_local_memory or not MEMORY_SYSTEM_AVAILABLE) else object()
 
 # Initialize Configuration
 load_dotenv()
@@ -1373,13 +1383,29 @@ def archival_memory_insert(content: str, tags: str = "") -> str:
         
     try:
         tag_list = [t.strip() for t in tags.split(",")] if tags else []
+        if memory_orchestrator_enabled(default=False):
+            from universal_agent.memory.orchestrator import get_memory_orchestrator
+
+            broker = get_memory_orchestrator(workspace_dir=workspace)
+            entry = broker.write(
+                content=content,
+                source="agent_tool",
+                session_id=None,
+                tags=tag_list,
+                memory_class="long_term",
+                importance=0.7,
+            )
+            if entry is None:
+                return "Memory write skipped by policy or dedupe."
+            return "Successfully saved to archival memory."
+
         entry = MemoryEntry(
             source="agent_tool",
             content=content,
             tags=tag_list,
-            timestamp=datetime.now(timezone.utc).isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat(),
         )
-        
+
         append_memory_entry(workspace, entry)
         return "Successfully saved to archival memory."
     except Exception as e:
@@ -1399,14 +1425,10 @@ def archival_memory_search(query: str, limit: int = 5) -> str:
     if not workspace:
         return "Error: No active workspace for memory."
         
-    # Reuse the existing tool logic from universal_agent.tools.memory
-    # But adapt it since ua_memory_search might expect different args or context
-    # actually ua_memory_search is a tool func, we can call it if we mock the context?
-    # Or just use the underlying logic if we can. 
-    # ua_memory_search depends on "agent" object in some implementations?
-    # Let's check tools/memory.py content again to be safe.
-    # For now, safe fallback:
-    return "Use the 'ua_memory_search' tool directly for searching."
+    try:
+        return ua_memory_search(query=query, limit=limit)
+    except Exception as e:
+        return f"Error searching memory: {e}"
 
 
 @mcp.tool()

@@ -8,7 +8,11 @@ from typing import Any
 
 from claude_agent_sdk import tool
 
-from universal_agent.feature_flags import memory_index_mode
+from universal_agent.feature_flags import (
+    memory_index_mode,
+    memory_orchestrator_enabled,
+    memory_session_sources,
+)
 from universal_agent.memory.memory_index import search_entries
 from universal_agent.memory.memory_vector_index import search_vectors
 
@@ -112,14 +116,31 @@ def ua_memory_search(query: str, limit: int = 5) -> str:
     workspace_dir = os.environ.get("AGENT_WORKSPACE_DIR", os.getcwd())
     root = Path(workspace_dir).resolve()
     memory_dir = root / "memory"
+    max_results = max(1, int(limit))
+
+    if memory_orchestrator_enabled(default=False):
+        try:
+            from universal_agent.memory.orchestrator import get_memory_orchestrator
+
+            broker = get_memory_orchestrator(workspace_dir=str(root))
+            results = broker.search(
+                query=query,
+                limit=max_results,
+                sources=memory_session_sources(default=("memory", "sessions")),
+            )
+            return broker.format_search_results(results)
+        except Exception:
+            # Fall through to legacy path.
+            pass
+
     index_mode = memory_index_mode()
 
     if index_mode == "vector":
         db_path = memory_dir / "vector_index.sqlite"
-        results = search_vectors(str(db_path), query, limit=limit)
+        results = search_vectors(str(db_path), query, limit=max_results)
     else:
         index_path = memory_dir / "index.json"
-        results = search_entries(str(index_path), query, limit=limit)
+        results = search_entries(str(index_path), query, limit=max_results)
 
     if not results:
         return "No memory matches found."

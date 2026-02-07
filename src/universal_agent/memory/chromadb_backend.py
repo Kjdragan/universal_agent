@@ -104,7 +104,7 @@ class ChromaDBMemory:
                 return None  # Duplicate detected
 
         # Generate embedding
-        vector = self._embeddings.embed(text)
+        vector = self._embeddings.embed_document(text)
 
         entry_id = str(uuid4())
         now = datetime.utcnow()
@@ -144,7 +144,7 @@ class ChromaDBMemory:
             return []
 
         # Generate query embedding
-        query_vector = self._embeddings.embed(query)
+        query_vector = self._embeddings.embed_query(query)
 
         # Build where filter
         where = None

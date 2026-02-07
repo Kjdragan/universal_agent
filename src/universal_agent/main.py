@@ -173,6 +173,9 @@ from universal_agent.feature_flags import (
     memory_max_tokens,
     memory_flush_on_exit,
     memory_flush_max_chars,
+    memory_orchestrator_enabled,
+    memory_session_enabled,
+    memory_session_index_on_end,
 )
 from universal_agent.logfire_payloads import (
     PayloadLoggingConfig,
@@ -7088,6 +7091,32 @@ async def setup_session(
     return options, session, user_id, workspace_dir, trace, agent
 
 
+def _sync_session_memory_if_enabled(
+    *,
+    workspace_dir: str,
+    session_id: str | None,
+    transcript_path: str,
+    force: bool,
+) -> dict[str, Any]:
+    if not memory_enabled(default=False):
+        return {"indexed": False, "reason": "memory_disabled"}
+    if not memory_orchestrator_enabled(default=False):
+        return {"indexed": False, "reason": "orchestrator_disabled"}
+    if not memory_session_enabled(default=True):
+        return {"indexed": False, "reason": "session_memory_disabled"}
+    if not transcript_path or not os.path.exists(transcript_path):
+        return {"indexed": False, "reason": "transcript_missing"}
+
+    from universal_agent.memory.orchestrator import get_memory_orchestrator
+
+    broker = get_memory_orchestrator(workspace_dir=workspace_dir)
+    return broker.sync_session(
+        session_id=session_id,
+        transcript_path=transcript_path,
+        force=force,
+    )
+
+
 async def process_turn(
     client: ClaudeSDKClient,
     user_input: str,
@@ -7483,6 +7512,18 @@ async def process_turn(
             transcript_path = os.path.join(workspace_dir, "transcript.md")
             if transcript_builder.generate_transcript(trace, transcript_path):
                 print(f"\n🎬 Intermediate transcript saved to {transcript_path}")
+
+                try:
+                    sync_result = _sync_session_memory_if_enabled(
+                        workspace_dir=workspace_dir,
+                        session_id=trace.get("session_id") or trace.get("run_id"),
+                        transcript_path=transcript_path,
+                        force=False,
+                    )
+                    if sync_result.get("indexed"):
+                        print("🧠 Session memory indexed from transcript delta.")
+                except Exception as sync_err:
+                    print(f"⚠️ Session memory sync failed: {sync_err}")
         except Exception as e:
             # Don't let transcript failure crash the agent
             print(f"⚠️ Failed to save intermediate transcript: {e}")
@@ -9246,6 +9287,19 @@ async def main(args: argparse.Namespace):
                 logfire.info("durable_run_completed", run_id=run_id)
 
     finally:
+        if "workspace_dir" in locals() and workspace_dir:
+            try:
+                final_sync = _sync_session_memory_if_enabled(
+                    workspace_dir=workspace_dir,
+                    session_id=trace.get("session_id") or trace.get("run_id"),
+                    transcript_path=os.path.join(workspace_dir, "transcript.md"),
+                    force=memory_session_index_on_end(default=True),
+                )
+                if final_sync.get("indexed"):
+                    print("🧠 Final session memory sync completed.")
+            except Exception as sync_err:
+                print(f"⚠️ Final session memory sync failed: {sync_err}")
+
         # [Global Memory Sync] Persist memory back to global store
         if 'workspace_dir' in locals() and workspace_dir:
             try:
