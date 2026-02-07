@@ -29,9 +29,21 @@ class EmbeddingProvider(ABC):
         """Generate embedding vector for text."""
         ...
 
+    def embed_query(self, text: str) -> list[float]:
+        """Generate embedding for a search query."""
+        return self.embed(text)
+
+    def embed_document(self, text: str) -> list[float]:
+        """Generate embedding for a memory/document payload."""
+        return self.embed(text)
+
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts. Override for efficiency."""
         return [self.embed(t) for t in texts]
+
+    def embed_document_batch(self, texts: list[str]) -> list[list[float]]:
+        """Generate document embeddings for multiple payloads."""
+        return self.embed_batch(texts)
 
 
 class OpenAIEmbeddings(EmbeddingProvider):
