@@ -32,17 +32,42 @@ def _safe_int(value: str | None, default: int, min_value: int, max_value: int) -
 
 @dataclass(frozen=True)
 class PayloadLoggingConfig:
+    redaction_level: str
     full_payload_mode: bool
     redact_sensitive: bool
     redact_emails: bool
     max_chars: int
 
 
+def _normalize_redaction_level(value: str | None) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized in {"strict", "balanced", "off"}:
+        return normalized
+    return "balanced"
+
+
+def _default_redaction_flags(level: str) -> tuple[bool, bool]:
+    if level == "off":
+        return False, False
+    if level == "strict":
+        return True, True
+    return True, True
+
+
 def load_payload_logging_config() -> PayloadLoggingConfig:
+    level = _normalize_redaction_level(os.getenv("UA_LOGFIRE_REDACTION_LEVEL"))
+    default_redact_sensitive, default_redact_emails = _default_redaction_flags(level)
     return PayloadLoggingConfig(
+        redaction_level=level,
         full_payload_mode=_is_truthy(os.getenv("UA_LOGFIRE_FULL_PAYLOAD_MODE"), default=False),
-        redact_sensitive=_is_truthy(os.getenv("UA_LOGFIRE_FULL_PAYLOAD_REDACT"), default=True),
-        redact_emails=_is_truthy(os.getenv("UA_LOGFIRE_FULL_PAYLOAD_REDACT_EMAILS"), default=True),
+        redact_sensitive=_is_truthy(
+            os.getenv("UA_LOGFIRE_FULL_PAYLOAD_REDACT"),
+            default=default_redact_sensitive,
+        ),
+        redact_emails=_is_truthy(
+            os.getenv("UA_LOGFIRE_FULL_PAYLOAD_REDACT_EMAILS"),
+            default=default_redact_emails,
+        ),
         max_chars=_safe_int(
             os.getenv("UA_LOGFIRE_FULL_PAYLOAD_MAX_CHARS"),
             default=50000,

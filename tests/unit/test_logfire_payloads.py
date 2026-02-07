@@ -13,6 +13,7 @@ class TestLogfirePayloads(unittest.TestCase):
     def test_load_payload_logging_config_defaults(self):
         with patch.dict(os.environ, {}, clear=True):
             cfg = load_payload_logging_config()
+        self.assertEqual(cfg.redaction_level, "balanced")
         self.assertFalse(cfg.full_payload_mode)
         self.assertTrue(cfg.redact_sensitive)
         self.assertTrue(cfg.redact_emails)
@@ -26,17 +27,31 @@ class TestLogfirePayloads(unittest.TestCase):
                 "UA_LOGFIRE_FULL_PAYLOAD_REDACT": "false",
                 "UA_LOGFIRE_FULL_PAYLOAD_REDACT_EMAILS": "0",
                 "UA_LOGFIRE_FULL_PAYLOAD_MAX_CHARS": "999999999",
+                "UA_LOGFIRE_REDACTION_LEVEL": "strict",
             },
             clear=True,
         ):
             cfg = load_payload_logging_config()
+        self.assertEqual(cfg.redaction_level, "strict")
         self.assertTrue(cfg.full_payload_mode)
         self.assertFalse(cfg.redact_sensitive)
         self.assertFalse(cfg.redact_emails)
         self.assertEqual(cfg.max_chars, 2_000_000)
 
+    def test_load_payload_logging_config_redaction_level_off(self):
+        with patch.dict(
+            os.environ,
+            {"UA_LOGFIRE_REDACTION_LEVEL": "off"},
+            clear=True,
+        ):
+            cfg = load_payload_logging_config()
+        self.assertEqual(cfg.redaction_level, "off")
+        self.assertFalse(cfg.redact_sensitive)
+        self.assertFalse(cfg.redact_emails)
+
     def test_serialize_payload_redacts_sensitive_keys_and_emails(self):
         cfg = PayloadLoggingConfig(
+            redaction_level="balanced",
             full_payload_mode=True,
             redact_sensitive=True,
             redact_emails=True,
@@ -58,6 +73,7 @@ class TestLogfirePayloads(unittest.TestCase):
 
     def test_serialize_payload_can_keep_emails_when_configured(self):
         cfg = PayloadLoggingConfig(
+            redaction_level="balanced",
             full_payload_mode=True,
             redact_sensitive=True,
             redact_emails=False,
@@ -71,6 +87,7 @@ class TestLogfirePayloads(unittest.TestCase):
 
     def test_serialize_payload_truncates(self):
         cfg = PayloadLoggingConfig(
+            redaction_level="balanced",
             full_payload_mode=True,
             redact_sensitive=False,
             redact_emails=False,

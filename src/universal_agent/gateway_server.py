@@ -53,6 +53,12 @@ from universal_agent.ops_config import (
     write_ops_config,
 )
 from universal_agent.approvals import list_approvals, update_approval, upsert_approval
+from universal_agent.security_paths import (
+    allow_external_workspaces_from_env,
+    resolve_ops_log_path,
+    resolve_workspace_dir,
+    validate_session_id,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -71,6 +77,36 @@ if env_ws_dir:
     logger.info(f"📁 Workspaces Directory Overridden: {WORKSPACES_DIR}")
 else:
     WORKSPACES_DIR = _default_ws_dir
+
+_DEPLOYMENT_PROFILE = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
+if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
+    _DEPLOYMENT_PROFILE = "local_workstation"
+
+
+def _deployment_profile_defaults() -> dict:
+    if _DEPLOYMENT_PROFILE == "standalone_node":
+        return {
+            "profile": _DEPLOYMENT_PROFILE,
+            "allowlist_required": False,
+            "ops_token_required": True,
+            "remote_access": "vpn_recommended",
+            "notes": "Single-owner appliance posture with explicit ops token.",
+        }
+    if _DEPLOYMENT_PROFILE == "vps":
+        return {
+            "profile": _DEPLOYMENT_PROFILE,
+            "allowlist_required": True,
+            "ops_token_required": True,
+            "remote_access": "vpn_or_strict_firewall",
+            "notes": "Internet-exposed posture requires strict auth and network controls.",
+        }
+    return {
+        "profile": _DEPLOYMENT_PROFILE,
+        "allowlist_required": False,
+        "ops_token_required": False,
+        "remote_access": "local_only_default",
+        "notes": "Development workstation defaults prioritize local iteration speed.",
+    }
 
 # 2. Allowlist Configuration
 ALLOWED_USERS = set()
@@ -469,6 +505,24 @@ def get_session(session_id: str) -> Optional[GatewaySession]:
     return _sessions.get(session_id)
 
 
+def _sanitize_session_id_or_400(session_id: str) -> str:
+    try:
+        return validate_session_id(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _sanitize_workspace_dir_or_400(workspace_dir: Optional[str]) -> Optional[str]:
+    try:
+        return resolve_workspace_dir(
+            WORKSPACES_DIR,
+            workspace_dir,
+            allow_external=allow_external_workspaces_from_env(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def is_user_allowed(user_id: str) -> bool:
     """Check if user_id is in the allowlist (if active)."""
     if not ALLOWED_USERS:
@@ -704,7 +758,8 @@ async def health(response: Response):
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0",
         "db_status": db_status,
-        "db_error": db_error
+        "db_error": db_error,
+        "deployment_profile": _deployment_profile_defaults(),
     }
 
 
@@ -716,11 +771,12 @@ async def create_session(request: CreateSessionRequest):
         logger.warning(f"⛔ Access Denied: User '{final_user_id}' not in allowlist.")
         raise HTTPException(status_code=403, detail="Access denied: User not allowed.")
 
+    workspace_dir = _sanitize_workspace_dir_or_400(request.workspace_dir)
     gateway = get_gateway()
     try:
         session = await gateway.create_session(
             user_id=final_user_id,
-            workspace_dir=request.workspace_dir,
+            workspace_dir=workspace_dir,
         )
         store_session(session)
         if _heartbeat_service:
@@ -763,11 +819,12 @@ async def wake_heartbeat(request: HeartbeatWakeRequest):
     reason = request.reason or "wake"
     mode = (request.mode or "now").strip().lower()
     if request.session_id:
+        session_id = _sanitize_session_id_or_400(request.session_id)
         if mode == "next":
-            _heartbeat_service.request_heartbeat_next(request.session_id, reason=reason)
+            _heartbeat_service.request_heartbeat_next(session_id, reason=reason)
         else:
-            _heartbeat_service.request_heartbeat_now(request.session_id, reason=reason)
-        return {"status": "queued", "session_id": request.session_id, "reason": reason, "mode": mode}
+            _heartbeat_service.request_heartbeat_now(session_id, reason=reason)
+        return {"status": "queued", "session_id": session_id, "reason": reason, "mode": mode}
 
     for session_id in list(_sessions.keys()):
         if mode == "next":
@@ -783,6 +840,7 @@ async def get_last_heartbeat(session_id: Optional[str] = None):
         raise HTTPException(status_code=400, detail="Heartbeat service not available.")
 
     if session_id:
+        session_id = _sanitize_session_id_or_400(session_id)
         session = get_session(session_id)
         if session:
             state = _read_heartbeat_state(session.workspace_dir) or {}
@@ -826,9 +884,10 @@ async def post_system_event(request: SystemEventRequest):
 
     target_sessions: list[str]
     if request.session_id:
-        if request.session_id not in _sessions:
+        requested_session_id = _sanitize_session_id_or_400(request.session_id)
+        if requested_session_id not in _sessions:
             raise HTTPException(status_code=404, detail="Session not found.")
-        target_sessions = [request.session_id]
+        target_sessions = [requested_session_id]
     else:
         target_sessions = list(_sessions.keys())
 
@@ -855,6 +914,7 @@ async def post_system_event(request: SystemEventRequest):
 
 @app.get("/api/v1/system/events")
 async def list_system_events(session_id: str):
+    session_id = _sanitize_session_id_or_400(session_id)
     if session_id not in _sessions:
         raise HTTPException(status_code=404, detail="Session not found.")
     return {"session_id": session_id, "events": _system_events.get(session_id, [])}
@@ -899,7 +959,7 @@ async def create_cron_job(request: CronJobCreateRequest):
         
         job = _cron_service.add_job(
             user_id=request.user_id or "cron",
-            workspace_dir=request.workspace_dir,
+            workspace_dir=_sanitize_workspace_dir_or_400(request.workspace_dir),
             command=request.command,
             every_raw=request.every,
             cron_expr=request.cron_expr,
@@ -954,7 +1014,7 @@ async def update_cron_job(job_id: str, request: CronJobUpdateRequest):
     if request.enabled is not None:
         updates["enabled"] = request.enabled
     if request.workspace_dir is not None:
-        updates["workspace_dir"] = request.workspace_dir
+        updates["workspace_dir"] = _sanitize_workspace_dir_or_400(request.workspace_dir)
     if request.user_id is not None:
         updates["user_id"] = request.user_id
     if request.metadata is not None:
@@ -1005,6 +1065,7 @@ async def list_cron_runs(limit: int = 200):
 
 @app.get("/api/v1/sessions/{session_id}")
 async def get_session_info(session_id: str):
+    session_id = _sanitize_session_id_or_400(session_id)
     session = get_session(session_id)
     if not session:
         gateway = get_gateway()
@@ -1030,6 +1091,7 @@ async def get_session_info(session_id: str):
 
 @app.delete("/api/v1/sessions/{session_id}")
 async def delete_session(session_id: str):
+    session_id = _sanitize_session_id_or_400(session_id)
     _sessions.pop(session_id, None)
     gateway = get_gateway()
     await gateway.close_session(session_id)
@@ -1062,6 +1124,7 @@ async def ops_list_sessions(
 @app.get("/api/v1/ops/sessions/{session_id}")
 async def ops_get_session(request: Request, session_id: str):
     _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
     if not _ops_service:
         raise HTTPException(status_code=503, detail="Ops service not initialized")
     details = _ops_service.get_session_details(session_id)
@@ -1075,6 +1138,7 @@ async def ops_session_preview(
     request: Request, session_id: str, limit: int = 200, max_bytes: int = 200_000
 ):
     _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
     if not _ops_service:
         raise HTTPException(status_code=503, detail="Ops service not initialized")
     result = _ops_service.tail_file(session_id, "activity_journal.log", limit=limit, max_bytes=max_bytes)
@@ -1086,6 +1150,7 @@ async def ops_session_reset(
     request: Request, session_id: str, payload: OpsSessionResetRequest
 ):
     _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
     if not _ops_service:
         raise HTTPException(status_code=503, detail="Ops service not initialized")
     result = _ops_service.reset_session(
@@ -1104,6 +1169,7 @@ async def ops_session_compact(
     request: Request, session_id: str, payload: OpsSessionCompactRequest
 ):
     _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
     if not _ops_service:
         raise HTTPException(status_code=503, detail="Ops service not initialized")
     result = _ops_service.compact_session(session_id, payload.max_lines, payload.max_bytes)
@@ -1115,6 +1181,7 @@ async def ops_session_compact(
 @app.delete("/api/v1/ops/sessions/{session_id}")
 async def ops_delete_session(request: Request, session_id: str, confirm: bool = False):
     _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
     if not confirm:
         raise HTTPException(status_code=400, detail="confirm=true is required")
     if not _ops_service:
@@ -1140,18 +1207,15 @@ async def ops_logs_tail(
         raise HTTPException(status_code=503, detail="Ops service not initialized")
 
     if session_id:
+        session_id = _sanitize_session_id_or_400(session_id)
         result = _ops_service.tail_file(session_id, "run.log", cursor=cursor, limit=limit, max_bytes=max_bytes)
         file_path = str(_ops_service.workspaces_dir / session_id / "run.log")
         return {"file": file_path, **result}
     elif path:
-        candidate = Path(path)
-        if not candidate.is_absolute():
-            candidate = (BASE_DIR / candidate).resolve()
-        if not (
-            str(candidate).startswith(str(WORKSPACES_DIR))
-            or str(candidate).startswith(str(BASE_DIR))
-        ):
-            raise HTTPException(status_code=400, detail="Invalid log path")
+        try:
+            candidate = resolve_ops_log_path(WORKSPACES_DIR, path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         result = _ops_service.read_log_slice(candidate, cursor=cursor, limit=limit, max_bytes=max_bytes)
         return {"file": str(candidate), **result}
     else:
@@ -1232,6 +1296,12 @@ async def ops_config_schema_get(request: Request):
     return {"schema": ops_config_schema()}
 
 
+@app.get("/api/v1/ops/deployment/profile")
+async def ops_deployment_profile_get(request: Request):
+    _require_ops_auth(request)
+    return {"deployment_profile": _deployment_profile_defaults()}
+
+
 @app.post("/api/v1/ops/config")
 async def ops_config_set(request: Request, payload: OpsConfigRequest):
     _require_ops_auth(request)
@@ -1307,6 +1377,11 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
 
 @app.websocket("/api/v1/sessions/{session_id}/stream")
 async def websocket_stream(websocket: WebSocket, session_id: str):
+    try:
+        session_id = validate_session_id(session_id)
+    except ValueError:
+        await websocket.close(code=4000, reason="Invalid session id format")
+        return
     connection_id = f"gw_{session_id}_{time.time()}"
     # Register connection with session_id
     await manager.connect(connection_id, websocket, session_id)
