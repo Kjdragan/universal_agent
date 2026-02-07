@@ -40,6 +40,16 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+USE_PROCESS_STDIO_REDIRECT = _env_truthy("UA_GATEWAY_PROCESS_STDIO_REDIRECT", default=False)
+
+
 class _TeeWriter:
     """Mirror writes to both a file handle and an underlying stream."""
 
@@ -70,8 +80,8 @@ def _redirect_stdio_to_run_log(workspace_dir: str) -> Any:
     Redirect process-wide stdout/stderr to the session's run.log for the duration
     of a single turn, then restore.
 
-    NOTE: This is intentionally process-wide. In gateway mode we serialize
-    execution (see InProcessGateway) to avoid cross-session contamination.
+    NOTE: This is process-wide and is now disabled by default in gateway mode.
+    Use UA_GATEWAY_PROCESS_STDIO_REDIRECT=1 only for targeted debugging.
     """
 
     log_path = Path(workspace_dir) / "run.log"
@@ -338,7 +348,18 @@ class ProcessTurnAdapter:
                     runtime_db_conn=getattr(main_module, "runtime_db_conn", None),
                 )
 
-                with _redirect_stdio_to_run_log(self.config.workspace_dir):
+                if USE_PROCESS_STDIO_REDIRECT:
+                    with _redirect_stdio_to_run_log(self.config.workspace_dir):
+                        result = await process_turn(
+                            client=client,
+                            user_input=user_input,
+                            workspace_dir=self.config.workspace_dir,
+                            force_complex=self.config.force_complex,
+                            execution_session=execution_session,
+                            max_iterations=self.config.max_iterations,
+                            event_callback=event_callback,
+                        )
+                else:
                     result = await process_turn(
                         client=client,
                         user_input=user_input,

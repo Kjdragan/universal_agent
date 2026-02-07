@@ -111,6 +111,18 @@ def test_ops_log_tail(client, tmp_path):
     assert data["lines"] == []
     assert data["size"] == 0
 
+
+def test_ops_log_tail_rejects_invalid_session_id(client):
+    resp = client.get("/api/v1/ops/logs/tail?session_id=../../etc/passwd")
+    assert resp.status_code == 400
+    assert "Invalid session id format" in resp.text
+
+
+def test_ops_log_tail_rejects_path_escape(client):
+    resp = client.get("/api/v1/ops/logs/tail?path=../gateway.log")
+    assert resp.status_code == 400
+    assert "Log path must remain under UA_WORKSPACES_DIR" in resp.text
+
 def test_ops_preview_compact_reset(client, tmp_path):
     # Setup session with logs
     lines = [f"line {i}" for i in range(10)]
@@ -152,4 +164,3 @@ def test_ops_preview_compact_reset(client, tmp_path):
     archive_dir = Path(resp.json()["archive_dir"])
     assert archive_dir.exists()
     assert (archive_dir / "run.log").exists()
-

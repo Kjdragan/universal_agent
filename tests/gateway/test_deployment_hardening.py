@@ -63,5 +63,28 @@ class TestDeploymentHardening(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("Access denied", response.json()["detail"])
 
+    @patch("universal_agent.gateway_server.get_gateway")
+    @patch("universal_agent.gateway_server.ALLOWED_USERS", set())
+    @patch("universal_agent.gateway_server.resolve_user_id")
+    @patch("universal_agent.gateway_server.allow_external_workspaces_from_env")
+    def test_create_session_workspace_containment(
+        self,
+        mock_allow_external,
+        mock_resolve,
+        mock_get_gateway,
+    ):
+        mock_allow_external.return_value = False
+        mock_resolve.side_effect = lambda u: u or "default"
+
+        with patch("universal_agent.gateway_server.WORKSPACES_DIR", Path("/tmp/ua_workspaces")):
+            response = self.client.post(
+                "/api/v1/sessions",
+                json={"user_id": "anyone", "workspace_dir": "/etc"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Workspace path must remain under UA_WORKSPACES_DIR", response.text)
+        mock_get_gateway.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()

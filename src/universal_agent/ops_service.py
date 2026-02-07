@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from universal_agent.gateway import InProcessGateway, GatewaySessionSummary
+from universal_agent.security_paths import validate_session_id
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,15 @@ class OpsService:
     def __init__(self, gateway: InProcessGateway, workspaces_dir: Path):
         self.gateway = gateway
         self.workspaces_dir = workspaces_dir
+
+    def _session_workspace(self, session_id: str) -> Path:
+        safe_session_id = validate_session_id(session_id)
+        workspace = (self.workspaces_dir / safe_session_id).resolve()
+        try:
+            workspace.relative_to(self.workspaces_dir.resolve())
+        except Exception as exc:
+            raise ValueError("Session path escapes workspace root") from exc
+        return workspace
 
     def list_sessions(self, status_filter: str = "all") -> List[Dict[str, Any]]:
         """List all sessions via the gateway/disk."""
@@ -82,16 +92,17 @@ class OpsService:
 
     def get_session_details(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed info about a session."""
-        workspace = self.workspaces_dir / session_id
+        workspace = self._session_workspace(session_id)
         if not workspace.exists():
             return None
         return {"session": self._build_session_summary(workspace)}
 
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session's workspace directory and close its adapter."""
-        await self.gateway.close_session(session_id)
+        safe_session_id = validate_session_id(session_id)
+        await self.gateway.close_session(safe_session_id)
 
-        workspace = self.workspaces_dir / session_id
+        workspace = self._session_workspace(safe_session_id)
         if workspace.exists() and workspace.is_dir():
             shutil.rmtree(workspace)
             return True
@@ -99,7 +110,7 @@ class OpsService:
 
     def tail_file(self, session_id: str, filename: str, cursor: Optional[int] = None, limit: int = DEFAULT_LOG_LIMIT, max_bytes: int = DEFAULT_LOG_MAX_BYTES) -> Dict[str, Any]:
         """Tail a specific log file in the session."""
-        workspace = self.workspaces_dir / session_id
+        workspace = self._session_workspace(session_id)
         file_path = workspace / filename
         
         if not file_path.exists():
@@ -115,6 +126,10 @@ class OpsService:
         return self.read_log_slice(file_path, cursor, limit, max_bytes)
 
     def read_log_slice(self, file_path: Path, cursor: Optional[int], limit: int, max_bytes: int) -> Dict[str, Any]:
+        try:
+            file_path.resolve().relative_to(self.workspaces_dir.resolve())
+        except Exception as exc:
+            raise ValueError("Log path escapes workspace root") from exc
         try:
             stat = file_path.stat()
             size = stat.st_size
@@ -183,7 +198,7 @@ class OpsService:
         }
         
     def reset_session(self, session_id: str, clear_logs: bool = True, clear_memory: bool = False, clear_work_products: bool = False) -> Dict[str, Any]:
-        session_path = self.workspaces_dir / session_id
+        session_path = self._session_workspace(session_id)
         if not session_path.exists():
             return {"error": "Session not found"}
             
@@ -209,7 +224,7 @@ class OpsService:
         return {"status": "reset", "archived": moved, "archive_dir": str(archive_dir)}
 
     def compact_session(self, session_id: str, max_lines: int, max_bytes: int) -> Dict[str, Any]:
-        session_path = self.workspaces_dir / session_id
+        session_path = self._session_workspace(session_id)
         if not session_path.exists():
              return {"error": "Session not found"}
              
