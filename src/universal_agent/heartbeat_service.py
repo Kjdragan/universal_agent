@@ -44,7 +44,7 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "   - No markdown.\n"
     "   - No explanations.\n"
 )
-DEFAULT_INTERVAL_SECONDS = 20 * 60  # 20 minutes default (Clawdbot parity)
+DEFAULT_INTERVAL_SECONDS = 25 * 60  # 25 minutes default (Clawdbot parity)
 BUSY_RETRY_DELAY = 10  # Seconds
 DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 300
 MIN_HEARTBEAT_EXEC_TIMEOUT = 300
