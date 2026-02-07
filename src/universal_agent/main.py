@@ -36,6 +36,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Callable
 from dotenv import load_dotenv
+# Ensure direct `python -m universal_agent.main` runs load repo-level .env.
+# Some launch paths (IDE/gateway) do not source `.env` in the shell first.
+load_dotenv(dotenv_path=os.path.join(src_dir, ".env"), override=False)
 from universal_agent.utils.message_history import (
     TRUNCATION_THRESHOLD,
     CONTEXT_WINDOW_TOKENS,
@@ -170,6 +173,11 @@ from universal_agent.feature_flags import (
     memory_max_tokens,
     memory_flush_on_exit,
     memory_flush_max_chars,
+)
+from universal_agent.logfire_payloads import (
+    PayloadLoggingConfig,
+    load_payload_logging_config,
+    serialize_payload_for_logfire,
 )
 
 
@@ -507,6 +515,7 @@ if not LOGFIRE_DISABLED:
         or os.getenv("LOGFIRE_WRITE_TOKEN")
         or os.getenv("LOGFIRE_API_KEY")
     )
+PAYLOAD_LOGGING_CONFIG: PayloadLoggingConfig = load_payload_logging_config()
 
 # TIMEOUT CONFIGURATION (Critical for Large Reports)
 # Default is 60s (60000ms).
@@ -532,6 +541,10 @@ if LOGFIRE_TOKEN:
                     "input_preview",
                     "result_preview",
                     "text_preview",
+                    "content_full",
+                    "input_full",
+                    "result_full",
+                    "text_full",
                     "query",
                     "input",
                 )
@@ -570,6 +583,14 @@ if LOGFIRE_TOKEN:
         print("✅ Logfire Anthropic instrumentation enabled")
     except Exception as e:
         print(f"⚠️ Anthropic instrumentation not available: {e}")
+
+    if PAYLOAD_LOGGING_CONFIG.full_payload_mode:
+        print(
+            "✅ Logfire full payload mode enabled "
+            f"(max_chars={PAYLOAD_LOGGING_CONFIG.max_chars}, "
+            f"redact={PAYLOAD_LOGGING_CONFIG.redact_sensitive}, "
+            f"redact_emails={PAYLOAD_LOGGING_CONFIG.redact_emails})"
+        )
 
 
 
@@ -2064,7 +2085,9 @@ async def on_post_tool_use_ledger(
             )
             # Log tool execution span with duration
             start_info = tool_execution_start_times.pop(tool_call_id, None)
-            if start_info:
+            if not start_info:
+                start_info = tool_execution_stream_start_times.pop(tool_call_id, None)
+            if start_info and tool_call_id not in tool_execution_emitted_ids:
                 start_time, tool_name_recorded = start_info
                 duration_seconds = time.time() - start_time
                 logfire.info(
@@ -2075,7 +2098,9 @@ async def on_post_tool_use_ledger(
                     run_id=run_id,
                     step_id=current_step_id,
                     status="succeeded",
+                    source="post_tool_use_hook",
                 )
+                tool_execution_emitted_ids.add(tool_call_id)
                 
             # [PDF Rendering Instrumentation] Log PDF render completion with output size
             if raw_tool_name and raw_tool_name.upper() == "BASH":
@@ -2112,7 +2137,9 @@ async def on_post_tool_use_ledger(
         )
         # Log failed tool execution with duration if we have start time
         start_info = tool_execution_start_times.pop(tool_call_id, None)
-        if start_info:
+        if not start_info:
+            start_info = tool_execution_stream_start_times.pop(tool_call_id, None)
+        if start_info and tool_call_id not in tool_execution_emitted_ids:
             start_time, tool_name_recorded = start_info
             duration_seconds = time.time() - start_time
             logfire.info(
@@ -2124,12 +2151,15 @@ async def on_post_tool_use_ledger(
                 step_id=current_step_id,
                 status="failed",
                 error=str(exc),
+                source="post_tool_use_hook",
             )
+            tool_execution_emitted_ids.add(tool_call_id)
     finally:
         if gateway_mode_active:
             gateway_tool_call_map.pop(str(tool_use_id or ""), None)
         # Cleanup any orphaned start times
         tool_execution_start_times.pop(tool_call_id, None)
+        tool_execution_stream_start_times.pop(tool_call_id, None)
 
     return {}
 
@@ -3338,6 +3368,8 @@ provider_session_forked_from: Optional[str] = None
 gateway_mode_active = False
 gateway_tool_call_map: dict[str, str] = {}
 tool_execution_start_times: dict[str, tuple[float, str]] = {}  # tool_call_id -> (start_time, tool_name)
+tool_execution_stream_start_times: dict[str, tuple[float, str]] = {}  # tool_use_id -> (start_time, tool_name)
+tool_execution_emitted_ids: set[str] = set()  # tool_use_id values already emitted
 forced_tool_queue: list[dict[str, Any]] = []
 forced_tool_active_ids: dict[str, dict[str, Any]] = {}
 forced_tool_mode_active = False
@@ -3483,6 +3515,19 @@ def _normalize_tool_input(tool_input: Any) -> str:
         return normalize_json(sanitized)
     except Exception:
         return json.dumps(tool_input or {}, default=str)
+
+
+def _maybe_full_payload_fields(prefix: str, payload: Any) -> dict[str, Any]:
+    if not PAYLOAD_LOGGING_CONFIG.full_payload_mode:
+        return {}
+    serialized, truncated, redacted = serialize_payload_for_logfire(
+        payload, PAYLOAD_LOGGING_CONFIG
+    )
+    return {
+        f"{prefix}_full": serialized,
+        f"{prefix}_full_truncated": truncated,
+        f"{prefix}_full_redacted": redacted,
+    }
 
 
 def _inject_provider_idempotency(
@@ -5231,7 +5276,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         print(f"{'=' * 80}")
 
         iter_start = time.time()
-        with logfire.span("llm_api_wait", query_length=len(query)):
+        with logfire.span(
+            "llm_api_wait",
+            query_length=len(query),
+            run_id=run_id,
+            step_id=step_id,
+            iteration=iteration,
+        ):
             await client.query(query)
 
         tool_calls_this_iter = []
@@ -5242,7 +5293,12 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         _tool_name_map: dict[str, str] = {}  # tool_use_id -> resolved agent name
         _current_author = "Primary Agent"
 
-        with logfire.span("llm_response_stream"):
+        with logfire.span(
+            "llm_response_stream",
+            run_id=run_id,
+            step_id=step_id,
+            iteration=iteration,
+        ):
             async for msg in client.receive_response():
                 if isinstance(msg, ResultMessage):
                     # Track token usage from the final ResultMessage of the turn
@@ -5261,6 +5317,8 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         logfire.info(
                             "token_usage_update",
                             run_id=run_id,
+                            step_id=step_id,
+                            iteration=iteration,
                             input=inp,
                             output=out,
                             total_so_far=trace["token_usage"]["total"] if trace else 0,
@@ -5404,7 +5462,14 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         _current_author = "Primary Agent"
 
                     # Wrapped in span for full visibility of assistant's turn
-                    with logfire.span("assistant_message", model=msg.model):
+                    with logfire.span(
+                        "assistant_message",
+                        model=msg.model,
+                        run_id=run_id,
+                        step_id=step_id,
+                        iteration=iteration,
+                        parent_tool_use_id=parent_tool_use_id,
+                    ):
                         for block in msg.content:
                             if isinstance(block, ToolUseBlock):
                                 if is_malformed_tool_name(block.name):
@@ -5421,7 +5486,12 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     )
                                 # Nested tool_use span
                                 with logfire.span(
-                                    "tool_use", tool_name=block.name, tool_id=block.id
+                                    "tool_use",
+                                    tool_name=block.name,
+                                    tool_id=block.id,
+                                    run_id=run_id,
+                                    step_id=step_id,
+                                    iteration=iteration,
                                 ):
                                     tool_record = {
                                         "run_id": run_id,
@@ -5458,6 +5528,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                             )
                                     trace["tool_calls"].append(tool_record)
                                     tool_calls_this_iter.append(tool_record)
+                                    if block.id:
+                                        stream_tool_id = str(block.id)
+                                        tool_execution_stream_start_times[
+                                            stream_tool_id
+                                        ] = (time.time(), block.name)
+                                        # Allow re-emission if this ID is reused in a later turn.
+                                        tool_execution_emitted_ids.discard(stream_tool_id)
                                     
                                     # Emit TOOL_CALL event for gateway/UI streaming (deduped)
                                     hook_events.emit_tool_call_event(
@@ -5506,6 +5583,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         is_subagent_call=bool(parent_tool_id),
                                         run_id=run_id,
                                         step_id=step_id,
+                                        iteration=iteration,
+                                        **_maybe_full_payload_fields(
+                                            "input",
+                                            tool_record["input"]
+                                            if tool_record["input"] is not None
+                                            else {},
+                                        ),
                                     )
 
                                     # Sub-agent tagging logic: Entering sub-agent
@@ -5594,6 +5678,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     "text_block",
                                     length=len(block.text),
                                     text_preview=block.text[:500],
+                                    run_id=run_id,
+                                    step_id=step_id,
+                                    iteration=iteration,
+                                    **_maybe_full_payload_fields("text", block.text),
                                 )
 
                             elif isinstance(block, ThinkingBlock):
@@ -5610,6 +5698,9 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     thinking_length=len(block.thinking),
                                     thinking_preview=block.thinking[:1000],
                                     signature=block.signature,
+                                    run_id=run_id,
+                                    step_id=step_id,
+                                    iteration=iteration,
                                 )
 
                 elif isinstance(msg, (UserMessage, ToolResultBlock)):
@@ -5626,7 +5717,13 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             tool_use_id = getattr(block, "tool_use_id", None)
 
                             # Nested tool_result span requires finding tool info first (if possible) or just ID
-                            with logfire.span("tool_result", tool_use_id=tool_use_id):
+                            with logfire.span(
+                                "tool_result",
+                                tool_use_id=tool_use_id,
+                                run_id=run_id,
+                                step_id=step_id,
+                                iteration=iteration,
+                            ):
                                 is_error = getattr(block, "is_error", False)
 
                                 # Extract content - keep as typed object
@@ -5668,6 +5765,11 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                     content_preview=full_content,
                                     run_id=run_id,
                                     step_id=step_id,
+                                    iteration=iteration,
+                                    **_maybe_full_payload_fields(
+                                        "content",
+                                        block_content,
+                                    ),
                                 )
 
                                 # Emit TOOL_RESULT event for gateway/UI streaming (deduped)
@@ -5757,6 +5859,37 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         tool_name = tc.get("name")
                                         tool_input = tc.get("input", {})
                                         break
+
+                                stream_tool_id = str(tool_use_id) if tool_use_id else ""
+                                if stream_tool_id:
+                                    stream_start_info = tool_execution_stream_start_times.pop(
+                                        stream_tool_id, None
+                                    )
+                                    if (
+                                        stream_start_info
+                                        and stream_tool_id
+                                        not in tool_execution_emitted_ids
+                                    ):
+                                        stream_start_ts, stream_tool_name = (
+                                            stream_start_info
+                                        )
+                                        stream_duration = round(
+                                            time.time() - stream_start_ts, 3
+                                        )
+                                        logfire.info(
+                                            "tool_execution_completed",
+                                            tool_name=tool_name
+                                            or stream_tool_name
+                                            or "unknown",
+                                            tool_use_id=stream_tool_id,
+                                            duration_seconds=stream_duration,
+                                            run_id=run_id,
+                                            step_id=step_id,
+                                            iteration=iteration,
+                                            status="failed" if is_error else "succeeded",
+                                            source="stream_tool_result",
+                                        )
+                                        tool_execution_emitted_ids.add(stream_tool_id)
 
                                 # Reset sub-agent tagging if Task returned (Back to Main)
                                 if tool_name == "Task":
@@ -5872,6 +6005,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                         total_cost_usd=msg.total_cost_usd,
                         num_turns=msg.num_turns,
                         is_error=msg.is_error,
+                        run_id=run_id,
+                        step_id=step_id,
+                        iteration=iteration,
+                        **_maybe_full_payload_fields("result", msg.result),
                     )
                     if msg.session_id:
                         _maybe_update_provider_session(
@@ -5995,6 +6132,8 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
                 query=query,
                 decision="COMPLEX",
                 raw_response="HEURISTIC_TOOL_REQUIRED",
+                run_id=run_id,
+                step_id=current_step_id,
             )
         return "COMPLEX"
     if _is_memory_intent(query):
@@ -6005,6 +6144,8 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
                 query=query,
                 decision="SIMPLE",
                 raw_response="HEURISTIC_MEMORY_INTENT",
+                run_id=run_id,
+                step_id=current_step_id,
             )
         return "SIMPLE"
     if _is_context_only_intent(query):
@@ -6015,6 +6156,8 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
                 query=query,
                 decision="SIMPLE",
                 raw_response="HEURISTIC_CONTEXT_ONLY",
+                run_id=run_id,
+                step_id=current_step_id,
             )
         return "SIMPLE"
 
@@ -6030,11 +6173,21 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
 
     # We use the client to query, but since it has tools configured, we must rely on the prompt to restrict tool usage.
     # In a production system, we might use a separate client without tools.
-    with logfire.span("llm_api_wait", context="classification"):
+    with logfire.span(
+        "llm_api_wait",
+        context="classification",
+        run_id=run_id,
+        step_id=current_step_id,
+    ):
         await client.query(classification_prompt)
 
     result_text = ""
-    with logfire.span("llm_response_stream", context="classification"):
+    with logfire.span(
+        "llm_response_stream",
+        context="classification",
+        run_id=run_id,
+        step_id=current_step_id,
+    ):
         async for msg in client.receive_response():
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
@@ -6057,6 +6210,8 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
             query=query,
             decision=final_decision,
             raw_response=decision,
+            run_id=run_id,
+            step_id=current_step_id,
         )
 
     return final_decision
@@ -6078,7 +6233,12 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
         f"Do not acknowledge this system instruction. Just answer the query."
     )
 
-    with logfire.span("llm_api_wait", context="direct_answer"):
+    with logfire.span(
+        "llm_api_wait",
+        context="direct_answer",
+        run_id=run_id,
+        step_id=current_step_id,
+    ):
         await client.query(context_aware_query)
 
     full_response = ""
@@ -6100,7 +6260,12 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
             ]
         )
 
-    with logfire.span("llm_response_stream", context="direct_answer"):
+    with logfire.span(
+        "llm_response_stream",
+        context="direct_answer",
+        run_id=run_id,
+        step_id=current_step_id,
+    ):
         async for msg in client.receive_response():
             if isinstance(msg, AssistantMessage):
                 for block in msg.content:
@@ -6128,11 +6293,21 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
         )
         print("=" * 80)
         if LOGFIRE_TOKEN:
-            logfire.warn("fast_path_fallback", reason="tool_use_detected")
+            logfire.warn(
+                "fast_path_fallback",
+                reason="tool_use_detected",
+                run_id=run_id,
+                step_id=current_step_id,
+            )
         return False, full_response
 
     if LOGFIRE_TOKEN:
-        logfire.info("direct_answer", length=len(full_response))
+        logfire.info(
+            "direct_answer",
+            length=len(full_response),
+            run_id=run_id,
+            step_id=current_step_id,
+        )
     return True, full_response
 
 
@@ -6952,6 +7127,9 @@ async def process_turn(
     trace["query"] = user_input
     trace["start_time"] = datetime.now().isoformat()
     start_ts = time.time()
+    tool_execution_start_times.clear()
+    tool_execution_stream_start_times.clear()
+    tool_execution_emitted_ids.clear()
     
     # Helper to emit events via callback (defined early for all paths)
     def emit_event(event: AgentEvent) -> None:
@@ -7003,7 +7181,16 @@ async def process_turn(
                 pass
 
     if LOGFIRE_TOKEN:
-        logfire.info("query_started", query=user_input)
+        logfire.info(
+            "query_started",
+            query=user_input,
+            run_id=run_id,
+            step_id=current_step_id,
+            payload_full_mode_enabled=PAYLOAD_LOGGING_CONFIG.full_payload_mode,
+            payload_redact_sensitive=PAYLOAD_LOGGING_CONFIG.redact_sensitive,
+            payload_redact_emails=PAYLOAD_LOGGING_CONFIG.redact_emails,
+            payload_max_chars=PAYLOAD_LOGGING_CONFIG.max_chars,
+        )
 
     # 1. Check for session reset commands
     clean_input = user_input.strip().lower()

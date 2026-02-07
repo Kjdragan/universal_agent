@@ -106,6 +106,92 @@ GROUP BY 1
 ORDER BY calls DESC
 ```
 
+### Tool Completion Coverage
+```sql
+SELECT attributes->>'source' AS completion_source,
+       attributes->>'status' AS status,
+       COUNT(*) AS count
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name = 'tool_execution_completed'
+GROUP BY 1, 2
+ORDER BY count DESC
+```
+
+### Instrumentation Coverage Matrix
+```sql
+SELECT span_name, COUNT(*) AS count
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name IN (
+    'assistant_message',
+    'tool_use',
+    'tool_input',
+    'tool_result',
+    'tool_output',
+    'tool_execution_completed',
+    'token_usage_update'
+  )
+GROUP BY span_name
+ORDER BY span_name
+```
+
+### Tool Lifecycle Parity
+```sql
+SELECT
+  SUM(CASE WHEN span_name = 'tool_use' THEN 1 ELSE 0 END) AS tool_use_count,
+  SUM(CASE WHEN span_name = 'tool_output' THEN 1 ELSE 0 END) AS tool_output_count,
+  SUM(CASE WHEN span_name = 'tool_execution_completed' THEN 1 ELSE 0 END) AS tool_completed_count
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name IN ('tool_use', 'tool_output', 'tool_execution_completed')
+```
+
+### Payload Mode Status (Run-Level)
+```sql
+SELECT
+  attributes->>'payload_full_mode_enabled' AS full_mode,
+  attributes->>'payload_redact_sensitive' AS redact_sensitive,
+  attributes->>'payload_redact_emails' AS redact_emails,
+  attributes->>'payload_max_chars' AS max_chars,
+  start_timestamp
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name = 'query_started'
+ORDER BY start_timestamp DESC
+LIMIT 1
+```
+
+### Full Payload Coverage (Debug Mode)
+```sql
+SELECT span_name,
+       COUNT(*) AS total,
+       SUM(CASE WHEN attributes->>'input_full' IS NOT NULL THEN 1 ELSE 0 END) AS with_input_full,
+       SUM(CASE WHEN attributes->>'content_full' IS NOT NULL THEN 1 ELSE 0 END) AS with_content_full,
+       SUM(CASE WHEN attributes->>'text_full' IS NOT NULL THEN 1 ELSE 0 END) AS with_text_full
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name IN ('tool_input', 'tool_output', 'text_block')
+GROUP BY span_name
+ORDER BY span_name
+```
+
+### Full Payload Redaction/Truncation Signals
+```sql
+SELECT span_name,
+       SUM(CASE WHEN attributes->>'input_full_redacted' = 'true' THEN 1 ELSE 0 END) AS input_redacted,
+       SUM(CASE WHEN attributes->>'content_full_redacted' = 'true' THEN 1 ELSE 0 END) AS content_redacted,
+       SUM(CASE WHEN attributes->>'text_full_redacted' = 'true' THEN 1 ELSE 0 END) AS text_redacted,
+       SUM(CASE WHEN attributes->>'input_full_truncated' = 'true' THEN 1 ELSE 0 END) AS input_truncated,
+       SUM(CASE WHEN attributes->>'content_full_truncated' = 'true' THEN 1 ELSE 0 END) AS content_truncated,
+       SUM(CASE WHEN attributes->>'text_full_truncated' = 'true' THEN 1 ELSE 0 END) AS text_truncated
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name IN ('tool_input', 'tool_output', 'text_block')
+GROUP BY span_name
+ORDER BY span_name
+```
+
 ### Pipeline Phases
 ```sql
 SELECT span_name, message, ROUND(duration::numeric, 2) as dur_sec, start_timestamp

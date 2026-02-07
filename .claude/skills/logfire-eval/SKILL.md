@@ -20,6 +20,16 @@ Analyze Universal Agent session traces to produce comprehensive evaluation repor
 7. **Do not default to repo root outputs** — never save reports as `./logfire_evaluation.md`
 8. **Use catalog files first** — only read `run.log` if all catalog files are unavailable
 9. **If `run_id` filters are sparse/empty, pivot to `trace_id` filters** — some spans may not carry `attributes->>'run_id'`
+10. **Check payload visibility mode before judging observability completeness**:
+   - Default mode logs previews (`input_preview`, `content_preview`, `text_preview`)
+   - Full mode adds redacted/truncated full fields (`input_full`, `content_full`, `text_full`, `result_full`)
+   - Confirm mode from `query_started` attributes (`payload_full_mode_enabled`, redaction flags)
+11. **Track tool completion using `tool_execution_completed` and `source`**:
+   - `post_tool_use_hook`: completion recorded by durable hook
+   - `stream_tool_result`: completion recorded from streamed tool result fallback
+12. **Always run an instrumentation completeness audit** before final conclusions:
+   - Required observability spans: `assistant_message`, `tool_use`, `tool_input`, `tool_result`, `tool_output`, `tool_execution_completed`, `token_usage_update`
+   - If any are missing/near-zero, call out whether it is expected for that run type vs an instrumentation gap
 
 ## Output Policy (MANDATORY)
 
@@ -103,6 +113,42 @@ ORDER BY count DESC
 LIMIT 25
 ```
 
+Payload coverage check:
+```sql
+SELECT span_name,
+       COUNT(*) AS total,
+       SUM(CASE WHEN attributes->>'input_preview' IS NOT NULL THEN 1 ELSE 0 END) AS with_input_preview,
+       SUM(CASE WHEN attributes->>'input_full' IS NOT NULL THEN 1 ELSE 0 END) AS with_input_full,
+       SUM(CASE WHEN attributes->>'content_preview' IS NOT NULL THEN 1 ELSE 0 END) AS with_content_preview,
+       SUM(CASE WHEN attributes->>'content_full' IS NOT NULL THEN 1 ELSE 0 END) AS with_content_full
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name IN ('tool_input', 'tool_output')
+GROUP BY span_name
+ORDER BY span_name
+```
+
+Payload mode status check:
+```sql
+SELECT
+  attributes->>'payload_full_mode_enabled' AS full_mode,
+  attributes->>'payload_redact_sensitive' AS redact_sensitive,
+  attributes->>'payload_redact_emails' AS redact_emails,
+  attributes->>'payload_max_chars' AS max_chars,
+  start_timestamp
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name = 'query_started'
+ORDER BY start_timestamp DESC
+LIMIT 1
+```
+
+If full fields are missing, verify runtime config:
+- `UA_LOGFIRE_FULL_PAYLOAD_MODE=true`
+- `UA_LOGFIRE_FULL_PAYLOAD_REDACT=true` (recommended)
+- `UA_LOGFIRE_FULL_PAYLOAD_REDACT_EMAILS=true` (recommended)
+- `UA_LOGFIRE_FULL_PAYLOAD_MAX_CHARS=<limit>`
+
 Assign health verdict:
 - **No exceptions + normal durations** → 
 - **Some exceptions but completed** → 
@@ -150,6 +196,44 @@ WHERE attributes->>'run_id' = '{RUN_ID}'
 GROUP BY 1
 ORDER BY calls DESC
 ```
+
+### Phase E2 — Instrumentation Completeness Audit
+
+Run a span coverage matrix and include it in the report:
+```sql
+SELECT span_name, COUNT(*) AS count
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name IN (
+    'assistant_message',
+    'tool_use',
+    'tool_input',
+    'tool_result',
+    'tool_output',
+    'tool_execution_completed',
+    'token_usage_update'
+  )
+GROUP BY span_name
+ORDER BY span_name
+```
+
+Run tool lifecycle parity check:
+```sql
+SELECT
+  SUM(CASE WHEN span_name = 'tool_use' THEN 1 ELSE 0 END) AS tool_use_count,
+  SUM(CASE WHEN span_name = 'tool_output' THEN 1 ELSE 0 END) AS tool_output_count,
+  SUM(CASE WHEN span_name = 'tool_execution_completed' THEN 1 ELSE 0 END) AS tool_completed_count
+FROM records
+WHERE attributes->>'run_id' = '{RUN_ID}'
+  AND span_name IN ('tool_use', 'tool_output', 'tool_execution_completed')
+```
+
+Interpretation guidance:
+- `tool_use > tool_output` can indicate failed/blocked/aborted tools
+- `tool_output > tool_execution_completed` suggests completion-event gap
+- `tool_execution_completed` with mixed `source` is acceptable (`post_tool_use_hook` + `stream_tool_result`)
+- If full payload mode is off, missing `*_full` fields is expected (not a gap)
+- If `query_started` lacks payload mode attributes, treat payload mode as `unknown` (older run or older instrumentation), not automatically disabled
 
 ### Phase F — Pipeline & Sub-Agent Analysis
 
@@ -236,6 +320,15 @@ Use this structure:
 ## Tool Execution Summary
 | Tool | Calls | Avg Duration | Errors |
 |------|-------|--------------|--------|
+
+## Instrumentation Coverage
+| Signal | Status | Evidence |
+|--------|--------|----------|
+| Assistant input/output visibility | {present/missing} | {span counts / payload fields} |
+| Tool call visibility | {present/missing} | {tool_use/tool_input counts} |
+| Tool result visibility | {present/missing} | {tool_result/tool_output counts} |
+| Tool completion visibility | {present/missing} | {tool_execution_completed count + sources} |
+| Full payload mode | {enabled/disabled} | {presence of *_full fields} |
 
 ## Heartbeat Summary (if applicable)
 | Time | Session | Outcome | Tools | Duration |
