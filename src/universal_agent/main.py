@@ -155,7 +155,13 @@ from universal_agent.cli_io import (
 from universal_agent.execution_context import bind_workspace
 from universal_agent.execution_session import ExecutionSession
 from universal_agent.trace_utils import write_trace
-from universal_agent.trace_catalog import emit_trace_catalog, save_trace_catalog_md, enrich_trace_json
+from universal_agent.trace_catalog import (
+    emit_trace_catalog,
+    save_trace_catalog_md,
+    save_trace_catalog_work_product,
+    enrich_trace_json,
+    extract_local_tool_trace_ids_from_trace,
+)
 from universal_agent.feature_flags import (
     heartbeat_enabled,
     memory_index_enabled,
@@ -7211,7 +7217,10 @@ async def process_turn(
                 )
 
         # Collect and display all trace IDs via the trace catalog
-        local_trace_ids = collect_local_tool_trace_ids(workspace_dir)
+        local_trace_ids = sorted(
+            set(collect_local_tool_trace_ids(workspace_dir))
+            | set(extract_local_tool_trace_ids_from_trace(trace))
+        )
         trace["local_toolkit_trace_ids"] = local_trace_ids
 
         _catalog = emit_trace_catalog(
@@ -7222,6 +7231,16 @@ async def process_turn(
             workspace_dir=workspace_dir,
         )
         enrich_trace_json(trace, _catalog)
+        # Keep a standalone catalog refreshed per turn so analysis skills do not
+        # need to parse large run.log files.
+        try:
+            catalog_path = save_trace_catalog_md(_catalog, workspace_dir)
+            trace["trace_catalog_path"] = catalog_path
+            wp_catalog_paths = save_trace_catalog_work_product(_catalog, workspace_dir)
+            trace["trace_catalog_work_product_path"] = wp_catalog_paths["md_path"]
+            trace["trace_catalog_work_product_json_path"] = wp_catalog_paths["json_path"]
+        except Exception as cat_err:
+            print(f"⚠️ Failed to refresh trace catalog: {cat_err}")
 
         # Emit execution summary to Activity Log for UI visibility
         summary_parts = [f"⏱️ {request_duration}s", f"🔧 {len(request_tool_calls)} tools"]
@@ -8904,7 +8923,10 @@ async def main(args: argparse.Namespace):
 
             # Save trace (with trace_catalog embedded)
             if "trace_catalog" not in trace:
-                _local_ids = collect_local_tool_trace_ids(workspace_dir)
+                _local_ids = sorted(
+                    set(collect_local_tool_trace_ids(workspace_dir))
+                    | set(extract_local_tool_trace_ids_from_trace(trace))
+                )
                 _cat = emit_trace_catalog(
                     trace_id=trace.get("trace_id"),
                     run_id=trace.get("run_id") or os.path.basename(workspace_dir),
@@ -8913,15 +8935,26 @@ async def main(args: argparse.Namespace):
                     workspace_dir=workspace_dir,
                 )
                 enrich_trace_json(trace, _cat)
-            trace_path = write_trace(trace, workspace_dir)
-            print(f"\n📊 Full trace saved to {trace_path}")
 
             # Save standalone trace_catalog.md for agent discovery
             try:
                 catalog_path = save_trace_catalog_md(trace.get("trace_catalog", {}), workspace_dir)
+                wp_catalog_paths = save_trace_catalog_work_product(
+                    trace.get("trace_catalog", {}), workspace_dir
+                )
+                trace["trace_catalog_path"] = catalog_path
+                trace["trace_catalog_work_product_path"] = wp_catalog_paths["md_path"]
+                trace["trace_catalog_work_product_json_path"] = wp_catalog_paths["json_path"]
                 print(f"📋 Trace catalog saved to {catalog_path}")
+                print(
+                    "📋 Trace catalog work product saved to "
+                    f"{wp_catalog_paths['md_path']}"
+                )
             except Exception as cat_err:
                 print(f"⚠️ Failed to save trace catalog: {cat_err}")
+
+            trace_path = write_trace(trace, workspace_dir)
+            print(f"\n📊 Full trace saved to {trace_path}")
 
             # Save comprehensive session summary
             summary_lines = []

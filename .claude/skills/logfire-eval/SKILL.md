@@ -10,18 +10,59 @@ Analyze Universal Agent session traces to produce comprehensive evaluation repor
 ## Critical Rules
 
 1. **Always query by `run_id` or `trace_id`** — NEVER by time period alone (risks mixing multiple runs)
-2. **Read `trace_catalog.md` first** if a workspace path is available — it has all trace IDs and query hints
-3. **The main trace has 99%+ of useful data** — local toolkit traces are thin MCP wrappers (1 span each)
-4. **Use `references/sql_queries.md`** for pre-built parameterized queries
-5. **Use `references/span_catalog.md`** to understand what each span type means
+2. **Read the session work-product trace catalog first**: `{workspace}/work_products/logfire-eval/trace_catalog.md`
+3. **Use catalog `local_toolkit.mode` to interpret local traces**:
+   - `embedded_in_main`: local toolkit spans are inside the main trace (no distinct local trace IDs)
+   - `distinct_traces`: investigate listed local trace IDs for tool-level exceptions
+4. **The main trace has 99%+ of useful data** — start there first
+5. **Use `references/sql_queries.md`** for pre-built parameterized queries
+6. **Use `references/span_catalog.md`** to understand what each span type means
+7. **Do not default to repo root outputs** — never save reports as `./logfire_evaluation.md`
+8. **Use catalog files first** — only read `run.log` if all catalog files are unavailable
+9. **If `run_id` filters are sparse/empty, pivot to `trace_id` filters** — some spans may not carry `attributes->>'run_id'`
+
+## Output Policy (MANDATORY)
+
+1. **Resolve workspace first** (in this order):
+- Explicit workspace path from user request
+- `CURRENT_SESSION_WORKSPACE` environment variable
+- Latest `AGENT_RUN_WORKSPACES/session_*` directory by modified time
+
+If none can be resolved, STOP and ask for the workspace path. Do not write to repo root.
+
+2. **Session work product output** (always write):
+- `{workspace}/work_products/logfire-eval/logfire_evaluation.md`
+- Catalog input should come from: `{workspace}/work_products/logfire-eval/trace_catalog.md` (or `.json` fallback)
+
+3. **Persistent artifact output** (always write a durable copy):
+- Resolve artifacts root with:
+  - `python3 -c "from universal_agent.artifacts import resolve_artifacts_dir; print(resolve_artifacts_dir())"`
+- Write to:
+  - `UA_ARTIFACTS_DIR/logfire-eval/{YYYY-MM-DD}/{run-id-or-trace-id}__{HHMMSS}/logfire_evaluation.md`
+- Include a small `manifest.json` in the same artifact run directory with `run_id`, `trace_id`, source workspace, and generation timestamp.
 
 ## Workflow
 
 ### Phase A — Discovery
 
 **If workspace path is known:**
-1. Read `{workspace}/trace_catalog.md` or `{workspace}/trace.json` to get `run_id`, `trace_id`, and catalog
-2. Use the `trace_id` from `trace_catalog.main_agent.trace_id`
+1. Read `{workspace}/work_products/logfire-eval/trace_catalog.md` first (preferred)
+2. If missing, read `{workspace}/trace_catalog.md`
+3. If missing, read `{workspace}/work_products/logfire-eval/trace_catalog.json`
+4. If missing, read `{workspace}/trace.json` and use `trace_catalog` key
+5. Only if all are missing, parse trace block from `{workspace}/run.log`
+6. Use `trace_catalog.main_agent.trace_id` as the primary trace
+
+**Logfire MCP call contract (always):**
+- Tool: `arbitrary_query`
+- Input keys: `age` (minutes) + `query` (SQL string)
+- Example input:
+```json
+{
+  "age": 2880,
+  "query": "SELECT trace_id, COUNT(*) AS span_count FROM records WHERE trace_id = '{TRACE_ID}' GROUP BY trace_id"
+}
+```
 
 **If "latest run" / "last run" requested:**
 ```sql
@@ -161,7 +202,13 @@ ORDER BY start_timestamp
 
 ### Phase I — Report Generation
 
-Save to `{workspace}/logfire_evaluation.md` with this structure:
+Save to session work products at:
+- `{workspace}/work_products/logfire-eval/logfire_evaluation.md`
+
+Also copy to persistent artifacts at:
+- `UA_ARTIFACTS_DIR/logfire-eval/{YYYY-MM-DD}/{run-id-or-trace-id}__{HHMMSS}/logfire_evaluation.md`
+
+Use this structure:
 
 ```markdown
 # Logfire Evaluation Report

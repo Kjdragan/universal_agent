@@ -94,6 +94,8 @@ The catalog contains:
 ```
 {workspace}/trace.json          # Full trace data + trace_catalog
 {workspace}/trace_catalog.md    # Standalone catalog for agent discovery
+{workspace}/work_products/logfire-eval/trace_catalog.md    # Preferred skill input
+{workspace}/work_products/logfire-eval/trace_catalog.json  # Machine-readable catalog
 {workspace}/run.log             # Contains the printed trace catalog block
 ```
 
