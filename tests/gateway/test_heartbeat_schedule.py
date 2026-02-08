@@ -54,13 +54,14 @@ async def _run_once(base_url: str, ws_url: str, workspace_dir: Path, heartbeat_c
                 return None
 
 
-def _run_gateway(env_overrides: dict[str, str]):
+def _run_gateway(env_overrides: dict[str, str], workspace_root: Path):
     port = _get_free_port()
     base_url = f"http://127.0.0.1:{port}"
     ws_url = f"ws://127.0.0.1:{port}"
     env = {
         **os.environ,
         "UA_GATEWAY_PORT": str(port),
+        "UA_WORKSPACES_DIR": str(workspace_root),
         "UA_ENABLE_HEARTBEAT": "1",
         "UA_HEARTBEAT_INTERVAL": "1",
         "UA_HEARTBEAT_MOCK_RESPONSE": "1",
@@ -99,7 +100,7 @@ def test_active_hours_blocked(tmp_path):
         "UA_HEARTBEAT_TIMEZONE": "UTC",
         "UA_HEARTBEAT_ACTIVE_START": start,
         "UA_HEARTBEAT_ACTIVE_END": end,
-    })
+    }, tmp_path)
     try:
         msg = asyncio.run(
             _run_once(base_url, ws_url, tmp_path / "hb_active_blocked", "UA_HEARTBEAT_OK")
@@ -117,7 +118,7 @@ def test_empty_file_skips(tmp_path):
         "UA_HEARTBEAT_TIMEZONE": "UTC",
         "UA_HEARTBEAT_ACTIVE_START": start,
         "UA_HEARTBEAT_ACTIVE_END": end,
-    })
+    }, tmp_path)
     try:
         msg = asyncio.run(
             _run_once(base_url, ws_url, tmp_path / "hb_empty", "# Heartbeat\n\n")

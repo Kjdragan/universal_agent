@@ -15,31 +15,39 @@ try:
 except ImportError:
     Composio = None
 
-INPROCESS_MCP_TOOLS = [
-    "mcp__internal__run_research_pipeline",
-    "mcp__internal__run_research_phase",
-    "mcp__internal__crawl_parallel",
-    "mcp__internal__run_report_generation",
-    "mcp__internal__generate_outline",
-    "mcp__internal__draft_report_parallel",
-    "mcp__internal__cleanup_report",
-    "mcp__internal__compile_report",
-    "mcp__internal__upload_to_composio",
-    "mcp__internal__list_directory",
-    "mcp__internal__append_to_file",
-    "mcp__internal__finalize_research",
-    "mcp__internal__generate_image",
-    "mcp__internal__describe_image",
-    "mcp__internal__preview_image",
-    "mcp__internal__html_to_pdf",
-    "mcp__internal__batch_tool_execute",
-    "mcp__internal__core_memory_replace",
-    "mcp__internal__core_memory_append",
-    "mcp__internal__archival_memory_insert",
-    "mcp__internal__archival_memory_search",
-    "mcp__internal__get_core_memory_blocks",
-    "mcp__internal__ask_user_questions",
-]
+try:
+    from universal_agent.tools.internal_registry import get_internal_tool_slugs
+    # Build list dynamically. We default to including memory tools for documentation completeness,
+    # or we could make it conditional if we had access to config here.
+    # For now, listing all possible internal tools is safer for discovery.
+    INPROCESS_MCP_TOOLS = get_internal_tool_slugs(enable_memory=True)
+except ImportError:
+    # Fallback if registry is missing (e.g. during partial refactors)
+    INPROCESS_MCP_TOOLS = [
+        "run_research_pipeline",
+        "run_research_phase",
+        "crawl_parallel",
+        "run_report_generation",
+        "generate_outline",
+        "draft_report_parallel",
+        "cleanup_report",
+        "compile_report",
+        "upload_to_composio",
+        "list_directory",
+        "append_to_file",
+        "finalize_research",
+        "generate_image",
+        "describe_image",
+        "preview_image",
+        "html_to_pdf",
+        "batch_tool_execute",
+        "core_memory_replace",
+        "core_memory_append",
+        "archival_memory_insert",
+        "archival_memory_search",
+        "get_core_memory_blocks",
+        "ask_user_questions",
+    ]
 
 def get_local_tools() -> List[str]:
     """Return the list of tools available in the in-process MCP Toolkit."""
@@ -62,7 +70,8 @@ def discover_connected_toolkits(composio_client: Any, user_id: str) -> List[str]
     connected_slugs = []
     try:
         # Use the global list filtered by user_id, exactly like the audit script that worked
-        connections_response = composio_client.connected_accounts.list(user_ids=[user_id])
+        # We increase the limit to ensure we see all connections for the user
+        connections_response = composio_client.connected_accounts.list(user_ids=[user_id], limit=50)
         
         if hasattr(connections_response, 'items'):
             for item in connections_response.items:
@@ -93,6 +102,57 @@ def discover_connected_toolkits(composio_client: Any, user_id: str) -> List[str]
         return []
 
     return connected_slugs
+
+def fetch_toolkit_meta(composio_client: Any, slug: str) -> Dict[str, Any]:
+    """
+    Fetch metadata for a specific toolkit slug.
+    """
+    meta = {"slug": slug, "description": "", "name": slug.title()}
+    try:
+        tk = composio_client.toolkits.get(slug)
+        if hasattr(tk, 'description') and tk.description:
+            meta['description'] = tk.description
+        if hasattr(tk, 'name') and tk.name:
+            meta['name'] = tk.name
+        
+        # Additional metadata if available
+        if hasattr(tk, 'meta') and hasattr(tk.meta, 'categories'):
+            meta['categories'] = [c.name for c in tk.meta.categories]
+            
+    except Exception as e:
+        # print(f"⚠️ [Discovery] Failed to fetch metadata for {slug}: {e}")
+        pass
+
+    # Fallbacks if description is still empty
+    if not meta['description']:
+        if slug == 'codeinterpreter':
+            meta['description'] = "Executes Python code in a sandboxed environment for calculation, data analysis, and logic."
+        elif slug == 'composio_search':
+            meta['description'] = "Search engine for finding appropriate tools and actions within the Composio ecosystem."
+        elif slug == 'sqltool':
+            meta['description'] = "Execute SQL queries against connected databases."
+        elif slug == 'filetool':
+            meta['description'] = "Read, write, and manage files in the local workspace."
+        elif slug == 'browserbase':
+            meta['description'] = "Headless browser for web scraping and interaction."
+        elif slug == 'gmail':
+            meta['description'] = "Google's email service."
+        elif slug == 'github':
+            meta['description'] = "Code hosting and collaboration platform."
+            
+    return meta
+
+def discover_connected_toolkits_with_meta(composio_client: Any, user_id: str) -> List[Dict[str, Any]]:
+    """
+    Discover toolkits with metadata (description, category) for active connections.
+    """
+    slugs = discover_connected_toolkits(composio_client, user_id)
+    results = []
+    
+    for slug in slugs:
+        results.append(fetch_toolkit_meta(composio_client, slug))
+        
+    return results
 
 def discover_composio_apps(composio_client: Any) -> List[str]:
     """

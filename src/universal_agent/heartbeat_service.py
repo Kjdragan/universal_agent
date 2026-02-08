@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, Callable
 
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
@@ -58,9 +58,9 @@ EXEC_EVENT_PROMPT = (
     "If it failed, explain what went wrong."
 )
 
-# Type alias for system event provider callbacks
-from typing import Callable
+# Type aliases for service callbacks
 SystemEventProvider = Callable[[str], list[dict]]  # (session_id) -> list of event dicts
+HeartbeatEventSink = Callable[[dict], None]
 
 @dataclass
 class HeartbeatDeliveryConfig:
@@ -369,10 +369,12 @@ class HeartbeatService:
         gateway: InProcessGateway,
         connection_manager,
         system_event_provider: Optional[SystemEventProvider] = None,
+        event_sink: Optional[HeartbeatEventSink] = None,
     ):
         self.gateway = gateway
         self.connection_manager = connection_manager
         self.system_event_provider = system_event_provider
+        self.event_sink = event_sink
         self.execution_timeout_seconds = _resolve_exec_timeout_seconds()
         self.running = False
         self.task: Optional[asyncio.Task] = None
@@ -421,6 +423,14 @@ class HeartbeatService:
             ack_max_chars=_parse_int(os.getenv("UA_HEARTBEAT_ACK_MAX_CHARS"), DEFAULT_ACK_MAX_CHARS),
             ok_tokens=ok_tokens,
         )
+
+    def _emit_event(self, payload: dict) -> None:
+        if not self.event_sink:
+            return
+        try:
+            self.event_sink(payload)
+        except Exception as exc:
+            logger.warning("Heartbeat event sink failed: %s", exc)
 
     def _resolve_schedule(self, overrides: dict) -> HeartbeatScheduleConfig:
         schedule = replace(self.default_schedule)
@@ -588,11 +598,29 @@ class HeartbeatService:
     def request_heartbeat_now(self, session_id: str, reason: str = "wake") -> None:
         self.wake_sessions.add(session_id)
         self.last_wake_reason[session_id] = reason
+        self._emit_event(
+            {
+                "type": "heartbeat_wake_requested",
+                "session_id": session_id,
+                "mode": "now",
+                "reason": reason,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
         logger.info("Heartbeat wake requested for %s (%s)", session_id, reason)
 
     def request_heartbeat_next(self, session_id: str, reason: str = "wake_next") -> None:
         self.wake_next_sessions.add(session_id)
         self.last_wake_reason[session_id] = reason
+        self._emit_event(
+            {
+                "type": "heartbeat_wake_requested",
+                "session_id": session_id,
+                "mode": "next",
+                "reason": reason,
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
         logger.info("Heartbeat wake-next requested for %s (%s)", session_id, reason)
 
     async def _scheduler_loop(self):
@@ -730,6 +758,15 @@ class HeartbeatService:
         
         # Create parent Logfire span for the entire heartbeat execution
         _hb_span = None
+        run_started_at = datetime.now().isoformat()
+        self._emit_event(
+            {
+                "type": "heartbeat_started",
+                "session_id": session.session_id,
+                "timestamp": run_started_at,
+                "wake_reason": _wake_reason,
+            }
+        )
         if _LOGFIRE_AVAILABLE and logfire:
             _hb_span = logfire.span(
                 "heartbeat_run",
@@ -1112,9 +1149,27 @@ class HeartbeatService:
             
             with open(state_path, "w") as f:
                 json.dump(state.to_dict(), f)
+            self._emit_event(
+                {
+                    "type": "heartbeat_completed",
+                    "session_id": session.session_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "ok_only": ok_only,
+                    "suppressed_reason": suppressed_reason,
+                    "sent": sent_any,
+                }
+            )
 
         except Exception as e:
             logger.error(f"Heartbeat execution failed for {session.session_id}: {e}")
+            self._emit_event(
+                {
+                    "type": "heartbeat_failed",
+                    "session_id": session.session_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "error": str(e),
+                }
+            )
             # Update last_run even on failure to prevent rapid retry loops.
             # The next scheduled tick will retry after the normal interval.
             state.last_run = time.time()

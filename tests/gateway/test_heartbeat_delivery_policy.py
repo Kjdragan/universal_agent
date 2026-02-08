@@ -71,13 +71,14 @@ async def _run_once(base_url: str, ws_url: str, workspace_dir: Path, instruction
                 # Skip status, query_complete, pong, text, etc.
 
 
-def _run_gateway(env_overrides: dict[str, str]):
+def _run_gateway(env_overrides: dict[str, str], workspace_root: Path):
     port = _get_free_port()
     base_url = f"http://127.0.0.1:{port}"
     ws_url = f"ws://127.0.0.1:{port}"
     env = {
         **os.environ,
         "UA_GATEWAY_PORT": str(port),
+        "UA_WORKSPACES_DIR": str(workspace_root),
         "UA_ENABLE_HEARTBEAT": "1",
         "UA_HEARTBEAT_INTERVAL": "1",
         "UA_HEARTBEAT_MOCK_RESPONSE": "1",
@@ -108,7 +109,7 @@ def test_show_ok_suppressed(tmp_path):
         "UA_HB_SHOW_OK": "false",
         "UA_HB_USE_INDICATOR": "false",
         "UA_HB_DELIVERY_MODE": "last",
-    })
+    }, tmp_path)
     try:
         msg = asyncio.run(_run_once(base_url, ws_url, tmp_path / "hb_show_ok_off", "UA_HEARTBEAT_OK"))
         assert msg is None
@@ -121,7 +122,7 @@ def test_show_ok_indicator(tmp_path):
         "UA_HB_SHOW_OK": "false",
         "UA_HB_USE_INDICATOR": "true",
         "UA_HB_DELIVERY_MODE": "last",
-    })
+    }, tmp_path)
     try:
         msg = asyncio.run(
             _run_once(base_url, ws_url, tmp_path / "hb_show_ok_indicator", "UA_HEARTBEAT_OK")
@@ -136,7 +137,7 @@ def test_show_alerts_suppressed(tmp_path):
     process, base_url, ws_url = _run_gateway({
         "UA_HB_SHOW_ALERTS": "false",
         "UA_HB_DELIVERY_MODE": "last",
-    })
+    }, tmp_path)
     try:
         msg = asyncio.run(_run_once(base_url, ws_url, tmp_path / "hb_alerts_off", "ALERT_TEST_A"))
         assert msg is None
@@ -149,7 +150,7 @@ def test_dedupe_alert(tmp_path):
         "UA_HB_SHOW_ALERTS": "true",
         "UA_HB_DELIVERY_MODE": "last",
         "UA_HB_DEDUPE_WINDOW": "3600",
-    })
+    }, tmp_path)
     try:
         workspace = tmp_path / "hb_dedupe"
         msg_first = asyncio.run(
@@ -171,7 +172,7 @@ def test_explicit_delivery_current(tmp_path):
         "UA_HB_DELIVERY_MODE": "explicit",
         "UA_HB_EXPLICIT_SESSION_IDS": "CURRENT",
         "UA_HB_SHOW_OK": "true",
-    })
+    }, tmp_path)
     try:
         msg = asyncio.run(
             _run_once(base_url, ws_url, tmp_path / "hb_explicit_current", "UA_HEARTBEAT_OK")

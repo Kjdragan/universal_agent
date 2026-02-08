@@ -9,6 +9,7 @@ Usage:
 """
 
 import asyncio
+from collections import deque
 import hashlib
 import json
 import logging
@@ -31,6 +32,7 @@ BASE_DIR = Path(__file__).parent.parent.parent
 load_dotenv(BASE_DIR / ".env", override=False)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -342,6 +344,55 @@ _observability_metrics: dict[str, Any] = {
     "turn_duplicate_in_progress": 0,
     "turn_duplicate_completed": 0,
 }
+_scheduling_runtime_started_ts = time.time()
+_scheduling_runtime_metrics: dict[str, Any] = {
+    "started_at": datetime.now().isoformat(),
+    "counters": {
+        "calendar_events_requests": 0,
+        "calendar_action_requests": 0,
+        "calendar_change_request_requests": 0,
+        "calendar_change_confirm_requests": 0,
+        "heartbeat_last_requests": 0,
+        "heartbeat_wake_requests": 0,
+        "event_emissions_total": 0,
+        "cron_events_total": 0,
+        "heartbeat_events_total": 0,
+        "event_bus_published": 0,
+        "projection_applied": 0,
+        "projection_seed_count": 0,
+        "projection_seed_jobs": 0,
+        "projection_seed_runs": 0,
+        "projection_read_hits": 0,
+        "push_replay_requests": 0,
+        "push_stream_connects": 0,
+        "push_stream_disconnects": 0,
+        "push_stream_keepalives": 0,
+        "push_stream_event_payloads": 0,
+    },
+    "event_counts": {
+        "cron": {},
+        "heartbeat": {},
+    },
+    "projection": {
+        "builds": 0,
+        "duration_ms_last": 0.0,
+        "duration_ms_max": 0.0,
+        "duration_ms_total": 0.0,
+        "events_total": 0,
+        "always_running_total": 0,
+        "stasis_total": 0,
+        "due_lag_samples": 0,
+        "due_lag_seconds_last": 0.0,
+        "due_lag_seconds_max": 0.0,
+        "due_lag_seconds_total": 0.0,
+    },
+}
+SCHED_PUSH_ENABLED = (
+    os.getenv("UA_SCHED_PUSH_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+)
+SCHED_EVENT_PROJECTION_ENABLED = (
+    os.getenv("UA_SCHED_EVENT_PROJECTION_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+)
 
 SESSION_STATE_IDLE = "idle"
 SESSION_STATE_RUNNING = "running"
@@ -366,6 +417,298 @@ def _increment_metric(name: str, amount: int = 1) -> None:
     current = int(_observability_metrics.get(name, 0) or 0)
     _observability_metrics[name] = current + max(0, int(amount))
     _sync_continuity_notifications()
+
+
+def _scheduling_counter_inc(name: str, amount: int = 1) -> None:
+    counters = _scheduling_runtime_metrics.setdefault("counters", {})
+    current = int(counters.get(name, 0) or 0)
+    counters[name] = current + max(0, int(amount))
+
+
+class SchedulingEventBus:
+    def __init__(self, max_events: int = 5000):
+        self.max_events = max(100, int(max_events))
+        self._events: deque[dict[str, Any]] = deque(maxlen=self.max_events)
+        self._seq: int = 0
+        self._subscribers: list[Any] = []
+        self._condition = asyncio.Condition()
+
+    def subscribe(self, callback: Any) -> None:
+        if callback in self._subscribers:
+            return
+        self._subscribers.append(callback)
+
+    def publish(self, source: str, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+        self._seq += 1
+        envelope = {
+            "seq": self._seq,
+            "source": str(source or "unknown"),
+            "type": str(event_type or "event"),
+            "timestamp": datetime.now().isoformat(),
+            "data": payload if isinstance(payload, dict) else {"value": payload},
+        }
+        self._events.append(envelope)
+        for callback in list(self._subscribers):
+            try:
+                callback(envelope)
+            except Exception as exc:
+                logger.warning("Scheduling event subscriber failed: %s", exc)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._notify_waiters())
+        except RuntimeError:
+            pass
+        return envelope
+
+    def snapshot(self, since_seq: int = 0, limit: int = 5000) -> list[dict[str, Any]]:
+        low_water = max(0, int(since_seq))
+        max_items = max(1, min(int(limit), self.max_events))
+        items = [event for event in list(self._events) if int(event.get("seq", 0)) > low_water]
+        return items[-max_items:]
+
+    async def _notify_waiters(self) -> None:
+        async with self._condition:
+            self._condition.notify_all()
+
+    async def wait_for_events(self, since_seq: int = 0, timeout_seconds: float = 20.0, limit: int = 5000) -> list[dict[str, Any]]:
+        current = self.snapshot(since_seq=since_seq, limit=limit)
+        if current:
+            return current
+        wait_for = max(1.0, float(timeout_seconds))
+        try:
+            async with self._condition:
+                await asyncio.wait_for(self._condition.wait(), timeout=wait_for)
+        except asyncio.TimeoutError:
+            return []
+        return self.snapshot(since_seq=since_seq, limit=limit)
+
+    def info(self) -> dict[str, Any]:
+        return {
+            "seq": self._seq,
+            "max_events": self.max_events,
+            "buffered_events": len(self._events),
+            "subscriber_count": len(self._subscribers),
+        }
+
+
+class SchedulingProjectionState:
+    def __init__(self, enabled: bool = False):
+        self.enabled = bool(enabled)
+        self.version: int = 0
+        self.last_event_seq: int = 0
+        self.last_updated_at: Optional[str] = None
+        self.seeded: bool = False
+        self.cron_jobs: dict[str, Any] = {}
+        self.cron_runs_by_job: dict[str, list[dict[str, Any]]] = {}
+        self.cron_run_ids: set[str] = set()
+        self.heartbeat_last_by_session: dict[str, dict[str, Any]] = {}
+
+    def reset(self) -> None:
+        self.version = 0
+        self.last_event_seq = 0
+        self.last_updated_at = None
+        self.seeded = False
+        self.cron_jobs = {}
+        self.cron_runs_by_job = {}
+        self.cron_run_ids = set()
+        self.heartbeat_last_by_session = {}
+
+    def _mark_changed(self, seq: Optional[int] = None) -> None:
+        self.version += 1
+        if seq is not None:
+            self.last_event_seq = max(self.last_event_seq, int(seq))
+        self.last_updated_at = datetime.now().isoformat()
+
+    def _upsert_cron_job(self, job: dict[str, Any]) -> bool:
+        job_id = str(job.get("job_id") or "").strip()
+        if not job_id:
+            return False
+        current = self.cron_jobs.get(job_id)
+        if current is not None and getattr(current, "__dict__", {}) == job:
+            return False
+        self.cron_jobs[job_id] = SimpleNamespace(**job)
+        return True
+
+    def _delete_cron_job(self, job_id: str) -> bool:
+        if job_id in self.cron_jobs:
+            self.cron_jobs.pop(job_id, None)
+            return True
+        return False
+
+    def _append_cron_run(self, run: dict[str, Any]) -> bool:
+        run_id = str(run.get("run_id") or "").strip()
+        if run_id and run_id in self.cron_run_ids:
+            return False
+        job_id = str(run.get("job_id") or "").strip()
+        if not job_id:
+            return False
+        if run_id:
+            self.cron_run_ids.add(run_id)
+        bucket = self.cron_runs_by_job.setdefault(job_id, [])
+        bucket.append(dict(run))
+        # Keep bounded per job for memory safety.
+        if len(bucket) > 5000:
+            overflow = bucket[:-5000]
+            bucket[:] = bucket[-5000:]
+            for item in overflow:
+                rid = str(item.get("run_id") or "").strip()
+                if rid:
+                    self.cron_run_ids.discard(rid)
+        return True
+
+    def seed_from_runtime(self) -> None:
+        if not self.enabled or self.seeded:
+            return
+        changed = False
+        if _cron_service:
+            for job in _cron_service.list_jobs():
+                changed = self._upsert_cron_job(job.to_dict()) or changed
+            for run in _cron_service.list_runs(limit=5000):
+                if isinstance(run, dict):
+                    changed = self._append_cron_run(run) or changed
+        for session_id in list(_sessions.keys()):
+            if session_id not in self.heartbeat_last_by_session:
+                self.heartbeat_last_by_session[session_id] = {
+                    "type": "heartbeat_session_seen",
+                    "timestamp": datetime.now().isoformat(),
+                }
+                changed = True
+        self.seeded = True
+        if changed:
+            self._mark_changed()
+        _scheduling_counter_inc("projection_seed_count")
+        _scheduling_counter_inc("projection_seed_jobs", len(self.cron_jobs))
+        _scheduling_counter_inc("projection_seed_runs", sum(len(v) for v in self.cron_runs_by_job.values()))
+
+    def apply_event(self, envelope: dict[str, Any]) -> None:
+        if not self.enabled or not isinstance(envelope, dict):
+            return
+        source = str(envelope.get("source") or "").strip().lower()
+        event_type = str(envelope.get("type") or "").strip().lower()
+        payload = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+        seq = int(envelope.get("seq") or 0)
+        changed = False
+
+        if source == "cron":
+            if event_type in {"cron_job_created", "cron_job_updated"}:
+                job_data = payload.get("job") if isinstance(payload.get("job"), dict) else None
+                if job_data:
+                    changed = self._upsert_cron_job(job_data)
+            elif event_type == "cron_job_deleted":
+                changed = self._delete_cron_job(str(payload.get("job_id") or ""))
+            elif event_type in {"cron_run_started", "cron_run_completed"}:
+                run_data = payload.get("run") if isinstance(payload.get("run"), dict) else None
+                if run_data:
+                    changed = self._append_cron_run(run_data)
+        elif source == "heartbeat":
+            session_id = str(payload.get("session_id") or "").strip()
+            if session_id:
+                previous = self.heartbeat_last_by_session.get(session_id)
+                candidate = {
+                    "type": event_type or "heartbeat_event",
+                    "timestamp": str(envelope.get("timestamp") or datetime.now().isoformat()),
+                }
+                if previous != candidate:
+                    self.heartbeat_last_by_session[session_id] = candidate
+                    changed = True
+
+        if changed:
+            self._mark_changed(seq=seq)
+            _scheduling_counter_inc("projection_applied")
+
+    def list_cron_jobs(self) -> list[Any]:
+        return list(self.cron_jobs.values())
+
+    def list_cron_runs(self, limit: int = 2000) -> list[dict[str, Any]]:
+        merged: list[dict[str, Any]] = []
+        for rows in self.cron_runs_by_job.values():
+            merged.extend(rows)
+        merged.sort(key=lambda row: float(row.get("started_at") or row.get("scheduled_at") or 0.0), reverse=True)
+        return merged[: max(1, int(limit))]
+
+    def info(self) -> dict[str, Any]:
+        return {
+            "enabled": self.enabled,
+            "seeded": self.seeded,
+            "version": self.version,
+            "last_event_seq": self.last_event_seq,
+            "last_updated_at": self.last_updated_at,
+            "cron_jobs": len(self.cron_jobs),
+            "cron_runs": sum(len(rows) for rows in self.cron_runs_by_job.values()),
+            "heartbeat_sessions": len(self.heartbeat_last_by_session),
+        }
+
+
+_scheduling_event_bus = SchedulingEventBus(
+    max_events=int(os.getenv("UA_SCHED_EVENT_BUS_MAX", "5000") or 5000)
+)
+_scheduling_projection = SchedulingProjectionState(enabled=SCHED_EVENT_PROJECTION_ENABLED)
+_scheduling_event_bus.subscribe(_scheduling_projection.apply_event)
+
+
+def _scheduling_record_event(source: str, event_type: Optional[str]) -> None:
+    source_norm = (source or "unknown").strip().lower()
+    event_norm = (event_type or f"{source_norm}_event").strip().lower() or f"{source_norm}_event"
+    _scheduling_counter_inc("event_emissions_total")
+    if source_norm == "cron":
+        _scheduling_counter_inc("cron_events_total")
+    elif source_norm == "heartbeat":
+        _scheduling_counter_inc("heartbeat_events_total")
+    bucket = _scheduling_runtime_metrics.setdefault("event_counts", {}).setdefault(source_norm, {})
+    bucket[event_norm] = int(bucket.get(event_norm, 0) or 0) + 1
+
+
+def _scheduling_record_projection_sample(
+    *,
+    duration_ms: float,
+    events: list[dict[str, Any]],
+    always_running: list[dict[str, Any]],
+    stasis_count: int,
+) -> None:
+    projection = _scheduling_runtime_metrics.setdefault("projection", {})
+    projection["builds"] = int(projection.get("builds", 0) or 0) + 1
+    projection["duration_ms_last"] = round(duration_ms, 3)
+    projection["duration_ms_total"] = float(projection.get("duration_ms_total", 0.0) or 0.0) + max(0.0, duration_ms)
+    projection["duration_ms_max"] = max(float(projection.get("duration_ms_max", 0.0) or 0.0), max(0.0, duration_ms))
+    projection["events_total"] = int(projection.get("events_total", 0) or 0) + max(0, len(events))
+    projection["always_running_total"] = int(projection.get("always_running_total", 0) or 0) + max(0, len(always_running))
+    projection["stasis_total"] = int(projection.get("stasis_total", 0) or 0) + max(0, int(stasis_count))
+
+    now_ts = time.time()
+    due_lags: list[float] = []
+    for item in events:
+        status = str(item.get("status") or "").strip().lower()
+        if status not in {"scheduled", "running"}:
+            continue
+        scheduled_at = float(item.get("scheduled_at_epoch") or 0.0)
+        if scheduled_at <= 0 or scheduled_at > now_ts:
+            continue
+        due_lags.append(max(0.0, now_ts - scheduled_at))
+
+    if due_lags:
+        lag_total = float(sum(due_lags))
+        lag_last = float(max(due_lags))
+        projection["due_lag_samples"] = int(projection.get("due_lag_samples", 0) or 0) + len(due_lags)
+        projection["due_lag_seconds_total"] = float(projection.get("due_lag_seconds_total", 0.0) or 0.0) + lag_total
+        projection["due_lag_seconds_last"] = round(lag_last, 3)
+        projection["due_lag_seconds_max"] = max(float(projection.get("due_lag_seconds_max", 0.0) or 0.0), lag_last)
+    else:
+        projection["due_lag_seconds_last"] = 0.0
+
+
+def _scheduling_runtime_metrics_snapshot() -> dict[str, Any]:
+    data = json.loads(json.dumps(_scheduling_runtime_metrics))
+    projection = data.setdefault("projection", {})
+    builds = int(projection.get("builds", 0) or 0)
+    duration_total = float(projection.get("duration_ms_total", 0.0) or 0.0)
+    lag_samples = int(projection.get("due_lag_samples", 0) or 0)
+    lag_total = float(projection.get("due_lag_seconds_total", 0.0) or 0.0)
+    projection["duration_ms_avg"] = round(duration_total / builds, 3) if builds > 0 else 0.0
+    projection["due_lag_seconds_avg"] = round(lag_total / lag_samples, 3) if lag_samples > 0 else 0.0
+    data["uptime_seconds"] = round(max(0.0, time.time() - _scheduling_runtime_started_ts), 3)
+    data["event_bus"] = _scheduling_event_bus.info()
+    data["projection_state"] = _scheduling_projection.info()
+    return data
 
 
 def _continuity_alerts_snapshot() -> dict[str, Any]:
@@ -732,13 +1075,24 @@ def _mark_session_terminal(session_id: str, reason: str) -> None:
 
 
 def _emit_cron_event(payload: dict) -> None:
+    event_type = str(payload.get("type") or "cron_event")
+    _scheduling_record_event("cron", event_type)
+    _scheduling_event_bus.publish("cron", event_type, payload)
+    _scheduling_counter_inc("event_bus_published")
     event = {
-        "type": payload.get("type", "cron_event"),
+        "type": event_type,
         "data": payload,
         "timestamp": datetime.now().isoformat(),
     }
     for session_id in list(manager.session_connections.keys()):
         asyncio.create_task(manager.broadcast(session_id, event))
+
+
+def _emit_heartbeat_event(payload: dict) -> None:
+    event_type = str(payload.get("type") or "heartbeat_event")
+    _scheduling_record_event("heartbeat", event_type)
+    _scheduling_event_bus.publish("heartbeat", event_type, payload)
+    _scheduling_counter_inc("event_bus_published")
 
 
 def _cron_wake_callback(session_id: str, mode: str, reason: str) -> None:
@@ -1312,10 +1666,18 @@ def _calendar_project_cron_events(
     timezone_name: str,
     owner: Optional[str],
 ) -> list[dict[str, Any]]:
-    if not _cron_service:
+    use_projection = bool(_scheduling_projection.enabled)
+    if use_projection:
+        _scheduling_projection.seed_from_runtime()
+        jobs = _scheduling_projection.list_cron_jobs()
+        runs = _scheduling_projection.list_cron_runs(limit=2000)
+        _scheduling_counter_inc("projection_read_hits")
+    else:
+        jobs = _cron_service.list_jobs() if _cron_service else []
+        runs = _cron_service.list_runs(limit=2000) if _cron_service else []
+    if not jobs:
         return []
     now_ts = time.time()
-    runs = _cron_service.list_runs(limit=2000)
     runs_by_job: dict[str, list[dict[str, Any]]] = {}
     for row in runs:
         job_id = str(row.get("job_id") or "")
@@ -1324,7 +1686,7 @@ def _calendar_project_cron_events(
         runs_by_job.setdefault(job_id, []).append(row)
 
     events: list[dict[str, Any]] = []
-    for job in _cron_service.list_jobs():
+    for job in jobs:
         if owner and str(getattr(job, "user_id", "")).lower() != owner.strip().lower():
             continue
         occurrences = _calendar_iter_cron_occurrences(job, start_ts, end_ts, max_count=400)
@@ -1360,7 +1722,6 @@ def _calendar_project_cron_events(
                     "disable",
                     "open_logs",
                     "open_session",
-                    "request_change",
                 ],
             }
             if matched_run:
@@ -1373,7 +1734,6 @@ def _calendar_project_cron_events(
                     "delete_missed",
                     "open_logs",
                     "open_session",
-                    "request_change",
                 ]
                 _calendar_register_missed_event(event)
             events.append(event)
@@ -1449,7 +1809,6 @@ def _calendar_project_heartbeat_events(
                     "disable",
                     "open_logs",
                     "open_session",
-                    "request_change",
                 ],
             }
             if status_value == "missed":
@@ -1459,7 +1818,6 @@ def _calendar_project_heartbeat_events(
                     "delete_missed",
                     "open_logs",
                     "open_session",
-                    "request_change",
                 ]
                 _calendar_register_missed_event(event)
             events.append(event)
@@ -1487,7 +1845,6 @@ def _calendar_project_heartbeat_events(
                 "disable",
                 "open_logs",
                 "open_session",
-                "request_change",
             ],
         }
         always_running.append(always_event)
@@ -1701,7 +2058,7 @@ async def _calendar_apply_event_action(
         if action_norm == "reschedule":
             run_at_ts = _calendar_parse_ts(run_at, timezone_name) if run_at else None
             if run_at_ts is None and run_at:
-                run_at_ts = parse_run_at(run_at)
+                run_at_ts = parse_run_at(run_at, timezone_name=timezone_name)
             if run_at_ts is None:
                 run_at_ts = time.time() + 3600
             new_job = _cron_service.add_job(
@@ -2058,7 +2415,7 @@ def is_user_allowed(user_id: str) -> bool:
     return False
 
 
-def _require_ops_auth(request: Request) -> None:
+def _require_ops_auth(request: Request, token_override: Optional[str] = None) -> None:
     if not OPS_TOKEN:
         return
     header = request.headers.get("authorization", "")
@@ -2067,6 +2424,8 @@ def _require_ops_auth(request: Request) -> None:
         token = header.split(" ", 1)[1].strip()
     if not token:
         token = request.headers.get("x-ua-ops-token", "").strip()
+    if not token and token_override is not None:
+        token = str(token_override).strip()
     if token != OPS_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -2170,6 +2529,7 @@ async def lifespan(app: FastAPI):
             get_gateway(),
             manager,
             system_event_provider=_drain_system_events,
+            event_sink=_emit_heartbeat_event,
         )
         await _heartbeat_service.start()
     else:
@@ -2190,6 +2550,9 @@ async def lifespan(app: FastAPI):
     
     # Always enabled Ops Service
     _ops_service = OpsService(get_gateway(), WORKSPACES_DIR)
+    if _scheduling_projection.enabled:
+        _scheduling_projection.seed_from_runtime()
+        logger.info("📈 Scheduling projection enabled (event-driven cron projection path)")
 
     yield
     
@@ -2468,6 +2831,7 @@ async def wake_heartbeat(request: HeartbeatWakeRequest):
     if not _heartbeat_service:
         raise HTTPException(status_code=400, detail="Heartbeat service not available.")
 
+    _scheduling_counter_inc("heartbeat_wake_requests")
     reason = request.reason or "wake"
     mode = (request.mode or "now").strip().lower()
     if request.session_id:
@@ -2491,6 +2855,7 @@ async def get_last_heartbeat(session_id: Optional[str] = None):
     if not _heartbeat_service:
         raise HTTPException(status_code=400, detail="Heartbeat service not available.")
 
+    _scheduling_counter_inc("heartbeat_last_requests")
     if session_id:
         session_id = _sanitize_session_id_or_400(session_id)
         session = get_session(session_id)
@@ -2596,7 +2961,12 @@ async def get_system_presence():
 async def list_cron_jobs():
     if not _cron_service:
         raise HTTPException(status_code=400, detail="Cron service not available.")
-    return {"jobs": [job.to_dict() for job in _cron_service.list_jobs()]}
+    return {
+        "jobs": [
+            {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
+            for job in _cron_service.list_jobs()
+        ]
+    }
 
 
 @app.post("/api/v1/cron/jobs")
@@ -2606,8 +2976,8 @@ async def create_cron_job(request: CronJobCreateRequest):
     try:
         from universal_agent.cron_service import parse_run_at
         
-        # Parse run_at (handles relative like "20m" or absolute ISO)
-        run_at_ts = parse_run_at(request.run_at) if request.run_at else None
+        # Parse run_at (relative, ISO, or natural text in the request timezone)
+        run_at_ts = parse_run_at(request.run_at, timezone_name=request.timezone) if request.run_at else None
         
         job = _cron_service.add_job(
             user_id=request.user_id or "cron",
@@ -2622,7 +2992,7 @@ async def create_cron_job(request: CronJobCreateRequest):
             enabled=request.enabled,
             metadata=request.metadata or {},
         )
-        return {"job": job.to_dict()}
+        return {"job": {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -2634,7 +3004,7 @@ async def get_cron_job(job_id: str):
     job = _cron_service.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Cron job not found")
-    return {"job": job.to_dict()}
+    return {"job": {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}}
 
 
 @app.put("/api/v1/cron/jobs/{job_id}")
@@ -2658,7 +3028,8 @@ async def update_cron_job(job_id: str, request: CronJobUpdateRequest):
     if request.timezone is not None:
         updates["timezone"] = request.timezone
     if request.run_at is not None:
-        updates["run_at"] = parse_run_at(request.run_at)
+        effective_tz = request.timezone if request.timezone is not None else job.timezone
+        updates["run_at"] = parse_run_at(request.run_at, timezone_name=effective_tz)
     if request.delete_after_run is not None:
         updates["delete_after_run"] = request.delete_after_run
     if request.model is not None:
@@ -2674,7 +3045,7 @@ async def update_cron_job(job_id: str, request: CronJobUpdateRequest):
     
     try:
         job = _cron_service.update_job(job_id, updates)
-        return {"job": job.to_dict()}
+        return {"job": {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -2898,6 +3269,8 @@ async def ops_calendar_events(
     timezone_name: Optional[str] = None,
 ):
     _require_ops_auth(request)
+    _scheduling_counter_inc("calendar_events_requests")
+    started = time.perf_counter()
     tz_name = _calendar_timezone_or_default(timezone_name)
     start_ts, end_ts = _calendar_normalize_window(
         start=start,
@@ -2915,6 +3288,12 @@ async def ops_calendar_events(
     )
     stasis_items = [item for item in _calendar_missed_events.values() if item.get("status") == "pending"]
     stasis_items.sort(key=lambda item: str(item.get("created_at") or ""))
+    _scheduling_record_projection_sample(
+        duration_ms=(time.perf_counter() - started) * 1000.0,
+        events=feed["events"],
+        always_running=feed["always_running"],
+        stasis_count=len(stasis_items),
+    )
     return {
         "timezone": tz_name,
         "view": view,
@@ -2943,6 +3322,7 @@ async def ops_calendar_event_action(
     payload: CalendarEventActionRequest,
 ):
     _require_ops_auth(request)
+    _scheduling_counter_inc("calendar_action_requests")
     source, source_ref, _scheduled_at = _calendar_parse_event_id(event_id)
     tz_name = _calendar_timezone_or_default(payload.timezone)
     result = await _calendar_apply_event_action(
@@ -2968,6 +3348,7 @@ async def ops_calendar_event_change_request(
     payload: CalendarEventChangeRequest,
 ):
     _require_ops_auth(request)
+    _scheduling_counter_inc("calendar_change_request_requests")
     tz_name = _calendar_timezone_or_default(payload.timezone)
     proposal = _calendar_create_change_proposal(
         event_id=event_id,
@@ -2984,6 +3365,7 @@ async def ops_calendar_event_change_confirm(
     payload: CalendarEventChangeConfirmRequest,
 ):
     _require_ops_auth(request)
+    _scheduling_counter_inc("calendar_change_confirm_requests")
     proposal = _calendar_change_proposals.get(payload.proposal_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="Proposal not found")
@@ -3073,6 +3455,103 @@ async def ops_calendar_event_change_confirm(
 async def ops_session_continuity_metrics(request: Request):
     _require_ops_auth(request)
     return {"metrics": _observability_metrics_snapshot()}
+
+
+@app.get("/api/v1/ops/metrics/scheduling-runtime")
+async def ops_scheduling_runtime_metrics(request: Request):
+    _require_ops_auth(request)
+    return {"metrics": _scheduling_runtime_metrics_snapshot()}
+
+
+@app.get("/api/v1/ops/scheduling/events")
+async def ops_scheduling_events(
+    request: Request,
+    since_seq: int = 0,
+    limit: int = 500,
+):
+    _require_ops_auth(request)
+    _scheduling_counter_inc("push_replay_requests")
+    events = _scheduling_event_bus.snapshot(since_seq=max(0, int(since_seq)), limit=max(1, min(int(limit), 5000)))
+    metrics = _scheduling_runtime_metrics_snapshot()
+    projection_state = metrics.get("projection_state", {}) if isinstance(metrics, dict) else {}
+    return {
+        "events": events,
+        "projection_version": int(projection_state.get("version", 0) or 0),
+        "projection_last_event_seq": int(projection_state.get("last_event_seq", 0) or 0),
+        "event_bus_seq": int((_scheduling_event_bus.info() or {}).get("seq", 0) or 0),
+    }
+
+
+@app.get("/api/v1/ops/scheduling/stream")
+async def ops_scheduling_stream(
+    request: Request,
+    since_seq: int = 0,
+    heartbeat_seconds: int = 20,
+    limit: int = 500,
+    once: bool = False,
+    ops_token: Optional[str] = None,
+):
+    _require_ops_auth(request, token_override=ops_token)
+    if not SCHED_PUSH_ENABLED:
+        raise HTTPException(status_code=503, detail="Scheduling push stream disabled.")
+    since = max(0, int(since_seq))
+    max_items = max(1, min(int(limit), 5000))
+    heartbeat_wait = max(2, min(int(heartbeat_seconds), 60))
+
+    async def event_gen():
+        nonlocal since
+        _scheduling_counter_inc("push_stream_connects")
+        emitted = 0
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                events = await _scheduling_event_bus.wait_for_events(
+                    since_seq=since,
+                    timeout_seconds=float(heartbeat_wait),
+                    limit=max_items,
+                )
+                metrics = _scheduling_runtime_metrics_snapshot()
+                projection_state = metrics.get("projection_state", {}) if isinstance(metrics, dict) else {}
+                projection_version = int(projection_state.get("version", 0) or 0)
+                projection_last_event_seq = int(projection_state.get("last_event_seq", 0) or 0)
+                if events:
+                    for event in events:
+                        seq = int(event.get("seq", 0) or 0)
+                        if seq > since:
+                            since = seq
+                        payload = {
+                            "kind": "event",
+                            "event": event,
+                            "projection_version": projection_version,
+                            "projection_last_event_seq": projection_last_event_seq,
+                        }
+                        _scheduling_counter_inc("push_stream_event_payloads")
+                        yield f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                        emitted += 1
+                        if once and emitted >= 1:
+                            return
+                else:
+                    keepalive = {
+                        "kind": "heartbeat",
+                        "seq": since,
+                        "projection_version": projection_version,
+                        "projection_last_event_seq": projection_last_event_seq,
+                    }
+                    _scheduling_counter_inc("push_stream_keepalives")
+                    yield f"data: {json.dumps(keepalive, separators=(',', ':'))}\n\n"
+                    emitted += 1
+                    if once and emitted >= 1:
+                        return
+        finally:
+            _scheduling_counter_inc("push_stream_disconnects")
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
 
 
 @app.get("/api/v1/ops/sessions/{session_id}")

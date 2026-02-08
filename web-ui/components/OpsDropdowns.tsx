@@ -8,6 +8,7 @@ import { getWebSocket } from "@/lib/websocket";
 
 const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8002";
 const OPS_TOKEN = process.env.NEXT_PUBLIC_UA_OPS_TOKEN;
+const SCHED_PUSH_ENABLED = (process.env.NEXT_PUBLIC_UA_SCHED_PUSH_ENABLED ?? "1").trim().toLowerCase() !== "0";
 
 type SessionSummary = {
   session_id: string;
@@ -47,6 +48,13 @@ type SessionContinuityMetrics = {
 type SessionContinuityState = {
   status: string;
   metrics?: SessionContinuityMetrics;
+  updated_at?: string;
+  error?: string;
+};
+type SchedulingPushState = {
+  status: string;
+  seq: number;
+  projection_version: number;
   updated_at?: string;
   error?: string;
 };
@@ -102,6 +110,7 @@ type OpsCtx = {
   sessions: SessionSummary[]; skills: SkillStatus[]; channels: ChannelStatus[]; approvals: ApprovalRecord[];
   selected: string | null; setSelected: (id: string | null) => void;
   logTail: string; loading: boolean; heartbeatState: HeartbeatState; continuityState: SessionContinuityState; mergedEvents: SystemEventItem[];
+  schedulingPushState: SchedulingPushState;
   fetchSessions: () => Promise<void>; fetchSkills: () => Promise<void>; fetchChannels: () => Promise<void>;
   fetchSessionContinuityMetrics: () => Promise<void>;
   fetchApprovals: () => Promise<void>; probeChannel: (id: string) => Promise<void>;
@@ -138,6 +147,12 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
   const [opsSchemaStatus, setOpsSchemaStatus] = useState("Not loaded");
   const [heartbeatState, setHeartbeatState] = useState<HeartbeatState>({ status: "Not loaded" });
   const [continuityState, setContinuityState] = useState<SessionContinuityState>({ status: "Not loaded" });
+  const [schedulingPushState, setSchedulingPushState] = useState<SchedulingPushState>({
+    status: "Not connected",
+    seq: 0,
+    projection_version: 0,
+  });
+  const currentChatSessionId = useAgentStore((s) => s.currentSession?.session_id ?? null);
 
   const mergedEvents = useMemo(() => {
     const m = new Map<string, SystemEventItem>();
@@ -354,24 +369,166 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
   const refreshAll = useCallback(() => {
     fetchSessions(); fetchSkills(); fetchChannels(); fetchApprovals(); loadOpsConfig(); loadOpsSchema();
     fetchSessionContinuityMetrics();
-    if (selected) { fetchLogs(selected); fetchSystemEvents(selected); fetchHeartbeat(selected); }
-  }, [fetchSessions, fetchSkills, fetchChannels, fetchApprovals, loadOpsConfig, loadOpsSchema, fetchSessionContinuityMetrics, selected, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
+    if (selected) { fetchLogs(selected); fetchSystemEvents(selected); }
+    const heartbeatSessionId = currentChatSessionId || selected;
+    if (heartbeatSessionId) fetchHeartbeat(heartbeatSessionId);
+  }, [fetchSessions, fetchSkills, fetchChannels, fetchApprovals, loadOpsConfig, loadOpsSchema, fetchSessionContinuityMetrics, selected, currentChatSessionId, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
 
   useEffect(() => { fetchSessions(); fetchSkills(); fetchChannels(); fetchApprovals(); loadOpsConfig(); loadOpsSchema(); fetchSessionContinuityMetrics(); }, [fetchApprovals, fetchChannels, fetchSessions, fetchSkills, loadOpsConfig, loadOpsSchema, fetchSessionContinuityMetrics]);
-  useEffect(() => { if (selected) { fetchLogs(selected); fetchSystemEvents(selected); fetchHeartbeat(selected); } }, [selected, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
   useEffect(() => {
-    const timer = window.setInterval(() => {
+    if (selected) {
+      fetchLogs(selected);
+      fetchSystemEvents(selected);
+    }
+    const heartbeatSessionId = currentChatSessionId || selected;
+    if (heartbeatSessionId) {
+      fetchHeartbeat(heartbeatSessionId);
+    }
+  }, [selected, currentChatSessionId, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
+
+  useEffect(() => {
+    if (!SCHED_PUSH_ENABLED) {
+      setSchedulingPushState((prev) => ({
+        ...prev,
+        status: "Disabled",
+        updated_at: new Date().toISOString(),
+        error: undefined,
+      }));
+      return;
+    }
+    let cancelled = false;
+    let es: EventSource | null = null;
+    let reconnectTimer: number | null = null;
+    let heartbeatTimer: number | null = null;
+    let continuityTimer: number | null = null;
+    let sinceSeq = 0;
+
+    const queueHeartbeatRefresh = () => {
+      if (heartbeatTimer !== null) return;
+      heartbeatTimer = window.setTimeout(() => {
+        heartbeatTimer = null;
+        const sid = currentChatSessionId || selected;
+        if (sid) fetchHeartbeat(sid);
+      }, 300);
+    };
+
+    const queueContinuityRefresh = () => {
+      if (continuityTimer !== null) return;
+      continuityTimer = window.setTimeout(() => {
+        continuityTimer = null;
+        fetchSessionContinuityMetrics();
+      }, 750);
+    };
+
+    const connect = () => {
+      const params = new URLSearchParams({
+        since_seq: String(sinceSeq),
+        heartbeat_seconds: "20",
+        limit: "500",
+      });
+      if (OPS_TOKEN) params.set("ops_token", OPS_TOKEN);
+      const url = `${API_BASE}/api/v1/ops/scheduling/stream?${params.toString()}`;
+
+      setSchedulingPushState((prev) => ({
+        ...prev,
+        status: "Connecting",
+        error: undefined,
+      }));
+      es = new EventSource(url);
+
+      es.onopen = () => {
+        setSchedulingPushState((prev) => ({
+          ...prev,
+          status: "Connected",
+          updated_at: new Date().toISOString(),
+          error: undefined,
+        }));
+      };
+
+      es.onmessage = (message) => {
+        let payload: Record<string, unknown> = {};
+        try {
+          payload = JSON.parse(message.data || "{}") as Record<string, unknown>;
+        } catch {
+          return;
+        }
+        const kind = String(payload.kind || "");
+        const projectionVersion = Number(payload.projection_version || 0);
+        const event = (payload.event && typeof payload.event === "object") ? payload.event as Record<string, unknown> : null;
+        const seq = Number((event && event.seq) || payload.seq || 0);
+        if (Number.isFinite(seq) && seq > sinceSeq) {
+          sinceSeq = seq;
+        }
+        setSchedulingPushState((prev) => ({
+          ...prev,
+          status: "Connected",
+          seq: Math.max(prev.seq, Number.isFinite(seq) ? seq : prev.seq),
+          projection_version: Math.max(prev.projection_version, Number.isFinite(projectionVersion) ? projectionVersion : prev.projection_version),
+          updated_at: new Date().toISOString(),
+          error: undefined,
+        }));
+
+        if (kind === "event" && event) {
+          const source = String(event.source || "");
+          if (source === "heartbeat") queueHeartbeatRefresh();
+          if (source === "heartbeat" || source === "cron") queueContinuityRefresh();
+        }
+      };
+
+      es.onerror = () => {
+        if (es) {
+          es.close();
+          es = null;
+        }
+        setSchedulingPushState((prev) => ({
+          ...prev,
+          status: "Disconnected",
+          updated_at: new Date().toISOString(),
+          error: "Scheduling push stream disconnected",
+        }));
+        if (!cancelled) {
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+          }, 3000);
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      cancelled = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      if (heartbeatTimer !== null) window.clearTimeout(heartbeatTimer);
+      if (continuityTimer !== null) window.clearTimeout(continuityTimer);
+      if (es) es.close();
+    };
+  }, [currentChatSessionId, selected, fetchHeartbeat, fetchSessionContinuityMetrics]);
+
+  // Degraded-mode watchdog polling only when push is unavailable.
+  useEffect(() => {
+    if (schedulingPushState.status === "Connected") return;
+    const heartbeatSessionId = currentChatSessionId || selected;
+    const heartbeatTimer = window.setInterval(() => {
+      if (!heartbeatSessionId) return;
+      fetchHeartbeat(heartbeatSessionId);
+    }, 20000);
+    const continuityTimer = window.setInterval(() => {
       fetchSessionContinuityMetrics();
-    }, 15000);
-    return () => window.clearInterval(timer);
-  }, [fetchSessionContinuityMetrics]);
+    }, 45000);
+    return () => {
+      window.clearInterval(heartbeatTimer);
+      window.clearInterval(continuityTimer);
+    };
+  }, [schedulingPushState.status, currentChatSessionId, selected, fetchHeartbeat, fetchSessionContinuityMetrics]);
 
   const val: OpsCtx = useMemo(() => ({
-    sessions, skills, channels, approvals, selected, setSelected, logTail, loading, heartbeatState, continuityState, mergedEvents,
+    sessions, skills, channels, approvals, selected, setSelected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
     deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, opsSchemaText, opsSchemaStatus, refreshAll,
-  }), [sessions, skills, channels, approvals, selected, logTail, loading, heartbeatState, continuityState, mergedEvents,
+  }), [sessions, skills, channels, approvals, selected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
     deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, opsSchemaText, opsSchemaStatus, refreshAll]);
@@ -499,6 +656,7 @@ export function SessionsSection() {
 }
 
 export function CalendarSection() {
+  const { schedulingPushState } = useOps();
   const [view, setView] = useState<"week" | "day">("week");
   const [sourceFilter, setSourceFilter] = useState<"all" | "cron" | "heartbeat">("all");
   const [anchorDate, setAnchorDate] = useState<Date>(new Date());
@@ -575,7 +733,28 @@ export function CalendarSection() {
     fetchCalendar();
   }, [fetchCalendar]);
 
+  useEffect(() => {
+    if (schedulingPushState.seq <= 0) return;
+    const timer = window.setTimeout(() => {
+      fetchCalendar();
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [schedulingPushState.seq, fetchCalendar]);
+
+  // Fallback polling when push stream is disconnected.
+  useEffect(() => {
+    if (schedulingPushState.status === "Connected") return;
+    const timer = window.setInterval(() => {
+      fetchCalendar();
+    }, 30000);
+    return () => window.clearInterval(timer);
+  }, [schedulingPushState.status, fetchCalendar]);
+
   const performAction = useCallback(async (event: CalendarEventItem, action: string) => {
+    if (action === "request_change") {
+      // Backward compatibility: older feeds may still emit this pseudo-action.
+      return;
+    }
     const payload: Record<string, unknown> = { action };
     if (action === "reschedule") {
       const requested = prompt("Reschedule for when? (e.g. 'in 30m' or ISO timestamp)");
@@ -695,6 +874,9 @@ export function CalendarSection() {
             <option value="heartbeat">heartbeat</option>
           </select>
           <span className="text-[10px] text-muted-foreground">timezone: {tz}</span>
+          <span className="text-[10px] text-muted-foreground">
+            push: {schedulingPushState.status.toLowerCase()} (v{schedulingPushState.projection_version})
+          </span>
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-500/80" />heartbeat</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-blue-500/80" />scheduled</span>
@@ -1109,6 +1291,8 @@ export function SessionContinuityWidget() {
 
 export function HeartbeatWidget() {
   const { heartbeatState, selected } = useOps();
+  const currentChatSessionId = useAgentStore((s) => s.currentSession?.session_id ?? null);
+  const heartbeatSessionId = currentChatSessionId || selected;
   const [isCollapsed, setIsCollapsed] = useState(false);
   return (
     <div className={`flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
@@ -1121,9 +1305,10 @@ export function HeartbeatWidget() {
       </div>
       {!isCollapsed && (
         <div className="p-3 text-xs space-y-1">
-          {!selected && <div className="text-muted-foreground">Select a session to view heartbeat.</div>}
-          {selected && (
+          {!heartbeatSessionId && <div className="text-muted-foreground">Select a session to view heartbeat.</div>}
+          {heartbeatSessionId && (
             <>
+              <div className="flex justify-between"><span className="text-muted-foreground">Session</span><span className="font-mono text-[11px] truncate max-w-[180px]" title={heartbeatSessionId}>{heartbeatSessionId}</span></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Last run</span><span className="font-mono text-[11px]">{typeof heartbeatState.last_run === "number" ? new Date(heartbeatState.last_run * 1000).toLocaleString() : heartbeatState.last_run ?? "--"}</span></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Running</span><span className="font-mono text-[11px]">{heartbeatState.busy ? "yes" : "no"}</span></div>
               {(() => {

@@ -1,7 +1,7 @@
 # Internal Scheduling Calendar V1 Implementation Plan
 Date: 2026-02-08
 Owner: Universal Agent Core
-Status: Approved for implementation planning
+Status: Implemented with stabilization updates; V2 follow-on planned
 
 ## 1. Objective
 Build an internal dashboard calendar for operational scheduling visibility and control, focused on:
@@ -274,3 +274,35 @@ V1 is complete when:
 - Missed/failure states are visible and alerting works with category suppression.
 - Request Change NL flow functions with confirm-first safety.
 - Automated tests and manual validation pass consistently.
+
+## 16. Implementation Closure Snapshot (2026-02-08)
+This section records V1 as implemented and distinguishes completed behavior from deferred optimizations.
+
+### 16.1 Implemented in Codebase
+- Unified calendar feed endpoint implemented: `GET /api/v1/ops/calendar/events`.
+- Calendar action endpoint implemented: `POST /api/v1/ops/calendar/events/{event_id}/action`.
+- Missed-event stasis actions implemented: `approve_backfill_run`, `reschedule`, `delete_missed`.
+- Request-change proposal + confirm endpoints implemented:
+  - `POST /api/v1/ops/calendar/events/{event_id}/change-request`
+  - `POST /api/v1/ops/calendar/events/{event_id}/change-request/confirm`
+- Dashboard calendar tab implemented with week/day controls and source filter.
+- Heartbeat shown in red with source legend and source-aware action handling.
+- Cron one-shot lifecycle hardened to avoid pre-consumption before run start.
+
+### 16.2 Stabilization Corrections Applied
+- Corrected cron job identity mapping in cron UI (`job_id` usage), preventing stale delete/run targeting.
+- Removed unsupported calendar action exposure to avoid runtime unsupported-action failures.
+- Added cron running-state surfacing in API/UI and disabled conflicting `Run now` while already running.
+- Improved heartbeat status panel refresh behavior tied to active chat session context.
+
+### 16.3 Known Gaps Carried to V2
+- Polling-heavy refresh model remains in several UI/status surfaces.
+- Scheduler/calendar synchronization is still mixed between polling and event updates.
+- Runtime push delivery for calendar/heartbeat state is not yet first-class (SSE/WS-oriented model pending).
+- External provider sync remains intentionally stub-only.
+
+## 17. V2 Handoff
+V2 is defined in:
+- `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/10_Scheduling_Runtime_V2_Event_Driven_Architecture_2026-02-08.md`
+
+V2 scope starts from V1 working behavior and focuses on efficiency and correctness of runtime scheduling/state propagation, not replacement of heartbeat as the operational catch-all.
