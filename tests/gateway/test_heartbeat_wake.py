@@ -74,6 +74,7 @@ def test_heartbeat_wake_now_and_next(tmp_path):
     env = {
         **os.environ,
         "UA_GATEWAY_PORT": str(port),
+        "UA_WORKSPACES_DIR": str(tmp_path),
         "UA_ENABLE_HEARTBEAT": "1",
         "UA_HEARTBEAT_INTERVAL": "2",
         "UA_HEARTBEAT_MOCK_RESPONSE": "1",

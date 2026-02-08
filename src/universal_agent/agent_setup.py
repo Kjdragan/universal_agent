@@ -12,6 +12,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+import yaml
 
 from dotenv import load_dotenv
 
@@ -55,6 +56,7 @@ from universal_agent.tools.local_toolkit_bridge import (
 )
 from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 from universal_agent.tools.memory import ua_memory_get_wrapper, ua_memory_search_wrapper
+from universal_agent.tools.internal_registry import get_all_internal_tools
 from universal_agent.execution_context import bind_workspace_env
 from universal_agent.feature_flags import (
     memory_enabled,
@@ -113,7 +115,7 @@ class AgentSetup:
         self._initialized = False
         
         # Cached discovery results
-        self._discovered_apps: list[str] = []
+        self._discovered_apps: list[dict] = []
         self._discovered_skills: list[dict] = []
         self._skills_xml: str = ""
         self._memory_context: str = ""
@@ -179,7 +181,7 @@ class AgentSetup:
         session_future = asyncio.to_thread(
             self._composio.create,
             user_id=self.user_id,
-            toolkits={"disable": ["firecrawl", "exa"]},
+            toolkits={"disable": ["firecrawl", "exa", "jira", "semanticscholar"]},
         )
 
         self._log("⏳ Discovering connected apps...")
@@ -192,16 +194,15 @@ class AgentSetup:
         # Await discovery
         self._discovered_apps = await discovery_future
         
-        # Ensure core apps are always available
-        core_apps = ["gmail", "composio_search", "browserbase", "github", "codeinterpreter"]
+        # Ensure discovery didn't fail/return None
         if not self._discovered_apps:
+            # If discovery failed entirely, we might want a minimal fallback, 
+            # but _discover_apps_async already catches exceptions and returns []
+            # We could add hardcoded core apps here as a last resort if needed, 
+            # but for now let's rely on the updated discovery logic.
             self._discovered_apps = []
-            
-        for app in core_apps:
-            if app not in self._discovered_apps:
-                self._discovered_apps.append(app)
-                
-        self._log(f"✅ Active Apps (Discovered + Core): {self._discovered_apps}")
+
+        self._log(f"✅ Active Apps: {[app['slug'] for app in self._discovered_apps]}")
 
         # Discover skills
         if self.enable_skills:
@@ -220,14 +221,43 @@ class AgentSetup:
         # Build options
         self._options = self._build_options()
         self._initialized = True
+        
+        # Generate capabilities registry
+        self._generate_capabilities_doc()
 
-    async def _discover_apps_async(self) -> list[str]:
-        """Discover connected Composio apps."""
+    async def _discover_apps_async(self) -> list[dict]:
+        """Discover connected Composio apps with metadata."""
         try:
-            from universal_agent.utils.composio_discovery import discover_connected_toolkits
-            return await asyncio.to_thread(
-                discover_connected_toolkits, self._composio, self.user_id
+            from universal_agent.utils.composio_discovery import (
+                discover_connected_toolkits_with_meta,
+                fetch_toolkit_meta
             )
+            
+            # 1. Discover connected apps
+            connected_apps = await asyncio.to_thread(
+                discover_connected_toolkits_with_meta, self._composio, self.user_id
+            )
+            
+            # 2. Add core apps if missing, fetching their metadata
+            # These are "Standard toolkits" we always want the agent to know are available.
+            core_apps = [
+                "gmail", "googlecalendar", "googlesheets", "googledocs", 
+                "github", "slack", "notion", "discord", "reddit", "telegram",
+                "figma", "composio_search", 
+                "browserbase", "codeinterpreter"
+            ]
+            connected_slugs = {app['slug'] for app in connected_apps}
+            
+            for app_slug in core_apps:
+                if app_slug not in connected_slugs:
+                    # Fetch metadata for core app even if not connected
+                    meta = await asyncio.to_thread(
+                        fetch_toolkit_meta, self._composio, app_slug
+                    )
+                    connected_apps.append(meta)
+                    
+            return connected_apps
+            
         except Exception as e:
             self._log(f"⚠️ App discovery failed: {e}")
             return []
@@ -398,6 +428,14 @@ class AgentSetup:
             "- If something is safe to delete later, mark it as retention=temp in the manifest.\n"
             "- When writing under UA_ARTIFACTS_DIR, prefer `mcp__internal__write_text_file` over native `Write`.\n"
         )
+        
+        capabilities_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
+        capabilities_ref = (
+            f"\n\nCAPABILITIES REGISTRY:\n"
+            f"You have a self-updating capabilities registry available at:\n"
+            f"`{capabilities_path}`\n"
+            "Read this file to discover your full range of Agents, Skills, and Tools if you are unsure how to proceed.\n"
+        )
 
         return (
             f"{soul_section}"
@@ -405,6 +443,7 @@ class AgentSetup:
             f"Tomorrow is: {tomorrow_str}\n"
             f"{self._memory_context}\n"
             f"{tool_knowledge_block}\n"
+            f"{capabilities_ref}\n"
             f"{fs_policy}\n"
             "TEMPORAL CONTEXT: Use the current date above as authoritative. "
             "Do not treat post-training dates as hallucinations if they are supported by tool results. "
@@ -546,32 +585,7 @@ class AgentSetup:
             "internal": create_sdk_mcp_server(
                 name="internal",
                 version="1.0.0",
-                tools=[
-                    run_report_generation_wrapper, 
-                    run_research_pipeline_wrapper, 
-                    crawl_parallel_wrapper, 
-                    run_research_phase_wrapper,
-                    generate_outline_wrapper,
-                    draft_report_parallel_wrapper,
-                    cleanup_report_wrapper,
-                    compile_report_wrapper,
-                    upload_to_composio_wrapper,
-                    list_directory_wrapper,
-                    append_to_file_wrapper,
-                    write_text_file_wrapper,
-                    finalize_research_wrapper,
-                    generate_image_wrapper,
-                    describe_image_wrapper,
-                    preview_image_wrapper,
-                    html_to_pdf_wrapper,
-                    core_memory_replace_wrapper,
-                    core_memory_append_wrapper,
-                    archival_memory_insert_wrapper,
-                    archival_memory_search_wrapper,
-                    get_core_memory_blocks_wrapper,
-                    ask_user_questions_wrapper,
-                    batch_tool_execute_wrapper,
-                ] + ([ua_memory_get_wrapper, ua_memory_search_wrapper] if self.enable_memory else [])
+                tools=get_all_internal_tools(self.enable_memory)
             ),
             "taskwarrior": {
                 "type": "stdio",
@@ -606,6 +620,135 @@ class AgentSetup:
                 },
             },
         }
+
+    def _generate_capabilities_doc(self) -> None:
+        """
+        Generate a comprehensive capabilities registry (capabilities.md) in the workspace.
+        This file serves as a self-reflection menu for the agent to understand its tools,
+        skills, and sub-agents.
+        """
+        try:
+            lines = ["# 🧠 Agent Capabilities Registry", "", f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
+            
+            # 1. Skills
+            lines.append("## 📚 Skills (Standard Operating Procedures)")
+            if self.enable_skills and self._discovered_skills:
+                for skill in self._discovered_skills:
+                    lines.append(f"- **{skill['name']}**: {skill['description']}")
+                    lines.append(f"  - Path: `{skill['path']}`")
+            else:
+                lines.append("- No skills discovered or skills disabled.")
+            lines.append("")
+
+            # 2. Agents (Sub-Agents)
+            lines.append("## 🤖 Specialist Agents")
+            lines.append("Use these agents for specialized tasks. Explicitly delegate to them.")
+            
+            agent_dirs = [
+                os.path.join(self.src_dir, ".claude", "agents"),
+                os.path.join(self.src_dir, "src", "universal_agent", "agent_college"),
+            ]
+            
+            seen_agents = set()
+            for directory in agent_dirs:
+                if not os.path.exists(directory):
+                    continue
+                
+                for filename in sorted(os.listdir(directory)):
+                    if filename.endswith(".md"):
+                        filepath = os.path.join(directory, filename)
+                        try:
+                            with open(filepath, "r", encoding="utf-8") as f:
+                                content = f.read()
+                            
+                            # Parse YAML frontmatter
+                            if content.startswith("---"):
+                                parts = content.split("---", 2)
+                                if len(parts) >= 3:
+                                    frontmatter = yaml.safe_load(parts[1])
+                                    name = frontmatter.get("name") or filename.replace(".md", "")
+                                    description = frontmatter.get("description", "No description provided.")
+                                    
+                                    if name not in seen_agents:
+                                        lines.append(f"- **{name}**: {description}")
+                                        seen_agents.add(name)
+                        except Exception as e:
+                            self._log(f"⚠️ Failed to parse agent definitions in {filename}: {e}")
+            
+            if not seen_agents:
+                lines.append("- No specialist agents found.")
+            lines.append("")
+
+            # 3. Tools (MCPs)
+            # 3. Tools (Apps & MCPs)
+            lines.append("## 🛠 Tools & Apps")
+            
+            # Helper to format app line
+            def format_app_line(app):
+                name = app.get('name', app['slug'].title())
+                desc = app.get('description', '')
+                slug = app['slug']
+                line = f"- **{name}** (`{slug}`)"
+                if desc:
+                    line += f": {desc}"
+                return line
+            
+            # Split apps into Connected vs Core
+            # Core are internal/utility apps that don't represent personal productivity accounts
+            core_slugs = {"composio_search", "browserbase", "codeinterpreter", "filetool", "sqltool"}
+            connected_apps = []
+            core_apps_list = []
+            
+            if self._discovered_apps:
+                for app in self._discovered_apps:
+                    if app['slug'] in core_slugs:
+                        core_apps_list.append(app)
+                    else:
+                        connected_apps.append(app)
+
+            if connected_apps:
+                lines.append("### 🔌 Connected Toolkits")
+                for app in connected_apps:
+                    lines.append(format_app_line(app))
+                    if app.get('categories'):
+                        lines.append(f"  - Categories: {', '.join(app['categories'])}")
+                lines.append("")
+                
+            lines.append("### 🧰 Core Utilities")
+            if core_apps_list:
+                for app in core_apps_list:
+                    lines.append(format_app_line(app))
+            else:
+                lines.append("- No core utilities found.")
+            lines.append("")
+
+            lines.append("### 🧩 MCP Servers")
+            if self._options and self._options.mcp_servers:
+                for server_name, config in self._options.mcp_servers.items():
+                    server_type = config.get("type", "unknown")
+                    lines.append(f"- **{server_name}** ({server_type})")
+                    
+                    # Inspect internal tools dynamically
+                    if server_name == "internal":
+                         try:
+                             from universal_agent.tools.internal_registry import get_internal_tool_slugs
+                             tools = get_internal_tool_slugs(self.enable_memory)
+                             for tool in tools:
+                                 lines.append(f"  - `{tool}`")
+                         except ImportError:
+                             lines.append("  - (Internal toolkit: File ops, Research, Reporting, Memory)")
+            else:
+                lines.append("- No MCP servers configured.")
+                
+            # Write file
+            output_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
+            with open(output_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            
+            self._log(f"✅ Generated Capabilities Registry: {output_path}")
+
+        except Exception as e:
+            self._log(f"⚠️ Failed to generate capabilities.md: {e}")
 
     def _default_hooks(self) -> dict:
         """Return default hooks configuration."""

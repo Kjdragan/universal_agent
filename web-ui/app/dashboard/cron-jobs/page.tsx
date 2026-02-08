@@ -5,12 +5,14 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8002";
 
 type CronJob = {
-  id: string;
+  job_id: string;
   command: string;
-  every?: string | null;
+  every_seconds?: number | null;
+  cron_expr?: string | null;
   enabled: boolean;
   workspace_dir?: string | null;
   user_id?: string | null;
+  running?: boolean;
   run_at?: string | number | null;
   next_run_at?: string | number | null;
 };
@@ -34,6 +36,15 @@ function parseErrorDetail(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+function formatEverySeconds(value?: number | null): string {
+  const seconds = Math.max(0, Number(value || 0));
+  if (seconds <= 0) return "n/a";
+  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
 }
 
 export default function DashboardCronJobsPage() {
@@ -96,8 +107,8 @@ export default function DashboardCronJobsPage() {
     [command, every, runAt, load],
   );
 
-  const runNow = useCallback(async (id: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/cron/jobs/${encodeURIComponent(id)}/run`, { method: "POST" });
+  const runNow = useCallback(async (jobId: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/cron/jobs/${encodeURIComponent(jobId)}/run`, { method: "POST" });
     if (!res.ok) {
       const detail = await res.text();
       setError(parseErrorDetail(detail) || `Run failed (${res.status})`);
@@ -106,8 +117,8 @@ export default function DashboardCronJobsPage() {
     await load();
   }, [load]);
 
-  const deleteJob = useCallback(async (id: string) => {
-    const res = await fetch(`${API_BASE}/api/v1/cron/jobs/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const deleteJob = useCallback(async (jobId: string) => {
+    const res = await fetch(`${API_BASE}/api/v1/cron/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
     if (!res.ok) {
       const detail = await res.text();
       setError(parseErrorDetail(detail) || `Delete failed (${res.status})`);
@@ -149,7 +160,7 @@ export default function DashboardCronJobsPage() {
         <input
           value={runAt}
           onChange={(e) => setRunAt(e.target.value)}
-          placeholder="run at (e.g. 2h, 30m, 2026-02-08T07:00:00-06:00)"
+          placeholder="run at (e.g. 1am, tomorrow 9:15am, 2h, ISO)"
           className="rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm outline-none focus:border-cyan-500"
         />
         <button
@@ -161,8 +172,8 @@ export default function DashboardCronJobsPage() {
       </form>
       <p className="text-xs text-slate-400">
         Set <span className="font-mono">run at</span> for one-shot jobs (auto delete after run), or leave it blank and use{" "}
-        <span className="font-mono">every</span> for recurring jobs. Supported <span className="font-mono">run at</span> formats: relative
-        duration (`30m`, `2h`) or ISO datetime.
+        <span className="font-mono">every</span> for recurring jobs. Supported <span className="font-mono">run at</span> formats: natural
+        phrases (`1am`, `tomorrow 9:15am`), relative duration (`30m`, `2h`), or ISO datetime.
       </p>
 
       {error && (
@@ -177,26 +188,31 @@ export default function DashboardCronJobsPage() {
           </div>
         )}
         {jobs.map((job) => (
-          <article key={job.id} className="rounded-lg border border-slate-800 bg-slate-900/70 p-3">
+          <article key={job.job_id} className="rounded-lg border border-slate-800 bg-slate-900/70 p-3">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="font-mono text-sm text-slate-100">{job.command}</p>
                 <p className="mt-1 text-xs text-slate-400">
-                  {job.run_at ? `one-shot at ${toLocalDateTime(job.run_at)}` : job.every ? `every ${job.every}` : "one-shot"} ·{" "}
-                  {job.enabled ? "enabled" : "disabled"} · next: {toLocalDateTime(job.next_run_at)}
+                  {job.run_at
+                    ? `one-shot at ${toLocalDateTime(job.run_at)}`
+                    : job.cron_expr
+                      ? `cron ${job.cron_expr}`
+                      : `every ${formatEverySeconds(job.every_seconds)}`} ·{" "}
+                  {job.running ? "running" : job.enabled ? "enabled" : "disabled"} · next: {toLocalDateTime(job.next_run_at)}
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => runNow(job.id)}
+                  onClick={() => runNow(job.job_id)}
+                  disabled={Boolean(job.running)}
                   className="rounded-md border border-emerald-700 bg-emerald-500/20 px-2 py-1 text-xs text-emerald-100 hover:bg-emerald-500/30"
                 >
                   Run now
                 </button>
                 <button
                   type="button"
-                  onClick={() => deleteJob(job.id)}
+                  onClick={() => deleteJob(job.job_id)}
                   className="rounded-md border border-amber-700 bg-amber-500/20 px-2 py-1 text-xs text-amber-100 hover:bg-amber-500/30"
                 >
                   Delete

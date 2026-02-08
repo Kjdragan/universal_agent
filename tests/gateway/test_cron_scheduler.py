@@ -79,3 +79,66 @@ def test_cron_auto_run():
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+
+
+def test_cron_one_shot_runs_and_deletes():
+    port = _get_free_port()
+    base_url = f"http://127.0.0.1:{port}"
+    env = {
+        **os.environ,
+        "UA_GATEWAY_PORT": str(port),
+        "UA_ENABLE_CRON": "1",
+        "UA_CRON_MOCK_RESPONSE": "1",
+    }
+
+    process = subprocess.Popen(
+        [sys.executable, "-m", "universal_agent.gateway_server"],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    try:
+        ready = asyncio.run(_wait_for_server(base_url))
+        assert ready, "Gateway did not start in time"
+
+        async def _run_flow():
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{base_url}/api/v1/cron/jobs",
+                    json={"command": "one-shot test", "run_at": "3s", "delete_after_run": True},
+                ) as resp:
+                    data = await resp.json()
+                    assert resp.status == 200, data
+                    job_id = data["job"]["job_id"]
+
+                deadline = time.time() + 20
+                saw_success = False
+                saw_deleted = False
+                while time.time() < deadline:
+                    async with session.get(f"{base_url}/api/v1/cron/runs") as rr:
+                        runs_payload = await rr.json()
+                        assert rr.status == 200
+                    if any(r.get("job_id") == job_id and r.get("status") == "success" for r in (runs_payload.get("runs") or [])):
+                        saw_success = True
+
+                    async with session.get(f"{base_url}/api/v1/cron/jobs") as jr:
+                        jobs_payload = await jr.json()
+                        assert jr.status == 200
+                    if not any(j.get("job_id") == job_id for j in (jobs_payload.get("jobs") or [])):
+                        saw_deleted = True
+
+                    if saw_success and saw_deleted:
+                        break
+                    await asyncio.sleep(0.5)
+
+                assert saw_success, "One-shot cron run did not complete successfully"
+                assert saw_deleted, "One-shot cron job was not deleted after success"
+
+        asyncio.run(_run_flow())
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()

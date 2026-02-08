@@ -2,10 +2,11 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, Iterable, Callable
 
@@ -18,13 +19,113 @@ from universal_agent.heartbeat_service import _parse_duration_seconds
 logger = logging.getLogger(__name__)
 
 
-def parse_run_at(value: str | float | None, now: float | None = None) -> float | None:
+def _resolve_run_at_timezone(timezone_name: str | None) -> Any:
+    name = (timezone_name or "").strip() or "UTC"
+    try:
+        return pytz.timezone(name)
+    except Exception:
+        local_tz = datetime.now().astimezone().tzinfo
+        return local_tz or pytz.UTC
+
+
+def _parse_time_of_day(raw: str) -> tuple[int, int] | None:
+    text = raw.strip().lower()
+    if not text:
+        return None
+    if text.startswith("at "):
+        text = text[3:].strip()
+    match = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", text)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or "0")
+    meridiem = (match.group(3) or "").lower()
+    if minute < 0 or minute > 59:
+        return None
+    if meridiem:
+        if hour < 1 or hour > 12:
+            return None
+        if meridiem == "pm" and hour < 12:
+            hour += 12
+        if meridiem == "am" and hour == 12:
+            hour = 0
+    elif hour > 23:
+        return None
+    return hour, minute
+
+
+def _parse_natural_run_at(value: str, now_dt: datetime) -> float | None:
+    text = value.strip().lower()
+    if not text:
+        return None
+
+    if text in {"now", "right now", "asap"}:
+        return now_dt.timestamp()
+
+    if text.startswith("in "):
+        duration_raw = text[3:].strip()
+        duration = _parse_duration_seconds(duration_raw, 0)
+        if duration <= 0:
+            word_match = re.match(
+                r"^(\d+)\s*(minute|minutes|min|hour|hours|day|days)$",
+                duration_raw,
+            )
+            if word_match:
+                amount = int(word_match.group(1))
+                unit = word_match.group(2)
+                if unit.startswith(("minute", "min")):
+                    duration = amount * 60
+                elif unit.startswith("hour"):
+                    duration = amount * 3600
+                elif unit.startswith("day"):
+                    duration = amount * 86400
+        if duration > 0:
+            return now_dt.timestamp() + duration
+
+    day_offset = 0
+    explicit_day = False
+    remainder = text
+    if remainder.startswith("tomorrow"):
+        explicit_day = True
+        day_offset = 1
+        remainder = remainder[len("tomorrow"):].strip()
+    elif remainder.startswith("today"):
+        explicit_day = True
+        day_offset = 0
+        remainder = remainder[len("today"):].strip()
+    elif remainder.startswith("tonight"):
+        explicit_day = True
+        day_offset = 0
+        remainder = remainder[len("tonight"):].strip()
+        if not remainder:
+            remainder = "8:00pm"
+
+    time_parts = _parse_time_of_day(remainder or text)
+    if not time_parts:
+        return None
+
+    hour, minute = time_parts
+    candidate = now_dt.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(days=day_offset)
+    if candidate <= now_dt and not explicit_day:
+        candidate += timedelta(days=1)
+    elif candidate <= now_dt and explicit_day and day_offset == 0:
+        candidate += timedelta(days=1)
+    return candidate.timestamp()
+
+
+def parse_run_at(
+    value: str | float | None,
+    now: float | None = None,
+    timezone_name: str | None = None,
+) -> float | None:
     """Parse run_at value to absolute timestamp.
     
     Accepts:
     - None: returns None
     - float: absolute timestamp (returned as-is)
-    - str: relative duration like "20m", "2h", "1d" OR absolute ISO timestamp
+    - str: relative duration like "20m", "2h", "1d"
+    - str: absolute ISO timestamp (with or without timezone)
+    - str: natural phrases like "1am", "tomorrow 9:15am", "in 90 minutes"
     """
     if value is None:
         return None
@@ -37,21 +138,33 @@ def parse_run_at(value: str | float | None, now: float | None = None) -> float |
     if not value:
         return None
     
+    tz = _resolve_run_at_timezone(timezone_name)
     now_ts = now if now is not None else time.time()
+    now_dt = datetime.fromtimestamp(now_ts, tz)
     
     # Try relative duration first (e.g., "20m", "2h")
     duration = _parse_duration_seconds(value, 0)
     if duration > 0:
         return now_ts + duration
+
+    # Unix timestamp as string
+    if re.match(r"^\d{9,}(?:\.\d+)?$", value):
+        try:
+            return float(value)
+        except Exception:
+            pass
     
     # Try ISO timestamp
     try:
         dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = tz.localize(dt) if hasattr(tz, "localize") else dt.replace(tzinfo=tz)
         return dt.timestamp()
     except Exception:
         pass
-    
-    return None
+
+    # Try natural language forms
+    return _parse_natural_run_at(value, now_dt)
 
 @dataclass
 class CronJob:
@@ -394,13 +507,23 @@ class CronService:
             for job in list(self.jobs.values()):
                 if not job.enabled:
                     continue
+                if job.job_id in self.running_jobs:
+                    # Prevent repeated "already running" skips while a prior dispatch is active.
+                    continue
                 if job.next_run_at is None:
                     job.schedule_next(now)
                 if job.next_run_at and now >= job.next_run_at:
-                    job.last_run_at = now
-                    job.schedule_next(now)
+                    scheduled_at = float(job.next_run_at)
+                    if job.run_at is not None:
+                        # One-shot jobs should only be consumed after a real run attempt starts.
+                        # Keep them retriable across short restarts by moving next_run forward
+                        # until _run_job finalizes state.
+                        job.next_run_at = now + 5.0
+                    else:
+                        job.last_run_at = now
+                        job.schedule_next(now)
                     self.store.save_jobs(self.jobs.values())
-                    asyncio.create_task(self._run_job(job, scheduled_at=now, reason="schedule"))
+                    asyncio.create_task(self._run_job(job, scheduled_at=scheduled_at, reason="schedule"))
             await asyncio.sleep(1)
 
     async def _run_job(self, job: CronJob, scheduled_at: Optional[float], reason: str) -> CronRunRecord:
@@ -463,6 +586,11 @@ class CronService:
                 logger.error("Cron job %s failed: %s", job.job_id, exc)
             finally:
                 self.running_jobs.discard(job.job_id)
+                # Finalize one-shot schedule consumption only after run actually started.
+                if reason == "schedule" and job.run_at is not None:
+                    job.last_run_at = record.started_at or time.time()
+                    job.schedule_next(job.last_run_at)
+                    self.store.save_jobs(self.jobs.values())
                 self.store.append_run(record)
                 self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
                 

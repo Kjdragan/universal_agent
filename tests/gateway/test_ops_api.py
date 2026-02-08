@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import time
 import pytest
@@ -31,6 +32,12 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_calendar_missed_events", {})
     monkeypatch.setattr(gateway_server, "_calendar_missed_notifications", set())
     monkeypatch.setattr(gateway_server, "_calendar_change_proposals", {})
+    monkeypatch.setattr(gateway_server, "SCHED_EVENT_PROJECTION_ENABLED", False)
+    projection = gateway_server.SchedulingProjectionState(enabled=False)
+    event_bus = gateway_server.SchedulingEventBus(max_events=5000)
+    event_bus.subscribe(projection.apply_event)
+    monkeypatch.setattr(gateway_server, "_scheduling_projection", projection)
+    monkeypatch.setattr(gateway_server, "_scheduling_event_bus", event_bus)
     monkeypatch.setattr(
         gateway_server,
         "_observability_metrics",
@@ -46,6 +53,53 @@ def client(tmp_path, monkeypatch):
             "turn_busy_rejected": 0,
             "turn_duplicate_in_progress": 0,
             "turn_duplicate_completed": 0,
+        },
+    )
+    monkeypatch.setattr(gateway_server, "_scheduling_runtime_started_ts", time.time())
+    monkeypatch.setattr(
+        gateway_server,
+        "_scheduling_runtime_metrics",
+        {
+            "started_at": "2026-02-08T00:00:00",
+            "counters": {
+                "calendar_events_requests": 0,
+                "calendar_action_requests": 0,
+                "calendar_change_request_requests": 0,
+                "calendar_change_confirm_requests": 0,
+                "heartbeat_last_requests": 0,
+                "heartbeat_wake_requests": 0,
+                "event_emissions_total": 0,
+                "cron_events_total": 0,
+                "heartbeat_events_total": 0,
+                "event_bus_published": 0,
+                "projection_applied": 0,
+                "projection_seed_count": 0,
+                "projection_seed_jobs": 0,
+                "projection_seed_runs": 0,
+                "projection_read_hits": 0,
+                "push_replay_requests": 0,
+                "push_stream_connects": 0,
+                "push_stream_disconnects": 0,
+                "push_stream_keepalives": 0,
+                "push_stream_event_payloads": 0,
+            },
+            "event_counts": {
+                "cron": {},
+                "heartbeat": {},
+            },
+            "projection": {
+                "builds": 0,
+                "duration_ms_last": 0.0,
+                "duration_ms_max": 0.0,
+                "duration_ms_total": 0.0,
+                "events_total": 0,
+                "always_running_total": 0,
+                "stasis_total": 0,
+                "due_lag_samples": 0,
+                "due_lag_seconds_last": 0.0,
+                "due_lag_seconds_max": 0.0,
+                "due_lag_seconds_total": 0.0,
+            },
         },
     )
     
@@ -381,6 +435,166 @@ def test_ops_session_continuity_metrics_alerts(client):
     assert "attach_success_rate_low" in codes
     assert "resume_failures_high" in codes
     assert "attach_failures_high" in codes
+
+
+def test_ops_scheduling_runtime_metrics_endpoint(client):
+    from universal_agent import gateway_server
+
+    calendar_resp = client.get("/api/v1/ops/calendar/events?source=all&view=week")
+    assert calendar_resp.status_code == 200
+
+    gateway_server._scheduling_record_event("cron", "cron_job_created")
+    gateway_server._scheduling_record_event("heartbeat", "heartbeat_started")
+
+    resp = client.get("/api/v1/ops/metrics/scheduling-runtime")
+    assert resp.status_code == 200
+    metrics = resp.json()["metrics"]
+
+    counters = metrics["counters"]
+    projection = metrics["projection"]
+    assert counters["calendar_events_requests"] >= 1
+    assert counters["event_emissions_total"] == 2
+    assert counters["cron_events_total"] == 1
+    assert counters["heartbeat_events_total"] == 1
+    assert metrics["event_counts"]["cron"]["cron_job_created"] == 1
+    assert metrics["event_counts"]["heartbeat"]["heartbeat_started"] == 1
+    assert projection["builds"] >= 1
+    assert projection["duration_ms_last"] >= 0.0
+    assert projection["duration_ms_avg"] >= 0.0
+    assert metrics["uptime_seconds"] >= 0.0
+
+
+def test_ops_scheduling_events_replay_and_stream(client):
+    from universal_agent import gateway_server
+
+    published = gateway_server._scheduling_event_bus.publish(
+        "cron",
+        "cron_job_created",
+        {"job": {"job_id": "job_stream_test", "command": "echo hi"}},
+    )
+    assert int(published.get("seq", 0)) >= 1
+
+    replay_resp = client.get("/api/v1/ops/scheduling/events?since_seq=0&limit=50")
+    assert replay_resp.status_code == 200
+    replay_payload = replay_resp.json()
+    events = replay_payload["events"]
+    assert any(item.get("type") == "cron_job_created" for item in events)
+    assert "projection_version" in replay_payload
+    assert "projection_last_event_seq" in replay_payload
+    assert "event_bus_seq" in replay_payload
+
+    stream_resp = client.get("/api/v1/ops/scheduling/stream?since_seq=0&heartbeat_seconds=2&limit=20&once=1")
+    assert stream_resp.status_code == 200
+    assert stream_resp.headers["content-type"].startswith("text/event-stream")
+    lines = [line for line in stream_resp.text.splitlines() if line.startswith("data:")]
+    assert lines
+    payload = json.loads(lines[0][len("data:"):].strip())
+    kind = payload.get("kind")
+    assert kind in {"event", "heartbeat"}
+    if kind == "event":
+        event = payload.get("event") or {}
+        assert event.get("type") == "cron_job_created"
+    assert "projection_version" in payload
+
+    metrics_resp = client.get("/api/v1/ops/metrics/scheduling-runtime")
+    assert metrics_resp.status_code == 200
+    counters = metrics_resp.json()["metrics"]["counters"]
+    assert counters["push_replay_requests"] >= 1
+    assert counters["push_stream_connects"] >= 1
+    assert counters["push_stream_disconnects"] >= 1
+    assert (counters["push_stream_event_payloads"] + counters["push_stream_keepalives"]) >= 1
+
+
+def test_ops_scheduling_stream_disabled_returns_503(client, monkeypatch):
+    from universal_agent import gateway_server
+
+    monkeypatch.setattr(gateway_server, "SCHED_PUSH_ENABLED", False)
+    resp = client.get("/api/v1/ops/scheduling/stream?once=1")
+    assert resp.status_code == 503
+    assert "disabled" in str(resp.json().get("detail", "")).lower()
+
+
+def test_scheduling_projection_idempotent_and_order_tolerant():
+    from universal_agent import gateway_server
+
+    state = gateway_server.SchedulingProjectionState(enabled=True)
+    run = {
+        "run_id": "run_1",
+        "job_id": "job_1",
+        "status": "success",
+        "scheduled_at": time.time(),
+    }
+    job = {
+        "job_id": "job_1",
+        "user_id": "owner_1",
+        "workspace_dir": "/tmp/ws",
+        "command": "echo hi",
+        "enabled": True,
+        "every_seconds": 60,
+        "cron_expr": None,
+        "run_at": None,
+        "created_at": time.time(),
+        "metadata": {},
+    }
+
+    # Out-of-order event application: run arrives before job create.
+    state.apply_event(
+        {"seq": 1, "source": "cron", "type": "cron_run_completed", "timestamp": "2026-02-08T00:00:00", "data": {"run": run}}
+    )
+    # Duplicate run event should be idempotent.
+    state.apply_event(
+        {"seq": 2, "source": "cron", "type": "cron_run_completed", "timestamp": "2026-02-08T00:00:01", "data": {"run": run}}
+    )
+    state.apply_event(
+        {"seq": 3, "source": "cron", "type": "cron_job_created", "timestamp": "2026-02-08T00:00:02", "data": {"job": job}}
+    )
+
+    jobs = state.list_cron_jobs()
+    runs = state.list_cron_runs(limit=100)
+    assert len(jobs) == 1
+    assert jobs[0].job_id == "job_1"
+    assert len([item for item in runs if item.get("job_id") == "job_1"]) == 1
+
+
+def test_calendar_projection_feed_parity(client, tmp_path):
+    from universal_agent import gateway_server
+
+    gateway_server._cron_service = CronService(
+        gateway_server.get_gateway(),
+        tmp_path,
+    )
+    cron_ws = tmp_path / "cron_projection_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="projection parity check",
+        every_raw="30m",
+        enabled=True,
+    )
+
+    gateway_server._scheduling_projection.reset()
+    gateway_server._scheduling_projection.enabled = False
+    baseline_resp = client.get("/api/v1/ops/calendar/events?source=cron&view=week")
+    assert baseline_resp.status_code == 200
+    baseline_events = [item for item in baseline_resp.json()["events"] if item.get("source") == "cron"]
+    baseline_pairs = {(item["event_id"], item["status"]) for item in baseline_events}
+
+    gateway_server._scheduling_projection.reset()
+    gateway_server._scheduling_projection.enabled = True
+    gateway_server._scheduling_projection.seed_from_runtime()
+    projected_resp = client.get("/api/v1/ops/calendar/events?source=cron&view=week")
+    assert projected_resp.status_code == 200
+    projected_events = [item for item in projected_resp.json()["events"] if item.get("source") == "cron"]
+    projected_pairs = {(item["event_id"], item["status"]) for item in projected_events}
+    assert projected_pairs == baseline_pairs
+
+    metrics_resp = client.get("/api/v1/ops/metrics/scheduling-runtime")
+    assert metrics_resp.status_code == 200
+    metrics = metrics_resp.json()["metrics"]
+    assert metrics["projection_state"]["enabled"] is True
+    assert metrics["projection_state"]["seeded"] is True
+    assert metrics["counters"]["projection_read_hits"] >= 1
 
 
 def test_continuity_alert_notifications_are_emitted_and_deduped(client):
