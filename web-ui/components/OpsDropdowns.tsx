@@ -76,7 +76,7 @@ type OpsCtx = {
   fetchApprovals: () => Promise<void>; probeChannel: (id: string) => Promise<void>;
   updateApproval: (id: string, status: string) => Promise<void>; fetchLogs: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>; resetSession: (id: string) => Promise<void>; compactLogs: (id: string) => Promise<void>;
-  cancelSession: (id: string) => Promise<void>; archiveSession: (id: string) => Promise<void>;
+  cancelSession: (id: string) => Promise<void>; cancelOutstandingRuns: () => Promise<void>; archiveSession: (id: string) => Promise<void>;
   opsConfigText: string; setOpsConfigText: (t: string) => void; opsConfigStatus: string;
   opsConfigError: string | null; opsConfigSaving: boolean;
   loadOpsConfig: () => Promise<void>; saveOpsConfig: () => Promise<void>;
@@ -257,6 +257,28 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
     }
   }, [fetchSessions]);
 
+  const cancelOutstandingRuns = useCallback(async () => {
+    if (!confirm("Cancel all currently running session work?")) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/sessions/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...buildHeaders() },
+        body: JSON.stringify({ reason: "Cancelled from ops bulk session controls" }),
+      });
+      if (r.ok) {
+        const data = await r.json();
+        fetchSessions();
+        const count = Array.isArray(data.sessions_cancelled) ? data.sessions_cancelled.length : 0;
+        alert(`Cancel request sent for ${count} session(s)`);
+      } else {
+        alert("Cancel all failed: " + r.statusText);
+      }
+    } catch (e) {
+      console.error("Cancel all sessions failed", e);
+      alert("Cancel all failed");
+    }
+  }, [fetchSessions]);
+
   const archiveSession = useCallback(async (sid: string) => {
     if (!sid) return;
     if (!confirm(`Archive logs for session ${sid}?`)) return;
@@ -316,11 +338,11 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
   const val: OpsCtx = useMemo(() => ({
     sessions, skills, channels, approvals, selected, setSelected, logTail, loading, heartbeatState, continuityState, mergedEvents,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
-    deleteSession, resetSession, compactLogs, cancelSession, archiveSession, opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError,
+    deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, opsSchemaText, opsSchemaStatus, refreshAll,
   }), [sessions, skills, channels, approvals, selected, logTail, loading, heartbeatState, continuityState, mergedEvents,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
-    deleteSession, resetSession, compactLogs, cancelSession, archiveSession, opsConfigText, opsConfigStatus, opsConfigError,
+    deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, opsSchemaText, opsSchemaStatus, refreshAll]);
 
   return <OpsContext.Provider value={val}>{children}</OpsContext.Provider>;
@@ -329,7 +351,7 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
 // ---- Section Components ----
 
 export function SessionsSection() {
-  const { sessions, selected, setSelected, loading, logTail, fetchSessions, fetchLogs, deleteSession, resetSession, compactLogs, cancelSession, archiveSession } = useOps();
+  const { sessions, selected, setSelected, loading, logTail, fetchSessions, fetchLogs, deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession } = useOps();
   const [attaching, setAttaching] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "running" | "idle" | "terminal">("all");
   const [sourceFilter, setSourceFilter] = useState<"all" | "chat" | "telegram" | "api" | "local">("all");
@@ -359,13 +381,25 @@ export function SessionsSection() {
     const ownerMatch = !ownerFilter.trim() || owner === ownerFilter.trim().toLowerCase();
     return statusMatch && sourceMatch && memoryModeMatch && ownerMatch;
   }), [sessions, statusFilter, sourceFilter, memoryModeFilter, ownerFilter]);
+  const runningCount = useMemo(
+    () =>
+      sessions.filter((s) => {
+        const status = (s.status || "").toLowerCase();
+        const activeRuns = Number(s.active_runs || 0);
+        return status === "running" || status === "active" || activeRuns > 0;
+      }).length,
+    [sessions],
+  );
 
   return (
     <div className="p-3 text-xs space-y-3">
       <div className="border rounded bg-background/40 p-2">
         <div className="font-semibold mb-2 flex items-center justify-between">
           <span>Sessions</span>
-          <button onClick={fetchSessions} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻"}</button>
+          <div className="flex items-center gap-1">
+            <button onClick={cancelOutstandingRuns} className="text-[10px] px-2 py-0.5 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
+            <button onClick={fetchSessions} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻"}</button>
+          </div>
         </div>
         <div className="mb-2 grid grid-cols-4 gap-1">
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">

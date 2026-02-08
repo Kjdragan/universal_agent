@@ -577,3 +577,31 @@ def test_ops_session_archive_and_cancel_actions(client, tmp_path):
     assert payload["status"] == "cancel_requested"
     assert payload["session_id"] == "session_actions"
     assert payload["reason"] == "ops cancel test"
+
+
+def test_ops_cancel_outstanding_runs(client, tmp_path):
+    running_dir = _create_dummy_session(tmp_path, "session_running", ["line 1"])
+    _create_dummy_session(tmp_path, "session_idle", ["line 1"])
+
+    running_session = GatewaySession(
+        session_id="session_running",
+        user_id="tester",
+        workspace_dir=str(running_dir),
+        metadata={
+            "run_id": "run_bulk_cancel_123",
+        },
+    )
+    gateway_server.get_gateway()._sessions["session_running"] = running_session
+    gateway_server.store_session(running_session)
+    gateway_server._increment_session_active_runs("session_running")
+
+    cancel_resp = client.post(
+        "/api/v1/ops/sessions/cancel",
+        json={"reason": "bulk cancel test"},
+    )
+    assert cancel_resp.status_code == 200
+    payload = cancel_resp.json()
+    assert payload["status"] == "cancel_requested"
+    assert payload["reason"] == "bulk cancel test"
+    assert payload["sessions_considered"] == 1
+    assert payload["sessions_cancelled"] == ["session_running"]

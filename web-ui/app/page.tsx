@@ -20,6 +20,8 @@ import { ApprovalModal, useApprovalModal } from "@/components/approvals/Approval
 import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
 import { OpsProvider, SessionsSection, SkillsSection, ChannelsSection, ApprovalsSection, SystemEventsSection, OpsConfigSection, SessionContinuityWidget, HeartbeatWidget } from "@/components/OpsDropdowns";
+// UI Primitives
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -1190,7 +1192,7 @@ export default function HomePage() {
   const [activityWidth, setActivityWidth] = useState(400);
   const [filesWidth, setFilesWidth] = useState(320);
 
-  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+
   const [activityCollapsed, setActivityCollapsed] = useState(false);
 
   // Resizing Logic
@@ -1308,43 +1310,36 @@ export default function HomePage() {
           {/* Center: Ops dropdown buttons - REPOSITIONED to be part of flow */}
           <div className="flex items-center gap-0.5 shrink-0">
             {([
-              { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: 1200 },
-              { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: 1200 },
-              { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: 800 },
-              { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: 800 },
-              { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection />, width: 900 },
-              { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection />, width: 1200 },
+              { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: "w-[800px]" },
+              { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: "w-[800px]" },
+              { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: "w-[600px]" },
+              { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: "w-[600px]" },
+              { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection />, width: "w-[800px]" },
+              { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection />, width: "w-[800px]" },
             ] as const).map((item) => (
-              <div key={item.key} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setOpenDropdown((prev) => prev === item.key ? null : item.key)}
-                  className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition ${openDropdown === item.key
-                    ? "border-primary/50 bg-primary/10 text-primary"
-                    : "border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60"
-                    }`}
-                >
-                  <span className="text-xs">{item.icon}</span>
-                  <span>{item.label}</span>
-                  <span className={`text-[8px] transition-transform ${openDropdown === item.key ? "rotate-180" : ""}`}>▾</span>
-                </button>
-                {openDropdown === item.key && (
-                  <div
-                    className="absolute top-full left-1/2 -translate-x-1/2 mt-2 max-h-[85vh] overflow-hidden rounded-lg border border-border/60 bg-background/95 backdrop-blur-xl shadow-2xl z-50"
-                    style={{ width: item.width }}
+              <Popover key={item.key}>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60 data-[state=open]:border-primary/50 data-[state=open]:bg-primary/10 data-[state=open]:text-primary"
                   >
-                    <div className="max-h-[85vh] overflow-y-auto scrollbar-thin">
-                      {item.content}
-                    </div>
+                    <span className="text-xs">{item.icon}</span>
+                    <span>{item.label}</span>
+                    <span className="text-[8px] transition-transform group-data-[state=open]:rotate-180">▾</span>
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent
+                  className={`p-0 overflow-hidden bg-background/95 backdrop-blur-xl border-border/60 shadow-2xl ${item.width}`}
+                  align="start"
+                  collisionPadding={10}
+                >
+                  <div className="max-h-[85vh] overflow-y-auto scrollbar-thin">
+                    {item.content}
                   </div>
-                )}
-              </div>
+                </PopoverContent>
+              </Popover>
             ))}
           </div>
-          {/* Click-away overlay to close dropdowns */}
-          {openDropdown && (
-            <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)} />
-          )}
 
           {/* Right: Metrics, Status */}
           <div className="ml-auto flex items-center gap-4">
