@@ -17,6 +17,7 @@ _DESTRUCTIVE_RE = re.compile(
     r"(rm\s+-rf|shutdown|reboot|format\s+disk|delete\s+all|wipe|sudo\s+rm)",
     re.IGNORECASE,
 )
+_MEMORY_MODES = {"off", "session_only", "selective", "full"}
 
 
 def _notification_email_default() -> str:
@@ -25,6 +26,71 @@ def _notification_email_default() -> str:
         or os.getenv("UA_PRIMARY_EMAIL")
         or "kevinjdragan@gmail.com"
     ).strip()
+
+
+def _default_memory_mode() -> str:
+    raw = (os.getenv("UA_SESSION_MEMORY_DEFAULT_MODE") or "session_only").strip().lower()
+    if raw in _MEMORY_MODES:
+        return raw
+    return "session_only"
+
+
+def _normalize_tags(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_items = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, list):
+        raw_items = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        raw_items = []
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def default_memory_policy() -> dict[str, Any]:
+    mode = _default_memory_mode()
+    allowlist = ["retain"] if mode == "selective" else []
+    return {
+        "mode": mode,
+        "session_memory_enabled": True,
+        "tags": [],
+        "long_term_tag_allowlist": allowlist,
+    }
+
+
+def normalize_memory_policy(policy: dict[str, Any] | None) -> dict[str, Any]:
+    base = default_memory_policy()
+    incoming = policy if isinstance(policy, dict) else {}
+    mode = str(incoming.get("mode", base["mode"])).strip().lower()
+    if mode not in _MEMORY_MODES:
+        mode = str(base["mode"])
+    session_memory_enabled = incoming.get("session_memory_enabled", base["session_memory_enabled"])
+    if not isinstance(session_memory_enabled, bool):
+        session_memory_enabled = bool(session_memory_enabled)
+    tags = _normalize_tags(incoming.get("tags", base["tags"]))
+    allowlist = _normalize_tags(incoming.get("long_term_tag_allowlist", base["long_term_tag_allowlist"]))
+    if mode == "selective" and not allowlist:
+        allowlist = ["retain"]
+    if mode in {"off", "session_only", "full"}:
+        allowlist = []
+    return {
+        "mode": mode,
+        "session_memory_enabled": session_memory_enabled,
+        "tags": tags,
+        "long_term_tag_allowlist": allowlist,
+    }
+
+
+def normalize_session_policy(policy: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(policy)
+    payload["memory"] = normalize_memory_policy(payload.get("memory"))
+    return payload
 
 def default_session_policy(session_id: str, user_id: str) -> dict[str, Any]:
     now = time.time()
@@ -77,6 +143,7 @@ def default_session_policy(session_id: str, user_id: str) -> dict[str, Any]:
             "email_targets": [_notification_email_default()],
         },
         "email_whitelist": sorted(set(email_whitelist)),
+        "memory": default_memory_policy(),
         "created_at": now,
         "updated_at": now,
     }
@@ -98,15 +165,15 @@ def load_session_policy(workspace_dir: str, *, session_id: str, user_id: str) ->
         merged = apply_merge_patch(default, payload)
         merged["session_id"] = session_id
         merged["user_id"] = user_id
-        return merged
+        return normalize_session_policy(merged)
     except Exception:
-        return default
+        return normalize_session_policy(default)
 
 
 def save_session_policy(workspace_dir: str, policy: dict[str, Any]) -> Path:
     path = policy_path(workspace_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = dict(policy)
+    payload = normalize_session_policy(policy)
     payload["updated_at"] = time.time()
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return path
@@ -121,8 +188,9 @@ def update_session_policy(
 ) -> dict[str, Any]:
     current = load_session_policy(workspace_dir, session_id=session_id, user_id=user_id)
     updated = apply_merge_patch(current, patch)
-    save_session_policy(workspace_dir, updated)
-    return updated
+    normalized = normalize_session_policy(updated)
+    save_session_policy(workspace_dir, normalized)
+    return normalized
 
 
 def classify_request_categories(user_input: str, metadata: dict[str, Any] | None = None) -> list[str]:

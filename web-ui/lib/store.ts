@@ -31,6 +31,8 @@ interface AgentStore {
   sessions: Session[];
   setCurrentSession: (session: SessionInfo | null) => void;
   setSessions: (sessions: Session[]) => void;
+  sessionAttachMode: "default" | "tail";
+  setSessionAttachMode: (mode: "default" | "tail") => void;
 
   // Messages
   messages: Message[];
@@ -145,6 +147,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   sessions: [],
   setCurrentSession: (session) => set({ currentSession: session }),
   setSessions: (sessions) => set({ sessions }),
+  sessionAttachMode: "default",
+  setSessionAttachMode: (mode) => set({ sessionAttachMode: mode }),
 
   // Messages
   messages: [],
@@ -364,6 +368,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     iterationCount: 0,
     lastError: null,
     viewingFile: null,
+    sessionAttachMode: "default",
   }),
 }));
 
@@ -381,7 +386,10 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
     case "connected": {
       const data = event.data as Record<string, unknown>;
       store.setConnectionStatus("connected");
-      store.setCurrentSession(data.session as SessionInfo);
+      const sessionPayload = (data.session as SessionInfo) ?? (data as SessionInfo);
+      if (sessionPayload?.session_id) {
+        store.setCurrentSession(sessionPayload);
+      }
       break;
     }
 

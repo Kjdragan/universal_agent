@@ -9,16 +9,18 @@ Usage:
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 import shutil
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 import httpx
@@ -62,6 +64,7 @@ from universal_agent.security_paths import (
 from universal_agent.session_policy import (
     evaluate_request_against_policy,
     load_session_policy,
+    normalize_memory_policy,
     save_session_policy,
     update_session_policy,
 )
@@ -252,9 +255,28 @@ class OpsSessionCompactRequest(BaseModel):
     max_bytes: int = 200_000
 
 
+class OpsSessionArchiveRequest(BaseModel):
+    clear_memory: bool = False
+    clear_work_products: bool = False
+
+
+class OpsSessionCancelRequest(BaseModel):
+    reason: Optional[str] = None
+
+
 class NotificationUpdateRequest(BaseModel):
     status: str
     note: Optional[str] = None
+    snooze_minutes: Optional[int] = None
+
+
+class NotificationBulkUpdateRequest(BaseModel):
+    status: str
+    note: Optional[str] = None
+    kind: Optional[str] = None
+    current_status: Optional[str] = None
+    snooze_minutes: Optional[int] = None
+    limit: int = 200
 
 
 class SessionPolicyPatchRequest(BaseModel):
@@ -272,6 +294,7 @@ class ResumeRequest(BaseModel):
 
 _gateway: Optional[InProcessGateway] = None
 _sessions: dict[str, GatewaySession] = {}
+_session_runtime: dict[str, dict[str, Any]] = {}
 _heartbeat_service: Optional[HeartbeatService] = None
 _cron_service: Optional[CronService] = None
 _ops_service: Optional[OpsService] = None
@@ -281,7 +304,410 @@ _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
 _channel_probe_results: dict[str, dict] = {}
 _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
+_continuity_active_alerts: set[str] = set()
 _pending_gated_requests: dict[str, dict] = {}
+_session_turn_state: dict[str, dict[str, Any]] = {}
+_session_turn_locks: dict[str, asyncio.Lock] = {}
+_observability_metrics: dict[str, Any] = {
+    "started_at": datetime.now().isoformat(),
+    "sessions_created": 0,
+    "ws_attach_attempts": 0,
+    "ws_attach_successes": 0,
+    "ws_attach_failures": 0,
+    "resume_attempts": 0,
+    "resume_successes": 0,
+    "resume_failures": 0,
+    "turn_busy_rejected": 0,
+    "turn_duplicate_in_progress": 0,
+    "turn_duplicate_completed": 0,
+}
+
+SESSION_STATE_IDLE = "idle"
+SESSION_STATE_RUNNING = "running"
+SESSION_STATE_TERMINAL = "terminal"
+TURN_STATUS_RUNNING = "running"
+TURN_STATUS_COMPLETED = "completed"
+TURN_STATUS_FAILED = "failed"
+TURN_HISTORY_LIMIT = int(os.getenv("UA_TURN_HISTORY_LIMIT", "200"))
+TURN_FINGERPRINT_DEDUPE_WINDOW_SECONDS = int(os.getenv("UA_TURN_FINGERPRINT_DEDUPE_WINDOW_SECONDS", "120"))
+CONTINUITY_RESUME_SUCCESS_MIN = float(os.getenv("UA_CONTINUITY_RESUME_SUCCESS_MIN", "0.90") or 0.90)
+CONTINUITY_ATTACH_SUCCESS_MIN = float(os.getenv("UA_CONTINUITY_ATTACH_SUCCESS_MIN", "0.90") or 0.90)
+CONTINUITY_FAILURE_WARN_THRESHOLD = int(os.getenv("UA_CONTINUITY_FAILURE_WARN_THRESHOLD", "3") or 3)
+NOTIFICATION_SNOOZE_MINUTES_DEFAULT = int(os.getenv("UA_NOTIFICATION_SNOOZE_MINUTES_DEFAULT", "30") or 30)
+NOTIFICATION_SNOOZE_MINUTES_MAX = int(os.getenv("UA_NOTIFICATION_SNOOZE_MINUTES_MAX", "1440") or 1440)
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat()
+
+
+def _increment_metric(name: str, amount: int = 1) -> None:
+    current = int(_observability_metrics.get(name, 0) or 0)
+    _observability_metrics[name] = current + max(0, int(amount))
+    _sync_continuity_notifications()
+
+
+def _continuity_alerts_snapshot() -> dict[str, Any]:
+    resume_attempts = int(_observability_metrics.get("resume_attempts", 0) or 0)
+    resume_successes = int(_observability_metrics.get("resume_successes", 0) or 0)
+    ws_attach_attempts = int(_observability_metrics.get("ws_attach_attempts", 0) or 0)
+    ws_attach_successes = int(_observability_metrics.get("ws_attach_successes", 0) or 0)
+    resume_rate = round(resume_successes / resume_attempts, 4) if resume_attempts > 0 else None
+    attach_rate = round(ws_attach_successes / ws_attach_attempts, 4) if ws_attach_attempts > 0 else None
+    resume_failures = int(_observability_metrics.get("resume_failures", 0) or 0)
+    attach_failures = int(_observability_metrics.get("ws_attach_failures", 0) or 0)
+    alerts: list[dict[str, Any]] = []
+    if resume_rate is not None and resume_rate < CONTINUITY_RESUME_SUCCESS_MIN:
+        alerts.append(
+            {
+                "code": "resume_success_rate_low",
+                "severity": "warning",
+                "message": "Resume success rate below threshold.",
+                "actual": resume_rate,
+                "threshold": CONTINUITY_RESUME_SUCCESS_MIN,
+            }
+        )
+    if attach_rate is not None and attach_rate < CONTINUITY_ATTACH_SUCCESS_MIN:
+        alerts.append(
+            {
+                "code": "attach_success_rate_low",
+                "severity": "warning",
+                "message": "Attach success rate below threshold.",
+                "actual": attach_rate,
+                "threshold": CONTINUITY_ATTACH_SUCCESS_MIN,
+            }
+        )
+    if resume_failures >= CONTINUITY_FAILURE_WARN_THRESHOLD:
+        alerts.append(
+            {
+                "code": "resume_failures_high",
+                "severity": "warning",
+                "message": "Resume failures exceeded warning threshold.",
+                "actual": resume_failures,
+                "threshold": CONTINUITY_FAILURE_WARN_THRESHOLD,
+            }
+        )
+    if attach_failures >= CONTINUITY_FAILURE_WARN_THRESHOLD:
+        alerts.append(
+            {
+                "code": "attach_failures_high",
+                "severity": "warning",
+                "message": "Attach failures exceeded warning threshold.",
+                "actual": attach_failures,
+                "threshold": CONTINUITY_FAILURE_WARN_THRESHOLD,
+            }
+        )
+    return {
+        "resume_success_rate": resume_rate,
+        "attach_success_rate": attach_rate,
+        "continuity_status": "degraded" if alerts else "ok",
+        "alerts": alerts,
+    }
+
+
+def _sync_continuity_notifications() -> None:
+    global _continuity_active_alerts
+    # This function can be invoked early during app initialization in tests;
+    # guard in case notification utilities are not yet fully available.
+    if "_add_notification" not in globals():
+        return
+    snapshot = _continuity_alerts_snapshot()
+    alerts = snapshot.get("alerts") or []
+    if not isinstance(alerts, list):
+        return
+    by_code = {
+        str(alert.get("code")): alert
+        for alert in alerts
+        if isinstance(alert, dict) and alert.get("code")
+    }
+    current_codes = set(by_code.keys())
+    newly_active = current_codes - _continuity_active_alerts
+    recovered = _continuity_active_alerts - current_codes
+
+    for code in sorted(newly_active):
+        alert = by_code.get(code, {})
+        message = str(alert.get("message") or code)
+        actual = alert.get("actual")
+        threshold = alert.get("threshold")
+        details = f" actual={actual}, threshold={threshold}" if actual is not None and threshold is not None else ""
+        _add_notification(
+            kind="continuity_alert",
+            title="Session Continuity Alert",
+            message=f"{message}.{details}",
+            severity="warning",
+            requires_action=False,
+            metadata={"code": code, "alert": alert, "source": "session_continuity_metrics"},
+        )
+
+    for code in sorted(recovered):
+        _add_notification(
+            kind="continuity_recovered",
+            title="Session Continuity Recovered",
+            message=f"Continuity alert resolved: {code}.",
+            severity="info",
+            requires_action=False,
+            metadata={"code": code, "source": "session_continuity_metrics"},
+        )
+
+    _continuity_active_alerts = current_codes
+
+
+def _observability_metrics_snapshot() -> dict[str, Any]:
+    duplicate_prevented = (
+        int(_observability_metrics.get("turn_busy_rejected", 0) or 0)
+        + int(_observability_metrics.get("turn_duplicate_in_progress", 0) or 0)
+        + int(_observability_metrics.get("turn_duplicate_completed", 0) or 0)
+    )
+    continuity = _continuity_alerts_snapshot()
+    return {
+        **_observability_metrics,
+        "duplicate_turn_prevention_count": duplicate_prevented,
+        "resume_success_rate": continuity.get("resume_success_rate"),
+        "attach_success_rate": continuity.get("attach_success_rate"),
+        "continuity_status": continuity.get("continuity_status"),
+        "alerts": continuity.get("alerts"),
+    }
+
+
+def _session_runtime_snapshot(session_id: str) -> dict[str, Any]:
+    state = _session_runtime.get(session_id)
+    if not state:
+        state = {
+            "session_id": session_id,
+            "lifecycle_state": SESSION_STATE_IDLE,
+            "last_event_seq": 0,
+            "last_activity_at": _now_iso(),
+            "active_connections": 0,
+            "active_runs": 0,
+            "last_event_type": None,
+            "terminal_reason": None,
+        }
+        _session_runtime[session_id] = state
+    return state
+
+
+def _runtime_status_from_counters(state: dict[str, Any]) -> str:
+    if str(state.get("lifecycle_state")) == SESSION_STATE_TERMINAL:
+        return SESSION_STATE_TERMINAL
+    return SESSION_STATE_RUNNING if int(state.get("active_runs", 0)) > 0 else SESSION_STATE_IDLE
+
+
+def _sync_runtime_metadata(session_id: str) -> None:
+    session = _sessions.get(session_id)
+    if not session:
+        return
+    runtime = _session_runtime_snapshot(session_id)
+    session.metadata["runtime"] = {
+        "lifecycle_state": runtime.get("lifecycle_state", SESSION_STATE_IDLE),
+        "last_event_seq": int(runtime.get("last_event_seq", 0)),
+        "last_activity_at": runtime.get("last_activity_at"),
+        "active_connections": int(runtime.get("active_connections", 0)),
+        "active_runs": int(runtime.get("active_runs", 0)),
+        "last_event_type": runtime.get("last_event_type"),
+        "terminal_reason": runtime.get("terminal_reason"),
+    }
+
+
+def _record_session_event(session_id: str, event_type: Optional[str] = None) -> None:
+    runtime = _session_runtime_snapshot(session_id)
+    runtime["last_event_seq"] = int(runtime.get("last_event_seq", 0)) + 1
+    runtime["last_activity_at"] = _now_iso()
+    if event_type:
+        runtime["last_event_type"] = event_type
+    _sync_runtime_metadata(session_id)
+
+
+def _session_turn_lock(session_id: str) -> asyncio.Lock:
+    lock = _session_turn_locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_turn_locks[session_id] = lock
+    return lock
+
+
+def _session_turn_snapshot(session_id: str) -> dict[str, Any]:
+    snapshot = _session_turn_state.get(session_id)
+    if not snapshot:
+        snapshot = {
+            "session_id": session_id,
+            "active_turn_id": None,
+            "turns": {},
+            "last_turn_id": None,
+        }
+        _session_turn_state[session_id] = snapshot
+    return snapshot
+
+
+def _normalize_client_turn_id(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if len(text) > 128:
+        text = text[:128]
+    return text
+
+
+def _compute_turn_fingerprint(user_input: str, force_complex: bool, metadata: dict[str, Any]) -> str:
+    # Keep fallback fingerprint coarse and stable across retries so it can block
+    # accidental duplicate side effects from clients that do not send client_turn_id.
+    payload = {
+        "user_input": user_input,
+        "force_complex": bool(force_complex),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str, ensure_ascii=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _trim_turn_history(state: dict[str, Any]) -> None:
+    turns = state.get("turns", {})
+    if not isinstance(turns, dict):
+        return
+    overflow = len(turns) - TURN_HISTORY_LIMIT
+    if overflow <= 0:
+        return
+    active_turn_id = state.get("active_turn_id")
+    for turn_id in list(turns.keys()):
+        if overflow <= 0:
+            break
+        if turn_id == active_turn_id:
+            continue
+        turns.pop(turn_id, None)
+        overflow -= 1
+
+
+def _admit_turn(
+    session_id: str,
+    connection_id: str,
+    user_input: str,
+    force_complex: bool,
+    metadata: dict[str, Any],
+    client_turn_id: Optional[str],
+) -> dict[str, Any]:
+    state = _session_turn_snapshot(session_id)
+    turns = state["turns"]
+    assert isinstance(turns, dict)
+    fingerprint = _compute_turn_fingerprint(user_input, force_complex, metadata)
+
+    active_turn_id = state.get("active_turn_id")
+    if active_turn_id:
+        active_record = turns.get(active_turn_id)
+        if isinstance(active_record, dict) and active_record.get("status") == TURN_STATUS_RUNNING:
+            # Explicit idempotency key repeated while running.
+            if client_turn_id and client_turn_id == active_turn_id:
+                return {"decision": "duplicate_in_progress", "turn_id": active_turn_id, "record": active_record}
+            # Fallback for clients without explicit turn IDs.
+            if not client_turn_id and active_record.get("fingerprint") == fingerprint:
+                return {"decision": "duplicate_in_progress", "turn_id": active_turn_id, "record": active_record}
+            return {"decision": "busy", "turn_id": active_turn_id, "record": active_record}
+        state["active_turn_id"] = None
+
+    if not client_turn_id:
+        now = datetime.now().timestamp()
+        for prior_turn_id in reversed(list(turns.keys())):
+            prior_record = turns.get(prior_turn_id)
+            if not isinstance(prior_record, dict):
+                continue
+            if prior_record.get("fingerprint") != fingerprint:
+                continue
+            prior_status = str(prior_record.get("status"))
+            if prior_status == TURN_STATUS_RUNNING:
+                return {"decision": "duplicate_in_progress", "turn_id": str(prior_turn_id), "record": prior_record}
+            if prior_status == TURN_STATUS_COMPLETED:
+                finished = _parse_iso_timestamp(prior_record.get("finished_at") or prior_record.get("started_at"))
+                if finished is None:
+                    return {"decision": "duplicate_completed", "turn_id": str(prior_turn_id), "record": prior_record}
+                if (now - finished.timestamp()) <= TURN_FINGERPRINT_DEDUPE_WINDOW_SECONDS:
+                    return {"decision": "duplicate_completed", "turn_id": str(prior_turn_id), "record": prior_record}
+
+    if client_turn_id and client_turn_id in turns:
+        record = turns[client_turn_id]
+        if isinstance(record, dict):
+            status = str(record.get("status", TURN_STATUS_COMPLETED))
+            if status == TURN_STATUS_RUNNING:
+                return {"decision": "duplicate_in_progress", "turn_id": client_turn_id, "record": record}
+            return {"decision": "duplicate_completed", "turn_id": client_turn_id, "record": record}
+
+    turn_id = client_turn_id or f"turn_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+    record = {
+        "turn_id": turn_id,
+        "client_turn_id": client_turn_id,
+        "status": TURN_STATUS_RUNNING,
+        "started_at": _now_iso(),
+        "origin_connection_id": connection_id,
+        "fingerprint": fingerprint,
+    }
+    turns[turn_id] = record
+    state["active_turn_id"] = turn_id
+    state["last_turn_id"] = turn_id
+    _trim_turn_history(state)
+    return {"decision": "accepted", "turn_id": turn_id, "record": record}
+
+
+def _finalize_turn(session_id: str, turn_id: str, status: str, error_message: Optional[str] = None) -> None:
+    state = _session_turn_snapshot(session_id)
+    turns = state.get("turns", {})
+    if not isinstance(turns, dict):
+        return
+    record = turns.get(turn_id)
+    if not isinstance(record, dict):
+        return
+    record["status"] = status
+    record["finished_at"] = _now_iso()
+    if error_message:
+        record["error_message"] = error_message
+    if state.get("active_turn_id") == turn_id:
+        state["active_turn_id"] = None
+
+
+def _set_session_connections(session_id: str, count: int) -> None:
+    runtime = _session_runtime_snapshot(session_id)
+    runtime["active_connections"] = max(0, int(count))
+    runtime["last_activity_at"] = _now_iso()
+    runtime["lifecycle_state"] = _runtime_status_from_counters(runtime)
+    _sync_runtime_metadata(session_id)
+
+
+def _increment_session_active_runs(session_id: str) -> None:
+    runtime = _session_runtime_snapshot(session_id)
+    runtime["active_runs"] = int(runtime.get("active_runs", 0)) + 1
+    runtime["lifecycle_state"] = SESSION_STATE_RUNNING
+    runtime["terminal_reason"] = None
+    runtime["last_activity_at"] = _now_iso()
+    _sync_runtime_metadata(session_id)
+
+
+def _decrement_session_active_runs(session_id: str) -> None:
+    runtime = _session_runtime_snapshot(session_id)
+    runtime["active_runs"] = max(0, int(runtime.get("active_runs", 0)) - 1)
+    runtime["lifecycle_state"] = _runtime_status_from_counters(runtime)
+    runtime["last_activity_at"] = _now_iso()
+    _sync_runtime_metadata(session_id)
+
+
+def _mark_session_terminal(session_id: str, reason: str) -> None:
+    runtime = _session_runtime_snapshot(session_id)
+    runtime["active_runs"] = 0
+    runtime["active_connections"] = 0
+    runtime["lifecycle_state"] = SESSION_STATE_TERMINAL
+    runtime["terminal_reason"] = reason
+    runtime["last_activity_at"] = _now_iso()
+    _sync_runtime_metadata(session_id)
 
 
 def _emit_cron_event(payload: dict) -> None:
@@ -394,6 +820,83 @@ def _add_notification(
         if session_id in manager.session_connections:
             _broadcast_system_event(session_id, event)
     return record
+
+
+def _normalize_notification_status(status: str) -> str:
+    return str(status or "").strip().lower()
+
+
+def _resolve_snooze_minutes(value: Optional[int]) -> int:
+    if value is None:
+        return max(1, min(NOTIFICATION_SNOOZE_MINUTES_DEFAULT, NOTIFICATION_SNOOZE_MINUTES_MAX))
+    try:
+        parsed = int(value)
+    except Exception:
+        parsed = NOTIFICATION_SNOOZE_MINUTES_DEFAULT
+    return max(1, min(parsed, NOTIFICATION_SNOOZE_MINUTES_MAX))
+
+
+def _parse_snooze_until(metadata: dict[str, Any]) -> Optional[float]:
+    until_ts = metadata.get("snooze_until_ts")
+    if isinstance(until_ts, (int, float)):
+        return float(until_ts)
+    until_raw = metadata.get("snooze_until")
+    if isinstance(until_raw, str) and until_raw.strip():
+        parsed = _parse_iso_timestamp(until_raw.strip())
+        if parsed:
+            return parsed.timestamp()
+    return None
+
+
+def _apply_notification_status(
+    item: dict[str, Any],
+    *,
+    status_value: str,
+    note: Optional[str] = None,
+    snooze_minutes: Optional[int] = None,
+) -> dict[str, Any]:
+    normalized = _normalize_notification_status(status_value)
+    item["status"] = normalized
+    item["updated_at"] = datetime.now().isoformat()
+    metadata = item.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+        item["metadata"] = metadata
+    if note:
+        metadata["note"] = note
+    if normalized == "snoozed":
+        minutes = _resolve_snooze_minutes(snooze_minutes)
+        until_ts = time.time() + (minutes * 60)
+        metadata["snooze_minutes"] = minutes
+        metadata["snooze_until_ts"] = until_ts
+        metadata["snooze_until"] = datetime.fromtimestamp(until_ts).isoformat()
+    else:
+        metadata.pop("snooze_until_ts", None)
+        metadata.pop("snooze_until", None)
+        metadata.pop("snooze_minutes", None)
+    return item
+
+
+def _apply_notification_snooze_expiry() -> int:
+    now_ts = time.time()
+    changed = 0
+    for item in _notifications:
+        if _normalize_notification_status(item.get("status")) != "snoozed":
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        until_ts = _parse_snooze_until(metadata)
+        if until_ts is None or until_ts > now_ts:
+            continue
+        item["status"] = "new"
+        item["updated_at"] = datetime.now().isoformat()
+        metadata["snooze_expired_at"] = item["updated_at"]
+        metadata.pop("snooze_until_ts", None)
+        metadata.pop("snooze_until", None)
+        metadata.pop("snooze_minutes", None)
+        changed += 1
+    return changed
 
 
 def _approval_status(approval_id: str) -> Optional[str]:
@@ -612,6 +1115,11 @@ def get_gateway() -> InProcessGateway:
 
 def store_session(session: GatewaySession) -> None:
     _sessions[session.session_id] = session
+    runtime = _session_runtime_snapshot(session.session_id)
+    if "manager" in globals():
+        runtime["active_connections"] = len(manager.session_connections.get(session.session_id, set()))
+    runtime["lifecycle_state"] = _runtime_status_from_counters(runtime)
+    _sync_runtime_metadata(session.session_id)
 
 
 def get_session(session_id: str) -> Optional[GatewaySession]:
@@ -644,6 +1152,66 @@ def _session_policy(session: GatewaySession) -> dict:
     )
     save_session_policy(session.workspace_dir, policy)
     return policy
+
+
+def _policy_metadata_snapshot(policy: dict[str, Any]) -> dict[str, Any]:
+    memory = normalize_memory_policy(policy.get("memory") if isinstance(policy, dict) else None)
+    return {
+        "autonomy_mode": policy.get("autonomy_mode"),
+        "identity_mode": policy.get("identity_mode"),
+        "tool_profile": policy.get("tool_profile"),
+        "memory_mode": memory.get("mode"),
+        "session_memory_enabled": memory.get("session_memory_enabled"),
+        "memory_tags": memory.get("tags", []),
+        "long_term_tag_allowlist": memory.get("long_term_tag_allowlist", []),
+    }
+
+
+def _mark_run_cancel_requested(run_id: Optional[str], reason: str) -> Optional[str]:
+    if not run_id:
+        return None
+    try:
+        import universal_agent.main as main_module
+        from universal_agent.durable.state import request_run_cancel
+
+        if main_module.runtime_db_conn:
+            request_run_cancel(main_module.runtime_db_conn, run_id, reason)
+            logger.info("Marked run %s as cancel_requested", run_id)
+    except Exception as cancel_err:
+        logger.warning("Failed to mark run as cancelled: %s", cancel_err)
+    return run_id
+
+
+async def _cancel_session_execution(session_id: str, reason: str, run_id: Optional[str] = None) -> dict:
+    if not run_id:
+        session = get_session(session_id)
+        if session:
+            run_id = session.metadata.get("run_id")
+    marked_run_id = _mark_run_cancel_requested(run_id, reason)
+
+    await manager.broadcast(
+        session_id,
+        {
+            "type": "cancelled",
+            "data": {
+                "reason": reason,
+                "run_id": marked_run_id,
+                "session_id": session_id,
+            },
+            "timestamp": datetime.now().isoformat(),
+        },
+    )
+
+    _add_notification(
+        kind="cancelled",
+        title="Session Cancelled",
+        message=reason,
+        session_id=session_id,
+        severity="warning",
+        metadata={"source": "ops"},
+    )
+
+    return {"status": "cancel_requested", "session_id": session_id, "run_id": marked_run_id, "reason": reason}
 
 
 def is_user_allowed(user_id: str) -> bool:
@@ -691,6 +1259,7 @@ class ConnectionManager:
         if session_id not in self.session_connections:
             self.session_connections[session_id] = set()
         self.session_connections[session_id].add(connection_id)
+        _set_session_connections(session_id, len(self.session_connections.get(session_id, set())))
         
         logger.info(f"Gateway WebSocket connected: {connection_id} (session: {session_id})")
 
@@ -703,16 +1272,20 @@ class ConnectionManager:
             self.session_connections[session_id].discard(connection_id)
             if not self.session_connections[session_id]:
                 del self.session_connections[session_id]
+        _set_session_connections(session_id, len(self.session_connections.get(session_id, set())))
 
-    async def send_json(self, connection_id: str, data: dict):
+    async def send_json(self, connection_id: str, data: dict, session_id: Optional[str] = None):
         if connection_id in self.active_connections:
             try:
                 await self.active_connections[connection_id].send_text(json.dumps(data))
+                if session_id:
+                    _record_session_event(session_id, str(data.get("type", "")))
             except Exception as e:
                 logger.error(f"Failed to send to {connection_id}: {e}")
 
     async def broadcast(self, session_id: str, data: dict, exclude_connection_id: Optional[str] = None):
         """Send a message to all connections associated with a session_id."""
+        _record_session_event(session_id, str(data.get("type", "")))
         if session_id not in self.session_connections:
             return
 
@@ -902,12 +1475,9 @@ async def create_session(request: CreateSessionRequest):
             workspace_dir=workspace_dir,
         )
         policy = _session_policy(session)
-        session.metadata["policy"] = {
-            "autonomy_mode": policy.get("autonomy_mode"),
-            "identity_mode": policy.get("identity_mode"),
-            "tool_profile": policy.get("tool_profile"),
-        }
+        session.metadata["policy"] = _policy_metadata_snapshot(policy)
         store_session(session)
+        _increment_metric("sessions_created")
         if _heartbeat_service:
             _heartbeat_service.register_session(session)
         else:
@@ -942,6 +1512,7 @@ async def list_sessions():
 
 @app.get("/api/v1/dashboard/summary")
 async def dashboard_summary():
+    _apply_notification_snooze_expiry()
     sessions_total = 0
     if _ops_service:
         try:
@@ -951,7 +1522,15 @@ async def dashboard_summary():
     else:
         sessions_total = len(_sessions)
 
-    active_sessions = sum(1 for s in _sessions.values() if s)
+    if _session_runtime:
+        active_sessions = sum(
+            1
+            for runtime in _session_runtime.values()
+            if str(runtime.get("lifecycle_state")) == SESSION_STATE_RUNNING
+            or int(runtime.get("active_connections", 0)) > 0
+        )
+    else:
+        active_sessions = sum(1 for s in _sessions.values() if s)
     pending_approvals = len(list_approvals(status="pending"))
     unread_notifications = sum(
         1 for item in _notifications if str(item.get("status", "new")).lower() in {"new", "pending"}
@@ -990,6 +1569,7 @@ async def dashboard_notifications(
     status: Optional[str] = None,
     session_id: Optional[str] = None,
 ):
+    _apply_notification_snooze_expiry()
     items = list(_notifications)
     if status:
         status_norm = status.strip().lower()
@@ -1003,19 +1583,53 @@ async def dashboard_notifications(
 
 @app.patch("/api/v1/dashboard/notifications/{notification_id}")
 async def dashboard_notification_update(notification_id: str, payload: NotificationUpdateRequest):
-    status_value = payload.status.strip().lower()
-    if status_value not in {"new", "read", "acknowledged", "dismissed"}:
+    status_value = _normalize_notification_status(payload.status)
+    if status_value not in {"new", "read", "acknowledged", "snoozed", "dismissed"}:
         raise HTTPException(status_code=400, detail="Invalid status")
     for item in reversed(_notifications):
         if item.get("id") == notification_id:
-            item["status"] = status_value
-            item["updated_at"] = datetime.now().isoformat()
-            if payload.note:
-                metadata = item.setdefault("metadata", {})
-                if isinstance(metadata, dict):
-                    metadata["note"] = payload.note
+            _apply_notification_status(
+                item,
+                status_value=status_value,
+                note=payload.note,
+                snooze_minutes=payload.snooze_minutes,
+            )
             return {"notification": item}
     raise HTTPException(status_code=404, detail="Notification not found")
+
+
+@app.post("/api/v1/dashboard/notifications/bulk")
+async def dashboard_notification_bulk_update(payload: NotificationBulkUpdateRequest):
+    status_value = _normalize_notification_status(payload.status)
+    if status_value not in {"new", "read", "acknowledged", "snoozed", "dismissed"}:
+        raise HTTPException(status_code=400, detail="Invalid status")
+
+    _apply_notification_snooze_expiry()
+    kind_filter = str(payload.kind or "").strip().lower()
+    current_status_filter = _normalize_notification_status(payload.current_status or "")
+    limit = max(1, min(int(payload.limit or 200), 1000))
+    updated: list[dict[str, Any]] = []
+
+    for item in reversed(_notifications):
+        if len(updated) >= limit:
+            break
+        if kind_filter and str(item.get("kind", "")).strip().lower() != kind_filter:
+            continue
+        if current_status_filter and _normalize_notification_status(item.get("status")) != current_status_filter:
+            continue
+        _apply_notification_status(
+            item,
+            status_value=status_value,
+            note=payload.note,
+            snooze_minutes=payload.snooze_minutes,
+        )
+        updated.append(item)
+
+    return {
+        "updated": len(updated),
+        "status": status_value,
+        "notifications": updated,
+    }
 
 
 @app.post("/api/v1/heartbeat/wake")
@@ -1275,19 +1889,18 @@ async def get_session_info(session_id: str):
     session_id = _sanitize_session_id_or_400(session_id)
     session = get_session(session_id)
     if not session:
+        _increment_metric("resume_attempts")
         gateway = get_gateway()
         try:
             session = await gateway.resume_session(session_id)
             policy = _session_policy(session)
-            session.metadata["policy"] = {
-                "autonomy_mode": policy.get("autonomy_mode"),
-                "identity_mode": policy.get("identity_mode"),
-                "tool_profile": policy.get("tool_profile"),
-            }
+            session.metadata["policy"] = _policy_metadata_snapshot(policy)
             store_session(session)
+            _increment_metric("resume_successes")
             if _heartbeat_service:
                 _heartbeat_service.register_session(session)
         except ValueError:
+            _increment_metric("resume_failures")
             raise HTTPException(status_code=404, detail="Session not found")
             
     # Allowlist check for resume (optional, but good practice)
@@ -1324,11 +1937,7 @@ async def patch_session_policy(session_id: str, payload: SessionPolicyPatchReque
         session_id=session.session_id,
         user_id=session.user_id,
     )
-    session.metadata["policy"] = {
-        "autonomy_mode": updated.get("autonomy_mode"),
-        "identity_mode": updated.get("identity_mode"),
-        "tool_profile": updated.get("tool_profile"),
-    }
+    session.metadata["policy"] = _policy_metadata_snapshot(updated)
     return {"session_id": session_id, "policy": updated}
 
 
@@ -1368,10 +1977,14 @@ async def resume_gated_request(session_id: str, payload: ResumeRequest):
 @app.delete("/api/v1/sessions/{session_id}")
 async def delete_session(session_id: str):
     session_id = _sanitize_session_id_or_400(session_id)
+    _mark_session_terminal(session_id, "deleted")
     _sessions.pop(session_id, None)
     _pending_gated_requests.pop(session_id, None)
+    _session_turn_state.pop(session_id, None)
+    _session_turn_locks.pop(session_id, None)
     gateway = get_gateway()
     await gateway.close_session(session_id)
+    _session_runtime.pop(session_id, None)
     if _heartbeat_service:
         _heartbeat_service.unregister_session(session_id)
     return {"status": "deleted", "session_id": session_id}
@@ -1384,18 +1997,35 @@ async def delete_session(session_id: str):
 
 @app.get("/api/v1/ops/sessions")
 async def ops_list_sessions(
-    request: Request, limit: int = 100, offset: int = 0, status: str = "all"
+    request: Request,
+    limit: int = 100,
+    offset: int = 0,
+    status: str = "all",
+    source: str = "all",
+    owner: Optional[str] = None,
+    memory_mode: str = "all",
 ):
     _require_ops_auth(request)
     if not _ops_service:
         raise HTTPException(status_code=503, detail="Ops service not initialized")
-    summaries = _ops_service.list_sessions(status_filter=status)
+    summaries = _ops_service.list_sessions(
+        status_filter=status,
+        source_filter=source,
+        owner_filter=owner,
+        memory_mode_filter=memory_mode,
+    )
     return {
         "sessions": summaries[offset : offset + limit],
         "total": len(summaries),
         "limit": limit,
         "offset": offset,
     }
+
+
+@app.get("/api/v1/ops/metrics/session-continuity")
+async def ops_session_continuity_metrics(request: Request):
+    _require_ops_auth(request)
+    return {"metrics": _observability_metrics_snapshot()}
 
 
 @app.get("/api/v1/ops/sessions/{session_id}")
@@ -1439,6 +2069,40 @@ async def ops_session_reset(
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
+
+
+@app.post("/api/v1/ops/sessions/{session_id}/archive")
+async def ops_session_archive(
+    request: Request, session_id: str, payload: OpsSessionArchiveRequest
+):
+    _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    result = _ops_service.archive_session(
+        session_id,
+        clear_memory=payload.clear_memory,
+        clear_work_products=payload.clear_work_products,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.post("/api/v1/ops/sessions/{session_id}/cancel")
+async def ops_session_cancel(
+    request: Request, session_id: str, payload: OpsSessionCancelRequest
+):
+    _require_ops_auth(request)
+    session_id = _sanitize_session_id_or_400(session_id)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+    if not _ops_service.get_session_details(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    reason = (payload.reason or "Cancelled from ops panel").strip()
+    if not reason:
+        reason = "Cancelled from ops panel"
+    return await _cancel_session_execution(session_id, reason)
 
 
 @app.post("/api/v1/ops/sessions/{session_id}/compact")
@@ -1690,17 +2354,22 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
     connection_id = f"gw_{session_id}_{time.time()}"
     # Register connection with session_id
     await manager.connect(connection_id, websocket, session_id)
+    _increment_metric("ws_attach_attempts")
 
     gateway = get_gateway()
     session = get_session(session_id)
 
     if not session:
+        _increment_metric("resume_attempts")
         try:
             session = await gateway.resume_session(session_id)
             store_session(session)
+            _increment_metric("resume_successes")
             if _heartbeat_service:
                 _heartbeat_service.register_session(session)
         except ValueError:
+            _increment_metric("resume_failures")
+            _increment_metric("ws_attach_failures")
             await websocket.close(code=4004, reason="Session not found")
             manager.disconnect(connection_id, session_id)
             return
@@ -1708,6 +2377,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
     # 1. Enforce Allowlist for WebSocket
     if not is_user_allowed(session.user_id):
         logger.warning(f"⛔ Access Denied (WS): User '{session.user_id}' not in allowlist.")
+        _increment_metric("ws_attach_failures")
         await websocket.close(code=4003, reason="Access denied")
         manager.disconnect(connection_id, session_id)
         return
@@ -1723,7 +2393,9 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
             },
             "timestamp": datetime.now().isoformat(),
         },
+        session_id=session_id,
     )
+    _increment_metric("ws_attach_successes")
 
     try:
         while True:
@@ -1743,15 +2415,20 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 "data": {"message": "Empty user_input"},
                                 "timestamp": datetime.now().isoformat(),
                             },
+                            session_id=session_id,
                         )
                         continue
 
-                    metadata = msg.get("data", {}).get("metadata", {}) or {}
+                    raw_data = msg.get("data", {}) or {}
+                    client_turn_id = _normalize_client_turn_id(raw_data.get("client_turn_id"))
+                    metadata = raw_data.get("metadata", {}) or {}
                     if not isinstance(metadata, dict):
                         metadata = {"raw": metadata}
                     system_events = _drain_system_events(session_id)
                     if system_events:
                         metadata = {**metadata, "system_events": system_events}
+                    policy = _session_policy(session)
+                    memory_policy = normalize_memory_policy(policy.get("memory"))
 
                     resume_requested = user_input.strip().lower() in {"resume", "continue", "/resume"}
                     pending_gate = _pending_gated_requests.get(session_id)
@@ -1767,13 +2444,14 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     },
                                     "timestamp": datetime.now().isoformat(),
                                 },
+                                session_id=session_id,
                             )
                             continue
                         saved_request = pending_gate.get("request", {})
                         if not isinstance(saved_request, dict):
                             saved_request = {}
                         user_input = str(saved_request.get("user_input") or user_input)
-                        force_complex = bool(saved_request.get("force_complex", msg.get("data", {}).get("force_complex", False)))
+                        force_complex = bool(saved_request.get("force_complex", raw_data.get("force_complex", False)))
                         saved_metadata = saved_request.get("metadata", {})
                         if not isinstance(saved_metadata, dict):
                             saved_metadata = {}
@@ -1781,14 +2459,20 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             **saved_metadata,
                             "resumed": True,
                             "identity_mode": pending_gate.get("identity_mode") or saved_metadata.get("identity_mode", "persona"),
+                            "autonomy_mode": policy.get("autonomy_mode", "yolo"),
+                            "memory_policy": memory_policy,
+                            "memory_mode": memory_policy.get("mode"),
+                            "memory_tags": memory_policy.get("tags", []),
                         }
                         clear_pending_gate_on_success = True
                     else:
-                        policy = _session_policy(session)
                         metadata = {
                             **metadata,
                             "identity_mode": policy.get("identity_mode", "persona"),
                             "autonomy_mode": policy.get("autonomy_mode", "yolo"),
+                            "memory_policy": memory_policy,
+                            "memory_mode": memory_policy.get("mode"),
+                            "memory_tags": memory_policy.get("tags", []),
                         }
                         evaluation = evaluate_request_against_policy(
                             policy,
@@ -1817,6 +2501,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "data": {"message": reason_text, "categories": categories},
                                     "timestamp": datetime.now().isoformat(),
                                 },
+                                session_id=session_id,
                             )
                             continue
 
@@ -1844,7 +2529,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 "created_at": datetime.now().isoformat(),
                                 "request": {
                                     "user_input": user_input,
-                                    "force_complex": msg.get("data", {}).get("force_complex", False),
+                                    "force_complex": raw_data.get("force_complex", False),
                                     "metadata": metadata,
                                 },
                                 "identity_mode": policy.get("identity_mode", "persona"),
@@ -1873,15 +2558,93 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     },
                                     "timestamp": datetime.now().isoformat(),
                                 },
+                                session_id=session_id,
                             )
                             continue
 
-                        force_complex = msg.get("data", {}).get("force_complex", False)
+                        force_complex = raw_data.get("force_complex", False)
+
+                    async with _session_turn_lock(session_id):
+                        admission = _admit_turn(
+                            session_id=session_id,
+                            connection_id=connection_id,
+                            user_input=user_input,
+                            force_complex=bool(force_complex),
+                            metadata=metadata,
+                            client_turn_id=client_turn_id,
+                        )
+
+                    decision = str(admission.get("decision", "accepted"))
+                    admitted_turn_id = str(admission.get("turn_id") or "")
+                    if decision == "busy":
+                        _increment_metric("turn_busy_rejected")
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "status",
+                                "data": {
+                                    "status": "turn_rejected_busy",
+                                    "active_turn_id": admitted_turn_id,
+                                    "message": "Another turn is currently running for this session.",
+                                },
+                                "timestamp": datetime.now().isoformat(),
+                            },
+                            session_id=session_id,
+                        )
+                        continue
+                    if decision == "duplicate_in_progress":
+                        _increment_metric("turn_duplicate_in_progress")
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "status",
+                                "data": {
+                                    "status": "turn_in_progress",
+                                    "turn_id": admitted_turn_id,
+                                    "message": "This turn is already in progress.",
+                                },
+                                "timestamp": datetime.now().isoformat(),
+                            },
+                            session_id=session_id,
+                        )
+                        continue
+                    if decision == "duplicate_completed":
+                        _increment_metric("turn_duplicate_completed")
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "status",
+                                "data": {
+                                    "status": "duplicate_turn_ignored",
+                                    "turn_id": admitted_turn_id,
+                                    "message": "Duplicate turn ignored; request already processed.",
+                                },
+                                "timestamp": datetime.now().isoformat(),
+                            },
+                            session_id=session_id,
+                        )
+                        await manager.send_json(
+                            connection_id,
+                            {
+                                "type": "query_complete",
+                                "data": {"turn_id": admitted_turn_id},
+                                "timestamp": datetime.now().isoformat(),
+                            },
+                            session_id=session_id,
+                        )
+                        continue
+
+                    request_metadata = {
+                        **metadata,
+                        "turn_id": admitted_turn_id,
+                    }
+                    if client_turn_id:
+                        request_metadata["client_turn_id"] = client_turn_id
 
                     request = GatewayRequest(
                         user_input=user_input,
                         force_complex=force_complex,
-                        metadata=metadata,
+                        metadata=request_metadata,
                     )
                     logger.info(
                         "WS execute start (session=%s, user_id=%s, len=%s)",
@@ -1889,8 +2652,9 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         session.user_id,
                         len(user_input),
                     )
+                    _increment_session_active_runs(session_id)
 
-                    async def run_execution():
+                    async def run_execution(turn_id: str):
                         saw_streaming_text = False
                         tool_call_count = 0
                         execution_duration_seconds = 0.0
@@ -1898,7 +2662,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         if _heartbeat_service:
                             _heartbeat_service.busy_sessions.add(session.session_id)
                         try:
-                            # Execute the request and stream back to THIS connection
+                            # Execute the request and stream to all attached clients for this session.
                             async for event in gateway.execute(session, request):
                                 if event.type == EventType.TOOL_CALL:
                                     tool_call_count += 1
@@ -1937,7 +2701,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                         session.session_id,
                                         event.data,
                                     )
-                                await manager.send_json(connection_id, agent_event_to_wire(event))
+                                await manager.broadcast(session_id, agent_event_to_wire(event))
 
                             # Generate checkpoint for next session/follow-up
                             try:
@@ -1972,22 +2736,24 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 },
                             )
 
-                            await manager.send_json(
-                                connection_id,
+                            await manager.broadcast(
+                                session_id,
                                 {
                                     "type": "query_complete",
-                                    "data": {},
+                                    "data": {"turn_id": turn_id},
                                     "timestamp": datetime.now().isoformat(),
                                 },
                             )
 
-                            await manager.send_json(
-                                connection_id,
+                            await manager.broadcast(
+                                session_id,
                                 {"type": "pong", "data": {}, "timestamp": datetime.now().isoformat()},
                             )
                             logger.info("WS execute complete (session=%s)", session_id)
                             if clear_pending_gate_on_success:
                                 _pending_gated_requests.pop(session_id, None)
+                            async with _session_turn_lock(session_id):
+                                _finalize_turn(session_id, turn_id, TURN_STATUS_COMPLETED)
                         except Exception as e:
                             logger.error("Execution error for session %s: %s", session_id, e, exc_info=True)
                             _add_notification(
@@ -1998,19 +2764,22 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 severity="error",
                                 requires_action=True,
                             )
-                            await manager.send_json(
-                                connection_id,
+                            await manager.broadcast(
+                                session_id,
                                 {
                                     "type": "error",
                                     "data": {"message": str(e)},
                                     "timestamp": datetime.now().isoformat(),
                                 },
                             )
+                            async with _session_turn_lock(session_id):
+                                _finalize_turn(session_id, turn_id, TURN_STATUS_FAILED, error_message=str(e))
                         finally:
+                            _decrement_session_active_runs(session_id)
                             if _heartbeat_service:
                                 _heartbeat_service.busy_sessions.discard(session.session_id)
                     
-                    asyncio.create_task(run_execution())
+                    asyncio.create_task(run_execution(admitted_turn_id))
                 
                 elif msg_type == "input_response":
                     input_id = msg.get("data", {}).get("input_id", "default")
@@ -2048,35 +2817,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     reason = msg.get("data", {}).get("reason", "User requested stop")
                     run_id = session.metadata.get("run_id")
                     logger.info("Cancel request received (session=%s, run=%s, reason=%s)", session_id, run_id, reason)
-                    
-                    # Mark the run as cancel_requested in the durable DB
-                    if run_id:
-                        try:
-                            import universal_agent.main as main_module
-                            from universal_agent.durable.state import request_run_cancel
-                            if main_module.runtime_db_conn:
-                                request_run_cancel(main_module.runtime_db_conn, run_id, reason)
-                                logger.info("Marked run %s as cancel_requested", run_id)
-                        except Exception as cancel_err:
-                            logger.warning("Failed to mark run as cancelled: %s", cancel_err)
-                    
-                    # Broadcast cancelled event to all connections for this session
-                    await manager.broadcast(session_id, {
-                        "type": "cancelled",
-                        "data": {
-                            "reason": reason,
-                            "run_id": run_id,
-                            "session_id": session_id,
-                        },
-                        "timestamp": datetime.now().isoformat(),
-                    })
-                    _add_notification(
-                        kind="cancelled",
-                        title="Session Cancelled",
-                        message=reason,
-                        session_id=session_id,
-                        severity="warning",
-                    )
+                    await _cancel_session_execution(session_id, reason, run_id=run_id)
 
                 else:
                     await manager.send_json(
@@ -2086,6 +2827,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             "data": {"message": f"Unknown message type: {msg_type}"},
                             "timestamp": datetime.now().isoformat(),
                         },
+                        session_id=session_id,
                     )
 
             except json.JSONDecodeError:
@@ -2096,6 +2838,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         "data": {"message": "Invalid JSON"},
                         "timestamp": datetime.now().isoformat(),
                     },
+                    session_id=session_id,
                 )
             except Exception as e:
                 logger.error(f"Error handling message: {e}")
@@ -2106,6 +2849,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         "data": {"message": str(e)},
                         "timestamp": datetime.now().isoformat(),
                     },
+                    session_id=session_id,
                 )
 
     except WebSocketDisconnect:

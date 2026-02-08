@@ -4,16 +4,52 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAgentStore } from "@/lib/store";
+import { getWebSocket } from "@/lib/websocket";
 
 const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8002";
 const OPS_TOKEN = process.env.NEXT_PUBLIC_UA_OPS_TOKEN;
 
-type SessionSummary = { session_id: string; status: string; last_activity?: string; workspace_dir?: string };
+type SessionSummary = {
+  session_id: string;
+  status: string;
+  source?: string;
+  channel?: string;
+  owner?: string;
+  memory_mode?: string;
+  last_activity?: string;
+  workspace_dir?: string;
+  active_connections?: number;
+  active_runs?: number;
+};
 type SkillStatus = { name: string; enabled: boolean; available: boolean; unavailable_reason?: string | null };
 type SystemEventItem = { id: string; event_type: string; payload: Record<string, unknown>; created_at?: string; session_id?: string; timestamp: number };
 type ChannelStatus = { id: string; label: string; enabled: boolean; configured: boolean; note?: string; probe?: { status?: string; checked_at?: string; http_status?: number; detail?: string } };
 type ApprovalRecord = { approval_id: string; status?: string; summary?: string; requested_by?: string; created_at?: number; updated_at?: number; metadata?: Record<string, unknown> };
 type HeartbeatState = { status: string; busy?: boolean; last_run?: number | string; last_summary_raw?: unknown; last_summary_text?: string; error?: string };
+type SessionContinuityMetrics = {
+  started_at?: string;
+  sessions_created?: number;
+  ws_attach_attempts?: number;
+  ws_attach_successes?: number;
+  ws_attach_failures?: number;
+  resume_attempts?: number;
+  resume_successes?: number;
+  resume_failures?: number;
+  turn_busy_rejected?: number;
+  turn_duplicate_in_progress?: number;
+  turn_duplicate_completed?: number;
+  duplicate_turn_prevention_count?: number;
+  resume_success_rate?: number | null;
+  attach_success_rate?: number | null;
+  continuity_status?: "ok" | "degraded";
+  alerts?: { code?: string; severity?: string; message?: string; actual?: number; threshold?: number }[];
+};
+type SessionContinuityState = {
+  status: string;
+  metrics?: SessionContinuityMetrics;
+  updated_at?: string;
+  error?: string;
+};
 
 function buildHeaders(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -34,11 +70,13 @@ function safeJsonParse(v: string): { ok: true; data: Record<string, unknown> } |
 type OpsCtx = {
   sessions: SessionSummary[]; skills: SkillStatus[]; channels: ChannelStatus[]; approvals: ApprovalRecord[];
   selected: string | null; setSelected: (id: string | null) => void;
-  logTail: string; loading: boolean; heartbeatState: HeartbeatState; mergedEvents: SystemEventItem[];
+  logTail: string; loading: boolean; heartbeatState: HeartbeatState; continuityState: SessionContinuityState; mergedEvents: SystemEventItem[];
   fetchSessions: () => Promise<void>; fetchSkills: () => Promise<void>; fetchChannels: () => Promise<void>;
+  fetchSessionContinuityMetrics: () => Promise<void>;
   fetchApprovals: () => Promise<void>; probeChannel: (id: string) => Promise<void>;
   updateApproval: (id: string, status: string) => Promise<void>; fetchLogs: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>; resetSession: (id: string) => Promise<void>; compactLogs: (id: string) => Promise<void>;
+  cancelSession: (id: string) => Promise<void>; archiveSession: (id: string) => Promise<void>;
   opsConfigText: string; setOpsConfigText: (t: string) => void; opsConfigStatus: string;
   opsConfigError: string | null; opsConfigSaving: boolean;
   loadOpsConfig: () => Promise<void>; saveOpsConfig: () => Promise<void>;
@@ -68,6 +106,7 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
   const [opsSchemaText, setOpsSchemaText] = useState("{}");
   const [opsSchemaStatus, setOpsSchemaStatus] = useState("Not loaded");
   const [heartbeatState, setHeartbeatState] = useState<HeartbeatState>({ status: "Not loaded" });
+  const [continuityState, setContinuityState] = useState<SessionContinuityState>({ status: "Not loaded" });
 
   const mergedEvents = useMemo(() => {
     const m = new Map<string, SystemEventItem>();
@@ -151,6 +190,34 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
     } catch (e) { setHeartbeatState({ status: "Error", error: (e as Error).message }); }
   }, []);
 
+  const fetchSessionContinuityMetrics = useCallback(async () => {
+    setContinuityState((prev) => ({ ...prev, status: "Loading..." }));
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/metrics/session-continuity`, { headers: buildHeaders() });
+      if (!r.ok) {
+        const dt = await r.text();
+        setContinuityState({
+          status: `Unavailable (${r.status})`,
+          error: dt || `Metrics endpoint unavailable (${r.status})`,
+          updated_at: new Date().toISOString(),
+        });
+        return;
+      }
+      const d = await r.json();
+      setContinuityState({
+        status: "OK",
+        metrics: (d.metrics || {}) as SessionContinuityMetrics,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      setContinuityState({
+        status: "Error",
+        error: (e as Error).message,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }, []);
+
   const deleteSession = useCallback(async (sid: string) => {
     if (!sid || !confirm(`Permanently delete session ${sid}?`)) return;
     try { const r = await fetch(`${API_BASE}/api/v1/ops/sessions/${sid}?confirm=true`, { method: "DELETE", headers: buildHeaders() }); if (r.ok) { setSelected(null); fetchSessions(); } else alert("Delete failed: " + r.statusText); }
@@ -168,6 +235,48 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
     try { const r = await fetch(`${API_BASE}/api/v1/ops/sessions/${sid}/compact`, { method: "POST", headers: { "Content-Type": "application/json", ...buildHeaders() }, body: JSON.stringify({ max_lines: 500, max_bytes: 250000 }) }); if (r.ok) { alert("Logs compacted"); if (selected === sid) fetchLogs(sid); } else alert("Compact failed: " + r.statusText); }
     catch (e) { console.error("Compact logs failed", e); alert("Compact failed"); }
   }, [selected, fetchLogs]);
+
+  const cancelSession = useCallback(async (sid: string) => {
+    if (!sid) return;
+    if (!confirm(`Cancel active work for session ${sid}?`)) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/sessions/${sid}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...buildHeaders() },
+        body: JSON.stringify({ reason: "Cancelled from ops session controls" }),
+      });
+      if (r.ok) {
+        fetchSessions();
+        alert("Cancel request sent");
+      } else {
+        alert("Cancel failed: " + r.statusText);
+      }
+    } catch (e) {
+      console.error("Cancel session failed", e);
+      alert("Cancel failed");
+    }
+  }, [fetchSessions]);
+
+  const archiveSession = useCallback(async (sid: string) => {
+    if (!sid) return;
+    if (!confirm(`Archive logs for session ${sid}?`)) return;
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/sessions/${sid}/archive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...buildHeaders() },
+        body: JSON.stringify({ clear_memory: false, clear_work_products: false }),
+      });
+      if (r.ok) {
+        fetchSessions();
+        alert("Session archived");
+      } else {
+        alert("Archive failed: " + r.statusText);
+      }
+    } catch (e) {
+      console.error("Archive session failed", e);
+      alert("Archive failed");
+    }
+  }, [fetchSessions]);
 
   const loadOpsSchema = useCallback(async () => {
     setOpsSchemaStatus("Loading...");
@@ -191,20 +300,27 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
 
   const refreshAll = useCallback(() => {
     fetchSessions(); fetchSkills(); fetchChannels(); fetchApprovals(); loadOpsConfig(); loadOpsSchema();
+    fetchSessionContinuityMetrics();
     if (selected) { fetchLogs(selected); fetchSystemEvents(selected); fetchHeartbeat(selected); }
-  }, [fetchSessions, fetchSkills, fetchChannels, fetchApprovals, loadOpsConfig, loadOpsSchema, selected, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
+  }, [fetchSessions, fetchSkills, fetchChannels, fetchApprovals, loadOpsConfig, loadOpsSchema, fetchSessionContinuityMetrics, selected, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
 
-  useEffect(() => { fetchSessions(); fetchSkills(); fetchChannels(); fetchApprovals(); loadOpsConfig(); loadOpsSchema(); }, [fetchApprovals, fetchChannels, fetchSessions, fetchSkills, loadOpsConfig, loadOpsSchema]);
+  useEffect(() => { fetchSessions(); fetchSkills(); fetchChannels(); fetchApprovals(); loadOpsConfig(); loadOpsSchema(); fetchSessionContinuityMetrics(); }, [fetchApprovals, fetchChannels, fetchSessions, fetchSkills, loadOpsConfig, loadOpsSchema, fetchSessionContinuityMetrics]);
   useEffect(() => { if (selected) { fetchLogs(selected); fetchSystemEvents(selected); fetchHeartbeat(selected); } }, [selected, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      fetchSessionContinuityMetrics();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [fetchSessionContinuityMetrics]);
 
   const val: OpsCtx = useMemo(() => ({
-    sessions, skills, channels, approvals, selected, setSelected, logTail, loading, heartbeatState, mergedEvents,
-    fetchSessions, fetchSkills, fetchChannels, fetchApprovals, probeChannel, updateApproval, fetchLogs,
-    deleteSession, resetSession, compactLogs, opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError,
+    sessions, skills, channels, approvals, selected, setSelected, logTail, loading, heartbeatState, continuityState, mergedEvents,
+    fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
+    deleteSession, resetSession, compactLogs, cancelSession, archiveSession, opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, opsSchemaText, opsSchemaStatus, refreshAll,
-  }), [sessions, skills, channels, approvals, selected, logTail, loading, heartbeatState, mergedEvents,
-    fetchSessions, fetchSkills, fetchChannels, fetchApprovals, probeChannel, updateApproval, fetchLogs,
-    deleteSession, resetSession, compactLogs, opsConfigText, opsConfigStatus, opsConfigError,
+  }), [sessions, skills, channels, approvals, selected, logTail, loading, heartbeatState, continuityState, mergedEvents,
+    fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
+    deleteSession, resetSession, compactLogs, cancelSession, archiveSession, opsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, opsSchemaText, opsSchemaStatus, refreshAll]);
 
   return <OpsContext.Provider value={val}>{children}</OpsContext.Provider>;
@@ -213,7 +329,37 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
 // ---- Section Components ----
 
 export function SessionsSection() {
-  const { sessions, selected, setSelected, loading, logTail, fetchSessions, fetchLogs, deleteSession, resetSession, compactLogs } = useOps();
+  const { sessions, selected, setSelected, loading, logTail, fetchSessions, fetchLogs, deleteSession, resetSession, compactLogs, cancelSession, archiveSession } = useOps();
+  const [attaching, setAttaching] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<"all" | "running" | "idle" | "terminal">("all");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "chat" | "telegram" | "api" | "local">("all");
+  const [memoryModeFilter, setMemoryModeFilter] = useState<"all" | "off" | "session_only" | "selective" | "full">("all");
+  const [ownerFilter, setOwnerFilter] = useState("");
+
+  const attachToChat = async (sessionId: string) => {
+    setAttaching(true);
+    try {
+      const store = useAgentStore.getState();
+      store.reset();
+      store.setSessionAttachMode("tail");
+      const ws = getWebSocket();
+      ws.attachToSession(sessionId);
+    } finally {
+      setAttaching(false);
+    }
+  };
+
+  const filteredSessions = useMemo(() => sessions.filter((s) => {
+    const statusMatch = statusFilter === "all" || (s.status || "").toLowerCase() === statusFilter;
+    const source = (s.source || s.channel || "local").toLowerCase();
+    const sourceMatch = sourceFilter === "all" || source === sourceFilter;
+    const memoryMode = (s.memory_mode || "session_only").toLowerCase();
+    const memoryModeMatch = memoryModeFilter === "all" || memoryMode === memoryModeFilter;
+    const owner = (s.owner || "").toLowerCase();
+    const ownerMatch = !ownerFilter.trim() || owner === ownerFilter.trim().toLowerCase();
+    return statusMatch && sourceMatch && memoryModeMatch && ownerMatch;
+  }), [sessions, statusFilter, sourceFilter, memoryModeFilter, ownerFilter]);
+
   return (
     <div className="p-3 text-xs space-y-3">
       <div className="border rounded bg-background/40 p-2">
@@ -221,12 +367,45 @@ export function SessionsSection() {
           <span>Sessions</span>
           <button onClick={fetchSessions} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻"}</button>
         </div>
+        <div className="mb-2 grid grid-cols-4 gap-1">
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
+            <option value="all">status: all</option>
+            <option value="running">running</option>
+            <option value="idle">idle</option>
+            <option value="terminal">terminal</option>
+          </select>
+          <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
+            <option value="all">source: all</option>
+            <option value="chat">chat</option>
+            <option value="telegram">telegram</option>
+            <option value="api">api</option>
+            <option value="local">local</option>
+          </select>
+          <input
+            value={ownerFilter}
+            onChange={(e) => setOwnerFilter(e.target.value)}
+            placeholder="owner"
+            className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]"
+          />
+          <select value={memoryModeFilter} onChange={(e) => setMemoryModeFilter(e.target.value as typeof memoryModeFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
+            <option value="all">memory: all</option>
+            <option value="off">off</option>
+            <option value="session_only">session_only</option>
+            <option value="selective">selective</option>
+            <option value="full">full</option>
+          </select>
+        </div>
         <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
-          {sessions.length === 0 && <div className="text-muted-foreground">No sessions found</div>}
-          {sessions.map((s) => (
+          {filteredSessions.length === 0 && <div className="text-muted-foreground">No sessions found</div>}
+          {filteredSessions.map((s) => (
             <button key={s.session_id} onClick={() => setSelected(s.session_id)} className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === s.session_id ? "border-primary text-primary" : "border-border/50 text-muted-foreground"}`}>
               <div className="font-mono truncate">{s.session_id}</div>
               <div className="flex justify-between"><span>{s.status}</span><span className="opacity-60">{s.last_activity?.slice(11, 19) ?? "--:--:--"}</span></div>
+              <div className="flex justify-between opacity-70">
+                <span>{s.source || s.channel || "local"}</span>
+                <span>{s.owner || "unknown"}</span>
+              </div>
+              <div className="opacity-60 text-[10px]">memory: {s.memory_mode || "session_only"}</div>
             </button>
           ))}
         </div>
@@ -236,6 +415,9 @@ export function SessionsSection() {
           <div className="border rounded bg-background/40 p-2">
             <div className="font-semibold mb-2">Session Actions</div>
             <div className="flex gap-2 flex-wrap">
+              <button onClick={() => attachToChat(selected)} className="px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" disabled={attaching}>{attaching ? "Attaching..." : "Attach To Chat (Tail)"}</button>
+              <button onClick={() => cancelSession(selected)} className="px-2 py-1 rounded border bg-orange-500/10 text-orange-500 hover:bg-orange-500/20">Cancel Run</button>
+              <button onClick={() => archiveSession(selected)} className="px-2 py-1 rounded border bg-sky-500/10 text-sky-500 hover:bg-sky-500/20">Archive</button>
               <button onClick={() => compactLogs(selected)} className="px-2 py-1 rounded border bg-blue-500/10 text-blue-500 hover:bg-blue-500/20">Compact Logs</button>
               <button onClick={() => resetSession(selected)} className="px-2 py-1 rounded border bg-amber-500/10 text-amber-500 hover:bg-amber-500/20">Reset</button>
               <button onClick={() => deleteSession(selected)} className="px-2 py-1 rounded border bg-red-500/10 text-red-500 hover:bg-red-500/20">Delete</button>
@@ -487,6 +669,78 @@ export function OpsConfigSection() {
         </div>
         <textarea className="w-full min-h-[100px] text-[11px] font-mono p-2 rounded border bg-background/60" value={opsSchemaText} readOnly />
       </div>
+    </div>
+  );
+}
+
+export function SessionContinuityWidget() {
+  const { continuityState, fetchSessionContinuityMetrics } = useOps();
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const metrics = continuityState.metrics || {};
+
+  const resumeRate =
+    typeof metrics.resume_success_rate === "number"
+      ? `${(metrics.resume_success_rate * 100).toFixed(1)}%`
+      : "--";
+  const attachRate =
+    typeof metrics.attach_success_rate === "number"
+      ? `${(metrics.attach_success_rate * 100).toFixed(1)}%`
+      : "--";
+  const alerts = metrics.alerts || [];
+
+  return (
+    <div className={`flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
+      <div className="p-3 bg-card/30 border-b border-border/40 cursor-pointer hover:bg-card/40 flex items-center justify-between" onClick={() => setIsCollapsed(!isCollapsed)}>
+        <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
+          <span className="text-primary/60">📈</span> Continuity
+          <span className="text-[9px] text-muted-foreground/60 font-normal font-mono">({continuityState.status})</span>
+        </h2>
+        <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? "rotate-180" : ""}`}>▼</span>
+      </div>
+      {!isCollapsed && (
+        <div className="p-3 text-xs space-y-1">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-muted-foreground">Session continuity metrics</span>
+            <button
+              type="button"
+              className="text-[10px] px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+              onClick={(e) => {
+                e.stopPropagation();
+                fetchSessionContinuityMetrics();
+              }}
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Resume success</span><span className="font-mono text-[11px]">{resumeRate}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Attach success</span><span className="font-mono text-[11px]">{attachRate}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Dupes prevented</span><span className="font-mono text-[11px]">{metrics.duplicate_turn_prevention_count ?? 0}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Sessions created</span><span className="font-mono text-[11px]">{metrics.sessions_created ?? 0}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Resume fail</span><span className="font-mono text-[11px]">{metrics.resume_failures ?? 0}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Attach fail</span><span className="font-mono text-[11px]">{metrics.ws_attach_failures ?? 0}</span></div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Status</span>
+            <span className={`font-mono text-[11px] ${metrics.continuity_status === "degraded" ? "text-amber-500" : "text-emerald-500"}`}>
+              {metrics.continuity_status || "--"}
+            </span>
+          </div>
+          {alerts.length > 0 && (
+            <div className="text-[10px] text-amber-500 space-y-1 pt-1">
+              {alerts.slice(0, 4).map((alert, idx) => (
+                <div key={`${alert.code || "alert"}-${idx}`}>{alert.message || alert.code || "continuity alert"}</div>
+              ))}
+            </div>
+          )}
+          {continuityState.updated_at && (
+            <div className="text-[10px] text-muted-foreground/70 pt-1">
+              Updated: {new Date(continuityState.updated_at).toLocaleTimeString()}
+            </div>
+          )}
+          {continuityState.error && (
+            <div className="text-[10px] text-amber-500">{continuityState.error}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

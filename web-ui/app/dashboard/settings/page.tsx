@@ -1,6 +1,6 @@
 "use client";
 
-import { OpsProvider, OpsConfigSection } from "@/components/OpsDropdowns";
+import { OpsProvider, OpsConfigSection, SessionContinuityWidget } from "@/components/OpsDropdowns";
 import { SessionGovernancePanel } from "@/components/dashboard/SessionGovernancePanel";
 
 export default function DashboardSettingsPage() {
@@ -12,6 +12,9 @@ export default function DashboardSettingsPage() {
           <p className="text-sm text-slate-400">Control plane config and schema.</p>
         </div>
         <SessionGovernancePanel />
+        <div className="rounded-xl border border-slate-800 bg-slate-900/70">
+          <SessionContinuityWidget />
+        </div>
         <div className="rounded-xl border border-slate-800 bg-slate-900/70">
           <OpsConfigSection />
         </div>

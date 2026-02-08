@@ -11,6 +11,12 @@ type SessionPolicy = {
   autonomy_mode?: string;
   identity_mode?: string;
   tool_profile?: string;
+  memory?: {
+    mode?: "off" | "session_only" | "selective" | "full";
+    session_memory_enabled?: boolean;
+    tags?: string[];
+    long_term_tag_allowlist?: string[];
+  };
   approvals?: { enabled?: boolean; timeout_hours?: number };
   limits?: { max_runtime_seconds?: number; max_tool_calls?: number };
 };
@@ -179,6 +185,36 @@ export function SessionGovernancePanel() {
             </select>
           </label>
 
+          <label className="text-xs text-slate-400">
+            Memory Mode
+            <select
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
+              value={policy.memory?.mode || "session_only"}
+              onChange={(e) => savePatch({ memory: { ...(policy.memory || {}), mode: e.target.value } })}
+            >
+              <option value="off">off</option>
+              <option value="session_only">session_only</option>
+              <option value="selective">selective</option>
+              <option value="full">full</option>
+            </select>
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={policy.memory?.session_memory_enabled !== false}
+              onChange={(e) =>
+                savePatch({
+                  memory: {
+                    ...(policy.memory || {}),
+                    session_memory_enabled: e.target.checked,
+                  },
+                })
+              }
+            />
+            Session Memory Enabled
+          </label>
+
           <label className="flex items-center gap-2 text-sm text-slate-300">
             <input
               type="checkbox"
@@ -186,6 +222,49 @@ export function SessionGovernancePanel() {
               onChange={(e) => savePatch({ approvals: { ...(policy.approvals || {}), enabled: e.target.checked } })}
             />
             Approvals Enabled
+          </label>
+
+          <label className="text-xs text-slate-400 md:col-span-2">
+            Memory Tags (comma-separated)
+            <div className="mt-1">
+              <input
+                key={`memory-tags-${selectedSession}-${(policy.memory?.tags || []).join(",")}`}
+                className="w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
+                defaultValue={(policy.memory?.tags || []).join(", ")}
+                onBlur={(e) =>
+                  savePatch({
+                    memory: {
+                      ...(policy.memory || {}),
+                      tags: e.target.value.split(",").map((item) => item.trim()).filter(Boolean),
+                    },
+                  })
+                }
+                placeholder="dev_test,retain"
+              />
+            </div>
+          </label>
+
+          <label className="text-xs text-slate-400 md:col-span-2">
+            Long-term Allowlist (selective mode)
+            <div className="mt-1">
+              <input
+                key={`memory-allow-${selectedSession}-${(policy.memory?.long_term_tag_allowlist || []).join(",")}`}
+                className="w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
+                defaultValue={(policy.memory?.long_term_tag_allowlist || []).join(", ")}
+                onBlur={(e) =>
+                  savePatch({
+                    memory: {
+                      ...(policy.memory || {}),
+                      long_term_tag_allowlist: e.target.value
+                        .split(",")
+                        .map((item) => item.trim())
+                        .filter(Boolean),
+                    },
+                  })
+                }
+                placeholder="retain"
+              />
+            </div>
           </label>
         </div>
       )}

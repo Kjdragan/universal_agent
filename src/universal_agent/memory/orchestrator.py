@@ -6,8 +6,10 @@ from typing import Any
 
 from universal_agent.feature_flags import (
     memory_adapter_state,
+    memory_long_term_tag_allowlist,
     memory_profile_mode,
     memory_retrieval_strategy,
+    memory_runtime_tags,
     memory_session_enabled,
     memory_session_sources,
     memory_tag_dev_writes,
@@ -91,14 +93,33 @@ class MemoryOrchestrator:
     def _decorate_tags(self, tags: list[str]) -> list[str]:
         profile = memory_profile_mode(default="dev_standard")
         output = list(tags)
+        output.extend(memory_runtime_tags(default=()))
         if memory_tag_dev_writes(default=True) and profile != "prod":
             output.append(f"profile:{profile}")
-        return output
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for tag in output:
+            normalized = str(tag).strip()
+            if not normalized:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(normalized)
+        return deduped
 
-    def _allow_write(self, *, memory_class: str, importance: float) -> bool:
+    def _allow_write(self, *, memory_class: str, importance: float, tags: list[str]) -> bool:
         profile = memory_profile_mode(default="dev_standard")
         if profile == "dev_no_persist":
             return False
+        if memory_class == "long_term":
+            allowlist = memory_long_term_tag_allowlist(default=())
+            if allowlist:
+                tags_norm = {str(tag).strip().lower() for tag in tags if str(tag).strip()}
+                allow_norm = {str(tag).strip().lower() for tag in allowlist if str(tag).strip()}
+                if not tags_norm.intersection(allow_norm):
+                    return False
         if memory_class == "long_term" and profile in {"dev_standard", "dev_memory_test"}:
             threshold = memory_write_policy_min_importance(default=0.6)
             return importance >= threshold
@@ -118,14 +139,15 @@ class MemoryOrchestrator:
         body = (content or "").strip()
         if not body:
             return None
-        if not self._allow_write(memory_class=memory_class, importance=importance):
+        entry_tags = self._decorate_tags(tags or [])
+        if not self._allow_write(memory_class=memory_class, importance=importance, tags=entry_tags):
             return None
 
         entry = MemoryEntry(
             content=body,
             source=source,
             session_id=session_id,
-            tags=self._decorate_tags(tags or []),
+            tags=entry_tags,
             summary=summary,
         )
 
@@ -293,4 +315,3 @@ def get_memory_orchestrator(workspace_dir: str | None = None) -> MemoryOrchestra
         broker = MemoryOrchestrator(workspace_dir=resolved)
         _BROKERS[resolved] = broker
     return broker
-
