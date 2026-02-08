@@ -2,6 +2,7 @@ import os
 import json
 import shutil
 import time
+import asyncio
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -887,6 +888,127 @@ def test_ops_calendar_event_actions_for_cron(client, tmp_path, monkeypatch):
     )
     assert run_resp.status_code == 200
     assert run_resp.json()["run"]["status"] == "success"
+
+
+def test_ops_calendar_missed_stasis_actions_for_cron(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("UA_CRON_MOCK_RESPONSE", "1")
+    gateway_server._cron_service = CronService(
+        gateway_server.get_gateway(),
+        tmp_path,
+    )
+    cron_ws = tmp_path / "cron_stasis_actions_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+
+    job_approve = gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="approve missed run",
+        run_at=time.time() - 900,
+        enabled=True,
+    )
+    job_reschedule = gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="reschedule missed run",
+        run_at=time.time() - 1200,
+        enabled=True,
+    )
+    job_delete = gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="delete missed run",
+        run_at=time.time() - 1500,
+        enabled=True,
+    )
+
+    feed_resp = client.get("/api/v1/ops/calendar/events?source=cron&view=week")
+    assert feed_resp.status_code == 200
+    feed = feed_resp.json()
+    missed_by_job = {
+        str(item["source_ref"]): item
+        for item in feed["events"]
+        if item.get("source") == "cron" and item.get("status") == "missed"
+    }
+    assert job_approve.job_id in missed_by_job
+    assert job_reschedule.job_id in missed_by_job
+    assert job_delete.job_id in missed_by_job
+
+    approve_event_id = missed_by_job[job_approve.job_id]["event_id"]
+    reschedule_event_id = missed_by_job[job_reschedule.job_id]["event_id"]
+    delete_event_id = missed_by_job[job_delete.job_id]["event_id"]
+
+    approve_resp = client.post(
+        f"/api/v1/ops/calendar/events/{approve_event_id}/action",
+        json={"action": "approve_backfill_run"},
+    )
+    assert approve_resp.status_code == 200
+    assert approve_resp.json()["run"]["status"] == "success"
+
+    reschedule_resp = client.post(
+        f"/api/v1/ops/calendar/events/{reschedule_event_id}/action",
+        json={"action": "reschedule", "run_at": "in 15m"},
+    )
+    assert reschedule_resp.status_code == 200
+    assert reschedule_resp.json()["job"]["delete_after_run"] is True
+
+    delete_resp = client.post(
+        f"/api/v1/ops/calendar/events/{delete_event_id}/action",
+        json={"action": "delete_missed"},
+    )
+    assert delete_resp.status_code == 200
+    assert delete_resp.json()["status"] == "ok"
+
+    refreshed_resp = client.get("/api/v1/ops/calendar/events?source=cron&view=week")
+    assert refreshed_resp.status_code == 200
+    refreshed = refreshed_resp.json()
+
+    # Approve-backfill should reconcile the originally missed event to success.
+    approved_event = next((item for item in refreshed["events"] if item["event_id"] == approve_event_id), None)
+    assert approved_event is not None
+    assert approved_event["status"] == "success"
+
+    # Rescheduled/deleted missed events should no longer reappear as active missed items.
+    assert not any(item["event_id"] == reschedule_event_id for item in refreshed["events"])
+    assert not any(item["event_id"] == delete_event_id for item in refreshed["events"])
+    assert not any(item.get("event_id") in {approve_event_id, reschedule_event_id, delete_event_id} for item in refreshed["stasis_queue"])
+
+
+def test_cron_default_wake_for_session_bound_jobs(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_CRON_MOCK_RESPONSE", "1")
+    wake_calls: list[tuple[str, str, str]] = []
+
+    def wake_callback(session_id: str, mode: str, reason: str) -> None:
+        wake_calls.append((session_id, mode, reason))
+
+    service = CronService(
+        gateway_server.get_gateway(),
+        tmp_path,
+        wake_callback=wake_callback,
+    )
+    job_default = service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(tmp_path / "cron_wake_default_workspace"),
+        command="default wake",
+        every_raw="30m",
+        enabled=True,
+        metadata={"session_id": "sess_default"},
+    )
+    job_disabled = service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(tmp_path / "cron_wake_disabled_workspace"),
+        command="disabled wake",
+        every_raw="30m",
+        enabled=True,
+        metadata={"session_id": "sess_disabled", "wake_heartbeat": "off"},
+    )
+
+    run_default = asyncio.run(service.run_job_now(job_default.job_id, reason="test_default_wake"))
+    assert run_default.status == "success"
+    run_disabled = asyncio.run(service.run_job_now(job_disabled.job_id, reason="test_disabled_wake"))
+    assert run_disabled.status == "success"
+
+    assert any(session_id == "sess_default" and mode == "next" for session_id, mode, _ in wake_calls)
+    assert not any(session_id == "sess_disabled" for session_id, _, _ in wake_calls)
 
 
 def test_ops_calendar_change_request_confirm_for_cron_interval(client, tmp_path):
