@@ -19,7 +19,7 @@ import { formatDuration, formatFileSize } from "@/lib/utils";
 import { ApprovalModal, useApprovalModal } from "@/components/approvals/ApprovalModal";
 import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
-import { OpsProvider, SessionsSection, SkillsSection, ChannelsSection, ApprovalsSection, SystemEventsSection, OpsConfigSection, HeartbeatWidget } from "@/components/OpsDropdowns";
+import { OpsProvider, SessionsSection, SkillsSection, ChannelsSection, ApprovalsSection, SystemEventsSection, OpsConfigSection, SessionContinuityWidget, HeartbeatWidget } from "@/components/OpsDropdowns";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -835,6 +835,9 @@ function ChatInterface() {
   const messages = useAgentStore((s) => s.messages);
   const toolCalls = useAgentStore((s) => s.toolCalls);
   const logs = useAgentStore((s) => s.logs);
+  const currentSession = useAgentStore((s) => s.currentSession);
+  const sessionAttachMode = useAgentStore((s) => s.sessionAttachMode);
+  const setSessionAttachMode = useAgentStore((s) => s.setSessionAttachMode);
   const currentStreamingMessage = useAgentStore((s) => s.currentStreamingMessage);
   const currentThinking = useAgentStore((s) => s.currentThinking);
   const currentAuthor = useAgentStore((s) => s.currentAuthor);
@@ -895,6 +898,18 @@ function ChatInterface() {
     <div className="flex flex-col h-full">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto scrollbar-thin p-4">
+        {sessionAttachMode === "tail" && currentSession?.session_id && (
+          <div className="mb-3 flex items-center justify-between rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-emerald-300">
+            <span>Attached Session (Tail): <span className="font-mono">{currentSession.session_id}</span></span>
+            <button
+              type="button"
+              onClick={() => setSessionAttachMode("default")}
+              className="rounded border border-emerald-500/40 px-2 py-0.5 text-[9px] text-emerald-200 hover:bg-emerald-500/20"
+            >
+              Hide Tag
+            </button>
+          </div>
+        )}
         {messages.length === 0 && !currentStreamingMessage ? (
           <div className="h-full flex items-center justify-center">
             <div className="text-center max-w-md">
@@ -1411,6 +1426,7 @@ export default function HomePage() {
               <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
                 <WorkProductViewer />
               </div>
+              <SessionContinuityWidget />
               <HeartbeatWidget />
               <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
                 <TaskPanel />

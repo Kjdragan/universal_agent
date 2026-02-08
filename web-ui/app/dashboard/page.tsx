@@ -22,6 +22,7 @@ type DashboardNotification = {
   status: string;
   created_at: string;
   session_id?: string | null;
+  metadata?: Record<string, unknown>;
 };
 
 function headers(): Record<string, string> {
@@ -32,6 +33,8 @@ export default function DashboardPage() {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
   const [loading, setLoading] = useState(true);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [bulkUpdating, setBulkUpdating] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -49,6 +52,60 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const updateNotificationStatus = useCallback(
+    async (
+      id: string,
+      status: "acknowledged" | "snoozed" | "dismissed" | "read",
+      note?: string,
+      snoozeMinutes?: number,
+    ) => {
+      setUpdatingId(id);
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/dashboard/notifications/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", ...headers() },
+          body: JSON.stringify({ status, note, snooze_minutes: snoozeMinutes }),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const updated = data.notification as DashboardNotification;
+        setNotifications((prev) => prev.map((item) => (item.id === id ? updated : item)));
+      } finally {
+        setUpdatingId((prev) => (prev === id ? null : prev));
+      }
+    },
+    [],
+  );
+
+  const bulkUpdateContinuityAlerts = useCallback(
+    async (
+      status: "acknowledged" | "snoozed" | "dismissed",
+      note: string,
+      snoozeMinutes?: number,
+    ) => {
+      setBulkUpdating(true);
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/dashboard/notifications/bulk`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...headers() },
+          body: JSON.stringify({
+            status,
+            note,
+            kind: "continuity_alert",
+            current_status: "new",
+            snooze_minutes: snoozeMinutes,
+            limit: 500,
+          }),
+        });
+        if (!res.ok) return;
+        await load();
+      } finally {
+        setBulkUpdating(false);
+      }
+    },
+    [load],
+  );
+
   useEffect(() => {
     load();
     const timer = window.setInterval(load, 8000);
@@ -63,6 +120,13 @@ export default function DashboardPage() {
       { label: "Enabled Cron Jobs", value: summary?.cron.enabled ?? 0 },
     ],
     [summary],
+  );
+  const openContinuityAlerts = useMemo(
+    () =>
+      notifications.filter(
+        (item) => item.kind === "continuity_alert" && item.status === "new",
+      ),
+    [notifications],
   );
 
   return (
@@ -95,7 +159,37 @@ export default function DashboardPage() {
       <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Notification Center</h2>
-          {loading && <span className="text-xs text-slate-500">Refreshing…</span>}
+          <div className="flex items-center gap-2">
+            {openContinuityAlerts.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => bulkUpdateContinuityAlerts("acknowledged", "acknowledged in dashboard bulk action")}
+                  disabled={bulkUpdating}
+                  className="rounded border border-emerald-800/70 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                >
+                  Ack All Continuity ({openContinuityAlerts.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => bulkUpdateContinuityAlerts("snoozed", "snoozed in dashboard bulk action", 30)}
+                  disabled={bulkUpdating}
+                  className="rounded border border-amber-800/70 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
+                >
+                  Snooze All 30m
+                </button>
+                <button
+                  type="button"
+                  onClick={() => bulkUpdateContinuityAlerts("dismissed", "dismissed in dashboard bulk action")}
+                  disabled={bulkUpdating}
+                  className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
+                >
+                  Dismiss All
+                </button>
+              </>
+            )}
+            {loading && <span className="text-xs text-slate-500">Refreshing…</span>}
+          </div>
         </div>
         <div className="space-y-2">
           {notifications.length === 0 && (
@@ -113,6 +207,46 @@ export default function DashboardPage() {
               <p className="mt-2 text-[11px] text-slate-500">
                 {item.kind} · {item.session_id || "global"} · {item.created_at}
               </p>
+              {item.kind === "continuity_alert" && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded border border-emerald-800/70 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                    onClick={() => updateNotificationStatus(item.id, "acknowledged", "acknowledged in dashboard")}
+                    disabled={updatingId === item.id}
+                  >
+                    Acknowledge
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border border-amber-800/70 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
+                    onClick={() => updateNotificationStatus(item.id, "snoozed", "snoozed in dashboard", 30)}
+                    disabled={updatingId === item.id}
+                  >
+                    Snooze 30m
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
+                    onClick={() => updateNotificationStatus(item.id, "dismissed", "dismissed in dashboard")}
+                    disabled={updatingId === item.id}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
+              {item.kind !== "continuity_alert" && item.status === "new" && (
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
+                    onClick={() => updateNotificationStatus(item.id, "read", "read in dashboard")}
+                    disabled={updatingId === item.id}
+                  >
+                    Mark Read
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>

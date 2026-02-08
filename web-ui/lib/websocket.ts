@@ -7,9 +7,6 @@
 import {
   WebSocketEvent,
   EventType,
-  SessionInfo,
-  ToolCall,
-  WorkProduct,
   ConnectionStatus,
 } from "@/types/agent";
 import { generateId } from "./utils";
@@ -45,6 +42,23 @@ export class AgentWebSocket {
   private currentStatus: ConnectionStatus = "disconnected";
   private sessionIdKey = "universal_agent_session_id"; // Key for localStorage
 
+  private extractSessionId(data: unknown): string | null {
+    if (!data || typeof data !== "object") return null;
+    const payload = data as Record<string, unknown>;
+    const nested = payload.session;
+    if (nested && typeof nested === "object") {
+      const nestedId = (nested as Record<string, unknown>).session_id;
+      if (typeof nestedId === "string" && nestedId.trim()) {
+        return nestedId;
+      }
+    }
+    const topLevelId = payload.session_id;
+    if (typeof topLevelId === "string" && topLevelId.trim()) {
+      return topLevelId;
+    }
+    return null;
+  }
+
   constructor(url?: string) {
     if (url) {
       this.url = url;
@@ -74,6 +88,20 @@ export class AgentWebSocket {
   // Connection Management
   // ==========================================================================
 
+  private getStoredSessionId(): string | null {
+    if (typeof window === "undefined") return null;
+    return localStorage.getItem(this.sessionIdKey);
+  }
+
+  private setStoredSessionId(sessionId: string | null): void {
+    if (typeof window === "undefined") return;
+    if (!sessionId) {
+      localStorage.removeItem(this.sessionIdKey);
+      return;
+    }
+    localStorage.setItem(this.sessionIdKey, sessionId);
+  }
+
   connect(): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       console.log("WebSocket already connected");
@@ -86,13 +114,11 @@ export class AgentWebSocket {
     try {
       let wsUrl = this.url;
       // Append session_id if available to resume session
-      if (typeof window !== "undefined") {
-        const storedSessionId = localStorage.getItem(this.sessionIdKey);
-        if (storedSessionId) {
-          const separator = wsUrl.includes("?") ? "&" : "?";
-          wsUrl += `${separator}session_id=${storedSessionId}`;
-          console.log(`Resuming session: ${storedSessionId}`);
-        }
+      const storedSessionId = this.getStoredSessionId();
+      if (storedSessionId) {
+        const separator = wsUrl.includes("?") ? "&" : "?";
+        wsUrl += `${separator}session_id=${encodeURIComponent(storedSessionId)}`;
+        console.log(`Resuming session: ${storedSessionId}`);
       }
 
       this.ws = new WebSocket(wsUrl);
@@ -170,10 +196,8 @@ export class AgentWebSocket {
       if (event.type === "connected") {
         console.log("Connection confirmed:", event.data);
         // Save session_id for resumption
-        const sessionData = event.data as SessionInfo;
-        if (sessionData && sessionData.session_id && typeof window !== "undefined") {
-          localStorage.setItem(this.sessionIdKey, sessionData.session_id);
-        }
+        const sessionId = this.extractSessionId(event.data);
+        if (sessionId) this.setStoredSessionId(sessionId);
       } else if (event.type === "query_complete" || event.type === "cancelled") {
         this.updateStatus("connected");
       } else if (event.type === "status") {
@@ -214,7 +238,7 @@ export class AgentWebSocket {
 
     const event: WebSocketEvent = {
       type: "query",
-      data: { text },
+      data: { text, client_turn_id: generateId() },
       timestamp: Date.now(),
     };
 
@@ -294,6 +318,24 @@ export class AgentWebSocket {
 
     console.log("[AgentWebSocket] Sending cancel request");
     this.ws.send(JSON.stringify(event));
+  }
+
+  attachToSession(sessionId: string): void {
+    const normalized = (sessionId || "").trim();
+    if (!normalized) return;
+
+    const current = this.getStoredSessionId();
+    this.setStoredSessionId(normalized);
+
+    const shouldReconnect =
+      current !== normalized
+      || !this.ws
+      || this.ws.readyState !== WebSocket.OPEN;
+
+    if (!shouldReconnect) return;
+
+    this.disconnect();
+    this.connect();
   }
 
   // ==========================================================================

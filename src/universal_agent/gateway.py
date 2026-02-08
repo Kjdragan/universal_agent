@@ -316,6 +316,11 @@ class InProcessGateway(Gateway):
             adapter.config.force_complex = request.force_complex
             run_source = request.metadata.get("source", "user")
             adapter.config.__dict__["_run_source"] = run_source
+            memory_policy = request.metadata.get("memory_policy", {})
+            if isinstance(memory_policy, dict):
+                adapter.config.__dict__["_memory_policy"] = dict(memory_policy)
+            else:
+                adapter.config.__dict__["_memory_policy"] = {}
             
             # Execute through unified engine
             async for event in adapter.execute(request.user_input):
@@ -402,7 +407,12 @@ class InProcessGateway(Gateway):
         for session_id, session in self._sessions.items():
             workspace_path = Path(session.workspace_dir)
             trace_file = workspace_path / "trace.json"
-            status = "complete" if trace_file.exists() else "active"
+            runtime = session.metadata.get("runtime", {}) if isinstance(session.metadata, dict) else {}
+            runtime_state = runtime.get("lifecycle_state") if isinstance(runtime, dict) else None
+            if isinstance(runtime_state, str) and runtime_state:
+                status = runtime_state
+            else:
+                status = "complete" if trace_file.exists() else "active"
             summaries.append(
                 GatewaySessionSummary(
                     session_id=session_id,

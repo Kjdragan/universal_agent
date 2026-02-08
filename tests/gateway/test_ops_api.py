@@ -20,6 +20,29 @@ def client(tmp_path, monkeypatch):
     # We must reset the global singletons to force re-init with new path
     monkeypatch.setattr(gateway_server, "_gateway", None)
     monkeypatch.setattr(gateway_server, "_ops_service", None)
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_session_runtime", {})
+    monkeypatch.setattr(gateway_server, "_session_turn_state", {})
+    monkeypatch.setattr(gateway_server, "_session_turn_locks", {})
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "_continuity_active_alerts", set())
+    monkeypatch.setattr(
+        gateway_server,
+        "_observability_metrics",
+        {
+            "started_at": "2026-02-07T00:00:00",
+            "sessions_created": 0,
+            "ws_attach_attempts": 0,
+            "ws_attach_successes": 0,
+            "ws_attach_failures": 0,
+            "resume_attempts": 0,
+            "resume_successes": 0,
+            "resume_failures": 0,
+            "turn_busy_rejected": 0,
+            "turn_duplicate_in_progress": 0,
+            "turn_duplicate_completed": 0,
+        },
+    )
     
     # Env vars
     monkeypatch.setenv("UA_GATEWAY_PORT", "0") # Avoid binding real port if it tried
@@ -204,6 +227,177 @@ def test_dashboard_summary_and_notifications(client, tmp_path):
     assert patch_resp.status_code == 200
     assert patch_resp.json()["notification"]["status"] == "read"
 
+    snooze_resp = client.patch(
+        "/api/v1/dashboard/notifications/ntf_test_1",
+        json={"status": "snoozed", "note": "snooze continuity alert"},
+    )
+    assert snooze_resp.status_code == 200
+    snoozed = snooze_resp.json()["notification"]
+    assert snoozed["status"] == "snoozed"
+    assert snoozed["metadata"]["note"] == "snooze continuity alert"
+
+
+def test_dashboard_notification_snooze_expiry_reactivates(client):
+    from universal_agent import gateway_server
+    gateway_server._notifications.append(  # type: ignore[attr-defined]
+        {
+            "id": "ntf_snooze_expired",
+            "kind": "continuity_alert",
+            "title": "Continuity Alert",
+            "message": "Resume success rate below threshold.",
+            "session_id": None,
+            "severity": "warning",
+            "requires_action": False,
+            "status": "snoozed",
+            "created_at": "2026-02-07T00:00:00",
+            "updated_at": "2026-02-07T00:00:00",
+            "channels": ["dashboard"],
+            "email_targets": [],
+            "metadata": {"snooze_until_ts": 1.0},
+        }
+    )
+    resp = client.get("/api/v1/dashboard/notifications?limit=20")
+    assert resp.status_code == 200
+    items = resp.json()["notifications"]
+    target = next(item for item in items if item["id"] == "ntf_snooze_expired")
+    assert target["status"] == "new"
+    assert target["metadata"].get("snooze_expired_at")
+
+
+def test_dashboard_notification_bulk_update(client):
+    from universal_agent import gateway_server
+    gateway_server._notifications.extend(  # type: ignore[attr-defined]
+        [
+            {
+                "id": "ntf_bulk_1",
+                "kind": "continuity_alert",
+                "title": "Continuity Alert 1",
+                "message": "Alert 1",
+                "session_id": None,
+                "severity": "warning",
+                "requires_action": False,
+                "status": "new",
+                "created_at": "2026-02-07T00:00:00",
+                "updated_at": "2026-02-07T00:00:00",
+                "channels": ["dashboard"],
+                "email_targets": [],
+                "metadata": {},
+            },
+            {
+                "id": "ntf_bulk_2",
+                "kind": "continuity_alert",
+                "title": "Continuity Alert 2",
+                "message": "Alert 2",
+                "session_id": None,
+                "severity": "warning",
+                "requires_action": False,
+                "status": "new",
+                "created_at": "2026-02-07T00:00:01",
+                "updated_at": "2026-02-07T00:00:01",
+                "channels": ["dashboard"],
+                "email_targets": [],
+                "metadata": {},
+            },
+            {
+                "id": "ntf_bulk_other",
+                "kind": "mission_complete",
+                "title": "Mission",
+                "message": "done",
+                "session_id": None,
+                "severity": "info",
+                "requires_action": False,
+                "status": "new",
+                "created_at": "2026-02-07T00:00:02",
+                "updated_at": "2026-02-07T00:00:02",
+                "channels": ["dashboard"],
+                "email_targets": [],
+                "metadata": {},
+            },
+        ]
+    )
+    bulk_resp = client.post(
+        "/api/v1/dashboard/notifications/bulk",
+        json={
+            "status": "snoozed",
+            "kind": "continuity_alert",
+            "current_status": "new",
+            "note": "bulk snoozed",
+            "snooze_minutes": 30,
+            "limit": 100,
+        },
+    )
+    assert bulk_resp.status_code == 200
+    payload = bulk_resp.json()
+    assert payload["updated"] == 2
+    updated_ids = {item["id"] for item in payload["notifications"]}
+    assert updated_ids == {"ntf_bulk_1", "ntf_bulk_2"}
+    for item in payload["notifications"]:
+        assert item["status"] == "snoozed"
+        assert item["metadata"]["note"] == "bulk snoozed"
+        assert item["metadata"]["snooze_minutes"] == 30
+
+def test_ops_session_continuity_metrics_endpoint(client):
+    from universal_agent import gateway_server
+
+    gateway_server._increment_metric("sessions_created")
+    gateway_server._increment_metric("resume_attempts")
+    gateway_server._increment_metric("resume_successes")
+    gateway_server._increment_metric("turn_duplicate_completed", 2)
+
+    resp = client.get("/api/v1/ops/metrics/session-continuity")
+    assert resp.status_code == 200
+    payload = resp.json()["metrics"]
+    assert payload["sessions_created"] == 1
+    assert payload["resume_attempts"] == 1
+    assert payload["resume_successes"] == 1
+    assert payload["turn_duplicate_completed"] == 2
+    assert payload["duplicate_turn_prevention_count"] == 2
+    assert payload["resume_success_rate"] == 1.0
+    assert payload["continuity_status"] == "ok"
+    assert payload["alerts"] == []
+
+
+def test_ops_session_continuity_metrics_alerts(client):
+    from universal_agent import gateway_server
+
+    gateway_server._increment_metric("resume_attempts", 10)
+    gateway_server._increment_metric("resume_successes", 6)
+    gateway_server._increment_metric("resume_failures", 4)
+    gateway_server._increment_metric("ws_attach_attempts", 5)
+    gateway_server._increment_metric("ws_attach_successes", 2)
+    gateway_server._increment_metric("ws_attach_failures", 3)
+
+    resp = client.get("/api/v1/ops/metrics/session-continuity")
+    assert resp.status_code == 200
+    payload = resp.json()["metrics"]
+    assert payload["continuity_status"] == "degraded"
+    codes = {item["code"] for item in payload["alerts"]}
+    assert "resume_success_rate_low" in codes
+    assert "attach_success_rate_low" in codes
+    assert "resume_failures_high" in codes
+    assert "attach_failures_high" in codes
+
+
+def test_continuity_alert_notifications_are_emitted_and_deduped(client):
+    from universal_agent import gateway_server
+
+    gateway_server._increment_metric("resume_failures", 3)
+    alert_notifications = [item for item in gateway_server._notifications if item.get("kind") == "continuity_alert"]
+    assert len(alert_notifications) == 1
+    assert alert_notifications[0]["metadata"]["code"] == "resume_failures_high"
+
+    # Condition still active; no duplicate alert should be emitted.
+    gateway_server._increment_metric("resume_failures", 1)
+    alert_notifications_2 = [item for item in gateway_server._notifications if item.get("kind") == "continuity_alert"]
+    assert len(alert_notifications_2) == 1
+
+    # Force recovery and sync to emit resolved notification.
+    gateway_server._observability_metrics["resume_failures"] = 0
+    gateway_server._sync_continuity_notifications()
+    recovered = [item for item in gateway_server._notifications if item.get("kind") == "continuity_recovered"]
+    assert len(recovered) == 1
+    assert recovered[0]["metadata"]["code"] == "resume_failures_high"
+
 
 def test_session_policy_endpoints_and_resume(client, tmp_path):
     session_dir = _create_dummy_session(tmp_path, "session_policy", ["run"])
@@ -225,13 +419,27 @@ def test_session_policy_endpoints_and_resume(client, tmp_path):
     assert get_resp.status_code == 200
     policy = get_resp.json()["policy"]
     assert policy["identity_mode"] == "persona"
+    assert policy["memory"]["mode"] == "session_only"
 
     patch_resp = client.patch(
         "/api/v1/sessions/session_policy/policy",
-        json={"patch": {"identity_mode": "operator_proxy", "autonomy_mode": "guarded"}},
+        json={
+            "patch": {
+                "identity_mode": "operator_proxy",
+                "autonomy_mode": "guarded",
+                "memory": {
+                    "mode": "selective",
+                    "tags": ["dev_test", "retain"],
+                    "long_term_tag_allowlist": ["retain"],
+                    "session_memory_enabled": True,
+                },
+            }
+        },
     )
     assert patch_resp.status_code == 200
     assert patch_resp.json()["policy"]["identity_mode"] == "operator_proxy"
+    assert patch_resp.json()["policy"]["memory"]["mode"] == "selective"
+    assert patch_resp.json()["policy"]["memory"]["long_term_tag_allowlist"] == ["retain"]
 
     pending_resp = client.get("/api/v1/sessions/session_policy/pending")
     assert pending_resp.status_code == 200
@@ -243,3 +451,129 @@ def test_session_policy_endpoints_and_resume(client, tmp_path):
     )
     assert resume_resp.status_code == 200
     assert resume_resp.json()["pending"]["status"] == "approved"
+
+
+def test_ops_session_runtime_state_fields(client, tmp_path):
+    session_dir = _create_dummy_session(tmp_path, "session_runtime", ["run"])
+    session = GatewaySession(
+        session_id="session_runtime",
+        user_id="tester",
+        workspace_dir=str(session_dir),
+        metadata={},
+    )
+    gateway_server.get_gateway()._sessions["session_runtime"] = session
+    gateway_server.store_session(session)
+
+    gateway_server._set_session_connections("session_runtime", 2)
+    gateway_server._increment_session_active_runs("session_runtime")
+    gateway_server._record_session_event("session_runtime", "status")
+
+    detail_running = client.get("/api/v1/ops/sessions/session_runtime")
+    assert detail_running.status_code == 200
+    running_payload = detail_running.json()["session"]
+    assert running_payload["status"] == "running"
+    assert running_payload["active_connections"] == 2
+    assert running_payload["active_runs"] == 1
+    assert running_payload["last_event_seq"] >= 1
+
+    gateway_server._decrement_session_active_runs("session_runtime")
+    gateway_server._set_session_connections("session_runtime", 0)
+    detail_idle = client.get("/api/v1/ops/sessions/session_runtime")
+    assert detail_idle.status_code == 200
+    idle_payload = detail_idle.json()["session"]
+    assert idle_payload["status"] == "idle"
+    assert idle_payload["active_connections"] == 0
+
+
+def test_ops_session_filters_source_owner_status(client, tmp_path):
+    tg_dir = _create_dummy_session(tmp_path, "tg_12345", ["tg"])
+    web_dir = _create_dummy_session(tmp_path, "session_web", ["web"])
+
+    session = GatewaySession(
+        session_id="session_web",
+        user_id="tester_user",
+        workspace_dir=str(web_dir),
+        metadata={},
+    )
+    gateway_server.get_gateway()._sessions["session_web"] = session
+    gateway_server.store_session(session)
+    gateway_server._increment_session_active_runs("session_web")
+
+    all_resp = client.get("/api/v1/ops/sessions")
+    assert all_resp.status_code == 200
+    all_items = all_resp.json()["sessions"]
+    assert any(item["source"] == "telegram" for item in all_items)
+    assert any(item["owner"] == "tester_user" for item in all_items)
+
+    running_resp = client.get("/api/v1/ops/sessions?status=running")
+    assert running_resp.status_code == 200
+    running_ids = {item["session_id"] for item in running_resp.json()["sessions"]}
+    assert "session_web" in running_ids
+    assert "tg_12345" not in running_ids
+
+    tg_resp = client.get("/api/v1/ops/sessions?source=telegram")
+    assert tg_resp.status_code == 200
+    tg_ids = {item["session_id"] for item in tg_resp.json()["sessions"]}
+    assert tg_ids == {"tg_12345"}
+
+    owner_resp = client.get("/api/v1/ops/sessions?owner=tester_user")
+    assert owner_resp.status_code == 200
+    owner_ids = {item["session_id"] for item in owner_resp.json()["sessions"]}
+    assert owner_ids == {"session_web"}
+
+
+def test_ops_session_filters_memory_mode(client, tmp_path):
+    full_dir = _create_dummy_session(tmp_path, "session_full_mem", ["m1"])
+    default_dir = _create_dummy_session(tmp_path, "session_default_mem", ["m2"])
+    (full_dir / "session_policy.json").write_text(
+        '{"memory":{"mode":"full"},"user_id":"tester_full"}',
+        encoding="utf-8",
+    )
+    (default_dir / "session_policy.json").write_text(
+        '{"memory":{"mode":"session_only"},"user_id":"tester_default"}',
+        encoding="utf-8",
+    )
+
+    full_resp = client.get("/api/v1/ops/sessions?memory_mode=full")
+    assert full_resp.status_code == 200
+    full_ids = {item["session_id"] for item in full_resp.json()["sessions"]}
+    assert "session_full_mem" in full_ids
+    assert "session_default_mem" not in full_ids
+
+    for item in full_resp.json()["sessions"]:
+        if item["session_id"] == "session_full_mem":
+            assert item["memory_mode"] == "full"
+            break
+    else:
+        raise AssertionError("session_full_mem should be present in filtered response")
+
+
+def test_ops_session_archive_and_cancel_actions(client, tmp_path):
+    session_dir = _create_dummy_session(tmp_path, "session_actions", ["line 1", "line 2"])
+    (session_dir / "activity_journal.log").write_text("entry\n", encoding="utf-8")
+    session = GatewaySession(
+        session_id="session_actions",
+        user_id="tester",
+        workspace_dir=str(session_dir),
+        metadata={"run_id": "run_test_123"},
+    )
+    gateway_server.get_gateway()._sessions["session_actions"] = session
+    gateway_server.store_session(session)
+
+    archive_resp = client.post(
+        "/api/v1/ops/sessions/session_actions/archive",
+        json={"clear_memory": False, "clear_work_products": False},
+    )
+    assert archive_resp.status_code == 200
+    assert archive_resp.json()["status"] == "archived"
+    assert not (session_dir / "run.log").exists()
+
+    cancel_resp = client.post(
+        "/api/v1/ops/sessions/session_actions/cancel",
+        json={"reason": "ops cancel test"},
+    )
+    assert cancel_resp.status_code == 200
+    payload = cancel_resp.json()
+    assert payload["status"] == "cancel_requested"
+    assert payload["session_id"] == "session_actions"
+    assert payload["reason"] == "ops cancel test"

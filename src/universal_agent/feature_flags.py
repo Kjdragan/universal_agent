@@ -146,6 +146,17 @@ def _read_choice(name: str, allowed: Iterable[str], default: str) -> str:
     return default
 
 
+def _read_csv_list(name: str, *, allowed: Iterable[str] | None = None) -> list[str]:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return []
+    parts = [item.strip() for item in raw.split(",") if item.strip()]
+    if allowed is None:
+        return parts
+    allowed_set = {item.lower() for item in allowed}
+    return [item for item in parts if item.lower() in allowed_set]
+
+
 def memory_orchestrator_mode(default: str = "legacy") -> str:
     """Return memory control mode: legacy|unified."""
     return _read_choice("UA_MEMORY_ORCHESTRATOR_MODE", ("legacy", "unified"), default)
@@ -186,6 +197,22 @@ def memory_tag_dev_writes(default: bool = True) -> bool:
     if _is_truthy(os.getenv("UA_MEMORY_DISABLE_TAG_DEV_WRITES")):
         return False
     return default
+
+
+def memory_runtime_tags(default: tuple[str, ...] = ()) -> list[str]:
+    """Return optional runtime tags applied to all orchestrator writes."""
+    values = _read_csv_list("UA_MEMORY_RUN_TAGS")
+    if values:
+        return values
+    return list(default)
+
+
+def memory_long_term_tag_allowlist(default: tuple[str, ...] = ()) -> list[str]:
+    """Return tags that are allowed to persist long-term entries when set."""
+    values = _read_csv_list("UA_MEMORY_LONG_TERM_TAG_ALLOWLIST")
+    if values:
+        return values
+    return list(default)
 
 
 def memory_write_policy_min_importance(default: float = 0.6) -> float:

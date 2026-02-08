@@ -106,6 +106,102 @@ def _redirect_stdio_to_run_log(workspace_dir: str) -> Any:
             pass
 
 
+@contextmanager
+def _temporary_env(overrides: dict[str, Optional[str]]) -> Any:
+    original: dict[str, Optional[str]] = {}
+    keys = list(overrides.keys())
+    try:
+        for key in keys:
+            original[key] = os.environ.get(key)
+            value = overrides[key]
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = str(value)
+        yield
+    finally:
+        for key in keys:
+            previous = original.get(key)
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
+
+
+def _normalize_tag_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        items = []
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _build_memory_env_overrides(memory_policy: dict[str, Any] | None) -> dict[str, Optional[str]]:
+    policy = memory_policy if isinstance(memory_policy, dict) else {}
+    mode = str(policy.get("mode", "session_only")).strip().lower()
+    if mode not in {"off", "session_only", "selective", "full"}:
+        mode = "session_only"
+    session_enabled = policy.get("session_memory_enabled", True)
+    if not isinstance(session_enabled, bool):
+        session_enabled = bool(session_enabled)
+    tags = _normalize_tag_list(policy.get("tags"))
+    allowlist = _normalize_tag_list(policy.get("long_term_tag_allowlist"))
+    if mode == "selective" and not allowlist:
+        allowlist = ["retain"]
+
+    overrides: dict[str, Optional[str]] = {
+        "UA_MEMORY_RUN_TAGS": ",".join(tags) if tags else None,
+        "UA_MEMORY_LONG_TERM_TAG_ALLOWLIST": None,
+        "UA_MEMORY_PROFILE_MODE": None,
+    }
+    if mode == "off":
+        overrides.update(
+            {
+                "UA_DISABLE_MEMORY": "1",
+                "UA_DISABLE_LOCAL_MEMORY": "1",
+                "UA_MEMORY_ENABLED": "0",
+                "UA_MEMORY_SESSION_ENABLED": None,
+                "UA_MEMORY_SESSION_DISABLED": "1",
+                "UA_MEMORY_ORCHESTRATOR_MODE": None,
+            }
+        )
+        return overrides
+
+    overrides.update(
+        {
+            "UA_DISABLE_MEMORY": None,
+            "UA_DISABLE_LOCAL_MEMORY": None,
+            "UA_MEMORY_ENABLED": "1",
+            "UA_MEMORY_ORCHESTRATOR_MODE": "unified",
+        }
+    )
+    if session_enabled:
+        overrides["UA_MEMORY_SESSION_ENABLED"] = "1"
+        overrides["UA_MEMORY_SESSION_DISABLED"] = None
+    else:
+        overrides["UA_MEMORY_SESSION_ENABLED"] = None
+        overrides["UA_MEMORY_SESSION_DISABLED"] = "1"
+
+    if mode == "session_only":
+        overrides["UA_MEMORY_PROFILE_MODE"] = "dev_no_persist"
+    elif mode == "selective":
+        overrides["UA_MEMORY_PROFILE_MODE"] = "dev_memory_test"
+        overrides["UA_MEMORY_LONG_TERM_TAG_ALLOWLIST"] = ",".join(allowlist)
+    else:  # full
+        overrides["UA_MEMORY_PROFILE_MODE"] = "prod"
+    return overrides
+
+
 @dataclass
 class EngineConfig:
     """Configuration for the execution engine."""
@@ -344,46 +440,61 @@ class ProcessTurnAdapter:
                     trace=self._trace,
                     runtime_db_conn=getattr(main_module, "runtime_db_conn", None),
                 )
+                memory_policy = self.config.__dict__.get("_memory_policy")
+                env_overrides = _build_memory_env_overrides(
+                    memory_policy if isinstance(memory_policy, dict) else {}
+                )
 
-                if USE_PROCESS_STDIO_REDIRECT:
-                    with _redirect_stdio_to_run_log(self.config.workspace_dir) as log_handle:
-                        # Log user input
-                        try:
-                            ts = datetime.now().strftime("%H:%M:%S")
-                            log_handle.write(f"\n[{ts}] 👤 USER: {user_input}\n")
-                            log_handle.flush()
-                        except Exception:
-                            pass
-
-                        # Wrap callback to log events
-                        def logging_callback(event: AgentEvent) -> None:
+                with _temporary_env(env_overrides):
+                    if USE_PROCESS_STDIO_REDIRECT:
+                        with _redirect_stdio_to_run_log(self.config.workspace_dir) as log_handle:
+                            # Log user input
                             try:
-                                if event_callback:
-                                    event_callback(event)
-                                
-                                # Simple plain-text logging of key events
                                 ts = datetime.now().strftime("%H:%M:%S")
-                                if event.type == EventType.TEXT:
-                                    text = event.data.get("text", "")
-                                    if text:
-                                        log_handle.write(f"[{ts}] 🤖 ASSISTANT: {text}\n")
-                                elif event.type == EventType.TOOL_CALL:
-                                    name = event.data.get("name", "unknown")
-                                    log_handle.write(f"\n[{ts}] 🛠️ TOOL CALL: {name}\n")
-                                elif event.type == EventType.TOOL_RESULT:
-                                    log_handle.write(f"[{ts}] 📦 TOOL RESULT\n")
-                                elif event.type == EventType.STATUS:
-                                    status = event.data.get("status", "")
-                                    if status:
-                                        log_handle.write(f"[{ts}] ℹ️ STATUS: {status}\n")
-                                elif event.type == EventType.ERROR:
-                                    msg = event.data.get("message", "")
-                                    log_handle.write(f"[{ts}] ❌ ERROR: {msg}\n")
-                                
+                                log_handle.write(f"\n[{ts}] 👤 USER: {user_input}\n")
                                 log_handle.flush()
                             except Exception:
                                 pass
 
+                            # Wrap callback to log events
+                            def logging_callback(event: AgentEvent) -> None:
+                                try:
+                                    if event_callback:
+                                        event_callback(event)
+                                    
+                                    # Simple plain-text logging of key events
+                                    ts = datetime.now().strftime("%H:%M:%S")
+                                    if event.type == EventType.TEXT:
+                                        text = event.data.get("text", "")
+                                        if text:
+                                            log_handle.write(f"[{ts}] 🤖 ASSISTANT: {text}\n")
+                                    elif event.type == EventType.TOOL_CALL:
+                                        name = event.data.get("name", "unknown")
+                                        log_handle.write(f"\n[{ts}] 🛠️ TOOL CALL: {name}\n")
+                                    elif event.type == EventType.TOOL_RESULT:
+                                        log_handle.write(f"[{ts}] 📦 TOOL RESULT\n")
+                                    elif event.type == EventType.STATUS:
+                                        status = event.data.get("status", "")
+                                        if status:
+                                            log_handle.write(f"[{ts}] ℹ️ STATUS: {status}\n")
+                                    elif event.type == EventType.ERROR:
+                                        msg = event.data.get("message", "")
+                                        log_handle.write(f"[{ts}] ❌ ERROR: {msg}\n")
+                                    
+                                    log_handle.flush()
+                                except Exception:
+                                    pass
+
+                            result = await process_turn(
+                                client=client,
+                                user_input=user_input,
+                                workspace_dir=self.config.workspace_dir,
+                                force_complex=self.config.force_complex,
+                                execution_session=execution_session,
+                                max_iterations=self.config.max_iterations,
+                                event_callback=logging_callback,
+                            )
+                    else:
                         result = await process_turn(
                             client=client,
                             user_input=user_input,
@@ -391,18 +502,8 @@ class ProcessTurnAdapter:
                             force_complex=self.config.force_complex,
                             execution_session=execution_session,
                             max_iterations=self.config.max_iterations,
-                            event_callback=logging_callback,
+                            event_callback=event_callback,
                         )
-                else:
-                    result = await process_turn(
-                        client=client,
-                        user_input=user_input,
-                        workspace_dir=self.config.workspace_dir,
-                        force_complex=self.config.force_complex,
-                        execution_session=execution_session,
-                        max_iterations=self.config.max_iterations,
-                        event_callback=event_callback,
-                    )
                 result_holder["result"] = result
                 result_holder["success"] = True
             except Exception as e:
