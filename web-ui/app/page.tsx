@@ -19,7 +19,7 @@ import { formatDuration, formatFileSize } from "@/lib/utils";
 import { ApprovalModal, useApprovalModal } from "@/components/approvals/ApprovalModal";
 import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
-import { OpsProvider, SessionsSection, SkillsSection, ChannelsSection, ApprovalsSection, SystemEventsSection, OpsConfigSection, SessionContinuityWidget, HeartbeatWidget } from "@/components/OpsDropdowns";
+import { OpsProvider, SessionsSection, CalendarSection, SkillsSection, ChannelsSection, ApprovalsSection, SystemEventsSection, OpsConfigSection, SessionContinuityWidget, HeartbeatWidget } from "@/components/OpsDropdowns";
 // UI Primitives
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import ReactMarkdown from "react-markdown";
@@ -1311,6 +1311,7 @@ export default function HomePage() {
           <div className="flex items-center gap-0.5 shrink-0">
             {([
               { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: "w-[800px]" },
+              { key: "calendar", label: "Calendar", icon: "🗓️", content: <CalendarSection />, width: "w-[1100px]" },
               { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: "w-[800px]" },
               { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: "w-[600px]" },
               { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: "w-[600px]" },

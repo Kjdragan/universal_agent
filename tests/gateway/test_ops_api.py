@@ -1,5 +1,6 @@
 import os
 import shutil
+import time
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 from universal_agent import gateway_server
 from universal_agent.gateway import GatewaySessionSummary
 from universal_agent.gateway import GatewaySession
+from universal_agent.cron_service import CronService
 
 # Mock OpsService to avoid full gateway dependency chains in unit tests
 # OR rely on the fact that lifespan will init a real OpsService with a real InProcessGateway pointing to tmp_path?
@@ -26,6 +28,9 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_session_turn_locks", {})
     monkeypatch.setattr(gateway_server, "_notifications", [])
     monkeypatch.setattr(gateway_server, "_continuity_active_alerts", set())
+    monkeypatch.setattr(gateway_server, "_calendar_missed_events", {})
+    monkeypatch.setattr(gateway_server, "_calendar_missed_notifications", set())
+    monkeypatch.setattr(gateway_server, "_calendar_change_proposals", {})
     monkeypatch.setattr(
         gateway_server,
         "_observability_metrics",
@@ -605,3 +610,102 @@ def test_ops_cancel_outstanding_runs(client, tmp_path):
     assert payload["reason"] == "bulk cancel test"
     assert payload["sessions_considered"] == 1
     assert payload["sessions_cancelled"] == ["session_running"]
+
+
+def test_ops_calendar_events_with_cron_missed_stasis(client, tmp_path):
+    gateway_server._cron_service = CronService(
+        gateway_server.get_gateway(),
+        tmp_path,
+    )
+    cron_ws = tmp_path / "cron_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="heartbeat check",
+        run_at=time.time() - 300,
+        enabled=True,
+    )
+
+    resp = client.get("/api/v1/ops/calendar/events?source=cron&view=week")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["events"]
+    assert any(item["source"] == "cron" for item in payload["events"])
+    assert any(item["status"] == "missed" for item in payload["events"])
+    assert payload["stasis_queue"]
+
+
+def test_ops_calendar_event_actions_for_cron(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("UA_CRON_MOCK_RESPONSE", "1")
+    gateway_server._cron_service = CronService(
+        gateway_server.get_gateway(),
+        tmp_path,
+    )
+    cron_ws = tmp_path / "cron_actions_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    job = gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="run status report",
+        every_raw="30m",
+        enabled=True,
+    )
+    event_id = f"cron|{job.job_id}|{int(job.next_run_at or time.time())}"
+
+    pause_resp = client.post(
+        f"/api/v1/ops/calendar/events/{event_id}/action",
+        json={"action": "pause"},
+    )
+    assert pause_resp.status_code == 200
+    assert pause_resp.json()["job"]["enabled"] is False
+
+    resume_resp = client.post(
+        f"/api/v1/ops/calendar/events/{event_id}/action",
+        json={"action": "resume"},
+    )
+    assert resume_resp.status_code == 200
+    assert resume_resp.json()["job"]["enabled"] is True
+
+    run_resp = client.post(
+        f"/api/v1/ops/calendar/events/{event_id}/action",
+        json={"action": "run_now"},
+    )
+    assert run_resp.status_code == 200
+    assert run_resp.json()["run"]["status"] == "success"
+
+
+def test_ops_calendar_change_request_confirm_for_cron_interval(client, tmp_path):
+    gateway_server._cron_service = CronService(
+        gateway_server.get_gateway(),
+        tmp_path,
+    )
+    cron_ws = tmp_path / "cron_change_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    job = gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="weekly summary",
+        every_raw="30m",
+        enabled=True,
+    )
+    event_id = f"cron|{job.job_id}|{int(job.next_run_at or time.time())}"
+
+    propose_resp = client.post(
+        f"/api/v1/ops/calendar/events/{event_id}/change-request",
+        json={"instruction": "Change this to every 45 minutes"},
+    )
+    assert propose_resp.status_code == 200
+    proposal = propose_resp.json()["proposal"]
+    assert proposal["status"] == "pending_confirmation"
+    assert proposal["operation"]["type"] == "cron_set_interval"
+
+    confirm_resp = client.post(
+        f"/api/v1/ops/calendar/events/{event_id}/change-request/confirm",
+        json={"proposal_id": proposal["proposal_id"], "approve": True},
+    )
+    assert confirm_resp.status_code == 200
+    assert confirm_resp.json()["status"] == "applied"
+    updated = gateway_server._cron_service.get_job(job.job_id)
+    assert updated is not None
+    assert updated.every_seconds == 45 * 60

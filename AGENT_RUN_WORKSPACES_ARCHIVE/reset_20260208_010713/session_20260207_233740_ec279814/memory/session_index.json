@@ -1,0 +1,32 @@
+[
+  {
+    "entry_id": "fdf2c553-8a73-418e-a4c3-8f09ba1795a6",
+    "timestamp": "2026-02-08T05:38:05.251620+00:00",
+    "source": "session_index",
+    "session_id": "f6ce9666-2029-4d0e-87b7-6ff14aae4d60",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:f6ce9666-2029-4d0e-87b7-6ff14aae4d60"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-07 23:38:02**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c3bc18deaaaa521d9b1e229a8c7c5` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/f6ce9666-2029-4d0e-87b7-6ff14aae4d60_2026-02-08.md",
+    "content_hash": "19526f578f19c2c85c38450ca7a19b20548c209f2bd90a1e5238ebca886bef69"
+  },
+  {
+    "entry_id": "0dbe9fd3-9f5b-4a2f-bca3-44b58eb66fa4",
+    "timestamp": "2026-02-08T05:43:31.572000+00:00",
+    "source": "session_index",
+    "session_id": "f6ce9666-2029-4d0e-87b7-6ff14aae4d60",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:f6ce9666-2029-4d0e-87b7-6ff14aae4d60"
+    ],
+    "summary": null,
+    "preview": "}\n    }\n  ],\n  \"session_id\": \"pull\",\n  \"sync_response_to_workbench\": false\n}\n```\n</details>\n\n**Result Output:**\n```json\n{\n  \"successful\": true,\n  \"data\": {\n    \"results\": [\n      {\n        \"response\": {\n          \"successful\": true,\n          \"data\": {\n            \"id\": \"19c3bc6b",
+    "file_path": "memory/sessions/f6ce9666-2029-4d0e-87b7-6ff14aae4d60_2026-02-08.md",
+    "content_hash": "e3c09eaa98fc04d97b94dc51efbb56b419a672314942ab9bfa321ac2242a88c1"
+  }
+]

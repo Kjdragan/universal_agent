@@ -50,6 +50,37 @@ type SessionContinuityState = {
   updated_at?: string;
   error?: string;
 };
+type CalendarEventItem = {
+  event_id: string;
+  source: "cron" | "heartbeat";
+  source_ref: string;
+  owner_id?: string;
+  session_id?: string;
+  channel?: string;
+  title: string;
+  description?: string;
+  category?: string;
+  color_key?: string;
+  status: "scheduled" | "running" | "success" | "failed" | "missed" | "paused" | "disabled";
+  scheduled_at_utc: string;
+  scheduled_at_local: string;
+  scheduled_at_epoch: number;
+  timezone_display?: string;
+  always_running?: boolean;
+  actions?: string[];
+};
+type CalendarFeedResponse = {
+  timezone: string;
+  view: string;
+  start_utc: string;
+  end_utc: string;
+  start_local: string;
+  end_local: string;
+  events: CalendarEventItem[];
+  always_running: CalendarEventItem[];
+  stasis_queue: Array<Record<string, unknown>>;
+  legend?: Record<string, string>;
+};
 
 function buildHeaders(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -463,6 +494,303 @@ export function SessionsSection() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+export function CalendarSection() {
+  const [view, setView] = useState<"week" | "day">("week");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "cron" | "heartbeat">("all");
+  const [anchorDate, setAnchorDate] = useState<Date>(new Date());
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [events, setEvents] = useState<CalendarEventItem[]>([]);
+  const [alwaysRunning, setAlwaysRunning] = useState<CalendarEventItem[]>([]);
+  const [stasisQueue, setStasisQueue] = useState<Array<{ event_id?: string; status?: string; created_at?: string; event?: CalendarEventItem }>>([]);
+  const [tz, setTz] = useState<string>("America/Chicago");
+
+  const attachToChat = useCallback(async (sessionId: string) => {
+    if (!sessionId) return;
+    const store = useAgentStore.getState();
+    store.reset();
+    store.setSessionAttachMode("tail");
+    const ws = getWebSocket();
+    ws.attachToSession(sessionId);
+  }, []);
+
+  const startOfWeek = (d: Date) => {
+    const copy = new Date(d);
+    const daysSinceSunday = copy.getDay();
+    copy.setDate(copy.getDate() - daysSinceSunday);
+    copy.setHours(0, 0, 0, 0);
+    return copy;
+  };
+  const addDays = (d: Date, n: number) => {
+    const copy = new Date(d);
+    copy.setDate(copy.getDate() + n);
+    return copy;
+  };
+  const range = useMemo(() => {
+    if (view === "day") {
+      const start = new Date(anchorDate);
+      start.setHours(0, 0, 0, 0);
+      const end = addDays(start, 1);
+      return { start, end };
+    }
+    const start = startOfWeek(anchorDate);
+    const end = addDays(start, 7);
+    return { start, end };
+  }, [anchorDate, view]);
+
+  const fetchCalendar = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Chicago";
+      const params = new URLSearchParams({
+        view,
+        start: range.start.toISOString(),
+        end: range.end.toISOString(),
+        source: sourceFilter,
+        timezone_name: browserTz,
+      });
+      const r = await fetch(`${API_BASE}/api/v1/ops/calendar/events?${params.toString()}`, { headers: buildHeaders() });
+      if (!r.ok) {
+        const msg = await r.text();
+        throw new Error(msg || `Calendar load failed (${r.status})`);
+      }
+      const data = (await r.json()) as CalendarFeedResponse;
+      setEvents(data.events || []);
+      setAlwaysRunning(data.always_running || []);
+      setStasisQueue((data.stasis_queue as Array<{ event_id?: string; status?: string; created_at?: string; event?: CalendarEventItem }>) || []);
+      setTz(data.timezone || browserTz);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, [range.end, range.start, sourceFilter, view]);
+
+  useEffect(() => {
+    fetchCalendar();
+  }, [fetchCalendar]);
+
+  const performAction = useCallback(async (event: CalendarEventItem, action: string) => {
+    const payload: Record<string, unknown> = { action };
+    if (action === "reschedule") {
+      const requested = prompt("Reschedule for when? (e.g. 'in 30m' or ISO timestamp)");
+      if (!requested || !requested.trim()) return;
+      payload.run_at = requested.trim();
+    }
+    const r = await fetch(`${API_BASE}/api/v1/ops/calendar/events/${encodeURIComponent(event.event_id)}/action`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...buildHeaders() },
+      body: JSON.stringify(payload),
+    });
+    if (!r.ok) {
+      const msg = await r.text();
+      throw new Error(msg || `Action failed (${r.status})`);
+    }
+    const data = await r.json();
+    if (action === "open_logs" && data.path) {
+      const href = String(data.path);
+      const full = href.startsWith("http") ? href : `${API_BASE}${href.startsWith("/") ? "" : "/"}${href}`;
+      window.open(full, "_blank", "noopener,noreferrer");
+    }
+    if (action === "open_session") {
+      const sid = String(data.session_id || event.session_id || "");
+      if (sid) await attachToChat(sid);
+    }
+    await fetchCalendar();
+  }, [attachToChat, fetchCalendar]);
+
+  const requestChange = useCallback(async (event: CalendarEventItem) => {
+    const instruction = prompt("Describe the schedule change:");
+    if (!instruction || !instruction.trim()) return;
+    const propose = await fetch(`${API_BASE}/api/v1/ops/calendar/events/${encodeURIComponent(event.event_id)}/change-request`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...buildHeaders() },
+      body: JSON.stringify({ instruction: instruction.trim() }),
+    });
+    if (!propose.ok) {
+      const msg = await propose.text();
+      throw new Error(msg || `Change request failed (${propose.status})`);
+    }
+    const proposalPayload = await propose.json();
+    const proposal = proposalPayload.proposal;
+    const warningText = Array.isArray(proposal?.warnings) && proposal.warnings.length > 0
+      ? `\nWarnings:\n- ${proposal.warnings.join("\n- ")}`
+      : "";
+    const ok = confirm(
+      `Apply this change?\n\n${proposal?.summary || "No summary"}\nConfidence: ${proposal?.confidence || "unknown"}${warningText}`,
+    );
+    const confirmResp = await fetch(`${API_BASE}/api/v1/ops/calendar/events/${encodeURIComponent(event.event_id)}/change-request/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...buildHeaders() },
+      body: JSON.stringify({ proposal_id: proposal?.proposal_id, approve: ok }),
+    });
+    if (!confirmResp.ok) {
+      const msg = await confirmResp.text();
+      throw new Error(msg || `Confirm failed (${confirmResp.status})`);
+    }
+    await fetchCalendar();
+  }, [fetchCalendar]);
+
+  const weekDays = useMemo(() => {
+    if (view === "day") return [new Date(range.start)];
+    return Array.from({ length: 7 }, (_, i) => addDays(range.start, i));
+  }, [range.start, view]);
+
+  const eventsByDay = useMemo(() => {
+    const map = new Map<string, CalendarEventItem[]>();
+    for (const day of weekDays) {
+      map.set(day.toDateString(), []);
+    }
+    for (const event of events) {
+      const key = new Date(event.scheduled_at_local).toDateString();
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(event);
+    }
+    for (const [, bucket] of map) {
+      bucket.sort((a, b) => a.scheduled_at_epoch - b.scheduled_at_epoch);
+    }
+    return map;
+  }, [events, weekDays]);
+
+  const statusBadge = (event: CalendarEventItem) => {
+    if (event.source === "heartbeat") return "bg-red-500/20 border-red-500/50 text-red-300";
+    if (event.status === "missed") return "bg-amber-500/20 border-amber-500/50 text-amber-300";
+    if (event.status === "failed") return "bg-rose-500/20 border-rose-500/50 text-rose-300";
+    if (event.status === "success") return "bg-emerald-500/20 border-emerald-500/50 text-emerald-300";
+    if (event.status === "disabled") return "bg-slate-500/20 border-slate-500/50 text-slate-300";
+    return "bg-blue-500/20 border-blue-500/50 text-blue-200";
+  };
+
+  const shiftWindow = (days: number) => {
+    const next = new Date(anchorDate);
+    next.setDate(next.getDate() + days);
+    setAnchorDate(next);
+  };
+
+  return (
+    <div className="p-3 text-xs space-y-3">
+      <div className="border rounded bg-background/40 p-2 space-y-2">
+        <div className="font-semibold flex items-center justify-between gap-2">
+          <span>Calendar</span>
+          <div className="flex items-center gap-1">
+            <button onClick={() => shiftWindow(view === "day" ? -1 : -7)} className="px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60">◀</button>
+            <button onClick={() => setAnchorDate(new Date())} className="px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60">Today</button>
+            <button onClick={() => shiftWindow(view === "day" ? 1 : 7)} className="px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60">▶</button>
+            <button onClick={fetchCalendar} className="px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60">{loading ? "..." : "↻"}</button>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={view} onChange={(e) => setView(e.target.value as typeof view)} className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[10px]">
+            <option value="week">week</option>
+            <option value="day">day</option>
+          </select>
+          <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)} className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[10px]">
+            <option value="all">source: all</option>
+            <option value="cron">cron</option>
+            <option value="heartbeat">heartbeat</option>
+          </select>
+          <span className="text-[10px] text-muted-foreground">timezone: {tz}</span>
+          <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-500/80" />heartbeat</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-blue-500/80" />scheduled</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-amber-500/80" />missed</span>
+          </div>
+        </div>
+        {error && <div className="text-[10px] text-rose-400">{error}</div>}
+      </div>
+
+      <div className="border rounded bg-background/40 p-2">
+        <div className="font-semibold mb-1">Always Running</div>
+        {alwaysRunning.length === 0 && <div className="text-muted-foreground text-[10px]">No always-running entries</div>}
+        <div className="flex flex-wrap gap-1">
+          {alwaysRunning.map((item) => (
+            <button key={item.event_id} onClick={() => performAction(item, "run_now")} className="px-2 py-1 rounded border border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20">
+              {item.title} • every {item.description?.split("every ").pop() || "n/a"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="border rounded bg-background/40 p-2">
+        <div className="font-semibold mb-1">Missed Event Stasis Queue</div>
+        {stasisQueue.length === 0 && <div className="text-muted-foreground text-[10px]">No pending missed events</div>}
+        <div className="space-y-1">
+          {stasisQueue.map((entry) => {
+            const ev = entry.event;
+            if (!ev) return null;
+            return (
+              <div key={entry.event_id || ev.event_id} className="rounded border border-amber-500/40 bg-amber-500/10 p-2">
+                <div className="font-semibold text-amber-200">{ev.title}</div>
+                <div className="text-[10px] text-amber-100/90">
+                  missed at {new Date(ev.scheduled_at_local).toLocaleString()} • status: {entry.status || "pending"}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-1">
+                  <button onClick={() => performAction(ev, "approve_backfill_run")} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">Approve & Run</button>
+                  <button onClick={() => performAction(ev, "reschedule")} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">Reschedule</button>
+                  <button onClick={() => performAction(ev, "delete_missed")} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">Delete</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="hidden md:grid grid-cols-7 gap-2">
+        {weekDays.map((day) => {
+          const key = day.toDateString();
+          const bucket = eventsByDay.get(key) || [];
+          return (
+            <div key={key} className="border rounded bg-background/40 p-2 min-h-[220px]">
+              <div className="font-semibold text-[11px] mb-2">{day.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" })}</div>
+              <div className="space-y-1">
+                {bucket.length === 0 && <div className="text-[10px] text-muted-foreground">No events</div>}
+                {bucket.map((event) => (
+                  <div key={event.event_id} className={`rounded border px-2 py-1 ${statusBadge(event)}`}>
+                    <div className="font-semibold truncate">{event.title}</div>
+                    <div className="text-[10px] opacity-90">{new Date(event.scheduled_at_local).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} • {event.status}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {(event.actions || []).map((action) => (
+                        <button key={`${event.event_id}-${action}`} onClick={() => performAction(event, action)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">
+                          {action}
+                        </button>
+                      ))}
+                      <button onClick={() => requestChange(event)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">change</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="md:hidden border rounded bg-background/40 p-2">
+        <div className="font-semibold mb-2">{view === "day" ? "Day" : "Events"}</div>
+        <div className="space-y-2 max-h-72 overflow-y-auto scrollbar-thin">
+          {events.length === 0 && <div className="text-[10px] text-muted-foreground">No events</div>}
+          {events.map((event) => (
+            <div key={event.event_id} className={`rounded border px-2 py-1 ${statusBadge(event)}`}>
+              <div className="font-semibold">{event.title}</div>
+              <div className="text-[10px] opacity-90">
+                {new Date(event.scheduled_at_local).toLocaleString()} • {event.status}
+              </div>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {(event.actions || []).map((action) => (
+                  <button key={`${event.event_id}-${action}`} onClick={() => performAction(event, action)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">
+                    {action}
+                  </button>
+                ))}
+                <button onClick={() => requestChange(event)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">change</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
