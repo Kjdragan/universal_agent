@@ -106,7 +106,134 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
+clean_runtime_state() {
+    echo "🧼 Cleaning runtime state..."
+
+    # Stop any existing stack first
+    fuser -k "${UA_GATEWAY_PORT}"/tcp 2>/dev/null || true
+    fuser -k 8001/tcp 2>/dev/null || true
+    fuser -k 3000/tcp 2>/dev/null || true
+    pkill -f "universal_agent.gateway_server" 2>/dev/null || true
+    pkill -f "python -m universal_agent.api.server" 2>/dev/null || true
+    pkill -f "next dev" 2>/dev/null || true
+    pkill -f "npm run dev" 2>/dev/null || true
+    sleep 1
+
+    # Archive existing workspace runtime/session state
+    local ws_dir="AGENT_RUN_WORKSPACES"
+    local archive_root="AGENT_RUN_WORKSPACES_ARCHIVE"
+    local ts
+    ts="$(date +%Y%m%d_%H%M%S)"
+    local archive_dir="${archive_root}/reset_${ts}"
+
+    mkdir -p "${ws_dir}" "${archive_dir}"
+
+    shopt -s nullglob
+    local moved=0
+    for p in "${ws_dir}"/session_* "${ws_dir}"/tg_* "${ws_dir}"/api_*; do
+        mv "${p}" "${archive_dir}/"
+        moved=1
+    done
+    for f in \
+        "${ws_dir}/approvals.json" \
+        "${ws_dir}/runtime_state.db" \
+        "${ws_dir}/runtime_state.db-shm" \
+        "${ws_dir}/runtime_state.db-wal"; do
+        if [ -e "${f}" ]; then
+            mv "${f}" "${archive_dir}/"
+            moved=1
+        fi
+    done
+
+    if [ "${moved}" -eq 1 ]; then
+        echo "📦 Archived previous runtime state to: ${archive_dir}"
+    else
+        # Remove empty archive dir if nothing was moved
+        rmdir "${archive_dir}" 2>/dev/null || true
+        echo "✅ No prior runtime state found to archive."
+    fi
+}
+
+start_full_stack() {
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║         GATEWAY MODE - FULL STACK                            ║"
+    echo "╠══════════════════════════════════════════════════════════════╣"
+    echo "║  Gateway:   http://localhost:${UA_GATEWAY_PORT}                            ║"
+    echo "║  API:       http://localhost:8001                            ║"
+    echo "║  Web UI:    http://localhost:3000                            ║"
+    echo "║  Dashboard: http://localhost:3000/dashboard                  ║"
+    echo "║                                                              ║"
+    echo "║  CLI client (separate terminal):                             ║"
+    echo "║    UA_GATEWAY_URL=http://localhost:${UA_GATEWAY_PORT} ./start_cli_dev.sh   ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # Clean up existing processes
+    echo "🧹 Cleaning up existing processes..."
+    fuser -k "${UA_GATEWAY_PORT}"/tcp 2>/dev/null
+    fuser -k 8001/tcp 2>/dev/null
+    fuser -k 3000/tcp 2>/dev/null
+    sleep 1
+
+    # 1. Start Gateway Server (background)
+    echo "🚀 Starting Gateway Server (Port ${UA_GATEWAY_PORT})..."
+    run_gateway_background
+    GATEWAY_PID=$!
+    echo "   PID: $GATEWAY_PID (Logs: tail -f gateway.log)"
+
+    # Wait for gateway to be ready
+    echo "⏳ Waiting for Gateway..."
+    for i in {1..30}; do
+        if curl -s "http://localhost:${UA_GATEWAY_PORT}/api/v1/health" > /dev/null 2>&1; then
+            echo "   ✅ Gateway ready"
+            break
+        fi
+        sleep 1
+        if [ $i -eq 30 ]; then
+            echo "   ❌ Gateway failed to start. Check gateway.log"
+            cat gateway.log | tail -20
+            exit 1
+        fi
+    done
+
+    # 2. Start API Server (background, connects to gateway)
+    echo "🔌 Starting API Server (Port 8001)..."
+    UA_GATEWAY_URL="http://localhost:${UA_GATEWAY_PORT}" PYTHONPATH=src uv run python -m universal_agent.api.server > api.log 2>&1 &
+    API_PID=$!
+    echo "   PID: $API_PID (Logs: tail -f api.log)"
+    sleep 2
+
+    # 3. Start Web UI (foreground, optional)
+    echo "💻 Starting Web UI (Port 3000)..."
+    echo "---------------------------------------------------"
+    echo "   Use Ctrl+C to stop all services."
+    echo ""
+    if [ -d "web-ui" ] && command -v npm >/dev/null 2>&1; then
+        cd web-ui
+        npm run dev
+    else
+        echo "⚠️  Web UI skipped (missing web-ui directory or npm)."
+    fi
+}
+
 case "$MODE" in
+    --clean)
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║         CLEAN RUNTIME STATE                                  ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        clean_runtime_state
+        echo "✅ Clean complete."
+        exit 0
+        ;;
+
+    --clean-start)
+        echo "╔══════════════════════════════════════════════════════════════╗"
+        echo "║         CLEAN + START FULL STACK                             ║"
+        echo "╚══════════════════════════════════════════════════════════════╝"
+        clean_runtime_state
+        start_full_stack
+        ;;
+
     --server)
         echo "╔══════════════════════════════════════════════════════════════╗"
         echo "║         GATEWAY SERVER ONLY                                  ║"
@@ -162,64 +289,6 @@ case "$MODE" in
         ;;
 
     full|*)
-        echo "╔══════════════════════════════════════════════════════════════╗"
-        echo "║         GATEWAY MODE - FULL STACK                            ║"
-        echo "╠══════════════════════════════════════════════════════════════╣"
-        echo "║  Gateway:   http://localhost:${UA_GATEWAY_PORT}                            ║"
-        echo "║  API:       http://localhost:8001                            ║"
-        echo "║  Web UI:    http://localhost:3000                            ║"
-        echo "║  Dashboard: http://localhost:3000/dashboard                  ║"
-        echo "║                                                              ║"
-        echo "║  CLI client (separate terminal):                             ║"
-        echo "║    UA_GATEWAY_URL=http://localhost:${UA_GATEWAY_PORT} ./start_cli_dev.sh   ║"
-        echo "╚══════════════════════════════════════════════════════════════╝"
-        echo ""
-        
-        # Clean up existing processes
-        echo "🧹 Cleaning up existing processes..."
-        fuser -k "${UA_GATEWAY_PORT}"/tcp 2>/dev/null
-        fuser -k 8001/tcp 2>/dev/null
-        fuser -k 3000/tcp 2>/dev/null
-        sleep 1
-        
-        # 1. Start Gateway Server (background)
-        echo "🚀 Starting Gateway Server (Port ${UA_GATEWAY_PORT})..."
-        run_gateway_background
-        GATEWAY_PID=$!
-        echo "   PID: $GATEWAY_PID (Logs: tail -f gateway.log)"
-        
-        # Wait for gateway to be ready
-        echo "⏳ Waiting for Gateway..."
-        for i in {1..30}; do
-            if curl -s "http://localhost:${UA_GATEWAY_PORT}/api/v1/health" > /dev/null 2>&1; then
-                echo "   ✅ Gateway ready"
-                break
-            fi
-            sleep 1
-            if [ $i -eq 30 ]; then
-                echo "   ❌ Gateway failed to start. Check gateway.log"
-                cat gateway.log | tail -20
-                exit 1
-            fi
-        done
-        
-        # 2. Start API Server (background, connects to gateway)
-        echo "🔌 Starting API Server (Port 8001)..."
-        UA_GATEWAY_URL="http://localhost:${UA_GATEWAY_PORT}" PYTHONPATH=src uv run python -m universal_agent.api.server > api.log 2>&1 &
-        API_PID=$!
-        echo "   PID: $API_PID (Logs: tail -f api.log)"
-        sleep 2
-        
-        # 3. Start Web UI (foreground, optional)
-        echo "💻 Starting Web UI (Port 3000)..."
-        echo "---------------------------------------------------"
-        echo "   Use Ctrl+C to stop all services."
-        echo ""
-        if [ -d "web-ui" ] && command -v npm >/dev/null 2>&1; then
-            cd web-ui
-            npm run dev
-        else
-            echo "⚠️  Web UI skipped (missing web-ui directory or npm)."
-        fi
+        start_full_stack
         ;;
 esac

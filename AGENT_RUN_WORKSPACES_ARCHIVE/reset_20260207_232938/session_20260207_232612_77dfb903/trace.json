@@ -1,0 +1,103 @@
+{
+  "run_id": "28484167-8046-4789-af8c-d18b6f18dbd9",
+  "session_info": {
+    "url": "https://backend.composio.dev/tool_router/trs_8r9TMK_pK0NN/mcp",
+    "user_id": "pg-test-8c18facc-7f25-4693-918c-7252c15d36b2",
+    "run_id": "28484167-8046-4789-af8c-d18b6f18dbd9",
+    "timestamp": "2026-02-07T23:26:13.481522"
+  },
+  "query": "Run a one-line sanity check and answer with SMOKE_OK if possible.",
+  "start_time": "2026-02-07T23:26:19.023434",
+  "end_time": "2026-02-07T23:26:37.498922",
+  "total_duration_seconds": 18.475,
+  "tool_calls": [
+    {
+      "run_id": "28484167-8046-4789-af8c-d18b6f18dbd9",
+      "step_id": "845948e3-0e1b-441d-8b49-cf41ea619fab",
+      "iteration": 1,
+      "name": "Bash",
+      "id": "call_39f78c1fe7804b37b97e81cf",
+      "time_offset_seconds": 11.406,
+      "input": {
+        "command": "python -c \"import sys; print(f'Python {sys.version.split()[0]}'); print('SMOKE_OK')\"",
+        "description": "Run Python sanity check"
+      },
+      "input_size_bytes": 143
+    }
+  ],
+  "tool_results": [
+    {
+      "run_id": "28484167-8046-4789-af8c-d18b6f18dbd9",
+      "step_id": "845948e3-0e1b-441d-8b49-cf41ea619fab",
+      "tool_use_id": "call_39f78c1fe7804b37b97e81cf",
+      "time_offset_seconds": 13.806,
+      "is_error": false,
+      "content_size_bytes": 23,
+      "content_preview": "Python 3.13.11\nSMOKE_OK"
+    }
+  ],
+  "iterations": [
+    {
+      "run_id": "28484167-8046-4789-af8c-d18b6f18dbd9",
+      "step_id": "845948e3-0e1b-441d-8b49-cf41ea619fab",
+      "iteration": 1,
+      "query": "Run a one-line sanity check and answer with SMOKE_OK if possible.",
+      "duration_seconds": 18.469,
+      "tool_calls": 1,
+      "needs_user_input": false,
+      "auth_link": null
+    }
+  ],
+  "token_usage": {
+    "input": 35269,
+    "output": 85,
+    "total": 35354
+  },
+  "logfire_enabled": true,
+  "trace_id": "019c3bb7108df991b9f7e7dd75112e11",
+  "token_usage_flags": {},
+  "provider_session_id": "a17b5348-f576-4062-b285-047ef0a739c2",
+  "local_toolkit_trace_ids": [],
+  "trace_catalog": {
+    "main_agent": {
+      "trace_id": "019c3bb7108df991b9f7e7dd75112e11",
+      "logfire_url": "https://logfire.pydantic.dev/Kjdragan/composio-claudemultiagent?q=trace_id%3D%27019c3bb7108df991b9f7e7dd75112e11%27",
+      "description": "Primary execution trace with all agent spans",
+      "span_types": [
+        "conversation_iteration_{N}",
+        "llm_api_wait",
+        "llm_response_stream",
+        "assistant_message",
+        "tool_use / tool_input",
+        "tool_result / tool_output",
+        "observer_*",
+        "skill_gated",
+        "query_classification",
+        "token_usage_update",
+        "POST (HTTPX)"
+      ]
+    },
+    "local_toolkit": {
+      "trace_ids": [],
+      "distinct_trace_ids": [],
+      "overlap_with_main": false,
+      "mode": "none",
+      "description": "MCP tool server traces discovered from tool output markers"
+    },
+    "all_trace_ids": [
+      "019c3bb7108df991b9f7e7dd75112e11"
+    ],
+    "coverage": {
+      "sources": [
+        "main_trace_id",
+        "local_toolkit_trace_markers"
+      ],
+      "note": "Catalog guarantees main trace coverage and local toolkit marker coverage. External tool traces without emitted trace markers may not be discoverable."
+    },
+    "run_id": "28484167-8046-4789-af8c-d18b6f18dbd9",
+    "run_source": "user"
+  },
+  "trace_catalog_path": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260207_232612_77dfb903/trace_catalog.md",
+  "trace_catalog_work_product_path": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260207_232612_77dfb903/work_products/logfire-eval/trace_catalog.md",
+  "trace_catalog_work_product_json_path": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260207_232612_77dfb903/work_products/logfire-eval/trace_catalog.json"
+}

@@ -386,7 +386,7 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
     case "connected": {
       const data = event.data as Record<string, unknown>;
       store.setConnectionStatus("connected");
-      const sessionPayload = (data.session as SessionInfo) ?? (data as SessionInfo);
+      const sessionPayload = ((data.session as unknown as SessionInfo) ?? (data as unknown as SessionInfo));
       if (sessionPayload?.session_id) {
         store.setCurrentSession(sessionPayload);
       }

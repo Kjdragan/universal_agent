@@ -2022,6 +2022,40 @@ async def ops_list_sessions(
     }
 
 
+@app.post("/api/v1/ops/sessions/cancel")
+async def ops_cancel_outstanding_sessions(request: Request, payload: OpsSessionCancelRequest):
+    _require_ops_auth(request)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+
+    reason = (payload.reason or "Cancelled from ops bulk session controls").strip()
+    if not reason:
+        reason = "Cancelled from ops bulk session controls"
+
+    sessions = _ops_service.list_sessions(status_filter="all")
+    candidates: list[dict[str, Any]] = []
+    for item in sessions:
+        status = str(item.get("status", "")).lower()
+        active_runs = int(item.get("active_runs") or 0)
+        if status in {"running", "active"} or active_runs > 0:
+            candidates.append(item)
+
+    cancelled: list[str] = []
+    for item in candidates:
+        session_id = str(item.get("session_id", "")).strip()
+        if not session_id:
+            continue
+        await _cancel_session_execution(session_id, reason)
+        cancelled.append(session_id)
+
+    return {
+        "status": "cancel_requested",
+        "reason": reason,
+        "sessions_considered": len(candidates),
+        "sessions_cancelled": cancelled,
+    }
+
+
 @app.get("/api/v1/ops/metrics/session-continuity")
 async def ops_session_continuity_metrics(request: Request):
     _require_ops_auth(request)
