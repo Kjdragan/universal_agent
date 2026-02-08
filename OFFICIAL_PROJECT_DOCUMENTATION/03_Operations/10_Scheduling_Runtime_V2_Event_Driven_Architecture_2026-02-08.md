@@ -388,3 +388,80 @@ Executed:
 Added tests:
 - Stream-disabled feature flag behavior (`503` contract).
 - Scheduling runtime metric assertions for replay/connect/disconnect/payload counters.
+
+## 16. Phase 4 Execution Log (Implemented)
+Date executed: 2026-02-08
+Status: Completed
+
+### 16.1 Implemented Changes
+- Hardened cron missed-event reconciliation path:
+  - `approve_backfill_run` for cron now executes with the original scheduled timestamp so the resulting run record reconciles to the missed timeline event.
+  - Added resolved-missed suppression for timeline rendering:
+    - missed entries marked `approved_and_run`, `rescheduled`, or `deleted` are no longer re-surfaced as active missed events.
+- Hardened scheduler wake behavior for session-bound cron jobs:
+  - Cron jobs with session binding metadata now default to `wake next heartbeat` after completion, even if explicit wake flags are omitted.
+  - Explicit wake-disable directives (for example `wake_heartbeat=off`) still suppress wake calls.
+  - Existing explicit wake modes (`now` / `next`) remain supported.
+
+### 16.2 Behavioral Outcome
+- Missed-event queue actions are now lifecycle-consistent:
+  - Approve-and-run resolves the exact missed event.
+  - Reschedule/delete removes stale missed reappearance for the same occurrence.
+- Due-work wake behavior is more reliable for session-scoped cron runs without requiring extra per-job configuration.
+- Heartbeat remains the catch-all loop; cron remains scheduler-of-record.
+
+### 16.3 Validation Evidence
+Executed:
+- `uv run pytest -q tests/gateway/test_ops_api.py tests/gateway/test_cron_api.py tests/gateway/test_cron_scheduler.py`
+  - Result: `33 passed`
+- `uv run pytest -q tests/gateway/test_heartbeat_last.py tests/gateway/test_heartbeat_wake.py tests/gateway/test_heartbeat_schedule.py tests/gateway/test_heartbeat_delivery_policy.py tests/gateway/test_heartbeat_mvp.py`
+  - Result: `10 passed`
+- `npm --prefix web-ui run lint`
+  - Result: no errors (existing pre-existing warnings outside this phase remain).
+
+Added tests:
+- Cron missed-event stasis action coverage for:
+  - `approve_backfill_run`
+  - `reschedule`
+  - `delete_missed`
+- Default-vs-disabled cron heartbeat wake behavior coverage for session-bound cron jobs.
+
+## 17. Phase 5 Execution Log (Implemented)
+Date executed: 2026-02-08
+Status: Completed (excluding 24h soak window)
+
+### 17.1 Implemented Changes
+- Added V2 operational rollout runbook:
+  - `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/11_Scheduling_Runtime_V2_Operational_Runbook_2026-02-08.md`
+- Added soak automation script:
+  - `src/universal_agent/scripts/scheduling_v2_soak.py`
+- Added short-soak execution report:
+  - `OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/03_Scheduling_Runtime_V2_Short_Soak_Readiness_2026-02-08.md`
+- Captured explicit feature-flag rollout sequence:
+  - projection enablement
+  - push backend enablement
+  - push frontend enablement
+  - rollback sequence
+- Added operational SLO gate checklist for V2 cutover decisions.
+- Added troubleshooting entries for:
+  - cron availability issues
+  - push connection problems
+  - missed-event reconciliation checks
+  - heartbeat status visibility checks
+
+### 17.2 Exit Criteria Status
+- Feature flag rollout plan (`push_enabled`, `event_projection_enabled`): Completed.
+- Runbook updates and operational troubleshooting notes: Completed.
+- Final migration notes from V1 to V2: Completed in architecture + runbook docs.
+- 24h soak test: Pending operator execution window.
+
+### 17.3 Validation Evidence
+Executed and still passing after Phase 4/5 completion:
+- `uv run pytest -q tests/gateway/test_ops_api.py tests/gateway/test_cron_api.py tests/gateway/test_cron_scheduler.py`
+  - Result: `33 passed`
+- `uv run pytest -q tests/gateway/test_heartbeat_last.py tests/gateway/test_heartbeat_wake.py tests/gateway/test_heartbeat_schedule.py tests/gateway/test_heartbeat_delivery_policy.py tests/gateway/test_heartbeat_mvp.py`
+  - Result: `10 passed`
+- `npm --prefix web-ui run lint`
+  - Result: no errors (pre-existing warnings outside scheduling scope remain).
+- Short automated soak:
+  - `duration=60s`, `interval=15s`, total checks `24`, failures `0`.

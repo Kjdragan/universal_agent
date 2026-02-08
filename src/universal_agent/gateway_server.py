@@ -1564,6 +1564,16 @@ def _calendar_register_missed_event(event: dict[str, Any]) -> None:
     )
 
 
+def _calendar_missed_resolution(event_id: str) -> Optional[str]:
+    record = _calendar_missed_events.get(event_id)
+    if not record:
+        return None
+    status = str(record.get("status") or "").strip().lower()
+    if status in {"approved_and_run", "rescheduled", "deleted"}:
+        return status
+    return None
+
+
 def _calendar_cleanup_state() -> None:
     now_ts = time.time()
     stale_cutoff = now_ts - (30 * 86400)
@@ -1728,6 +1738,9 @@ def _calendar_project_cron_events(
                 event["run_status"] = matched_run.get("status")
                 event["run_id"] = matched_run.get("run_id")
             if status_value == "missed" and scheduled_at >= (now_ts - 48 * 3600):
+                resolution = _calendar_missed_resolution(event_id)
+                if resolution:
+                    continue
                 event["actions"] = [
                     "approve_backfill_run",
                     "reschedule",
@@ -1812,6 +1825,9 @@ def _calendar_project_heartbeat_events(
                 ],
             }
             if status_value == "missed":
+                resolution = _calendar_missed_resolution(event_id)
+                if resolution:
+                    continue
                 event["actions"] = [
                     "approve_backfill_run",
                     "reschedule",
@@ -2049,7 +2065,12 @@ async def _calendar_apply_event_action(
             updated = _cron_service.update_job(source_ref, {"enabled": False})
             return {"status": "ok", "action": action_norm, "job": updated.to_dict()}
         if action_norm == "approve_backfill_run":
-            record = await _cron_service.run_job_now(source_ref, reason="calendar_backfill_approved")
+            _source, _source_ref, scheduled_at = _calendar_parse_event_id(event_id)
+            record = await _cron_service.run_job_now(
+                source_ref,
+                reason="calendar_backfill_approved",
+                scheduled_at=float(scheduled_at),
+            )
             queue_entry = _calendar_missed_events.get(event_id)
             if queue_entry:
                 queue_entry["status"] = "approved_and_run"

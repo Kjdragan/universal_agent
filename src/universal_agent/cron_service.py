@@ -497,9 +497,14 @@ class CronService:
     def list_runs(self, job_id: Optional[str] = None, limit: int = 200) -> list[dict[str, Any]]:
         return self.store.read_runs(job_id=job_id, limit=limit)
 
-    async def run_job_now(self, job_id: str, reason: str = "manual") -> CronRunRecord:
+    async def run_job_now(
+        self,
+        job_id: str,
+        reason: str = "manual",
+        scheduled_at: Optional[float] = None,
+    ) -> CronRunRecord:
         job = self.jobs[job_id]
-        return await self._run_job(job, scheduled_at=None, reason=reason)
+        return await self._run_job(job, scheduled_at=scheduled_at, reason=reason)
 
     async def _scheduler_loop(self) -> None:
         while self.running:
@@ -642,21 +647,33 @@ class CronService:
             return
         metadata = job.metadata or {}
         trigger = metadata.get("wake_heartbeat") or metadata.get("heartbeat_wake")
-        if not trigger:
-            return
         session_id = (
             metadata.get("wake_session_id")
             or metadata.get("session_id")
             or metadata.get("target_session_id")
+            or metadata.get("target_session")
         )
         if not session_id:
-            logger.warning("Cron job %s requested heartbeat wake but no session_id provided", job.job_id)
             return
         mode = "next"
-        if isinstance(trigger, str):
-            mode = trigger
-        elif metadata.get("wake_mode"):
-            mode = str(metadata.get("wake_mode"))
+        if isinstance(trigger, bool):
+            if not trigger:
+                return
+            mode = str(metadata.get("wake_mode") or mode)
+        elif isinstance(trigger, str):
+            trigger_mode = trigger.strip().lower()
+            if trigger_mode in {"", "0", "false", "off", "none", "disable", "disabled"}:
+                return
+            if trigger_mode in {"auto", "default"}:
+                mode = "next"
+            else:
+                mode = trigger_mode
+        elif trigger is None:
+            # For session-bound cron jobs, wake next heartbeat by default so due-work
+            # transitions reliably surface in the target session without extra polling.
+            mode = str(metadata.get("wake_mode") or mode)
+        else:
+            mode = str(metadata.get("wake_mode") or mode)
         mode = mode.strip().lower()
         if mode not in {"now", "next"}:
             mode = "next"
