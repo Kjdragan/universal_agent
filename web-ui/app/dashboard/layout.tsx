@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/chat", label: "Chat" },
   { href: "/dashboard/skills", label: "Skills" },
+  { href: "/dashboard/calendar", label: "Calendar" },
   { href: "/dashboard/cron-jobs", label: "Cron Jobs" },
   { href: "/dashboard/channels", label: "Channels" },
   { href: "/dashboard/settings", label: "Settings" },
