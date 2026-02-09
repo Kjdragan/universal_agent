@@ -114,6 +114,18 @@ Issue: Heartbeat panel not reflecting run state
 ## 9. Soak Automation
 Use:
 - `src/universal_agent/scripts/scheduling_v2_soak.py`
+- `src/universal_agent/scripts/start_scheduling_v2_soak_24h.sh`
+- `src/universal_agent/scripts/show_scheduling_v2_soak_status.sh`
+
+One-command 24h launch (starts gateway if needed):
+```bash
+./src/universal_agent/scripts/start_scheduling_v2_soak_24h.sh
+```
+
+Check latest live status:
+```bash
+./src/universal_agent/scripts/show_scheduling_v2_soak_status.sh
+```
 
 Example short run:
 ```bash
