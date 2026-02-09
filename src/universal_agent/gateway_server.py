@@ -325,6 +325,9 @@ _channel_probe_results: dict[str, dict] = {}
 _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
 _continuity_active_alerts: set[str] = set()
+_continuity_metric_events: deque[dict[str, Any]] = deque(
+    maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
+)
 _pending_gated_requests: dict[str, dict] = {}
 _session_turn_state: dict[str, dict[str, Any]] = {}
 _session_turn_locks: dict[str, asyncio.Lock] = {}
@@ -405,6 +408,12 @@ TURN_FINGERPRINT_DEDUPE_WINDOW_SECONDS = int(os.getenv("UA_TURN_FINGERPRINT_DEDU
 CONTINUITY_RESUME_SUCCESS_MIN = float(os.getenv("UA_CONTINUITY_RESUME_SUCCESS_MIN", "0.90") or 0.90)
 CONTINUITY_ATTACH_SUCCESS_MIN = float(os.getenv("UA_CONTINUITY_ATTACH_SUCCESS_MIN", "0.90") or 0.90)
 CONTINUITY_FAILURE_WARN_THRESHOLD = int(os.getenv("UA_CONTINUITY_FAILURE_WARN_THRESHOLD", "3") or 3)
+CONTINUITY_WINDOW_SECONDS = max(60, int(os.getenv("UA_CONTINUITY_WINDOW_SECONDS", "900") or 900))
+CONTINUITY_RATE_MIN_ATTEMPTS = max(1, int(os.getenv("UA_CONTINUITY_RATE_MIN_ATTEMPTS", "3") or 3))
+CONTINUITY_EVENT_RETENTION_SECONDS = max(
+    CONTINUITY_WINDOW_SECONDS * 4,
+    int(os.getenv("UA_CONTINUITY_EVENT_RETENTION_SECONDS", "3600") or 3600),
+)
 NOTIFICATION_SNOOZE_MINUTES_DEFAULT = int(os.getenv("UA_NOTIFICATION_SNOOZE_MINUTES_DEFAULT", "30") or 30)
 NOTIFICATION_SNOOZE_MINUTES_MAX = int(os.getenv("UA_NOTIFICATION_SNOOZE_MINUTES_MAX", "1440") or 1440)
 
@@ -416,7 +425,54 @@ def _now_iso() -> str:
 def _increment_metric(name: str, amount: int = 1) -> None:
     current = int(_observability_metrics.get(name, 0) or 0)
     _observability_metrics[name] = current + max(0, int(amount))
+    _record_continuity_metric_event(name, amount=amount)
     _sync_continuity_notifications()
+
+
+def _record_continuity_metric_event(name: str, amount: int = 1, ts: Optional[float] = None) -> None:
+    tracked = {
+        "resume_attempts",
+        "resume_successes",
+        "resume_failures",
+        "ws_attach_attempts",
+        "ws_attach_successes",
+        "ws_attach_failures",
+    }
+    if name not in tracked:
+        return
+    count = max(0, int(amount))
+    if count <= 0:
+        return
+    now_ts = float(ts if ts is not None else time.time())
+    # Keep event fanout bounded for large increments while preserving rough shape.
+    capped = min(count, 100)
+    for _ in range(capped):
+        _continuity_metric_events.append({"name": name, "ts": now_ts})
+
+
+def _continuity_window_counts(now_ts: Optional[float] = None) -> dict[str, int]:
+    ts_now = float(now_ts if now_ts is not None else time.time())
+    retention_start = ts_now - float(CONTINUITY_EVENT_RETENTION_SECONDS)
+    while _continuity_metric_events and float(_continuity_metric_events[0].get("ts", 0.0) or 0.0) < retention_start:
+        _continuity_metric_events.popleft()
+
+    window_start = ts_now - float(CONTINUITY_WINDOW_SECONDS)
+    counts = {
+        "resume_attempts": 0,
+        "resume_successes": 0,
+        "resume_failures": 0,
+        "ws_attach_attempts": 0,
+        "ws_attach_successes": 0,
+        "ws_attach_failures": 0,
+    }
+    for item in _continuity_metric_events:
+        item_ts = float(item.get("ts", 0.0) or 0.0)
+        if item_ts < window_start:
+            continue
+        name = str(item.get("name") or "")
+        if name in counts:
+            counts[name] += 1
+    return counts
 
 
 def _scheduling_counter_inc(name: str, amount: int = 1) -> None:
@@ -712,16 +768,28 @@ def _scheduling_runtime_metrics_snapshot() -> dict[str, Any]:
 
 
 def _continuity_alerts_snapshot() -> dict[str, Any]:
-    resume_attempts = int(_observability_metrics.get("resume_attempts", 0) or 0)
-    resume_successes = int(_observability_metrics.get("resume_successes", 0) or 0)
-    ws_attach_attempts = int(_observability_metrics.get("ws_attach_attempts", 0) or 0)
-    ws_attach_successes = int(_observability_metrics.get("ws_attach_successes", 0) or 0)
+    now_ts = time.time()
+    window_counts = _continuity_window_counts(now_ts=now_ts)
+    window_start_ts = now_ts - float(CONTINUITY_WINDOW_SECONDS)
+    resume_attempts = int(window_counts.get("resume_attempts", 0) or 0)
+    resume_successes = int(window_counts.get("resume_successes", 0) or 0)
+    ws_attach_attempts = int(window_counts.get("ws_attach_attempts", 0) or 0)
+    ws_attach_successes = int(window_counts.get("ws_attach_successes", 0) or 0)
     resume_rate = round(resume_successes / resume_attempts, 4) if resume_attempts > 0 else None
     attach_rate = round(ws_attach_successes / ws_attach_attempts, 4) if ws_attach_attempts > 0 else None
-    resume_failures = int(_observability_metrics.get("resume_failures", 0) or 0)
-    attach_failures = int(_observability_metrics.get("ws_attach_failures", 0) or 0)
+    resume_failures = int(window_counts.get("resume_failures", 0) or 0)
+    attach_failures = int(window_counts.get("ws_attach_failures", 0) or 0)
+    rate_checks_enabled = (
+        resume_attempts >= CONTINUITY_RATE_MIN_ATTEMPTS
+        or ws_attach_attempts >= CONTINUITY_RATE_MIN_ATTEMPTS
+    )
     alerts: list[dict[str, Any]] = []
-    if resume_rate is not None and resume_rate < CONTINUITY_RESUME_SUCCESS_MIN:
+    if (
+        rate_checks_enabled
+        and resume_rate is not None
+        and resume_attempts >= CONTINUITY_RATE_MIN_ATTEMPTS
+        and resume_rate < CONTINUITY_RESUME_SUCCESS_MIN
+    ):
         alerts.append(
             {
                 "code": "resume_success_rate_low",
@@ -729,9 +797,15 @@ def _continuity_alerts_snapshot() -> dict[str, Any]:
                 "message": "Resume success rate below threshold.",
                 "actual": resume_rate,
                 "threshold": CONTINUITY_RESUME_SUCCESS_MIN,
+                "scope": "transport",
             }
         )
-    if attach_rate is not None and attach_rate < CONTINUITY_ATTACH_SUCCESS_MIN:
+    if (
+        rate_checks_enabled
+        and attach_rate is not None
+        and ws_attach_attempts >= CONTINUITY_RATE_MIN_ATTEMPTS
+        and attach_rate < CONTINUITY_ATTACH_SUCCESS_MIN
+    ):
         alerts.append(
             {
                 "code": "attach_success_rate_low",
@@ -739,6 +813,7 @@ def _continuity_alerts_snapshot() -> dict[str, Any]:
                 "message": "Attach success rate below threshold.",
                 "actual": attach_rate,
                 "threshold": CONTINUITY_ATTACH_SUCCESS_MIN,
+                "scope": "transport",
             }
         )
     if resume_failures >= CONTINUITY_FAILURE_WARN_THRESHOLD:
@@ -749,6 +824,7 @@ def _continuity_alerts_snapshot() -> dict[str, Any]:
                 "message": "Resume failures exceeded warning threshold.",
                 "actual": resume_failures,
                 "threshold": CONTINUITY_FAILURE_WARN_THRESHOLD,
+                "scope": "transport",
             }
         )
     if attach_failures >= CONTINUITY_FAILURE_WARN_THRESHOLD:
@@ -759,12 +835,44 @@ def _continuity_alerts_snapshot() -> dict[str, Any]:
                 "message": "Attach failures exceeded warning threshold.",
                 "actual": attach_failures,
                 "threshold": CONTINUITY_FAILURE_WARN_THRESHOLD,
+                "scope": "transport",
             }
         )
+
+    runtime_faults = 0
+    for runtime in _session_runtime.values():
+        if not isinstance(runtime, dict):
+            continue
+        reason = str(runtime.get("terminal_reason") or "").strip().lower()
+        if reason in {"error", "failed", "crashed", "exception"}:
+            runtime_faults += 1
+
+    transport_status = "degraded" if alerts else "ok"
+    runtime_status = "degraded" if runtime_faults > 0 else "ok"
     return {
         "resume_success_rate": resume_rate,
         "attach_success_rate": attach_rate,
-        "continuity_status": "degraded" if alerts else "ok",
+        "transport_status": transport_status,
+        "runtime_status": runtime_status,
+        "window_seconds": CONTINUITY_WINDOW_SECONDS,
+        "window_started_at": datetime.fromtimestamp(window_start_ts, timezone.utc).isoformat(),
+        "window_event_count": (
+            resume_attempts
+            + ws_attach_attempts
+            + resume_failures
+            + attach_failures
+        ),
+        "window": {
+            "resume_attempts": resume_attempts,
+            "resume_successes": resume_successes,
+            "resume_failures": resume_failures,
+            "resume_success_rate": resume_rate,
+            "ws_attach_attempts": ws_attach_attempts,
+            "ws_attach_successes": ws_attach_successes,
+            "ws_attach_failures": attach_failures,
+            "attach_success_rate": attach_rate,
+        },
+        "runtime_faults": runtime_faults,
         "alerts": alerts,
     }
 
@@ -828,7 +936,13 @@ def _observability_metrics_snapshot() -> dict[str, Any]:
         "duplicate_turn_prevention_count": duplicate_prevented,
         "resume_success_rate": continuity.get("resume_success_rate"),
         "attach_success_rate": continuity.get("attach_success_rate"),
-        "continuity_status": continuity.get("continuity_status"),
+        "transport_status": continuity.get("transport_status"),
+        "runtime_status": continuity.get("runtime_status"),
+        "window_seconds": continuity.get("window_seconds"),
+        "window_started_at": continuity.get("window_started_at"),
+        "window_event_count": continuity.get("window_event_count"),
+        "window": continuity.get("window"),
+        "runtime_faults": continuity.get("runtime_faults"),
         "alerts": continuity.get("alerts"),
     }
 

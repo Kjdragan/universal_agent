@@ -124,68 +124,99 @@ def _load_skill_overrides() -> dict[str, bool]:
 def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
     """
     Scan .claude/skills/ directory and parse SKILL.md frontmatter.
+    Now supports both PROJECT and USER level skills.
     Returns list of {name, description, path} for each skill.
     
+    Prioritization: Project skills override User skills.
     NOW IMPLEMENTS GATING: Hides skills if dependencies are missing.
     """
+    print(f"DEBUG: discover_skills called with dir={skills_dir}")
     import yaml
 
+    # Define directories to scan
+    dirs_to_scan = []
+    
+    # 1. Project Level (Highest Priority)
+    project_skills = skills_dir or os.getenv("UA_SKILLS_DIR") or os.path.join(_PROJECT_ROOT, ".claude", "skills")
+    dirs_to_scan.append(project_skills)
+    
+    # 2. User Level (Fallback)
+    # Only if not strictly overridden by explicit arg
     if skills_dir is None:
-        skills_dir = os.getenv("UA_SKILLS_DIR") or os.path.join(_PROJECT_ROOT, ".claude", "skills")
+        # Allow user to specify custom skills dir via env (e.g. base.quod)
+        user_skills_env = os.getenv("UA_USER_SKILLS_DIR")
+        user_skills = user_skills_env if user_skills_env else os.path.expanduser("~/.claude/skills")
+        dirs_to_scan.append(user_skills)
 
-    skills: list[dict] = []
+    skills_map: dict[str, dict] = {} # name -> skill_dict
     overrides = _load_skill_overrides()
 
-    if not os.path.exists(skills_dir):
-        return skills
+    for d in dirs_to_scan:
+        if not os.path.exists(d):
+            continue
 
-    for skill_name in os.listdir(skills_dir):
-        skill_path = os.path.join(skills_dir, skill_name)
-        skill_md = os.path.join(skill_path, "SKILL.md")
+        for skill_name in os.listdir(d):
+            # Skip if we already have this skill from a higher-priority directory
+            # (Assuming folder name matches skill name, which is standard)
+            # Actual deduplication happens on 'name' from frontmatter below, 
+            # but we can also optimize by folder name if needed. 
+            # For now, let's process and dedup by logical name.
+            
+            skill_path = os.path.join(d, skill_name)
+            skill_md = os.path.join(skill_path, "SKILL.md")
 
-        if os.path.isdir(skill_path) and os.path.exists(skill_md):
-            try:
-                with open(skill_md, "r", encoding="utf-8") as f:
-                    content = f.read()
-
-                # Parse YAML frontmatter (between --- markers)
-                if content.startswith("---"):
-                    parts = content.split("---", 2)
-                    if len(parts) >= 3:
-                        frontmatter = yaml.safe_load(parts[1])
-                        if frontmatter and isinstance(frontmatter, dict):
-                            skill_key = _normalize_skill_key(frontmatter.get("name", skill_name))
-                            if overrides.get(skill_key) is False:
-                                continue
-                            # GATING CHECK
-                            is_avail, reason = _check_skill_requirements(frontmatter)
-                            if is_avail:
-                                skills.append(
-                                    {
-                                        "name": frontmatter.get("name", skill_name),
-                                        "description": frontmatter.get(
-                                            "description", "No description"
-                                        ),
-                                        "path": skill_md,
-                                    }
-                                )
-                            else:
-                                try:
-                                    logfire.info("skill_gated", skill=skill_name, reason=reason)
-                                except Exception:
-                                    pass
-
-            except Exception as exc:
-                # Skip malformed SKILL.md files
+            if os.path.isdir(skill_path) and os.path.exists(skill_md):
                 try:
-                    logfire.warning(
-                        "skill_parse_error", skill=skill_name, error=str(exc)
-                    )
-                except Exception:
-                    pass
-                continue
+                    with open(skill_md, "r", encoding="utf-8") as f:
+                        content = f.read()
 
-    return skills
+                    # Parse YAML frontmatter (between --- markers)
+                    if content.startswith("---"):
+                        parts = content.split("---", 2)
+                        if len(parts) >= 3:
+                            frontmatter = yaml.safe_load(parts[1])
+                            if frontmatter and isinstance(frontmatter, dict):
+                                name = frontmatter.get("name", skill_name)
+                                skill_key = _normalize_skill_key(name)
+                                
+                                # Skip if disabled by config
+                                if overrides.get(skill_key) is False:
+                                    continue
+                                    
+                                # Check if we already found this skill in a higher-priority dir
+                                if skill_key in skills_map:
+                                    continue
+
+                                # GATING CHECK
+                                is_avail, reason = _check_skill_requirements(frontmatter)
+                                
+                                skill_entry = {
+                                    "name": name,
+                                    "description": frontmatter.get("description", "No description"),
+                                    "path": skill_md,
+                                    "enabled": is_avail,
+                                }
+                                
+                                if not is_avail:
+                                    skill_entry["disabled_reason"] = reason
+                                    try:
+                                        logfire.info("skill_gated", skill=skill_name, reason=reason)
+                                    except Exception:
+                                        pass
+                                
+                                skills_map[skill_key] = skill_entry
+
+                except Exception as exc:
+                    # Skip malformed SKILL.md files
+                    try:
+                        logfire.warning(
+                            "skill_parse_error", skill=skill_name, error=str(exc)
+                        )
+                    except Exception:
+                        pass
+                    continue
+                    
+    return list(skills_map.values())
 
 
 def generate_skills_xml(skills: list[dict]) -> str:

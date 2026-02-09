@@ -1,24 +1,140 @@
 "use client";
 
-import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { openOrFocusChatWindow } from "@/lib/chatWindow";
+import { fetchSessionDirectory, SessionDirectoryItem } from "@/lib/sessionDirectory";
 
 export default function DashboardChatPage() {
+  const [sessions, setSessions] = useState<SessionDirectoryItem[]>([]);
+  const [selectedSession, setSelectedSession] = useState<string>("");
+  const [attachRole, setAttachRole] = useState<"writer" | "viewer">("writer");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refreshSessions = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const rows = await fetchSessionDirectory(300);
+      setSessions(rows);
+      setSelectedSession((prev) => prev || rows[0]?.session_id || "");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshSessions();
+  }, [refreshSessions]);
+
+  const sortedSessions = useMemo(() => {
+    const copy = [...sessions];
+    copy.sort((a, b) => {
+      const aTs = Date.parse(a.last_activity || "") || 0;
+      const bTs = Date.parse(b.last_activity || "") || 0;
+      return bTs - aTs;
+    });
+    return copy;
+  }, [sessions]);
+
+  const openSelected = () => {
+    if (!selectedSession) {
+      openOrFocusChatWindow({ role: attachRole });
+      return;
+    }
+    openOrFocusChatWindow({ sessionId: selectedSession, attachMode: "tail", role: attachRole });
+  };
+
   return (
-    <div className="h-full min-h-[80vh] space-y-3">
+    <div className="h-full min-h-[80vh] space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Chat</h1>
-          <p className="text-sm text-slate-400">Embedded live console.</p>
+          <h1 className="text-xl font-semibold tracking-tight">Chat Launcher</h1>
+          <p className="text-sm text-slate-400">
+            Open or focus the dedicated full-screen chat tab. Choose writer or viewer attach mode.
+          </p>
         </div>
-        <Link
-          href="/"
+        <button
+          type="button"
+          onClick={openSelected}
           className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
         >
-          Open Full Chat
-        </Link>
+          Open/Focus Full Chat
+        </button>
       </div>
-      <div className="h-[calc(100vh-12rem)] overflow-hidden rounded-xl border border-slate-800">
-        <iframe title="Universal Agent Chat" src="/" className="h-full w-full border-0" />
+
+      <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={refreshSessions}
+            className="rounded-md border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
+            disabled={loading}
+          >
+            {loading ? "Refreshing..." : "Refresh Sessions"}
+          </button>
+          <button
+            type="button"
+            onClick={() => openOrFocusChatWindow({ role: attachRole })}
+            className="rounded-md border border-cyan-700 bg-cyan-500/20 px-3 py-1.5 text-sm text-cyan-100 hover:bg-cyan-500/30"
+          >
+            Open New Chat Surface
+          </button>
+          <div className="ml-auto flex items-center gap-2 text-xs text-slate-300">
+            <span>Attach as</span>
+            <select
+              value={attachRole}
+              onChange={(e) => setAttachRole(e.target.value as "writer" | "viewer")}
+              className="rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1 text-xs"
+            >
+              <option value="writer">writer</option>
+              <option value="viewer">viewer</option>
+            </select>
+          </div>
+        </div>
+
+        {error && (
+          <div className="rounded-md border border-red-700/60 bg-red-900/20 p-2 text-xs text-red-200">
+            {error}
+          </div>
+        )}
+
+        <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+          {sortedSessions.length === 0 && (
+            <div className="text-sm text-slate-400">No sessions found.</div>
+          )}
+          {sortedSessions.map((session) => {
+            const active = selectedSession === session.session_id;
+            return (
+              <button
+                key={session.session_id}
+                type="button"
+                onClick={() => setSelectedSession(session.session_id)}
+                className={[
+                  "w-full rounded-lg border px-3 py-2 text-left transition",
+                  active
+                    ? "border-cyan-500/40 bg-cyan-500/10"
+                    : "border-slate-800 bg-slate-950/40 hover:bg-slate-900/70",
+                ].join(" ")}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-xs truncate">{session.session_id}</span>
+                  <span className="text-[11px] text-slate-400">
+                    {(session.source || "local")} · {session.status || "unknown"}
+                  </span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500 truncate">
+                  owner: {session.owner || "unknown"} · memory: {session.memory_mode || "session_only"}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-600 truncate">
+                  {session.workspace_dir || "workspace: n/a"}
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );

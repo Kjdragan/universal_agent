@@ -5,9 +5,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useAgentStore } from "@/lib/store";
 import { getWebSocket } from "@/lib/websocket";
+import { openOrFocusChatWindow } from "@/lib/chatWindow";
 
-const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8002";
-const OPS_TOKEN = process.env.NEXT_PUBLIC_UA_OPS_TOKEN;
+const API_BASE = "/api/dashboard/gateway";
 const SCHED_PUSH_ENABLED = (process.env.NEXT_PUBLIC_UA_SCHED_PUSH_ENABLED ?? "1").trim().toLowerCase() !== "0";
 
 type SessionSummary = {
@@ -42,8 +42,23 @@ type SessionContinuityMetrics = {
   duplicate_turn_prevention_count?: number;
   resume_success_rate?: number | null;
   attach_success_rate?: number | null;
-  continuity_status?: "ok" | "degraded";
-  alerts?: { code?: string; severity?: string; message?: string; actual?: number; threshold?: number }[];
+  transport_status?: "ok" | "degraded";
+  runtime_status?: "ok" | "degraded";
+  window_seconds?: number;
+  window_started_at?: string;
+  window_event_count?: number;
+  runtime_faults?: number;
+  window?: {
+    resume_attempts?: number;
+    resume_successes?: number;
+    resume_failures?: number;
+    resume_success_rate?: number | null;
+    ws_attach_attempts?: number;
+    ws_attach_successes?: number;
+    ws_attach_failures?: number;
+    attach_success_rate?: number | null;
+  };
+  alerts?: { code?: string; severity?: string; message?: string; actual?: number; threshold?: number; scope?: string }[];
 };
 type SessionContinuityState = {
   status: string;
@@ -91,9 +106,7 @@ type CalendarFeedResponse = {
 };
 
 function buildHeaders(): Record<string, string> {
-  const h: Record<string, string> = {};
-  if (OPS_TOKEN) h["X-UA-OPS-TOKEN"] = OPS_TOKEN;
-  return h;
+  return {};
 }
 
 function safeJsonParse(v: string): { ok: true; data: Record<string, unknown> } | { ok: false; error: string } {
@@ -426,7 +439,6 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
         heartbeat_seconds: "20",
         limit: "500",
       });
-      if (OPS_TOKEN) params.set("ops_token", OPS_TOKEN);
       const url = `${API_BASE}/api/v1/ops/scheduling/stream?${params.toString()}`;
 
       setSchedulingPushState((prev) => ({
@@ -549,6 +561,12 @@ export function SessionsSection() {
   const attachToChat = async (sessionId: string) => {
     setAttaching(true);
     try {
+      const dashboardRoute =
+        typeof window !== "undefined" && window.location.pathname.startsWith("/dashboard");
+      if (dashboardRoute) {
+        openOrFocusChatWindow({ sessionId, attachMode: "tail" });
+        return;
+      }
       const store = useAgentStore.getState();
       store.reset();
       store.setSessionAttachMode("tail");
@@ -669,6 +687,12 @@ export function CalendarSection() {
 
   const attachToChat = useCallback(async (sessionId: string) => {
     if (!sessionId) return;
+    const dashboardRoute =
+      typeof window !== "undefined" && window.location.pathname.startsWith("/dashboard");
+    if (dashboardRoute) {
+      openOrFocusChatWindow({ sessionId, attachMode: "tail" });
+      return;
+    }
     const store = useAgentStore.getState();
     store.reset();
     store.setSessionAttachMode("tail");
@@ -1221,16 +1245,24 @@ export function SessionContinuityWidget() {
   const { continuityState, fetchSessionContinuityMetrics } = useOps();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const metrics = continuityState.metrics || {};
+  const windowMetrics = metrics.window || {};
 
   const resumeRate =
-    typeof metrics.resume_success_rate === "number"
-      ? `${(metrics.resume_success_rate * 100).toFixed(1)}%`
+    typeof windowMetrics.resume_success_rate === "number"
+      ? `${(windowMetrics.resume_success_rate * 100).toFixed(1)}%`
       : "--";
   const attachRate =
-    typeof metrics.attach_success_rate === "number"
-      ? `${(metrics.attach_success_rate * 100).toFixed(1)}%`
+    typeof windowMetrics.attach_success_rate === "number"
+      ? `${(windowMetrics.attach_success_rate * 100).toFixed(1)}%`
       : "--";
   const alerts = metrics.alerts || [];
+  const windowSeconds = Number(metrics.window_seconds || 0);
+  const windowLabel =
+    windowSeconds > 0
+      ? `${Math.max(1, Math.round(windowSeconds / 60))}m`
+      : "--";
+  const transportStatus = metrics.transport_status || "--";
+  const runtimeStatus = metrics.runtime_status || "--";
 
   return (
     <div className={`flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
@@ -1244,7 +1276,7 @@ export function SessionContinuityWidget() {
       {!isCollapsed && (
         <div className="p-3 text-xs space-y-1">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-muted-foreground">Session continuity metrics</span>
+            <span className="text-muted-foreground">Session continuity metrics (rolling {windowLabel})</span>
             <button
               type="button"
               className="text-[10px] px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
@@ -1256,22 +1288,34 @@ export function SessionContinuityWidget() {
               Refresh
             </button>
           </div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Resume success</span><span className="font-mono text-[11px]">{resumeRate}</span></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Attach success</span><span className="font-mono text-[11px]">{attachRate}</span></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Dupes prevented</span><span className="font-mono text-[11px]">{metrics.duplicate_turn_prevention_count ?? 0}</span></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Sessions created</span><span className="font-mono text-[11px]">{metrics.sessions_created ?? 0}</span></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Resume fail</span><span className="font-mono text-[11px]">{metrics.resume_failures ?? 0}</span></div>
-          <div className="flex justify-between"><span className="text-muted-foreground">Attach fail</span><span className="font-mono text-[11px]">{metrics.ws_attach_failures ?? 0}</span></div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Status</span>
-            <span className={`font-mono text-[11px] ${metrics.continuity_status === "degraded" ? "text-amber-500" : "text-emerald-500"}`}>
-              {metrics.continuity_status || "--"}
+            <span className="text-muted-foreground">Runtime status</span>
+            <span className={`font-mono text-[11px] ${runtimeStatus === "degraded" ? "text-rose-500" : "text-emerald-500"}`}>
+              {runtimeStatus}
             </span>
           </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Transport status</span>
+            <span className={`font-mono text-[11px] ${transportStatus === "degraded" ? "text-amber-500" : "text-emerald-500"}`}>
+              {transportStatus}
+            </span>
+          </div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Resume success</span><span className="font-mono text-[11px]">{resumeRate}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Attach success</span><span className="font-mono text-[11px]">{attachRate}</span></div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Window resume fail</span>
+            <span className="font-mono text-[11px]">{windowMetrics.resume_failures ?? 0}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Window attach fail</span>
+            <span className="font-mono text-[11px]">{windowMetrics.ws_attach_failures ?? 0}</span>
+          </div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Dupes prevented (lifetime)</span><span className="font-mono text-[11px]">{metrics.duplicate_turn_prevention_count ?? 0}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Sessions created (lifetime)</span><span className="font-mono text-[11px]">{metrics.sessions_created ?? 0}</span></div>
           {alerts.length > 0 && (
             <div className="text-[10px] text-amber-500 space-y-1 pt-1">
               {alerts.slice(0, 4).map((alert, idx) => (
-                <div key={`${alert.code || "alert"}-${idx}`}>{alert.message || alert.code || "continuity alert"}</div>
+                <div key={`${alert.code || "alert"}-${idx}`}>{alert.message || alert.code || "continuity alert"}{alert.scope ? ` (${alert.scope})` : ""}</div>
               ))}
             </div>
           )}

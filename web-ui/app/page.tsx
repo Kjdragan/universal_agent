@@ -847,10 +847,19 @@ function ChatInterface() {
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const [chatRole, setChatRole] = useState<"writer" | "viewer">("writer");
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const role = (params.get("role") || "").trim().toLowerCase();
+    setChatRole(role === "viewer" ? "viewer" : "writer");
+  }, []);
+
   const handleSend = async (textOverride?: string) => {
+    if (chatRole === "viewer") return;
     const query = textOverride ?? input;
     if (!query.trim() || (isSending && !textOverride)) return;
 
@@ -900,6 +909,11 @@ function ChatInterface() {
     <div className="flex flex-col h-full">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto scrollbar-thin p-4">
+        {chatRole === "viewer" && (
+          <div className="mb-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-amber-300">
+            Viewer mode: read-only attachment. Open as writer to send messages.
+          </div>
+        )}
         {sessionAttachMode === "tail" && currentSession?.session_id && (
           <div className="mb-3 flex items-center justify-between rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-emerald-300">
             <span>Attached Session (Tail): <span className="font-mono">{currentSession.session_id}</span></span>
@@ -1026,6 +1040,7 @@ function ChatInterface() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
+                if (chatRole === "viewer") return;
                 if (connectionStatus === "connected") {
                   handleSend();
                 } else if (connectionStatus === "processing" && input.trim()) {
@@ -1036,11 +1051,17 @@ function ChatInterface() {
                 }
               }
             }}
-            placeholder={connectionStatus === "processing" ? "Type to redirect (Enter to stop & send)..." : "Enter your neural query..."}
-            disabled={connectionStatus === "disconnected" || connectionStatus === "connecting"}
+            placeholder={
+              chatRole === "viewer"
+                ? "Viewer mode: input disabled"
+                : connectionStatus === "processing"
+                  ? "Type to redirect (Enter to stop & send)..."
+                  : "Enter your neural query..."
+            }
+            disabled={chatRole === "viewer" || connectionStatus === "disconnected" || connectionStatus === "connecting"}
             className="flex-1 bg-card/40 border border-border/60 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary/60 focus:shadow-glow-sm disabled:opacity-50 transition-all font-mono"
           />
-          {connectionStatus === "processing" ? (
+          {connectionStatus === "processing" && chatRole !== "viewer" ? (
             <button
               onClick={() => ws.sendCancel()}
               className="bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-400 px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-xs font-bold uppercase tracking-wider"
@@ -1051,7 +1072,7 @@ function ChatInterface() {
           ) : (
             <button
               onClick={() => handleSend()}
-              disabled={connectionStatus !== "connected" || isSending || !input.trim()}
+              disabled={chatRole === "viewer" || connectionStatus !== "connected" || isSending || !input.trim()}
               className="bg-primary hover:bg-primary/90 disabled:bg-primary/20 disabled:text-primary/40 text-primary-foreground px-5 py-2 rounded-lg transition-all btn-primary text-xs font-bold uppercase tracking-wider flex items-center gap-2"
             >
               <span>Send</span>
@@ -1232,8 +1253,19 @@ export default function HomePage() {
   const { pendingInput, handleSubmit: handleInputSubmit, handleCancel: handleInputCancel } = useInputModal();
 
   useEffect(() => {
-    // Connect to WebSocket on mount
-    ws.connect();
+    // Connect to WebSocket on mount. If a session is explicitly requested in URL,
+    // attach to that session in this tab before opening the socket.
+    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+    const requestedSessionId = (params?.get("session_id") || "").trim();
+    const requestedAttach = (params?.get("attach") || "").trim().toLowerCase();
+
+    if (requestedSessionId) {
+      const store = useAgentStore.getState();
+      store.setSessionAttachMode(requestedAttach === "tail" ? "tail" : "default");
+      ws.attachToSession(requestedSessionId);
+    } else {
+      ws.connect();
+    }
 
     // Set up event listeners
     const unsubscribes: (() => void)[] = [];

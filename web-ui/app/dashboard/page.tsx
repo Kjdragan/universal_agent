@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { openOrFocusChatWindow } from "@/lib/chatWindow";
+import { fetchSessionDirectory, SessionDirectoryItem } from "@/lib/sessionDirectory";
 
-const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8002";
-const OPS_TOKEN = process.env.NEXT_PUBLIC_UA_OPS_TOKEN;
+const API_BASE = "/api/dashboard/gateway";
 
 type SummaryResponse = {
   sessions: { active: number; total: number };
@@ -25,13 +26,10 @@ type DashboardNotification = {
   metadata?: Record<string, unknown>;
 };
 
-function headers(): Record<string, string> {
-  return OPS_TOKEN ? { "X-UA-OPS-TOKEN": OPS_TOKEN } : {};
-}
-
 export default function DashboardPage() {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
+  const [sessionDirectory, setSessionDirectory] = useState<SessionDirectoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
@@ -40,13 +38,15 @@ export default function DashboardPage() {
     setLoading(true);
     try {
       const [summaryRes, notificationsRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/dashboard/summary`, { headers: headers() }),
-        fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=30`, { headers: headers() }),
+        fetch(`${API_BASE}/api/v1/dashboard/summary`),
+        fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=30`),
       ]);
       const summaryData = await summaryRes.json();
       const notificationsData = await notificationsRes.json();
+      const sessions = await fetchSessionDirectory(120);
       setSummary(summaryData);
       setNotifications(notificationsData.notifications || []);
+      setSessionDirectory(sessions);
     } finally {
       setLoading(false);
     }
@@ -63,7 +63,7 @@ export default function DashboardPage() {
       try {
         const res = await fetch(`${API_BASE}/api/v1/dashboard/notifications/${encodeURIComponent(id)}`, {
           method: "PATCH",
-          headers: { "Content-Type": "application/json", ...headers() },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ status, note, snooze_minutes: snoozeMinutes }),
         });
         if (!res.ok) return;
@@ -87,7 +87,7 @@ export default function DashboardPage() {
       try {
         const res = await fetch(`${API_BASE}/api/v1/dashboard/notifications/bulk`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...headers() },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             status,
             note,
@@ -154,6 +154,62 @@ export default function DashboardPage() {
             <p className="mt-2 text-3xl font-semibold text-cyan-200">{card.value}</p>
           </article>
         ))}
+      </section>
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Session Directory</h2>
+          <span className="text-xs text-slate-500">{sessionDirectory.length} sessions</span>
+        </div>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {sessionDirectory.slice(0, 18).map((session) => (
+            <article key={session.session_id} className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate font-mono text-xs text-slate-200">{session.session_id}</p>
+                <span className="text-[11px] text-slate-500">{session.status}</span>
+              </div>
+              <p className="mt-1 text-[11px] text-slate-400">
+                {session.source} · {session.owner}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                memory: {session.memory_mode}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded border border-cyan-700 bg-cyan-900/25 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
+                  onClick={() =>
+                    openOrFocusChatWindow({
+                      sessionId: session.session_id,
+                      attachMode: "tail",
+                      role: "writer",
+                    })
+                  }
+                >
+                  Open Writer
+                </button>
+                <button
+                  type="button"
+                  className="rounded border border-amber-700 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/30"
+                  onClick={() =>
+                    openOrFocusChatWindow({
+                      sessionId: session.session_id,
+                      attachMode: "tail",
+                      role: "viewer",
+                    })
+                  }
+                >
+                  Open Viewer
+                </button>
+              </div>
+            </article>
+          ))}
+          {sessionDirectory.length === 0 && (
+            <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-sm text-slate-400">
+              No sessions discovered yet.
+            </div>
+          )}
+        </div>
       </section>
 
       <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">

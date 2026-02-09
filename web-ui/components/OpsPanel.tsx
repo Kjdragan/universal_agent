@@ -3,8 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentStore } from "@/lib/store";
 
-const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8002";
-const OPS_TOKEN = process.env.NEXT_PUBLIC_UA_OPS_TOKEN;
+const API_BASE = "/api/dashboard/gateway";
 
 type SessionSummary = {
   session_id: string;
@@ -63,11 +62,7 @@ type ApprovalRecord = {
 };
 
 function buildHeaders(): Record<string, string> {
-  const headers: Record<string, string> = {};
-  if (OPS_TOKEN) {
-    headers["X-UA-OPS-TOKEN"] = OPS_TOKEN;
-  }
-  return headers;
+  return {};
 }
 
 function safeJsonParse(value: string): { ok: true; data: Record<string, unknown> } | { ok: false; error: string } {

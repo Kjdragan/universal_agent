@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8002";
-const OPS_TOKEN = process.env.NEXT_PUBLIC_UA_OPS_TOKEN;
+const API_BASE = "/api/dashboard/gateway";
 
 type SessionSummary = { session_id: string; status: string };
 
@@ -29,7 +28,7 @@ type PendingGate = {
 };
 
 function headers(): Record<string, string> {
-  return OPS_TOKEN ? { "X-UA-OPS-TOKEN": OPS_TOKEN } : {};
+  return {};
 }
 
 export function SessionGovernancePanel() {
