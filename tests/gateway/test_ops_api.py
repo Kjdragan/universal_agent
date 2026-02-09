@@ -3,6 +3,7 @@ import json
 import shutil
 import time
 import asyncio
+from collections import deque
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -30,6 +31,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_session_turn_locks", {})
     monkeypatch.setattr(gateway_server, "_notifications", [])
     monkeypatch.setattr(gateway_server, "_continuity_active_alerts", set())
+    monkeypatch.setattr(gateway_server, "_continuity_metric_events", deque(maxlen=5000))
     monkeypatch.setattr(gateway_server, "_calendar_missed_events", {})
     monkeypatch.setattr(gateway_server, "_calendar_missed_notifications", set())
     monkeypatch.setattr(gateway_server, "_calendar_change_proposals", {})
@@ -413,7 +415,11 @@ def test_ops_session_continuity_metrics_endpoint(client):
     assert payload["turn_duplicate_completed"] == 2
     assert payload["duplicate_turn_prevention_count"] == 2
     assert payload["resume_success_rate"] == 1.0
-    assert payload["continuity_status"] == "ok"
+    assert payload["transport_status"] == "ok"
+    assert payload["runtime_status"] == "ok"
+    assert payload["window"]["resume_attempts"] == 1
+    assert payload["window"]["resume_successes"] == 1
+    assert "continuity_status" not in payload
     assert payload["alerts"] == []
 
 
@@ -430,12 +436,35 @@ def test_ops_session_continuity_metrics_alerts(client):
     resp = client.get("/api/v1/ops/metrics/session-continuity")
     assert resp.status_code == 200
     payload = resp.json()["metrics"]
-    assert payload["continuity_status"] == "degraded"
+    assert payload["transport_status"] == "degraded"
+    assert payload["runtime_status"] == "ok"
+    assert "continuity_status" not in payload
     codes = {item["code"] for item in payload["alerts"]}
     assert "resume_success_rate_low" in codes
     assert "attach_success_rate_low" in codes
     assert "resume_failures_high" in codes
     assert "attach_failures_high" in codes
+
+
+def test_ops_session_continuity_metrics_use_rolling_window(client):
+    from universal_agent import gateway_server
+
+    gateway_server._continuity_metric_events.clear()
+    now_ts = time.time()
+    old_ts = now_ts - (gateway_server.CONTINUITY_WINDOW_SECONDS + 5)
+    # Old failures outside the rolling window should not degrade current status.
+    gateway_server._record_continuity_metric_event("resume_failures", amount=3, ts=old_ts)
+    gateway_server._record_continuity_metric_event("ws_attach_failures", amount=3, ts=old_ts)
+    gateway_server._sync_continuity_notifications()
+
+    resp = client.get("/api/v1/ops/metrics/session-continuity")
+    assert resp.status_code == 200
+    payload = resp.json()["metrics"]
+    assert payload["transport_status"] == "ok"
+    assert "continuity_status" not in payload
+    assert payload["window"]["resume_failures"] == 0
+    assert payload["window"]["ws_attach_failures"] == 0
+    assert payload["alerts"] == []
 
 
 def test_ops_scheduling_runtime_metrics_endpoint(client):
@@ -613,6 +642,7 @@ def test_continuity_alert_notifications_are_emitted_and_deduped(client):
 
     # Force recovery and sync to emit resolved notification.
     gateway_server._observability_metrics["resume_failures"] = 0
+    gateway_server._continuity_metric_events.clear()
     gateway_server._sync_continuity_notifications()
     recovered = [item for item in gateway_server._notifications if item.get("kind") == "continuity_recovered"]
     assert len(recovered) == 1

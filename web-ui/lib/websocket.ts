@@ -42,6 +42,24 @@ export class AgentWebSocket {
   private currentStatus: ConnectionStatus = "disconnected";
   private sessionIdKey = "universal_agent_session_id"; // Key for localStorage
 
+  private getSessionStorage(): Storage | null {
+    if (typeof window === "undefined") return null;
+    try {
+      return window.sessionStorage;
+    } catch {
+      return null;
+    }
+  }
+
+  private getLocalStorage(): Storage | null {
+    if (typeof window === "undefined") return null;
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  }
+
   private extractSessionId(data: unknown): string | null {
     if (!data || typeof data !== "object") return null;
     const payload = data as Record<string, unknown>;
@@ -89,17 +107,33 @@ export class AgentWebSocket {
   // ==========================================================================
 
   private getStoredSessionId(): string | null {
-    if (typeof window === "undefined") return null;
-    return localStorage.getItem(this.sessionIdKey);
+    const sessionStorage = this.getSessionStorage();
+    const localStorage = this.getLocalStorage();
+
+    const tabScoped = sessionStorage?.getItem(this.sessionIdKey);
+    if (tabScoped) return tabScoped;
+
+    // Migrate once from legacy global key to tab-scoped storage.
+    const legacyGlobal = localStorage?.getItem(this.sessionIdKey) ?? null;
+    if (legacyGlobal && sessionStorage) {
+      sessionStorage.setItem(this.sessionIdKey, legacyGlobal);
+      localStorage?.removeItem(this.sessionIdKey);
+      return legacyGlobal;
+    }
+    return legacyGlobal;
   }
 
   private setStoredSessionId(sessionId: string | null): void {
-    if (typeof window === "undefined") return;
+    const sessionStorage = this.getSessionStorage();
+    const localStorage = this.getLocalStorage();
     if (!sessionId) {
-      localStorage.removeItem(this.sessionIdKey);
+      sessionStorage?.removeItem(this.sessionIdKey);
+      localStorage?.removeItem(this.sessionIdKey);
       return;
     }
-    localStorage.setItem(this.sessionIdKey, sessionId);
+    sessionStorage?.setItem(this.sessionIdKey, sessionId);
+    // Clear legacy global pointer to avoid cross-tab session collisions.
+    localStorage?.removeItem(this.sessionIdKey);
   }
 
   connect(): void {

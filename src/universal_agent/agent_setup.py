@@ -93,6 +93,7 @@ class AgentSetup:
         enable_memory: Optional[bool] = None,
         verbose: bool = True,
     ):
+        print(f"DEBUG: AgentSetup.__init__ called! enable_skills={enable_skills}")
         self.workspace_dir = workspace_dir
         from universal_agent.identity.resolver import resolve_user_id
         self.workspace_dir = workspace_dir
@@ -206,10 +207,14 @@ class AgentSetup:
 
         # Discover skills
         if self.enable_skills:
+            self._log("🔍 Attempting to discover skills...")
             self._discovered_skills = discover_skills()
+            self._log(f"🔍 discover_skills() returned {len(self._discovered_skills)} items")
             skill_names = [s["name"] for s in self._discovered_skills]
             self._log(f"✅ Discovered Skills: {skill_names}")
             self._skills_xml = generate_skills_xml(self._discovered_skills)
+        else:
+            self._log("⚠️ Skills discovery DISABLED via enable_skills=False")
 
         # Load memory context
         if self.enable_memory:
@@ -218,12 +223,12 @@ class AgentSetup:
         # Load soul/persona
         self._load_soul_context()
         
+        # Generate capabilities registry (BEFORE building options/prompt)
+        self._generate_capabilities_doc()
+        
         # Build options
         self._options = self._build_options()
         self._initialized = True
-        
-        # Generate capabilities registry
-        self._generate_capabilities_doc()
 
     async def _discover_apps_async(self) -> list[dict]:
         """Discover connected Composio apps with metadata."""
@@ -405,9 +410,18 @@ class AgentSetup:
         today_str = user_now.strftime("%A, %B %d, %Y")
         tomorrow_str = (user_now + timedelta(days=1)).strftime("%A, %B %d, %Y")
         
+        # Load the dynamic capabilities registry
+        capabilities_content = ""
+        try:
+            capabilities_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
+            if os.path.exists(capabilities_path):
+                with open(capabilities_path, "r", encoding="utf-8") as f:
+                    capabilities_content = f.read()
+        except Exception:
+            capabilities_content = "Capabilities registry not found."
+            
         tool_knowledge_block = get_tool_knowledge_block()
-        skills_section = f"\n   - Available skills (read SKILL.md for detailed instructions):\n{self._skills_xml}\n" if self._skills_xml else ""
-
+        
         # Inject Soul if present
         soul_section = f"\n\n{self._soul_context}\n\n" if self._soul_context else ""
 
@@ -429,21 +443,12 @@ class AgentSetup:
             "- When writing under UA_ARTIFACTS_DIR, prefer `mcp__internal__write_text_file` over native `Write`.\n"
         )
         
-        capabilities_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
-        capabilities_ref = (
-            f"\n\nCAPABILITIES REGISTRY:\n"
-            f"You have a self-updating capabilities registry available at:\n"
-            f"`{capabilities_path}`\n"
-            "Read this file to discover your full range of Agents, Skills, and Tools if you are unsure how to proceed.\n"
-        )
-
         return (
             f"{soul_section}"
             f"Current Date: {today_str}\n"
             f"Tomorrow is: {tomorrow_str}\n"
             f"{self._memory_context}\n"
             f"{tool_knowledge_block}\n"
-            f"{capabilities_ref}\n"
             f"{fs_policy}\n"
             "TEMPORAL CONTEXT: Use the current date above as authoritative. "
             "Do not treat post-training dates as hallucinations if they are supported by tool results. "
@@ -452,100 +457,36 @@ class AgentSetup:
             "- If the user says 'past N days', interpret this as a rolling window ending today.\n"
             "- Prefer relative recency controls (e.g., `num_days`) over hardcoded historical dates.\n"
             "- If absolute dates are mentioned in output, they must match the rolling window.\n\n"
-            "You are a helpful assistant with access to external tools. "
-            "You can execute code when needed using COMPOSIO_REMOTE_WORKBENCH or any available code execution tool.\n\n"
-            "🔍 SEARCH TOOL PREFERENCE:\n"
-            "- For web/news research, ALWAYS use Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
-            "- **PRIMARY AGENT WARNING**: You are FORBIDDEN from using these tools directly. You must DELEGATE to `research-specialist`.\n"
-            "- Do NOT use native 'WebSearch' - it bypasses our artifact saving system.\n"
-            "- Composio search results are auto-saved by the Observer for sub-agent access.\n\n"
-            "🔒 SEARCH HYGIENE (MANDATORY):\n"
-            "- ALWAYS append `-site:wikipedia.org` to EVERY search query (COMPOSIO_SEARCH_NEWS, COMPOSIO_SEARCH_WEB, SERPAPI_SEARCH).\n"
-            "- This is MANDATORY, not optional. Wikipedia wastes search query slots.\n"
-            "- The only exception is if the user explicitly requests Wikipedia content.\n"
-            "IMPORTANT EXECUTION GUIDELINES:\n"
-            "- When the user requests an action (send email, upload file, execute code), proceed immediately without asking for confirmation.\n"
-            "- The user has already authorized these actions by making the request.\n"
-            "- Do not ask 'Should I proceed?' or 'Do you want me to send this?'\n"
-            "- Complete the full task end-to-end in a single workflow.\n"
-            "- If authentication is required, guide the user through it, then continue automatically.\n\n"
-            "⚡ AUTONOMOUS EXECUTION PROTOCOL:\n"
-            "- If you calculate a large scope (e.g. >10 hours), DO NOT ASK FOR PERMISSION. EXECUTE IT.\n"
-            "- You have FULL AUTHORITY to commit resources. Do not pause. Do not offer options.\n"
-            "- If faced with a choice (e.g. Batch vs Full), choose the most aggressive safe option (Full) to maximize results.\n"
-            "- The goal is to COMPLETE THE MISSION, not be polite.\n\n"
-            "REMOTE vs LOCAL WORKFLOW:\n"
-            "- The 'COMPOSIO' tools act as your Hands (Search, Email, Remote Execution).\n"
-            "- The 'LOCAL_TOOLKIT' and your own capabilities act as your Brain (Analysis, Writing, Reasoning).\n"
-            "GUIDELINES:\n"
-            "1. DATA FLOW POLICY (LOCAL-FIRST): Prefer receiving data DIRECTLY into your context.\n"
-            "   - Do NOT set `sync_response_to_workbench=True` unless you expect massive data (>5MB).\n"
-            "   - Default behavior (`sync=False`) is faster and avoids unnecessary download steps.\n"
-            "2. DATA COMPLETENESS: If a tool returns 'data_preview' or says 'Saved large response to <FILE>', it means the data was TRUNCATED.\n"
-            "   - In these cases (and ONLY these cases), use 'workbench_download' to fetch the full file.\n"
-            "   - 🚫 NEVER use REMOTE_WORKBENCH to save search results. The Observer already saves them automatically.\n"
-            "   - 🚫 **COMPOSIO_REMOTE_WORKBENCH IS FORBIDDEN**: You are a COORDINATOR. If you need to browse or execute untrusted code, you MUST delegate to a specialist.\n"
-            "   - DO NOT call the workbench directly. Doing so bypasses our security and architectural guardrails.\n"
-            "   - 🚫 NEVER try to access local files from REMOTE_WORKBENCH - local paths don't exist there!\n"
-            "4. 🚨 MANDATORY DELEGATION FOR RESEARCH & REPORTS:\n"
-            "   - Role: You are the COORDINATOR. You delegate work to specialists.\n"
-            "   - 🚫 **ABSOLUTE PROHIBITION**: You must NOT perform web searches, crawls, or report writing yourself.\n"
-            "   - **TRACK 1: TREND & DISCOVERY (Agile)**:\n"
-            "     - Trigger: 'News', 'Trends', 'Last 30 days', 'Quick summary', 'What is X', 'Overview', 'Pulse check'.\n"
-            "     - **Delegate to**: `trend-specialist`.\n"
-            "     - Capability: Uses `last30days` skill for rapid, dense insights from Reddit/X/Web. Reports directly to chat.\n"
-            "     - Prompt: 'Research [topic] for trending insights.'\n"
-            "   - **TRACK 2: DEEP RESEARCH (Heavy)**:\n"
-            "     - Trigger: 'Comprehensive report', 'Deep dive', 'Learn codebase', 'Formal documentation'.\n"
-            "     - **Delegate to**: `research-specialist`.\n"
-            "     - Capability: Full pipeline (Composio Search -> Crawl -> Refine -> Report Writer).\n"
-            f"     - Prompt: 'Today is {today_str}. Research [topic]: execute recency-bounded searches for {user_now.strftime('%B %Y')}, crawl sources, finalize corpus.'\n"
-            "   - **SYNERGY**: You can use Track 1 as a 'scout'. If findings suggest depth is needed, then upgrade to Track 2.\n"
-            "   - **REPORT WRITING**:\n"
-            "     - Only delegate to `report-writer` if the user SPECIFICALLY asks for a 'Formal Report' or 'HTML/PDF Document'.\n"
-            "     - Otherwise, the `trend-specialist` or `research-specialist` summary is sufficient.\n"
-            "   - ✅ SubagentStop HOOK: When the sub-agent finishes, a hook will inject next steps.\n"
-            "     Wait for this message before proceeding with upload/email.\n"
-            "5. 📤 EMAIL ATTACHMENTS - USE `upload_to_composio` (ONE-STEP SOLUTION):\n"
-            "   - For email attachments, call `mcp__internal__upload_to_composio(path='/local/path/to/file', tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`\n"
-            "   - This tool handles EVERYTHING: local→remote→S3 in ONE call.\n"
-            "   - It returns `s3_key` which you pass to GMAIL_SEND_EMAIL's `attachment.s3key` field.\n"
-            "   - DO NOT manually call workbench_upload + REMOTE_WORKBENCH. That's the old, broken way.\n"
-            "   - 🚫 NEVER use the Composio Python SDK in Bash for uploads. Use the MCP tool above.\n"
-            "6. ⚠️ LOCAL vs REMOTE FILESYSTEM:\n"
-            "   - LOCAL paths: `/home/kjdragan/...` or relative paths - accessible by in-process tools.\n"
-            "   - ALWAYS build paths using `CURRENT_SESSION_WORKSPACE`; do NOT guess the workspace root.\n"
-            "   - REMOTE paths: `/home/user/...` - only accessible inside COMPOSIO_REMOTE_WORKBENCH sandbox.\n"
-            "7. 📁 WORK PRODUCTS (EPHEMERAL DATA):\n"
-            "   - Definition: Intermediate task data, crawl results, search outputs, and draft findings.\n"
-            "   - Location: ALWAYS save to `os.path.join(os.getenv('CURRENT_SESSION_WORKSPACE'), 'work_products', 'filename')`.\n"
-            "   - Lifecycle: These directories are ephemeral and may be deleted. Do NOT save important code here.\n"
-            "   - Mandatory Save: Save any significant tables, summaries, or analyses BEFORE responding to the user.\n\n"
-            "8. 🏢 PROJECT HYGIENE & ASSET BOUNDARIES (PERSISTENT CODE):\n"
-            "   🚨 MANDATORY: Prevent repository root clutter. Distinguish between 'Run Data' and 'Development Assets'.\n"
-            "   - **Persistent Development**: Any core code, reusable scripts, or permanent documentation MUST be saved to their respective directories:\n"
-            "     - Utility Scripts: `scripts/` (e.g., scripts/sync_memory.py)\n"
-            "     - Core Logic: `src/universal_agent/` (or designated subpackages)\n"
-            "     - Permanent Docs: `Project_Documentation/` or `docs/` (e.g., docs/new_feature_spec.md)\n"
-            "   - **Root Protection**: DO NOT save new files to the repository root. Exceptions: README.md, .env, pyproject.toml.\n"
-            "   - **Verification**: Before saving a file, ask: 'Is this a permanent part of the codebase or a temporary task artifact?'\n\n"
-            "9. 🔗 MANDATORY DELEGATION FOR RESEARCH (NO EXCEPTIONS):\n"
-            "   - **RESEARCH TRACKS**:\n"
-            "     1. **TREND/SCOUT**: Delegate to `trend-specialist` (Keywords: 'news', 'latest', '30 days').\n"
-            "     2. **DEEP DIVE**: Delegate to `research-specialist` (Keywords: 'comprehensive', 'formal report').\n"
-            "   - **REPORTING**:\n"
-            "     - `trend-specialist` generates its own summaries.\n"
-            "     - Only delegate to `report-writer` for requested formal documents.\n"
-            "   - **PROHIBITION**: Do NOT use `WebSearch` or search tools directly. Always delegate research first.\n"
-            "10. 💡 PROACTIVE FOLLOW-UP SUGGESTIONS:\n"
-            "   - After completing a task, suggest 2-3 helpful follow-up actions based on what was just accomplished.\n"
-            "   - Examples: 'Would you like me to email this report?', 'Should I save this to a different format?',\n"
-            "     'I can schedule a calendar event for the mentioned deadline if you'd like.'\n"
-            "   - Keep suggestions relevant to the completed task and the user's apparent goals.\n\n"
-            "11. 🎯 SKILLS - BEST PRACTICES KNOWLEDGE:\n"
-            "   - Skills are pre-defined workflows for complex tasks.\n"
-            "   - Before building document creation scripts from scratch, CHECK if a skill exists.\n"
-            f"{skills_section}"
+            "You are the **Universal Coordinator Agent**. You are a helpful, capable, and autonomous AI assistant.\n\n"
+            "## 🧠 YOUR CAPABILITIES & SPECIALISTS\n"
+            "You are not alone. You have access to a team of **Specialist Agents** and **Toolkits** organized by DOMAIN.\n"
+            "Your primary job is to **Route Work** to the best specialist for the task.\n\n"
+            f"{capabilities_content}\n\n"
+            "## 🏗️ ARCHITECTURE & TOOL USAGE\n"
+            "You interact with external tools via MCP tool calls. You do NOT write Python/Bash code to call SDKs directly.\n"
+            "**Tool Namespaces:**\n"
+            "- `mcp__composio__*` - Remote tools (Gmail, Slack, Search) -> Call directly\n"
+            "- `mcp__internal__*` - Local tools (File I/O, Memory) -> Call directly\n"
+            "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
+            "## 🚀 EXECUTION STRATEGY (THE COORDINATOR LOOP)\n"
+            "1. **Analyze Request**: What DOMAIN does this fall into? (Research? Coding? Creative? Ops?)\n"
+            "2. **Check Registry**: Look at the 'Specialist Agents' list above. Is there an expert for this?\n"
+            "   - Need deep research? -> Delegate to `research-specialist`.\n"
+            "   - Need a video? -> Delegate to `video-creation-expert`.\n"
+            "   - Need complex coding? -> Delegate to `task-decomposer` or `codeinterpreter`.\n"
+            "   - Need to check Slack/Email? -> Delegate to `slack-expert` or use tools directly.\n"
+            "3. **Delegate**: Use `Task(subagent_type='[name]', ...)` to hand off the workflow.\n"
+            "4. **Fallback**: If NO specialist exists, use your own tools (`read_file`, `write_file`, `bash`, etc.) to solve it.\n\n"
+            "🛑 **CRITICAL RULE**: Do not attempt complex multi-step workflows (like 'Research & Report' or 'Video Production') yourself if a Specialist exists.\n"
+            "**Your Value**: You obtain the user's intent, route it to the right expert, and synthesize the result.\n\n"
+            "## ⚡ AUTONOMOUS BEHAVIOR\n"
+            "- **Proactive**: If a task requires multiple steps (search -> summarize -> email), plan and execute the chain.\n"
+            "- **Filesystem**: `CURRENT_SESSION_WORKSPACE` is your scratchpad. `UA_ARTIFACTS_DIR` is for permanent output.\n"
+            "- **Safety**: Always use absolute paths. Do not access files outside your workspace.\n\n"
+            "## 📧 EMAIL & COMMUNICATION\n"
+            "- When sending emails, use `mcp__internal__upload_to_composio` to handle attachments.\n"
+            "- Keep email bodies concise. Delegate drafting to the `scribe` or `writer` if needed.\n\n"
+            f"Context:\nCURRENT_SESSION_WORKSPACE: {self.workspace_dir}\n"
         )
 
     def _build_mcp_servers(self) -> dict:
@@ -624,128 +565,133 @@ class AgentSetup:
     def _generate_capabilities_doc(self) -> None:
         """
         Generate a comprehensive capabilities registry (capabilities.md) in the workspace.
-        This file serves as a self-reflection menu for the agent to understand its tools,
-        skills, and sub-agents.
+        Organizes agents and tools by DOMAIN to support the Universal Coordinator architecture.
         """
         try:
             lines = ["# 🧠 Agent Capabilities Registry", "", f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
             
-            # 1. Skills
-            lines.append("## 📚 Skills (Standard Operating Procedures)")
-            if self.enable_skills and self._discovered_skills:
-                for skill in self._discovered_skills:
-                    lines.append(f"- **{skill['name']}**: {skill['description']}")
-                    lines.append(f"  - Path: `{skill['path']}`")
-            else:
-                lines.append("- No skills discovered or skills disabled.")
-            lines.append("")
+            # --- DOMAIN DEFINITIONS ---
+            domains = {
+                "🔬 Research & Analysis": ["research-specialist", "trend-specialist", "professor", "scribe"],
+                "🎨 Creative & Media": ["image-expert", "video-creation-expert", "video-remotion-expert"],
+                "⚙️ Engineering & Code": ["task-decomposer", "codeinterpreter", "github"],
+                "🏢 Operations & Communication": ["slack-expert", "gmail", "googlecalendar", "notion", "linear"]
+            }
+            
+            # helper to find domain for an item
+            def get_domain(name: str) -> str:
+                name_lower = name.lower()
+                for domain, keywords in domains.items():
+                    if any(k in name_lower for k in keywords):
+                        return domain
+                return "🛠 General Tools"
 
-            # 2. Agents (Sub-Agents)
-            lines.append("## 🤖 Specialist Agents")
-            lines.append("Use these agents for specialized tasks. Explicitly delegate to them.")
+            # 1. SPECIALIST AGENTS (Categorized)
+            lines.append("## 🤖 Specialist Agents (Micro-Agents)")
+            lines.append("Delegate full workflows to these specialists based on value-add.")
             
             agent_dirs = [
                 os.path.join(self.src_dir, ".claude", "agents"),
                 os.path.join(self.src_dir, "src", "universal_agent", "agent_college"),
             ]
             
-            seen_agents = set()
+            found_agents = {} # name -> description
+            
             for directory in agent_dirs:
                 if not os.path.exists(directory):
                     continue
-                
                 for filename in sorted(os.listdir(directory)):
-                    if filename.endswith(".md"):
-                        filepath = os.path.join(directory, filename)
-                        try:
-                            with open(filepath, "r", encoding="utf-8") as f:
-                                content = f.read()
+                    if filename.endswith(".md") or filename.endswith(".py"):
+                        # Skip __init__.py and common.py
+                        if filename.startswith("_") or filename == "common.py": 
+                            continue
                             
-                            # Parse YAML frontmatter
-                            if content.startswith("---"):
-                                parts = content.split("---", 2)
-                                if len(parts) >= 3:
-                                    frontmatter = yaml.safe_load(parts[1])
-                                    name = frontmatter.get("name") or filename.replace(".md", "")
-                                    description = frontmatter.get("description", "No description provided.")
-                                    
-                                    if name not in seen_agents:
-                                        lines.append(f"- **{name}**: {description}")
-                                        seen_agents.add(name)
-                        except Exception as e:
-                            self._log(f"⚠️ Failed to parse agent definitions in {filename}: {e}")
+                        filepath = os.path.join(directory, filename)
+                        name = filename.replace(".md", "").replace(".py", "")
+                        
+                        # Python agents (College) - simple heuristic for now
+                        description = "Internal specialized agent."
+                        
+                        if filename.endswith(".md"):
+                            try:
+                                with open(filepath, "r", encoding="utf-8") as f:
+                                    content = f.read()
+                                if content.startswith("---"):
+                                    parts = content.split("---", 2)
+                                    if len(parts) >= 3:
+                                        frontmatter = yaml.safe_load(parts[1])
+                                        name = frontmatter.get("name") or name
+                                        description = frontmatter.get("description", description)
+                            except Exception:
+                                pass
+                        elif filename.endswith(".py"):
+                             # Basic description for known college agents
+                             if name == "professor": description = "Academic oversight and skill creation."
+                             if name == "scribe": description = "Memory logging and fact recording."
+
+                        found_agents[name] = description
+
+            # Group by Domain
+            agents_by_domain = {}
+            for name, desc in found_agents.items():
+                domain = get_domain(name)
+                if domain not in agents_by_domain:
+                    agents_by_domain[domain] = []
+                agents_by_domain[domain].append((name, desc))
             
-            if not seen_agents:
-                lines.append("- No specialist agents found.")
+            for domain, agents in agents_by_domain.items():
+                lines.append(f"\n### {domain}")
+                for name, desc in agents:
+                    lines.append(f"- **{name}**: {desc}")
+                    lines.append(f"  -> Delegate: `Task(subagent_type='{name}', ...)`")
+
             lines.append("")
 
-            # 3. Tools (MCPs)
-            # 3. Tools (Apps & MCPs)
-            lines.append("## 🛠 Tools & Apps")
+            # 2. SKILLS (SOPs)
+            lines.append("## 📚 Skills (Standard Operating Procedures)")
+            if self.enable_skills and self._discovered_skills:
+                for skill in self._discovered_skills:
+                    if skill.get("enabled", True):
+                        lines.append(f"- **{skill['name']}**: {skill['description']}")
+                    else:
+                        reason = skill.get("disabled_reason", "Missing requirements")
+                        lines.append(f"- ~~**{skill['name']}**~~ (Unavailable: {reason})")
+            else:
+                lines.append("- No skills discovered.")
+            lines.append("")
+
+            # 3. TOOLKITS (By Domain)
+            lines.append("## 🛠 Toolkits & Capabilities")
             
-            # Helper to format app line
-            def format_app_line(app):
-                name = app.get('name', app['slug'].title())
-                desc = app.get('description', '')
-                slug = app['slug']
-                line = f"- **{name}** (`{slug}`)"
-                if desc:
-                    line += f": {desc}"
-                return line
-            
-            # Split apps into Connected vs Core
-            # Core are internal/utility apps that don't represent personal productivity accounts
+            # Combine Core + Connected for sorting
+            all_apps = []
             core_slugs = {"composio_search", "browserbase", "codeinterpreter", "filetool", "sqltool"}
-            connected_apps = []
-            core_apps_list = []
             
             if self._discovered_apps:
-                for app in self._discovered_apps:
-                    if app['slug'] in core_slugs:
-                        core_apps_list.append(app)
-                    else:
-                        connected_apps.append(app)
-
-            if connected_apps:
-                lines.append("### 🔌 Connected Toolkits")
-                for app in connected_apps:
-                    lines.append(format_app_line(app))
-                    if app.get('categories'):
-                        lines.append(f"  - Categories: {', '.join(app['categories'])}")
-                lines.append("")
+                all_apps.extend(self._discovered_apps)
+            
+            # Group Apps by Domain
+            apps_by_domain = {}
+            for app in all_apps:
+                slug = app['slug']
+                name = app.get('name', slug.title())
+                desc = app.get('description', '')
+                domain = get_domain(slug) # Use slug for matching
                 
-            lines.append("### 🧰 Core Utilities")
-            if core_apps_list:
-                for app in core_apps_list:
-                    lines.append(format_app_line(app))
-            else:
-                lines.append("- No core utilities found.")
-            lines.append("")
+                if domain not in apps_by_domain:
+                    apps_by_domain[domain] = []
+                apps_by_domain[domain].append(f"- **{name}** (`{slug}`): {desc}")
 
-            lines.append("### 🧩 MCP Servers")
-            if self._options and self._options.mcp_servers:
-                for server_name, config in self._options.mcp_servers.items():
-                    server_type = config.get("type", "unknown")
-                    lines.append(f"- **{server_name}** ({server_type})")
-                    
-                    # Inspect internal tools dynamically
-                    if server_name == "internal":
-                         try:
-                             from universal_agent.tools.internal_registry import get_internal_tool_slugs
-                             tools = get_internal_tool_slugs(self.enable_memory)
-                             for tool in tools:
-                                 lines.append(f"  - `{tool}`")
-                         except ImportError:
-                             lines.append("  - (Internal toolkit: File ops, Research, Reporting, Memory)")
-            else:
-                lines.append("- No MCP servers configured.")
+            for domain, app_lines in apps_by_domain.items():
+                lines.append(f"\n### {domain}")
+                lines.extend(app_lines)
                 
             # Write file
             output_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
             
-            self._log(f"✅ Generated Capabilities Registry: {output_path}")
+            self._log(f"✅ Generated Domain-Driven Capabilities: {output_path}")
 
         except Exception as e:
             self._log(f"⚠️ Failed to generate capabilities.md: {e}")

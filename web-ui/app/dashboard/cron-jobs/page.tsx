@@ -1,8 +1,9 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { openOrFocusChatWindow } from "@/lib/chatWindow";
 
-const API_BASE = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8002";
+const API_BASE = "/api/dashboard/gateway";
 
 type CronJob = {
   job_id: string;
@@ -15,6 +16,7 @@ type CronJob = {
   running?: boolean;
   run_at?: string | number | null;
   next_run_at?: string | number | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 function toLocalDateTime(value?: string | number | null): string {
@@ -45,6 +47,26 @@ function formatEverySeconds(value?: number | null): string {
   if (seconds % 3600 === 0) return `${seconds / 3600}h`;
   if (seconds % 60 === 0) return `${seconds / 60}m`;
   return `${seconds}s`;
+}
+
+function extractJobSessionId(job: CronJob): string {
+  const metadata = (job.metadata || {}) as Record<string, unknown>;
+  const fromMetadata = String(
+    metadata.session_id
+      || metadata.target_session_id
+      || metadata.target_session
+      || "",
+  ).trim();
+  if (fromMetadata) return fromMetadata;
+
+  const workspace = String(job.workspace_dir || "").trim();
+  const marker = "/AGENT_RUN_WORKSPACES/";
+  const idx = workspace.lastIndexOf(marker);
+  if (idx >= 0) {
+    const tail = workspace.slice(idx + marker.length).split("/")[0];
+    return tail || "";
+  }
+  return "";
 }
 
 export default function DashboardCronJobsPage() {
@@ -200,6 +222,15 @@ export default function DashboardCronJobsPage() {
                       : `every ${formatEverySeconds(job.every_seconds)}`} ·{" "}
                   {job.running ? "running" : job.enabled ? "enabled" : "disabled"} · next: {toLocalDateTime(job.next_run_at)}
                 </p>
+                {(() => {
+                  const sessionId = extractJobSessionId(job);
+                  if (!sessionId) return null;
+                  return (
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      session: <span className="font-mono">{sessionId}</span>
+                    </p>
+                  );
+                })()}
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -217,6 +248,25 @@ export default function DashboardCronJobsPage() {
                 >
                   Delete
                 </button>
+                {(() => {
+                  const sessionId = extractJobSessionId(job);
+                  if (!sessionId) return null;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openOrFocusChatWindow({
+                          sessionId,
+                          attachMode: "tail",
+                          role: "writer",
+                        })
+                      }
+                      className="rounded-md border border-cyan-700 bg-cyan-500/20 px-2 py-1 text-xs text-cyan-100 hover:bg-cyan-500/30"
+                    >
+                      Open Session
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           </article>
