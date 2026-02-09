@@ -435,8 +435,13 @@ Status: Completed (excluding 24h soak window)
   - `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/11_Scheduling_Runtime_V2_Operational_Runbook_2026-02-08.md`
 - Added soak automation script:
   - `src/universal_agent/scripts/scheduling_v2_soak.py`
+- Added soak launch/status helper scripts:
+  - `src/universal_agent/scripts/start_scheduling_v2_soak_24h.sh`
+  - `src/universal_agent/scripts/show_scheduling_v2_soak_status.sh`
 - Added short-soak execution report:
   - `OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/03_Scheduling_Runtime_V2_Short_Soak_Readiness_2026-02-08.md`
+- Added 24h soak in-progress tracker:
+  - `OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/04_Scheduling_Runtime_V2_24h_Soak_In_Progress_2026-02-08.md`
 - Captured explicit feature-flag rollout sequence:
   - projection enablement
   - push backend enablement

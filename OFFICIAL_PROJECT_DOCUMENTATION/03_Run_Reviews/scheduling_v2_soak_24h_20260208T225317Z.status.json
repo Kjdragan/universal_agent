@@ -1,0 +1,185 @@
+{
+  "running": true,
+  "updated_at": "2026-02-08T22:56:54.100123+00:00",
+  "started_at": "2026-02-08T22:53:22.085878+00:00",
+  "base_url": "http://127.0.0.1:8002",
+  "duration_seconds": 86400,
+  "interval_seconds": 30,
+  "timeout_seconds": 8.0,
+  "elapsed_seconds": 212.014,
+  "remaining_seconds": 86187.986,
+  "last_cycle": {
+    "cycle": 7,
+    "at": "2026-02-08T22:56:54.099984+00:00",
+    "results": [
+      {
+        "name": "health",
+        "url": "http://127.0.0.1:8002/api/v1/health",
+        "started_at": "2026-02-08T22:56:52.086672+00:00",
+        "status_code": 200,
+        "latency_ms": 1.891,
+        "ok": true,
+        "payload_preview": {
+          "keys": [
+            "db_error",
+            "db_status",
+            "deployment_profile",
+            "status",
+            "timestamp",
+            "version"
+          ]
+        }
+      },
+      {
+        "name": "scheduling_runtime_metrics",
+        "url": "http://127.0.0.1:8002/api/v1/ops/metrics/scheduling-runtime",
+        "started_at": "2026-02-08T22:56:52.088749+00:00",
+        "status_code": 200,
+        "latency_ms": 2.295,
+        "ok": true,
+        "payload_preview": {
+          "keys": [
+            "metrics"
+          ],
+          "projection_state": {
+            "enabled": true,
+            "seeded": true,
+            "version": 0,
+            "last_event_seq": 0
+          },
+          "push_counters": {
+            "push_replay_requests": 7,
+            "push_stream_connects": 7,
+            "push_stream_disconnects": 7,
+            "push_stream_event_payloads": 0,
+            "push_stream_keepalives": 7
+          }
+        }
+      },
+      {
+        "name": "session_continuity_metrics",
+        "url": "http://127.0.0.1:8002/api/v1/ops/metrics/session-continuity",
+        "started_at": "2026-02-08T22:56:52.091222+00:00",
+        "status_code": 200,
+        "latency_ms": 1.765,
+        "ok": true,
+        "payload_preview": {
+          "keys": [
+            "metrics"
+          ],
+          "continuity_status": "ok",
+          "resume_success_rate": null,
+          "attach_success_rate": null,
+          "alerts_count": 0
+        }
+      },
+      {
+        "name": "calendar_events",
+        "url": "http://127.0.0.1:8002/api/v1/ops/calendar/events?source=all&view=week",
+        "started_at": "2026-02-08T22:56:52.093146+00:00",
+        "status_code": 200,
+        "latency_ms": 1.806,
+        "ok": true,
+        "payload_preview": {
+          "keys": [
+            "always_running",
+            "end_local",
+            "end_utc",
+            "events",
+            "legend",
+            "start_local",
+            "start_utc",
+            "stasis_queue",
+            "timezone",
+            "view"
+          ],
+          "events_count": 0,
+          "always_running_count": 0,
+          "stasis_count": 0,
+          "timezone": "America/Chicago",
+          "view": "week"
+        }
+      },
+      {
+        "name": "scheduling_replay",
+        "url": "http://127.0.0.1:8002/api/v1/ops/scheduling/events?since_seq=0&limit=50",
+        "started_at": "2026-02-08T22:56:52.095072+00:00",
+        "status_code": 200,
+        "latency_ms": 1.663,
+        "ok": true,
+        "payload_preview": {
+          "keys": [
+            "event_bus_seq",
+            "events",
+            "projection_last_event_seq",
+            "projection_version"
+          ],
+          "events_count": 0,
+          "event_bus_seq": 0,
+          "projection_version": 0,
+          "projection_last_event_seq": 0
+        }
+      },
+      {
+        "name": "scheduling_stream_once",
+        "url": "http://127.0.0.1:8002/api/v1/ops/scheduling/stream?since_seq=0&once=1&heartbeat_seconds=2&limit=50",
+        "started_at": "2026-02-08T22:56:52.096855+00:00",
+        "status_code": 200,
+        "latency_ms": 2003.028,
+        "ok": true,
+        "payload_preview": "data: {\"kind\":\"heartbeat\",\"seq\":0,\"projection_version\":0,\"projection_last_event_seq\":0}\n\n"
+      }
+    ]
+  },
+  "summary": {
+    "cycles": 8,
+    "total_checks": 48,
+    "total_ok": 48,
+    "total_fail": 0,
+    "all_checks_ok": true,
+    "by_endpoint": {
+      "health": {
+        "samples": 8,
+        "ok": 8,
+        "fail": 0,
+        "latency_ms_avg": 2.109,
+        "latency_ms_max": 3.824
+      },
+      "scheduling_runtime_metrics": {
+        "samples": 8,
+        "ok": 8,
+        "fail": 0,
+        "latency_ms_avg": 1.737,
+        "latency_ms_max": 2.39
+      },
+      "session_continuity_metrics": {
+        "samples": 8,
+        "ok": 8,
+        "fail": 0,
+        "latency_ms_avg": 1.416,
+        "latency_ms_max": 1.765
+      },
+      "calendar_events": {
+        "samples": 8,
+        "ok": 8,
+        "fail": 0,
+        "latency_ms_avg": 2.122,
+        "latency_ms_max": 2.663
+      },
+      "scheduling_replay": {
+        "samples": 8,
+        "ok": 8,
+        "fail": 0,
+        "latency_ms_avg": 1.695,
+        "latency_ms_max": 2.433
+      },
+      "scheduling_stream_once": {
+        "samples": 8,
+        "ok": 8,
+        "fail": 0,
+        "latency_ms_avg": 2002.84,
+        "latency_ms_max": 2005.201
+      }
+    }
+  }
+}

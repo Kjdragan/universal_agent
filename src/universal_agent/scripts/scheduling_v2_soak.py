@@ -45,7 +45,7 @@ CHECKS: list[CheckSpec] = [
     CheckSpec(
         name="scheduling_stream_once",
         path="/api/v1/ops/scheduling/stream",
-        query={"since_seq": "0", "once": "1"},
+        query={"since_seq": "0", "once": "1", "heartbeat_seconds": "2", "limit": "50"},
         expects_json=False,
     ),
 ]
@@ -53,6 +53,43 @@ CHECKS: list[CheckSpec] = [
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _summary_from_cycles(checks_per_cycle: list[dict[str, Any]]) -> dict[str, Any]:
+    flat = [result for cycle_data in checks_per_cycle for result in cycle_data.get("results", [])]
+    by_name: dict[str, list[dict[str, Any]]] = {}
+    for item in flat:
+        by_name.setdefault(str(item.get("name")), []).append(item)
+
+    endpoint_summary: dict[str, Any] = {}
+    for name, rows in by_name.items():
+        latencies = [float(r["latency_ms"]) for r in rows if isinstance(r.get("latency_ms"), (int, float))]
+        ok_count = sum(1 for r in rows if bool(r.get("ok")))
+        endpoint_summary[name] = {
+            "samples": len(rows),
+            "ok": ok_count,
+            "fail": len(rows) - ok_count,
+            "latency_ms_avg": round(sum(latencies) / len(latencies), 3) if latencies else None,
+            "latency_ms_max": round(max(latencies), 3) if latencies else None,
+        }
+
+    total_checks = len(flat)
+    total_ok = sum(1 for item in flat if bool(item.get("ok")))
+    return {
+        "cycles": len(checks_per_cycle),
+        "total_checks": total_checks,
+        "total_ok": total_ok,
+        "total_fail": total_checks - total_ok,
+        "all_checks_ok": total_ok == total_checks and total_checks > 0,
+        "by_endpoint": endpoint_summary,
+    }
 
 
 def _build_url(base_url: str, spec: CheckSpec) -> str:
@@ -194,6 +231,7 @@ def run_soak(
     interval_seconds: int,
     timeout_seconds: float,
     ops_token: str | None,
+    status_json: Path | None = None,
 ) -> dict[str, Any]:
     started_at = _iso_now()
     end_ts = time.time() + max(1, int(duration_seconds))
@@ -218,6 +256,23 @@ def run_soak(
                 "results": cycle_results,
             }
         )
+        if status_json is not None:
+            summary = _summary_from_cycles(checks_per_cycle)
+            now_ts = time.time()
+            status_payload = {
+                "running": True,
+                "updated_at": _iso_now(),
+                "started_at": started_at,
+                "base_url": base_url,
+                "duration_seconds": duration_seconds,
+                "interval_seconds": interval_seconds,
+                "timeout_seconds": timeout_seconds,
+                "elapsed_seconds": round(max(0.0, now_ts - (end_ts - duration_seconds)), 3),
+                "remaining_seconds": round(max(0.0, end_ts - now_ts), 3),
+                "last_cycle": checks_per_cycle[-1],
+                "summary": summary,
+            }
+            _write_json_atomic(status_json, status_payload)
         cycle += 1
         elapsed = time.time() - cycle_started
         sleep_for = max(0.0, float(interval_seconds) - elapsed)
@@ -225,26 +280,8 @@ def run_soak(
             time.sleep(sleep_for)
 
     ended_at = _iso_now()
-    flat = [result for cycle_data in checks_per_cycle for result in cycle_data["results"]]
-    by_name: dict[str, list[dict[str, Any]]] = {}
-    for item in flat:
-        by_name.setdefault(str(item.get("name")), []).append(item)
-
-    endpoint_summary: dict[str, Any] = {}
-    for name, rows in by_name.items():
-        latencies = [float(r["latency_ms"]) for r in rows if isinstance(r.get("latency_ms"), (int, float))]
-        ok_count = sum(1 for r in rows if bool(r.get("ok")))
-        endpoint_summary[name] = {
-            "samples": len(rows),
-            "ok": ok_count,
-            "fail": len(rows) - ok_count,
-            "latency_ms_avg": round(sum(latencies) / len(latencies), 3) if latencies else None,
-            "latency_ms_max": round(max(latencies), 3) if latencies else None,
-        }
-
-    total_checks = len(flat)
-    total_ok = sum(1 for item in flat if bool(item.get("ok")))
-    return {
+    summary = _summary_from_cycles(checks_per_cycle)
+    report = {
         "started_at": started_at,
         "ended_at": ended_at,
         "base_url": base_url,
@@ -252,15 +289,60 @@ def run_soak(
         "interval_seconds": interval_seconds,
         "timeout_seconds": timeout_seconds,
         "checks_per_cycle": checks_per_cycle,
-        "summary": {
-            "cycles": len(checks_per_cycle),
-            "total_checks": total_checks,
-            "total_ok": total_ok,
-            "total_fail": total_checks - total_ok,
-            "all_checks_ok": total_ok == total_checks and total_checks > 0,
-            "by_endpoint": endpoint_summary,
-        },
+        "summary": summary,
     }
+    if status_json is not None:
+        _write_json_atomic(
+            status_json,
+            {
+                "running": False,
+                "updated_at": _iso_now(),
+                "report_path": None,
+                **report,
+            },
+        )
+    return report
+
+
+def _default_status_json(out_json: Path) -> Path:
+    stem = out_json.stem
+    suffix = out_json.suffix or ".json"
+    return out_json.with_name(f"{stem}.status{suffix}")
+
+
+def _with_report_path(status_json: Path, report_path: Path) -> None:
+    if not status_json.exists():
+        return
+    try:
+        payload = json.loads(status_json.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    payload["report_path"] = str(report_path)
+    payload["updated_at"] = _iso_now()
+    _write_json_atomic(status_json, payload)
+
+
+def _run_and_write(
+    *,
+    base_url: str,
+    duration_seconds: int,
+    interval_seconds: int,
+    timeout_seconds: float,
+    ops_token: str | None,
+    out_path: Path,
+    status_path: Path,
+) -> dict[str, Any]:
+    report = run_soak(
+        base_url=base_url,
+        duration_seconds=duration_seconds,
+        interval_seconds=interval_seconds,
+        timeout_seconds=timeout_seconds,
+        ops_token=ops_token,
+        status_json=status_path,
+    )
+    _write_json_atomic(out_path, report)
+    _with_report_path(status_path, out_path)
+    return report
 
 
 def main() -> int:
@@ -274,31 +356,35 @@ def main() -> int:
         "--out-json",
         default="OFFICIAL_PROJECT_DOCUMENTATION/03_Run_Reviews/scheduling_v2_soak_latest.json",
     )
+    parser.add_argument(
+        "--status-json",
+        default=None,
+        help="Optional live status JSON path. Defaults to <out-json stem>.status.json",
+    )
     args = parser.parse_args()
 
-    report = run_soak(
+    out_path = Path(args.out_json)
+    status_path = Path(args.status_json) if args.status_json else _default_status_json(out_path)
+
+    report = _run_and_write(
         base_url=args.base_url,
         duration_seconds=args.duration_seconds,
         interval_seconds=args.interval_seconds,
         timeout_seconds=args.timeout_seconds,
         ops_token=args.ops_token,
+        out_path=out_path,
+        status_path=status_path,
     )
-    out_path = Path(args.out_json)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     summary = report.get("summary", {})
-    print(
-        json.dumps(
-            {
-                "out_json": str(out_path),
-                "cycles": summary.get("cycles"),
-                "total_checks": summary.get("total_checks"),
-                "total_fail": summary.get("total_fail"),
-                "all_checks_ok": summary.get("all_checks_ok"),
-            },
-            indent=2,
-        )
-    )
+    result = {
+        "out_json": str(out_path),
+        "status_json": str(status_path),
+        "cycles": summary.get("cycles"),
+        "total_checks": summary.get("total_checks"),
+        "total_fail": summary.get("total_fail"),
+        "all_checks_ok": summary.get("all_checks_ok"),
+    }
+    print(json.dumps(result, indent=2))
     return 0 if summary.get("all_checks_ok") else 1
 
 
