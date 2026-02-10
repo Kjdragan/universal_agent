@@ -414,30 +414,29 @@ function HeaderMetrics() {
   const sessionId = currentSession?.workspace ? currentSession.workspace.split('/').pop() : 'NO SESSION';
 
   return (
-    <div className="hidden md:flex items-center gap-6 mr-6 px-5 py-2.5 rounded-lg bg-card/30 border border-border/40 tactical-panel">
-      <div className="flex items-center gap-2 text-xs tracking-wider">
-        <span className="text-muted-foreground/70 font-semibold">SESSION</span>
-        <span className="font-mono text-primary truncate max-w-[120px]" title={sessionId}>{sessionId}</span>
+    <div className="hidden md:flex items-center gap-6 mr-6 px-5 py-2.5 rounded-lg bg-card/30 border border-border/40 tactical-panel min-w-fit">
+      <div className="flex items-center gap-2 text-[0.7rem] tracking-wider">
+        <span className="font-mono text-primary whitespace-nowrap" title={sessionId}>{sessionId}</span>
       </div>
       <div className="w-px h-4 bg-border/40" />
       <div className="flex items-center gap-2 text-xs tracking-wider">
-        <span className="text-muted-foreground/70 font-semibold">TOKENS</span>
-        <span className="font-mono">{tokenUsage.total.toLocaleString()}</span>
+        <span className="text-muted-foreground/70 font-semibold text-[0.7rem]">TOKENS</span>
+        <span className="font-mono text-[0.7rem]">{tokenUsage.total.toLocaleString()}</span>
       </div>
       <div className="w-px h-4 bg-border/40" />
       <div className="flex items-center gap-2 text-xs tracking-wider">
-        <span className="text-muted-foreground/70 font-semibold">TOOLS</span>
-        <span className="font-mono">{toolCallCount}</span>
+        <span className="text-muted-foreground/70 font-semibold text-[0.7rem]">TOOLS</span>
+        <span className="font-mono text-[0.7rem]">{toolCallCount}</span>
       </div>
       <div className="w-px h-4 bg-border/40" />
       <div className="flex items-center gap-2 text-xs tracking-wider">
-        <span className="text-muted-foreground/70 font-semibold">TIME</span>
-        <span className="font-mono">{formatDuration(startTime ? duration : 0)}</span>
+        <span className="text-muted-foreground/70 font-semibold text-[0.7rem]">TIME</span>
+        <span className="font-mono text-[0.7rem]">{formatDuration(startTime ? duration : 0)}</span>
       </div>
       <div className="w-px h-4 bg-border/40" />
       <div className="flex items-center gap-2 text-xs tracking-wider">
-        <span className="text-muted-foreground/70 font-semibold">ITERS</span>
-        <span className="font-mono">{iterationCount}</span>
+        <span className="text-muted-foreground/70 font-semibold text-[0.7rem]">ITERS</span>
+        <span className="font-mono text-[0.7rem]">{iterationCount}</span>
       </div>
     </div>
   );
@@ -1210,7 +1209,7 @@ export default function HomePage() {
   // Layout State
   // We now have: [Chat (flex)] - [Activity (px)] - [Files (px)]
   // We track widths for the two right-side panels.
-  const [activityWidth, setActivityWidth] = useState(400);
+  const [activityWidth, setActivityWidth] = useState(560);
   const [filesWidth, setFilesWidth] = useState(320);
 
 

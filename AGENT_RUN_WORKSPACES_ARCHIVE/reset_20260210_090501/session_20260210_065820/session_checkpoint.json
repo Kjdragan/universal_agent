@@ -1,0 +1,78 @@
+{
+  "session_id": "fd7c10f5-ff72-4b7c-ac34-a68d3fa50ddd",
+  "timestamp": "2026-02-10T13:05:14.867358",
+  "original_request": "Search for the latest information from the Russia-Ukraine war over the past three days, create a report, save the report as a PDF and gmail it to me.",
+  "completed_tasks": [],
+  "artifacts": [
+    {
+      "path": "work_products/russia_ukraine_war_report.pdf",
+      "description": "Russia Ukraine War Report (PDF document)"
+    },
+    {
+      "path": "work_products/report.html",
+      "description": "Report (HTML document)"
+    },
+    {
+      "path": "work_products/logfire-eval/trace_catalog.json",
+      "description": "Trace Catalog (JSON data)"
+    },
+    {
+      "path": "work_products/logfire-eval/trace_catalog.md",
+      "description": "Trace Catalog (Markdown document)"
+    },
+    {
+      "path": "work_products/_working/outline.json",
+      "description": "Outline (JSON data)"
+    },
+    {
+      "path": "work_products/_working/sections/06_06_russian_domestic_stability.md",
+      "description": "06 06 Russian Domestic Stability (Markdown document)"
+    },
+    {
+      "path": "work_products/_working/sections/03_03_humanitarian_crisis_energy_war.md",
+      "description": "03 03 Humanitarian Crisis Energy War (Markdown document)"
+    },
+    {
+      "path": "work_products/_working/sections/04_04_diplomatic_efforts_roadblocks.md",
+      "description": "04 04 Diplomatic Efforts Roadblocks (Markdown document)"
+    },
+    {
+      "path": "work_products/_working/sections/07_07_legal_human_rights_implications.md",
+      "description": "07 07 Legal Human Rights Implications (Markdown document)"
+    },
+    {
+      "path": "work_products/_working/sections/01_01_executive_summary.md",
+      "description": "01 01 Executive Summary (Markdown document)"
+    },
+    {
+      "path": "work_products/_working/sections/02_02_military_situation_attrition.md",
+      "description": "02 02 Military Situation Attrition (Markdown document)"
+    },
+    {
+      "path": "work_products/_working/sections/05_05_international_response_nato_eu.md",
+      "description": "05 05 International Response Nato Eu (Markdown document)"
+    },
+    {
+      "path": "tasks/russia_ukraine_war_feb2026/research_overview.md",
+      "description": "Research Overview (Markdown document)"
+    },
+    {
+      "path": "tasks/russia_ukraine_war_feb2026/refined_corpus.md",
+      "description": "Refined Corpus (Markdown document)"
+    }
+  ],
+  "subagent_results": [
+    {
+      "subagent_type": "research-specialist",
+      "summary": "## Research Complete\n\nI have successfully completed comprehensive research on the Russia-Ukraine war for the period **February 8-10, 2026**. Here's what was accomplished:\n\n### Step 1: Web Searches Exe"
+    },
+    {
+      "subagent_type": "report-writer",
+      "summary": "Perfect! The comprehensive HTML report has been successfully generated.\n\n## Report Generated Successfully\n\n**Location**: `/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260210_06"
+    }
+  ],
+  "key_decisions": [],
+  "failed_approaches": [],
+  "tool_call_count": 9,
+  "execution_time_seconds": 299.829
+}

@@ -77,3 +77,18 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
     };
   });
 }
+
+export async function deleteSessionDirectoryEntry(sessionId: string): Promise<void> {
+  const sid = (sessionId || "").trim();
+  if (!sid) {
+    throw new Error("Session ID is required");
+  }
+  const res = await fetch(
+    `${API_BASE}/api/v1/ops/sessions/${encodeURIComponent(sid)}?confirm=true`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `Delete failed (${res.status})`);
+  }
+}

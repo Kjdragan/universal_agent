@@ -1,0 +1,51 @@
+{
+  "approvals": {
+    "approval_required_categories": [
+      "public_posting"
+    ],
+    "enabled": true,
+    "reminder_count": 1,
+    "timeout_hours": 111
+  },
+  "autonomy_mode": "yolo",
+  "created_at": 1770736063.0591838,
+  "email_whitelist": [
+    "gardragan@gmail.com",
+    "kelsey.scarlet@icloud.com",
+    "kevin.dragan@outlook.com",
+    "kevinjdragan@gmail.com",
+    "mthdragan@gmail.com"
+  ],
+  "hard_stops": {
+    "block_destructive_local_ops": true,
+    "block_public_posting": true,
+    "no_payments": true,
+    "outbound_email_whitelist_only": false
+  },
+  "identity_mode": "persona",
+  "limits": {
+    "max_runtime_seconds": 0,
+    "max_tool_calls": 0
+  },
+  "memory": {
+    "long_term_tag_allowlist": [],
+    "mode": "session_only",
+    "session_memory_enabled": true,
+    "tags": []
+  },
+  "notifications": {
+    "channels": [
+      "dashboard",
+      "email",
+      "telegram"
+    ],
+    "email_targets": [
+      "kevinjdragan@gmail.com"
+    ]
+  },
+  "session_id": "session_20260210_090741_4ebf9143",
+  "tool_profile": "full",
+  "updated_at": 1770736104.7518787,
+  "user_id": "pg-test-8c18facc-7f25-4693-918c-7252c15d36b2",
+  "version": 1
+}

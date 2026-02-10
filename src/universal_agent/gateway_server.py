@@ -58,6 +58,7 @@ from universal_agent.ops_config import (
     write_ops_config,
 )
 from universal_agent.approvals import list_approvals, update_approval, upsert_approval
+from universal_agent.hooks_service import HooksService
 from universal_agent.security_paths import (
     allow_external_workspaces_from_env,
     resolve_ops_log_path,
@@ -318,6 +319,7 @@ _session_runtime: dict[str, dict[str, Any]] = {}
 _heartbeat_service: Optional[HeartbeatService] = None
 _cron_service: Optional[CronService] = None
 _ops_service: Optional[OpsService] = None
+_hooks_service: Optional[HooksService] = None
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
@@ -2657,7 +2659,7 @@ async def lifespan(app: FastAPI):
     main_module.budget_config = main_module.load_budget_config()
     
     # Initialize Heartbeat Service
-    global _heartbeat_service, _cron_service, _ops_service
+    global _heartbeat_service, _cron_service, _ops_service, _hooks_service
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
         _heartbeat_service = HeartbeatService(
@@ -2685,6 +2687,11 @@ async def lifespan(app: FastAPI):
     
     # Always enabled Ops Service
     _ops_service = OpsService(get_gateway(), WORKSPACES_DIR)
+    
+    # Initialize Hooks Service
+    _hooks_service = HooksService(get_gateway())
+    logger.info("🪝 Hooks Service Initialized")
+
     if _scheduling_projection.enabled:
         _scheduling_projection.seed_from_runtime()
         logger.info("📈 Scheduling projection enabled (event-driven cron projection path)")
@@ -2748,6 +2755,13 @@ async def root():
             "health": "/api/v1/health",
         },
     }
+
+
+@app.post("/api/v1/hooks/{subpath:path}")
+async def hooks_endpoint(request: Request, subpath: str):
+    if not _hooks_service:
+        raise HTTPException(status_code=503, detail="Hooks service not initialized")
+    return await _hooks_service.handle_request(request, subpath)
 
 
 @app.get("/api/v1/health")

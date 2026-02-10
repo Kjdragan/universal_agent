@@ -1,0 +1,17 @@
+[
+  {
+    "entry_id": "79602f8e-3797-4ce9-87ed-9e6f54601ae4",
+    "timestamp": "2026-02-10T14:01:52.375997+00:00",
+    "source": "session_index",
+    "session_id": "f5ffd483-c087-4250-a81d-f53bcdaa7a95",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:f5ffd483-c087-4250-a81d-f53bcdaa7a95"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-10 08:01:50**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c47db82e038201cecca3b3b873795` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/f5ffd483-c087-4250-a81d-f53bcdaa7a95_2026-02-10.md",
+    "content_hash": "4aa55074b177c2589931959aaab1d09dfc6875ce99600bc94ae0f6604b9e91ca"
+  }
+]
