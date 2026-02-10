@@ -178,6 +178,9 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
     setLoading(true);
     try {
       const r = await fetch(`${API_BASE}/api/v1/ops/sessions`, { headers: buildHeaders() });
+      if (!r.ok) {
+        throw new Error(`Ops sessions fetch failed (${r.status})`);
+      }
       const d = await r.json(); const ns = d.sessions || [];
       setSessions(ns);
       if (ns.length > 0) setSelected((p) => p ?? ns[0].session_id);
@@ -186,7 +189,14 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const fetchSkills = useCallback(async () => {
-    try { const r = await fetch(`${API_BASE}/api/v1/ops/skills`, { headers: buildHeaders() }); const d = await r.json(); setSkills(d.skills || []); }
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/skills`, { headers: buildHeaders() });
+      if (!r.ok) {
+        throw new Error(`Ops skills fetch failed (${r.status})`);
+      }
+      const d = await r.json();
+      setSkills(d.skills || []);
+    }
     catch (e) { console.error("Ops skills fetch failed", e); }
   }, []);
 
@@ -361,8 +371,20 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
 
   const loadOpsSchema = useCallback(async () => {
     setOpsSchemaStatus("Loading...");
-    try { const r = await fetch(`${API_BASE}/api/v1/ops/config/schema`, { headers: buildHeaders() }); if (!r.ok) throw new Error(`Schema load failed (${r.status})`); const d = await r.json(); setOpsSchemaText(JSON.stringify(d.schema || {}, null, 2)); setOpsSchemaStatus("Loaded"); }
-    catch (e) { console.error("Ops schema fetch failed", e); setOpsSchemaStatus("Load failed"); }
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/config/schema`, { headers: buildHeaders() });
+      if (!r.ok) {
+        setOpsSchemaText("{}");
+        setOpsSchemaStatus(`Unavailable (${r.status})`);
+        return;
+      }
+      const d = await r.json();
+      setOpsSchemaText(JSON.stringify(d.schema || {}, null, 2));
+      setOpsSchemaStatus("Loaded");
+    } catch {
+      setOpsSchemaText("{}");
+      setOpsSchemaStatus("Unavailable");
+    }
   }, []);
 
   const loadOpsConfig = useCallback(async () => {

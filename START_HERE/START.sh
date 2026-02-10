@@ -19,7 +19,7 @@ case "$choice" in
     ./start_cli_dev.sh
     ;;
   2)
-    ./start_gateway.sh
+    ./start_gateway.sh --browser chrome
     ;;
   3)
     echo "⚠️  Advanced mode: requires gnome-terminal and is best for diagnostics."

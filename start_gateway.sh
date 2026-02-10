@@ -13,6 +13,8 @@
 #   ./start_gateway.sh              # Gateway + Web UI
 #   ./start_gateway.sh --server     # Gateway server only (for CLI testing)
 #   ./start_gateway.sh --ui         # Web UI only (assumes gateway already running)
+#   ./start_gateway.sh --browser chrome|firefox|default|none
+#   ./start_gateway.sh --no-browser # Disable auto-open
 #
 # CLI client (separate terminal):
 #   UA_GATEWAY_URL=http://localhost:8002 ./start_cli_dev.sh
@@ -70,8 +72,150 @@ fi
 if [ -z "$UA_GATEWAY_URL" ]; then
     export UA_GATEWAY_URL="http://localhost:${UA_GATEWAY_PORT}"
 fi
+# Explicit dashboard proxy target (used by Next.js server route).
+export UA_DASHBOARD_GATEWAY_URL="http://localhost:${UA_GATEWAY_PORT}"
 
-MODE="${1:-full}"
+MODE="full"
+BROWSER_PREF="${UA_START_BROWSER:-chrome}"
+AUTO_OPEN_BROWSER=1
+
+print_usage() {
+    cat <<'EOF'
+Usage: ./start_gateway.sh [mode] [options]
+
+Modes:
+  full (default)      Start gateway + api + web ui
+  --server            Start gateway only
+  --ui                Start api + web ui (expects running gateway)
+  --clean             Archive runtime/session state and exit
+  --clean-start       Clean runtime/session state, then start full stack
+
+Options:
+  --browser <name>    Browser target: chrome | firefox | default | none
+  --browser=<name>    Same as above
+  --no-browser        Disable browser auto-open
+  --help              Show this help
+EOF
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        full|--server|--ui|--clean|--clean-start)
+            MODE="$1"
+            shift
+            ;;
+        --browser)
+            if [ -z "${2:-}" ]; then
+                echo "❌ Missing value for --browser"
+                print_usage
+                exit 1
+            fi
+            BROWSER_PREF="$2"
+            shift 2
+            ;;
+        --browser=*)
+            BROWSER_PREF="${1#*=}"
+            shift
+            ;;
+        --no-browser)
+            AUTO_OPEN_BROWSER=0
+            shift
+            ;;
+        --help|-h)
+            print_usage
+            exit 0
+            ;;
+        *)
+            echo "❌ Unknown argument: $1"
+            print_usage
+            exit 1
+            ;;
+    esac
+done
+
+BROWSER_PREF="$(echo "$BROWSER_PREF" | tr '[:upper:]' '[:lower:]')"
+case "$BROWSER_PREF" in
+    chrome|firefox|default|none)
+        ;;
+    *)
+        echo "❌ Unsupported browser '$BROWSER_PREF'. Use chrome, firefox, default, or none."
+        exit 1
+        ;;
+esac
+
+is_graphical_session() {
+    [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]
+}
+
+launch_browser_url() {
+    local url="$1"
+    local cmd=""
+
+    if [ "$AUTO_OPEN_BROWSER" -ne 1 ]; then
+        return 0
+    fi
+    if [ "$BROWSER_PREF" = "none" ]; then
+        return 0
+    fi
+    if ! is_graphical_session; then
+        echo "ℹ️  Skipping browser launch (no graphical session detected)."
+        return 0
+    fi
+
+    case "$BROWSER_PREF" in
+        chrome)
+            for candidate in google-chrome google-chrome-stable chromium-browser chromium; do
+                if command -v "$candidate" >/dev/null 2>&1; then
+                    cmd="$candidate"
+                    break
+                fi
+            done
+            if [ -z "$cmd" ]; then
+                echo "⚠️  Chrome not found. Falling back to system default browser."
+                cmd="xdg-open"
+            fi
+            ;;
+        firefox)
+            if command -v firefox >/dev/null 2>&1; then
+                cmd="firefox"
+            else
+                echo "⚠️  Firefox not found. Falling back to system default browser."
+                cmd="xdg-open"
+            fi
+            ;;
+        default)
+            cmd="xdg-open"
+            ;;
+    esac
+
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "⚠️  Unable to launch browser automatically ('$cmd' not available)."
+        return 0
+    fi
+
+    echo "🌐 Opening dashboard: $url (browser: $BROWSER_PREF)"
+    nohup "$cmd" "$url" >/dev/null 2>&1 &
+}
+
+schedule_browser_open() {
+    local url="$1"
+
+    if [ "$AUTO_OPEN_BROWSER" -ne 1 ] || [ "$BROWSER_PREF" = "none" ]; then
+        return 0
+    fi
+
+    (
+        for _ in $(seq 1 90); do
+            if curl -fsS "$url" >/dev/null 2>&1; then
+                launch_browser_url "$url"
+                exit 0
+            fi
+            sleep 1
+        done
+        echo "⚠️  Web UI did not become reachable in time; skipped browser auto-open."
+    ) &
+    BROWSER_WAIT_PID=$!
+}
 
 run_gateway_foreground() {
     if [ "$(id -u)" -eq 0 ] && id -u appuser >/dev/null 2>&1; then
@@ -98,6 +242,7 @@ cleanup() {
     echo "🛑 Shutting down..."
     [ -n "$GATEWAY_PID" ] && kill $GATEWAY_PID 2>/dev/null
     [ -n "$API_PID" ] && kill $API_PID 2>/dev/null
+    [ -n "$BROWSER_WAIT_PID" ] && kill $BROWSER_WAIT_PID 2>/dev/null
     fuser -k "${UA_GATEWAY_PORT}"/tcp 2>/dev/null
     fuser -k 8001/tcp 2>/dev/null
     fuser -k 3000/tcp 2>/dev/null
@@ -209,6 +354,7 @@ start_full_stack() {
     echo "   Use Ctrl+C to stop all services."
     echo ""
     if [ -d "web-ui" ] && command -v npm >/dev/null 2>&1; then
+        schedule_browser_open "http://localhost:3000/dashboard"
         cd web-ui
         npm run dev
     else
@@ -281,6 +427,7 @@ case "$MODE" in
         # Start Web UI (optional)
         echo "💻 Starting Web UI (Port 3000)..."
         if [ -d "web-ui" ] && command -v npm >/dev/null 2>&1; then
+            schedule_browser_open "http://localhost:3000/dashboard"
             cd web-ui
             npm run dev
         else
