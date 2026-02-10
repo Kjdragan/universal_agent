@@ -1,12 +1,22 @@
 
-import pytest
+import base64
+import hashlib
+import hmac
 import json
 import asyncio
+import time
+import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from pathlib import Path
 
-from fastapi import Request, Response
-from universal_agent.hooks_service import HooksService, HooksConfig, HookMappingConfig, HookMatchConfig, HookAction, HookTransformConfig
+from fastapi import Request
+from universal_agent.hooks_service import (
+    HookAuthConfig,
+    HookMappingConfig,
+    HookMatchConfig,
+    HooksConfig,
+    HooksService,
+    HookTransformConfig,
+)
 from universal_agent.gateway import InProcessGateway, GatewaySession
 
 @pytest.fixture
@@ -60,6 +70,8 @@ async def test_disabled_service(hooks_service):
 async def test_unauthorized(hooks_service):
     request = MagicMock(spec=Request)
     request.headers = {}
+    request.body = AsyncMock(return_value=b"{}")
+    request.query_params = {}
     
     response = await hooks_service.handle_request(request, "test")
     assert response.status_code == 401
@@ -132,6 +144,48 @@ async def test_no_match(hooks_service):
     assert response.status_code == 404
 
 @pytest.mark.asyncio
+async def test_header_match_success(hooks_service):
+    hooks_service.config.mappings = [
+        HookMappingConfig(
+            id="header-hook",
+            match=HookMatchConfig(path="test", headers={"x-event-type": "push"}),
+            action="wake",
+            text_template="ok",
+        )
+    ]
+    request = MagicMock(spec=Request)
+    request.headers = {
+        "Authorization": "Bearer secret-token",
+        "X-Event-Type": "push",
+    }
+    request.body = AsyncMock(return_value=b'{}')
+    request.query_params = {}
+
+    response = await hooks_service.handle_request(request, "test")
+    assert response.status_code == 202
+
+@pytest.mark.asyncio
+async def test_header_match_failure(hooks_service):
+    hooks_service.config.mappings = [
+        HookMappingConfig(
+            id="header-hook",
+            match=HookMatchConfig(path="test", headers={"x-event-type": "push"}),
+            action="wake",
+            text_template="ok",
+        )
+    ]
+    request = MagicMock(spec=Request)
+    request.headers = {
+        "Authorization": "Bearer secret-token",
+        "X-Event-Type": "pull_request",
+    }
+    request.body = AsyncMock(return_value=b'{}')
+    request.query_params = {}
+
+    response = await hooks_service.handle_request(request, "test")
+    assert response.status_code == 404
+
+@pytest.mark.asyncio
 async def test_template_rendering(hooks_service):
     context = {
         "payload": {"user": {"name": "Alice"}},
@@ -172,3 +226,191 @@ def transform(ctx):
     
     assert action is None
 
+def _composio_signature(secret: str, webhook_id: str, webhook_timestamp: str, body: bytes) -> str:
+    signing_string = f"{webhook_id}.{webhook_timestamp}.{body.decode('utf-8')}"
+    digest = hmac.new(secret.encode("utf-8"), signing_string.encode("utf-8"), hashlib.sha256).digest()
+    return f"v1,{base64.b64encode(digest).decode('utf-8')}"
+
+@pytest.mark.asyncio
+async def test_composio_hmac_valid(mock_gateway):
+    config = HooksConfig(
+        enabled=True,
+        token=None,
+        mappings=[
+            HookMappingConfig(
+                id="composio",
+                match=HookMatchConfig(path="composio"),
+                auth=HookAuthConfig(strategy="composio_hmac"),
+                action="wake",
+                text_template="ok",
+            )
+        ],
+    )
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway)
+        service.config = config
+
+    secret = "test-composio-secret"
+    webhook_id = "msg_123"
+    webhook_timestamp = str(int(time.time()))
+    body = b'{"type":"composio.trigger.message","data":{"x":1}}'
+
+    request = MagicMock(spec=Request)
+    request.headers = {
+        "webhook-id": webhook_id,
+        "webhook-timestamp": webhook_timestamp,
+        "webhook-signature": _composio_signature(secret, webhook_id, webhook_timestamp, body),
+    }
+    request.body = AsyncMock(return_value=body)
+    request.query_params = {}
+
+    with patch.dict("os.environ", {"COMPOSIO_WEBHOOK_SECRET": secret}, clear=False):
+        response = await service.handle_request(request, "composio")
+
+    assert response.status_code == 202
+
+@pytest.mark.asyncio
+async def test_composio_hmac_invalid_signature(mock_gateway):
+    config = HooksConfig(
+        enabled=True,
+        token=None,
+        mappings=[
+            HookMappingConfig(
+                id="composio",
+                match=HookMatchConfig(path="composio"),
+                auth=HookAuthConfig(strategy="composio_hmac"),
+                action="wake",
+                text_template="ok",
+            )
+        ],
+    )
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway)
+        service.config = config
+
+    body = b'{"type":"composio.trigger.message","data":{"x":1}}'
+    request = MagicMock(spec=Request)
+    request.headers = {
+        "webhook-id": "msg_123",
+        "webhook-timestamp": str(int(time.time())),
+        "webhook-signature": "v1,not-valid",
+    }
+    request.body = AsyncMock(return_value=body)
+    request.query_params = {}
+
+    with patch.dict("os.environ", {"COMPOSIO_WEBHOOK_SECRET": "test-composio-secret"}, clear=False):
+        response = await service.handle_request(request, "composio")
+
+    assert response.status_code == 401
+
+@pytest.mark.asyncio
+async def test_composio_hmac_replay_rejected(mock_gateway):
+    config = HooksConfig(
+        enabled=True,
+        token=None,
+        mappings=[
+            HookMappingConfig(
+                id="composio",
+                match=HookMatchConfig(path="composio"),
+                auth=HookAuthConfig(strategy="composio_hmac", replay_window_seconds=600),
+                action="wake",
+                text_template="ok",
+            )
+        ],
+    )
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway)
+        service.config = config
+
+    secret = "test-composio-secret"
+    webhook_id = "msg_abc"
+    webhook_timestamp = str(int(time.time()))
+    body = b'{"type":"composio.trigger.message","data":{"x":1}}'
+    signature = _composio_signature(secret, webhook_id, webhook_timestamp, body)
+
+    request1 = MagicMock(spec=Request)
+    request1.headers = {
+        "webhook-id": webhook_id,
+        "webhook-timestamp": webhook_timestamp,
+        "webhook-signature": signature,
+    }
+    request1.body = AsyncMock(return_value=body)
+    request1.query_params = {}
+
+    request2 = MagicMock(spec=Request)
+    request2.headers = dict(request1.headers)
+    request2.body = AsyncMock(return_value=body)
+    request2.query_params = {}
+
+    with patch.dict("os.environ", {"COMPOSIO_WEBHOOK_SECRET": secret}, clear=False):
+        first = await service.handle_request(request1, "composio")
+        second = await service.handle_request(request2, "composio")
+
+    assert first.status_code == 202
+    assert second.status_code == 401
+
+@pytest.mark.asyncio
+async def test_composio_hmac_timestamp_skew_rejected(mock_gateway):
+    config = HooksConfig(
+        enabled=True,
+        token=None,
+        mappings=[
+            HookMappingConfig(
+                id="composio",
+                match=HookMatchConfig(path="composio"),
+                auth=HookAuthConfig(strategy="composio_hmac", timestamp_tolerance_seconds=60),
+                action="wake",
+                text_template="ok",
+            )
+        ],
+    )
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway)
+        service.config = config
+
+    secret = "test-composio-secret"
+    webhook_id = "msg_old"
+    webhook_timestamp = str(int(time.time()) - 3600)
+    body = b'{"type":"composio.trigger.message","data":{"x":1}}'
+    signature = _composio_signature(secret, webhook_id, webhook_timestamp, body)
+
+    request = MagicMock(spec=Request)
+    request.headers = {
+        "webhook-id": webhook_id,
+        "webhook-timestamp": webhook_timestamp,
+        "webhook-signature": signature,
+    }
+    request.body = AsyncMock(return_value=body)
+    request.query_params = {}
+
+    with patch.dict("os.environ", {"COMPOSIO_WEBHOOK_SECRET": secret}, clear=False):
+        response = await service.handle_request(request, "composio")
+
+    assert response.status_code == 401
+
+@pytest.mark.asyncio
+async def test_token_strategy_allows_open_mapping_when_token_not_configured(mock_gateway):
+    config = HooksConfig(
+        enabled=True,
+        token=None,
+        mappings=[
+            HookMappingConfig(
+                id="open",
+                match=HookMatchConfig(path="open"),
+                auth=HookAuthConfig(strategy="token"),
+                action="wake",
+                text_template="ok",
+            )
+        ],
+    )
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway)
+        service.config = config
+
+    request = MagicMock(spec=Request)
+    request.headers = {}
+    request.body = AsyncMock(return_value=b"{}")
+    request.query_params = {}
+
+    response = await service.handle_request(request, "open")
+    assert response.status_code == 202

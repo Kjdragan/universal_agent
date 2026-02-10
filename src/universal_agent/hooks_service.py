@@ -1,13 +1,17 @@
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import importlib.util
 import json
 import logging
 import os
-import sys
 import re
+import sys
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Dict, List, Optional
 
 from fastapi import Request, Response
 from pydantic import BaseModel, Field
@@ -29,12 +33,19 @@ class HookTransformConfig(BaseModel):
     module: str
     export: Optional[str] = None
 
+class HookAuthConfig(BaseModel):
+    strategy: str = "token"  # token | composio_hmac | none
+    secret_env: Optional[str] = None
+    timestamp_tolerance_seconds: int = 300
+    replay_window_seconds: int = 600
+
 class HookMappingConfig(BaseModel):
     id: Optional[str] = None
     match: Optional[HookMatchConfig] = None
     action: str = "agent"  # "wake" or "agent"
     wake_mode: str = "now"
     transform: Optional[HookTransformConfig] = None
+    auth: Optional[HookAuthConfig] = None
     message_template: Optional[str] = None
     text_template: Optional[str] = None
     name: Optional[str] = None
@@ -74,6 +85,7 @@ class HooksService:
         self.gateway = gateway
         self.config = self._load_config()
         self.transform_cache = {}
+        self._seen_webhook_ids: Dict[str, float] = {}
 
     def _load_config(self) -> HooksConfig:
         ops_config = load_ops_config()
@@ -93,11 +105,6 @@ class HooksService:
     async def handle_request(self, request: Request, subpath: str) -> Response:
         if not self.config.enabled:
             return Response("Hooks disabled", status_code=404)
-
-        # Auth check
-        token = self._extract_token(request)
-        if not token or token != self.config.token:
-            return Response("Unauthorized", status_code=401)
         
         # Read body
         try:
@@ -115,22 +122,46 @@ class HooksService:
             return Response(f"Error reading body: {str(e)}", status_code=400)
 
         # Context for matching/templating
+        headers = {k.lower(): v for k, v in request.headers.items()}
         context = {
             "payload": payload,
-            "headers": dict(request.headers),
+            "headers": headers,
             "path": subpath,
-            "query": dict(request.query_params)
+            "query": dict(request.query_params),
+            "raw_body": body_bytes,
+            "raw_body_text": body_bytes.decode("utf-8", errors="replace"),
         }
 
         # Match and dispatch
         try:
+            matched = False
+            auth_failed = False
             for mapping in self.config.mappings:
-                if self._mapping_matches(mapping, context):
-                    action = await self._build_action(mapping, context)
-                    if action:
-                        asyncio.create_task(self._dispatch_action(action))
-                        return Response(json.dumps({"ok": True, "action": action.kind}), media_type="application/json", status_code=202)
+                if not self._mapping_matches(mapping, context):
+                    continue
+
+                matched = True
+                if not self._authenticate_request(mapping, request, context):
+                    auth_failed = True
+                    continue
+
+                action = await self._build_action(mapping, context)
+                if action is None:
+                    return Response(
+                        json.dumps({"ok": True, "skipped": True}),
+                        media_type="application/json",
+                        status_code=202,
+                    )
+
+                asyncio.create_task(self._dispatch_action(action))
+                return Response(
+                    json.dumps({"ok": True, "action": action.kind}),
+                    media_type="application/json",
+                    status_code=202,
+                )
             
+            if matched and auth_failed:
+                return Response("Unauthorized", status_code=401)
             return Response("No matching hook found", status_code=404)
         except Exception as e:
             logger.exception("Error processing hook")
@@ -150,8 +181,83 @@ class HooksService:
                 payload_source = context["payload"].get("source")
                 if payload_source != mapping.match.source:
                     return False
-             # Add header matching if needed
+
+            if mapping.match.headers:
+                headers = context.get("headers", {})
+                for expected_header, expected_value in mapping.match.headers.items():
+                    actual_value = headers.get(expected_header.lower())
+                    if actual_value is None:
+                        return False
+                    if str(actual_value) != str(expected_value):
+                        return False
         return True
+
+    def _authenticate_request(self, mapping: HookMappingConfig, request: Request, context: Dict) -> bool:
+        auth = mapping.auth or HookAuthConfig()
+        strategy = (auth.strategy or "token").strip().lower()
+
+        if strategy == "none":
+            return True
+        if strategy == "composio_hmac":
+            return self._verify_composio_hmac(context, auth)
+
+        # default: token strategy
+        if not self.config.token:
+            # Explicitly allow open webhook mappings when no token is configured.
+            return True
+        token = self._extract_token(request)
+        return bool(token and token == self.config.token)
+
+    def _verify_composio_hmac(self, context: Dict, auth: HookAuthConfig) -> bool:
+        headers = context.get("headers", {})
+        signature = headers.get("webhook-signature") or headers.get("x-composio-signature")
+        webhook_id = headers.get("webhook-id")
+        webhook_timestamp_raw = headers.get("webhook-timestamp")
+        secret_env = auth.secret_env or "COMPOSIO_WEBHOOK_SECRET"
+        secret = os.getenv(secret_env)
+
+        if not signature or not webhook_id or not webhook_timestamp_raw or not secret:
+            return False
+
+        received_sig = signature.strip()
+        if received_sig.lower().startswith("v1,"):
+            received_sig = received_sig.split(",", 1)[1].strip()
+        if not received_sig:
+            return False
+
+        try:
+            webhook_timestamp = int(webhook_timestamp_raw)
+        except (TypeError, ValueError):
+            return False
+
+        now = int(time.time())
+        if abs(now - webhook_timestamp) > auth.timestamp_tolerance_seconds:
+            return False
+
+        self._cleanup_seen_webhook_ids(now)
+        if webhook_id in self._seen_webhook_ids:
+            return False
+
+        raw_body_text = context.get("raw_body_text", "")
+        signing_string = f"{webhook_id}.{webhook_timestamp_raw}.{raw_body_text}"
+        expected_sig = base64.b64encode(
+            hmac.new(
+                secret.encode("utf-8"),
+                signing_string.encode("utf-8"),
+                hashlib.sha256,
+            ).digest()
+        ).decode("utf-8")
+
+        if not hmac.compare_digest(received_sig, expected_sig):
+            return False
+
+        self._seen_webhook_ids[webhook_id] = float(now + auth.replay_window_seconds)
+        return True
+
+    def _cleanup_seen_webhook_ids(self, now_epoch: int) -> None:
+        expired = [wid for wid, exp in self._seen_webhook_ids.items() if exp <= now_epoch]
+        for wid in expired:
+            self._seen_webhook_ids.pop(wid, None)
 
     async def _build_action(self, mapping: HookMappingConfig, context: Dict) -> Optional[HookAction]:
         # base action
@@ -318,4 +424,3 @@ class HooksService:
                      
              except Exception as e:
                  logger.error(f"Failed to dispatch to agent: {e}")
-

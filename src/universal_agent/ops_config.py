@@ -110,6 +110,19 @@ def ops_config_schema() -> dict[str, Any]:
                                         "export": {"type": "string"},
                                     }
                                 },
+                                "auth": {
+                                    "type": "object",
+                                    "properties": {
+                                        "strategy": {
+                                            "type": "string",
+                                            "enum": ["token", "composio_hmac", "none"],
+                                        },
+                                        "secret_env": {"type": "string"},
+                                        "timestamp_tolerance_seconds": {"type": "integer"},
+                                        "replay_window_seconds": {"type": "integer"},
+                                    },
+                                    "additionalProperties": True,
+                                },
                                 "message_template": {"type": "string"},
                                 "text_template": {"type": "string"},
                             },
