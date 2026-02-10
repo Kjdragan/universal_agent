@@ -149,7 +149,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           <div className="mb-4 border-b border-slate-800 pb-3">
             <div className="relative h-12 w-48 mb-2">
               <Image
-                src="/simon_logo.png"
+                src="/simon_logo_v2.png"
                 alt="Simon"
                 fill
                 className="object-contain object-left"

@@ -1,0 +1,306 @@
+Bird CLI + /last30days Skill Setup Guide
+Complete guide for setting up Bird CLI and the /last30days Claude Code skill with proper authentication.
+
+Prerequisites
+
+Node.js/npm installed
+Claude Code installed
+Access to X/Twitter account
+OpenAI API key (or compatible API like Z.ai)
+
+
+Part 1: Install Bird CLI
+1. Install Bird via npm
+bashnpm install -g @steipete/bird
+2. Authenticate Bird with X/Twitter
+Bird uses cookie extraction from your browser. You need to be logged into X/Twitter in Chrome or Firefox.
+Option A: Extract Cookies Manually (Recommended)
+Step 1: Get your cookies while Chrome is running
+bash# Install sqlite3 if not already installed
+sudo apt install sqlite3
+
+# Check if you're logged into X in Chrome
+google-chrome https://x.com
+
+# In a terminal, extract the cookie values
+# Close Chrome first to unlock the database
+pkill -9 chrome
+sleep 2
+
+# Extract auth_token
+sqlite3 ~/.config/google-chrome/Default/Cookies "SELECT value FROM cookies WHERE name='auth_token' AND host_key='.x.com';"
+
+# Extract ct0
+sqlite3 ~/.config/google-chrome/Default/Cookies "SELECT value FROM cookies WHERE name='ct0' AND host_key='.x.com';"
+Step 2: Set environment variables
+bash# Add to .bashrc (replace with your actual cookie values)
+cat >> ~/.bashrc << 'EOF'
+# Bird CLI authentication
+export AUTH_TOKEN="your_auth_token_value_here"
+export CT0="your_ct0_value_here"
+EOF
+
+# Reload shell
+source ~/.bashrc
+Step 3: Verify Bird works
+bash# Test authentication
+bird whoami
+
+# Should show your X/Twitter username and account info
+Option B: Alternative Cookie Extraction via DevTools
+If the sqlite3 method doesn't work:
+
+Open Chrome and go to https://x.com (make sure you're logged in)
+Press F12 to open DevTools
+Go to: Application → Cookies → https://x.com
+Find auth_token - right-click the Value → Copy
+Find ct0 - right-click the Value → Copy
+Use the values in the export commands above
+
+
+Part 2: Install /last30days Skill
+1. Clone the Repository
+bash# Clone to Claude Code skills directory
+git clone https://github.com/mvanhorn/last30days-skill.git ~/.claude/skills/last30days
+2. Configure API Keys
+Create the config directory and .env file:
+bash# Create config directory
+mkdir -p ~/.config/last30days
+
+# Create .env file with your API keys
+cat > ~/.config/last30days/.env << 'EOF'
+# OpenAI API key (required for Reddit search)
+OPENAI_API_KEY=your_openai_key_here
+
+# Optional: xAI API key for paid X search (if not using Bird CLI)
+# XAI_API_KEY=xai-your-key-here
+EOF
+
+# Secure the file
+chmod 600 ~/.config/last30days/.env
+3. Add Bird CLI Environment Variables to .env
+IMPORTANT: The /last30days skill needs to access the same Bird CLI credentials. Add them to the .env file:
+bash# Add Bird CLI credentials to the skill's config
+cat >> ~/.config/last30days/.env << 'EOF'
+
+# Bird CLI authentication (for free X/Twitter search)
+AUTH_TOKEN=your_auth_token_value_here
+CT0=your_ct0_value_here
+EOF
+Complete .env file should look like:
+bash# OpenAI API key (required for Reddit search)
+OPENAI_API_KEY=sk-your-key-here
+
+# Bird CLI authentication (for free X/Twitter search)
+AUTH_TOKEN=08e802c4221f08a9e1ffc6e05a447d9d8918196f
+CT0=3344fa9a85bc5ec1023b63d6fe959932b643c780a011c0ee2b1e4323afa917f894aa001be2bea05016193fbb0f62c2b302a0a8df8dca1165bca9668ee5d9a82b3925fa7e243980cf3806995c9bbff875
+
+# Optional: xAI API key (if not using Bird CLI)
+# XAI_API_KEY=xai-your-key-here
+4. Verify .env File
+bash# Check the file exists and has correct permissions
+ls -la ~/.config/last30days/.env
+
+# Should show: -rw------- (600 permissions)
+
+# View contents (verify your keys are there)
+cat ~/.config/last30days/.env
+
+Part 3: Fix the API Errors
+Based on your error messages, here's what needs to be fixed:
+Error 1: OpenAI API 401 Unauthorized
+[REDDIT ERROR] OpenAI API error: HTTP 401: Unauthorized
+Cause: Your OpenAI API key in .env is invalid or expired.
+Fix:
+bash# Edit the .env file
+nano ~/.config/last30days/.env
+
+# Update the OPENAI_API_KEY line with a valid key
+# If using Z.ai (as shown in your earlier setup):
+OPENAI_API_KEY=d747f216d4434754af9ff1672ecf261f.ISELcv9prVdsewyj
+
+# Or get a new OpenAI key from: https://platform.openai.com/api-keys
+
+# Save and exit (Ctrl+X, then Y, then Enter)
+Error 2: No X/Twitter Data
+💡 Tip: For X/Twitter data with real likes & reposts:
+   FREE: npm install -g @steipete/bird (uses browser session)
+Cause: Bird CLI credentials are not available to the skill.
+Fix: You already added AUTH_TOKEN and CT0 to the .env file in step 3 above. Verify they're there:
+bash# Check if Bird credentials are in the .env file
+grep -E "AUTH_TOKEN|CT0" ~/.config/last30days/.env
+
+# Should show both variables with values
+
+Part 4: Test the Setup
+1. Test Bird CLI Standalone
+bash# Should work from terminal
+bird whoami
+bird search "test query" -n 3
+2. Test /last30days in Claude Code
+Open Claude Code and try:
+/last30days What are the best rap songs lately
+Expected behavior:
+
+Should search Reddit (if OpenAI key is valid)
+Should search X/Twitter (if Bird credentials are in .env)
+Should provide synthesized results
+
+3. Check for Specific Issues
+If it still doesn't work, check:
+bash# Verify Bird can be found by the skill
+which bird
+
+# Should output: /usr/local/bin/bird or similar
+
+# Check if environment variables are exported
+env | grep -E "AUTH_TOKEN|CT0"
+
+# Should show both variables with values
+
+Complete .env File Template
+Here's what your ~/.config/last30days/.env should contain:
+bash# ============================================
+# /last30days Skill Configuration
+# ============================================
+
+# ----------------
+# OpenAI API (Required for Reddit search)
+# ----------------
+# Get from: https://platform.openai.com/api-keys
+# Or use Z.ai compatible endpoint
+OPENAI_API_KEY=your_openai_key_here
+
+# Optional: If using Z.ai or other OpenAI-compatible API
+# OPENAI_BASE_URL=https://api.z.ai/api/paas/v4
+
+# ----------------
+# X/Twitter Search (Choose one method)
+# ----------------
+
+# Method 1: Bird CLI (Free - Recommended)
+# Get these from Chrome cookies (see instructions above)
+AUTH_TOKEN=your_auth_token_from_chrome
+CT0=your_ct0_token_from_chrome
+
+# Method 2: xAI API (Paid alternative to Bird)
+# Get from: https://console.x.ai/
+# XAI_API_KEY=xai-your-key-here
+
+# ============================================
+# Notes:
+# - At least one of (Bird CLI credentials OR xAI key) required for X search
+# - Bird CLI is preferred (free, no rate limits)
+# - OpenAI key is required for Reddit search
+# ============================================
+
+Troubleshooting
+Issue: "REDDIT ERROR: HTTP 401: Unauthorized"
+Solution:
+
+Check your OpenAI API key is valid
+If using Z.ai, make sure OPENAI_BASE_URL is set correctly
+Verify the key has credits/quota remaining
+
+bash# Test your OpenAI key directly
+curl https://api.openai.com/v1/models \
+  -H "Authorization: Bearer YOUR_OPENAI_API_KEY"
+
+# Should return a list of models, not an error
+Issue: "No X/Twitter data"
+Solution:
+
+Verify Bird CLI works standalone: bird whoami
+Check AUTH_TOKEN and CT0 are in ~/.config/last30days/.env
+Make sure the values are not wrapped in quotes in .env (or use single quotes)
+
+bash# Good:
+AUTH_TOKEN=abc123def456
+# Or:
+AUTH_TOKEN='abc123def456'
+
+# Bad:
+AUTH_TOKEN="abc123def456"  # May cause issues
+Issue: Bird says "database is locked"
+Solution: Close Chrome before extracting cookies
+bashpkill -9 chrome
+sleep 2
+# Then run your sqlite3 commands
+Issue: Cookies are encrypted
+Solution: Use the manual DevTools extraction method instead of sqlite3
+Issue: /last30days command not found in Claude Code
+Solution:
+
+Verify the skill is installed: ls -la ~/.claude/skills/last30days
+Restart Claude Code
+Check if other skills work (try /help or other slash commands)
+
+
+Quick Reference
+Bird CLI Commands
+bashbird whoami                    # Show authenticated account
+bird search "query" -n 10      # Search tweets
+bird --version                 # Check version
+/last30days Commands (in Claude Code)
+bash/last30days [topic]                    # Basic research
+/last30days [topic] --days=7           # Last 7 days only
+/last30days [topic] --quick            # Faster, fewer sources
+/last30days [topic] --deep             # More comprehensive
+/last30days [topic] --sources=reddit   # Reddit only
+/last30days [topic] --sources=x        # X/Twitter only
+Important File Paths
+
+Bird config: ~/.config/bird/config.json5 (optional)
+Bird credentials: ~/.bashrc (AUTH_TOKEN and CT0 exports)
+Skill config: ~/.config/last30days/.env
+Skill location: ~/.claude/skills/last30days
+Chrome cookies: ~/.config/google-chrome/Default/Cookies
+
+
+Summary of What You Need
+✅ For Reddit search:
+
+Valid OpenAI API key in ~/.config/last30days/.env
+
+✅ For X/Twitter search (choose one):
+
+Option A: Bird CLI installed + AUTH_TOKEN and CT0 in both ~/.bashrc AND ~/.config/last30days/.env
+Option B: xAI API key in ~/.config/last30days/.env
+
+✅ For both to work:
+
+All credentials in ~/.config/last30days/.env
+File permissions set to 600
+Claude Code restarted after configuration
+
+
+Testing Checklist
+Run through this checklist to verify everything works:
+
+ Bird CLI installed: bird --version
+ Bird authenticated: bird whoami shows your X username
+ Environment variables set: env | grep -E "AUTH_TOKEN|CT0" shows values
+ .env file exists: ls -la ~/.config/last30days/.env
+ .env file has OpenAI key: grep OPENAI_API_KEY ~/.config/last30days/.env
+ .env file has Bird credentials: grep -E "AUTH_TOKEN|CT0" ~/.config/last30days/.env
+ Skill installed: ls -la ~/.claude/skills/last30days
+ Test in Claude Code: /last30days test query
+
+If all checkboxes pass, the skill should work!
+
+Getting Help
+If you still have issues:
+
+Check the Bird CLI GitHub: https://github.com/steipete/bird
+Check the /last30days GitHub: https://github.com/mvanhorn/last30days-skill
+File an issue with:
+
+Output of bird whoami
+Output of env | grep -E "AUTH_TOKEN|CT0|OPENAI"
+Contents of ~/.config/last30days/.env (redact actual key values)
+Full error message from Claude Code
+
+
+
+
+Last updated: February 2026

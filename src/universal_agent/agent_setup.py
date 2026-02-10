@@ -356,7 +356,7 @@ class AgentSetup:
     def _build_options(self) -> ClaudeAgentOptions:
         """Build ClaudeAgentOptions with full configuration."""
         # Build system prompt
-        system_prompt = self._build_system_prompt()
+        system_prompt = self._build_system_prompt(self.workspace_dir)
         
         # Build MCP servers config
         mcp_servers = self._build_mcp_servers()
@@ -395,9 +395,20 @@ class AgentSetup:
             permission_mode="bypassPermissions",
         )
 
-    def _build_system_prompt(self) -> str:
-        """Build the full system prompt."""
-        # Get current date/time
+    def _build_system_prompt(self, workspace_path: str, agents: Optional[dict] = None) -> str:
+        """Build the main system prompt."""
+        
+        # Load the dynamic capabilities registry
+        capabilities_content = ""
+        try:
+            capabilities_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
+            if os.path.exists(capabilities_path):
+                with open(capabilities_path, "r", encoding="utf-8") as f:
+                    capabilities_content = f.read()
+        except Exception:
+            capabilities_content = "Capabilities registry not found."
+
+        # Get temporal context
         try:
             import pytz
             user_tz = pytz.timezone(os.getenv("USER_TIMEZONE", "America/Chicago"))
@@ -409,54 +420,10 @@ class AgentSetup:
 
         today_str = user_now.strftime("%A, %B %d, %Y")
         tomorrow_str = (user_now + timedelta(days=1)).strftime("%A, %B %d, %Y")
+        temporal_line = f"Current Date: {today_str}\nTomorrow is: {tomorrow_str}"
         
-        # Load the dynamic capabilities registry
-        capabilities_content = ""
-        try:
-            capabilities_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
-            if os.path.exists(capabilities_path):
-                with open(capabilities_path, "r", encoding="utf-8") as f:
-                    capabilities_content = f.read()
-        except Exception:
-            capabilities_content = "Capabilities registry not found."
-            
-        tool_knowledge_block = get_tool_knowledge_block()
-        
-        # Inject Soul if present
-        soul_section = f"\n\n{self._soul_context}\n\n" if self._soul_context else ""
-
-        artifacts_dir = os.path.abspath(
-            os.getenv(
-                "UA_ARTIFACTS_DIR",
-                str((Path(__file__).resolve().parent.parent.parent / "artifacts")),
-            )
-        )
-        fs_policy = (
-            "\nFILESYSTEM OUTPUT POLICY:\n"
-            f"- Ephemeral scratch workspace: CURRENT_SESSION_WORKSPACE={os.path.abspath(self.workspace_dir)}\n"
-            f"- Persistent artifacts root:   UA_ARTIFACTS_DIR={artifacts_dir}\n"
-            "- Default: write durable deliverables (docs/code/diagrams) under UA_ARTIFACTS_DIR.\n"
-            "- Use the session workspace for caches, downloads, and intermediate pipeline steps.\n"
-            "- For each artifact run, prefer: artifacts/<skill_name>/<YYYY-MM-DD>/<slug>__<HHMMSS>/\n"
-            "- Always write a small manifest.json in the artifact run directory.\n"
-            "- If something is safe to delete later, mark it as retention=temp in the manifest.\n"
-            "- When writing under UA_ARTIFACTS_DIR, prefer `mcp__internal__write_text_file` over native `Write`.\n"
-        )
-        
-        return (
-            f"{soul_section}"
-            f"Current Date: {today_str}\n"
-            f"Tomorrow is: {tomorrow_str}\n"
-            f"{self._memory_context}\n"
-            f"{tool_knowledge_block}\n"
-            f"{fs_policy}\n"
-            "TEMPORAL CONTEXT: Use the current date above as authoritative. "
-            "Do not treat post-training dates as hallucinations if they are supported by tool results. "
-            "If sources are older or dated, note that explicitly rather than dismissing them.\n\n"
-            "TIME WINDOW INTERPRETATION (MANDATORY):\n"
-            "- If the user says 'past N days', interpret this as a rolling window ending today.\n"
-            "- Prefer relative recency controls (e.g., `num_days`) over hardcoded historical dates.\n"
-            "- If absolute dates are mentioned in output, they must match the rolling window.\n\n"
+        prompt = (
+            f"{temporal_line}\n"
             "You are the **Universal Coordinator Agent**. You are a helpful, capable, and autonomous AI assistant.\n\n"
             "## 🧠 YOUR CAPABILITIES & SPECIALISTS\n"
             "You are not alone. You have access to a team of **Specialist Agents** and **Toolkits** organized by DOMAIN.\n"
@@ -486,8 +453,9 @@ class AgentSetup:
             "## 📧 EMAIL & COMMUNICATION\n"
             "- When sending emails, use `mcp__internal__upload_to_composio` to handle attachments.\n"
             "- Keep email bodies concise. Delegate drafting to the `scribe` or `writer` if needed.\n\n"
-            f"Context:\nCURRENT_SESSION_WORKSPACE: {self.workspace_dir}\n"
+            f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
         )
+        return prompt
 
     def _build_mcp_servers(self) -> dict:
         """Build MCP servers configuration."""
@@ -568,7 +536,7 @@ class AgentSetup:
         Organizes agents and tools by DOMAIN to support the Universal Coordinator architecture.
         """
         try:
-            lines = ["# 🧠 Agent Capabilities Registry", "", f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ""]
+            lines = ["<!-- Agent Capabilities Registry -->", "", f"<!-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} -->", ""]
             
             # --- DOMAIN DEFINITIONS ---
             domains = {
@@ -587,7 +555,7 @@ class AgentSetup:
                 return "🛠 General Tools"
 
             # 1. SPECIALIST AGENTS (Categorized)
-            lines.append("## 🤖 Specialist Agents (Micro-Agents)")
+            lines.append("### 🤖 Specialist Agents (Micro-Agents)")
             lines.append("Delegate full workflows to these specialists based on value-add.")
             
             agent_dirs = [
@@ -640,28 +608,61 @@ class AgentSetup:
                 agents_by_domain[domain].append((name, desc))
             
             for domain, agents in agents_by_domain.items():
-                lines.append(f"\n### {domain}")
+                lines.append(f"\n#### {domain}")
                 for name, desc in agents:
                     lines.append(f"- **{name}**: {desc}")
                     lines.append(f"  -> Delegate: `Task(subagent_type='{name}', ...)`")
 
             lines.append("")
 
-            # 2. SKILLS (SOPs)
-            lines.append("## 📚 Skills (Standard Operating Procedures)")
+            # 2. SKILLS (Standard Operating Procedures)
+            lines.append("### 📚 Standard Operating Procedures (Skills)")
+            lines.append("These organized guides are available to **ALL** agents and sub-agents. You should prioritize using these instead of improvising.")
+            lines.append("They represent the collective knowledge of the system. **Think about your capabilities** and how these guides can help you.")
+            lines.append("")
+            lines.append("**Progressive Disclosure**:")
+            lines.append("1. **Scan**: Read the YAML frontmatter below to identifying relevant skills.")
+            lines.append("2. **Read**: If a skill seems useful, use `mcp__internal__read_file` to read the full Markdown content (SOP).")
+            lines.append("3. **Execute**: Follow the procedure step-by-step.")
+            lines.append("")
+            
             if self.enable_skills and self._discovered_skills:
-                for skill in self._discovered_skills:
-                    if skill.get("enabled", True):
-                        lines.append(f"- **{skill['name']}**: {skill['description']}")
-                    else:
+                # Sort skills by name
+                sorted_skills = sorted(self._discovered_skills, key=lambda x: x["name"])
+                
+                for skill in sorted_skills:
+                    name = skill["name"]
+                    desc = skill["description"]
+                    path = skill["path"]
+                    is_enabled = skill.get("enabled", True)
+                    
+                    if not is_enabled:
                         reason = skill.get("disabled_reason", "Missing requirements")
-                        lines.append(f"- ~~**{skill['name']}**~~ (Unavailable: {reason})")
+                        lines.append(f"#### ~~{name}~~ (Unavailable)")
+                        lines.append(f"> **Reason**: {reason}")
+                        continue
+
+                    lines.append(f"#### {name}")
+                    lines.append(f"{desc}")
+                    lines.append(f"Source: `{path}`")
+                    
+                    # Dump Frontmatter to YAML block
+                    frontmatter = skill.get("frontmatter", {})
+                    # Clean up description from frontmatter if it's long, or just dump all
+                    try:
+                        yaml_str = yaml.dump(frontmatter, default_flow_style=False, sort_keys=False).strip()
+                        lines.append("```yaml")
+                        lines.append(yaml_str)
+                        lines.append("```")
+                    except Exception:
+                        pass
+                    lines.append("")
             else:
                 lines.append("- No skills discovered.")
             lines.append("")
 
             # 3. TOOLKITS (By Domain)
-            lines.append("## 🛠 Toolkits & Capabilities")
+            lines.append("### 🛠 Toolkits & Capabilities")
             
             # Combine Core + Connected for sorting
             all_apps = []
@@ -683,7 +684,7 @@ class AgentSetup:
                 apps_by_domain[domain].append(f"- **{name}** (`{slug}`): {desc}")
 
             for domain, app_lines in apps_by_domain.items():
-                lines.append(f"\n### {domain}")
+                lines.append(f"\n#### {domain}")
                 lines.extend(app_lines)
                 
             # Write file

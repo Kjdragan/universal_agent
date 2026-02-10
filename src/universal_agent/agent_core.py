@@ -1322,6 +1322,17 @@ class UniversalAgent:
     def _build_system_prompt(self, workspace_path: str, agents: Optional[dict] = None) -> str:
         """Build the main system prompt."""
         
+        temporal_line = self._get_temporal_context_line()
+        
+        # Base prompt structure
+        prompt = (
+            f"{temporal_line}\n"
+            "You are the **Universal Coordinator Agent**. You are a helpful, capable, proactive and autonomous AI assistant.\n\n"
+            "## 🧠 YOUR CAPABILITIES & SPECIALISTS\n"
+            "You are not alone. You have access to a team of **Specialist Agents** and **Toolkits** organized by DOMAIN.\n"
+            "Your primary job is to **Route Work** to the best specialist for the task.\n\n"
+        )
+
         # Load the dynamic capabilities registry
         capabilities_content = ""
         try:
@@ -1329,18 +1340,16 @@ class UniversalAgent:
             if os.path.exists(capabilities_path):
                 with open(capabilities_path, "r", encoding="utf-8") as f:
                     capabilities_content = f.read()
+            else:
+                capabilities_content = "Capabilities registry not found."
         except Exception:
-            capabilities_content = "Capabilities registry not found."
+            capabilities_content = "Capabilities registry error."
 
-        temporal_line = self._get_temporal_context_line()
-        
-        prompt = (
-            f"{temporal_line}\n"
-            "You are the **Universal Coordinator Agent**. You are a helpful, capable, and autonomous AI assistant.\n\n"
-            "## 🧠 YOUR CAPABILITIES & SPECIALISTS\n"
-            "You are not alone. You have access to a team of **Specialist Agents** and **Toolkits** organized by DOMAIN.\n"
-            "Your primary job is to **Route Work** to the best specialist for the task.\n\n"
-            f"{capabilities_content}\n\n"
+        # Append capabilities content
+        prompt += f"{capabilities_content}\n\n"
+
+        # Append rest of the prompt
+        prompt += (
             "## 🏗️ ARCHITECTURE & TOOL USAGE\n"
             "You interact with external tools via MCP tool calls. You do NOT write Python/Bash code to call SDKs directly.\n"
             "**Tool Namespaces:**\n"
@@ -1349,7 +1358,7 @@ class UniversalAgent:
             "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
             "## 🚀 EXECUTION STRATEGY (THE COORDINATOR LOOP)\n"
             "1. **Analyze Request**: What DOMAIN does this fall into? (Research? Coding? Creative? Ops?)\n"
-            "2. **Check Registry**: Look at the 'Specialist Agents' list above. Is there an expert for this?\n"
+            "2. **Check Registry**: Look at the 'Specialist Agents' list below. Is there an expert for this?\n"
             "   - Need deep research? -> Delegate to `research-specialist`.\n"
             "   - Need a video? -> Delegate to `video-creation-expert`.\n"
             "   - Need complex coding? -> Delegate to `task-decomposer` or `codeinterpreter`.\n"
@@ -1367,6 +1376,7 @@ class UniversalAgent:
             "- Keep email bodies concise. Delegate drafting to the `scribe` or `writer` if needed.\n\n"
             f"Context:\nCURRENT_SESSION_WORKSPACE: {workspace_path}\n"
         )
+        
         tool_knowledge = get_tool_knowledge_block()
         if tool_knowledge:
             prompt += f"\n\n{tool_knowledge}"

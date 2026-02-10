@@ -16,8 +16,9 @@ const HOP_BY_HOP = new Set([
 
 function gatewayBaseUrl(): string {
   const raw =
-    (process.env.UA_GATEWAY_URL || "").trim()
+    (process.env.UA_DASHBOARD_GATEWAY_URL || "").trim()
     || (process.env.NEXT_PUBLIC_GATEWAY_URL || "").trim()
+    || (process.env.UA_GATEWAY_URL || "").trim()
     || "http://localhost:8002";
   return raw.replace(/\/$/, "");
 }
@@ -49,6 +50,9 @@ function buildUpstreamHeaders(request: NextRequest, ownerId: string): Headers {
 }
 
 function maybeApplyOwnerFilter(pathname: string, params: URLSearchParams, ownerId: string): void {
+  const enforceRaw = (process.env.UA_DASHBOARD_ENFORCE_OWNER_FILTER || "").trim().toLowerCase();
+  const enforceOwnerFilter = ["1", "true", "yes", "on"].includes(enforceRaw);
+  if (!enforceOwnerFilter) return;
   if (params.has("owner")) return;
   if (!ownerId) return;
 

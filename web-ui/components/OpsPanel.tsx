@@ -159,6 +159,9 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
       const res = await fetch(`${API_BASE}/api/v1/ops/sessions`, {
         headers: buildHeaders(),
       });
+      if (!res.ok) {
+        throw new Error(`Ops sessions fetch failed (${res.status})`);
+      }
       const data = await res.json();
       const nextSessions = data.sessions || [];
       setSessions(nextSessions);
@@ -177,6 +180,9 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
       const res = await fetch(`${API_BASE}/api/v1/ops/skills`, {
         headers: buildHeaders(),
       });
+      if (!res.ok) {
+        throw new Error(`Ops skills fetch failed (${res.status})`);
+      }
       const data = await res.json();
       setSkills(data.skills || []);
     } catch (err) {
@@ -421,14 +427,16 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
         headers: buildHeaders(),
       });
       if (!res.ok) {
-        throw new Error(`Schema load failed (${res.status})`);
+        setOpsSchemaText("{}");
+        setOpsSchemaStatus(`Unavailable (${res.status})`);
+        return;
       }
       const data = await res.json();
       setOpsSchemaText(JSON.stringify(data.schema || {}, null, 2));
       setOpsSchemaStatus("Loaded");
-    } catch (err) {
-      console.error("Ops schema fetch failed", err);
-      setOpsSchemaStatus("Load failed");
+    } catch {
+      setOpsSchemaText("{}");
+      setOpsSchemaStatus("Unavailable");
     }
   }, []);
 

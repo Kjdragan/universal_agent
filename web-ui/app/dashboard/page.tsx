@@ -26,6 +26,14 @@ type DashboardNotification = {
   metadata?: Record<string, unknown>;
 };
 
+const EMPTY_SUMMARY: SummaryResponse = {
+  sessions: { active: 0, total: 0 },
+  approvals: { pending: 0, total: 0 },
+  cron: { total: 0, enabled: 0 },
+  notifications: { unread: 0, total: 0 },
+  deployment_profile: { profile: "local_workstation" },
+};
+
 export default function DashboardPage() {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
@@ -41,11 +49,34 @@ export default function DashboardPage() {
         fetch(`${API_BASE}/api/v1/dashboard/summary`),
         fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=30`),
       ]);
-      const summaryData = await summaryRes.json();
-      const notificationsData = await notificationsRes.json();
+      const summaryData = summaryRes.ok
+        ? await summaryRes.json()
+        : EMPTY_SUMMARY;
+      const notificationsData = notificationsRes.ok
+        ? await notificationsRes.json()
+        : { notifications: [] };
       const sessions = await fetchSessionDirectory(120);
-      setSummary(summaryData);
-      setNotifications(notificationsData.notifications || []);
+      setSummary({
+        ...EMPTY_SUMMARY,
+        ...(summaryData || {}),
+        sessions: {
+          ...EMPTY_SUMMARY.sessions,
+          ...((summaryData && (summaryData as Partial<SummaryResponse>).sessions) || {}),
+        },
+        approvals: {
+          ...EMPTY_SUMMARY.approvals,
+          ...((summaryData && (summaryData as Partial<SummaryResponse>).approvals) || {}),
+        },
+        cron: {
+          ...EMPTY_SUMMARY.cron,
+          ...((summaryData && (summaryData as Partial<SummaryResponse>).cron) || {}),
+        },
+        notifications: {
+          ...EMPTY_SUMMARY.notifications,
+          ...((summaryData && (summaryData as Partial<SummaryResponse>).notifications) || {}),
+        },
+      });
+      setNotifications(Array.isArray(notificationsData.notifications) ? notificationsData.notifications : []);
       setSessionDirectory(sessions);
     } finally {
       setLoading(false);
@@ -114,10 +145,10 @@ export default function DashboardPage() {
 
   const cards = useMemo(
     () => [
-      { label: "Active Sessions", value: summary?.sessions.active ?? 0 },
-      { label: "Pending Approvals", value: summary?.approvals.pending ?? 0 },
-      { label: "Unread Alerts", value: summary?.notifications.unread ?? 0 },
-      { label: "Enabled Cron Jobs", value: summary?.cron.enabled ?? 0 },
+      { label: "Active Sessions", value: summary?.sessions?.active ?? 0 },
+      { label: "Pending Approvals", value: summary?.approvals?.pending ?? 0 },
+      { label: "Unread Alerts", value: summary?.notifications?.unread ?? 0 },
+      { label: "Enabled Cron Jobs", value: summary?.cron?.enabled ?? 0 },
     ],
     [summary],
   );
