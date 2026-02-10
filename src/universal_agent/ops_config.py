@@ -77,6 +77,47 @@ def ops_config_schema() -> dict[str, Any]:
                 "type": "object",
                 "additionalProperties": True,
             },
+            "hooks": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "token": {"type": "string"},
+                    "base_path": {"type": "string"},
+                    "max_body_bytes": {"type": "integer"},
+                    "transforms_dir": {"type": "string"},
+                    "mappings": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "match": {
+                                    "type": "object",
+                                    "properties": {
+                                        "path": {"type": "string"},
+                                        "source": {"type": "string"},
+                                        "headers": {"type": "object"},
+                                    }
+                                },
+                                "action": {
+                                    "type": "string", 
+                                    "enum": ["wake", "agent"]
+                                },
+                                "transform": {
+                                    "type": "object",
+                                    "properties": {
+                                        "module": {"type": "string"},
+                                        "export": {"type": "string"},
+                                    }
+                                },
+                                "message_template": {"type": "string"},
+                                "text_template": {"type": "string"},
+                            },
+                        }
+                    }
+                },
+                "additionalProperties": True,
+            },
         },
         "additionalProperties": True,
     }

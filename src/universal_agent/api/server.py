@@ -428,6 +428,21 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
     last_query_text: Optional[str] = None
     last_query_ts: Optional[float] = None
     gateway_forward_task: Optional[asyncio.Task] = None
+    query_stream_event_types = {
+        "text",
+        "tool_call",
+        "tool_result",
+        "thinking",
+        "status",
+        "iteration_end",
+        "query_complete",
+        "work_product",
+        "auth_required",
+        "error",
+        "input_required",
+        "input_response",
+        "pong",
+    }
 
     try:
         # Send connected event
@@ -478,6 +493,11 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
 
                                 event_type = (event_data.get("type") or "").strip()
                                 if not event_type or event_type == "connected":
+                                    continue
+                                # When this UI connection is already streaming an active query via
+                                # bridge.execute_query(), suppress duplicate runtime events from the
+                                # passive gateway forwarder and keep only background/system signals.
+                                if in_flight and event_type in query_stream_event_types:
                                     continue
 
                                 ws_event = converter._convert_gateway_event(event_type, event_data)

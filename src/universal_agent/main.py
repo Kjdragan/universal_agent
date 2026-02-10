@@ -6621,6 +6621,22 @@ async def setup_session(
                 print(f"⚠️ Failed to read SOUL.md: {e}")
         return ""
 
+    def get_capabilities_content(source_dir: str) -> str:
+        """Load the dynamic capabilities registry from capabilities.md."""
+        capabilities_path = os.path.join(
+            source_dir, "src", "universal_agent", "prompt_assets", "capabilities.md"
+        )
+        if os.path.exists(capabilities_path):
+            try:
+                with open(capabilities_path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        print(f"✅ Injected Capabilities Registry ({len(content)} chars)")
+                        return f"\n\n## 🧠 YOUR CAPABILITIES & SPECIALISTS\n{content}"
+            except Exception as e:
+                print(f"⚠️ Failed to read capabilities.md: {e}")
+        return ""
+
     # Initialize Composio with automatic file downloads to this workspace
     downloads_dir = os.path.join(workspace_dir, "downloads")
     os.makedirs(downloads_dir, exist_ok=True)
@@ -6818,6 +6834,8 @@ async def setup_session(
         active_workspace=str(workspace_dir)
     )
 
+    capabilities_registry = get_capabilities_content(src_dir)
+
     agent = UniversalAgent(workspace_dir=workspace_dir)
     if attach_stdio:
         setup_log_bridge(agent)
@@ -6839,7 +6857,8 @@ async def setup_session(
             ),
         },
         system_prompt=(
-            f"{load_soul_context(workspace_dir, src_dir)}\n\n"
+            f"{load_soul_context(workspace_dir, src_dir)}\n"
+            f"{capabilities_registry}\n\n"
             f"Current Date: {today_str}\n"
             f"Tomorrow is: {tomorrow_str}\n"
             f"{memory_context_str}\n"
