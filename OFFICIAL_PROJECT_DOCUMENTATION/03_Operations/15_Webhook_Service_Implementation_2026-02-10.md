@@ -15,8 +15,10 @@ The system consists of the following components:
 
 1. **`HooksService`**: A new service class in `universal_agent.hooks_service`.
     * Loads configuration.
-    * Authenticates requests.
+    * Authenticates requests (token, Composio HMAC, or explicit none).
     * Matches requests to configured mappings.
+    * Supports header-level matching in `match.headers`.
+    * Applies replay protection for signed webhook IDs.
     * Executes optional Python-based "Transforms".
     * Dispatches actions to the `InProcessGateway`.
 
@@ -51,6 +53,12 @@ Webhooks are configured in `ops_config.json` under the `hooks` key.
           }
         },
         "action": "agent",
+        "auth": {
+          "strategy": "composio_hmac",
+          "secret_env": "COMPOSIO_WEBHOOK_SECRET",
+          "timestamp_tolerance_seconds": 300,
+          "replay_window_seconds": 600
+        },
         "message_template": "New PR {{ payload.pull_request.number }}: {{ payload.pull_request.title }}",
         "name": "GitHubBot",
         "session_key": "gh-pr-{{ payload.pull_request.id }}",
@@ -88,9 +96,14 @@ def verify_and_transform(ctx):
 ## Security
 
 1. **Authentication**: All webhook requests must ideally include the `Authorization: Bearer <token>` header matching the configured token.
-    * *Note*: The service supports open webhooks if the token is not enforced, but it is highly recommended to use the token or a Transform for verification.
+    * Per-mapping authentication strategy is supported via `auth.strategy`:
+      * `token`: bearer token check (`UA_HOOKS_TOKEN` / config token).
+      * `composio_hmac`: verifies `webhook-signature`, `webhook-id`, and `webhook-timestamp`.
+      * `none`: no auth (test/local only).
+    * *Note*: The service supports open mappings when no token is configured, but authenticated mappings are strongly recommended.
 2. **Validation**: Transforms allow for provider-specific validation (e.g., HMAC signatures) to ensure request integrity.
-3. **Isolation**: Transforms run in the main process but are loaded dynamically. Standard code review practices apply to transform scripts.
+3. **Replay Protection**: Signed webhook IDs are cached for a replay window and duplicate deliveries are rejected.
+4. **Isolation**: Transforms run in the main process but are loaded dynamically. Standard code review practices apply to transform scripts.
 
 ## Verification
 
