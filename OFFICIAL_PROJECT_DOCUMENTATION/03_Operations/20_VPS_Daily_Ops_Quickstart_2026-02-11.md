@@ -48,6 +48,22 @@ Expected:
 
 ---
 
+## Post-Fix Verification (Web Query Stability)
+```bash
+cd /opt/universal_agent
+latest_log="$(ls -1t AGENT_RUN_WORKSPACES/cron_*/run.log | head -n 1)"
+echo "Using log: $latest_log"
+
+tail -n 400 "$latest_log" | grep -Eni "reconnect|re-?connect|retry(ing)?|connection (lost|reset|refused|failed|timeout)|timed out|websocket.*(close|error)|ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH" || true
+```
+
+Expected:
+1. No matches in the last 400 log lines during normal operation.
+2. UI should process once and settle online, without repeated connecting/updating loops.
+3. Heartbeat runs should complete with `HEARTBEAT_OK` when no active monitor is triggered.
+
+---
+
 ## Security Check (Ops Auth)
 ```bash
 curl -i https://api.clearspringcg.com/api/v1/ops/deployment/profile
@@ -95,6 +111,49 @@ Nginx ingress check:
 ```bash
 tail -f /var/log/nginx/access.log
 ```
+
+---
+
+## Optional: Local Mirror for Remote Debugging
+
+From your local dev machine, mirror VPS workspaces into this repo so local debugging can inspect remote `run.log`, `trace.json`, and artifacts:
+
+Preferred low-resource workflow (default OFF):
+
+```bash
+scripts/remote_workspace_sync_control.sh off
+scripts/remote_workspace_sync_control.sh sync-now
+scripts/remote_workspace_sync_control.sh on --interval 600
+scripts/remote_workspace_sync_control.sh off
+```
+
+When local timer is enabled, use dashboard `Config` -> `Remote To Local Debug Sync` toggle to allow/deny sync cycles remotely.
+Default toggle state is OFF when unset.
+
+```bash
+cd /home/kjdragan/lrepos/universal_agent
+scripts/sync_remote_workspaces.sh --once \
+  --host root@187.77.16.29 \
+  --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt
+```
+
+Automate every 30s with user systemd timer:
+
+```bash
+scripts/install_remote_workspace_sync_timer.sh \
+  --host root@187.77.16.29 \
+  --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
+  --interval 30
+```
+
+Notes:
+1. Default behavior skips previously synced workspace IDs, even if local mirror folders were later deleted.
+2. Optional remote cleanup is available with `--prune-remote-when-local-missing --allow-remote-delete` (destructive; use intentionally).
+3. Prune mode only deletes remote directories older than 300s by default (`--prune-min-age-seconds`).
 
 ---
 

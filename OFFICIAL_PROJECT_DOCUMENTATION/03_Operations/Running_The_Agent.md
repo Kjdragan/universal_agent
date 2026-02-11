@@ -83,3 +83,106 @@ Every run creates a dedicated workspace directory in `AGENT_RUN_WORKSPACES/sessi
 - `trace.json`: Low-level SDK logs.
 - `run.log`: Console output for that session.
 - `artifacts/`: Files produced by tools (images, reports, etc.).
+
+---
+
+## 6. Mirror Remote Workspaces Locally (Debug `app.clearspringcg.com`)
+
+If your remote deployment is running on a VPS, you can continuously mirror remote
+`AGENT_RUN_WORKSPACES` into this local repo while your computer is on.
+
+### Recommended control model (simple toggle)
+
+Keep automation OFF by default, and only enable while actively debugging:
+
+```bash
+scripts/remote_workspace_sync_control.sh off
+scripts/remote_workspace_sync_control.sh status
+```
+
+Run a manual one-time sync only when you ask for it:
+
+```bash
+scripts/remote_workspace_sync_control.sh sync-now
+```
+
+Temporarily enable periodic sync while debugging:
+
+```bash
+scripts/remote_workspace_sync_control.sh on --interval 600
+scripts/remote_workspace_sync_control.sh toggle
+scripts/remote_workspace_sync_control.sh off
+```
+
+Web UI toggle behavior:
+- In the dashboard `Config` panel, use `Remote To Local Debug Sync`.
+- Default state is OFF when unset.
+- Local timer jobs only sync when this toggle is ON (if timer was enabled with `remote_workspace_sync_control.sh on`).
+- If local machine is offline or token/network checks fail, cycle is skipped.
+
+### One-time sync
+
+```bash
+scripts/sync_remote_workspaces.sh --once \
+  --host root@187.77.16.29 \
+  --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt
+```
+
+### Continuous sync in current terminal
+
+```bash
+scripts/sync_remote_workspaces.sh \
+  --host root@187.77.16.29 \
+  --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
+  --interval 30
+```
+
+Behavior note:
+- By default, the script skips any workspace ID already recorded in the manifest.
+- This means if you clear local mirrored folders later, old remote workspaces will not re-download unless you run with `--no-skip-synced`.
+
+### Auto-sync when computer is running (user systemd timer)
+
+```bash
+scripts/install_remote_workspace_sync_timer.sh \
+  --host root@187.77.16.29 \
+  --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
+  --interval 30
+```
+
+Optional remote cleanup (explicitly destructive):
+
+```bash
+scripts/install_remote_workspace_sync_timer.sh \
+  --host root@187.77.16.29 \
+  --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
+  --interval 30 \
+  --prune-remote-when-local-missing \
+  --prune-min-age-seconds 300 \
+  --allow-remote-delete
+```
+
+Prune safety:
+- `--prune-remote-when-local-missing` only deletes remote directories older than 300s by default.
+- Set `--prune-min-age-seconds 0` only if you intentionally want immediate pruning.
+
+Check timer status:
+
+```bash
+systemctl --user status ua-remote-workspace-sync.timer --no-pager
+journalctl --user -u ua-remote-workspace-sync.service -n 80 --no-pager
+```
+
+Uninstall timer:
+
+```bash
+scripts/install_remote_workspace_sync_timer.sh --uninstall
+```

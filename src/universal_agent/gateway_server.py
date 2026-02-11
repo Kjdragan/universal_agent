@@ -254,6 +254,10 @@ class OpsConfigPatchRequest(BaseModel):
     base_hash: Optional[str] = None
 
 
+class OpsRemoteSyncUpdateRequest(BaseModel):
+    enabled: bool = False
+
+
 class OpsSkillUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
 
@@ -4134,6 +4138,13 @@ async def ops_config_schema_get(request: Request):
     return {"schema": ops_config_schema()}
 
 
+def _remote_sync_enabled(config: dict[str, Any]) -> bool:
+    section = config.get("remote_debug", {})
+    if not isinstance(section, dict):
+        return False
+    return bool(section.get("local_workspace_sync_enabled", False))
+
+
 @app.get("/api/v1/ops/deployment/profile")
 async def ops_deployment_profile_get(request: Request):
     _require_ops_auth(request)
@@ -4160,6 +4171,37 @@ async def ops_config_patch(request: Request, payload: OpsConfigPatchRequest):
     updated = apply_merge_patch(current, payload.patch or {})
     write_ops_config(updated)
     return {"config": updated, "base_hash": ops_config_hash(updated)}
+
+
+@app.get("/api/v1/ops/remote-sync")
+async def ops_remote_sync_get(request: Request):
+    _require_ops_auth(request)
+    config = load_ops_config()
+    return {
+        "enabled": _remote_sync_enabled(config),
+        "default_enabled": False,
+        "config_key": "remote_debug.local_workspace_sync_enabled",
+        "base_hash": ops_config_hash(config),
+    }
+
+
+@app.post("/api/v1/ops/remote-sync")
+async def ops_remote_sync_set(request: Request, payload: OpsRemoteSyncUpdateRequest):
+    _require_ops_auth(request)
+    config = load_ops_config()
+    section = config.get("remote_debug", {})
+    if not isinstance(section, dict):
+        section = {}
+    section["local_workspace_sync_enabled"] = bool(payload.enabled)
+    config["remote_debug"] = section
+    write_ops_config(config)
+    updated = load_ops_config()
+    return {
+        "enabled": _remote_sync_enabled(updated),
+        "default_enabled": False,
+        "config_key": "remote_debug.local_workspace_sync_enabled",
+        "base_hash": ops_config_hash(updated),
+    }
 
 
 @app.get("/api/v1/ops/approvals")

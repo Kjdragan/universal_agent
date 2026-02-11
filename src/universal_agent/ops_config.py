@@ -131,6 +131,14 @@ def ops_config_schema() -> dict[str, Any]:
                 },
                 "additionalProperties": True,
             },
+            "remote_debug": {
+                "type": "object",
+                "properties": {
+                    "local_workspace_sync_enabled": {"type": "boolean"},
+                    "notes": {"type": "string"},
+                },
+                "additionalProperties": True,
+            },
         },
         "additionalProperties": True,
     }
