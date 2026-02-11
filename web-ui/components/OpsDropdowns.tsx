@@ -133,6 +133,8 @@ type OpsCtx = {
   opsConfigText: string; setOpsConfigText: (t: string) => void; opsConfigStatus: string;
   opsConfigError: string | null; opsConfigSaving: boolean;
   loadOpsConfig: () => Promise<void>; saveOpsConfig: () => Promise<void>;
+  remoteSyncEnabled: boolean; remoteSyncStatus: string; remoteSyncError: string | null; remoteSyncSaving: boolean;
+  loadRemoteSync: () => Promise<void>; setRemoteSync: (enabled: boolean) => Promise<void>;
   opsSchemaText: string; opsSchemaStatus: string;
   refreshAll: () => void;
 };
@@ -156,6 +158,10 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
   const [opsConfigStatus, setOpsConfigStatus] = useState("Not loaded");
   const [opsConfigError, setOpsConfigError] = useState<string | null>(null);
   const [opsConfigSaving, setOpsConfigSaving] = useState(false);
+  const [remoteSyncEnabled, setRemoteSyncEnabled] = useState(false);
+  const [remoteSyncStatus, setRemoteSyncStatus] = useState("Not loaded");
+  const [remoteSyncError, setRemoteSyncError] = useState<string | null>(null);
+  const [remoteSyncSaving, setRemoteSyncSaving] = useState(false);
   const [opsSchemaText, setOpsSchemaText] = useState("{}");
   const [opsSchemaStatus, setOpsSchemaStatus] = useState("Not loaded");
   const [heartbeatState, setHeartbeatState] = useState<HeartbeatState>({ status: "Not loaded" });
@@ -401,15 +407,59 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
     finally { setOpsConfigSaving(false); }
   }, [opsConfigHash, opsConfigText]);
 
+  const loadRemoteSync = useCallback(async () => {
+    setRemoteSyncError(null);
+    setRemoteSyncStatus("Loading...");
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/remote-sync`, { headers: buildHeaders() });
+      if (!r.ok) throw new Error(`Remote sync load failed (${r.status})`);
+      const d = await r.json();
+      const enabled = Boolean(d.enabled);
+      setRemoteSyncEnabled(enabled);
+      setRemoteSyncStatus(enabled ? "Enabled" : "Disabled");
+    } catch (e) {
+      setRemoteSyncEnabled(false);
+      setRemoteSyncStatus("Unavailable");
+      setRemoteSyncError((e as Error).message);
+    }
+  }, []);
+
+  const setRemoteSync = useCallback(async (enabled: boolean) => {
+    setRemoteSyncSaving(true);
+    setRemoteSyncError(null);
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/remote-sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...buildHeaders() },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!r.ok) {
+        const dt = await r.text();
+        throw new Error(dt || `Remote sync update failed (${r.status})`);
+      }
+      const d = await r.json();
+      const nextEnabled = Boolean(d.enabled);
+      setRemoteSyncEnabled(nextEnabled);
+      setRemoteSyncStatus(nextEnabled ? "Enabled" : "Disabled");
+      // Keep raw config text aligned after toggle updates.
+      loadOpsConfig();
+    } catch (e) {
+      setRemoteSyncError((e as Error).message);
+      setRemoteSyncStatus("Update failed");
+    } finally {
+      setRemoteSyncSaving(false);
+    }
+  }, [loadOpsConfig]);
+
   const refreshAll = useCallback(() => {
-    fetchSessions(); fetchSkills(); fetchChannels(); fetchApprovals(); loadOpsConfig(); loadOpsSchema();
+    fetchSessions(); fetchSkills(); fetchChannels(); fetchApprovals(); loadOpsConfig(); loadOpsSchema(); loadRemoteSync();
     fetchSessionContinuityMetrics();
     if (selected) { fetchLogs(selected); fetchSystemEvents(selected); }
     const heartbeatSessionId = currentChatSessionId || selected;
     if (heartbeatSessionId) fetchHeartbeat(heartbeatSessionId);
-  }, [fetchSessions, fetchSkills, fetchChannels, fetchApprovals, loadOpsConfig, loadOpsSchema, fetchSessionContinuityMetrics, selected, currentChatSessionId, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
+  }, [fetchSessions, fetchSkills, fetchChannels, fetchApprovals, loadOpsConfig, loadOpsSchema, loadRemoteSync, fetchSessionContinuityMetrics, selected, currentChatSessionId, fetchLogs, fetchSystemEvents, fetchHeartbeat]);
 
-  useEffect(() => { fetchSessions(); fetchSkills(); fetchChannels(); fetchApprovals(); loadOpsConfig(); loadOpsSchema(); fetchSessionContinuityMetrics(); }, [fetchApprovals, fetchChannels, fetchSessions, fetchSkills, loadOpsConfig, loadOpsSchema, fetchSessionContinuityMetrics]);
+  useEffect(() => { fetchSessions(); fetchSkills(); fetchChannels(); fetchApprovals(); loadOpsConfig(); loadOpsSchema(); loadRemoteSync(); fetchSessionContinuityMetrics(); }, [fetchApprovals, fetchChannels, fetchSessions, fetchSkills, loadOpsConfig, loadOpsSchema, loadRemoteSync, fetchSessionContinuityMetrics]);
   useEffect(() => {
     if (selected) {
       fetchLogs(selected);
@@ -561,11 +611,11 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
     sessions, skills, channels, approvals, selected, setSelected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
     deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError,
-    opsConfigSaving, loadOpsConfig, saveOpsConfig, opsSchemaText, opsSchemaStatus, refreshAll,
+    opsConfigSaving, loadOpsConfig, saveOpsConfig, remoteSyncEnabled, remoteSyncStatus, remoteSyncError, remoteSyncSaving, loadRemoteSync, setRemoteSync, opsSchemaText, opsSchemaStatus, refreshAll,
   }), [sessions, skills, channels, approvals, selected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
     deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, opsConfigStatus, opsConfigError,
-    opsConfigSaving, loadOpsConfig, saveOpsConfig, opsSchemaText, opsSchemaStatus, refreshAll]);
+    opsConfigSaving, loadOpsConfig, saveOpsConfig, remoteSyncEnabled, remoteSyncStatus, remoteSyncError, remoteSyncSaving, loadRemoteSync, setRemoteSync, opsSchemaText, opsSchemaStatus, refreshAll]);
 
   return <OpsContext.Provider value={val}>{children}</OpsContext.Provider>;
 }
@@ -1237,9 +1287,54 @@ export function SystemEventsSection() {
 }
 
 export function OpsConfigSection() {
-  const { opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError, opsConfigSaving, loadOpsConfig, saveOpsConfig, opsSchemaText, opsSchemaStatus } = useOps();
+  const {
+    opsConfigText,
+    setOpsConfigText,
+    opsConfigStatus,
+    opsConfigError,
+    opsConfigSaving,
+    loadOpsConfig,
+    saveOpsConfig,
+    remoteSyncEnabled,
+    remoteSyncStatus,
+    remoteSyncError,
+    remoteSyncSaving,
+    loadRemoteSync,
+    setRemoteSync,
+    opsSchemaText,
+    opsSchemaStatus,
+  } = useOps();
   return (
     <div className="p-3 text-xs space-y-3">
+      <div className="border rounded bg-background/40 p-2">
+        <div className="flex items-center justify-between mb-2">
+          <div className="font-semibold">Remote To Local Debug Sync</div>
+          <div className="text-[10px] text-muted-foreground">{remoteSyncStatus}</div>
+        </div>
+        <div className="text-[11px] text-muted-foreground mb-2">
+          Controls whether local debug mirror jobs should run when configured to respect the remote toggle.
+          Default is OFF when not set.
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className={`text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50 ${remoteSyncEnabled ? "bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"}`}
+            onClick={() => setRemoteSync(!remoteSyncEnabled)}
+            disabled={remoteSyncSaving}
+          >
+            {remoteSyncSaving ? "Saving..." : remoteSyncEnabled ? "Sync ON" : "Sync OFF"}
+          </button>
+          <button
+            type="button"
+            className="text-xs px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+            onClick={loadRemoteSync}
+            disabled={remoteSyncSaving}
+          >
+            Refresh
+          </button>
+        </div>
+        {remoteSyncError && <div className="text-[10px] text-red-500 mt-2">{remoteSyncError}</div>}
+      </div>
       <div className="border rounded bg-background/40 p-2">
         <div className="flex items-center justify-between mb-2">
           <div className="font-semibold">Ops config (ops_config.json)</div>
