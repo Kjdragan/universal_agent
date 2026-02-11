@@ -109,7 +109,9 @@ class HooksService:
         # Read body
         try:
             body_bytes = await request.body()
+            logger.info("Hook ingress received path=%s bytes=%d", subpath, len(body_bytes))
             if len(body_bytes) > self.config.max_body_bytes:
+                logger.warning("Hook ingress rejected path=%s reason=payload_too_large", subpath)
                 return Response("Payload too large", status_code=413)
             
             payload = {}
@@ -117,8 +119,10 @@ class HooksService:
                 try:
                     payload = json.loads(body_bytes)
                 except json.JSONDecodeError:
+                    logger.warning("Hook ingress rejected path=%s reason=invalid_json", subpath)
                     return Response("Invalid JSON", status_code=400)
         except Exception as e:
+            logger.exception("Hook ingress rejected path=%s reason=body_read_error", subpath)
             return Response(f"Error reading body: {str(e)}", status_code=400)
 
         # Context for matching/templating
@@ -141,12 +145,31 @@ class HooksService:
                     continue
 
                 matched = True
+                mapping_id = mapping.id or "<unlabeled>"
                 if not self._authenticate_request(mapping, request, context):
+                    if context.get("_composio_replay_detected"):
+                        logger.info(
+                            "Hook ingress deduped replay path=%s mapping=%s",
+                            subpath,
+                            mapping_id,
+                        )
+                        return Response(
+                            json.dumps({"ok": True, "deduped": True}),
+                            media_type="application/json",
+                            status_code=202,
+                        )
                     auth_failed = True
+                    logger.warning(
+                        "Hook ingress auth failed path=%s mapping=%s strategy=%s",
+                        subpath,
+                        mapping_id,
+                        (mapping.auth.strategy if mapping.auth else "token"),
+                    )
                     continue
 
                 action = await self._build_action(mapping, context)
                 if action is None:
+                    logger.info("Hook ingress skipped path=%s mapping=%s", subpath, mapping_id)
                     return Response(
                         json.dumps({"ok": True, "skipped": True}),
                         media_type="application/json",
@@ -154,6 +177,12 @@ class HooksService:
                     )
 
                 asyncio.create_task(self._dispatch_action(action))
+                logger.info(
+                    "Hook ingress accepted path=%s mapping=%s action=%s",
+                    subpath,
+                    mapping_id,
+                    action.kind,
+                )
                 return Response(
                     json.dumps({"ok": True, "action": action.kind}),
                     media_type="application/json",
@@ -161,7 +190,9 @@ class HooksService:
                 )
             
             if matched and auth_failed:
+                logger.warning("Hook ingress unauthorized path=%s", subpath)
                 return Response("Unauthorized", status_code=401)
+            logger.info("Hook ingress no_match path=%s", subpath)
             return Response("No matching hook found", status_code=404)
         except Exception as e:
             logger.exception("Error processing hook")
@@ -234,10 +265,6 @@ class HooksService:
         if abs(now - webhook_timestamp) > auth.timestamp_tolerance_seconds:
             return False
 
-        self._cleanup_seen_webhook_ids(now)
-        if webhook_id in self._seen_webhook_ids:
-            return False
-
         raw_body_text = context.get("raw_body_text", "")
         signing_string = f"{webhook_id}.{webhook_timestamp_raw}.{raw_body_text}"
         expected_sig = base64.b64encode(
@@ -249,6 +276,11 @@ class HooksService:
         ).decode("utf-8")
 
         if not hmac.compare_digest(received_sig, expected_sig):
+            return False
+
+        self._cleanup_seen_webhook_ids(now)
+        if webhook_id in self._seen_webhook_ids:
+            context["_composio_replay_detected"] = True
             return False
 
         self._seen_webhook_ids[webhook_id] = float(now + auth.replay_window_seconds)

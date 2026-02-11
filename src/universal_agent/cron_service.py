@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +18,62 @@ from universal_agent.gateway import InProcessGateway, GatewayRequest, GatewaySes
 from universal_agent.heartbeat_service import _parse_duration_seconds
 
 logger = logging.getLogger(__name__)
+
+MIN_CRON_TIMEOUT_SECONDS = 1
+MAX_CRON_TIMEOUT_SECONDS = 7200
+
+_CRON_MEDIA_EXTENSIONS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".tif",
+    ".tiff",
+    ".svg",
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".avi",
+    ".webm",
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".flac",
+    ".ogg",
+}
+_CRON_WORK_PRODUCT_EXTENSIONS = {
+    ".html",
+    ".pdf",
+    ".csv",
+    ".json",
+    ".md",
+    ".txt",
+    ".xlsx",
+    ".xls",
+    ".docx",
+    ".pptx",
+}
+_CRON_WORKSPACE_KEEP_FILES = {
+    "run.log",
+    "transcript.md",
+    "trace.json",
+    "trace_catalog.md",
+    "MEMORY.md",
+}
+
+
+def _normalize_timeout_seconds(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return None
+    if seconds <= 0:
+        return None
+    return max(MIN_CRON_TIMEOUT_SECONDS, min(MAX_CRON_TIMEOUT_SECONDS, seconds))
 
 
 def _resolve_run_at_timezone(timezone_name: str | None) -> Any:
@@ -178,6 +235,7 @@ class CronJob:
     run_at: Optional[float] = None  # One-shot: absolute timestamp to run at
     delete_after_run: bool = False  # One-shot: delete job after successful run
     model: Optional[str] = None  # Model override for this job
+    timeout_seconds: Optional[int] = None  # Per-job execution timeout
     enabled: bool = True
     created_at: float = field(default_factory=lambda: time.time())
     last_run_at: Optional[float] = None
@@ -196,6 +254,7 @@ class CronJob:
             "run_at": self.run_at,
             "delete_after_run": self.delete_after_run,
             "model": self.model,
+            "timeout_seconds": self.timeout_seconds,
             "enabled": self.enabled,
             "created_at": self.created_at,
             "last_run_at": self.last_run_at,
@@ -216,6 +275,11 @@ class CronJob:
             run_at=data.get("run_at"),
             delete_after_run=bool(data.get("delete_after_run", False)),
             model=data.get("model"),
+            timeout_seconds=_normalize_timeout_seconds(
+                data.get("timeout_seconds")
+                if data.get("timeout_seconds") is not None
+                else data.get("metadata", {}).get("timeout_seconds")
+            ),
             enabled=bool(data.get("enabled", True)),
             created_at=float(data.get("created_at", time.time())),
             last_run_at=data.get("last_run_at"),
@@ -353,6 +417,7 @@ class CronService:
         self.task: Optional[asyncio.Task] = None
         self.jobs: Dict[str, CronJob] = {}
         self.running_jobs: set[str] = set()
+        self.running_job_scheduled_at: dict[str, float] = {}
         self.max_concurrency = int(os.getenv("UA_CRON_MAX_CONCURRENCY", "1"))
         self._semaphore = asyncio.Semaphore(self.max_concurrency)
         self.event_sink = event_sink
@@ -403,6 +468,7 @@ class CronService:
         run_at: Optional[float] = None,
         delete_after_run: bool = False,
         model: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
         enabled: bool = True,
         metadata: Optional[dict[str, Any]] = None,
     ) -> CronJob:
@@ -438,6 +504,7 @@ class CronService:
             run_at=run_at,
             delete_after_run=delete_after_run,
             model=model,
+            timeout_seconds=_normalize_timeout_seconds(timeout_seconds),
             enabled=enabled,
             metadata=metadata or {},
         )
@@ -477,6 +544,8 @@ class CronService:
             job.delete_after_run = bool(updates["delete_after_run"])
         if "model" in updates:
             job.model = updates["model"]
+        if "timeout_seconds" in updates:
+            job.timeout_seconds = _normalize_timeout_seconds(updates["timeout_seconds"])
         if "workspace_dir" in updates:
             job.workspace_dir = updates["workspace_dir"]
         if "user_id" in updates:
@@ -556,6 +625,9 @@ class CronService:
                 started_at=time.time(),
             )
             self._emit_event({"type": "cron_run_started", "run": record.to_dict(), "reason": reason})
+            timeout_seconds = self._resolve_job_timeout_seconds(job)
+            scheduled_marker = float(scheduled_at) if scheduled_at is not None else float(record.started_at)
+            self.running_job_scheduled_at[job.job_id] = scheduled_marker
             try:
                 if os.getenv("UA_CRON_MOCK_RESPONSE", "0").lower() in {"1", "true", "yes"}:
                     record.status = "success"
@@ -580,10 +652,20 @@ class CronService:
                         force_complex=False,
                         metadata=request_metadata,
                     )
-                    result = await self.gateway.run_query(session, request)
+                    run_coro = self.gateway.run_query(session, request)
+                    if timeout_seconds is not None:
+                        result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
+                    else:
+                        result = await run_coro
                     record.status = "success"
                     record.finished_at = time.time()
                     record.output_preview = (result.response_text or "")[:400]
+            except asyncio.TimeoutError:
+                record.status = "error"
+                record.finished_at = time.time()
+                timeout_label = timeout_seconds if timeout_seconds is not None else "configured"
+                record.error = f"execution timed out after {timeout_label}s"
+                logger.error("Cron job %s timed out after %ss", job.job_id, timeout_label)
             except Exception as exc:
                 record.status = "error"
                 record.finished_at = time.time()
@@ -591,6 +673,8 @@ class CronService:
                 logger.error("Cron job %s failed: %s", job.job_id, exc)
             finally:
                 self.running_jobs.discard(job.job_id)
+                self.running_job_scheduled_at.pop(job.job_id, None)
+                moved_outputs = self._organize_workspace_outputs(job.workspace_dir)
                 # Finalize one-shot schedule consumption only after run actually started.
                 if reason == "schedule" and job.run_at is not None:
                     job.last_run_at = record.started_at or time.time()
@@ -598,6 +682,13 @@ class CronService:
                     self.store.save_jobs(self.jobs.values())
                 self.store.append_run(record)
                 self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
+                if moved_outputs:
+                    logger.info(
+                        "Cron job %s moved %d root output(s) into work_products: %s",
+                        job.job_id,
+                        len(moved_outputs),
+                        ", ".join(moved_outputs[:5]),
+                    )
                 
                 # Enqueue system event for target session (if wake_heartbeat configured)
                 metadata = job.metadata or {}
@@ -624,6 +715,58 @@ class CronService:
                     logger.info("Deleting one-shot cron job %s after successful run", job.job_id)
                     self.delete_job(job.job_id)
             return record
+
+    def _organize_workspace_outputs(self, workspace_dir: str) -> list[str]:
+        """Move common deliverables from workspace root into work_products."""
+        try:
+            workspace = Path(workspace_dir).resolve()
+            if not workspace.exists():
+                return []
+
+            work_products_dir = workspace / "work_products"
+            media_dir = work_products_dir / "media"
+            work_products_dir.mkdir(parents=True, exist_ok=True)
+            media_dir.mkdir(parents=True, exist_ok=True)
+
+            moved: list[str] = []
+            for entry in workspace.iterdir():
+                if not entry.is_file():
+                    continue
+                if entry.name.startswith("."):
+                    continue
+                if entry.name in _CRON_WORKSPACE_KEEP_FILES:
+                    continue
+                suffix = entry.suffix.lower()
+                if suffix in _CRON_MEDIA_EXTENSIONS:
+                    target = self._dedupe_destination(media_dir / entry.name)
+                elif suffix in _CRON_WORK_PRODUCT_EXTENSIONS:
+                    target = self._dedupe_destination(work_products_dir / entry.name)
+                else:
+                    continue
+                shutil.move(str(entry), str(target))
+                moved.append(str(target.relative_to(workspace)))
+            return moved
+        except Exception as exc:
+            logger.warning("Failed organizing cron workspace outputs for %s: %s", workspace_dir, exc)
+            return []
+
+    def _dedupe_destination(self, path: Path) -> Path:
+        if not path.exists():
+            return path
+        stem = path.stem
+        suffix = path.suffix
+        parent = path.parent
+        for index in range(2, 1000):
+            candidate = parent / f"{stem}_{index}{suffix}"
+            if not candidate.exists():
+                return candidate
+        return parent / f"{stem}_{uuid.uuid4().hex[:8]}{suffix}"
+
+    def _resolve_job_timeout_seconds(self, job: CronJob) -> Optional[int]:
+        if job.timeout_seconds is not None:
+            return _normalize_timeout_seconds(job.timeout_seconds)
+        metadata = job.metadata or {}
+        return _normalize_timeout_seconds(metadata.get("timeout_seconds"))
 
     def _emit_event(self, payload: dict[str, Any]) -> None:
         if not self.event_sink:

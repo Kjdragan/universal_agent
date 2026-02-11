@@ -98,3 +98,45 @@ async def test_pre_bash_injects_workspace_and_artifacts(tmp_path, monkeypatch):
     cmd = out["tool_input"]["command"]
     assert "export CURRENT_SESSION_WORKSPACE=" in cmd
     assert "export UA_ARTIFACTS_DIR=" in cmd
+
+
+@pytest.mark.asyncio
+async def test_pre_bash_auto_cd_workspace_by_default(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    monkeypatch.delenv("UA_ARTIFACTS_DIR", raising=False)
+    monkeypatch.delenv("UA_BASH_AUTO_CD_WORKSPACE", raising=False)
+
+    hooks = AgentHookSet(active_workspace=str(workspace))
+    input_data = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "python script.py"},
+    }
+
+    with workspace_context(str(workspace)):
+        out = await hooks.on_pre_bash_inject_workspace_env(input_data, tool_use_id="b2", context={})
+
+    assert "tool_input" in out
+    cmd = out["tool_input"]["command"]
+    assert f"cd {workspace}" in cmd
+
+
+@pytest.mark.asyncio
+async def test_pre_bash_respects_auto_cd_disable_flag(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    monkeypatch.setenv("UA_BASH_AUTO_CD_WORKSPACE", "0")
+    monkeypatch.delenv("UA_ARTIFACTS_DIR", raising=False)
+
+    hooks = AgentHookSet(active_workspace=str(workspace))
+    input_data = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "python script.py"},
+    }
+
+    with workspace_context(str(workspace)):
+        out = await hooks.on_pre_bash_inject_workspace_env(input_data, tool_use_id="b3", context={})
+
+    assert "tool_input" in out
+    cmd = out["tool_input"]["command"]
+    assert f"cd {workspace}" not in cmd

@@ -1324,19 +1324,18 @@ async def on_pre_tool_use_ledger(
                 updated_tool_input = normalized_input
                 tool_input = normalized_input
 
-    # Keep Bash relative paths scoped to the active session workspace to avoid
-    # accidentally reading repo-root work_products from prior runs.
+    # Keep Bash execution rooted in the active session workspace by default to
+    # prevent accidental repo-root artifacts.
     if tool_name == "Bash" and isinstance(tool_input, dict):
         bash_workspace = OBSERVER_WORKSPACE_DIR or os.getenv("CURRENT_SESSION_WORKSPACE")
         if bash_workspace:
             cmd = tool_input.get("command") or tool_input.get("cmd")
             if isinstance(cmd, str):
                 cmd_stripped = cmd.lstrip()
-                uses_session_paths = bool(
-                    re.search(r"(^|\\s)(work_products|tasks|search_results|downloads|memory|\\.prompt_history)/", cmd)
-                )
                 has_cd_prefix = cmd_stripped.startswith(("cd ", "pushd ", "popd "))
-                if uses_session_paths and not has_cd_prefix:
+                auto_cd_env = str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1").strip().lower()
+                auto_cd_enabled = auto_cd_env not in {"0", "false", "no", "off"}
+                if auto_cd_enabled and not has_cd_prefix:
                     updated_tool_input = dict(tool_input)
                     updated_tool_input["command"] = f"cd {bash_workspace} && {cmd}"
                     tool_input = updated_tool_input

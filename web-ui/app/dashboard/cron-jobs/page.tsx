@@ -10,6 +10,7 @@ type CronJob = {
   command: string;
   every_seconds?: number | null;
   cron_expr?: string | null;
+  timeout_seconds?: number | null;
   enabled: boolean;
   workspace_dir?: string | null;
   user_id?: string | null;
@@ -72,8 +73,9 @@ function extractJobSessionId(job: CronJob): string {
 export default function DashboardCronJobsPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [command, setCommand] = useState("");
-  const [every, setEvery] = useState("30m");
-  const [runAt, setRunAt] = useState("");
+  const [scheduleTime, setScheduleTime] = useState("in 30 minutes");
+  const [repeat, setRepeat] = useState(false);
+  const [timeoutSeconds, setTimeoutSeconds] = useState("900");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,14 +105,24 @@ export default function DashboardCronJobsPage() {
     async (event: FormEvent) => {
       event.preventDefault();
       if (!command.trim()) return;
-      const runAtValue = runAt.trim();
-      const everyValue = every.trim();
-      const payload: Record<string, unknown> = { command: command.trim() };
-      if (runAtValue) {
-        payload.run_at = runAtValue;
-        payload.delete_after_run = true;
-      } else if (everyValue) {
-        payload.every = everyValue;
+      const scheduleValue = scheduleTime.trim();
+      if (!scheduleValue) {
+        setError("Enter a schedule time like 'in 20 minutes' or '4:30 pm'.");
+        return;
+      }
+      const payload: Record<string, unknown> = {
+        command: command.trim(),
+        schedule_time: scheduleValue,
+        repeat,
+      };
+      const timeoutValue = timeoutSeconds.trim();
+      if (timeoutValue) {
+        const parsed = Number.parseInt(timeoutValue, 10);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          setError("Timeout must be a positive number of seconds.");
+          return;
+        }
+        payload.timeout_seconds = parsed;
       }
       const res = await fetch(`${API_BASE}/api/v1/cron/jobs`, {
         method: "POST",
@@ -123,10 +135,9 @@ export default function DashboardCronJobsPage() {
         return;
       }
       setCommand("");
-      setRunAt("");
       await load();
     },
-    [command, every, runAt, load],
+    [command, scheduleTime, repeat, timeoutSeconds, load],
   );
 
   const runNow = useCallback(async (jobId: string) => {
@@ -165,7 +176,7 @@ export default function DashboardCronJobsPage() {
         </button>
       </div>
 
-      <form onSubmit={createJob} className="grid gap-2 rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:grid-cols-[1fr,120px,240px,auto]">
+      <form onSubmit={createJob} className="grid gap-2 rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:grid-cols-[1fr,230px,130px,130px,auto]">
         <input
           value={command}
           onChange={(e) => setCommand(e.target.value)}
@@ -173,18 +184,31 @@ export default function DashboardCronJobsPage() {
           className="rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm outline-none focus:border-cyan-500"
         />
         <input
-          value={every}
-          onChange={(e) => setEvery(e.target.value)}
-          placeholder="every (e.g. 30m)"
-          disabled={Boolean(runAt.trim())}
+          value={scheduleTime}
+          onChange={(e) => setScheduleTime(e.target.value)}
+          placeholder="Time (e.g. in 20 minutes, 4:30 pm)"
           className="rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm outline-none focus:border-cyan-500"
         />
-        <input
-          value={runAt}
-          onChange={(e) => setRunAt(e.target.value)}
-          placeholder="run at (e.g. 1am, tomorrow 9:15am, 2h, ISO)"
-          className="rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm outline-none focus:border-cyan-500"
-        />
+        <div className="flex items-center gap-2 rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm">
+          <input
+            id="repeat"
+            type="checkbox"
+            checked={repeat}
+            onChange={(e) => setRepeat(e.target.checked)}
+            className="h-4 w-4 accent-cyan-500"
+          />
+          <label htmlFor="repeat" className="select-none text-slate-200">
+            Repeat
+          </label>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            value={timeoutSeconds}
+            onChange={(e) => setTimeoutSeconds(e.target.value)}
+            placeholder="Timeout (sec)"
+            className="w-full rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm outline-none focus:border-cyan-500"
+          />
+        </div>
         <button
           type="submit"
           className="rounded-md border border-cyan-700 bg-cyan-500/20 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-500/30"
@@ -193,9 +217,9 @@ export default function DashboardCronJobsPage() {
         </button>
       </form>
       <p className="text-xs text-slate-400">
-        Set <span className="font-mono">run at</span> for one-shot jobs (auto delete after run), or leave it blank and use{" "}
-        <span className="font-mono">every</span> for recurring jobs. Supported <span className="font-mono">run at</span> formats: natural
-        phrases (`1am`, `tomorrow 9:15am`), relative duration (`30m`, `2h`), or ISO datetime.
+        Enter a natural time like <span className="font-mono">in 20 minutes</span> or <span className="font-mono">4:30 pm</span>. With{" "}
+        <span className="font-mono">Repeat</span> on, interval phrases repeat (e.g. <span className="font-mono">in 30 minutes</span>) and
+        clock times run daily (e.g. <span className="font-mono">4:30 pm</span>).
       </p>
 
       {error && (
@@ -221,6 +245,7 @@ export default function DashboardCronJobsPage() {
                       ? `cron ${job.cron_expr}`
                       : `every ${formatEverySeconds(job.every_seconds)}`} ·{" "}
                   {job.running ? "running" : job.enabled ? "enabled" : "disabled"} · next: {toLocalDateTime(job.next_run_at)}
+                  {job.timeout_seconds ? ` · timeout ${job.timeout_seconds}s` : ""}
                 </p>
                 {(() => {
                   const sessionId = extractJobSessionId(job);

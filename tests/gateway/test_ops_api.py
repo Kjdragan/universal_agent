@@ -881,6 +881,41 @@ def test_ops_calendar_events_with_cron_missed_stasis(client, tmp_path):
     assert payload["stasis_queue"]
 
 
+def test_ops_calendar_events_with_running_cron_not_marked_missed(client, tmp_path):
+    gateway_server._cron_service = CronService(
+        gateway_server.get_gateway(),
+        tmp_path,
+    )
+    cron_ws = tmp_path / "cron_running_workspace"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    job = gateway_server._cron_service.add_job(
+        user_id="calendar_owner",
+        workspace_dir=str(cron_ws),
+        command="long running task",
+        run_at=time.time() - 300,
+        enabled=True,
+    )
+
+    # Simulate in-flight execution for this scheduled occurrence.
+    scheduled_at = float(job.run_at or time.time())
+    gateway_server._cron_service.running_jobs.add(job.job_id)
+    gateway_server._cron_service.running_job_scheduled_at[job.job_id] = scheduled_at
+
+    resp = client.get("/api/v1/ops/calendar/events?source=cron&view=week")
+    assert resp.status_code == 200
+    payload = resp.json()
+    matching = [
+        item for item in payload.get("events", [])
+        if item.get("source") == "cron" and item.get("source_ref") == job.job_id
+    ]
+    assert matching, "Expected cron event for running job"
+    assert matching[0]["status"] == "running"
+    assert not any(
+        item.get("source") == "cron" and item.get("source_ref") == job.job_id and item.get("status") == "missed"
+        for item in payload.get("events", [])
+    )
+
+
 def test_ops_calendar_event_actions_for_cron(client, tmp_path, monkeypatch):
     monkeypatch.setenv("UA_CRON_MOCK_RESPONSE", "1")
     gateway_server._cron_service = CronService(
