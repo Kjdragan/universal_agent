@@ -700,10 +700,6 @@ class AgentHookSet:
         if not command.strip():
             return {}
 
-        # Avoid repeated injection if already present.
-        if "UA_ARTIFACTS_DIR=" in command or "CURRENT_SESSION_WORKSPACE=" in command:
-            return {}
-
         try:
             ws = get_current_workspace() or self.workspace_dir or ""
             if not ws:
@@ -711,12 +707,25 @@ class AgentHookSet:
             from universal_agent.artifacts import resolve_artifacts_dir
 
             artifacts_root = str(resolve_artifacts_dir())
-            prefix = (
-                f"export CURRENT_SESSION_WORKSPACE={shlex.quote(ws)}; "
-                f"export UA_ARTIFACTS_DIR={shlex.quote(artifacts_root)}; "
-            )
+            cmd_stripped = command.lstrip()
+            has_cd_prefix = cmd_stripped.startswith(("cd ", "pushd ", "popd "))
+
+            auto_cd_env = str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1").strip().lower()
+            auto_cd_enabled = auto_cd_env not in {"0", "false", "no", "off"}
+
+            prefix_parts: list[str] = []
+            if "CURRENT_SESSION_WORKSPACE=" not in command:
+                prefix_parts.append(f"export CURRENT_SESSION_WORKSPACE={shlex.quote(ws)}")
+            if "UA_ARTIFACTS_DIR=" not in command:
+                prefix_parts.append(f"export UA_ARTIFACTS_DIR={shlex.quote(artifacts_root)}")
+            if auto_cd_enabled and not has_cd_prefix:
+                prefix_parts.append(f"cd {shlex.quote(ws)}")
+
+            if not prefix_parts:
+                return {}
+
             updated = dict(tool_input)
-            updated["command"] = prefix + command
+            updated["command"] = "; ".join(prefix_parts) + "; " + command
             return {"tool_input": updated}
         except Exception:
             return {}

@@ -104,6 +104,48 @@ def test_cron_job_crud_and_run():
                     assert resp.status == 200, data
                     assert data["job"]["run_at"] is not None
 
+                async with session.post(
+                    f"{base_url}/api/v1/cron/jobs",
+                    json={
+                        "command": "simple one-shot",
+                        "schedule_time": "in 5 minutes",
+                        "repeat": False,
+                        "timeout_seconds": 120,
+                    },
+                ) as resp:
+                    data = await resp.json()
+                    assert resp.status == 200, data
+                    assert data["job"]["run_at"] is not None
+                    assert data["job"]["delete_after_run"] is True
+                    assert data["job"]["timeout_seconds"] == 120
+
+                async with session.post(
+                    f"{base_url}/api/v1/cron/jobs",
+                    json={
+                        "command": "simple repeating interval",
+                        "schedule_time": "in 15 minutes",
+                        "repeat": True,
+                    },
+                ) as resp:
+                    data = await resp.json()
+                    assert resp.status == 200, data
+                    assert int(data["job"]["every_seconds"]) == 900
+                    assert data["job"]["run_at"] is None
+
+                async with session.post(
+                    f"{base_url}/api/v1/cron/jobs",
+                    json={
+                        "command": "simple repeating daily",
+                        "schedule_time": "4:30 pm",
+                        "repeat": True,
+                        "timezone": "America/Chicago",
+                    },
+                ) as resp:
+                    data = await resp.json()
+                    assert resp.status == 200, data
+                    assert data["job"]["cron_expr"] == "30 16 * * *"
+                    assert data["job"]["run_at"] is None
+
         asyncio.run(_run_flow())
     finally:
         process.terminate()

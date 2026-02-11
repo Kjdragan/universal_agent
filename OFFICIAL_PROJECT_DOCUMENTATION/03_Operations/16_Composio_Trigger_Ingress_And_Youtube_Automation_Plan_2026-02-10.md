@@ -192,9 +192,9 @@ Provision triggers per use case:
 
 Fallback strategy when Composio trigger setup fails:
 
-1. Use YouTube WebSub endpoint (push).
-2. Use RSS poller with dedupe.
-3. Always keep manual URL ingestion available.
+1. **Current scope decision (2026-02-10):** defer WebSub/RSS fallback implementation.
+2. Keep manual URL ingestion available now.
+3. Revisit WebSub and RSS only after Composio ingress is stable in production.
 
 ## Phased Implementation Plan
 
@@ -225,11 +225,11 @@ Fallback strategy when Composio trigger setup fails:
 2. Enforce output modes (`full`, `degraded_transcript_only`, `failed`) in manifest.
 3. Wire to explainer-first skill invocation contract.
 
-### Phase 4: Fallback Ingress
+### Phase 4: Fallback Ingress (Deferred)
 
-1. Add WebSub adapter route.
-2. Add RSS poller fallback with dedupe.
-3. Keep manual URL trigger endpoint.
+1. WebSub adapter route (deferred).
+2. RSS poller fallback with dedupe (deferred).
+3. Manual URL trigger endpoint is in active scope and should remain enabled.
 
 ### Phase 5: Observability And Ops
 
@@ -280,3 +280,30 @@ Fallback strategy when Composio trigger setup fails:
 2. Add `/hooks/composio` mapping + verifier transform.
 3. Draft the YouTube subagent contract and connect it to the normalized event envelope.
 4. Provision initial YouTube trigger set for one channel as pilot.
+
+## Scope Update (2026-02-10)
+
+1. Prioritize Composio trigger ingress end-to-end.
+2. Keep manual URL ingestion path active.
+3. Defer YouTube fallback ingestion (WebSub/RSS) until after Composio rollout validation.
+
+## Composio-First Quickstart
+
+1. Ensure secrets are configured:
+   1. `COMPOSIO_WEBHOOK_SECRET`
+   2. `UA_HOOKS_TOKEN` (recommended for manual endpoint auth)
+2. Bootstrap mappings (dry-run):
+   1. `uv run python scripts/bootstrap_composio_youtube_hooks.py`
+3. Write mappings to ops config:
+   1. `uv run python scripts/bootstrap_composio_youtube_hooks.py --write`
+4. Enable hooks and set token from env:
+   1. `uv run python scripts/bootstrap_composio_youtube_hooks.py --write --enable-hooks --set-token-from-env`
+5. Or set an explicit token directly:
+   1. `uv run python scripts/bootstrap_composio_youtube_hooks.py --write --enable-hooks --token "<your-token>"`
+6. Register/update Composio webhook subscription (recommended helper):
+   1. `uv run python scripts/register_composio_webhook_subscription.py --webhook-url "https://<gateway-host>/api/v1/hooks/composio"`
+   2. This helper handles single-subscription replacement and writes `COMPOSIO_WEBHOOK_SECRET` to `.env`.
+7. Configure Composio subscription webhook URL (manual alternative):
+   1. `https://<gateway-host>/api/v1/hooks/composio`
+8. Manual URL ingestion endpoint remains:
+   1. `POST /api/v1/hooks/youtube/manual`

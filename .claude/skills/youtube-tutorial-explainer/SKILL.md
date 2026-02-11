@@ -1,85 +1,92 @@
 ---
 name: youtube-tutorial-explainer
-description: [TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]
+description: |
+  Create an explainer-first tutorial artifact from a YouTube video so the user can learn without watching the full video.
+  Use when input is a YouTube URL or YouTube trigger payload (manual webhook or Composio trigger), and produce concise teachable notes with optional code only when it materially improves learning.
 ---
 
-# Youtube Tutorial Explainer
+# YouTube Tutorial Explainer (V2)
 
-## Overview
+Build a practical tutorial package from a YouTube video with this priority:
 
-[TODO: 1-2 sentences explaining what this skill enables]
+1. Teach clearly from transcript + visual evidence.
+2. Add implementation/code only when it truly helps.
+3. Do not fail if video download/vision fails and transcript is usable.
 
-## Structuring This Skill
+## When To Use
 
-[TODO: Choose the structure that best fits this skill's purpose. Common patterns:
+Use this skill when any of these are true:
 
-**1. Workflow-Based** (best for sequential processes)
-- Works well when there are clear step-by-step procedures
-- Example: DOCX skill with "Workflow Decision Tree" → "Reading" → "Creating" → "Editing"
-- Structure: ## Overview → ## Workflow Decision Tree → ## Step 1 → ## Step 2...
+1. User shares a YouTube URL and asks for a tutorial, summary, or implementation guide.
+2. A webhook payload contains a YouTube video URL/video ID.
+3. You need an "explain it like a tutorial" result with optional code appendix.
 
-**2. Task-Based** (best for tool collections)
-- Works well when the skill offers different operations/capabilities
-- Example: PDF skill with "Quick Start" → "Merge PDFs" → "Split PDFs" → "Extract Text"
-- Structure: ## Overview → ## Quick Start → ## Task Category 1 → ## Task Category 2...
+## Output Policy (Mandatory)
 
-**3. Reference/Guidelines** (best for standards or specifications)
-- Works well for brand guidelines, coding standards, or requirements
-- Example: Brand styling with "Brand Guidelines" → "Colors" → "Typography" → "Features"
-- Structure: ## Overview → ## Guidelines → ## Specifications → ## Usage...
+1. Use `CURRENT_SESSION_WORKSPACE` only for temporary downloads/processing.
+2. Write durable outputs to `UA_ARTIFACTS_DIR`.
+3. Create per-run folder:
+`UA_ARTIFACTS_DIR/youtube-tutorial-explainer/{YYYY-MM-DD}/{video-id-or-slug}__{HHMMSS}/`
 
-**4. Capabilities-Based** (best for integrated systems)
-- Works well when the skill provides multiple interrelated features
-- Example: Product Management with "Core Capabilities" → numbered capability list
-- Structure: ## Overview → ## Core Capabilities → ### 1. Feature → ### 2. Feature...
+Minimum files:
 
-Patterns can be mixed and matched as needed. Most skills combine patterns (e.g., start with task-based, add workflow for complex operations).
+1. `manifest.json`
+2. `EXPLAINER.md` (primary deliverable)
+3. `KEY_POINTS.md` (ultra-condensed checklist)
+4. `sources.md`
 
-Delete this entire "Structuring This Skill" section when done - it's just guidance.]
+Optional files:
 
-## [TODO: Replace with the first main section based on chosen structure]
+1. `CODE_APPENDIX.md` (only when code is genuinely useful)
+2. `transcript.clean.txt`
+3. `visuals/` (keyframes/OCR/notes)
 
-[TODO: Add content here. See examples in existing skills:
-- Code samples for technical skills
-- Decision trees for complex workflows
-- Concrete examples with realistic user requests
-- References to scripts/templates/references as needed]
+## Workflow
 
-## Resources
+1. Normalize input:
+   1. Accept direct YouTube URL.
+   2. Accept webhook payload fields like `video_url`, `video_id`, `channel_id`, `mode`, `allow_degraded_transcript_only`.
+2. Gather lightweight metadata (title, channel, duration, id) using `yt-dlp --print` fields (avoid huge metadata payloads).
+3. Acquire transcript:
+   1. First available path from `references/ingestion_and_tooling.md`.
+   2. Normalize and dedupe into `transcript.clean.txt`.
+4. Acquire visual evidence (best effort):
+   1. Use `yt-dlp` clip/frame extraction as needed.
+   2. Run Z.AI vision analysis when available.
+   3. If visual fails, continue transcript-only and mark degraded mode in `manifest.json`.
+5. Write explainer-first outputs:
+   1. `EXPLAINER.md`: teach concepts, workflow, pitfalls, assumptions, where uncertainty exists.
+   2. `KEY_POINTS.md`: concise operational checklist.
+   3. `CODE_APPENDIX.md`: include only minimal/high-value code.
+6. Finalize `manifest.json` with status:
+   1. `full`
+   2. `degraded_transcript_only`
+   3. `failed`
 
-This skill includes example resource directories that demonstrate how to organize different types of bundled resources:
+## Quality Rules
 
-### scripts/
-Executable code (Python/Bash/etc.) that can be run directly to perform specific operations.
+1. Prefer tutorial clarity over exhaustive dumps.
+2. Never claim visual findings without evidence.
+3. Never treat missing video as automatic hard failure if transcript is sufficient.
+4. Do not hardcode secrets or tokens in outputs.
+5. Do not run `uv add`, `pip install`, or mutate project dependencies for one-off runs.
 
-**Examples from other skills:**
-- PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF manipulation
-- DOCX skill: `document.py`, `utilities.py` - Python modules for document processing
+## Trigger Ingress
 
-**Appropriate for:** Python scripts, shell scripts, or any executable code that performs automation, data processing, or specific operations.
+Supported trigger paths in this project:
 
-**Note:** Scripts may be executed without loading into context, but can still be read by Claude for patching or environment adjustments.
+1. `POST /api/v1/hooks/composio` (Composio-triggered)
+2. `POST /api/v1/hooks/youtube/manual` (manual URL ingestion)
 
-### references/
-Documentation and reference material intended to be loaded into context to inform Claude's process and thinking.
+Use `references/composio_wiring_checklist.md` for setup/validation.
 
-**Examples from other skills:**
-- Product management: `communication.md`, `context_building.md` - detailed workflow guides
-- BigQuery: API reference documentation and query examples
-- Finance: Schema documentation, company policies
+## References
 
-**Appropriate for:** In-depth documentation, API references, database schemas, comprehensive guides, or any detailed information that Claude should reference while working.
+1. Tool/API selection and fallback matrix:
+   `references/ingestion_and_tooling.md`
+2. Composio + manual webhook setup checklist:
+   `references/composio_wiring_checklist.md`
+3. Deliverable schema and status contract:
+   `references/output_contract.md`
 
-### assets/
-Files not intended to be loaded into context, but rather used within the output Claude produces.
-
-**Examples from other skills:**
-- Brand styling: PowerPoint template files (.pptx), logo files
-- Frontend builder: HTML/React boilerplate project directories
-- Typography: Font files (.ttf, .woff2)
-
-**Appropriate for:** Templates, boilerplate code, document templates, images, icons, fonts, or any files meant to be copied or used in the final output.
-
----
-
-**Any unneeded directories can be deleted.** Not every skill requires all three types of resources.
+If a user asks for a "YouTube tutorial summary," default to this skill.

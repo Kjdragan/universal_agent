@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import time
 import uuid
@@ -126,6 +127,26 @@ ALLOWED_USERS = set()
 _allowed_users_str = os.getenv("UA_ALLOWED_USERS", "").strip()
 if _allowed_users_str:
     ALLOWED_USERS = {u.strip() for u in _allowed_users_str.split(",") if u.strip()}
+    # Keep strict allowlist mode, but automatically include runtime technical identities
+    # that are commonly used by first-party UA services.
+    _runtime_identity_candidates = {
+        (os.getenv("COMPOSIO_USER_ID") or "").strip(),
+        (os.getenv("DEFAULT_USER_ID") or "").strip(),
+        (os.getenv("UA_DASHBOARD_OWNER_ID") or "").strip(),
+    }
+    _telegram_allowed = (os.getenv("TELEGRAM_ALLOWED_USER_IDS") or "").strip()
+    if _telegram_allowed:
+        _runtime_identity_candidates.update(
+            {item.strip() for item in _telegram_allowed.split(",") if item.strip()}
+        )
+    _runtime_identity_candidates.discard("")
+    _added_runtime_identities = sorted(_runtime_identity_candidates - ALLOWED_USERS)
+    if _added_runtime_identities:
+        ALLOWED_USERS.update(_added_runtime_identities)
+        logger.info(
+            "➕ Added runtime identities to allowlist: %s",
+            ", ".join(_added_runtime_identities),
+        )
     logger.info(f"🔒 Authenticated Access Only. Allowed Users: {len(ALLOWED_USERS)}")
 else:
     logger.info("🔓 Public Access Mode (No Allowlist configured)")
@@ -180,6 +201,9 @@ class CronJobCreateRequest(BaseModel):
     user_id: Optional[str] = None
     workspace_dir: Optional[str] = None
     command: str
+    schedule_time: Optional[str] = None  # Simplified time input (e.g., "in 20 minutes", "4:30 pm")
+    repeat: Optional[bool] = None  # Simplified repeat toggle
+    timeout_seconds: Optional[int] = None  # Per-job execution timeout
     every: Optional[str] = None  # Simple interval (e.g., "30m", "1h")
     cron_expr: Optional[str] = None  # 5-field cron expression (e.g., "0 7 * * 1")
     timezone: str = "UTC"  # Timezone for cron expression
@@ -192,6 +216,7 @@ class CronJobCreateRequest(BaseModel):
 
 class CronJobUpdateRequest(BaseModel):
     command: Optional[str] = None
+    timeout_seconds: Optional[int] = None
     every: Optional[str] = None
     cron_expr: Optional[str] = None
     timezone: Optional[str] = None
@@ -1195,6 +1220,60 @@ def _emit_cron_event(payload: dict) -> None:
     _scheduling_record_event("cron", event_type)
     _scheduling_event_bus.publish("cron", event_type, payload)
     _scheduling_counter_inc("event_bus_published")
+    run_data = payload.get("run") if isinstance(payload.get("run"), dict) else None
+    if event_type == "cron_run_completed" and run_data:
+        run_status = str(run_data.get("status") or "unknown").strip().lower() or "unknown"
+        job_id = str(run_data.get("job_id") or "").strip()
+        run_id = str(run_data.get("run_id") or "").strip()
+        job = _cron_service.get_job(job_id) if _cron_service and job_id else None
+        command = str(getattr(job, "command", "") or "").strip()
+        if not command:
+            command = f"job {job_id}" if job_id else "cron job"
+        if len(command) > 120:
+            command = f"{command[:117]}..."
+
+        session_id = ""
+        if job:
+            metadata = getattr(job, "metadata", {}) or {}
+            if isinstance(metadata, dict):
+                session_id = str(
+                    metadata.get("session_id")
+                    or metadata.get("target_session_id")
+                    or metadata.get("target_session")
+                    or ""
+                ).strip()
+
+        if run_status == "success":
+            title = "Cron Run Succeeded"
+            severity = "info"
+            kind = "cron_run_success"
+            message = f"{command}"
+        else:
+            title = "Cron Run Failed"
+            severity = "error"
+            kind = "cron_run_failed"
+            error_text = str(run_data.get("error") or "").strip()
+            message = f"{command}"
+            if error_text:
+                message = f"{message} | {error_text[:240]}"
+
+        _add_notification(
+            kind=kind,
+            title=title,
+            message=message,
+            session_id=session_id or None,
+            severity=severity,
+            metadata={
+                "job_id": job_id,
+                "run_id": run_id,
+                "status": run_status,
+                "scheduled_at": run_data.get("scheduled_at"),
+                "started_at": run_data.get("started_at"),
+                "finished_at": run_data.get("finished_at"),
+                "error": run_data.get("error"),
+                "source": "cron",
+            },
+        )
     event = {
         "type": event_type,
         "data": payload,
@@ -1630,7 +1709,13 @@ def _calendar_parse_run_at_text(text: str, timezone_name: str) -> Optional[float
     return None
 
 
-def _calendar_status_from_cron_run(run: Optional[dict[str, Any]], now_ts: float, scheduled_at: float, enabled: bool) -> str:
+def _calendar_status_from_cron_run(
+    run: Optional[dict[str, Any]],
+    now_ts: float,
+    scheduled_at: float,
+    enabled: bool,
+    is_running: bool = False,
+) -> str:
     if run:
         run_status = str(run.get("status", "")).lower()
         if run_status == "success":
@@ -1640,6 +1725,8 @@ def _calendar_status_from_cron_run(run: Optional[dict[str, Any]], now_ts: float,
         if run_status == "skipped":
             return "failed"
         return "failed"
+    if is_running:
+        return "running"
     if not enabled:
         return "disabled"
     return "missed" if scheduled_at < now_ts else "scheduled"
@@ -1815,15 +1902,27 @@ def _calendar_project_cron_events(
     for job in jobs:
         if owner and str(getattr(job, "user_id", "")).lower() != owner.strip().lower():
             continue
+        running_scheduled_at: Optional[float] = None
+        if _cron_service:
+            try:
+                running_scheduled_at = _cron_service.running_job_scheduled_at.get(str(job.job_id))
+            except Exception:
+                running_scheduled_at = None
         occurrences = _calendar_iter_cron_occurrences(job, start_ts, end_ts, max_count=400)
         for scheduled_at in occurrences:
             event_id = _calendar_event_id("cron", str(job.job_id), scheduled_at)
             matched_run = _calendar_match_cron_run(runs_by_job.get(str(job.job_id), []), scheduled_at)
+            is_running = bool(
+                matched_run is None
+                and running_scheduled_at is not None
+                and abs(float(running_scheduled_at) - float(scheduled_at)) <= 90
+            )
             status_value = _calendar_status_from_cron_run(
                 matched_run,
                 now_ts=now_ts,
                 scheduled_at=scheduled_at,
                 enabled=bool(job.enabled),
+                is_running=is_running,
             )
             event = {
                 "event_id": event_id,
@@ -3106,6 +3205,94 @@ async def get_system_presence():
     return {"nodes": list(_system_presence.values())}
 
 
+_SIMPLE_INTERVAL_RE = re.compile(
+    r"^(?:in\s+)?(\d+)\s*(second|seconds|sec|secs|s|minute|minutes|min|mins|m|hour|hours|hr|hrs|h|day|days|d)$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_interval_from_text(text: str) -> Optional[str]:
+    raw = (text or "").strip().lower()
+    if not raw:
+        return None
+    compact = raw.replace(" ", "")
+    if re.match(r"^\d+[smhd]$", compact):
+        return compact
+    match = _SIMPLE_INTERVAL_RE.match(raw)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2).lower()
+    if unit.startswith(("second", "sec")) or unit == "s":
+        suffix = "s"
+    elif unit.startswith(("minute", "min")) or unit == "m":
+        suffix = "m"
+    elif unit.startswith(("hour", "hr")) or unit == "h":
+        suffix = "h"
+    else:
+        suffix = "d"
+    return f"{amount}{suffix}"
+
+
+def _parse_time_of_day_for_daily_cron(text: str) -> Optional[tuple[int, int]]:
+    raw = (text or "").strip().lower()
+    if not raw:
+        return None
+    for prefix in ("today ", "tomorrow ", "tonight "):
+        if raw.startswith(prefix):
+            raw = raw[len(prefix):].strip()
+            break
+    if raw.startswith("at "):
+        raw = raw[3:].strip()
+    match = re.match(r"^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$", raw)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or "0")
+    meridiem = (match.group(3) or "").lower()
+    if minute < 0 or minute > 59:
+        return None
+    if meridiem:
+        if hour < 1 or hour > 12:
+            return None
+        if meridiem == "pm" and hour < 12:
+            hour += 12
+        if meridiem == "am" and hour == 12:
+            hour = 0
+    elif hour > 23:
+        return None
+    return hour, minute
+
+
+def _resolve_simplified_schedule_fields(
+    schedule_time: str,
+    repeat: bool,
+    timezone_name: str,
+) -> tuple[Optional[str], Optional[str], Optional[float], bool]:
+    text = (schedule_time or "").strip()
+    if not text:
+        raise ValueError("schedule_time is required when using simplified cron input.")
+
+    if repeat:
+        every = _normalize_interval_from_text(text)
+        if every:
+            return every, None, None, False
+        tod = _parse_time_of_day_for_daily_cron(text)
+        if tod:
+            hour, minute = tod
+            return None, f"{minute} {hour} * * *", None, False
+        raise ValueError(
+            "For repeating jobs, use a relative interval like 'in 30 minutes' or a clock time like '4:30 pm'."
+        )
+
+    run_at_ts = parse_run_at(text, timezone_name=timezone_name)
+    if run_at_ts is None:
+        raise ValueError(
+            "Invalid schedule_time. Use natural text like 'in 20 minutes' or '4:30 pm'."
+        )
+    return None, None, run_at_ts, True
+
+
 @app.get("/api/v1/cron/jobs")
 async def list_cron_jobs():
     if not _cron_service:
@@ -3123,21 +3310,32 @@ async def create_cron_job(request: CronJobCreateRequest):
     if not _cron_service:
         raise HTTPException(status_code=400, detail="Cron service not available.")
     try:
-        from universal_agent.cron_service import parse_run_at
-        
         # Parse run_at (relative, ISO, or natural text in the request timezone)
         run_at_ts = parse_run_at(request.run_at, timezone_name=request.timezone) if request.run_at else None
+        every_raw = request.every
+        cron_expr = request.cron_expr
+        delete_after_run = request.delete_after_run
+
+        if request.schedule_time is not None:
+            every_raw, cron_expr, run_at_ts, delete_after_run = _resolve_simplified_schedule_fields(
+                schedule_time=request.schedule_time,
+                repeat=bool(request.repeat),
+                timezone_name=request.timezone,
+            )
+        elif request.repeat is not None and not (request.every or request.cron_expr or request.run_at):
+            raise ValueError("repeat requires schedule_time when legacy fields are not provided.")
         
         job = _cron_service.add_job(
             user_id=request.user_id or "cron",
             workspace_dir=_sanitize_workspace_dir_or_400(request.workspace_dir),
             command=request.command,
-            every_raw=request.every,
-            cron_expr=request.cron_expr,
+            every_raw=every_raw,
+            cron_expr=cron_expr,
             timezone=request.timezone,
             run_at=run_at_ts,
-            delete_after_run=request.delete_after_run,
+            delete_after_run=delete_after_run,
             model=request.model,
+            timeout_seconds=request.timeout_seconds,
             enabled=request.enabled,
             metadata=request.metadata or {},
         )
@@ -3164,12 +3362,12 @@ async def update_cron_job(job_id: str, request: CronJobUpdateRequest):
     if not job:
         raise HTTPException(status_code=404, detail="Cron job not found")
     
-    from universal_agent.cron_service import parse_run_at
-    
     # Build updates dict, only including non-None values
     updates: dict = {}
     if request.command is not None:
         updates["command"] = request.command
+    if request.timeout_seconds is not None:
+        updates["timeout_seconds"] = request.timeout_seconds
     if request.every is not None:
         updates["every"] = request.every
     if request.cron_expr is not None:
