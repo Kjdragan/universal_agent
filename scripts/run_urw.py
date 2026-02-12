@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default="claude-sonnet-4-20250514",
+        default=os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5"),
         help="Model for decomposition/evaluation",
     )
     parser.add_argument(

@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--llm-model",
-        default=os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-4-20250514"),
+        default=os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5"),
         help="Model name for decomposition/evaluation.",
     )
     return parser.parse_args()

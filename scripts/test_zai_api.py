@@ -18,8 +18,12 @@ import httpx
 # Configuration from environment
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 AUTH_TOKEN = os.getenv("ZAI_API_KEY", os.getenv("ANTHROPIC_AUTH_TOKEN"))
-MODEL = os.getenv("MODEL_NAME", "claude-sonnet-4-5-20250929")
-HAIKU_MODEL = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "claude-3-5-haiku-20241022")
+MODEL = (
+    os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL")
+    or os.getenv("MODEL_NAME")
+    or "glm-5"
+)
+HAIKU_MODEL = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "glm-5")
 
 print(f"=== ZAI API Feasibility Test ===")
 print(f"Base URL: {BASE_URL}")

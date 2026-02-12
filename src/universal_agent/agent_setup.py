@@ -373,7 +373,11 @@ class AgentSetup:
             ])
 
         return ClaudeAgentOptions(
-            model="claude-3-5-sonnet-20241022",
+            model=(
+                (os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL") or "").strip()
+                or (os.getenv("MODEL_NAME") or "").strip()
+                or "glm-5"
+            ),
             add_dirs=[os.path.join(self.src_dir, ".claude")],
             setting_sources=["project"],  # Enable loading agents from .claude/agents/
             disallowed_tools=disallowed_tools,

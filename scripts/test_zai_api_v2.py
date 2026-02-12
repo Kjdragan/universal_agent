@@ -22,7 +22,7 @@ import httpx
 # Configuration
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
 AUTH_TOKEN = os.getenv("ZAI_API_KEY", os.getenv("ANTHROPIC_AUTH_TOKEN"))
-FAST_MODEL = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "glm-4.7")
+FAST_MODEL = os.getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "glm-5")
 
 # Sample corpus files (simulate 10 research files)
 SAMPLE_CORPUS = [

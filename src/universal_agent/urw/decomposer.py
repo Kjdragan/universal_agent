@@ -11,6 +11,7 @@ Decomposes user requests into atomic tasks that:
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -293,7 +294,7 @@ class TemplateDecomposer(Decomposer):
 class LLMDecomposer(Decomposer):
     """Decomposer that uses an LLM to generate task breakdown."""
 
-    def __init__(self, llm_client: Any, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, llm_client: Any, model: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5")):
         self.llm_client = llm_client
         self.model = model
 
@@ -400,7 +401,7 @@ Return ONLY the JSON array, no additional text."""
 class HybridDecomposer(Decomposer):
     """Combines template and LLM decomposition."""
 
-    def __init__(self, llm_client: Any, templates: Optional[Dict] = None, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, llm_client: Any, templates: Optional[Dict] = None, model: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5")):
         self.template_decomposer = TemplateDecomposer(templates)
         self.llm_decomposer = LLMDecomposer(llm_client, model)
 

@@ -58,7 +58,7 @@ class URWConfig:
 
     llm_model: str = field(
         default_factory=lambda: os.getenv(
-            "ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-4-20250514"
+            "ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5"
         )
     )
 

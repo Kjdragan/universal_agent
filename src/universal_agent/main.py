@@ -764,6 +764,21 @@ _LETTA_SUBAGENT_ENABLED = os.getenv("UA_LETTA_SUBAGENT_MEMORY", "0").lower() in 
     "yes",
 }
 
+
+def _resolve_default_anthropic_model() -> str:
+    return (
+        (os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL") or "").strip()
+        or (os.getenv("MODEL_NAME") or "").strip()
+        or "glm-5"
+    )
+
+
+def _resolve_letta_model() -> str:
+    model = _resolve_default_anthropic_model()
+    if "/" in model:
+        return model
+    return f"anthropic/{model}"
+
 try:
     from agentic_learning import learning, AgenticLearning, AsyncAgenticLearning
     
@@ -780,7 +795,7 @@ try:
                 _letta_client.agents.create(
                     agent=LETTA_AGENT_NAME,
                     memory=LETTA_MEMORY_BLOCKS,
-                    model="anthropic/claude-sonnet-4-20250514",
+                    model=_resolve_letta_model(),
                 )
                 print(f"✅ Letta agent '{LETTA_AGENT_NAME}' created")
         except Exception as e:
@@ -891,7 +906,7 @@ async def _ensure_letta_agent(agent_name: str) -> None:
         await _letta_async_client.agents.create(
             agent=agent_name,
             memory=LETTA_MEMORY_BLOCKS,
-            model="anthropic/claude-sonnet-4-20250514",
+            model=_resolve_letta_model(),
         )
     except Exception:
         return
@@ -6840,7 +6855,7 @@ async def setup_session(
     if attach_stdio:
         setup_log_bridge(agent)
     options = ClaudeAgentOptions(
-        model="claude-3-5-sonnet-20241022",
+        model=_resolve_default_anthropic_model(),
         add_dirs=[os.path.join(src_dir, ".claude")],
         setting_sources=["project"],  # Enable loading agents from .claude/agents/
         disallowed_tools=disallowed_tools,
@@ -7681,7 +7696,7 @@ async def main(args: argparse.Namespace):
             _letta_client.agents.create(
                 agent=LETTA_AGENT_NAME,
                 memory=LETTA_MEMORY_BLOCKS,
-                model="anthropic/claude-sonnet-4-20250514",
+                model=_resolve_letta_model(),
             )
             print(f"   Recreated agent: {LETTA_AGENT_NAME}")
             
