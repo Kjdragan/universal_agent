@@ -101,22 +101,11 @@ export default function DashboardChatPage() {
           </button>
           <button
             type="button"
-            onClick={() => openOrFocusChatWindow({ role: attachRole })}
+            onClick={() => openOrFocusChatWindow({ role: "writer" })}
             className="rounded-md border border-cyan-700 bg-cyan-500/20 px-3 py-1.5 text-sm text-cyan-100 hover:bg-cyan-500/30"
           >
-            Open New Chat Surface
+            Open Chat
           </button>
-          <div className="ml-auto flex items-center gap-2 text-xs text-slate-300">
-            <span>Attach as</span>
-            <select
-              value={attachRole}
-              onChange={(e) => setAttachRole(e.target.value as "writer" | "viewer")}
-              className="rounded-md border border-slate-700 bg-slate-900/80 px-2 py-1 text-xs"
-            >
-              <option value="writer">writer</option>
-              <option value="viewer">viewer</option>
-            </select>
-          </div>
         </div>
 
         {error && (

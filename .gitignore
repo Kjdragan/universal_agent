@@ -21,6 +21,8 @@ uv.lock
 .env
 .env.local
 .env.*.local
+# Explicit local secret snapshot from VPS security sync.
+tmp/vps_security_env_keys_*.env
 identity_registry.json
 
 # === IDEs ===

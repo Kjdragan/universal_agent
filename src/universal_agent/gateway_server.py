@@ -4746,26 +4746,40 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
     connection_id = f"gw_{session_id}_{time.time()}"
     # Register connection with session_id
     await manager.connect(connection_id, websocket, session_id)
-    _increment_metric("ws_attach_attempts")
-
+    
     gateway = get_gateway()
     session = get_session(session_id)
 
     if not session:
-        _increment_metric("resume_attempts")
         try:
             session = await gateway.resume_session(session_id)
+            # Success - count metrics
+            _increment_metric("resume_attempts")
+            _increment_metric("resume_successes")
+            _increment_metric("ws_attach_attempts")
+            
             session.metadata["user_id"] = session.user_id
             store_session(session)
-            _increment_metric("resume_successes")
             if _heartbeat_service:
                 _heartbeat_service.register_session(session)
         except ValueError:
-            _increment_metric("resume_failures")
-            _increment_metric("ws_attach_failures")
+            # Session Not Found - do NOT count as continuity failure
             await websocket.close(code=4004, reason="Session not found")
             manager.disconnect(connection_id, session_id)
             return
+        except Exception:
+            # System error - count as failure
+            _increment_metric("resume_attempts")
+            _increment_metric("resume_failures")
+            _increment_metric("ws_attach_attempts")
+            _increment_metric("ws_attach_failures")
+            logger.exception(f"Failed to resume session {session_id}")
+            await websocket.close(code=1011, reason="Internal Error")
+            manager.disconnect(connection_id, session_id)
+            return
+    else:
+        # Session exists - count attempt
+        _increment_metric("ws_attach_attempts")
 
     session.metadata.setdefault("user_id", session.user_id)
 

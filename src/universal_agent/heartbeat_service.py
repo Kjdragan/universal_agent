@@ -655,8 +655,65 @@ class HeartbeatService:
                 logger.critical(f"Scheduler loop crash: {e}", exc_info=True)
                 await asyncio.sleep(5)
 
+    def _check_session_idle(self, session: GatewaySession) -> bool:
+        """
+        Check if session is idle (no connections, no active runs, and past timeout).
+        Returns True if session was unregistered (and thus processing should stop).
+        """
+        # Get runtime metadata
+        runtime = session.metadata.get("runtime", {})
+        active_connections = int(runtime.get("active_connections", 0))
+        active_runs = int(runtime.get("active_runs", 0))
+
+        # Check legacy connection manager just in case (e.g. if metadata sync failed)
+        cm_connections = 0
+        if self.connection_manager and hasattr(self.connection_manager, "session_connections"):
+             connections = self.connection_manager.session_connections.get(session.session_id)
+             if connections:
+                 cm_connections = len(connections)
+        
+        # If any connections exist, it's not idle
+        if active_connections > 0 or cm_connections > 0:
+            return False
+            
+        # If any runs are active, it's not idle
+        if active_runs > 0:
+            return False
+
+        # Check idle duration
+        last_activity_str = runtime.get("last_activity_at")
+        if not last_activity_str:
+            # If no activity recorded ever, assume safe to keep or handle elsewhere
+            return False
+            
+        try:
+            # Handle Z suffix for older python versions if needed
+            ts_str = str(last_activity_str).replace("Z", "+00:00")
+            last_activity = datetime.fromisoformat(ts_str)
+            now = datetime.now(last_activity.tzinfo) if last_activity.tzinfo else datetime.now()
+            
+            # Default 5 minutes (300s)
+            idle_timeout = int(os.getenv("UA_HEARTBEAT_IDLE_TIMEOUT", "300"))
+            
+            elapsed = (now - last_activity).total_seconds()
+            if elapsed > idle_timeout:
+                logger.info(
+                    "🧹 Unregistering idle session %s (idle for %.1fs > %ds, 0 connections)", 
+                    session.session_id, elapsed, idle_timeout
+                )
+                self.unregister_session(session.session_id)
+                return True
+        except Exception as e:
+            logger.warning(f"Failed to check idle state for {session.session_id}: {e}")
+            
+        return False
+
     async def _process_session(self, session: GatewaySession):
         """Check if a session needs a heartbeat run."""
+        # Check for idle cleanup first
+        if self._check_session_idle(session):
+            return
+
         if session.session_id in self.busy_sessions:
             return  # Skip if busy executing normal request
 
