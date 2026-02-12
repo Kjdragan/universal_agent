@@ -58,6 +58,7 @@ from universal_agent.ops_config import (
     ops_config_schema,
     write_ops_config,
 )
+from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.approvals import list_approvals, update_approval, upsert_approval
 from universal_agent.hooks_service import HooksService
 from universal_agent.security_paths import (
@@ -4676,6 +4677,60 @@ async def ops_remote_sync_set(request: Request, payload: OpsRemoteSyncUpdateRequ
         "default_enabled": False,
         "config_key": "remote_debug.local_workspace_sync_enabled",
         "base_hash": ops_config_hash(updated),
+    }
+
+
+@app.post("/api/v1/ops/workspaces/purge")
+async def ops_workspaces_purge(request: Request, confirm: bool = False):
+    """
+    Purge all session workspaces and artifacts from the VPS filesystem.
+    This frees up disk space and prevents old data from syncing to local environments.
+    """
+    _require_ops_auth(request)
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Confirmation required. Pass ?confirm=true to purge all workspaces and artifacts.",
+        )
+
+    deleted_workspaces_count = 0
+    deleted_artifacts_count = 0
+    errors = []
+
+    # 1. Purge Workspaces
+    if WORKSPACES_DIR.exists():
+        for item in WORKSPACES_DIR.iterdir():
+            if item.is_dir():
+                # Safety check: simplistic heuristic to avoid deleting non-session dirs if any exist
+                # But "Purge All" implies all. We'll trust the WORKSPACES_DIR is dedicated.
+                try:
+                    shutil.rmtree(item)
+                    deleted_workspaces_count += 1
+                except Exception as e:
+                    errors.append(f"Failed to delete workspace {item.name}: {e}")
+
+    # 2. Purge Artifacts
+    artifacts_dir = resolve_artifacts_dir()
+    if artifacts_dir.exists():
+        for item in artifacts_dir.iterdir():
+            try:
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+                deleted_artifacts_count += 1
+            except Exception as e:
+                errors.append(f"Failed to delete artifact item {item.name}: {e}")
+
+    logger.warning(
+        f"🧹 PURGE COMPLETE: Deleted {deleted_workspaces_count} workspaces and {deleted_artifacts_count} artifact items."
+    )
+
+    return {
+        "deleted_workspaces": deleted_workspaces_count,
+        "deleted_artifacts_items": deleted_artifacts_count,
+        "errors": errors,
+        "status": "completed" if not errors else "completed_with_errors",
     }
 
 

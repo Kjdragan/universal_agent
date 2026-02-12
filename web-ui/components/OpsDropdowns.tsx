@@ -1301,9 +1301,32 @@ export function OpsConfigSection() {
     remoteSyncSaving,
     loadRemoteSync,
     setRemoteSync,
-    opsSchemaText,
     opsSchemaStatus,
   } = useOps();
+
+  const purgeRemoteData = useCallback(async () => {
+    if (!confirm("⚠️ DANGER: This will delete ALL session workspaces and artifacts on the specific remote VPS.\n\nRunning sessions may fail. Local files are NOT affected.\n\nAre you sure you want to PURGE ALL REMOTE DATA?")) {
+      return;
+    }
+    try {
+      setRemoteSyncSaving(true); // Re-using this specific loading state for now
+      const r = await fetch(`${API_BASE}/api/v1/ops/workspaces/purge?confirm=true`, {
+        method: "POST",
+        headers: buildHeaders(),
+      });
+      if (!r.ok) {
+        const msg = await r.text();
+        throw new Error(msg || `Purge failed (${r.status})`);
+      }
+      const data = await r.json();
+      alert(`Purge Complete!\n\nDeleted Workspaces: ${data.deleted_workspaces}\nDeleted Artifact Items: ${data.deleted_artifacts_items}\n\n${data.errors.length > 0 ? "Errors:\n" + data.errors.join("\n") : "No errors."}`);
+    } catch (e) {
+      alert(`Purge failed: ${(e as Error).message}`);
+    } finally {
+      setRemoteSyncSaving(false);
+    }
+  }, []);
+
   return (
     <div className="p-3 text-xs space-y-3">
       <div className="border rounded bg-background/40 p-2">
@@ -1334,6 +1357,22 @@ export function OpsConfigSection() {
           </button>
         </div>
         {remoteSyncError && <div className="text-[10px] text-red-500 mt-2">{remoteSyncError}</div>}
+
+        <div className="mt-4 pt-3 border-t border-border/40">
+          <div className="font-semibold text-rose-400 mb-1">Danger Zone</div>
+          <div className="text-[10px] text-muted-foreground mb-2">
+            Permanently delete all session workspaces and artifacts on the remote server.
+            This does not affect your local files.
+          </div>
+          <button
+            type="button"
+            className="text-xs px-2 py-1 rounded border border-rose-500/50 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 transition-colors disabled:opacity-50"
+            onClick={purgeRemoteData}
+            disabled={remoteSyncSaving}
+          >
+            Purge All Remote Data
+          </button>
+        </div>
       </div>
       <div className="border rounded bg-background/40 p-2">
         <div className="flex items-center justify-between mb-2">
