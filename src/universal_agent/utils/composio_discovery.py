@@ -34,6 +34,7 @@ except ImportError:
         "compile_report",
         "upload_to_composio",
         "list_directory",
+        "inspect_session_workspace",
         "append_to_file",
         "finalize_research",
         "generate_image",

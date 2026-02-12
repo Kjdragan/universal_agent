@@ -52,6 +52,12 @@ _TOOL_SCHEMAS: dict[str, ToolSchema] = {
         required=("path",),
         example="list_directory({path: '/tmp'})",
     ),
+    "inspect_session_workspace": ToolSchema(
+        example=(
+            "inspect_session_workspace({session_id: 'session_20260211_231748_2b12a9df', "
+            "include_transcript: true, tail_lines: 120})"
+        ),
+    ),
     "append_to_file": ToolSchema(
         required=("path", "content"),
         example="append_to_file({path: '/tmp/report.html', content: '<html>...</html>'})",

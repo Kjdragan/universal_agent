@@ -36,12 +36,14 @@ class EventType(str, Enum):
     # Server -> Client control events
     CONNECTED = "connected"
     QUERY_COMPLETE = "query_complete"
+    CANCELLED = "cancelled"
     PONG = "pong"
 
     # Client -> Server events
     QUERY = "query"
     APPROVAL = "approval"
     PING = "ping"
+    CANCEL = "cancel"
 
 
 @dataclass

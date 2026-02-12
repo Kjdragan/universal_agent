@@ -77,6 +77,11 @@ export class AgentWebSocket {
     return null;
   }
 
+  private isBackgroundStatus(statusData: Record<string, unknown>): boolean {
+    const source = String(statusData.source ?? "").trim().toLowerCase();
+    return source === "heartbeat";
+  }
+
   constructor(url?: string) {
     if (url) {
       this.url = url;
@@ -236,7 +241,7 @@ export class AgentWebSocket {
         this.updateStatus("connected");
       } else if (event.type === "status") {
         const statusData = event.data as Record<string, unknown>;
-        if (statusData.status === "processing") {
+        if (statusData.status === "processing" && !this.isBackgroundStatus(statusData)) {
           this.updateStatus("processing");
         }
       }

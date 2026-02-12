@@ -10,6 +10,7 @@ import json
 import re
 import logging
 import inspect
+import heapq
 from collections import Counter
 from datetime import datetime, timezone
 import traceback
@@ -188,6 +189,8 @@ except Exception:
     raise
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_WORKSPACES_ROOT = (Path(PROJECT_ROOT) / "AGENT_RUN_WORKSPACES").resolve()
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 def _resolve_workspace(preferred: str | None = None) -> str | None:
@@ -217,6 +220,13 @@ def _resolve_workspace(preferred: str | None = None) -> str | None:
         if os.path.exists(resolved):
             return resolved
     return None
+
+
+def _resolve_workspaces_root() -> Path:
+    raw = (os.getenv("UA_WORKSPACES_DIR") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return DEFAULT_WORKSPACES_ROOT
 
 
 def get_bridge():
@@ -1073,6 +1083,234 @@ def list_directory(path: str) -> str:
         return json.dumps(items, indent=2)
     except Exception as e:
         return f"Error listing directory: {str(e)}"
+
+
+def _workspace_scope_guard(workspace: Path) -> tuple[bool, str]:
+    """Ensure inspector reads only from approved workspace roots."""
+    allowed_roots = {_resolve_workspaces_root()}
+    current_workspace = _resolve_workspace()
+    if current_workspace:
+        allowed_roots.add(Path(current_workspace).resolve())
+
+    for root in allowed_roots:
+        try:
+            workspace.resolve().relative_to(root)
+            return True, ""
+        except Exception:
+            continue
+
+    roots_str = ", ".join(str(root) for root in sorted(allowed_roots))
+    return False, f"Workspace must be under one of: {roots_str}"
+
+
+def _resolve_workspace_for_inspection(session_id: str | None) -> tuple[Path | None, str, str]:
+    requested_session = (session_id or "").strip()
+    if requested_session:
+        if not SESSION_ID_PATTERN.match(requested_session):
+            return None, "", "Invalid session_id format."
+        workspace = (_resolve_workspaces_root() / requested_session).resolve()
+        ok, error = _workspace_scope_guard(workspace)
+        if not ok:
+            return None, "", error
+        if not workspace.exists():
+            return None, "", f"Session workspace not found: {requested_session}"
+        return workspace, "session_id", ""
+
+    current_workspace = _resolve_workspace()
+    if current_workspace:
+        workspace = Path(current_workspace).resolve()
+        ok, error = _workspace_scope_guard(workspace)
+        if not ok:
+            return None, "", error
+        if workspace.exists():
+            return workspace, "current_workspace", ""
+
+    return None, "", "No active workspace found. Provide session_id explicitly."
+
+
+def _safe_file_tail(path: Path, *, max_lines: int, max_bytes: int) -> dict[str, Any]:
+    if not path.exists():
+        return {"exists": False}
+
+    size_bytes = path.stat().st_size
+    read_bytes = min(size_bytes, max_bytes)
+    with open(path, "rb") as handle:
+        if size_bytes > read_bytes:
+            handle.seek(size_bytes - read_bytes)
+        chunk = handle.read(read_bytes)
+
+    text = chunk.decode("utf-8", errors="replace")
+    if size_bytes > read_bytes and "\n" in text:
+        text = text.split("\n", 1)[1]
+    lines = text.splitlines()
+    truncated = size_bytes > read_bytes or len(lines) > max_lines
+    tail_lines = lines[-max_lines:]
+
+    return {
+        "exists": True,
+        "size_bytes": size_bytes,
+        "tail_line_count": len(tail_lines),
+        "tail_truncated": truncated,
+        "tail": tail_lines,
+    }
+
+
+def _safe_json_preview(path: Path, *, max_bytes: int, max_keys: int = 40) -> dict[str, Any]:
+    if not path.exists():
+        return {"exists": False}
+
+    size_bytes = path.stat().st_size
+    if size_bytes > max_bytes:
+        return {
+            "exists": True,
+            "size_bytes": size_bytes,
+            "preview_skipped": True,
+            "reason": f"file exceeds max_bytes={max_bytes}",
+        }
+
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            payload = json.load(handle)
+    except Exception as exc:
+        return {
+            "exists": True,
+            "size_bytes": size_bytes,
+            "preview_skipped": True,
+            "reason": f"json_parse_error: {exc}",
+        }
+
+    if isinstance(payload, dict):
+        keys = list(payload.keys())
+        preview_keys = keys[:max_keys]
+        return {
+            "exists": True,
+            "size_bytes": size_bytes,
+            "keys": preview_keys,
+            "key_count": len(keys),
+            "preview": {k: payload.get(k) for k in preview_keys},
+        }
+
+    return {
+        "exists": True,
+        "size_bytes": size_bytes,
+        "type": type(payload).__name__,
+        "preview": payload,
+    }
+
+
+def _recent_files_snapshot(base_dir: Path, *, limit: int) -> dict[str, Any]:
+    if not base_dir.exists():
+        return {"exists": False, "total_files": 0, "recent": []}
+
+    newest_heap: list[tuple[float, Path]] = []
+    total_files = 0
+
+    for root, _, files in os.walk(base_dir):
+        for filename in files:
+            candidate = Path(root) / filename
+            total_files += 1
+            try:
+                mtime = candidate.stat().st_mtime
+            except Exception:
+                continue
+            if len(newest_heap) < limit:
+                heapq.heappush(newest_heap, (mtime, candidate))
+            else:
+                heapq.heappushpop(newest_heap, (mtime, candidate))
+
+    newest = sorted(newest_heap, key=lambda item: item[0], reverse=True)
+    recent = []
+    for mtime, file_path in newest:
+        try:
+            rel_path = str(file_path.relative_to(base_dir))
+            size_bytes = file_path.stat().st_size
+        except Exception:
+            continue
+        recent.append(
+            {
+                "path": rel_path,
+                "size_bytes": size_bytes,
+                "modified_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+            }
+        )
+
+    return {"exists": True, "total_files": total_files, "recent": recent}
+
+
+@mcp.tool()
+@trace_tool_output
+def inspect_session_workspace(
+    session_id: str = "",
+    include_transcript: bool = True,
+    tail_lines: int = 120,
+    max_bytes_per_file: int = 65536,
+    recent_file_limit: int = 25,
+) -> str:
+    """
+    Read-only snapshot of a session workspace for debugging and self-review.
+
+    By default this inspects the active workspace and includes transcript.md,
+    run.log/activity logs tail, trace.json, heartbeat state, and recent artifacts.
+    """
+    tail_lines = max(1, min(int(tail_lines or 120), 400))
+    max_bytes_per_file = max(4096, min(int(max_bytes_per_file or 65536), 262144))
+    recent_file_limit = max(1, min(int(recent_file_limit or 25), 80))
+
+    workspace, source, error = _resolve_workspace_for_inspection(session_id)
+    if workspace is None:
+        return json.dumps({"ok": False, "error": error}, indent=2)
+
+    payload: dict[str, Any] = {
+        "ok": True,
+        "workspace": str(workspace),
+        "session_id": workspace.name,
+        "source": source,
+        "includes": {
+            "transcript_md": include_transcript,
+            "tail_lines": tail_lines,
+            "max_bytes_per_file": max_bytes_per_file,
+            "recent_file_limit": recent_file_limit,
+        },
+        "files": {
+            "run.log": _safe_file_tail(
+                workspace / "run.log",
+                max_lines=tail_lines,
+                max_bytes=max_bytes_per_file,
+            ),
+            "activity_journal.log": _safe_file_tail(
+                workspace / "activity_journal.log",
+                max_lines=tail_lines,
+                max_bytes=max_bytes_per_file,
+            ),
+            "trace.json": _safe_json_preview(
+                workspace / "trace.json",
+                max_bytes=max_bytes_per_file,
+            ),
+            "heartbeat_state.json": _safe_json_preview(
+                workspace / "heartbeat_state.json",
+                max_bytes=max_bytes_per_file,
+            ),
+        },
+        "artifacts": {
+            "work_products": _recent_files_snapshot(
+                workspace / "work_products",
+                limit=recent_file_limit,
+            ),
+            "tasks": _recent_files_snapshot(
+                workspace / "tasks",
+                limit=recent_file_limit,
+            ),
+        },
+    }
+
+    if include_transcript:
+        payload["files"]["transcript.md"] = _safe_file_tail(
+            workspace / "transcript.md",
+            max_lines=tail_lines,
+            max_bytes=max_bytes_per_file,
+        )
+
+    return json.dumps(payload, indent=2)
 
 
 @mcp.tool()

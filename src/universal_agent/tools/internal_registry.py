@@ -24,6 +24,7 @@ from universal_agent.tools.research_bridge import (
 from universal_agent.tools.local_toolkit_bridge import (
     upload_to_composio_wrapper,
     list_directory_wrapper,
+    inspect_session_workspace_wrapper,
     append_to_file_wrapper,
     write_text_file_wrapper,
     finalize_research_wrapper,
@@ -61,6 +62,7 @@ def get_core_internal_tools() -> List[Callable]:
         compile_report_wrapper,
         upload_to_composio_wrapper,
         list_directory_wrapper,
+        inspect_session_workspace_wrapper,
         append_to_file_wrapper,
         write_text_file_wrapper,
         finalize_research_wrapper,
