@@ -9,6 +9,12 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+YOUTUBE_LEARNING_SUBAGENT = "youtube-explainer-expert"
+MODE_EXPLAINER_ONLY = "explainer_only"
+MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
+LEARNING_MODE_CONCEPT_ONLY = "concept_only"
+LEARNING_MODE_CONCEPT_PLUS_IMPLEMENTATION = "concept_plus_implementation"
+
 
 def _first_non_empty(*values: Any) -> str | None:
     for value in values:
@@ -24,6 +30,10 @@ def _pick(data: dict[str, Any], keys: list[str]) -> str | None:
         value = data.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+        if key == "resourceId" and isinstance(value, dict):
+            nested_video_id = value.get("videoId")
+            if isinstance(nested_video_id, str) and nested_video_id.strip():
+                return nested_video_id.strip()
     return None
 
 
@@ -130,23 +140,78 @@ def _is_youtube_event(trigger_slug: str | None, toolkit_slug: str | None, event_
     return any(key in event_payload for key in key_hints)
 
 
+def _looks_like_youtube_video_id(value: str | None) -> bool:
+    if not isinstance(value, str):
+        return False
+    candidate = value.strip()
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]{11}", candidate))
+
+
+def _normalize_mode(raw_mode: Any) -> str:
+    if not isinstance(raw_mode, str):
+        return MODE_EXPLAINER_ONLY
+    mode = raw_mode.strip().lower()
+    if not mode:
+        return MODE_EXPLAINER_ONLY
+    if mode in {MODE_EXPLAINER_ONLY, "explain", "explanation", "explainer"}:
+        return MODE_EXPLAINER_ONLY
+    if mode in {
+        MODE_EXPLAINER_PLUS_CODE,
+        "plus_code",
+        "code",
+        "with_code",
+        "explainer_with_code",
+        "explain_and_code",
+    }:
+        return MODE_EXPLAINER_PLUS_CODE
+    return MODE_EXPLAINER_ONLY
+
+
+def _coerce_bool(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+    return default
+
+
+def _learning_mode_from_mode(mode: str) -> str:
+    if mode == MODE_EXPLAINER_PLUS_CODE:
+        return LEARNING_MODE_CONCEPT_PLUS_IMPLEMENTATION
+    return LEARNING_MODE_CONCEPT_ONLY
+
+
 def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     payload = ctx.get("payload", {}) if isinstance(ctx, dict) else {}
     if not isinstance(payload, dict):
         return None
 
     event_type = _first_non_empty(payload.get("type"), payload.get("event_type"))
-    if event_type and event_type.lower() != "composio.trigger.message":
+    if event_type and event_type.strip().lower() not in {
+        "composio.trigger.message",
+        "new_playlist_item",
+        "youtube_new_playlist_item_trigger",
+    }:
         return None
 
     data = payload.get("data")
     if not isinstance(data, dict):
         data = {}
 
-    event_payload = data.get("data", {})
-    if not isinstance(event_payload, dict):
-        event_payload = data.get("payload", {})
-    if not isinstance(event_payload, dict):
+    event_payload: dict[str, Any] | Any = data.get("data")
+    if not isinstance(event_payload, dict) or not event_payload:
+        candidate = data.get("payload")
+        if isinstance(candidate, dict) and candidate:
+            event_payload = candidate
+    if not isinstance(event_payload, dict) or not event_payload:
         # Fallback for webhook payloads where data itself is already the event object.
         if isinstance(data, dict) and data:
             event_payload = dict(data)
@@ -176,10 +241,16 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     if not _is_youtube_event(trigger_slug, toolkit_slug, event_payload):
         return None
 
-    video_id = _pick(
+    explicit_video_id = _pick(
         event_payload,
-        ["video_id", "youtube_video_id", "id", "videoId", "resourceId"],
+        ["video_id", "youtube_video_id", "videoId", "resourceId"],
     )
+    fallback_item_id = _pick(event_payload, ["id"])
+    video_id = explicit_video_id or fallback_item_id
+    if video_id and not _looks_like_youtube_video_id(video_id):
+        if explicit_video_id is None:
+            video_id = None
+
     video_url = _pick(
         event_payload,
         ["video_url", "youtube_video_url", "url", "link", "videoLink"],
@@ -206,22 +277,28 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     title = _pick(event_payload, ["title", "video_title", "name"])
     published_at = _pick(event_payload, ["published_at", "publishedAt", "timestamp"])
 
-    mode = _first_non_empty(
+    raw_mode = _first_non_empty(
         event_payload.get("mode"),
         payload.get("mode"),
-        "explainer_only",
+        MODE_EXPLAINER_PLUS_CODE,
     )
+    mode = _normalize_mode(raw_mode)
+    learning_mode = _learning_mode_from_mode(mode)
     degraded_raw = event_payload.get("allow_degraded_transcript_only")
     if degraded_raw is None:
         degraded_raw = payload.get("allow_degraded_transcript_only", True)
-    allow_degraded = bool(degraded_raw)
+    allow_degraded = _coerce_bool(degraded_raw, default=True)
 
     session_key = _session_key(channel_id, video_id, payload)
     name = "ComposioYouTubeTrigger"
 
     message_lines = [
         "YouTube trigger received via Composio.",
-        "Run youtube tutorial processing for this video.",
+        "Route this run to the YouTube learning specialist.",
+        f"target_subagent: {YOUTUBE_LEARNING_SUBAGENT}",
+        "Use the youtube-tutorial-learning skill workflow.",
+        "Produce durable learning artifacts in UA_ARTIFACTS_DIR.",
+        "Required artifacts: README.md, CONCEPT.md, IMPLEMENTATION.md, implementation/, manifest.json.",
         f"video_url: {video_url}",
         f"video_id: {video_id or ''}",
         f"channel_id: {channel_id or ''}",
@@ -231,7 +308,9 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         f"trigger_slug: {trigger_slug or ''}",
         f"event_type: {event_type or ''}",
         f"mode: {mode}",
+        f"learning_mode: {learning_mode}",
         f"allow_degraded_transcript_only: {str(allow_degraded).lower()}",
+        "If learning_mode is concept_plus_implementation, include runnable code in implementation/ and explain how to run it.",
         "Use visual analysis when available, but proceed transcript-only when visual extraction is not feasible.",
     ]
 
@@ -239,5 +318,6 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         "kind": "agent",
         "name": name,
         "session_key": session_key,
+        "to": YOUTUBE_LEARNING_SUBAGENT,
         "message": "\n".join(message_lines),
     }

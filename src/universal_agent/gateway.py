@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import time
@@ -506,12 +507,37 @@ class ExternalGateway(Gateway):
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._http_client: Optional[httpx.AsyncClient] = None
+        self._auth_headers = self._build_auth_headers()
+        self._ws_headers_param = self._detect_ws_headers_param()
+
+    def _build_auth_headers(self) -> dict[str, str]:
+        token = (
+            (os.getenv("UA_INTERNAL_API_TOKEN") or "").strip()
+            or (os.getenv("UA_OPS_TOKEN") or "").strip()
+        )
+        if not token:
+            return {}
+        return {
+            "authorization": f"Bearer {token}",
+            "x-ua-internal-token": token,
+            "x-ua-ops-token": token,
+        }
+
+    def _detect_ws_headers_param(self) -> str:
+        try:
+            params = inspect.signature(websockets.connect).parameters
+        except Exception:
+            return "extra_headers"
+        if "additional_headers" in params:
+            return "additional_headers"
+        return "extra_headers"
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None:
             self._http_client = httpx.AsyncClient(
                 base_url=self._base_url,
                 timeout=self._timeout,
+                headers=self._auth_headers or None,
             )
         return self._http_client
 
@@ -557,8 +583,11 @@ class ExternalGateway(Gateway):
         ws_url = self._base_url.replace("http://", "ws://").replace("https://", "wss://")
         ws_url = f"{ws_url}/api/v1/sessions/{session.session_id}/stream"
         completed = False
+        ws_kwargs: dict[str, Any] = {}
+        if self._auth_headers:
+            ws_kwargs[self._ws_headers_param] = self._auth_headers
 
-        async with websockets.connect(ws_url) as ws:
+        async with websockets.connect(ws_url, **ws_kwargs) as ws:
             connected_msg = await ws.recv()
             connected_data = json.loads(connected_msg)
             if connected_data.get("type") != "connected":

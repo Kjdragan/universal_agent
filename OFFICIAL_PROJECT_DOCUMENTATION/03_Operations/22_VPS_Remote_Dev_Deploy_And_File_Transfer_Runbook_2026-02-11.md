@@ -137,6 +137,22 @@ rsync -avz -e "ssh -i ~/.ssh/id_ed25519" \
   /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_YYYYMMDD_xxxxxxxx/
 ```
 
+## One-command manual debug pull (all/new sessions + durable artifacts)
+```bash
+cd /home/kjdragan/lrepos/universal_agent
+scripts/pull_remote_workspaces_now.sh
+```
+
+## One-command manual debug pull (single session + durable artifacts)
+```bash
+cd /home/kjdragan/lrepos/universal_agent
+scripts/pull_remote_workspaces_now.sh session_YYYYMMDD_xxxxxxxx
+```
+
+Default mirrors created by the sync scripts:
+1. `/opt/universal_agent/AGENT_RUN_WORKSPACES` -> `AGENT_RUN_WORKSPACES`
+2. `/opt/universal_agent/artifacts` -> `tmp/remote_vps_artifacts`
+
 ---
 
 ## Recommended future integrations
@@ -186,4 +202,3 @@ This would make “work in web UI only” practical while still moving assets/de
 3. Restart only required unit(s).
 4. Verify `systemctl is-active` and recent logs.
 5. Ask user to hard refresh and validate in UI.
-

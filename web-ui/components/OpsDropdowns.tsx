@@ -966,7 +966,7 @@ export function CalendarSection() {
           </select>
           <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)} className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[10px]">
             <option value="all">source: all</option>
-            <option value="cron">cron</option>
+            <option value="cron">chron</option>
             <option value="heartbeat">heartbeat</option>
           </select>
           <span className="text-[10px] text-muted-foreground">timezone: {tz}</span>

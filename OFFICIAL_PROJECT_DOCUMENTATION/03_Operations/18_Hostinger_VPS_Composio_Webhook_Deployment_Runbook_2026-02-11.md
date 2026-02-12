@@ -314,8 +314,84 @@ Expected:
    path/env issue, not an app bug.
 2. `401 Unauthorized` during first synthetic test:
    caused by unexported vars (`BODY`, `WEBHOOK_ID`, `WEBHOOK_TS`) while generating signature.
-3. No immediate live trigger when playlist changed:
-   usually Composio trigger-side timing/config/account-scope behavior; UA ingress itself is already validated by synthetic signed tests.
+3. Composio trigger appeared "queued" but no UA run started:
+   not always a delivery problem. In our 2026-02-12 incident, webhook delivery reached UA, but payload parsing skipped action dispatch.
+
+## Addendum: 2026-02-12 Architecture Correction (Critical)
+
+### The Correct Troubleshooting Layers
+
+Treat YouTube trigger processing as three separate layers:
+
+1. Delivery Layer: Composio -> `POST /api/v1/hooks/composio`
+2. Recognition Layer: UA transform parses payload into a valid action
+3. Dispatch Layer: UA creates/resumes session and runs the agent
+
+Do not collapse these into one "Composio is broken" diagnosis.
+
+### Fast Log Signature Map
+
+Use:
+
+```bash
+journalctl -u universal-agent-gateway --since '15 minutes ago' --no-pager \
+  | grep -En "Hook ingress|composio-youtube-trigger|Dispatching hook action|Creating webhook session|Hook action dispatched|skipped|deduped|unauthorized"
+```
+
+Interpretation:
+
+1. No `Hook ingress received`:
+   delivery/subscription/DNS/TLS/path issue.
+2. `Hook ingress received` + `Hook ingress skipped`:
+   delivery is working; transform did not recognize payload as actionable.
+3. `Hook ingress accepted` + `Creating webhook session`:
+   recognition succeeded and dispatch started.
+4. `Hook action dispatched`:
+   run completed its dispatch cycle.
+5. `deduped replay` after one accepted event:
+   expected retry handling, not a failure.
+
+### Composio UI Fields: What They Actually Mean
+
+From logs and live incident behavior:
+
+1. `webhookInvocationResponse.status=QUEUED`:
+   webhook delivery attempt was queued/sent to your webhook URL.
+2. `sdkTriggerInvocation.status=ERROR` with "No subscribers are listening for this trigger":
+   Composio SDK-side subscriber channel status, not proof that your webhook endpoint failed.
+
+So if UA logs show `Hook ingress received`, webhook delivery succeeded regardless of SDK subscriber warning text.
+
+### Payload Shape Pitfall We Fixed
+
+Two payload families must be handled:
+
+1. Envelope form:
+   `{"type":"composio.trigger.message","data":{"data":{...}}}`
+2. Direct trigger form:
+   `{"event_type":"new_playlist_item","item":{...}}`
+
+The direct form caused skips before parser updates.
+
+### YouTube ID Pitfall We Fixed
+
+For playlist events:
+
+1. `item.id` can be a playlist-item identifier (long, not playable as a YouTube watch ID).
+2. Correct playable video ID is usually `item.snippet.resourceId.videoId` (11 chars).
+
+Architecture rule:
+
+1. Prefer `resourceId.videoId` / `videoId` for `video_id`.
+2. Treat long `item.id` as non-video fallback metadata, not primary playback ID.
+
+### Practical Outcome
+
+After applying parser fixes on 2026-02-12:
+
+1. Resend events changed from `skipped` to `accepted`.
+2. UA created new webhook sessions under `session_hook_yt_*`.
+3. Dispatch proceeded to the YouTube explainer flow.
 
 ## How To Confirm You Are In The Correct Composio Account/Project
 

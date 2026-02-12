@@ -2693,6 +2693,7 @@ SUBAGENT_EXPECTED_SKILLS = {
     "video-creation-expert": [],  # Uses MCP tools, not skills
     "browserbase": [],  # Uses Composio MCP tools, not skills
     "video-remotion-expert": ["video-remotion"],
+    "system-configuration-agent": [],
 }
 
 
@@ -6954,7 +6955,19 @@ async def setup_session(
             "   - Examples: 'Would you like me to email this report?', 'Should I save this to a different format?',\n"
             "     'I can schedule a calendar event for the mentioned deadline if you'd like.'\n"
             "   - Keep suggestions relevant to the completed task and the user's apparent goals.\n\n"
-            "11. 🎯 SKILLS - BEST PRACTICES KNOWLEDGE:\n"
+            "11. 🛠️ MANDATORY SYSTEM-CONFIGURATION DELEGATION:\n"
+            "   - If the user asks to change system/runtime parameters (Chron/Cron schedule changes, heartbeat settings,\n"
+            "     ops config behavior, service operational settings), delegate to `system-configuration-agent` via `Task`.\n"
+            "   - IMMEDIATE ROUTING RULE: for schedule/automation intent (examples: 'create cron/chron job', 'run every day',\n"
+            "     'reschedule this job', 'pause/resume job', 'change heartbeat interval'), your FIRST action must be\n"
+            "     `Task(subagent_type='system-configuration-agent', ...)`.\n"
+            "   - Do NOT implement schedule changes via ad-hoc shell scripting.\n"
+            "   - NEVER use OS-level crontab for user scheduling requests (`crontab -e/-r`, piping to `crontab`, `/etc/cron*`).\n"
+            "     Use Universal Agent Chron APIs and runtime config paths only.\n"
+            "   - Treat these requests as platform operations, not normal content-generation tasks.\n"
+            "   - Require structured before/after change summaries and verification checks from the specialist.\n"
+            "   - Keep delegation invisible in user-facing phrasing unless the user explicitly asks for internal routing details.\n\n"
+            "12. 🎯 SKILLS - BEST PRACTICES KNOWLEDGE:\n"
             "   - Skills are pre-defined workflows and patterns for complex tasks (PDF, PPTX, DOCX, XLSX creation).\n"
             "   - Before building document creation scripts from scratch, CHECK if a skill exists.\n"
             "   - To use a skill: `read_local_file` the SKILL.md path below, then follow its patterns.\n"

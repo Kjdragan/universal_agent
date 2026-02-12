@@ -6,7 +6,9 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 DEFAULT_REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@187.77.16.29}"
 DEFAULT_REMOTE_DIR="${UA_REMOTE_WORKSPACES_DIR:-/opt/universal_agent/AGENT_RUN_WORKSPACES}"
-DEFAULT_LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/tmp/remote_app_workspaces}"
+DEFAULT_LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES}"
+DEFAULT_REMOTE_ARTIFACTS_DIR="${UA_REMOTE_ARTIFACTS_DIR:-/opt/universal_agent/artifacts}"
+DEFAULT_LOCAL_ARTIFACTS_DIR="${UA_LOCAL_ARTIFACTS_MIRROR_DIR:-${REPO_ROOT}/tmp/remote_vps_artifacts}"
 DEFAULT_STATE_DIR="${UA_REMOTE_SYNC_STATE_DIR:-${REPO_ROOT}/tmp/remote_sync_state}"
 DEFAULT_MANIFEST_FILE="${UA_REMOTE_SYNC_MANIFEST_FILE:-${DEFAULT_STATE_DIR}/synced_workspaces.txt}"
 DEFAULT_INTERVAL_SEC="${UA_REMOTE_SYNC_INTERVAL_SEC:-30}"
@@ -21,12 +23,18 @@ Usage:
   scripts/sync_remote_workspaces.sh [options]
 
 Purpose:
-  Mirror remote AGENT_RUN_WORKSPACES into a local directory for debugging.
+  Mirror remote AGENT_RUN_WORKSPACES and durable artifacts into local directories
+  for debugging.
 
 Options:
   --host <user@host>         Remote SSH host.
   --remote-dir <path>        Remote AGENT_RUN_WORKSPACES path.
   --local-dir <path>         Local mirror directory.
+  --remote-artifacts-dir <path>
+                             Remote durable artifacts path.
+  --local-artifacts-dir <path>
+                             Local durable artifacts mirror path.
+  --no-artifacts             Disable durable artifacts sync.
   --manifest-file <path>     File that records workspace IDs already synced.
   --no-skip-synced           Disable manifest-based skip behavior.
   --interval <seconds>       Sync loop interval (continuous mode only).
@@ -99,6 +107,8 @@ validate_workspace_id() {
 REMOTE_HOST="${DEFAULT_REMOTE_HOST}"
 REMOTE_DIR="${DEFAULT_REMOTE_DIR}"
 LOCAL_DIR="${DEFAULT_LOCAL_DIR}"
+REMOTE_ARTIFACTS_DIR="${DEFAULT_REMOTE_ARTIFACTS_DIR}"
+LOCAL_ARTIFACTS_DIR="${DEFAULT_LOCAL_ARTIFACTS_DIR}"
 MANIFEST_FILE="${DEFAULT_MANIFEST_FILE}"
 INTERVAL_SEC="${DEFAULT_INTERVAL_SEC}"
 SSH_PORT="${DEFAULT_SSH_PORT}"
@@ -116,6 +126,7 @@ RESPECT_REMOTE_TOGGLE="false"
 GATEWAY_URL="${DEFAULT_GATEWAY_URL}"
 OPS_TOKEN="${UA_OPS_TOKEN:-}"
 REMOTE_TOGGLE_PATH="${DEFAULT_REMOTE_TOGGLE_PATH}"
+INCLUDE_ARTIFACTS_SYNC="${UA_REMOTE_SYNC_INCLUDE_ARTIFACTS:-true}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -130,6 +141,18 @@ while [[ $# -gt 0 ]]; do
     --local-dir)
       LOCAL_DIR="${2:-}"
       shift 2
+      ;;
+    --remote-artifacts-dir)
+      REMOTE_ARTIFACTS_DIR="${2:-}"
+      shift 2
+      ;;
+    --local-artifacts-dir)
+      LOCAL_ARTIFACTS_DIR="${2:-}"
+      shift 2
+      ;;
+    --no-artifacts)
+      INCLUDE_ARTIFACTS_SYNC="false"
+      shift
       ;;
     --manifest-file)
       MANIFEST_FILE="${2:-}"
@@ -234,6 +257,9 @@ if [[ "${RESPECT_REMOTE_TOGGLE}" == "true" ]] && [[ -z "${GATEWAY_URL}" ]]; then
 fi
 
 mkdir -p "${LOCAL_DIR}"
+if [[ "${INCLUDE_ARTIFACTS_SYNC}" == "true" ]]; then
+  mkdir -p "${LOCAL_ARTIFACTS_DIR}"
+fi
 mkdir -p "$(dirname "${MANIFEST_FILE}")"
 touch "${MANIFEST_FILE}"
 
@@ -252,7 +278,7 @@ fi
 ssh_command="$(printf '%q ' "${ssh_parts[@]}")"
 remote_dir_q="$(printf '%q' "${REMOTE_DIR}")"
 
-rsync_args=(
+rsync_common_args=(
   --archive
   --compress
   --human-readable
@@ -261,12 +287,16 @@ rsync_args=(
   -e "${ssh_command}"
 )
 
+workspace_rsync_args=("${rsync_common_args[@]}")
+artifact_rsync_args=("${rsync_common_args[@]}")
+
 if [[ "${DELETE_MODE}" == "true" ]]; then
-  rsync_args+=(--delete --delete-excluded)
+  workspace_rsync_args+=(--delete --delete-excluded)
+  artifact_rsync_args+=(--delete --delete-excluded)
 fi
 
 if [[ "${INCLUDE_RUNTIME_DB}" != "true" ]]; then
-  rsync_args+=(
+  workspace_rsync_args+=(
     --exclude runtime_state.db
     --exclude runtime_state.db-shm
     --exclude runtime_state.db-wal
@@ -413,7 +443,7 @@ sync_workspace() {
   local local_target="${LOCAL_DIR%/}/${workspace_id}/"
   mkdir -p "${local_target}"
 
-  if rsync "${rsync_args[@]}" "${remote_source}" "${local_target}"; then
+  if rsync "${workspace_rsync_args[@]}" "${remote_source}" "${local_target}"; then
     log "Synced workspace: ${workspace_id}"
     mark_synced "${workspace_id}"
     if [[ "${DELETE_REMOTE_AFTER_SYNC}" == "true" ]]; then
@@ -423,6 +453,24 @@ sync_workspace() {
   fi
 
   warn "Sync failed for workspace: ${workspace_id}"
+  return 1
+}
+
+sync_artifacts() {
+  if [[ "${INCLUDE_ARTIFACTS_SYNC}" != "true" ]]; then
+    return 0
+  fi
+
+  local remote_source="${REMOTE_HOST}:${REMOTE_ARTIFACTS_DIR%/}/"
+  local local_target="${LOCAL_ARTIFACTS_DIR%/}/"
+  mkdir -p "${local_target}"
+
+  if rsync "${artifact_rsync_args[@]}" "${remote_source}" "${local_target}"; then
+    log "Synced durable artifacts: ${REMOTE_ARTIFACTS_DIR}"
+    return 0
+  fi
+
+  warn "Sync failed for durable artifacts: ${REMOTE_ARTIFACTS_DIR}"
   return 1
 }
 
@@ -451,6 +499,9 @@ sync_once() {
   fi
 
   local failed="0"
+  if ! sync_artifacts; then
+    failed="1"
+  fi
   while IFS= read -r workspace_id; do
     [[ -z "${workspace_id}" ]] && continue
     if ! sync_workspace "${workspace_id}"; then
@@ -474,6 +525,12 @@ fi
 log "Starting continuous sync every ${INTERVAL_SEC}s"
 log "Remote root: ${REMOTE_HOST}:${REMOTE_DIR}"
 log "Local root:  ${LOCAL_DIR}"
+if [[ "${INCLUDE_ARTIFACTS_SYNC}" == "true" ]]; then
+  log "Artifacts remote root: ${REMOTE_HOST}:${REMOTE_ARTIFACTS_DIR}"
+  log "Artifacts local root:  ${LOCAL_ARTIFACTS_DIR}"
+else
+  log "Artifacts sync: disabled"
+fi
 log "Manifest:    ${MANIFEST_FILE}"
 if [[ "${SKIP_SYNCED}" == "true" ]]; then
   log "Skip mode:   enabled (already-synced workspaces are skipped)"

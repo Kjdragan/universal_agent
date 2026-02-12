@@ -1,0 +1,95 @@
+{
+    "_comment": "Freelance Scout Configuration - Copy to config.json and fill in credentials",
+    
+    "platforms": {
+        "upwork": {
+            "enabled": true,
+            "priority": 1,
+            "credentials": {
+                "client_id": "ENV:UPWORK_CLIENT_ID",
+                "client_secret": "ENV:UPWORK_CLIENT_SECRET",
+                "access_token": "ENV:UPWORK_ACCESS_TOKEN",
+                "tenant_id": "ENV:UPWORK_TENANT_ID"
+            },
+            "notes": "Register at https://www.upwork.com/developer/keys/ - Request 'Client Credentials' key with 'Marketplace Job Search' scope"
+        },
+        "freelancer_com": {
+            "enabled": true,
+            "priority": 2,
+            "credentials": {
+                "oauth_token": "ENV:FREELANCER_OAUTH_TOKEN"
+            },
+            "notes": "Register at https://developers.freelancer.com - Python SDK: pip install freelancersdk"
+        },
+        "fiverr": {
+            "enabled": false,
+            "priority": 3,
+            "credentials": {
+                "apify_token": "ENV:APIFY_API_TOKEN"
+            },
+            "notes": "No official API. Uses Apify scraper actor: automation-lab/fiverr-scraper. Enable after Apify token configured."
+        }
+    },
+
+    "search_queries": {
+        "quick_wins": [
+            "data entry automation",
+            "web scraping python",
+            "spreadsheet automation",
+            "research report",
+            "data cleaning",
+            "content writing blog",
+            "technical documentation"
+        ],
+        "high_value": [
+            "AI agent development",
+            "LLM integration python",
+            "machine learning pipeline",
+            "data science consulting",
+            "API automation workflow",
+            "python automation consulting",
+            "chatbot development langchain"
+        ],
+        "growth": [
+            "full stack python next.js",
+            "cloud automation GCP AWS",
+            "AI workflow automation",
+            "multi-agent system"
+        ]
+    },
+
+    "scanning": {
+        "default_page_size": 20,
+        "max_results_per_query": 50,
+        "posted_within_days": 7,
+        "dedup_enabled": true,
+        "schedule_cron": "0 8,12,16,20 * * 1-5"
+    },
+
+    "scoring": {
+        "weights": {
+            "feasibility": 0.30,
+            "value": 0.25,
+            "competition": 0.15,
+            "client": 0.15,
+            "strategic": 0.15
+        },
+        "min_hourly_rate": 15.0,
+        "min_fixed_price": 50.0,
+        "shortlist_threshold": 0.55,
+        "max_shortlist_size": 20
+    },
+
+    "notifications": {
+        "high_priority_threshold": 0.80,
+        "slack_webhook": "ENV:SLACK_WEBHOOK_URL",
+        "email_digest": false,
+        "digest_time_utc": "22:00"
+    },
+
+    "storage": {
+        "results_dir": "results",
+        "max_history_days": 30,
+        "archive_old_results": true
+    }
+}

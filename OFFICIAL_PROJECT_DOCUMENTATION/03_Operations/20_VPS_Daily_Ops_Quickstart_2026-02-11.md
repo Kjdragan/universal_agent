@@ -8,6 +8,7 @@ Primary references:
 1. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/18_Hostinger_VPS_Composio_Webhook_Deployment_Runbook_2026-02-11.md`
 2. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
 3. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md`
+4. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/23_Agent_Workspace_Inspector_Skill_2026-02-11.md`
 
 ---
 
@@ -65,6 +66,28 @@ Expected:
 
 ---
 
+## Workspace Inspector (Read-Only Debug)
+Use this when you want the agent/runtime to inspect a session workspace safely.
+
+Quick smoke test on VPS:
+```bash
+cd /opt/universal_agent
+sid="$(find AGENT_RUN_WORKSPACES -mindepth 1 -maxdepth 1 -type d -name 'session_*' -printf '%f\n' | head -n 1)"
+echo "Session: $sid"
+PYTHONPATH=src .venv/bin/python -c "import mcp_server as s; print(s.inspect_session_workspace(session_id='$sid', include_transcript=False, tail_lines=5))"
+```
+
+Expected:
+1. JSON output with `"ok": true`.
+2. `files.run.log.tail` contains recent lines.
+3. `trace.json` preview and recent `work_products` snapshot are present when available.
+
+Notes:
+1. `transcript.md` is included by default (`include_transcript=true`).
+2. Tool is read-only and session/path scoped.
+
+---
+
 ## Security Check (Ops Auth)
 ```bash
 curl -i https://api.clearspringcg.com/api/v1/ops/deployment/profile
@@ -117,7 +140,7 @@ tail -f /var/log/nginx/access.log
 
 ## Optional: Local Mirror for Remote Debugging
 
-From your local dev machine, mirror VPS workspaces into this repo so local debugging can inspect remote `run.log`, `trace.json`, and artifacts:
+From your local dev machine, mirror VPS workspaces and durable artifact outputs into this repo so local debugging can inspect remote `run.log`, `trace.json`, and generated deliverables:
 
 Preferred low-resource workflow (default OFF):
 
@@ -128,6 +151,29 @@ scripts/remote_workspace_sync_control.sh on --interval 600
 scripts/remote_workspace_sync_control.sh off
 ```
 
+One-command manual pull (defaults):
+1. Workspaces -> `AGENT_RUN_WORKSPACES`
+2. Durable artifacts -> `tmp/remote_vps_artifacts`
+
+```bash
+cd /home/kjdragan/lrepos/universal_agent
+scripts/pull_remote_workspaces_now.sh
+```
+
+Custom target directories:
+```bash
+cd /home/kjdragan/lrepos/universal_agent
+UA_LOCAL_MIRROR_DIR=/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES \
+UA_LOCAL_ARTIFACTS_MIRROR_DIR=/home/kjdragan/lrepos/universal_agent/tmp/remote_vps_artifacts \
+scripts/pull_remote_workspaces_now.sh
+```
+
+Single-session manual pull:
+```bash
+cd /home/kjdragan/lrepos/universal_agent
+scripts/pull_remote_workspaces_now.sh session_20260212_001337_2e657ddc
+```
+
 When local timer is enabled, use dashboard `Config` -> `Remote To Local Debug Sync` toggle to allow/deny sync cycles remotely.
 Default toggle state is OFF when unset.
 
@@ -136,7 +182,9 @@ cd /home/kjdragan/lrepos/universal_agent
 scripts/sync_remote_workspaces.sh --once \
   --host root@187.77.16.29 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
-  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --remote-artifacts-dir /opt/universal_agent/artifacts \
+  --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES \
+  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_vps_artifacts \
   --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt
 ```
 
@@ -146,7 +194,9 @@ Automate every 30s with user systemd timer:
 scripts/install_remote_workspace_sync_timer.sh \
   --host root@187.77.16.29 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
-  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --remote-artifacts-dir /opt/universal_agent/artifacts \
+  --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES \
+  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_vps_artifacts \
   --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
   --interval 30
 ```
@@ -191,8 +241,27 @@ journalctl -u universal-agent-webui -n 120 --no-pager
 ### B) Composio trigger shows queued but nothing runs
 Check:
 1. Nginx access log for `/api/v1/hooks/composio`.
-2. Gateway logs for webhook accept/dedupe.
+2. Gateway logs for `received` vs `skipped` vs `accepted`.
 3. Composio subscription URL matches `https://api.clearspringcg.com/api/v1/hooks/composio`.
+
+Fast check:
+```bash
+journalctl -u universal-agent-gateway --since '15 minutes ago' --no-pager \
+  | grep -En "Hook ingress|composio-youtube-trigger|Dispatching hook action|Creating webhook session|Hook action dispatched|skipped|deduped|unauthorized"
+```
+
+Interpret:
+1. `received` + `skipped`: delivery works; parser/transform mismatch.
+2. `accepted` + `Creating webhook session`: ingestion and dispatch are working.
+3. no `received`: delivery path/subscription/network issue.
+
+Important Composio UI note:
+1. `webhookInvocationResponse.status=QUEUED` means webhook delivery was queued/sent.
+2. `sdkTriggerInvocation ... No subscribers are listening` does not prove VPS webhook failure by itself.
+
+Known YouTube payload pitfall:
+1. Playlist events may include `item.id` (playlist-item id, long string) and `item.snippet.resourceId.videoId` (real 11-char YouTube video id).
+2. Use `resourceId.videoId` as canonical `video_id`.
 
 ### C) Ops endpoints suddenly open without token
 Fix:
@@ -222,6 +291,39 @@ systemctl restart universal-agent-gateway universal-agent-api universal-agent-we
 2. `/etc/systemd/system/universal-agent-api.service`
 3. `/etc/systemd/system/universal-agent-webui.service`
 4. `/etc/systemd/system/universal-agent-telegram.service`
+5. `/etc/systemd/system/universal-agent-service-watchdog.service`
+6. `/etc/systemd/system/universal-agent-service-watchdog.timer`
+
+## Auto-Revive Watchdog (2026-02-12)
+Purpose:
+1. Revive always-on services if they are inactive.
+2. Restart gateway/api/webui when local health endpoints fail repeatedly.
+
+Install/update from repo:
+```bash
+cd /opt/universal_agent
+chmod +x scripts/vps_service_watchdog.sh scripts/install_vps_service_watchdog.sh
+scripts/install_vps_service_watchdog.sh
+```
+
+Verify timer and recent watchdog actions:
+```bash
+systemctl status universal-agent-service-watchdog.timer --no-pager
+journalctl -u universal-agent-service-watchdog.service --since '10 minutes ago' --no-pager
+```
+
+Default watchdog checks:
+1. `universal-agent-gateway` -> `http://127.0.0.1:8002/api/v1/health`
+2. `universal-agent-api` -> `http://127.0.0.1:8001/api/health`
+3. `universal-agent-webui` -> `http://127.0.0.1:3000/`
+4. `universal-agent-telegram` -> systemd active-state only
+
+Tunable env vars (optional in `/opt/universal_agent/.env`):
+1. `UA_WATCHDOG_HEALTH_FAIL_THRESHOLD` (default `3`)
+2. `UA_WATCHDOG_HTTP_TIMEOUT_SECONDS` (default `3`)
+3. `UA_WATCHDOG_HTTP_OK_MAX_STATUS` (default `499`)
+4. `UA_WATCHDOG_POST_RESTART_SETTLE_SECONDS` (default `2`)
+5. `UA_WATCHDOG_STATE_DIR` (default `/var/lib/universal-agent/watchdog`)
 
 ## Nginx Files
 1. `/etc/nginx/sites-available/universal-agent` (api)

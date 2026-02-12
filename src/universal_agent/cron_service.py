@@ -307,7 +307,7 @@ class CronJob:
                 next_dt = cron.get_next(datetime)
                 self.next_run_at = next_dt.timestamp()
             except Exception as exc:
-                logger.warning("Invalid cron expression '%s': %s", self.cron_expr, exc)
+                logger.warning("Invalid chron expression '%s': %s", self.cron_expr, exc)
                 # Fall back to interval if cron fails
                 if self.every_seconds > 0:
                     self.next_run_at = now + self.every_seconds
@@ -437,7 +437,7 @@ class CronService:
             return
         self.running = True
         self.task = asyncio.create_task(self._scheduler_loop())
-        logger.info("⏱️ Cron service started (%d jobs)", len(self.jobs))
+        logger.info("⏱️ Chron service started (%d jobs)", len(self.jobs))
 
     async def stop(self) -> None:
         if not self.running:
@@ -449,7 +449,7 @@ class CronService:
                 await self.task
             except asyncio.CancelledError:
                 pass
-        logger.info("🛑 Cron service stopped")
+        logger.info("🛑 Chron service stopped")
 
     def list_jobs(self) -> list[CronJob]:
         return list(self.jobs.values())
@@ -483,7 +483,7 @@ class CronService:
             try:
                 croniter(cron_expr)
             except Exception as exc:
-                raise ValueError(f"Invalid cron expression '{cron_expr}': {exc}")
+                raise ValueError(f"Invalid chron expression '{cron_expr}': {exc}")
         
         # Validate timezone
         try:
@@ -529,7 +529,7 @@ class CronService:
                 try:
                     croniter(cron_expr)
                 except Exception as exc:
-                    raise ValueError(f"Invalid cron expression '{cron_expr}': {exc}")
+                    raise ValueError(f"Invalid chron expression '{cron_expr}': {exc}")
             job.cron_expr = cron_expr
         if "timezone" in updates:
             tz = updates["timezone"]
@@ -602,7 +602,7 @@ class CronService:
 
     async def _run_job(self, job: CronJob, scheduled_at: Optional[float], reason: str) -> CronRunRecord:
         if job.job_id in self.running_jobs:
-            logger.info("Cron job %s already running, skipping", job.job_id)
+            logger.info("Chron job %s already running, skipping", job.job_id)
             record = CronRunRecord(
                 run_id=uuid.uuid4().hex[:12],
                 job_id=job.job_id,
@@ -665,12 +665,12 @@ class CronService:
                 record.finished_at = time.time()
                 timeout_label = timeout_seconds if timeout_seconds is not None else "configured"
                 record.error = f"execution timed out after {timeout_label}s"
-                logger.error("Cron job %s timed out after %ss", job.job_id, timeout_label)
+                logger.error("Chron job %s timed out after %ss", job.job_id, timeout_label)
             except Exception as exc:
                 record.status = "error"
                 record.finished_at = time.time()
                 record.error = str(exc)
-                logger.error("Cron job %s failed: %s", job.job_id, exc)
+                logger.error("Chron job %s failed: %s", job.job_id, exc)
             finally:
                 self.running_jobs.discard(job.job_id)
                 self.running_job_scheduled_at.pop(job.job_id, None)
@@ -684,7 +684,7 @@ class CronService:
                 self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
                 if moved_outputs:
                     logger.info(
-                        "Cron job %s moved %d root output(s) into work_products: %s",
+                        "Chron job %s moved %d root output(s) into work_products: %s",
                         job.job_id,
                         len(moved_outputs),
                         ", ".join(moved_outputs[:5]),
@@ -694,7 +694,7 @@ class CronService:
                 metadata = job.metadata or {}
                 target_session = metadata.get("target_session") or metadata.get("session_id")
                 if target_session:
-                    event_text = f"Cron job '{job.command[:50]}...' completed with status={record.status}"
+                    event_text = f"Chron job '{job.command[:50]}...' completed with status={record.status}"
                     if record.error:
                         event_text += f", error: {record.error[:100]}"
                     elif record.output_preview:
@@ -712,7 +712,7 @@ class CronService:
                 
                 # One-shot: delete job after successful run if configured
                 if job.delete_after_run and record.status == "success":
-                    logger.info("Deleting one-shot cron job %s after successful run", job.job_id)
+                    logger.info("Deleting one-shot chron job %s after successful run", job.job_id)
                     self.delete_job(job.job_id)
             return record
 
@@ -747,7 +747,7 @@ class CronService:
                 moved.append(str(target.relative_to(workspace)))
             return moved
         except Exception as exc:
-            logger.warning("Failed organizing cron workspace outputs for %s: %s", workspace_dir, exc)
+            logger.warning("Failed organizing chron workspace outputs for %s: %s", workspace_dir, exc)
             return []
 
     def _dedupe_destination(self, path: Path) -> Path:
@@ -774,7 +774,7 @@ class CronService:
         try:
             self.event_sink(payload)
         except Exception as exc:
-            logger.warning("Cron event sink failed: %s", exc)
+            logger.warning("Chron event sink failed: %s", exc)
 
     def _emit_system_event(self, session_id: str, event: dict[str, Any]) -> None:
         """Enqueue a system event for the given session (surfaced in next heartbeat)."""
@@ -783,7 +783,7 @@ class CronService:
         try:
             self.system_event_callback(session_id, event)
         except Exception as exc:
-            logger.warning("Cron system event callback failed: %s", exc)
+            logger.warning("Chron system event callback failed: %s", exc)
 
     def _maybe_wake_heartbeat(self, job: CronJob, reason: str) -> None:
         if not self.wake_callback:
@@ -823,4 +823,4 @@ class CronService:
         try:
             self.wake_callback(session_id, mode, f"cron:{job.job_id}:{reason}")
         except Exception as exc:
-            logger.warning("Cron heartbeat wake failed for %s: %s", job.job_id, exc)
+            logger.warning("Chron heartbeat wake failed for %s: %s", job.job_id, exc)

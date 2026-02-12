@@ -17,6 +17,71 @@ async def test_schema_guardrail_allows_task_and_bash_case_insensitive():
 
 
 @pytest.mark.anyio
+async def test_schema_guardrail_blocks_crontab_mutation_for_bash():
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "(crontab -l 2>/dev/null; echo '* * * * * /tmp/x') | crontab -"},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    assert result.get("decision") == "block"
+    assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    reason = result.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+    assert "crontab" in reason.lower()
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_allows_crontab_list_for_bash():
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "crontab -l"},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    assert result == {}
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_blocks_misrouted_system_config_task():
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Task",
+            "tool_input": {
+                "subagent_type": "research-specialist",
+                "prompt": "Create a chron job that runs every 30 minutes and send heartbeat updates.",
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    assert result.get("decision") == "block"
+    assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    reason = result.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+    assert "system-configuration-agent" in reason or "System configuration" in reason
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_allows_non_system_config_task_routing():
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Task",
+            "tool_input": {
+                "subagent_type": "research-specialist",
+                "prompt": "Research latest robotics funding announcements from the last 7 days.",
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    # This route may still be normalized for date windows, but should not be blocked.
+    assert result.get("decision") != "block"
+
+
+@pytest.mark.anyio
 async def test_schema_guardrail_blocks_malformed_tool_name():
     result = await pre_tool_use_schema_guardrail(
         {

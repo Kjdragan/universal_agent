@@ -109,6 +109,8 @@ async def test_authorized_success(hooks_service, mock_gateway):
     gateway_request = call_args[0][1]
     assert gateway_request.user_input == "Hello World"
     assert gateway_request.metadata["source"] == "webhook"
+    mock_gateway.resume_session.assert_called_once_with("session_hook_test-session")
+    mock_gateway.create_session.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_authorized_create_new(hooks_service, mock_gateway):
@@ -129,9 +131,43 @@ async def test_authorized_create_new(hooks_service, mock_gateway):
     
     await asyncio.sleep(0.1)
     
-    mock_gateway.create_session.assert_called()
+    mock_gateway.resume_session.assert_called_once_with("session_hook_test-session")
+    mock_gateway.create_session.assert_called_once_with(
+        user_id="webhook",
+        workspace_dir="AGENT_RUN_WORKSPACES/session_hook_test-session",
+    )
     mock_gateway.execute.assert_called()
     assert mock_gateway.execute.call_args[0][0] == mock_session
+
+
+@pytest.mark.asyncio
+async def test_action_to_injects_routing_prompt_and_metadata(hooks_service, mock_gateway):
+    hooks_service.config.mappings = [
+        HookMappingConfig(
+            id="route-hook",
+            match=HookMatchConfig(path="test"),
+            action="agent",
+            message_template="video_url: https://www.youtube.com/watch?v=abc",
+            name="RouteHook",
+            session_key="yt_route_abc",
+            to="youtube-explainer-expert",
+        )
+    ]
+    request = MagicMock(spec=Request)
+    request.headers = {"Authorization": "Bearer secret-token"}
+    request.body = AsyncMock(return_value=b"{}")
+    request.query_params = {}
+
+    mock_session = GatewaySession(session_id="session_hook_yt_route_abc", user_id="webhook", workspace_dir="/tmp")
+    mock_gateway.resume_session = AsyncMock(return_value=mock_session)
+
+    response = await hooks_service.handle_request(request, "test")
+    assert response.status_code == 202
+
+    await asyncio.sleep(0.1)
+    gateway_request = mock_gateway.execute.call_args[0][1]
+    assert "Task(subagent_type='youtube-explainer-expert'" in gateway_request.user_input
+    assert gateway_request.metadata["hook_route_to"] == "youtube-explainer-expert"
 
 @pytest.mark.asyncio
 async def test_no_match(hooks_service):
@@ -347,7 +383,8 @@ async def test_composio_hmac_replay_rejected(mock_gateway):
         second = await service.handle_request(request2, "composio")
 
     assert first.status_code == 202
-    assert second.status_code == 401
+    assert second.status_code == 202
+    assert json.loads(second.body)["deduped"] is True
 
 @pytest.mark.asyncio
 async def test_composio_hmac_timestamp_skew_rejected(mock_gateway):

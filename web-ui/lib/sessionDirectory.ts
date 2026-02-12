@@ -18,7 +18,7 @@ function inferSource(sessionId: string): string {
   if (sid.startsWith("tg_")) return "telegram";
   if (sid.startsWith("session_")) return "chat";
   if (sid.startsWith("api_")) return "api";
-  if (sid.startsWith("cron_")) return "cron";
+  if (sid.startsWith("cron_")) return "chron";
   return "local";
 }
 
@@ -31,8 +31,10 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
       const sessions = Array.isArray(opsData.sessions) ? opsData.sessions : [];
       return sessions.map((row) => {
         const sessionId = String(row.session_id || "");
-        const source = String(row.source || inferSource(sessionId) || "local");
-        const channel = String(row.channel || source || "local");
+        const sourceRaw = String(row.source || inferSource(sessionId) || "local");
+        const source = sourceRaw.toLowerCase() === "cron" ? "chron" : sourceRaw;
+        const channelRaw = String(row.channel || sourceRaw || "local");
+        const channel = channelRaw.toLowerCase() === "cron" ? "chron" : channelRaw;
         return {
           session_id: sessionId,
           status: String(row.status || "unknown"),
