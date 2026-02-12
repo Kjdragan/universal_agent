@@ -8,7 +8,9 @@ SYNC_SCRIPT="${REPO_ROOT}/scripts/sync_remote_workspaces.sh"
 DEFAULT_SERVICE_NAME="ua-remote-workspace-sync"
 DEFAULT_REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@187.77.16.29}"
 DEFAULT_REMOTE_DIR="${UA_REMOTE_WORKSPACES_DIR:-/opt/universal_agent/AGENT_RUN_WORKSPACES}"
-DEFAULT_LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/tmp/remote_app_workspaces}"
+DEFAULT_LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES}"
+DEFAULT_REMOTE_ARTIFACTS_DIR="${UA_REMOTE_ARTIFACTS_DIR:-/opt/universal_agent/artifacts}"
+DEFAULT_LOCAL_ARTIFACTS_DIR="${UA_LOCAL_ARTIFACTS_MIRROR_DIR:-${REPO_ROOT}/tmp/remote_vps_artifacts}"
 DEFAULT_STATE_DIR="${UA_REMOTE_SYNC_STATE_DIR:-${REPO_ROOT}/tmp/remote_sync_state}"
 DEFAULT_MANIFEST_FILE="${UA_REMOTE_SYNC_MANIFEST_FILE:-${DEFAULT_STATE_DIR}/synced_workspaces.txt}"
 DEFAULT_INTERVAL_SEC="${UA_REMOTE_SYNC_INTERVAL_SEC:-30}"
@@ -30,6 +32,11 @@ Options:
   --host <user@host>         Remote SSH host.
   --remote-dir <path>        Remote AGENT_RUN_WORKSPACES path.
   --local-dir <path>         Local mirror directory.
+  --remote-artifacts-dir <path>
+                             Remote durable artifacts path.
+  --local-artifacts-dir <path>
+                             Local durable artifacts mirror path.
+  --no-artifacts             Disable durable artifacts sync.
   --manifest-file <path>     File that records workspace IDs already synced.
   --no-skip-synced           Disable manifest-based skip behavior.
   --interval <seconds>       Timer interval.
@@ -85,6 +92,8 @@ SERVICE_NAME="${DEFAULT_SERVICE_NAME}"
 REMOTE_HOST="${DEFAULT_REMOTE_HOST}"
 REMOTE_DIR="${DEFAULT_REMOTE_DIR}"
 LOCAL_DIR="${DEFAULT_LOCAL_DIR}"
+REMOTE_ARTIFACTS_DIR="${DEFAULT_REMOTE_ARTIFACTS_DIR}"
+LOCAL_ARTIFACTS_DIR="${DEFAULT_LOCAL_ARTIFACTS_DIR}"
 MANIFEST_FILE="${DEFAULT_MANIFEST_FILE}"
 INTERVAL_SEC="${DEFAULT_INTERVAL_SEC}"
 SSH_PORT="${DEFAULT_SSH_PORT}"
@@ -101,6 +110,7 @@ RESPECT_REMOTE_TOGGLE="false"
 GATEWAY_URL="${DEFAULT_GATEWAY_URL}"
 OPS_TOKEN=""
 UNINSTALL="false"
+INCLUDE_ARTIFACTS_SYNC="${UA_REMOTE_SYNC_INCLUDE_ARTIFACTS:-true}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -119,6 +129,18 @@ while [[ $# -gt 0 ]]; do
     --local-dir)
       LOCAL_DIR="${2:-}"
       shift 2
+      ;;
+    --remote-artifacts-dir)
+      REMOTE_ARTIFACTS_DIR="${2:-}"
+      shift 2
+      ;;
+    --local-artifacts-dir)
+      LOCAL_ARTIFACTS_DIR="${2:-}"
+      shift 2
+      ;;
+    --no-artifacts)
+      INCLUDE_ARTIFACTS_SYNC="false"
+      shift
       ;;
     --manifest-file)
       MANIFEST_FILE="${2:-}"
@@ -230,6 +252,8 @@ exec_start=(
   --host "${REMOTE_HOST}"
   --remote-dir "${REMOTE_DIR}"
   --local-dir "${LOCAL_DIR}"
+  --remote-artifacts-dir "${REMOTE_ARTIFACTS_DIR}"
+  --local-artifacts-dir "${LOCAL_ARTIFACTS_DIR}"
   --manifest-file "${MANIFEST_FILE}"
   --interval "${INTERVAL_SEC}"
   --ssh-port "${SSH_PORT}"
@@ -266,6 +290,9 @@ if [[ "${RESPECT_REMOTE_TOGGLE}" == "true" ]]; then
 fi
 if [[ "${DELETE_MODE}" != "true" ]]; then
   exec_start+=(--no-delete)
+fi
+if [[ "${INCLUDE_ARTIFACTS_SYNC}" != "true" ]]; then
+  exec_start+=(--no-artifacts)
 fi
 
 exec_start_line="$(printf '%q ' "${exec_start[@]}")"

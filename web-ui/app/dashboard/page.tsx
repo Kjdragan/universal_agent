@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
 import { fetchSessionDirectory, SessionDirectoryItem } from "@/lib/sessionDirectory";
 
@@ -35,12 +36,17 @@ const EMPTY_SUMMARY: SummaryResponse = {
 };
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const sessionSectionRef = useRef<HTMLElement>(null);
+  const notificationSectionRef = useRef<HTMLElement>(null);
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [notifications, setNotifications] = useState<DashboardNotification[]>([]);
   const [sessionDirectory, setSessionDirectory] = useState<SessionDirectoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [sessionFilter, setSessionFilter] = useState<"all" | "active">("all");
+  const [notificationFilter, setNotificationFilter] = useState<"all" | "unread">("all");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -143,6 +149,28 @@ export default function DashboardPage() {
     return () => window.clearInterval(timer);
   }, [load]);
 
+  const handleCardClick = useCallback(
+    (label: string) => {
+      switch (label) {
+        case "Active Sessions":
+          setSessionFilter("active");
+          sessionSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          break;
+        case "Pending Approvals":
+          router.push("/dashboard/approvals");
+          break;
+        case "Unread Alerts":
+          setNotificationFilter("unread");
+          notificationSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          break;
+        case "Enabled Cron Jobs":
+          router.push("/dashboard/cron-jobs");
+          break;
+      }
+    },
+    [router],
+  );
+
   const cards = useMemo(
     () => [
       { label: "Active Sessions", value: summary?.sessions?.active ?? 0 },
@@ -180,20 +208,46 @@ export default function DashboardPage() {
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {cards.map((card) => (
-          <article key={card.label} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <article
+            key={card.label}
+            className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 cursor-pointer transition hover:border-cyan-700/50 hover:bg-slate-800/70"
+            onClick={() => handleCardClick(card.label)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleCardClick(card.label); }}
+          >
             <p className="text-xs uppercase tracking-[0.16em] text-slate-400">{card.label}</p>
             <p className="mt-2 text-3xl font-semibold text-cyan-200">{card.value}</p>
           </article>
         ))}
       </section>
 
-      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <section ref={sessionSectionRef} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Session Directory</h2>
-          <span className="text-xs text-slate-500">{sessionDirectory.length} sessions</span>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Session Directory</h2>
+            {sessionFilter === "active" && (
+              <button
+                type="button"
+                onClick={() => setSessionFilter("all")}
+                className="flex items-center gap-1 rounded-full border border-cyan-700/60 bg-cyan-900/20 px-2 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-900/40 transition"
+              >
+                Active only
+                <span className="ml-0.5">×</span>
+              </button>
+            )}
+          </div>
+          <span className="text-xs text-slate-500">
+            {sessionFilter === "active"
+              ? `${sessionDirectory.filter((s) => s.status === "active").length} active`
+              : `${sessionDirectory.length} sessions`}
+          </span>
         </div>
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {sessionDirectory.slice(0, 18).map((session) => (
+          {(sessionFilter === "active"
+            ? sessionDirectory.filter((s) => s.status === "active")
+            : sessionDirectory
+          ).slice(0, 18).map((session) => (
             <article key={session.session_id} className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="truncate font-mono text-xs text-slate-200">{session.session_id}</p>
@@ -243,9 +297,21 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+      <section ref={notificationSectionRef} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4">
         <div className="mb-3 flex items-center justify-between">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Notification Center</h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Notification Center</h2>
+            {notificationFilter === "unread" && (
+              <button
+                type="button"
+                onClick={() => setNotificationFilter("all")}
+                className="flex items-center gap-1 rounded-full border border-cyan-700/60 bg-cyan-900/20 px-2 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-900/40 transition"
+              >
+                Unread only
+                <span className="ml-0.5">×</span>
+              </button>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             {openContinuityAlerts.length > 0 && (
               <>
@@ -284,7 +350,10 @@ export default function DashboardPage() {
               No notifications yet.
             </div>
           )}
-          {notifications.map((item) => (
+          {(notificationFilter === "unread"
+            ? notifications.filter((item) => item.status === "new")
+            : notifications
+          ).map((item) => (
             <div key={item.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold">{item.title}</p>

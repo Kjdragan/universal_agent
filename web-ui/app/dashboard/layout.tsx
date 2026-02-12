@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/chat", label: "Chat Launch" },
   { href: "/dashboard/skills", label: "Skills" },
   { href: "/dashboard/calendar", label: "Calendar" },
+  { href: "/dashboard/approvals", label: "Approvals" },
   { href: "/dashboard/cron-jobs", label: "Cron Jobs" },
   { href: "/dashboard/channels", label: "Channels" },
   { href: "/dashboard/settings", label: "Settings" },

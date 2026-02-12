@@ -114,6 +114,22 @@ Main agent should pass video paths and desired operations in task description.
   -> Delegate: `Task(subagent_type='scribe', ...)`
 
 #### 🏢 Operations & Communication
+- **system-configuration-agent**: System configuration and runtime operations specialist for Universal Agent.
+
+**WHEN TO DELEGATE (MUST BE USED):**
+- User asks to create/reschedule/pause/resume a Chron/Cron job
+- User asks to change scheduling or automation behavior in natural language
+- User asks to update heartbeat interval/delivery behavior
+- User asks to change ops/runtime/service configuration
+
+**THIS SUB-AGENT:**
+- Interprets natural-language system-change requests into structured operations
+- Applies scheduling/runtime changes through first-class APIs and config paths
+- Verifies before/after state and returns auditable summaries
+
+  -> Delegate: `Task(subagent_type='system-configuration-agent', ...)`
+- **Routing rule**: Never use OS-level `crontab` for product scheduling requests. Route through `system-configuration-agent` and Chron APIs.
+
 - **slack-expert**: Expert for Slack workspace interactions.
 
 **WHEN TO DELEGATE:**

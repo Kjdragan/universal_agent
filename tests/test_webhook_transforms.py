@@ -24,6 +24,8 @@ def test_composio_transform_youtube_event():
     assert out["name"] == "ComposioYouTubeTrigger"
     assert "abc123xyz00" in out["message"]
     assert out["session_key"].startswith("yt_")
+    assert out["to"] == "youtube-explainer-expert"
+    assert "learning_mode: concept_plus_implementation" in out["message"]
 
 
 def test_composio_transform_non_youtube_returns_none():
@@ -40,6 +42,52 @@ def test_composio_transform_non_youtube_returns_none():
     assert composio_transform(ctx) is None
 
 
+def test_composio_transform_direct_new_playlist_item_payload():
+    ctx = {
+        "payload": {
+            "event_type": "new_playlist_item",
+            "item": {
+                "snippet": {
+                    "title": "Playlist Video",
+                    "resourceId": {
+                        "videoId": "dQw4w9WgXcQ",
+                    },
+                },
+            },
+        }
+    }
+
+    out = composio_transform(ctx)
+    assert out is not None
+    assert out["kind"] == "agent"
+    assert "video_id: dQw4w9WgXcQ" in out["message"]
+    assert "video_url: https://www.youtube.com/watch?v=dQw4w9WgXcQ" in out["message"]
+    assert out["to"] == "youtube-explainer-expert"
+
+
+def test_composio_transform_prefers_resource_video_id_over_playlist_item_id():
+    ctx = {
+        "payload": {
+            "event_type": "new_playlist_item",
+            "item": {
+                "id": "UExqTDNsaVFTaXh0c19ORDlXbEUwcjVmLXEwakdBREZJRy5DQUNERDQ2NkIzRUQxNTY1",
+                "snippet": {
+                    "title": "Pad Thai Tutorial",
+                    "resourceId": {
+                        "videoId": "dQw4w9WgXcQ",
+                    },
+                },
+            },
+        }
+    }
+
+    out = composio_transform(ctx)
+    assert out is not None
+    assert "video_id: dQw4w9WgXcQ" in out["message"]
+    assert "video_url: https://www.youtube.com/watch?v=dQw4w9WgXcQ" in out["message"]
+    assert "UExqTDNsaVFTaXh0c19ORDlXbEUwcjVmLXEwakdBREZJRy5DQUNERDQ2NkIzRUQxNTY1" not in out["message"]
+
+
 def test_manual_transform_from_video_url():
     ctx = {"payload": {"video_url": "https://youtu.be/xyz987abc12"}}
     out = manual_transform(ctx)
@@ -47,6 +95,45 @@ def test_manual_transform_from_video_url():
     assert out["kind"] == "agent"
     assert out["name"] == "ManualYouTubeWebhook"
     assert "xyz987abc12" in out["message"]
+    assert out["to"] == "youtube-explainer-expert"
+    assert "mode: explainer_plus_code" in out["message"]
+    assert "learning_mode: concept_plus_implementation" in out["message"]
+
+
+def test_composio_transform_normalizes_mode_and_degraded_flag():
+    ctx = {
+        "payload": {
+            "type": "composio.trigger.message",
+            "data": {
+                "trigger_slug": "youtube_new_playlist_item_trigger",
+                "toolkit_slug": "youtube",
+                "data": {
+                    "video_url": "https://www.youtube.com/watch?v=abc123xyz00",
+                    "mode": "code",
+                    "allow_degraded_transcript_only": "false",
+                },
+            },
+        }
+    }
+
+    out = composio_transform(ctx)
+    assert out is not None
+    assert "mode: explainer_plus_code" in out["message"]
+    assert "allow_degraded_transcript_only: false" in out["message"]
+
+
+def test_manual_transform_normalizes_mode_and_degraded_flag():
+    ctx = {
+        "payload": {
+            "video_url": "https://youtu.be/xyz987abc12",
+            "mode": "with_code",
+            "allow_degraded_transcript_only": "0",
+        }
+    }
+    out = manual_transform(ctx)
+    assert out is not None
+    assert "mode: explainer_plus_code" in out["message"]
+    assert "allow_degraded_transcript_only: false" in out["message"]
 
 
 def test_manual_transform_requires_target():

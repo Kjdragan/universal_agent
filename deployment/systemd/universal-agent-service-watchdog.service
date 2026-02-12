@@ -1,0 +1,13 @@
+[Unit]
+Description=Universal Agent Service Watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/scripts/vps_service_watchdog.sh
+
+[Install]
+WantedBy=multi-user.target

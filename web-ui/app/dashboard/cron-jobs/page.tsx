@@ -160,11 +160,56 @@ export default function DashboardCronJobsPage() {
     await load();
   }, [load]);
 
+  const updateJob = useCallback(async (jobId: string, payload: Record<string, unknown>) => {
+    const res = await fetch(`${API_BASE}/api/v1/cron/jobs/${encodeURIComponent(jobId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const detail = await res.text();
+      setError(parseErrorDetail(detail) || `Update failed (${res.status})`);
+      return false;
+    }
+    await load();
+    return true;
+  }, [load]);
+
+  const editJobText = useCallback(async (job: CronJob) => {
+    const nextText = window.prompt("Edit chron job text", job.command || "");
+    if (nextText === null) return;
+    const trimmed = nextText.trim();
+    if (!trimmed) {
+      setError("Chron job text cannot be empty.");
+      return;
+    }
+    await updateJob(job.job_id, { command: trimmed });
+  }, [updateJob]);
+
+  const changeJobScheduleWithNaturalLanguage = useCallback(async (job: CronJob) => {
+    const currentSchedule = job.run_at
+      ? `one-shot at ${toLocalDateTime(job.run_at)}`
+      : job.cron_expr
+        ? `chron ${job.cron_expr}`
+        : `every ${formatEverySeconds(job.every_seconds)}`;
+    const nextInstruction = window.prompt(
+      `Current schedule: ${currentSchedule}\n\nDescribe the new schedule in natural language.\nExamples: "every 30 minutes", "tomorrow 9:15 am", "in 2 hours".`,
+      "",
+    );
+    if (nextInstruction === null) return;
+    const trimmed = nextInstruction.trim();
+    if (!trimmed) {
+      setError("Schedule instruction cannot be empty.");
+      return;
+    }
+    await updateJob(job.job_id, { schedule_time: trimmed });
+  }, [updateJob]);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Cron Jobs</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Chron Jobs</h1>
           <p className="text-sm text-slate-400">Schedule autonomous recurring tasks.</p>
         </div>
         <button
@@ -230,7 +275,7 @@ export default function DashboardCronJobsPage() {
         {loading && <p className="text-sm text-slate-400">Loading…</p>}
         {!loading && jobs.length === 0 && (
           <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-400">
-            No cron jobs configured.
+            No chron jobs configured.
           </div>
         )}
         {jobs.map((job) => (
@@ -242,7 +287,7 @@ export default function DashboardCronJobsPage() {
                   {job.run_at
                     ? `one-shot at ${toLocalDateTime(job.run_at)}`
                     : job.cron_expr
-                      ? `cron ${job.cron_expr}`
+                      ? `chron ${job.cron_expr}`
                       : `every ${formatEverySeconds(job.every_seconds)}`} ·{" "}
                   {job.running ? "running" : job.enabled ? "enabled" : "disabled"} · next: {toLocalDateTime(job.next_run_at)}
                   {job.timeout_seconds ? ` · timeout ${job.timeout_seconds}s` : ""}
@@ -265,6 +310,20 @@ export default function DashboardCronJobsPage() {
                   className="rounded-md border border-emerald-700 bg-emerald-500/20 px-2 py-1 text-xs text-emerald-100 hover:bg-emerald-500/30"
                 >
                   Run now
+                </button>
+                <button
+                  type="button"
+                  onClick={() => editJobText(job)}
+                  className="rounded-md border border-sky-700 bg-sky-500/20 px-2 py-1 text-xs text-sky-100 hover:bg-sky-500/30"
+                >
+                  Edit text
+                </button>
+                <button
+                  type="button"
+                  onClick={() => changeJobScheduleWithNaturalLanguage(job)}
+                  className="rounded-md border border-violet-700 bg-violet-500/20 px-2 py-1 text-xs text-violet-100 hover:bg-violet-500/30"
+                >
+                  Change Schedule
                 </button>
                 <button
                   type="button"

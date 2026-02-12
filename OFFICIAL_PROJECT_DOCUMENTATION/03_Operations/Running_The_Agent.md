@@ -89,7 +89,7 @@ Every run creates a dedicated workspace directory in `AGENT_RUN_WORKSPACES/sessi
 ## 6. Mirror Remote Workspaces Locally (Debug `app.clearspringcg.com`)
 
 If your remote deployment is running on a VPS, you can continuously mirror remote
-`AGENT_RUN_WORKSPACES` into this local repo while your computer is on.
+`AGENT_RUN_WORKSPACES` and remote durable `artifacts` into this local repo while your computer is on.
 
 ### Recommended control model (simple toggle)
 
@@ -126,7 +126,9 @@ Web UI toggle behavior:
 scripts/sync_remote_workspaces.sh --once \
   --host root@187.77.16.29 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+  --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_vps_artifacts \
   --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt
 ```
 
@@ -136,7 +138,9 @@ scripts/sync_remote_workspaces.sh --once \
 scripts/sync_remote_workspaces.sh \
   --host root@187.77.16.29 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+  --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_vps_artifacts \
   --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
   --interval 30
 ```
@@ -151,7 +155,9 @@ Behavior note:
 scripts/install_remote_workspace_sync_timer.sh \
   --host root@187.77.16.29 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
+  --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
+  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_vps_artifacts \
   --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
   --interval 30
 ```

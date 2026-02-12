@@ -73,6 +73,7 @@ from universal_agent.session_policy import (
     save_session_policy,
     update_session_policy,
 )
+from universal_agent.utils.json_utils import extract_json_payload
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -227,6 +228,8 @@ class CronJobCreateRequest(BaseModel):
 
 class CronJobUpdateRequest(BaseModel):
     command: Optional[str] = None
+    schedule_time: Optional[str] = None  # Simplified time input for updates
+    repeat: Optional[bool] = None  # Optional repeat override for simplified updates
     timeout_seconds: Optional[int] = None
     every: Optional[str] = None
     cron_expr: Optional[str] = None
@@ -376,6 +379,7 @@ _session_turn_locks: dict[str, asyncio.Lock] = {}
 _calendar_missed_events: dict[str, dict[str, Any]] = {}
 _calendar_missed_notifications: set[str] = set()
 _calendar_change_proposals: dict[str, dict[str, Any]] = {}
+_SYSTEM_CONFIGURATION_AGENT_SESSION_ID = "session_system_configuration_agent"
 _observability_metrics: dict[str, Any] = {
     "started_at": datetime.now().isoformat(),
     "sessions_created": 0,
@@ -1243,7 +1247,7 @@ def _emit_cron_event(payload: dict) -> None:
         job = _cron_service.get_job(job_id) if _cron_service and job_id else None
         command = str(getattr(job, "command", "") or "").strip()
         if not command:
-            command = f"job {job_id}" if job_id else "cron job"
+            command = f"job {job_id}" if job_id else "chron job"
         if len(command) > 120:
             command = f"{command[:117]}..."
 
@@ -1259,12 +1263,12 @@ def _emit_cron_event(payload: dict) -> None:
                 ).strip()
 
         if run_status == "success":
-            title = "Cron Run Succeeded"
+            title = "Chron Run Succeeded"
             severity = "info"
             kind = "cron_run_success"
             message = f"{command}"
         else:
-            title = "Cron Run Failed"
+            title = "Chron Run Failed"
             severity = "error"
             kind = "cron_run_failed"
             error_text = str(run_data.get("error") or "").strip()
@@ -2015,7 +2019,7 @@ def _calendar_project_cron_events(
                 "owner_id": str(job.user_id),
                 "session_id": str((job.metadata or {}).get("session_id") or ""),
                 "channel": str((job.metadata or {}).get("channel") or "cron"),
-                "title": str((job.metadata or {}).get("title") or f"Cron: {str(job.command)[:40]}"),
+                "title": str((job.metadata or {}).get("title") or f"Chron: {str(job.command)[:40]}"),
                 "description": str(job.command),
                 "category": str((job.metadata or {}).get("priority") or "normal"),
                 "color_key": "cron",
@@ -2300,29 +2304,29 @@ def _calendar_create_change_proposal(
 
     if source == "cron":
         if not _cron_service:
-            raise HTTPException(status_code=503, detail="Cron service not available")
+            raise HTTPException(status_code=503, detail="Chron service not available")
         job = _cron_service.get_job(source_ref)
         if not job:
-            raise HTTPException(status_code=404, detail="Cron job not found")
+            raise HTTPException(status_code=404, detail="Chron job not found")
         before = job.to_dict()
         if any(token in lower for token in ("pause", "disable", "stop")):
             operation = {"type": "cron_set_enabled", "enabled": False}
-            summary = "Disable cron job"
+            summary = "Disable chron job"
             after = {**before, "enabled": False}
         elif any(token in lower for token in ("resume", "enable", "start")):
             operation = {"type": "cron_set_enabled", "enabled": True}
-            summary = "Enable cron job"
+            summary = "Enable chron job"
             after = {**before, "enabled": True}
         elif "run now" in lower:
             operation = {"type": "cron_run_now"}
-            summary = "Run cron job now"
+            summary = "Run chron job now"
             after = before
         else:
             every_seconds = _calendar_interval_seconds_from_text(lower)
             run_at_ts = _calendar_parse_run_at_text(lower, timezone_name)
             if every_seconds is not None:
                 operation = {"type": "cron_set_interval", "every_seconds": every_seconds}
-                summary = f"Set cron interval to every {every_seconds} seconds"
+                summary = f"Set chron interval to every {every_seconds} seconds"
                 after = {**before, "every_seconds": every_seconds}
                 confidence = "high"
             elif run_at_ts is not None:
@@ -2336,7 +2340,7 @@ def _calendar_create_change_proposal(
                 confidence = "medium"
             else:
                 operation = {"type": "none"}
-                summary = "Could not safely map instruction to a cron change"
+                summary = "Could not safely map instruction to a chron change"
                 after = before
                 warnings.append("Instruction not recognized; try explicit phrasing like 'pause', 'resume', or 'every 30 minutes'.")
                 confidence = "low"
@@ -2405,10 +2409,10 @@ async def _calendar_apply_event_action(
     action_norm = action.strip().lower()
     if source == "cron":
         if not _cron_service:
-            raise HTTPException(status_code=503, detail="Cron service not available")
+            raise HTTPException(status_code=503, detail="Chron service not available")
         job = _cron_service.get_job(source_ref)
         if not job:
-            raise HTTPException(status_code=404, detail="Cron job not found")
+            raise HTTPException(status_code=404, detail="Chron job not found")
         if action_norm == "run_now":
             record = await _cron_service.run_job_now(source_ref, reason="calendar_action")
             return {"status": "ok", "action": action_norm, "run": record.to_dict()}
@@ -2934,7 +2938,7 @@ async def lifespan(app: FastAPI):
         logger.info("💤 Heartbeat System DISABLED (feature flag)")
 
     if CRON_ENABLED:
-        logger.info("⏱️ Cron Service ENABLED")
+        logger.info("⏱️ Chron Service ENABLED")
         _cron_service = CronService(
             get_gateway(),
             WORKSPACES_DIR,
@@ -2944,7 +2948,7 @@ async def lifespan(app: FastAPI):
         )
         await _cron_service.start()
     else:
-        logger.info("⏲️ Cron Service DISABLED (feature flag)")
+        logger.info("⏲️ Chron Service DISABLED (feature flag)")
     
     # Always enabled Ops Service
     _ops_service = OpsService(get_gateway(), WORKSPACES_DIR)
@@ -2955,7 +2959,7 @@ async def lifespan(app: FastAPI):
 
     if _scheduling_projection.enabled:
         _scheduling_projection.seed_from_runtime()
-        logger.info("📈 Scheduling projection enabled (event-driven cron projection path)")
+        logger.info("📈 Scheduling projection enabled (event-driven chron projection path)")
 
     yield
     
@@ -3462,7 +3466,7 @@ def _resolve_simplified_schedule_fields(
 ) -> tuple[Optional[str], Optional[str], Optional[float], bool]:
     text = (schedule_time or "").strip()
     if not text:
-        raise ValueError("schedule_time is required when using simplified cron input.")
+        raise ValueError("schedule_time is required when using simplified chron input.")
 
     if repeat:
         every = _normalize_interval_from_text(text)
@@ -3484,10 +3488,246 @@ def _resolve_simplified_schedule_fields(
     return None, None, run_at_ts, True
 
 
+def _schedule_text_suggests_repeat(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return False
+    if re.search(r"\b(every|daily|weekly|weekday|weekdays|monthly|yearly)\b", lowered):
+        return True
+    if lowered.startswith("at "):
+        return True
+    return False
+
+
+def _resolve_simplified_schedule_update_fields(
+    *,
+    schedule_time: str,
+    repeat: Optional[bool],
+    timezone_name: str,
+    job: Any,
+) -> tuple[Optional[str], Optional[str], Optional[float], bool]:
+    if repeat is None:
+        existing_repeat = bool(getattr(job, "cron_expr", None) or int(getattr(job, "every_seconds", 0) or 0) > 0)
+        inferred_repeat = _schedule_text_suggests_repeat(schedule_time)
+        repeat_mode = inferred_repeat or existing_repeat
+    else:
+        repeat_mode = bool(repeat)
+    return _resolve_simplified_schedule_fields(
+        schedule_time=schedule_time,
+        repeat=repeat_mode,
+        timezone_name=timezone_name,
+    )
+
+
+class _AgentScheduleInterpretation(BaseModel):
+    status: str = "ok"
+    every: Optional[str] = None
+    cron_expr: Optional[str] = None
+    run_at: Optional[Any] = None
+    delete_after_run: Optional[bool] = None
+    reason: Optional[str] = None
+    confidence: Optional[str] = None
+
+
+def _chron_job_schedule_snapshot(job: Any) -> dict[str, Any]:
+    return {
+        "job_id": str(getattr(job, "job_id", "") or ""),
+        "every_seconds": int(getattr(job, "every_seconds", 0) or 0),
+        "cron_expr": getattr(job, "cron_expr", None),
+        "run_at_epoch": getattr(job, "run_at", None),
+        "timezone": str(getattr(job, "timezone", "UTC") or "UTC"),
+        "delete_after_run": bool(getattr(job, "delete_after_run", False)),
+    }
+
+
+def _normalize_agent_every_value(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    raw = str(value).strip().lower()
+    if not raw:
+        return None
+    if raw.startswith("every "):
+        raw = raw[6:].strip()
+    if raw.startswith("in "):
+        raw = raw[3:].strip()
+    normalized = _normalize_interval_from_text(raw)
+    if normalized:
+        return normalized
+    if re.match(r"^\d+[smhd]$", raw):
+        return raw
+    if re.match(r"^\d+$", raw):
+        return f"{int(raw)}s"
+    return None
+
+
+def _coerce_agent_schedule_to_update_fields(
+    *,
+    interpretation: _AgentScheduleInterpretation,
+    repeat: Optional[bool],
+    timezone_name: str,
+) -> tuple[Optional[str], Optional[str], Optional[float], bool]:
+    status = (interpretation.status or "ok").strip().lower()
+    if status not in {"ok", "applied"}:
+        reason = (interpretation.reason or "").strip() or (
+            "System configuration agent could not safely interpret the schedule request."
+        )
+        raise HTTPException(status_code=400, detail=reason)
+
+    every = _normalize_agent_every_value(interpretation.every)
+    cron_expr = str(interpretation.cron_expr).strip() if interpretation.cron_expr else None
+    run_at_ts: Optional[float] = None
+    if interpretation.run_at not in (None, ""):
+        run_at_ts = parse_run_at(interpretation.run_at, timezone_name=timezone_name)
+        if run_at_ts is None:
+            raise ValueError("System configuration agent returned an invalid run_at value.")
+
+    selected = int(every is not None) + int(cron_expr is not None) + int(run_at_ts is not None)
+    if selected != 1:
+        raise ValueError("System configuration agent must return exactly one schedule mode.")
+
+    if repeat is True and run_at_ts is not None:
+        raise ValueError("repeat=true requires a repeating schedule (every or cron_expr).")
+    if repeat is False and run_at_ts is None:
+        raise ValueError("repeat=false requires a one-shot schedule (run_at).")
+
+    if run_at_ts is not None:
+        # Simplified one-shot updates are always modeled as run once, then delete.
+        delete_after_run = True
+    else:
+        delete_after_run = False
+
+    return every, cron_expr, run_at_ts, delete_after_run
+
+
+async def _get_or_create_system_configuration_session() -> GatewaySession:
+    gateway = get_gateway()
+    try:
+        return await gateway.resume_session(_SYSTEM_CONFIGURATION_AGENT_SESSION_ID)
+    except Exception:
+        workspace = str(WORKSPACES_DIR / _SYSTEM_CONFIGURATION_AGENT_SESSION_ID)
+        return await gateway.create_session(
+            user_id="ops:system-configuration-agent",
+            workspace_dir=workspace,
+        )
+
+
+def _build_schedule_interpretation_prompt(
+    *,
+    schedule_time: str,
+    repeat: Optional[bool],
+    timezone_name: str,
+    job: Any,
+) -> str:
+    context = {
+        "instruction": schedule_time,
+        "repeat_override": repeat,
+        "timezone": timezone_name,
+        "now_utc": datetime.now(timezone.utc).isoformat(),
+        "job_schedule_before": _chron_job_schedule_snapshot(job),
+    }
+    return (
+        "Internal system configuration task.\n"
+        "Interpret a natural-language schedule update for a chron job.\n"
+        "This is runtime configuration work; delegate to "
+        "Task(subagent_type='system-configuration-agent', ...) if needed.\n"
+        "Return ONLY one JSON object, no markdown and no extra text.\n"
+        "Schema:\n"
+        "{\n"
+        '  "status": "ok|needs_clarification|cannot_comply",\n'
+        '  "every": "30m|null",\n'
+        '  "cron_expr": "5-field cron expr|null",\n'
+        '  "run_at": "ISO-8601 timestamp with timezone|null",\n'
+        '  "delete_after_run": true|false|null,\n'
+        '  "reason": "short explanation",\n'
+        '  "confidence": "low|medium|high"\n'
+        "}\n"
+        "Rules:\n"
+        "- Exactly one of every, cron_expr, run_at must be non-null when status is ok.\n"
+        "- If repeat_override=true, do not return run_at.\n"
+        "- If repeat_override=false, return run_at and delete_after_run=true.\n"
+        "- If repeat_override is null, infer intent from instruction and current schedule.\n"
+        "- Keep timezone handling explicit.\n"
+        "Context JSON:\n"
+        f"{json.dumps(context, ensure_ascii=True, indent=2)}\n"
+    )
+
+
+async def _interpret_schedule_with_system_configuration_agent(
+    *,
+    schedule_time: str,
+    repeat: Optional[bool],
+    timezone_name: str,
+    job: Any,
+) -> _AgentScheduleInterpretation:
+    session = await _get_or_create_system_configuration_session()
+    gateway = get_gateway()
+    prompt = _build_schedule_interpretation_prompt(
+        schedule_time=schedule_time,
+        repeat=repeat,
+        timezone_name=timezone_name,
+        job=job,
+    )
+    result = await gateway.run_query(
+        session,
+        GatewayRequest(
+            user_input=prompt,
+            force_complex=True,
+            metadata={
+                "source": "ops",
+                "operation": "chron_schedule_interpretation",
+                "subagent_type": "system-configuration-agent",
+            },
+        ),
+    )
+    payload = extract_json_payload(
+        result.response_text,
+        model=_AgentScheduleInterpretation,
+        require_model=True,
+    )
+    if not isinstance(payload, _AgentScheduleInterpretation):
+        raise ValueError("System configuration agent did not return a valid schedule payload.")
+    return payload
+
+
+async def _resolve_simplified_schedule_update_fields_with_agent(
+    *,
+    schedule_time: str,
+    repeat: Optional[bool],
+    timezone_name: str,
+    job: Any,
+) -> tuple[Optional[str], Optional[str], Optional[float], bool]:
+    try:
+        interpretation = await _interpret_schedule_with_system_configuration_agent(
+            schedule_time=schedule_time,
+            repeat=repeat,
+            timezone_name=timezone_name,
+            job=job,
+        )
+        return _coerce_agent_schedule_to_update_fields(
+            interpretation=interpretation,
+            repeat=repeat,
+            timezone_name=timezone_name,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "System configuration schedule interpretation failed for job %s, falling back to deterministic parser: %s",
+            getattr(job, "job_id", "unknown"),
+            exc,
+        )
+        return _resolve_simplified_schedule_update_fields(
+            schedule_time=schedule_time,
+            repeat=repeat,
+            timezone_name=timezone_name,
+            job=job,
+        )
+
+
 @app.get("/api/v1/cron/jobs")
 async def list_cron_jobs():
     if not _cron_service:
-        raise HTTPException(status_code=400, detail="Cron service not available.")
+        raise HTTPException(status_code=400, detail="Chron service not available.")
     return {
         "jobs": [
             {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
@@ -3499,7 +3739,7 @@ async def list_cron_jobs():
 @app.post("/api/v1/cron/jobs")
 async def create_cron_job(request: CronJobCreateRequest):
     if not _cron_service:
-        raise HTTPException(status_code=400, detail="Cron service not available.")
+        raise HTTPException(status_code=400, detail="Chron service not available.")
     try:
         # Parse run_at (relative, ISO, or natural text in the request timezone)
         run_at_ts = parse_run_at(request.run_at, timezone_name=request.timezone) if request.run_at else None
@@ -3538,25 +3778,46 @@ async def create_cron_job(request: CronJobCreateRequest):
 @app.get("/api/v1/cron/jobs/{job_id}")
 async def get_cron_job(job_id: str):
     if not _cron_service:
-        raise HTTPException(status_code=400, detail="Cron service not available.")
+        raise HTTPException(status_code=400, detail="Chron service not available.")
     job = _cron_service.get_job(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Cron job not found")
+        raise HTTPException(status_code=404, detail="Chron job not found")
     return {"job": {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}}
 
 
 @app.put("/api/v1/cron/jobs/{job_id}")
 async def update_cron_job(job_id: str, request: CronJobUpdateRequest):
     if not _cron_service:
-        raise HTTPException(status_code=400, detail="Cron service not available.")
+        raise HTTPException(status_code=400, detail="Chron service not available.")
     job = _cron_service.get_job(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Cron job not found")
+        raise HTTPException(status_code=404, detail="Chron job not found")
     
     # Build updates dict, only including non-None values
+    if request.repeat is not None and request.schedule_time is None:
+        raise HTTPException(status_code=400, detail="repeat requires schedule_time for simplified updates.")
     updates: dict = {}
+    effective_tz = request.timezone if request.timezone is not None else job.timezone
     if request.command is not None:
         updates["command"] = request.command
+    if request.schedule_time is not None:
+        every_raw, cron_expr, run_at_ts, delete_after_run = await _resolve_simplified_schedule_update_fields_with_agent(
+            schedule_time=request.schedule_time,
+            repeat=request.repeat,
+            timezone_name=effective_tz,
+            job=job,
+        )
+        # Scheduling modes are mutually exclusive.
+        updates["every_seconds"] = 0
+        updates["cron_expr"] = None
+        updates["run_at"] = None
+        if every_raw is not None:
+            updates["every"] = every_raw
+        if cron_expr is not None:
+            updates["cron_expr"] = cron_expr
+        if run_at_ts is not None:
+            updates["run_at"] = run_at_ts
+        updates["delete_after_run"] = delete_after_run
     if request.timeout_seconds is not None:
         updates["timeout_seconds"] = request.timeout_seconds
     if request.every is not None:
@@ -3566,7 +3827,6 @@ async def update_cron_job(job_id: str, request: CronJobUpdateRequest):
     if request.timezone is not None:
         updates["timezone"] = request.timezone
     if request.run_at is not None:
-        effective_tz = request.timezone if request.timezone is not None else job.timezone
         updates["run_at"] = parse_run_at(request.run_at, timezone_name=effective_tz)
     if request.delete_after_run is not None:
         updates["delete_after_run"] = request.delete_after_run
@@ -3591,10 +3851,10 @@ async def update_cron_job(job_id: str, request: CronJobUpdateRequest):
 @app.delete("/api/v1/cron/jobs/{job_id}")
 async def delete_cron_job(job_id: str):
     if not _cron_service:
-        raise HTTPException(status_code=400, detail="Cron service not available.")
+        raise HTTPException(status_code=400, detail="Chron service not available.")
     job = _cron_service.get_job(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Cron job not found")
+        raise HTTPException(status_code=404, detail="Chron job not found")
     _cron_service.delete_job(job_id)
     return {"status": "deleted", "job_id": job_id}
 
@@ -3602,10 +3862,10 @@ async def delete_cron_job(job_id: str):
 @app.post("/api/v1/cron/jobs/{job_id}/run")
 async def run_cron_job(job_id: str):
     if not _cron_service:
-        raise HTTPException(status_code=400, detail="Cron service not available.")
+        raise HTTPException(status_code=400, detail="Chron service not available.")
     job = _cron_service.get_job(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Cron job not found")
+        raise HTTPException(status_code=404, detail="Chron job not found")
     record = await _cron_service.run_job_now(job_id, reason="manual")
     return {"run": record.to_dict()}
 
@@ -3613,14 +3873,14 @@ async def run_cron_job(job_id: str):
 @app.get("/api/v1/cron/jobs/{job_id}/runs")
 async def list_cron_job_runs(job_id: str, limit: int = 200):
     if not _cron_service:
-        raise HTTPException(status_code=400, detail="Cron service not available.")
+        raise HTTPException(status_code=400, detail="Chron service not available.")
     return {"runs": _cron_service.list_runs(job_id=job_id, limit=limit)}
 
 
 @app.get("/api/v1/cron/runs")
 async def list_cron_runs(limit: int = 200):
     if not _cron_service:
-        raise HTTPException(status_code=400, detail="Cron service not available.")
+        raise HTTPException(status_code=400, detail="Chron service not available.")
     return {"runs": _cron_service.list_runs(limit=limit)}
 
 
@@ -3930,17 +4190,17 @@ async def ops_calendar_event_change_confirm(
     result: dict[str, Any]
     if op_type == "cron_set_enabled":
         if not _cron_service:
-            raise HTTPException(status_code=503, detail="Cron service not available")
+            raise HTTPException(status_code=503, detail="Chron service not available")
         updated = _cron_service.update_job(source_ref, {"enabled": bool(operation.get("enabled"))})
         result = {"job": updated.to_dict()}
     elif op_type == "cron_run_now":
         if not _cron_service:
-            raise HTTPException(status_code=503, detail="Cron service not available")
+            raise HTTPException(status_code=503, detail="Chron service not available")
         run = await _cron_service.run_job_now(source_ref, reason="calendar_change_request")
         result = {"run": run.to_dict()}
     elif op_type == "cron_set_interval":
         if not _cron_service:
-            raise HTTPException(status_code=503, detail="Cron service not available")
+            raise HTTPException(status_code=503, detail="Chron service not available")
         every_seconds = int(operation.get("every_seconds") or 0)
         if every_seconds <= 0:
             raise HTTPException(status_code=400, detail="Invalid interval")
@@ -3948,23 +4208,42 @@ async def ops_calendar_event_change_confirm(
         result = {"job": updated.to_dict()}
     elif op_type == "cron_backfill_schedule":
         if not _cron_service:
-            raise HTTPException(status_code=503, detail="Cron service not available")
+            raise HTTPException(status_code=503, detail="Chron service not available")
         job = _cron_service.get_job(source_ref)
         if not job:
-            raise HTTPException(status_code=404, detail="Cron job not found")
+            raise HTTPException(status_code=404, detail="Chron job not found")
         run_at = float(operation.get("run_at") or 0.0)
         if run_at <= 0:
             raise HTTPException(status_code=400, detail="Invalid run_at")
-        created = _cron_service.add_job(
-            user_id=job.user_id,
-            workspace_dir=job.workspace_dir,
-            command=job.command,
-            run_at=run_at,
-            delete_after_run=True,
-            enabled=True,
-            metadata={**(job.metadata or {}), "backfill_for_job_id": source_ref},
-        )
-        result = {"job": created.to_dict()}
+        # Keep one-shot jobs on the same job_id when rescheduling so
+        # calendar actions and run history stay correlated to the job
+        # the user actually edited.
+        if job.run_at is not None and bool(job.delete_after_run):
+            updated = _cron_service.update_job(
+                source_ref,
+                {
+                    "run_at": run_at,
+                    "enabled": True,
+                },
+            )
+            result = {
+                "job": updated.to_dict(),
+                "mode": "updated_existing_one_shot",
+            }
+        else:
+            created = _cron_service.add_job(
+                user_id=job.user_id,
+                workspace_dir=job.workspace_dir,
+                command=job.command,
+                run_at=run_at,
+                delete_after_run=True,
+                enabled=True,
+                metadata={**(job.metadata or {}), "backfill_for_job_id": source_ref},
+            )
+            result = {
+                "job": created.to_dict(),
+                "mode": "created_backfill_job",
+            }
     elif op_type == "heartbeat_set_delivery":
         mode = str(operation.get("mode") or "last").strip().lower()
         if mode not in {"none", "last"}:

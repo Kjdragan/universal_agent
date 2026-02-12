@@ -11,7 +11,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Request, Response
 from pydantic import BaseModel, Field
@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HOOKS_PATH = "/hooks"
 DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024
+HOOK_SESSION_ID_PREFIX = "session_hook_"
+MAX_SESSION_ID_LEN = 128
+SESSION_ID_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 class HookMatchConfig(BaseModel):
     path: Optional[str] = None
@@ -332,7 +335,12 @@ class HooksService:
                 name=self._render_template(mapping.name or "Hook", context),
                 deliver=mapping.deliver,
                 session_key=self._render_template(mapping.session_key or "", context),
-                wake_mode=mapping.wake_mode
+                mode=mapping.wake_mode,
+                allow_unsafe_external_content=mapping.allow_unsafe_external_content,
+                to=mapping.to,
+                model=mapping.model,
+                thinking=mapping.thinking,
+                timeout_seconds=mapping.timeout_seconds,
             )
 
     def _load_transform(self, transform_config: HookTransformConfig):
@@ -397,62 +405,94 @@ class HooksService:
         return re.sub(r'\{\{\s*([^}]+)\s*\}\}', replacer, template)
 
     async def _dispatch_action(self, action: HookAction):
-        # This is where we interface with the gateway
-        logger.info(f"Dispatching hook action: {action.kind}")
-        
+        logger.info("Dispatching hook action kind=%s", action.kind)
         if action.kind == "wake":
-             # Use OpsService-like logic or direct gateway interaction
-             pass # To impl: wake up sessions
-             
-        elif action.kind == "agent":
-             session_key = action.session_key
-             if not session_key:
-                  logger.warning("No session key for agent hook")
-                  return
+            logger.info("Wake hook action is not implemented yet; dropping action")
+            return
+        if action.kind != "agent":
+            logger.warning("Unsupported hook action kind=%s", action.kind)
+            return
 
-             # Generate a safe session ID from the key if needed, or use as is if it's a valid ID
-             # For now, simplistic approach: use session_key as session_id if it looks like one,
-             # otherwise hash it or prefix it?
-             # Clawdbot uses sessionKey as the ID directly.
-             session_id = session_key.replace(":", "_").replace("-", "_")
-             
-             try:
-                 # Check if session exists (to resume) or create
-                 # InProcessGateway.resume_session checks existence
-                 try:
-                     session = await self.gateway.resume_session(session_id)
-                 except ValueError:
-                     # Create if not found
-                     logger.info(f"Creating new session for hook: {session_id}")
-                     session = await self.gateway.create_session(user_id="webhook", workspace_dir=None)
-                     # If we want to force the ID, we'd need to modify create_session or use internal maps.
-                     # But create_session generates a random ID. 
-                     # Wait, InProcessGateway.create_session generates a random ID.
-                     # To support deterministic IDs (like hook:gmail:123), we need to handle that.
-                     # Since we can't easily force ID in create_session without changing it,
-                     # we might just settle for creating a new session and mapping it, OR
-                     # we modify create_session to accept an ID? 
-                     # Looking at InProcessGateway.create_session:
-                     # it generates ID.
-                     pass 
+        session_key = (action.session_key or "").strip()
+        if not session_key:
+            logger.warning("Hook agent action missing session_key")
+            return
 
-                 # Actually, create_session doesn't accept ID.
-                 # But we can pass workspace_dir!
-                 # If we pass workspace_dir = AGENT_RUN_WORKSPACES/<session_key>, then session_id becomes <session_key>.
-                 
-                 workspace_base = Path("AGENT_RUN_WORKSPACES")
-                 workspace_dir = workspace_base / session_id
-                 session = await self.gateway.create_session(user_id="webhook", workspace_dir=str(workspace_dir))
-                 
-                 # Send message
-                 request = GatewayRequest(
-                     user_input=action.message,
-                     metadata={"source": "webhook", "hook_name": action.name}
-                 )
-                 
-                 # Execute
-                 async for _ in self.gateway.execute(session, request):
-                     pass
-                     
-             except Exception as e:
-                 logger.error(f"Failed to dispatch to agent: {e}")
+        user_input = self._build_agent_user_input(action)
+        if not user_input:
+            logger.warning("Hook agent action missing message session_key=%s", session_key)
+            return
+
+        session_id = self._session_id_from_key(session_key)
+        metadata: Dict[str, Any] = {
+            "source": "webhook",
+            "hook_name": action.name or "Hook",
+            "hook_session_key": session_key,
+            "hook_session_id": session_id,
+        }
+        if action.to:
+            metadata["hook_route_to"] = action.to
+        if action.model:
+            metadata["hook_model"] = action.model
+        if action.thinking:
+            metadata["hook_thinking"] = action.thinking
+        if action.timeout_seconds is not None:
+            metadata["hook_timeout_seconds"] = action.timeout_seconds
+
+        try:
+            session = await self._resolve_or_create_webhook_session(session_id)
+            request = GatewayRequest(user_input=user_input, metadata=metadata)
+            async for _ in self.gateway.execute(session, request):
+                pass
+            logger.info("Hook action dispatched session_id=%s hook=%s", session_id, action.name or "Hook")
+        except Exception:
+            logger.exception(
+                "Failed dispatching hook action session_key=%s session_id=%s",
+                session_key,
+                session_id,
+            )
+
+    async def _resolve_or_create_webhook_session(self, session_id: str):
+        try:
+            return await self.gateway.resume_session(session_id)
+        except ValueError:
+            workspace_dir = Path("AGENT_RUN_WORKSPACES") / session_id
+            logger.info("Creating webhook session session_id=%s workspace=%s", session_id, workspace_dir)
+            return await self.gateway.create_session(user_id="webhook", workspace_dir=str(workspace_dir))
+
+    def _session_id_from_key(self, session_key: str) -> str:
+        raw = session_key.strip()
+        if not raw:
+            digest = hashlib.sha256(str(time.time()).encode("utf-8")).hexdigest()[:12]
+            return f"{HOOK_SESSION_ID_PREFIX}{digest}"
+
+        safe = SESSION_ID_SANITIZE_RE.sub("_", raw)
+        safe = safe.strip("._-")
+        if not safe:
+            safe = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+        session_id = f"{HOOK_SESSION_ID_PREFIX}{safe}"
+        if len(session_id) <= MAX_SESSION_ID_LEN:
+            return session_id
+
+        suffix = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
+        keep = MAX_SESSION_ID_LEN - len(HOOK_SESSION_ID_PREFIX) - len(suffix) - 1
+        keep = max(8, keep)
+        trimmed = safe[:keep].rstrip("._-") or safe[:8]
+        return f"{HOOK_SESSION_ID_PREFIX}{trimmed}_{suffix}"
+
+    def _build_agent_user_input(self, action: HookAction) -> str:
+        message = (action.message or "").strip()
+        if not message:
+            return ""
+        if not action.to:
+            return message
+
+        routing_lines = [
+            f"Webhook route target: {action.to}",
+            "Mandatory: delegate this run to the target subagent using Task.",
+            f"Use Task(subagent_type='{action.to}', prompt='Use the webhook payload below and complete the run end-to-end.').",
+            "",
+            message,
+        ]
+        return "\n".join(routing_lines)

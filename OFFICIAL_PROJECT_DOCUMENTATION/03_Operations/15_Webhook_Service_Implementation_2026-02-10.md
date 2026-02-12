@@ -112,6 +112,19 @@ The implementation has been verified via:
 1. **Unit Tests**: `tests/test_hooks_service.py` covers configuration loading, request matching, template rendering, and action dispatch.
 2. **Manual Testing**: Verified using `curl` to simulate webhook events and observing agent execution.
 
+## 2026-02-12 Hardening Notes
+
+After production webhook debugging on VPS, the following architectural clarifications were added:
+
+1. **Delivery vs Recognition vs Dispatch are separate phases**:
+   `received` in logs means delivery works even if action is skipped.
+2. **Composio YouTube payloads have multiple shapes**:
+   both `composio.trigger.message` envelope payloads and direct `event_type=new_playlist_item` payloads must parse.
+3. **Playlist item ID is not always playable video ID**:
+   prefer `item.snippet.resourceId.videoId` over long `item.id` values.
+4. **Webhook session routing should be deterministic**:
+   hook sessions use stable `session_hook_*` IDs for reliable replay/debug behavior.
+
 ## Next Steps
 
 1. **Create Standard Transforms**: Develop a library of standard transforms for common services (GitHub, Linear, Slack).

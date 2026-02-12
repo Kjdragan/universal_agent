@@ -271,6 +271,66 @@ def _rolling_window_label(days: int) -> str:
     return f"Canonical rolling window (inclusive): {start_str} to {end_str}."
 
 
+def _is_blocked_crontab_mutation(command: str) -> bool:
+    text = (command or "").strip().lower()
+    if not text:
+        return False
+    if "crontab" not in text and "/etc/cron" not in text and "cron.d" not in text:
+        return False
+    # Block mutation/edit flows.
+    if re.search(r"\bcrontab\s+-(e|r)\b", text):
+        return True
+    if re.search(r"\bcrontab\s+-(?!l\b)", text):
+        return True
+    if re.search(r"\|\s*crontab\b", text):
+        return True
+    if re.search(r"\bcrontab\s+/", text):
+        return True
+    if re.search(r"(>>|>|tee)\s*/etc/cron", text):
+        return True
+    if "/etc/cron" in text or "cron.d" in text:
+        return True
+    # Allow read-only inspection.
+    if re.search(r"\bcrontab\s+-l\b", text):
+        return False
+    if re.search(r"\bcat\s+/etc/cron", text):
+        return False
+    return False
+
+
+def _looks_like_system_configuration_intent(text: str) -> bool:
+    lowered = (text or "").strip().lower()
+    if not lowered:
+        return False
+    target_patterns = [
+        r"\bchron\b",
+        r"\bcron\b",
+        r"\bheartbeat\b",
+        r"\bops\s+config\b",
+        r"\bruntime\s+config\b",
+        r"\bservice\s+(settings|config|configuration)\b",
+    ]
+    action_patterns = [
+        r"\bcreate\b",
+        r"\bset\b",
+        r"\bchange\b",
+        r"\bupdate\b",
+        r"\breschedul",
+        r"\bpause\b",
+        r"\bresume\b",
+        r"\benable\b",
+        r"\bdisable\b",
+        r"\brun\s+now\b",
+        r"\bevery\b",
+        r"\bdaily\b",
+        r"\bweekly\b",
+        r"\binterval\b",
+    ]
+    has_target = any(re.search(pattern, lowered) for pattern in target_patterns)
+    has_action = any(re.search(pattern, lowered) for pattern in action_patterns)
+    return has_target and has_action
+
+
 def _parse_past_days_token(token: str) -> Optional[int]:
     cleaned = (token or "").strip().lower()
     if not cleaned:
@@ -593,6 +653,46 @@ async def pre_tool_use_schema_guardrail(
         # Allow the tool to proceed - it will handle missing data gracefully
         # The observer may still be writing files due to async save
     if isinstance(tool_input, dict):
+        if normalized_name == "task":
+            subagent_type = str(tool_input.get("subagent_type", "") or "").strip().lower()
+            prompt_text = str(tool_input.get("prompt", "") or "")
+            if (
+                subagent_type
+                and subagent_type != "system-configuration-agent"
+                and _looks_like_system_configuration_intent(prompt_text)
+            ):
+                return {
+                    "systemMessage": (
+                        "⚠️ Misrouted delegation detected. This task looks like a system/runtime configuration request.\n"
+                        "Delegate to `Task(subagent_type='system-configuration-agent', ...)`."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "System configuration intents must route to system-configuration-agent.",
+                    },
+                }
+
+        # Enforce Chron APIs for scheduling changes; block OS-level crontab mutation.
+        if normalized_name.endswith("bash"):
+            command = str(tool_input.get("command", "") or "")
+            if _is_blocked_crontab_mutation(command):
+                return {
+                    "systemMessage": (
+                        "⚠️ Blocked shell-level cron mutation. "
+                        "Use the system configuration path instead.\n\n"
+                        "Required routing:\n"
+                        "1) Delegate to `Task(subagent_type='system-configuration-agent', ... )`\n"
+                        "2) Apply scheduling through Universal Agent Chron APIs, not OS crontab."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "OS crontab mutation blocked. Use system-configuration-agent and Chron APIs.",
+                    },
+                }
         normalized_input = _normalize_tool_input(identity.tool_name, tool_input)
         if normalized_input is not None:
             return {

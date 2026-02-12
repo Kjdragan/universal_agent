@@ -10,7 +10,9 @@ SYNC_SCRIPT="${REPO_ROOT}/scripts/sync_remote_workspaces.sh"
 DEFAULT_SERVICE_NAME="ua-remote-workspace-sync"
 DEFAULT_REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@187.77.16.29}"
 DEFAULT_REMOTE_DIR="${UA_REMOTE_WORKSPACES_DIR:-/opt/universal_agent/AGENT_RUN_WORKSPACES}"
-DEFAULT_LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/tmp/remote_app_workspaces}"
+DEFAULT_LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES}"
+DEFAULT_REMOTE_ARTIFACTS_DIR="${UA_REMOTE_ARTIFACTS_DIR:-/opt/universal_agent/artifacts}"
+DEFAULT_LOCAL_ARTIFACTS_DIR="${UA_LOCAL_ARTIFACTS_MIRROR_DIR:-${REPO_ROOT}/tmp/remote_vps_artifacts}"
 DEFAULT_MANIFEST_FILE="${UA_REMOTE_SYNC_MANIFEST_FILE:-${REPO_ROOT}/tmp/remote_sync_state/synced_workspaces.txt}"
 DEFAULT_INTERVAL_SEC="${UA_REMOTE_SYNC_INTERVAL_SEC:-600}"
 DEFAULT_SSH_PORT="${UA_REMOTE_SSH_PORT:-22}"
@@ -34,6 +36,10 @@ Options (for on/sync-now, optional):
   --host <user@host>       Remote SSH host.
   --remote-dir <path>      Remote AGENT_RUN_WORKSPACES path.
   --local-dir <path>       Local mirror directory.
+  --remote-artifacts-dir <path>
+                           Remote durable artifacts path.
+  --local-artifacts-dir <path>
+                           Local durable artifacts mirror path.
   --manifest-file <path>   Manifest file path.
   --interval <seconds>     Timer interval for `on` (default: 600).
   --ssh-port <port>        SSH port.
@@ -42,6 +48,7 @@ Options (for on/sync-now, optional):
   --gateway-url <url>      Gateway base URL for remote toggle checks.
   --ops-token <token>      Optional ops token override for remote toggle checks.
   --include-runtime-db     Include runtime_state.db files.
+  --no-artifacts           Disable durable artifacts sync.
   --respect-remote-toggle  Force remote toggle gating for this command.
   --ignore-remote-toggle   Disable remote toggle gating for this command.
   --no-delete              Keep local files even if removed remotely.
@@ -94,6 +101,8 @@ SERVICE_NAME="${DEFAULT_SERVICE_NAME}"
 REMOTE_HOST="${DEFAULT_REMOTE_HOST}"
 REMOTE_DIR="${DEFAULT_REMOTE_DIR}"
 LOCAL_DIR="${DEFAULT_LOCAL_DIR}"
+REMOTE_ARTIFACTS_DIR="${DEFAULT_REMOTE_ARTIFACTS_DIR}"
+LOCAL_ARTIFACTS_DIR="${DEFAULT_LOCAL_ARTIFACTS_DIR}"
 MANIFEST_FILE="${DEFAULT_MANIFEST_FILE}"
 INTERVAL_SEC="${DEFAULT_INTERVAL_SEC}"
 SSH_PORT="${DEFAULT_SSH_PORT}"
@@ -105,6 +114,7 @@ INCLUDE_RUNTIME_DB="false"
 DELETE_MODE="true"
 SKIP_SYNCED="true"
 RESPECT_REMOTE_TOGGLE="auto"
+INCLUDE_ARTIFACTS_SYNC="${UA_REMOTE_SYNC_INCLUDE_ARTIFACTS:-true}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -122,6 +132,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --local-dir)
       LOCAL_DIR="${2:-}"
+      shift 2
+      ;;
+    --remote-artifacts-dir)
+      REMOTE_ARTIFACTS_DIR="${2:-}"
+      shift 2
+      ;;
+    --local-artifacts-dir)
+      LOCAL_ARTIFACTS_DIR="${2:-}"
       shift 2
       ;;
     --manifest-file)
@@ -154,6 +172,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --include-runtime-db)
       INCLUDE_RUNTIME_DB="true"
+      shift
+      ;;
+    --no-artifacts)
+      INCLUDE_ARTIFACTS_SYNC="false"
       shift
       ;;
     --respect-remote-toggle)
@@ -227,6 +249,8 @@ build_install_args() {
     --host "${REMOTE_HOST}"
     --remote-dir "${REMOTE_DIR}"
     --local-dir "${LOCAL_DIR}"
+    --remote-artifacts-dir "${REMOTE_ARTIFACTS_DIR}"
+    --local-artifacts-dir "${LOCAL_ARTIFACTS_DIR}"
     --manifest-file "${MANIFEST_FILE}"
     --interval "${INTERVAL_SEC}"
     --ssh-port "${SSH_PORT}"
@@ -243,6 +267,9 @@ build_install_args() {
   fi
   if [[ "${SKIP_SYNCED}" != "true" ]]; then
     args+=(--no-skip-synced)
+  fi
+  if [[ "${INCLUDE_ARTIFACTS_SYNC}" != "true" ]]; then
+    args+=(--no-artifacts)
   fi
   if [[ "${RESPECT_REMOTE_TOGGLE}" != "false" ]]; then
     args+=(--respect-remote-toggle)
@@ -269,6 +296,8 @@ cmd_sync_now() {
     --host "${REMOTE_HOST}"
     --remote-dir "${REMOTE_DIR}"
     --local-dir "${LOCAL_DIR}"
+    --remote-artifacts-dir "${REMOTE_ARTIFACTS_DIR}"
+    --local-artifacts-dir "${LOCAL_ARTIFACTS_DIR}"
     --manifest-file "${MANIFEST_FILE}"
     --ssh-port "${SSH_PORT}"
     --ssh-key "${SSH_KEY}"
@@ -284,6 +313,9 @@ cmd_sync_now() {
   fi
   if [[ "${SKIP_SYNCED}" != "true" ]]; then
     args+=(--no-skip-synced)
+  fi
+  if [[ "${INCLUDE_ARTIFACTS_SYNC}" != "true" ]]; then
+    args+=(--no-artifacts)
   fi
   if [[ "${RESPECT_REMOTE_TOGGLE}" == "true" ]]; then
     args+=(--respect-remote-toggle)

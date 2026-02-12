@@ -543,7 +543,18 @@ class AgentSetup:
                 "🔬 Research & Analysis": ["research-specialist", "trend-specialist", "professor", "scribe"],
                 "🎨 Creative & Media": ["image-expert", "video-creation-expert", "video-remotion-expert"],
                 "⚙️ Engineering & Code": ["task-decomposer", "codeinterpreter", "github"],
-                "🏢 Operations & Communication": ["slack-expert", "gmail", "googlecalendar", "notion", "linear"]
+                "🏢 Operations & Communication": [
+                    "slack-expert",
+                    "gmail",
+                    "googlecalendar",
+                    "notion",
+                    "linear",
+                    "system-configuration-agent",
+                    "ops",
+                    "heartbeat",
+                    "chron",
+                    "cron",
+                ],
             }
             
             # helper to find domain for an item
@@ -612,6 +623,14 @@ class AgentSetup:
                 for name, desc in agents:
                     lines.append(f"- **{name}**: {desc}")
                     lines.append(f"  -> Delegate: `Task(subagent_type='{name}', ...)`")
+
+            # Ensure system-configuration-agent guidance is always explicit in the registry.
+            if "system-configuration-agent" in found_agents:
+                lines.append("\n#### 🛠 Mandatory System Operations Routing")
+                lines.append("- **system-configuration-agent**: Platform/runtime operations specialist for Chron scheduling, heartbeat, and ops config.")
+                lines.append("  -> Delegate immediately for schedule and runtime parameter changes:")
+                lines.append("  `Task(subagent_type='system-configuration-agent', prompt='Apply this system change safely and verify it.')`")
+                lines.append("- Do not use OS-level crontab for product scheduling requests; use Chron APIs and runtime config paths.")
 
             lines.append("")
 

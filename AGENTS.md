@@ -27,3 +27,9 @@
 ## Session workspace introspection
 - Use internal tool `inspect_session_workspace` for read-only run diagnostics.
 - `transcript.md` is included by default (`include_transcript=true`).
+
+## Remote workspace sync defaults
+- Remote workspace sync now targets local `AGENT_RUN_WORKSPACES` by default.
+- One-command manual pull:
+  - `scripts/pull_remote_workspaces_now.sh`
+  - Optional single session: `scripts/pull_remote_workspaces_now.sh session_...`
