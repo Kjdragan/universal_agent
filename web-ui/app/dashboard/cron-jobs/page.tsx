@@ -54,9 +54,9 @@ function extractJobSessionId(job: CronJob): string {
   const metadata = (job.metadata || {}) as Record<string, unknown>;
   const fromMetadata = String(
     metadata.session_id
-      || metadata.target_session_id
-      || metadata.target_session
-      || "",
+    || metadata.target_session_id
+    || metadata.target_session
+    || "",
   ).trim();
   if (fromMetadata) return fromMetadata;
 
@@ -78,6 +78,8 @@ export default function DashboardCronJobsPage() {
   const [timeoutSeconds, setTimeoutSeconds] = useState("900");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{ command: string; schedule: string }>({ command: "", schedule: "" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -175,35 +177,44 @@ export default function DashboardCronJobsPage() {
     return true;
   }, [load]);
 
-  const editJobText = useCallback(async (job: CronJob) => {
-    const nextText = window.prompt("Edit chron job text", job.command || "");
-    if (nextText === null) return;
-    const trimmed = nextText.trim();
-    if (!trimmed) {
-      setError("Chron job text cannot be empty.");
-      return;
-    }
-    await updateJob(job.job_id, { command: trimmed });
-  }, [updateJob]);
-
-  const changeJobScheduleWithNaturalLanguage = useCallback(async (job: CronJob) => {
+  const startEditing = useCallback((job: CronJob) => {
     const currentSchedule = job.run_at
       ? `one-shot at ${toLocalDateTime(job.run_at)}`
       : job.cron_expr
-        ? `chron ${job.cron_expr}`
+        ? `cron ${job.cron_expr}`
         : `every ${formatEverySeconds(job.every_seconds)}`;
-    const nextInstruction = window.prompt(
-      `Current schedule: ${currentSchedule}\n\nDescribe the new schedule in natural language.\nExamples: "every 30 minutes", "tomorrow 9:15 am", "in 2 hours".`,
-      "",
-    );
-    if (nextInstruction === null) return;
-    const trimmed = nextInstruction.trim();
-    if (!trimmed) {
-      setError("Schedule instruction cannot be empty.");
+
+    setEditingId(job.job_id);
+    setEditForm({
+      command: job.command,
+      schedule: currentSchedule
+    });
+  }, []);
+
+  const saveEdit = useCallback(async (jobId: string) => {
+    const { command, schedule } = editForm;
+    if (!command.trim()) {
+      setError("Command cannot be empty.");
       return;
     }
-    await updateJob(job.job_id, { schedule_time: trimmed });
-  }, [updateJob]);
+
+    // Save both command and schedule
+    // We update command first
+    const ok = await updateJob(jobId, { command: command.trim() });
+    if (!ok) return;
+
+    // Then schedule if changed (simple check, backend handles parsing)
+    if (schedule.trim()) {
+      await updateJob(jobId, { schedule_time: schedule.trim() });
+    }
+
+    setEditingId(null);
+  }, [editForm, updateJob]);
+
+  const cancelEdit = useCallback(() => {
+    setEditingId(null);
+    setEditForm({ command: "", schedule: "" });
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -281,58 +292,95 @@ export default function DashboardCronJobsPage() {
         {jobs.map((job) => (
           <article key={job.job_id} className="rounded-lg border border-slate-800 bg-slate-900/70 p-3">
             <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="font-mono text-sm text-slate-100">{job.command}</p>
-                <p className="mt-1 text-xs text-slate-400">
-                  {job.run_at
-                    ? `one-shot at ${toLocalDateTime(job.run_at)}`
-                    : job.cron_expr
-                      ? `chron ${job.cron_expr}`
-                      : `every ${formatEverySeconds(job.every_seconds)}`} ·{" "}
-                  {job.running ? "running" : job.enabled ? "enabled" : "disabled"} · next: {toLocalDateTime(job.next_run_at)}
-                  {job.timeout_seconds ? ` · timeout ${job.timeout_seconds}s` : ""}
-                </p>
-                {(() => {
-                  const sessionId = extractJobSessionId(job);
-                  if (!sessionId) return null;
-                  return (
-                    <p className="mt-1 text-[11px] text-slate-500">
-                      session: <span className="font-mono">{sessionId}</span>
+              <div className="flex-1">
+                {editingId === job.job_id ? (
+                  <div className="space-y-2">
+                    <input
+                      value={editForm.command}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, command: e.target.value }))}
+                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-sm font-mono text-slate-200 outline-none focus:border-cyan-500"
+                      placeholder="Command"
+                      autoFocus
+                    />
+                    <input
+                      value={editForm.schedule}
+                      onChange={(e) => setEditForm(prev => ({ ...prev, schedule: e.target.value }))}
+                      className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs font-mono text-slate-300 outline-none focus:border-cyan-500"
+                      placeholder="Schedule (e.g. every 30m)"
+                      onKeyDown={(e) => { if (e.key === "Enter") saveEdit(job.job_id); }}
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <p className="font-mono text-sm text-slate-100">{job.command}</p>
+                    <p className="mt-1 text-xs text-slate-400">
+                      {job.run_at
+                        ? `one-shot at ${toLocalDateTime(job.run_at)}`
+                        : job.cron_expr
+                          ? `cron ${job.cron_expr}`
+                          : `every ${formatEverySeconds(job.every_seconds)}`} ·{" "}
+                      {job.running ? "running" : job.enabled ? "enabled" : "disabled"} · next: {toLocalDateTime(job.next_run_at)}
+                      {job.timeout_seconds ? ` · timeout ${job.timeout_seconds}s` : ""}
                     </p>
-                  );
-                })()}
+                    {(() => {
+                      const sessionId = extractJobSessionId(job);
+                      if (!sessionId) return null;
+                      return (
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          session: <span className="font-mono">{sessionId}</span>
+                        </p>
+                      );
+                    })()}
+                  </>
+                )}
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => runNow(job.job_id)}
-                  disabled={Boolean(job.running)}
-                  className="rounded-md border border-emerald-700 bg-emerald-500/20 px-2 py-1 text-xs text-emerald-100 hover:bg-emerald-500/30"
-                >
-                  Run now
-                </button>
-                <button
-                  type="button"
-                  onClick={() => editJobText(job)}
-                  className="rounded-md border border-sky-700 bg-sky-500/20 px-2 py-1 text-xs text-sky-100 hover:bg-sky-500/30"
-                >
-                  Edit text
-                </button>
-                <button
-                  type="button"
-                  onClick={() => changeJobScheduleWithNaturalLanguage(job)}
-                  className="rounded-md border border-violet-700 bg-violet-500/20 px-2 py-1 text-xs text-violet-100 hover:bg-violet-500/30"
-                >
-                  Change Schedule
-                </button>
-                <button
-                  type="button"
-                  onClick={() => deleteJob(job.job_id)}
-                  className="rounded-md border border-amber-700 bg-amber-500/20 px-2 py-1 text-xs text-amber-100 hover:bg-amber-500/30"
-                >
-                  Delete
-                </button>
+                {editingId === job.job_id ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => saveEdit(job.job_id)}
+                      className="rounded-md border border-cyan-700 bg-cyan-900/30 px-2 py-1 text-xs text-cyan-200 hover:bg-cyan-900/50"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelEdit}
+                      className="rounded-md border border-slate-700 bg-slate-800/60 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => runNow(job.job_id)}
+                      disabled={Boolean(job.running)}
+                      className="rounded-md border border-emerald-700 bg-emerald-500/20 px-2 py-1 text-xs text-emerald-100 hover:bg-emerald-500/30"
+                    >
+                      Run
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startEditing(job)}
+                      className="rounded-md border border-sky-700 bg-sky-500/20 px-2 py-1 text-xs text-sky-100 hover:bg-sky-500/30"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteJob(job.job_id)}
+                      className="rounded-md border border-amber-700 bg-amber-500/20 px-2 py-1 text-xs text-amber-100 hover:bg-amber-500/30"
+                    >
+                      Del
+                    </button>
+                  </>
+                )}
+
                 {(() => {
+                  if (editingId === job.job_id) return null;
                   const sessionId = extractJobSessionId(job);
                   if (!sessionId) return null;
                   return (
@@ -347,7 +395,7 @@ export default function DashboardCronJobsPage() {
                       }
                       className="rounded-md border border-cyan-700 bg-cyan-500/20 px-2 py-1 text-xs text-cyan-100 hover:bg-cyan-500/30"
                     >
-                      Open Session
+                      Open
                     </button>
                   );
                 })()}

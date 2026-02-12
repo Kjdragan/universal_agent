@@ -106,8 +106,8 @@ function FileViewer() {
   if (!viewingFile) return null;
 
   return (
-    <div className="flex flex-col h-full bg-background animate-in fade-in zoom-in-95 duration-200">
-      <div className="h-10 border-b border-border/50 flex items-center justify-between px-4 bg-secondary/10">
+    <div className="flex flex-col h-full bg-slate-950 animate-in fade-in zoom-in-95 duration-200">
+      <div className="h-10 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/60">
         <div className="flex items-center gap-2">
           <span className="text-lg">{ICONS.file}</span>
           <span className="font-semibold text-sm">{viewingFile.name}</span>
@@ -157,13 +157,13 @@ function TaskPanel() {
   const tasks = toolCalls.filter(tc => tc.name === "Task" || tc.name === "task").reverse();
 
   return (
-    <div className={`flex flex-col border-t border-border/40 bg-card/10 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
+    <div className={`flex flex-col border-t border-slate-800 bg-slate-900/20 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
       <div
-        className="p-3 bg-card/30 border-b border-border/40 cursor-pointer hover:bg-card/40 flex items-center justify-between"
+        className="p-3 bg-slate-900/40 border-b border-slate-800 cursor-pointer hover:bg-slate-800/60 flex items-center justify-between"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
-        <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
-          <span className="text-primary/60">{ICONS.activity}</span>
+        <h2 className="text-[10px] font-bold text-slate-400/80 uppercase tracking-widest flex items-center gap-2">
+          <span className="text-cyan-500/60">{ICONS.activity}</span>
           Tasks
           {tasks.length > 0 && !isCollapsed && (
             <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded text-[9px] font-mono">{tasks.length}</span>
@@ -262,9 +262,9 @@ function FileExplorer() {
   };
 
   return (
-    <div className={`flex flex-col border-b border-border/40 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
+    <div className={`flex flex-col border-b border-slate-800 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
       <div
-        className="p-3 border-b border-border/40 bg-card/30 flex items-center justify-between cursor-pointer hover:bg-card/40"
+        className="p-3 border-b border-slate-800 bg-slate-900/40 flex items-center justify-between cursor-pointer hover:bg-slate-800/60"
         onClick={(e) => {
           // Prevent collapse when clicking the 'Up' button
           if ((e.target as HTMLElement).tagName === 'BUTTON') return;
@@ -272,9 +272,9 @@ function FileExplorer() {
         }}
       >
         <div className="flex items-center gap-2 overflow-hidden">
-          <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}>▼</span>
-          <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest truncate" title={currentSession?.session_id}>
-            <span className="text-primary/60 mr-1">{ICONS.folder}</span>
+          <span className={`text-[9px] text-cyan-500/60 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}>▼</span>
+          <h2 className="text-[10px] font-bold text-slate-400/80 uppercase tracking-widest truncate" title={currentSession?.session_id}>
+            <span className="text-cyan-500/60 mr-1">{ICONS.folder}</span>
             {mode === "artifacts" ? (path ? `Artifacts/.../${path.split("/").pop()}` : "Artifacts") : (path ? `.../${path.split("/").pop()}` : "Files")}
           </h2>
         </div>
@@ -317,7 +317,7 @@ function FileExplorer() {
               {files.map((file, i) => (
                 <div
                   key={i}
-                  className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-all ${file.is_dir ? "hover:bg-primary/10 text-primary/80" : "hover:bg-card/60 text-foreground/70"
+                  className={`text-xs px-2 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-all ${file.is_dir ? "hover:bg-cyan-500/10 text-cyan-400/80" : "hover:bg-slate-800/60 text-slate-300/70"
                     }`}
                   onClick={() => handleNavigate(file.name, file.is_dir)}
                 >
@@ -379,7 +379,7 @@ function ConnectionIndicator() {
 
   return (
     <div className="flex items-center gap-3">
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-card/40 border border-border/60">
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/40 border border-slate-800">
         <div
           className={`w-2 h-2 rounded-full ${config.color} ${config.pulse ? "status-pulse" : ""
             }`}
@@ -414,7 +414,7 @@ function HeaderMetrics() {
   const sessionId = currentSession?.workspace ? currentSession.workspace.split('/').pop() : 'NO SESSION';
 
   return (
-    <div className="hidden md:flex items-center gap-6 mr-6 px-5 py-2.5 rounded-lg bg-card/30 border border-border/40 tactical-panel min-w-fit">
+    <div className="hidden md:flex items-center gap-6 mr-6 px-5 py-2.5 rounded-lg bg-slate-900/40 border border-slate-800 tactical-panel min-w-fit">
       <div className="flex items-center gap-2 text-[0.7rem] tracking-wider">
         <span className="font-mono text-primary whitespace-nowrap" title={sessionId}>{sessionId}</span>
       </div>
@@ -575,7 +575,7 @@ const PathLink = ({ path }: { path: string }) => {
 
         setViewingFile({ name, path: fullPath, type: "file" });
       }}
-      className="text-primary hover:underline cursor-pointer break-all font-mono bg-primary/10 px-1 rounded mx-0.5 text-left"
+      className="text-cyan-400 hover:underline cursor-pointer break-all font-mono bg-cyan-500/10 px-1 rounded mx-0.5 text-left"
       title="Open file preview"
     >
       {path}
@@ -600,7 +600,7 @@ const LinkifiedText = ({ text }: { text: string }) => {
                 href={normalizeUrl(token)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-primary hover:underline font-medium break-all"
+                className="text-cyan-400 hover:underline font-medium break-all"
                 onClick={(e) => e.stopPropagation()}
               >
                 {token}
@@ -645,7 +645,7 @@ const markdownComponents: any = {
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="text-primary hover:underline font-medium"
+      className="text-cyan-400 hover:underline font-medium"
       onClick={(e) => e.stopPropagation()}
     >
       {children}
@@ -680,7 +680,7 @@ const markdownComponents: any = {
             href={normalizeUrl(rawCode)}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-primary hover:underline font-medium break-all"
+            className="text-cyan-400 hover:underline font-medium break-all"
             onClick={(e) => e.stopPropagation()}
           >
             {rawCode}
@@ -693,7 +693,7 @@ const markdownComponents: any = {
     }
     return (
       <code
-        className={`${isInline ? "bg-black/20 text-primary px-1 rounded font-mono text-xs" : "block bg-black/30 p-2 rounded font-mono text-xs overflow-x-auto"}`}
+        className={`${isInline ? "bg-black/20 text-cyan-400 px-1 rounded font-mono text-xs" : "block bg-black/30 p-2 rounded font-mono text-xs overflow-x-auto"}`}
         {...props}
       >
         {children}
@@ -703,16 +703,16 @@ const markdownComponents: any = {
   pre: ({ children }: any) => <pre className="my-2">{children}</pre>,
 };
 
-function ThinkingBubble({ content }: { content: string }) {
+const ThinkingBubble = ({ content }: { content: string }) => {
   const [isExpanded, setIsExpanded] = useState(true);
 
   if (!content) return null;
 
   return (
     <div className="flex justify-start mb-4 group ml-10 max-w-[85%]">
-      <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-0 overflow-hidden w-full transition-colors hover:bg-amber-500/10">
+      <div className="bg-cyan-500/5 border border-cyan-500/20 rounded-xl p-0 overflow-hidden w-full transition-colors hover:bg-cyan-500/10">
         <div
-          className="flex items-center gap-2 cursor-pointer bg-amber-500/10 px-3 py-2 text-amber-600/80 hover:text-amber-600 transition-colors"
+          className="flex items-center gap-2 cursor-pointer bg-cyan-500/10 px-3 py-2 text-cyan-400 hover:text-cyan-300 transition-colors"
           onClick={() => setIsExpanded(!isExpanded)}
         >
           <span className="text-sm">🧠</span>
@@ -720,8 +720,8 @@ function ThinkingBubble({ content }: { content: string }) {
           <span className="ml-auto text-[10px] opacity-60 hover:opacity-100">{isExpanded ? "Collapse" : "Expand"}</span>
         </div>
         {isExpanded && (
-          <div className="p-3 bg-amber-500/5">
-            <div className="whitespace-pre-wrap text-amber-900/70 dark:text-amber-100/70 font-mono text-xs leading-relaxed border-l-2 border-amber-500/30 pl-3">
+          <div className="p-3 bg-cyan-500/5">
+            <div className="whitespace-pre-wrap text-cyan-200/70 font-mono text-xs leading-relaxed border-l-2 border-cyan-500/30 pl-3">
               {content}
             </div>
           </div>
@@ -779,7 +779,7 @@ function ChatMessage({ message }: { message: any }) {
               <span>{ICONS.chat}</span>
             </div>
           </div>
-          <div className="bg-primary/10 border border-primary/20 text-foreground rounded-xl p-4 shadow-sm text-sm">
+          <div className="bg-cyan-500/10 border border-cyan-500/20 text-slate-100 rounded-xl p-4 shadow-sm text-sm">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={markdownComponents}
@@ -816,7 +816,7 @@ function ChatMessage({ message }: { message: any }) {
                 {formattedDelta}
               </div>
             </div>
-            <div className={`bg-card border border-border/50 border-l-2 ${style.borderAccent} shadow-md rounded-xl p-4 text-sm leading-relaxed`}>
+            <div className={`bg-slate-900/80 border border-slate-800 border-l-2 ${style.borderAccent} shadow-md rounded-xl p-4 text-sm leading-relaxed`}>
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={markdownComponents}
@@ -855,6 +855,15 @@ function ChatInterface() {
     const params = new URLSearchParams(window.location.search);
     const role = (params.get("role") || "").trim().toLowerCase();
     setChatRole(role === "viewer" ? "viewer" : "writer");
+    // Pre-fill input from ?message= query param (used by dashboard Quick Command)
+    const prefill = (params.get("message") || "").trim();
+    if (prefill) {
+      setInput(prefill);
+      // Clean up the URL so refreshing doesn't re-fill
+      const url = new URL(window.location.href);
+      url.searchParams.delete("message");
+      window.history.replaceState({}, "", url.toString());
+    }
   }, []);
 
   const handleSend = async (textOverride?: string) => {
@@ -978,10 +987,9 @@ function ChatInterface() {
                 </div>
               );
             })()}
-            {/* Active Process Indicator */}
             {connectionStatus === "processing" && !currentStreamingMessage && (
               <div className="flex justify-start mb-4">
-                <div className="flex items-center gap-3 text-foreground/80 bg-card/40 border border-border/60 px-4 py-2.5 rounded-lg text-xs processing-bar">
+                <div className="flex items-center gap-3 text-slate-200 bg-slate-900/60 border border-slate-800 px-4 py-2.5 rounded-lg text-xs processing-bar">
                   {(() => {
                     // Check for running tools
                     const runningTool = toolCalls.find((tc: any) => tc.status === 'running');
@@ -1031,7 +1039,7 @@ function ChatInterface() {
       </div>
 
       {/* Input - Floating Bar Style */}
-      <div className="p-4 bg-card/40 border border-border/40 backdrop-blur-md mb-10 ml-64 mr-6 rounded-2xl shadow-xl">
+      <div className="p-4 bg-slate-900/60 border border-slate-800 backdrop-blur-md mb-10 ml-64 mr-6 rounded-2xl shadow-xl">
         <div className="flex gap-3">
           <input
             type="text"
@@ -1058,7 +1066,7 @@ function ChatInterface() {
                   : "Enter your neural query..."
             }
             disabled={chatRole === "viewer" || connectionStatus === "disconnected" || connectionStatus === "connecting"}
-            className="flex-1 bg-card/40 border border-border/60 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-primary/60 focus:shadow-glow-sm disabled:opacity-50 transition-all font-mono"
+            className="flex-1 bg-slate-950/50 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500/50 focus:shadow-glow-sm disabled:opacity-50 transition-all font-mono"
           />
           {connectionStatus === "processing" && chatRole !== "viewer" ? (
             <button
@@ -1072,7 +1080,7 @@ function ChatInterface() {
             <button
               onClick={() => handleSend()}
               disabled={chatRole === "viewer" || connectionStatus !== "connected" || isSending || !input.trim()}
-              className="bg-primary hover:bg-primary/90 disabled:bg-primary/20 disabled:text-primary/40 text-primary-foreground px-5 py-2 rounded-lg transition-all btn-primary text-xs font-bold uppercase tracking-wider flex items-center gap-2"
+              className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-600/20 disabled:text-cyan-400/40 text-white px-5 py-2 rounded-lg transition-all btn-primary text-xs font-bold uppercase tracking-wider flex items-center gap-2"
             >
               <span>Send</span>
               <span>{ICONS.send}</span>
@@ -1149,11 +1157,11 @@ function WorkProductViewer() {
   return (
     <div className={`flex flex-col transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
       <div
-        className="p-3 border-b border-border/40 flex items-center justify-between cursor-pointer hover:bg-card/30"
+        className="p-3 border-b border-slate-800 flex items-center justify-between cursor-pointer hover:bg-slate-800/40"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
-        <h3 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
-          <span className="text-primary/60">{ICONS.file}</span>
+        <h3 className="text-[10px] font-bold text-slate-400/80 uppercase tracking-widest flex items-center gap-2">
+          <span className="text-cyan-500/60">{ICONS.file}</span>
           Work Products
           <span className="text-[9px] text-muted-foreground/60 font-normal font-mono">({keyFiles.length})</span>
         </h3>
@@ -1171,7 +1179,7 @@ function WorkProductViewer() {
               <button
                 key={i}
                 onClick={() => setViewingFile({ name: file.name, path: file.path, type: 'file' })}
-                className="w-full text-left px-3 py-2 text-xs rounded hover:bg-card/40 transition-all flex items-center gap-2 border border-transparent hover:border-border/40"
+                className="w-full text-left px-3 py-2 text-xs rounded hover:bg-slate-800/40 transition-all flex items-center gap-2 border border-transparent hover:border-slate-800/40 text-slate-300"
               >
                 <span className="text-base opacity-60">{file.name.endsWith('pdf') ? '📕' : file.name.endsWith('html') ? '🌐' : '📄'}</span>
                 <div className="flex-1 min-w-0">
@@ -1402,27 +1410,22 @@ export default function HomePage() {
 
   return (
     <OpsProvider>
-      <div className="h-screen flex flex-col bg-background text-foreground relative z-10">
+      <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 relative z-10">
         {/* Header */}
-        <header className="h-14 border-b border-border/40 glass-strong flex items-center px-4 shrink-0 z-20 relative gap-4">
+        <header className="h-14 border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md flex items-center px-4 shrink-0 z-20 relative gap-4">
 
           {/* Left: Logo & Brand */}
           <div className="flex items-center gap-4 shrink-0 h-full">
             {/* Logo Image */}
-            <div className="relative h-full w-48">
+            <div className="relative h-full w-48 py-2">
               <Image
                 src="/simon_logo_v2.png"
                 alt="Simon"
                 fill
-                className="object-contain"
+                className="object-contain object-left"
                 priority
               />
             </div>
-
-            <div className="h-8 w-px bg-border/30" />
-            <span className="text-[15px] text-muted-foreground/70 px-3 py-2 rounded bg-card/40 border border-border/30 font-mono font-semibold tracking-wide">
-              v2.1
-            </span>
           </div>
 
           {/* Center: Ops dropdown buttons - REPOSITIONED to be part of flow */}
@@ -1496,13 +1499,13 @@ export default function HomePage() {
           {/* Center: Activity Log */}
           {/* This panel sits between Chat (Left) and Files (Right) */}
           <div
-            className={`min-h-0 border-r border-border/40 bg-card/10 relative transition-all duration-300 flex flex-col ${activityCollapsed ? 'w-10 shrink-0' : ''}`}
+            className={`min-h-0 border-r border-slate-800 bg-slate-900/20 relative transition-all duration-300 flex flex-col ${activityCollapsed ? 'w-10 shrink-0' : ''}`}
             style={activityCollapsed ? { width: 40 } : { width: activityWidth }}
           >
             {/* Resizer handle on the LEFT edge of this panel */}
             {!activityCollapsed && (
               <div
-                className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-primary/40 transition-colors z-20"
+                className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
                 onMouseDown={startResizing('activity')}
               />
             )}
@@ -1525,12 +1528,12 @@ export default function HomePage() {
 
           {/* Right Sidebar: Files & Tasks */}
           <aside
-            className="shrink-0 flex flex-col overflow-hidden bg-card/20 backdrop-blur-sm relative"
+            className="shrink-0 flex flex-col overflow-hidden bg-slate-900/30 backdrop-blur-sm relative"
             style={{ width: filesWidth }}
           >
             {/* Resizer on the LEFT edge */}
             <div
-              className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-primary/40 transition-colors z-20"
+              className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
               onMouseDown={startResizing('files')}
             />
 

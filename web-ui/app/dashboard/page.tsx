@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
-import { fetchSessionDirectory, SessionDirectoryItem } from "@/lib/sessionDirectory";
+import { fetchSessionDirectory, deleteSessionDirectoryEntry, SessionDirectoryItem } from "@/lib/sessionDirectory";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -47,6 +47,11 @@ export default function DashboardPage() {
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [sessionFilter, setSessionFilter] = useState<"all" | "active">("all");
   const [notificationFilter, setNotificationFilter] = useState<"all" | "unread">("all");
+  const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
+  const [commandText, setCommandText] = useState("");
+  const [commandSending, setCommandSending] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -188,6 +193,124 @@ export default function DashboardPage() {
     [notifications],
   );
 
+  const SOURCE_FILTERS = ["all", "chat", "cron", "telegram", "hook", "local", "api"] as const;
+
+  const inferSourceCategory = useCallback((session: SessionDirectoryItem) => {
+    const sid = session.session_id.toLowerCase();
+    if (sid.startsWith("tg_")) return "telegram";
+    if (sid.startsWith("session_hook_")) return "hook";
+    if (sid.startsWith("session_")) return "chat";
+    if (sid.startsWith("cron_")) return "cron";
+    if (sid.startsWith("api_")) return "api";
+    return "local";
+  }, []);
+
+  const filteredSessions = useMemo(() => {
+    let list = sessionDirectory;
+    if (sessionFilter === "active") {
+      list = list.filter((s) => s.status === "active");
+    }
+    if (sourceFilter !== "all") {
+      list = list.filter((s) => inferSourceCategory(s) === sourceFilter);
+    }
+    return list;
+  }, [sessionDirectory, sessionFilter, sourceFilter, inferSourceCategory]);
+
+  const toggleSession = useCallback((id: string) => {
+    setSelectedSessions((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleAllVisible = useCallback(() => {
+    const visibleIds = filteredSessions.map((s) => s.session_id);
+    setSelectedSessions((prev) => {
+      const allSelected = visibleIds.every((id) => prev.has(id));
+      if (allSelected) return new Set();
+      return new Set(visibleIds);
+    });
+  }, [filteredSessions]);
+
+  const deleteSession = useCallback(async (id: string) => {
+    if (!window.confirm(`Delete session ${id}?`)) return;
+    setDeletingIds((prev) => new Set(prev).add(id));
+    try {
+      await deleteSessionDirectoryEntry(id);
+      setSessionDirectory((prev) => prev.filter((s) => s.session_id !== id));
+      setSelectedSessions((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    } catch (err) {
+      console.error("Delete failed:", err);
+    } finally {
+      setDeletingIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+    }
+  }, []);
+
+  const bulkDeleteSelected = useCallback(async () => {
+    const ids = Array.from(selectedSessions);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} selected session${ids.length > 1 ? "s" : ""}?`)) return;
+    setDeletingIds(new Set(ids));
+    const succeeded: string[] = [];
+    for (const id of ids) {
+      try {
+        await deleteSessionDirectoryEntry(id);
+        succeeded.push(id);
+      } catch { /* continue */ }
+    }
+    setSessionDirectory((prev) => prev.filter((s) => !succeeded.includes(s.session_id)));
+    setSelectedSessions(new Set());
+    setDeletingIds(new Set());
+  }, [selectedSessions]);
+
+  const sendQuickCommand = useCallback(async () => {
+    const text = commandText.trim();
+    if (!text) return;
+
+    const targetAgent = text.startsWith("@") ? text.split(" ")[0].substring(1) : "system-configuration-agent";
+    const prefixed = text.startsWith("@") ? text : `@system-configuration-agent ${text}`;
+
+    // Find existing session for this agent to resume context
+    // Ideally we look for a session named "session_{agent_name}"
+    // But failing that, we just open a fresh session.
+    // For system configuration, let's try to reuse if we see one in the directory.
+    let targetSessionId = "";
+    const agentSession = sessionDirectory.find(s =>
+      s.session_id.includes(targetAgent) ||
+      (s.owner === targetAgent)
+    );
+
+    if (agentSession) {
+      targetSessionId = agentSession.session_id;
+    }
+
+    // If we have a target session, reuse it. Otherwise let the chat window handle creation (default behavior)
+    // But passing ?message= will auto-send.
+    openOrFocusChatWindow({
+      sessionId: targetSessionId || undefined,
+      role: "writer",
+    });
+
+    // We need to wait a bit for the window to open/focus before clearing? 
+    // Actually the URL param handles the message passing.
+    // But wait - if we construct URL with message, openOrFocusChatWindow needs to support it.
+    // It currently takes options but buildChatUrl doesn't support 'message'. 
+    // We should fix openOrFocusChatWindow or just construct URL manually here for now to be safe.
+
+    const params = new URLSearchParams();
+    if (targetSessionId) params.set("session_id", targetSessionId);
+    params.set("role", "writer");
+    params.set("message", prefixed);
+
+    const chatUrl = `/?${params.toString()}`;
+    const w = window.open(chatUrl, "ua-chat-window");
+    if (w) w.focus();
+
+    setCommandText("");
+  }, [commandText, sessionDirectory]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -222,6 +345,30 @@ export default function DashboardPage() {
         ))}
       </section>
 
+      {/* Quick Command Input */}
+      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+        <div className="flex items-center gap-3">
+          <span className="text-xs uppercase tracking-[0.16em] text-slate-400 shrink-0">Quick Command</span>
+          <input
+            type="text"
+            value={commandText}
+            onChange={(e) => setCommandText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendQuickCommand(); } }}
+            placeholder="e.g. delete all sessions except the current one…"
+            className="flex-1 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-700/60"
+          />
+          <button
+            type="button"
+            onClick={sendQuickCommand}
+            disabled={commandSending || !commandText.trim()}
+            className="rounded-lg border border-cyan-700 bg-cyan-900/25 px-4 py-2 text-sm text-cyan-200 hover:bg-cyan-900/40 disabled:opacity-40 transition"
+          >
+            Send →
+          </button>
+        </div>
+        <p className="mt-1.5 text-[10px] text-slate-500">Routes to the system-configuration-agent by default. Prefix with @agent-name to target a different agent.</p>
+      </section>
+
       <section ref={sessionSectionRef} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -238,23 +385,115 @@ export default function DashboardPage() {
             )}
           </div>
           <span className="text-xs text-slate-500">
-            {sessionFilter === "active"
-              ? `${sessionDirectory.filter((s) => s.status === "active").length} active`
-              : `${sessionDirectory.length} sessions`}
+            {filteredSessions.length} session{filteredSessions.length !== 1 ? "s" : ""}
           </span>
         </div>
+
+        {/* Source filter bar */}
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {SOURCE_FILTERS.map((src) => (
+            <button
+              key={src}
+              type="button"
+              onClick={() => { setSourceFilter(src); setSelectedSessions(new Set()); }}
+              className={[
+                "rounded-full px-2.5 py-1 text-[11px] capitalize transition border",
+                sourceFilter === src
+                  ? "border-cyan-600 bg-cyan-900/30 text-cyan-200"
+                  : "border-slate-700 bg-slate-800/40 text-slate-400 hover:text-slate-200",
+              ].join(" ")}
+            >
+              {src}
+            </button>
+          ))}
+        </div>
+
+        {/* Bulk action bar */}
+        {selectedSessions.size > 0 && (
+          <div className="mb-3 flex items-center gap-3 rounded-lg border border-rose-800/50 bg-rose-950/20 px-3 py-2">
+            <span className="text-xs text-rose-200">{selectedSessions.size} selected</span>
+            <button
+              type="button"
+              onClick={bulkDeleteSelected}
+              disabled={deletingIds.size > 0}
+              className="rounded border border-rose-700 bg-rose-900/25 px-3 py-1 text-[11px] text-rose-200 hover:bg-rose-900/40 disabled:opacity-50 transition"
+            >
+              Delete Selected
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedSessions(new Set())}
+              className="text-[11px] text-slate-400 hover:text-slate-200"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+
+        {/* Select all toggle */}
+        {filteredSessions.length > 0 && (
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={filteredSessions.length > 0 && filteredSessions.every((s) => selectedSessions.has(s.session_id))}
+                onChange={toggleAllVisible}
+                className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-900 accent-cyan-500"
+              />
+              <span className="text-[11px] text-slate-400">Select all visible</span>
+            </div>
+
+            <button
+              onClick={async () => {
+                const count = filteredSessions.length;
+                if (!window.confirm(`Delete ALL ${count} visible sessions? This cannot be undone.`)) return;
+                const ids = filteredSessions.map(s => s.session_id);
+                setDeletingIds(new Set(ids));
+                for (const id of ids) {
+                  try { await deleteSessionDirectoryEntry(id); } catch { /* ignore */ }
+                }
+                // We rely on state update from directory refresh or just optimistically clear
+                setSessionDirectory(prev => prev.filter(s => !ids.includes(s.session_id)));
+                setDeletingIds(new Set());
+                setSelectedSessions(new Set());
+              }}
+              className="rounded border border-red-900/50 bg-red-900/10 px-2 py-0.5 text-xs text-red-400 hover:bg-red-900/30 transition"
+            >
+              Delete All Visible
+            </button>
+          </div>
+        )}
+
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {(sessionFilter === "active"
-            ? sessionDirectory.filter((s) => s.status === "active")
-            : sessionDirectory
-          ).slice(0, 18).map((session) => (
-            <article key={session.session_id} className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+          {filteredSessions.map((session) => (
+            <article key={session.session_id} className={`rounded-lg border p-3 transition ${selectedSessions.has(session.session_id) ? "border-cyan-700/60 bg-cyan-950/20" : "border-slate-800/80 bg-slate-950/50"} ${deletingIds.has(session.session_id) ? "opacity-40" : ""}`}>
               <div className="flex items-center justify-between gap-2">
-                <p className="truncate font-mono text-xs text-slate-200">{session.session_id}</p>
-                <span className="text-[11px] text-slate-500">{session.status}</span>
+                <div className="flex items-center gap-2 min-w-0">
+                  <input
+                    type="checkbox"
+                    checked={selectedSessions.has(session.session_id)}
+                    onChange={() => toggleSession(session.session_id)}
+                    className="h-3.5 w-3.5 shrink-0 rounded border-slate-600 bg-slate-900 accent-cyan-500"
+                  />
+                  <p className="truncate font-mono text-xs text-slate-200">{session.session_id}</p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <span className="text-[11px] text-slate-500">{session.status}</span>
+                  <button
+                    type="button"
+                    onClick={() => deleteSession(session.session_id)}
+                    disabled={deletingIds.has(session.session_id)}
+                    title="Delete session"
+                    className="rounded p-0.5 text-rose-400/60 hover:text-rose-300 hover:bg-rose-900/25 transition disabled:opacity-30"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-3.5 w-3.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                    </svg>
+                  </button>
+                </div>
               </div>
               <p className="mt-1 text-[11px] text-slate-400">
-                {session.source} · {session.owner}
+                {inferSourceCategory(session)} · {session.owner}
               </p>
               <p className="mt-1 text-[11px] text-slate-500">
                 memory: {session.memory_mode}
@@ -289,13 +528,13 @@ export default function DashboardPage() {
               </div>
             </article>
           ))}
-          {sessionDirectory.length === 0 && (
+          {filteredSessions.length === 0 && (
             <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-sm text-slate-400">
-              No sessions discovered yet.
+              {sessionDirectory.length === 0 ? "No sessions discovered yet." : "No sessions match the current filter."}
             </div>
           )}
         </div>
-      </section>
+      </section >
 
       <section ref={notificationSectionRef} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4">
         <div className="mb-3 flex items-center justify-between">
@@ -407,6 +646,6 @@ export default function DashboardPage() {
           ))}
         </div>
       </section>
-    </div>
+    </div >
   );
 }

@@ -54,17 +54,17 @@ export function CombinedActivityLog({ onCollapse }: { onCollapse?: () => void } 
     }, [items.length]);
 
     return (
-        <div className="flex flex-col h-full bg-background border rounded-lg overflow-hidden">
-            <div className="p-3 border-b bg-muted/30 flex justify-between items-center">
-                <h3 className="font-semibold text-sm flex items-center gap-2">
-                    <Terminal className="w-4 h-4" />
+        <div className="flex flex-col h-full bg-slate-950 border border-slate-800 rounded-lg overflow-hidden">
+            <div className="p-3 border-b border-slate-800 bg-slate-900/60 flex justify-between items-center">
+                <h3 className="font-semibold text-sm flex items-center gap-2 text-slate-200">
+                    <Terminal className="w-4 h-4 text-cyan-500/70" />
                     Activity & Logs
                 </h3>
                 <div className="flex items-center gap-2">
                     {onCollapse && (
                         <button
                             type="button"
-                            className="text-[10px] px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+                            className="text-[10px] px-2 py-1 rounded border border-slate-700 bg-slate-800/60 hover:bg-slate-800 transition-colors text-slate-300"
                             title="Collapse activity panel"
                             onClick={onCollapse}
                         >
@@ -73,7 +73,7 @@ export function CombinedActivityLog({ onCollapse }: { onCollapse?: () => void } 
                     )}
                     <button
                         type="button"
-                        className="text-[10px] px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+                        className="text-[10px] px-2 py-1 rounded border border-slate-700 bg-slate-800/60 hover:bg-slate-800 transition-colors text-slate-300"
                         title="Toggle activity panel expansion"
                         onClick={() => {
                             setExpandMode((prev) => {
@@ -130,27 +130,27 @@ const CollapsibleData = ({ label, data, isError = false, expandMode }: { label: 
     }, [jsonString]);
 
     return (
-        <div className="border rounded bg-background/50 overflow-hidden">
+        <div className="border border-slate-800 rounded bg-slate-900/30 overflow-hidden">
             <div
-                className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-muted/50 transition-colors text-xs"
+                className="flex items-center gap-2 px-2 py-1.5 cursor-pointer hover:bg-slate-800/50 transition-colors text-xs"
                 onClick={() => {
                     if (expandMode === 'expanded') return;
                     setExpanded(!effectiveExpanded);
                 }}
             >
-                <span className="text-muted-foreground">
+                <span className="text-slate-500">
                     {effectiveExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                 </span>
-                <span className="font-semibold text-muted-foreground">{label}</span>
-                <span className="text-[10px] text-muted-foreground/60 font-mono">({size})</span>
-                {!effectiveExpanded && <span className="ml-auto text-muted-foreground/50 font-mono truncate max-w-[200px]">{preview}</span>}
+                <span className="font-semibold text-slate-400">{label}</span>
+                <span className="text-[10px] text-slate-500/60 font-mono">({size})</span>
+                {!effectiveExpanded && <span className="ml-auto text-slate-500/50 font-mono truncate max-w-[200px]">{preview}</span>}
             </div>
 
             {effectiveExpanded && (
-                <div className="border-t bg-background p-0">
+                <div className="border-t border-slate-800 bg-slate-950 p-0">
                     <pre className={cn(
                         "p-2 text-xs font-mono whitespace-pre-wrap break-words",
-                        isError ? "text-red-600 dark:text-red-400" : "text-foreground"
+                        isError ? "text-red-400" : "text-slate-300"
                     )}>
                         {data?.content_preview || jsonString}
                     </pre>
@@ -165,13 +165,13 @@ function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode
     const effectiveOpen = expandMode === 'collapsed' ? false : expandMode === 'expanded' ? true : isOpen;
 
     return (
-        <div className="border rounded-md bg-card/50 text-sm overflow-hidden">
+        <div className="border border-slate-800 rounded-md bg-slate-900/40 text-sm overflow-hidden">
             <div
                 className={cn(
-                    "flex items-center gap-2 p-2 cursor-pointer hover:bg-accent/50 transition-colors",
-                    tool.status === 'running' && "bg-blue-500/5 border-l-2 border-l-blue-500",
-                    tool.status === 'complete' && "bg-green-500/5 border-l-2 border-l-green-500",
-                    tool.status === 'error' && "bg-red-500/5 border-l-2 border-l-red-500"
+                    "flex items-center gap-2 p-2 cursor-pointer hover:bg-slate-800/60 transition-colors",
+                    tool.status === 'running' && "bg-blue-500/10 border-l-2 border-l-blue-500",
+                    tool.status === 'complete' && "bg-green-500/10 border-l-2 border-l-green-500",
+                    tool.status === 'error' && "bg-red-500/10 border-l-2 border-l-red-500"
                 )}
                 onClick={() => {
                     if (expandMode === 'expanded') return;
@@ -191,7 +191,7 @@ function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode
 
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                        <span className="font-mono font-medium text-primary truncate">{tool.name}</span>
+                        <span className="font-mono font-medium text-cyan-400 truncate">{tool.name}</span>
                         <span className="text-xs text-muted-foreground ml-auto whitespace-nowrap">
                             {format(tool.timestamp, 'HH:mm:ss.SSS')}
                         </span>

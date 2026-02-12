@@ -9,6 +9,7 @@ Primary references:
 2. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/19_Universal_Agent_VPS_App_API_Telegram_Deployment_Explainer_2026-02-11.md`
 3. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md`
 4. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/23_Agent_Workspace_Inspector_Skill_2026-02-11.md`
+5. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/26_VPS_Host_Security_Hardening_Runbook_2026-02-12.md`
 
 ---
 

@@ -229,3 +229,41 @@ Expected:
    3. cross-owner `403` isolation
 4. Add periodic audit command to detect any endpoint accidentally left unauthenticated.
 
+---
+
+## VPS Hardening For Solo-Dev Agentic Workflow (Recommended)
+This profile is designed to improve host security while preserving fast one-person development and agentic execution.
+
+### Why this profile keeps flexibility
+1. Keeps direct SSH access for operator workflows using your existing SSH key.
+2. Does not restrict normal outbound API calls the agent needs (Anthropic/ZAI/Composio/Gmail/web search).
+3. Does not add CPU-heavy controls that degrade runtime throughput.
+4. Uses reversible controls with clear rollback paths.
+
+### Recommended host settings
+1. SSH auth:
+   1. Set `PasswordAuthentication no`.
+   2. Keep `PermitRootLogin prohibit-password` for solo-operator velocity.
+2. Firewall:
+   1. Enable `ufw`.
+   2. Allow only inbound `22`, `80`, `443`.
+   3. Keep default outbound allow so agentic external tool/API access continues to work.
+3. Brute-force protection:
+   1. Install and enable `fail2ban` with `sshd` jail.
+4. Secrets file:
+   1. Keep `/opt/universal_agent/.env` on VPS.
+   2. Enforce restrictive file mode (`600` root-owned or `640` with explicit service group).
+5. Patch hygiene:
+   1. Keep unattended upgrades enabled.
+   2. Reboot after kernel/security updates in a controlled window.
+
+### What to avoid (breaks solo-agentic flow)
+1. Do not block outbound HTTPS by default unless you maintain explicit allowlists for all external providers.
+2. Do not disable key-based root access until a non-root sudo operator path is verified end-to-end.
+3. Do not force manual approval gates on every tool call at host level; keep approvals in app-level policy.
+
+### Performance impact summary
+1. SSH key-only auth: no meaningful runtime impact.
+2. UFW inbound filtering on 3 ports: negligible.
+3. Fail2ban: low overhead, only active under auth failure bursts.
+4. `.env` permission hardening: no runtime impact.

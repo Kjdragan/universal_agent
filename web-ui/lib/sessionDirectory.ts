@@ -16,9 +16,10 @@ export type SessionDirectoryItem = {
 function inferSource(sessionId: string): string {
   const sid = (sessionId || "").toLowerCase();
   if (sid.startsWith("tg_")) return "telegram";
+  if (sid.startsWith("session_hook_")) return "hook";
   if (sid.startsWith("session_")) return "chat";
   if (sid.startsWith("api_")) return "api";
-  if (sid.startsWith("cron_")) return "chron";
+  if (sid.startsWith("cron_")) return "cron";
   return "local";
 }
 
@@ -32,9 +33,9 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
       return sessions.map((row) => {
         const sessionId = String(row.session_id || "");
         const sourceRaw = String(row.source || inferSource(sessionId) || "local");
-        const source = sourceRaw.toLowerCase() === "cron" ? "chron" : sourceRaw;
+        const source = sourceRaw;
         const channelRaw = String(row.channel || sourceRaw || "local");
-        const channel = channelRaw.toLowerCase() === "cron" ? "chron" : channelRaw;
+        const channel = channelRaw;
         return {
           session_id: sessionId,
           status: String(row.status || "unknown"),
