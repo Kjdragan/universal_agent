@@ -44,7 +44,8 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "   - No markdown.\n"
     "   - No explanations.\n"
 )
-DEFAULT_INTERVAL_SECONDS = 25 * 60  # 25 minutes default (Clawdbot parity)
+DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default
+MIN_INTERVAL_SECONDS = 30 * 60      # Never run heartbeats more frequently than 30 minutes
 BUSY_RETRY_DELAY = 10  # Seconds
 DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 300
 MIN_HEARTBEAT_EXEC_TIMEOUT = 300
@@ -464,6 +465,7 @@ class HeartbeatService:
         )
         if interval_raw is not None:
             schedule.every_seconds = _parse_duration_seconds(str(interval_raw), schedule.every_seconds)
+        schedule.every_seconds = max(MIN_INTERVAL_SECONDS, int(schedule.every_seconds or DEFAULT_INTERVAL_SECONDS))
 
         active_start = schedule_data.get("active_start") or schedule_data.get("activeStart")
         active_end = schedule_data.get("active_end") or schedule_data.get("activeEnd")

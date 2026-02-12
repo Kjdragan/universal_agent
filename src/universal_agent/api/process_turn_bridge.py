@@ -93,6 +93,10 @@ class ProcessTurnBridge:
 
         return False
 
+    async def send_cancel(self, reason: str = "User requested stop") -> bool:
+        """Best-effort cancel for process_turn bridge (not yet supported)."""
+        return False
+
     def get_current_workspace(self) -> Optional[str]:
         """Get current workspace directory."""
         if self.current_session:

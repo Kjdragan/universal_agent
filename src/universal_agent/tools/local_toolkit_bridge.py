@@ -10,6 +10,7 @@ try:
     from mcp_server import (
         upload_to_composio as upload_to_composio_core,
         list_directory as list_directory_core,
+        inspect_session_workspace as inspect_session_workspace_core,
         append_to_file as append_to_file_core,
         write_text_file as write_text_file_core,
         generate_image as generate_image_core,
@@ -28,6 +29,7 @@ except ImportError:
     from src.mcp_server import (
         upload_to_composio as upload_to_composio_core,
         list_directory as list_directory_core,
+        inspect_session_workspace as inspect_session_workspace_core,
         append_to_file as append_to_file_core,
         write_text_file as write_text_file_core,
         generate_image as generate_image_core,
@@ -91,6 +93,32 @@ async def list_directory_wrapper(args: dict[str, Any]) -> dict[str, Any]:
     path = args.get("path")
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         result_str = list_directory_core(path)
+    return {"content": [{"type": "text", "text": result_str}]}
+
+
+@tool(
+    name="inspect_session_workspace",
+    description=(
+        "Read-only snapshot of session workspace diagnostics: run.log/activity_journal tails, "
+        "trace.json, heartbeat_state.json, transcript.md, and recent artifacts."
+    ),
+    input_schema={
+        "session_id": str,
+        "include_transcript": bool,
+        "tail_lines": int,
+        "max_bytes_per_file": int,
+        "recent_file_limit": int,
+    },
+)
+async def inspect_session_workspace_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result_str = inspect_session_workspace_core(
+            session_id=args.get("session_id", ""),
+            include_transcript=args.get("include_transcript", True),
+            tail_lines=args.get("tail_lines", 120),
+            max_bytes_per_file=args.get("max_bytes_per_file", 65536),
+            recent_file_limit=args.get("recent_file_limit", 25),
+        )
     return {"content": [{"type": "text", "text": result_str}]}
 
 

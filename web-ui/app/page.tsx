@@ -1201,10 +1201,20 @@ import Image from "next/image";
 // Main App Component
 // =============================================================================
 
+type DashboardAuthSession = {
+  authenticated: boolean;
+  auth_required: boolean;
+  owner_id: string;
+  expires_at?: number | null;
+};
+
 export default function HomePage() {
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const viewingFile = useAgentStore((s) => s.viewingFile); // Sub to viewing state
   const ws = getWebSocket();
+  const [authSession, setAuthSession] = useState<DashboardAuthSession | null>(null);
+  const [loadingAuth, setLoadingAuth] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Layout State
   // We now have: [Chat (flex)] - [Activity (px)] - [Files (px)]
@@ -1252,6 +1262,41 @@ export default function HomePage() {
   const { pendingInput, handleSubmit: handleInputSubmit, handleCancel: handleInputCancel } = useInputModal();
 
   useEffect(() => {
+    let cancelled = false;
+    fetch("/api/dashboard/auth/session", { cache: "no-store" })
+      .then(async (response) => {
+        const payload = (await response.json()) as DashboardAuthSession;
+        if (cancelled) return;
+        if (!response.ok && response.status !== 401) {
+          throw new Error(`Auth check failed (${response.status})`);
+        }
+        setAuthSession(payload);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setAuthError((error as Error).message || "Auth check failed");
+        setAuthSession({
+          authenticated: false,
+          auth_required: true,
+          owner_id: "owner_primary",
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingAuth(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (loadingAuth) return;
+    if (authSession?.auth_required && !authSession.authenticated) {
+      ws.disconnect();
+      return;
+    }
+
     // Connect to WebSocket on mount. If a session is explicitly requested in URL,
     // attach to that session in this tab before opening the socket.
     const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
@@ -1292,6 +1337,7 @@ export default function HomePage() {
       "status",
       "work_product",
       "query_complete",
+      "cancelled",
       "error",
       "iteration_end",
       "system_event",
@@ -1311,7 +1357,48 @@ export default function HomePage() {
     return () => {
       unsubscribes.forEach((unsub) => unsub());
     };
-  }, [ws]);
+  }, [ws, loadingAuth, authSession?.auth_required, authSession?.authenticated]);
+
+  if (loadingAuth) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-200">
+        <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-6 py-5 text-sm text-slate-300">
+          Verifying access...
+        </div>
+      </div>
+    );
+  }
+
+  if (authSession?.auth_required && !authSession.authenticated) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 p-4">
+        <div className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900/80 p-5">
+          <h1 className="text-lg font-semibold">Dashboard Access Required</h1>
+          <p className="mt-1 text-sm text-slate-400">Sign in from the dashboard shell to use chat and session controls.</p>
+          {authError && (
+            <div className="mt-3 rounded-md border border-rose-800/70 bg-rose-900/20 px-3 py-2 text-xs text-rose-200">
+              {authError}
+            </div>
+          )}
+          <div className="mt-4 flex items-center gap-2">
+            <a
+              href="/dashboard"
+              className="rounded-md border border-cyan-700 bg-cyan-600/20 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-600/30"
+            >
+              Go to Login
+            </a>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800/70"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <OpsProvider>

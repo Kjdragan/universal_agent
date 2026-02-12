@@ -8,16 +8,22 @@ Server runs on port 8001 by default (configurable via PORT env var).
 """
 
 import asyncio
+import base64
 import time
 import json
 import logging
 import mimetypes
 import os
+import hmac
+import hashlib
+import re
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
+import httpx
 import websockets
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -47,6 +53,231 @@ from universal_agent.api.events import (
 
 
 # =============================================================================
+# Auth Helpers
+# =============================================================================
+
+
+DASHBOARD_AUTH_COOKIE = "ua_dashboard_auth"
+DEFAULT_OWNER = "owner_primary"
+OWNER_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+
+@dataclass
+class DashboardAuthResult:
+    authenticated: bool
+    auth_required: bool
+    owner_id: str
+    expires_at: Optional[int] = None
+
+
+def _normalize_owner_id(value: Optional[str]) -> str:
+    candidate = (value or "").strip()
+    if candidate and OWNER_PATTERN.match(candidate):
+        return candidate
+    fallback = (os.getenv("UA_DASHBOARD_OWNER_ID") or DEFAULT_OWNER).strip()
+    if fallback and OWNER_PATTERN.match(fallback):
+        return fallback
+    return DEFAULT_OWNER
+
+
+def _env_flag(name: str) -> Optional[bool]:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return None
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _owners_configured() -> bool:
+    def _has_records(payload: Any) -> bool:
+        rows: list[Any]
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict) and isinstance(payload.get("owners"), list):
+            rows = payload.get("owners", [])
+        else:
+            return False
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            owner_id = str(row.get("owner_id") or "").strip()
+            password_hash = str(row.get("password_hash") or "").strip()
+            if owner_id and password_hash:
+                return True
+        return False
+
+    env_json = (os.getenv("UA_DASHBOARD_OWNERS_JSON") or "").strip()
+    if env_json:
+        try:
+            if _has_records(json.loads(env_json)):
+                return True
+        except Exception:
+            pass
+    owners_file = (os.getenv("UA_DASHBOARD_OWNERS_FILE") or "").strip()
+    if not owners_file:
+        owners_file = str((BASE_DIR / "config" / "dashboard_owners.json").resolve())
+    try:
+        path = Path(owners_file)
+        if not path.exists() or path.stat().st_size <= 0:
+            return False
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return _has_records(payload)
+    except Exception:
+        return False
+
+
+def _dashboard_auth_required() -> bool:
+    explicit = _env_flag("UA_DASHBOARD_AUTH_ENABLED")
+    if explicit is not None:
+        return explicit
+    if _owners_configured():
+        return True
+    return bool((os.getenv("UA_DASHBOARD_PASSWORD") or "").strip())
+
+
+def _dashboard_session_secret() -> str:
+    secret = (
+        (os.getenv("UA_DASHBOARD_SESSION_SECRET") or "").strip()
+        or (os.getenv("UA_OPS_TOKEN") or "").strip()
+        or (os.getenv("UA_DASHBOARD_PASSWORD") or "").strip()
+    )
+    return secret or "ua-dashboard-dev-secret"
+
+
+def _extract_auth_token(headers: Any) -> str:
+    header = str(headers.get("authorization", "")).strip()
+    if header.lower().startswith("bearer "):
+        return header.split(" ", 1)[1].strip()
+    for key in ("x-ua-internal-token", "x-ua-ops-token"):
+        value = str(headers.get(key, "")).strip()
+        if value:
+            return value
+    return ""
+
+
+def _internal_service_token() -> str:
+    return (
+        (os.getenv("UA_INTERNAL_API_TOKEN") or "").strip()
+        or (os.getenv("UA_OPS_TOKEN") or "").strip()
+    )
+
+
+def _base64url_decode(value: str) -> bytes:
+    padded = value + "=" * ((4 - len(value) % 4) % 4)
+    return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
+def _decode_dashboard_session_token(token: str) -> DashboardAuthResult:
+    auth_required = _dashboard_auth_required()
+    default_owner = _normalize_owner_id(None)
+    if not auth_required:
+        return DashboardAuthResult(True, auth_required, default_owner, None)
+
+    raw = (token or "").strip()
+    if "." not in raw:
+        return DashboardAuthResult(False, auth_required, default_owner, None)
+    payload_b64, sig = raw.split(".", 1)
+    if not payload_b64 or not sig:
+        return DashboardAuthResult(False, auth_required, default_owner, None)
+
+    expected_sig = base64.urlsafe_b64encode(
+        hmac.new(_dashboard_session_secret().encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+    ).decode("ascii").rstrip("=")
+    if not hmac.compare_digest(sig, expected_sig):
+        return DashboardAuthResult(False, auth_required, default_owner, None)
+
+    try:
+        payload_raw = _base64url_decode(payload_b64).decode("utf-8")
+        payload = json.loads(payload_raw)
+        exp = int(payload.get("exp") or 0)
+    except Exception:
+        return DashboardAuthResult(False, auth_required, default_owner, None)
+
+    now = int(time.time())
+    if exp <= now:
+        return DashboardAuthResult(False, auth_required, default_owner, None)
+
+    owner_id = _normalize_owner_id(str(payload.get("owner_id") or ""))
+    return DashboardAuthResult(True, auth_required, owner_id, exp)
+
+
+def _authenticate_dashboard_request(request: Request) -> DashboardAuthResult:
+    internal_token = _internal_service_token()
+    header_token = _extract_auth_token(request.headers)
+    if internal_token and header_token and hmac.compare_digest(header_token, internal_token):
+        return DashboardAuthResult(True, _dashboard_auth_required(), _normalize_owner_id(None), None)
+
+    cookie_token = request.cookies.get(DASHBOARD_AUTH_COOKIE, "")
+    return _decode_dashboard_session_token(cookie_token)
+
+
+def _authenticate_dashboard_ws(websocket: WebSocket) -> DashboardAuthResult:
+    internal_token = _internal_service_token()
+    header_token = _extract_auth_token(websocket.headers)
+    if internal_token and header_token and hmac.compare_digest(header_token, internal_token):
+        return DashboardAuthResult(True, _dashboard_auth_required(), _normalize_owner_id(None), None)
+
+    cookie_token = websocket.cookies.get(DASHBOARD_AUTH_COOKIE, "")
+    return _decode_dashboard_session_token(cookie_token)
+
+
+def _request_auth_owner(request: Request) -> str:
+    auth = getattr(request.state, "dashboard_auth", None)
+    if isinstance(auth, DashboardAuthResult) and auth.authenticated:
+        return auth.owner_id
+    return _normalize_owner_id(None)
+
+
+def _gateway_url() -> str:
+    return (os.getenv("UA_GATEWAY_URL") or "").strip().rstrip("/")
+
+
+def _gateway_headers() -> dict[str, str]:
+    token = _internal_service_token()
+    if not token:
+        return {}
+    return {
+        "authorization": f"Bearer {token}",
+        "x-ua-internal-token": token,
+        "x-ua-ops-token": token,
+    }
+
+
+async def _fetch_gateway_session_owner(session_id: str) -> Optional[str]:
+    gateway_url = _gateway_url()
+    if not gateway_url:
+        return None
+    url = f"{gateway_url}/api/v1/sessions/{session_id}"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(url, headers=_gateway_headers())
+    if response.status_code == 404:
+        return None
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to verify session ownership ({response.status_code})",
+        )
+    payload = response.json()
+    owner = str(payload.get("user_id") or "").strip()
+    return owner or None
+
+
+async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: bool) -> None:
+    if not _gateway_url():
+        return
+    session_owner = await _fetch_gateway_session_owner(session_id)
+    if session_owner and hmac.compare_digest(session_owner, owner_id):
+        return
+    if session_owner and not hmac.compare_digest(session_owner, owner_id):
+        raise HTTPException(status_code=403, detail="Access denied: session owner mismatch.")
+    if auth_required:
+        raise HTTPException(status_code=403, detail="Access denied: unable to verify session owner.")
+
+
+# =============================================================================
 # Pydantic Models for REST API
 # =============================================================================
 
@@ -67,7 +298,7 @@ class ApprovalRequest(BaseModel):
 
 class SessionCreateRequest(BaseModel):
     """Request to create a new session."""
-    user_id: Optional[str] = "user_ui"
+    user_id: Optional[str] = None
 
 
 # =============================================================================
@@ -146,6 +377,29 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def require_dashboard_auth(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return await call_next(request)
+    if path in {"/api/health"}:
+        return await call_next(request)
+
+    auth = _authenticate_dashboard_request(request)
+    request.state.dashboard_auth = auth
+    if auth.auth_required and not auth.authenticated:
+        return JSONResponse(
+            {
+                "detail": "Dashboard login required.",
+                "authenticated": False,
+                "auth_required": True,
+                "owner_id": auth.owner_id,
+            },
+            status_code=401,
+        )
+    return await call_next(request)
+
+
 # =============================================================================
 # REST API Endpoints
 # =============================================================================
@@ -178,12 +432,18 @@ async def health():
 
 
 @app.post("/api/sessions")
-async def create_session(request: SessionCreateRequest):
+async def create_session(request: SessionCreateRequest, http_request: Request):
     """Create a new agent session."""
+    auth = getattr(http_request.state, "dashboard_auth", _authenticate_dashboard_request(http_request))
+    owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
+    requested_user = (request.user_id or "").strip()
+    if requested_user and not hmac.compare_digest(requested_user, owner_id):
+        raise HTTPException(status_code=403, detail="Access denied: cannot create session for another owner.")
+
     bridge = get_agent_bridge()
     try:
         session_info = await bridge.create_session(
-            user_id=request.user_id or "user_ui"
+            user_id=owner_id,
         )
         return {
             "session_id": session_info.session_id,
@@ -196,17 +456,35 @@ async def create_session(request: SessionCreateRequest):
 
 
 @app.get("/api/sessions")
-async def list_sessions():
+async def list_sessions(request: Request):
     """List all agent sessions."""
+    auth = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
     bridge = get_agent_bridge()
     sessions = bridge.list_sessions()
-    return {"sessions": sessions}
+    if isinstance(auth, DashboardAuthResult) and not auth.auth_required:
+        return {"sessions": sessions}
+    filtered = []
+    for session in sessions:
+        if not isinstance(session, dict):
+            continue
+        session_owner = (
+            str(session.get("user_id") or "").strip()
+            or str((session.get("metadata") or {}).get("user_id") if isinstance(session.get("metadata"), dict) else "").strip()
+        )
+        if session_owner and hmac.compare_digest(session_owner, owner_id):
+            filtered.append(session)
+    return {"sessions": filtered}
 
 
 @app.get("/api/sessions/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, request: Request):
     """Get session details."""
-    bridge = get_agent_bridge()
+    auth = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
+    auth_required = auth.auth_required if isinstance(auth, DashboardAuthResult) else _dashboard_auth_required()
+    await _enforce_session_owner(session_id, owner_id, auth_required)
+
     session_dir = WORKSPACES_DIR / session_id
 
     if not session_dir.exists():
@@ -230,15 +508,18 @@ async def get_session(session_id: str):
 
 
 @app.get("/api/files")
-async def list_files(session_id: Optional[str] = None, path: str = ""):
+async def list_files(request: Request, session_id: Optional[str] = None, path: str = ""):
     """List files in a session workspace."""
-    bridge = get_agent_bridge()
+    auth = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
+    auth_required = auth.auth_required if isinstance(auth, DashboardAuthResult) else _dashboard_auth_required()
 
     # Determine which workspace to use
     if session_id:
+        await _enforce_session_owner(session_id, owner_id, auth_required)
         workspace = WORKSPACES_DIR / session_id
     else:
-        workspace = Path(bridge.get_current_workspace() or "")
+        raise HTTPException(status_code=400, detail="session_id is required")
 
     if not workspace.exists():
         return {"files": [], "error": "Workspace not found"}
@@ -284,8 +565,13 @@ async def list_files(session_id: Optional[str] = None, path: str = ""):
 
 
 @app.get("/api/files/{session_id}/{file_path:path}")
-async def get_file(session_id: str, file_path: str):
+async def get_file(session_id: str, file_path: str, request: Request):
     """Get file content from session workspace."""
+    auth = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
+    owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
+    auth_required = auth.auth_required if isinstance(auth, DashboardAuthResult) else _dashboard_auth_required()
+    await _enforce_session_owner(session_id, owner_id, auth_required)
+
     bridge = get_agent_bridge()
     result = bridge.get_session_file(session_id, file_path)
 
@@ -420,6 +706,19 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
     - Client sends: {"type": "query", "text": "..."} or {"type": "ping"}
     - Server sends: WebSocketEvent objects as JSON
     """
+    auth = _authenticate_dashboard_ws(websocket)
+    if auth.auth_required and not auth.authenticated:
+        await websocket.close(code=4401, reason="Dashboard login required")
+        return
+
+    owner_id = auth.owner_id
+    auth_required = auth.auth_required
+    if session_id:
+        try:
+            await _enforce_session_owner(session_id, owner_id, auth_required)
+        except HTTPException as exc:
+            await websocket.close(code=4403, reason=str(exc.detail))
+            return
     connection_id = f"conn_{datetime.now().timestamp()}"
 
     await manager.connect(connection_id, websocket)
@@ -436,6 +735,7 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
         "status",
         "iteration_end",
         "query_complete",
+        "cancelled",
         "work_product",
         "auth_required",
         "error",
@@ -454,7 +754,7 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
                 logger.warning(f"Session {session_id} not found, creating new one.")
 
         if not session_info:
-             session_info = await bridge.create_session()
+             session_info = await bridge.create_session(user_id=owner_id)
 
         await manager.send_event(
             connection_id,
@@ -474,7 +774,9 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
             async def _forward_gateway_broadcasts() -> None:
                 while True:
                     try:
-                        async with websockets.connect(ws_endpoint) as ws:
+                        async with websockets.connect(
+                            ws_endpoint, **converter.websocket_connect_kwargs()
+                        ) as ws:
                             # Initial "connected" message from the gateway stream
                             try:
                                 initial_msg = await asyncio.wait_for(ws.recv(), timeout=10.0)
@@ -568,6 +870,22 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
                         connection_id,
                         WebSocketEvent(type=WSEventType.PONG),
                     )
+
+                elif client_event.type == WSEventType.CANCEL:
+                    reason = str(client_event.data.get("reason") or "User requested stop")
+                    handled = False
+                    from universal_agent.api.gateway_bridge import GatewayBridge
+                    from universal_agent.api.process_turn_bridge import ProcessTurnBridge
+                    if isinstance(bridge, GatewayBridge):
+                        handled = await bridge.send_cancel(reason)
+                    elif isinstance(bridge, ProcessTurnBridge):
+                        handled = await bridge.send_cancel(reason)
+
+                    if not handled:
+                        await manager.send_event(
+                            connection_id,
+                            create_error_event("Cancel requested but no active cancellable run was found."),
+                        )
 
             except json.JSONDecodeError:
                 await manager.send_event(

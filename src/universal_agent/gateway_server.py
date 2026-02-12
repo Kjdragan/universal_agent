@@ -81,6 +81,15 @@ logger = logging.getLogger(__name__)
 HEARTBEAT_ENABLED = heartbeat_enabled()
 CRON_ENABLED = cron_enabled()
 MEMORY_INDEX_ENABLED = memory_index_enabled()
+MIN_HEARTBEAT_INTERVAL_SECONDS = 30 * 60
+HEARTBEAT_INTERVAL_SECONDS = max(
+    MIN_HEARTBEAT_INTERVAL_SECONDS,
+    int(os.getenv("UA_HEARTBEAT_INTERVAL_SECONDS", str(MIN_HEARTBEAT_INTERVAL_SECONDS)) or MIN_HEARTBEAT_INTERVAL_SECONDS),
+)
+CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS = max(
+    3600,
+    int(os.getenv("UA_CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS", str(72 * 3600)) or (72 * 3600)),
+)
 
 # 1. Configurable Workspaces Directory
 # Default to AGENT_RUN_WORKSPACES in project root, but allow override via env var
@@ -153,6 +162,7 @@ else:
 
 # Ops access token (optional hard gate for /api/v1/ops/* endpoints)
 OPS_TOKEN = os.getenv("UA_OPS_TOKEN", "").strip()
+SESSION_API_TOKEN = (os.getenv("UA_INTERNAL_API_TOKEN", "").strip() or OPS_TOKEN)
 
 
 # =============================================================================
@@ -176,6 +186,7 @@ class SessionSummaryResponse(BaseModel):
     session_id: str
     workspace_dir: str
     status: str
+    user_id: Optional[str] = None
     metadata: dict = {}
 
 
@@ -1743,6 +1754,29 @@ def _calendar_register_missed_event(event: dict[str, Any]) -> None:
     existing = _calendar_missed_events.get(event_id)
     if existing:
         return
+    source = str(event.get("source") or "").strip().lower()
+    source_ref = str(event.get("source_ref") or "").strip()
+    scheduled_at = float(event.get("scheduled_at_epoch") or 0.0)
+    superseded_ids: list[str] = []
+    for existing_id, existing_record in _calendar_missed_events.items():
+        if str(existing_record.get("status") or "").strip().lower() != "pending":
+            continue
+        existing_event = existing_record.get("event") if isinstance(existing_record.get("event"), dict) else {}
+        if str(existing_event.get("source") or "").strip().lower() != source:
+            continue
+        if str(existing_event.get("source_ref") or "").strip() != source_ref:
+            continue
+        existing_scheduled_at = float(existing_event.get("scheduled_at_epoch") or 0.0)
+        if existing_scheduled_at >= scheduled_at:
+            # Keep the newest pending missed item only.
+            return
+        existing_record["status"] = "skipped_superseded"
+        existing_record["updated_at"] = datetime.now().isoformat()
+        superseded_ids.append(existing_id)
+
+    for superseded_id in superseded_ids:
+        _calendar_missed_notifications.discard(superseded_id)
+
     record = {
         "event_id": event_id,
         "status": "pending",
@@ -1776,7 +1810,7 @@ def _calendar_missed_resolution(event_id: str) -> Optional[str]:
     if not record:
         return None
     status = str(record.get("status") or "").strip().lower()
-    if status in {"approved_and_run", "rescheduled", "deleted"}:
+    if status in {"approved_and_run", "rescheduled", "deleted", "skipped", "skipped_superseded"}:
         return status
     return None
 
@@ -1784,20 +1818,65 @@ def _calendar_missed_resolution(event_id: str) -> Optional[str]:
 def _calendar_cleanup_state() -> None:
     now_ts = time.time()
     stale_cutoff = now_ts - (30 * 86400)
-    stale_event_ids = [
-        event_id
-        for event_id, record in _calendar_missed_events.items()
-        if _calendar_parse_ts(
-            str(record.get("event", {}).get("scheduled_at_utc") or ""),
-            "UTC",
-        ) is not None
-        and float(
-            _calendar_parse_ts(str(record.get("event", {}).get("scheduled_at_utc") or ""), "UTC") or 0.0
-        ) < stale_cutoff
-    ]
+    stale_event_ids: list[str] = []
+    for event_id, record in _calendar_missed_events.items():
+        event = record.get("event") if isinstance(record.get("event"), dict) else {}
+        source = str(event.get("source") or "").strip().lower()
+        # Heartbeat missed backfill/alerts are disabled by policy.
+        if source == "heartbeat":
+            stale_event_ids.append(event_id)
+            continue
+        scheduled_ts = _calendar_parse_ts(str(event.get("scheduled_at_utc") or ""), "UTC")
+        if scheduled_ts is None:
+            continue
+        if float(scheduled_ts) < stale_cutoff:
+            stale_event_ids.append(event_id)
     for event_id in stale_event_ids:
         _calendar_missed_events.pop(event_id, None)
         _calendar_missed_notifications.discard(event_id)
+
+    # Remove legacy heartbeat-missed notifications from the dashboard stream.
+    _notifications[:] = [
+        item
+        for item in _notifications
+        if not (
+            str(item.get("kind") or "").strip().lower() == "calendar_missed"
+            and str((item.get("metadata") or {}).get("source") or "").strip().lower() == "heartbeat"
+        )
+    ]
+
+    # Keep at most one pending missed item per (source, source_ref): newest wins.
+    latest_pending_by_key: dict[tuple[str, str], tuple[str, float]] = {}
+    for event_id, record in _calendar_missed_events.items():
+        if str(record.get("status") or "").strip().lower() != "pending":
+            continue
+        event = record.get("event") if isinstance(record.get("event"), dict) else {}
+        source = str(event.get("source") or "").strip().lower()
+        source_ref = str(event.get("source_ref") or "").strip()
+        if not source or not source_ref:
+            continue
+        scheduled_at = float(event.get("scheduled_at_epoch") or 0.0)
+        if scheduled_at <= 0:
+            parsed = _calendar_parse_ts(str(event.get("scheduled_at_utc") or ""), "UTC")
+            scheduled_at = float(parsed or 0.0)
+        key = (source, source_ref)
+        current = latest_pending_by_key.get(key)
+        if current is None or scheduled_at > current[1]:
+            latest_pending_by_key[key] = (event_id, scheduled_at)
+
+    for event_id, record in list(_calendar_missed_events.items()):
+        if str(record.get("status") or "").strip().lower() != "pending":
+            continue
+        event = record.get("event") if isinstance(record.get("event"), dict) else {}
+        key = (
+            str(event.get("source") or "").strip().lower(),
+            str(event.get("source_ref") or "").strip(),
+        )
+        latest = latest_pending_by_key.get(key)
+        if latest and latest[0] != event_id:
+            record["status"] = "skipped_superseded"
+            record["updated_at"] = datetime.now().isoformat()
+            _calendar_missed_notifications.discard(event_id)
 
     expired_proposals = [
         proposal_id
@@ -1913,6 +1992,7 @@ def _calendar_project_cron_events(
             except Exception:
                 running_scheduled_at = None
         occurrences = _calendar_iter_cron_occurrences(job, start_ts, end_ts, max_count=400)
+        latest_missed_event: Optional[dict[str, Any]] = None
         for scheduled_at in occurrences:
             event_id = _calendar_event_id("cron", str(job.job_id), scheduled_at)
             matched_run = _calendar_match_cron_run(runs_by_job.get(str(job.job_id), []), scheduled_at)
@@ -1956,20 +2036,54 @@ def _calendar_project_cron_events(
             if matched_run:
                 event["run_status"] = matched_run.get("status")
                 event["run_id"] = matched_run.get("run_id")
-            if status_value == "missed" and scheduled_at >= (now_ts - 48 * 3600):
-                resolution = _calendar_missed_resolution(event_id)
-                if resolution:
+            if status_value == "missed":
+                if scheduled_at < (now_ts - 48 * 3600):
                     continue
-                event["actions"] = [
+                if latest_missed_event is None or float(latest_missed_event.get("scheduled_at_epoch") or 0.0) < float(scheduled_at):
+                    latest_missed_event = event
+                continue
+            events.append(event)
+        if latest_missed_event:
+            missed_event_id = str(latest_missed_event.get("event_id") or "")
+            resolution = _calendar_missed_resolution(missed_event_id)
+            if not resolution:
+                latest_missed_event["actions"] = [
                     "approve_backfill_run",
                     "reschedule",
                     "delete_missed",
                     "open_logs",
                     "open_session",
                 ]
-                _calendar_register_missed_event(event)
-            events.append(event)
+                _calendar_register_missed_event(latest_missed_event)
+            events.append(latest_missed_event)
     return events
+
+
+def _calendar_should_include_heartbeat_summary(summary: dict[str, Any], now_ts: float) -> bool:
+    session_id = str(summary.get("session_id") or "").strip()
+    if not session_id:
+        return False
+    owner_id = str(summary.get("owner") or "").strip().lower()
+    source = str(summary.get("source") or "").strip().lower()
+
+    # Ignore cron-owned/session workspaces in heartbeat views.
+    if session_id.startswith("cron_") or owner_id.startswith("cron:"):
+        return False
+    # Keep canonical chat/api session IDs by default; unknown local directories
+    # are usually historical workspaces and should not produce always-running rows.
+    if source == "local" and not session_id.startswith(("session_", "tg_", "api_")):
+        return False
+
+    active_connections = int(summary.get("active_connections") or 0)
+    active_runs = int(summary.get("active_runs") or 0)
+    if active_connections > 0 or active_runs > 0:
+        return True
+    if _heartbeat_service and session_id in _heartbeat_service.busy_sessions:
+        return True
+
+    # Only show "always running" heartbeat monitors for active sessions;
+    # historical workspaces should not be treated as live monitors.
+    return False
 
 
 def _calendar_project_heartbeat_events(
@@ -1985,6 +2099,8 @@ def _calendar_project_heartbeat_events(
     events: list[dict[str, Any]] = []
     always_running: list[dict[str, Any]] = []
     for summary in _ops_service.list_sessions(status_filter="all"):
+        if not _calendar_should_include_heartbeat_summary(summary, now_ts):
+            continue
         session_id = str(summary.get("session_id") or "")
         if not session_id:
             continue
@@ -1996,22 +2112,25 @@ def _calendar_project_heartbeat_events(
         if _heartbeat_service:
             schedule = _heartbeat_service._resolve_schedule(overrides)  # type: ignore[attr-defined]
             delivery = _heartbeat_service._resolve_delivery(overrides, session_id)  # type: ignore[attr-defined]
-            every_seconds = int(getattr(schedule, "every_seconds", 1500) or 1500)
+            every_seconds = int(getattr(schedule, "every_seconds", HEARTBEAT_INTERVAL_SECONDS) or HEARTBEAT_INTERVAL_SECONDS)
             delivery_mode = str(getattr(delivery, "mode", "last") or "last")
         else:
-            every_seconds = 1500
+            every_seconds = HEARTBEAT_INTERVAL_SECONDS
             delivery_mode = "last"
-        every_seconds = max(60, every_seconds)
+        every_seconds = max(HEARTBEAT_INTERVAL_SECONDS, every_seconds)
         hb_state = _read_heartbeat_state(workspace_dir) or {}
         last_run = float(hb_state.get("last_run") or 0.0)
-        next_run = (last_run + every_seconds) if last_run > 0 else (now_ts + every_seconds)
+        raw_next_run = (last_run + every_seconds) if last_run > 0 else (now_ts + every_seconds)
+        # Heartbeats do not backfill: if a run window is missed, schedule the next window.
+        if delivery_mode != "none" and raw_next_run < now_ts:
+            next_run = now_ts + every_seconds
+        else:
+            next_run = raw_next_run
         busy = bool(_heartbeat_service and session_id in _heartbeat_service.busy_sessions)
         if delivery_mode == "none":
             status_value = "disabled"
         elif busy:
             status_value = "running"
-        elif now_ts > (next_run + min(300, every_seconds // 2)):
-            status_value = "missed"
         else:
             status_value = "scheduled"
 
@@ -2043,19 +2162,11 @@ def _calendar_project_heartbeat_events(
                     "open_session",
                 ],
             }
-            if status_value == "missed":
-                resolution = _calendar_missed_resolution(event_id)
-                if resolution:
-                    continue
-                event["actions"] = [
-                    "approve_backfill_run",
-                    "reschedule",
-                    "delete_missed",
-                    "open_logs",
-                    "open_session",
-                ]
-                _calendar_register_missed_event(event)
             events.append(event)
+
+        active_connections = int(summary.get("active_connections") or 0)
+        active_runs = int(summary.get("active_runs") or 0)
+        is_live_monitor = active_connections > 0 or active_runs > 0 or busy
 
         always_event = {
             "event_id": _calendar_event_id("heartbeat", session_id, next_run),
@@ -2082,7 +2193,8 @@ def _calendar_project_heartbeat_events(
                 "open_session",
             ],
         }
-        always_running.append(always_event)
+        if is_live_monitor:
+            always_running.append(always_event)
     return events, always_running
 
 
@@ -2119,6 +2231,26 @@ def _calendar_build_feed(
         events.extend(hb_events)
         always_running.extend(hb_always)
 
+    # Defensive dedupe for noisy projection/replay cycles.
+    events_by_id = {str(item.get("event_id") or ""): item for item in events if str(item.get("event_id") or "").strip()}
+    always_running_by_ref: dict[str, dict[str, Any]] = {}
+    for item in always_running:
+        source = str(item.get("source") or "").strip().lower()
+        source_ref = str(item.get("source_ref") or "").strip()
+        if not source or not source_ref:
+            continue
+        key = f"{source}|{source_ref}"
+        existing = always_running_by_ref.get(key)
+        if not existing:
+            always_running_by_ref[key] = item
+            continue
+        existing_ts = float(existing.get("scheduled_at_epoch") or 0.0)
+        candidate_ts = float(item.get("scheduled_at_epoch") or 0.0)
+        if candidate_ts > existing_ts:
+            always_running_by_ref[key] = item
+    events = list(events_by_id.values())
+    always_running = list(always_running_by_ref.values())
+
     events.sort(key=lambda item: float(item.get("scheduled_at_epoch") or 0.0))
     always_running.sort(key=lambda item: float(item.get("scheduled_at_epoch") or 0.0))
     return {
@@ -2141,10 +2273,11 @@ def _calendar_apply_heartbeat_interval(session_id: str, every_seconds: int) -> d
     workspace = WORKSPACES_DIR / session_id
     if not workspace.exists():
         raise HTTPException(status_code=404, detail="Session not found")
+    normalized_seconds = max(HEARTBEAT_INTERVAL_SECONDS, int(every_seconds))
     existing = _calendar_read_heartbeat_overrides(str(workspace))
-    merged = _calendar_merge_dict(existing, {"heartbeat": {"every_seconds": int(every_seconds)}})
+    merged = _calendar_merge_dict(existing, {"heartbeat": {"every_seconds": normalized_seconds}})
     path = _calendar_write_heartbeat_overrides(session_id, merged)
-    return {"path": path, "every_seconds": int(every_seconds)}
+    return {"path": path, "every_seconds": normalized_seconds}
 
 
 def _calendar_create_change_proposal(
@@ -2224,9 +2357,14 @@ def _calendar_create_change_proposal(
         else:
             every_seconds = _calendar_interval_seconds_from_text(lower)
             if every_seconds is not None:
-                operation = {"type": "heartbeat_set_interval", "every_seconds": every_seconds}
-                summary = f"Set heartbeat interval to every {every_seconds} seconds"
-                after = {"heartbeat.every_seconds": every_seconds}
+                normalized_seconds = max(HEARTBEAT_INTERVAL_SECONDS, int(every_seconds))
+                if normalized_seconds != int(every_seconds):
+                    warnings.append(
+                        f"Heartbeat interval is capped to >= {HEARTBEAT_INTERVAL_SECONDS} seconds (30 minutes) to prevent runaway scheduling."
+                    )
+                operation = {"type": "heartbeat_set_interval", "every_seconds": normalized_seconds}
+                summary = f"Set heartbeat interval to every {normalized_seconds} seconds"
+                after = {"heartbeat.every_seconds": normalized_seconds}
             else:
                 operation = {"type": "none"}
                 summary = "Could not safely map instruction to a heartbeat change"
@@ -2345,30 +2483,11 @@ async def _calendar_apply_event_action(
         if action_norm == "resume":
             result = _calendar_apply_heartbeat_delivery_mode(session_id, "last")
             return {"status": "ok", "action": action_norm, "session_id": session_id, **result}
-        if action_norm == "approve_backfill_run":
-            if not _heartbeat_service:
-                raise HTTPException(status_code=503, detail="Heartbeat service not available")
-            _heartbeat_service.request_heartbeat_now(session_id, reason="calendar_backfill_approved")
-            queue_entry = _calendar_missed_events.get(event_id)
-            if queue_entry:
-                queue_entry["status"] = "approved_and_run"
-                queue_entry["updated_at"] = datetime.now().isoformat()
-            return {"status": "ok", "action": action_norm, "session_id": session_id}
-        if action_norm == "reschedule":
-            if not _heartbeat_service:
-                raise HTTPException(status_code=503, detail="Heartbeat service not available")
-            _heartbeat_service.request_heartbeat_next(session_id, reason="calendar_rescheduled")
-            queue_entry = _calendar_missed_events.get(event_id)
-            if queue_entry:
-                queue_entry["status"] = "rescheduled"
-                queue_entry["updated_at"] = datetime.now().isoformat()
-            return {"status": "ok", "action": action_norm, "session_id": session_id}
-        if action_norm == "delete_missed":
-            queue_entry = _calendar_missed_events.get(event_id)
-            if queue_entry:
-                queue_entry["status"] = "deleted"
-                queue_entry["updated_at"] = datetime.now().isoformat()
-            return {"status": "ok", "action": action_norm}
+        if action_norm in {"approve_backfill_run", "reschedule", "delete_missed"}:
+            raise HTTPException(
+                status_code=400,
+                detail="Heartbeat backfill is disabled. Missed heartbeat windows are skipped automatically.",
+            )
         if action_norm == "open_logs":
             return {
                 "status": "ok",
@@ -2670,6 +2789,45 @@ def _require_ops_auth(request: Request, token_override: Optional[str] = None) ->
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _extract_auth_token_from_headers(headers: Any) -> str:
+    header = str(headers.get("authorization", "")).strip()
+    token = ""
+    if header.lower().startswith("bearer "):
+        token = header.split(" ", 1)[1].strip()
+    if not token:
+        token = str(headers.get("x-ua-internal-token", "")).strip()
+    if not token:
+        token = str(headers.get("x-ua-ops-token", "")).strip()
+    return token
+
+
+def _session_api_auth_required() -> bool:
+    return _DEPLOYMENT_PROFILE == "vps" or bool(SESSION_API_TOKEN)
+
+
+def _require_session_api_auth(request: Request) -> None:
+    if not _session_api_auth_required():
+        return
+    if not SESSION_API_TOKEN:
+        raise HTTPException(status_code=503, detail="Session API token is not configured.")
+    token = _extract_auth_token_from_headers(request.headers)
+    if token != SESSION_API_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+async def _require_session_ws_auth(websocket: WebSocket) -> bool:
+    if not _session_api_auth_required():
+        return True
+    if not SESSION_API_TOKEN:
+        await websocket.close(code=1011, reason="Session API token is not configured.")
+        return False
+    token = _extract_auth_token_from_headers(websocket.headers)
+    if token != SESSION_API_TOKEN:
+        await websocket.close(code=4401, reason="Unauthorized")
+        return False
+    return True
+
+
 # =============================================================================
 # WebSocket Connection Manager
 # =============================================================================
@@ -2906,7 +3064,10 @@ async def health(response: Response):
 
 
 @app.post("/api/v1/sessions", response_model=CreateSessionResponse)
-async def create_session(request: CreateSessionRequest):
+async def create_session(request: CreateSessionRequest, http_request: Request):
+    _require_session_api_auth(http_request)
+    if _DEPLOYMENT_PROFILE == "vps" and not str(request.user_id or "").strip():
+        raise HTTPException(status_code=400, detail="user_id is required in vps profile")
     # 1. Enforce Allowlist
     final_user_id = resolve_user_id(request.user_id)
     if not is_user_allowed(final_user_id):
@@ -2920,6 +3081,7 @@ async def create_session(request: CreateSessionRequest):
             user_id=final_user_id,
             workspace_dir=workspace_dir,
         )
+        session.metadata["user_id"] = session.user_id
         policy = _session_policy(session)
         session.metadata["policy"] = _policy_metadata_snapshot(policy)
         store_session(session)
@@ -2940,15 +3102,40 @@ async def create_session(request: CreateSessionRequest):
 
 
 @app.get("/api/v1/sessions")
-async def list_sessions():
+async def list_sessions(request: Request):
+    _require_session_api_auth(request)
+    if _ops_service:
+        summaries = _ops_service.list_sessions(status_filter="all")
+        return {
+            "sessions": [
+                SessionSummaryResponse(
+                    session_id=str(item.get("session_id") or ""),
+                    workspace_dir=str(item.get("workspace_dir") or ""),
+                    status=str(item.get("status") or "unknown"),
+                    user_id=str(item.get("owner") or "") or None,
+                    metadata=item,
+                ).model_dump()
+                for item in summaries
+            ]
+        }
+
     gateway = get_gateway()
     summaries = gateway.list_sessions()
+    in_memory = {}
+    for summary in summaries:
+        session = get_session(summary.session_id)
+        if session:
+            in_memory[summary.session_id] = session.user_id
     return {
         "sessions": [
             SessionSummaryResponse(
                 session_id=s.session_id,
                 workspace_dir=s.workspace_dir,
                 status=s.status,
+                user_id=(
+                    (s.metadata.get("user_id") if isinstance(s.metadata, dict) else None)
+                    or in_memory.get(s.session_id)
+                ),
                 metadata=s.metadata,
             ).model_dump()
             for s in summaries
@@ -3438,7 +3625,8 @@ async def list_cron_runs(limit: int = 200):
 
 
 @app.get("/api/v1/sessions/{session_id}")
-async def get_session_info(session_id: str):
+async def get_session_info(session_id: str, request: Request):
+    _require_session_api_auth(request)
     session_id = _sanitize_session_id_or_400(session_id)
     session = get_session(session_id)
     if not session:
@@ -3446,6 +3634,7 @@ async def get_session_info(session_id: str):
         gateway = get_gateway()
         try:
             session = await gateway.resume_session(session_id)
+            session.metadata["user_id"] = session.user_id
             policy = _session_policy(session)
             session.metadata["policy"] = _policy_metadata_snapshot(policy)
             store_session(session)
@@ -3459,7 +3648,9 @@ async def get_session_info(session_id: str):
     # Allowlist check for resume (optional, but good practice)
     if not is_user_allowed(session.user_id):
         raise HTTPException(status_code=403, detail="Access denied: User not allowed.")
-        
+
+    session.metadata.setdefault("user_id", session.user_id)
+
     return CreateSessionResponse(
         session_id=session.session_id,
         user_id=session.user_id,
@@ -3469,7 +3660,8 @@ async def get_session_info(session_id: str):
 
 
 @app.get("/api/v1/sessions/{session_id}/policy")
-async def get_session_policy(session_id: str):
+async def get_session_policy(session_id: str, request: Request):
+    _require_session_api_auth(request)
     session_id = _sanitize_session_id_or_400(session_id)
     session = get_session(session_id)
     if not session:
@@ -3479,7 +3671,8 @@ async def get_session_policy(session_id: str):
 
 
 @app.patch("/api/v1/sessions/{session_id}/policy")
-async def patch_session_policy(session_id: str, payload: SessionPolicyPatchRequest):
+async def patch_session_policy(session_id: str, payload: SessionPolicyPatchRequest, request: Request):
+    _require_session_api_auth(request)
     session_id = _sanitize_session_id_or_400(session_id)
     session = get_session(session_id)
     if not session:
@@ -3495,14 +3688,16 @@ async def patch_session_policy(session_id: str, payload: SessionPolicyPatchReque
 
 
 @app.get("/api/v1/sessions/{session_id}/pending")
-async def get_pending_gate(session_id: str):
+async def get_pending_gate(session_id: str, request: Request):
+    _require_session_api_auth(request)
     session_id = _sanitize_session_id_or_400(session_id)
     pending = _pending_gated_requests.get(session_id)
     return {"session_id": session_id, "pending": pending}
 
 
 @app.post("/api/v1/sessions/{session_id}/resume")
-async def resume_gated_request(session_id: str, payload: ResumeRequest):
+async def resume_gated_request(session_id: str, payload: ResumeRequest, request: Request):
+    _require_session_api_auth(request)
     session_id = _sanitize_session_id_or_400(session_id)
     pending = _pending_gated_requests.get(session_id)
     if not pending:
@@ -3528,7 +3723,8 @@ async def resume_gated_request(session_id: str, payload: ResumeRequest):
 
 
 @app.delete("/api/v1/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, request: Request):
+    _require_session_api_auth(request)
     session_id = _sanitize_session_id_or_400(session_id)
     _mark_session_terminal(session_id, "deleted")
     _sessions.pop(session_id, None)
@@ -4261,6 +4457,8 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
 
 @app.websocket("/api/v1/sessions/{session_id}/stream")
 async def websocket_stream(websocket: WebSocket, session_id: str):
+    if not await _require_session_ws_auth(websocket):
+        return
     try:
         session_id = validate_session_id(session_id)
     except ValueError:
@@ -4278,6 +4476,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
         _increment_metric("resume_attempts")
         try:
             session = await gateway.resume_session(session_id)
+            session.metadata["user_id"] = session.user_id
             store_session(session)
             _increment_metric("resume_successes")
             if _heartbeat_service:
@@ -4288,6 +4487,8 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
             await websocket.close(code=4004, reason="Session not found")
             manager.disconnect(connection_id, session_id)
             return
+
+    session.metadata.setdefault("user_id", session.user_id)
 
     # 1. Enforce Allowlist for WebSocket
     if not is_user_allowed(session.user_id):

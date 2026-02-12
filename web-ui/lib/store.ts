@@ -453,7 +453,9 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
 
     case "status": {
       const data = event.data as Record<string, unknown>;
-      if (data.status === "processing") {
+      const source = String(data.source ?? "").trim().toLowerCase();
+      const isHeartbeatBackground = source === "heartbeat";
+      if (data.status === "processing" && !isHeartbeatBackground) {
         store.setConnectionStatus("processing");
       }
       if (data.is_log) {
@@ -468,6 +470,11 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
       }
       break;
     }
+
+    case "cancelled":
+      store.finishStream();
+      store.setConnectionStatus("connected");
+      break;
 
     case "iteration_end": {
       const data = event.data as Record<string, unknown>;

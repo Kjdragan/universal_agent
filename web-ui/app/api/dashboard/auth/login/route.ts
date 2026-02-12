@@ -22,11 +22,11 @@ export async function POST(request: NextRequest) {
 
   const authRequired = dashboardAuthRequired();
   const password = String(payload.password || "");
-  if (authRequired && !validateDashboardPassword(password)) {
+  const ownerId = normalizeOwnerId(payload.owner_id);
+  if (authRequired && !validateDashboardPassword(password, ownerId)) {
     return NextResponse.json({ detail: "Invalid credentials." }, { status: 401 });
   }
 
-  const ownerId = normalizeOwnerId(payload.owner_id);
   const { token, expiresAt } = createDashboardSessionToken(ownerId);
 
   const response = NextResponse.json({

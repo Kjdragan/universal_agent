@@ -222,6 +222,7 @@ KNOWN_MCP_SIDE_EFFECTS = {
 KNOWN_MCP_READ_ONLY = {
     "read_local_file",
     "list_directory",
+    "inspect_session_workspace",
     "archival_memory_search",
     "get_core_memory_blocks",
     "describe_image",

@@ -10,11 +10,12 @@ This allows the Web UI to use the same canonical execution engine as the CLI.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import os
 import time
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Optional
 from pathlib import Path
 
 import httpx
@@ -45,6 +46,38 @@ class GatewayBridge:
         self.current_session_id: Optional[str] = None
         self.current_workspace: Optional[str] = None
         self._http_client: Optional[httpx.AsyncClient] = None
+        self._current_ws: Any = None
+
+    def _gateway_auth_token(self) -> str:
+        return (
+            (os.getenv("UA_INTERNAL_API_TOKEN") or "").strip()
+            or (os.getenv("UA_OPS_TOKEN") or "").strip()
+        )
+
+    def _gateway_headers(self) -> dict[str, str]:
+        token = self._gateway_auth_token()
+        if not token:
+            return {}
+        return {
+            "authorization": f"Bearer {token}",
+            "x-ua-internal-token": token,
+            "x-ua-ops-token": token,
+        }
+
+    def websocket_connect_kwargs(self) -> dict[str, Any]:
+        headers = self._gateway_headers()
+        if not headers:
+            return {}
+        items = list(headers.items())
+        try:
+            params = inspect.signature(websockets.connect).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "additional_headers" in params:
+            return {"additional_headers": items}
+        if "extra_headers" in params:
+            return {"extra_headers": items}
+        return {}
         
     async def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None:
@@ -59,6 +92,7 @@ class GatewayBridge:
             response = await client.post(
                 f"{self.gateway_url}/api/v1/sessions",
                 json={"user_id": user_id},
+                headers=self._gateway_headers(),
             )
             response.raise_for_status()
             data = response.json()
@@ -86,7 +120,8 @@ class GatewayBridge:
         
         try:
             response = await client.get(
-                f"{self.gateway_url}/api/v1/sessions/{session_id}"
+                f"{self.gateway_url}/api/v1/sessions/{session_id}",
+                headers=self._gateway_headers(),
             )
             if response.status_code == 404:
                 return None
@@ -118,7 +153,8 @@ class GatewayBridge:
         saw_streaming_text = False
         
         try:
-            async with websockets.connect(ws_endpoint) as ws:
+            async with websockets.connect(ws_endpoint, **self.websocket_connect_kwargs()) as ws:
+                self._current_ws = ws
                 # Wait for connected event from gateway
                 initial_msg = await asyncio.wait_for(ws.recv(), timeout=10.0)
                 initial_data = json.loads(initial_msg)
@@ -159,13 +195,16 @@ class GatewayBridge:
                             
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to parse gateway event: {e}")
-
+            self._current_ws = None
                         
         except asyncio.TimeoutError:
+            self._current_ws = None
             yield create_error_event("Gateway connection timeout")
         except websockets.exceptions.ConnectionClosed as e:
+            self._current_ws = None
             yield create_error_event(f"Gateway connection closed: {e}")
         except Exception as e:
+            self._current_ws = None
             logger.error(f"Gateway execution error: {e}")
             yield create_error_event(str(e))
 
@@ -198,6 +237,7 @@ class GatewayBridge:
                 "work_product": WSEventType.WORK_PRODUCT,
                 "connected": WSEventType.CONNECTED,
                 "query_complete": WSEventType.QUERY_COMPLETE,
+                "cancelled": WSEventType.CANCELLED,
                 "pong": WSEventType.PONG,
                 "input_required": WSEventType.INPUT_REQUIRED,
                 "input_response": WSEventType.INPUT_RESPONSE,
@@ -222,7 +262,7 @@ class GatewayBridge:
 
     async def send_input_response(self, input_id: str, response: str) -> bool:
         """Send user input response back to the gateway."""
-        if not hasattr(self, "_current_ws") or self._current_ws is None:
+        if self._current_ws is None:
             logger.error("No active Gateway WebSocket to send input response")
             return False
         
@@ -238,6 +278,22 @@ class GatewayBridge:
             return True
         except Exception as e:
             logger.error(f"Failed to send input response to gateway: {e}")
+            return False
+
+    async def send_cancel(self, reason: str = "User requested stop") -> bool:
+        """Forward cancel request to the active gateway stream."""
+        if self._current_ws is None:
+            logger.warning("No active Gateway WebSocket to send cancel")
+            return False
+        try:
+            msg = {
+                "type": "cancel",
+                "data": {"reason": reason},
+            }
+            await self._current_ws.send(json.dumps(msg))
+            return True
+        except Exception as e:
+            logger.error(f"Failed to send cancel to gateway: {e}")
             return False
 
     def get_current_workspace(self) -> Optional[str]:
@@ -266,7 +322,10 @@ class GatewayBridge:
         """List sessions from gateway."""
         client = await self._get_client()
         try:
-            response = await client.get(f"{self.gateway_url}/api/v1/sessions")
+            response = await client.get(
+                f"{self.gateway_url}/api/v1/sessions",
+                headers=self._gateway_headers(),
+            )
             response.raise_for_status()
             data = response.json()
             return data.get("sessions", [])
