@@ -15,7 +15,7 @@ async def main():
     
     # Minimal options
     options = ClaudeAgentOptions(
-        model="claude-3-5-sonnet-20241022",
+        model=os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5"),
         system_prompt="You are a test agent.",
     )
     

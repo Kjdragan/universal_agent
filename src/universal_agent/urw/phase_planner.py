@@ -12,6 +12,7 @@ Key concepts:
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict, Any, Set
@@ -155,7 +156,7 @@ class PhasePlanner:
         self.max_tasks_per_phase = max_tasks_per_phase or self.DEFAULT_MAX_TASKS_PER_PHASE
         self.llm_client = llm_client
         self.use_llm_assessment = use_llm_assessment and llm_client is not None
-        self.llm_model = llm_model or "claude-sonnet-4-20250514"
+        self.llm_model = llm_model or os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5")
 
     
     def plan_phases(

@@ -11,7 +11,7 @@ from universal_agent.rate_limiter import ZAIRateLimiter
 # CONFIG - Auto-detect environment
 API_KEY = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ZAI_API_KEY")
 BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic")
-MODEL = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-4.7")
+MODEL = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5")
 
 async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, order, base_path: Path):
     """Write a single section using centralized rate limiter."""

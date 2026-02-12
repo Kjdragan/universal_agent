@@ -234,7 +234,7 @@ class ConstraintEvaluator(Evaluator):
 class LLMJudgeEvaluator(Evaluator):
     """Uses an LLM to evaluate qualitative completion."""
 
-    def __init__(self, llm_client: Any, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, llm_client: Any, model: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5")):
         self.llm_client = llm_client
         self.model = model
 
@@ -539,7 +539,7 @@ class CompositeEvaluator(Evaluator):
         self,
         llm_client: Any,
         state_manager=None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5"),
         evaluation_policy: Optional[Dict[str, Any]] = None,
     ):
         self.binary = BinaryCheckEvaluator(state_manager)
@@ -640,7 +640,7 @@ class CompositeEvaluator(Evaluator):
 def create_default_evaluator(
     llm_client: Any,
     state_manager=None,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5"),
     evaluation_policy: Optional[Dict[str, Any]] = None,
 ) -> CompositeEvaluator:
     return CompositeEvaluator(
@@ -654,7 +654,7 @@ def quick_evaluate(
     agent_output: str,
     workspace_path: Path,
     llm_client: Any,
-    model: str = "claude-sonnet-4-20250514",
+    model: str = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5"),
     evaluation_policy: Optional[Dict[str, Any]] = None,
 ) -> EvaluationResult:
     evaluator = CompositeEvaluator(llm_client, model=model, evaluation_policy=evaluation_policy)

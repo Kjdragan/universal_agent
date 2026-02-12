@@ -26,7 +26,9 @@ async def test_urw_adapter():
     workspace.mkdir(parents=True, exist_ok=True)
     
     # Create adapter exactly as run_urw.py does
-    adapter = UniversalAgentAdapter({"model": "claude-sonnet-4-20250514", "verbose": True})
+    adapter = UniversalAgentAdapter(
+        {"model": os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "glm-5"), "verbose": True}
+    )
     
     # Manually call _create_agent like execute_task does internally
     print("[TEST] Creating agent...")
