@@ -7342,14 +7342,13 @@ async def process_turn(
             is_simple = False  # Fallback to Complex Path
         else:
             final_response_text = fast_path_text
-            # Emit events for fast path completion
-            emit_event(AgentEvent(type=EventType.TEXT, data={"text": final_response_text}))
-            emit_event(AgentEvent(type=EventType.ITERATION_END, data={
-                "status": "complete",
-                "path": "fast",
-                "duration_seconds": round(time.time() - start_ts, 2),
-                "tool_calls": 0,
-            }))
+            # NOTE: Do NOT emit TEXT or ITERATION_END here.
+            # The execution engine (ProcessTurnAdapter) emits them
+            # canonically after process_turn() returns, via the
+            # result.response_text fallback and the post-completion
+            # ITERATION_END yield.  Emitting here caused duplicate
+            # chat output in the Web UI (every fast-path response
+            # appeared twice).
 
     if not is_simple:
         # Complex Path (Tool Loop) - track per-request timing
