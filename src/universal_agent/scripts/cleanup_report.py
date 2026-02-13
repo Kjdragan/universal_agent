@@ -152,8 +152,8 @@ def write_updates(
 def check_placeholders(text: str) -> List[str]:
     """Scan text for common placeholder patterns."""
     warnings = []
-    # Patterns: [INSERT...], [TODO...], [STATS...], <INSERT...>
-    regex = r"\[(INSERT|TODO|STATS|NOTE).*?\]|\[\s*\.\.\.\s*\]"
+    # Patterns: [INSERT...], [TODO...], [STATS...], <INSERT...>, pending synthesis marker
+    regex = r"\[(INSERT|TODO|STATS|NOTE|PENDING SYNTHESIS).*?\]|\[\s*\.\.\.\s*\]"
     matches = re.finditer(regex, text, re.IGNORECASE)
     for m in matches:
         warnings.append(f"Found placeholder: '{m.group(0)}'")
@@ -234,6 +234,7 @@ async def cleanup_report_async(workspace_path: Path) -> str:
     final_sections = dict(preprocessed_sections)
     updated_files: List[str] = []
     all_warnings: Dict[str, List[str]] = {}
+    pending_marker = re.compile(r"^\s*\[Pending Synthesis by Cleanup Tool\]\s*$", re.IGNORECASE | re.MULTILINE)
 
     # Helper for fuzzy matching filenames
     def match_filename(target: str, available: List[str]) -> Optional[str]:
@@ -280,6 +281,13 @@ async def cleanup_report_async(workspace_path: Path) -> str:
 
         final_sections[matched_name] = cleaned
         updated_files.append(matched_name)
+
+    for filename, content in list(final_sections.items()):
+        cleaned = pending_marker.sub("", content)
+        if cleaned != content:
+            cleaned = cleaned.strip() + "\n"
+            final_sections[filename] = cleaned
+            all_warnings.setdefault(filename, []).append("Removed leftover pending synthesis marker.")
 
     normalized_updates, _ = write_updates(
         sections_dir, original_sections, final_sections

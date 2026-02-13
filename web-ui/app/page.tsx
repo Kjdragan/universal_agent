@@ -1429,7 +1429,7 @@ export default function HomePage() {
           </div>
 
           {/* Center: Ops dropdown buttons - REPOSITIONED to be part of flow */}
-          <div className="flex items-center gap-0.5 shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
             {([
               { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: "w-[800px]" },
               { key: "calendar", label: "Calendar", icon: "🗓️", content: <CalendarSection />, width: "w-[1100px]" },
@@ -1438,6 +1438,7 @@ export default function HomePage() {
               { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: "w-[600px]" },
               { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection />, width: "w-[800px]" },
               { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection />, width: "w-[800px]" },
+              { key: "continuity", label: "Continuity", icon: "📈", content: <SessionContinuityWidget />, width: "w-[520px]" },
             ] as const).map((item) => (
               <Popover key={item.key}>
                 <PopoverTrigger asChild>
@@ -1499,8 +1500,8 @@ export default function HomePage() {
           {/* Center: Activity Log */}
           {/* This panel sits between Chat (Left) and Files (Right) */}
           <div
-            className={`min-h-0 border-r border-slate-800 bg-slate-900/20 relative transition-all duration-300 flex flex-col ${activityCollapsed ? 'w-10 shrink-0' : ''}`}
-            style={activityCollapsed ? { width: 40 } : { width: activityWidth }}
+            className={`border-r border-slate-800 bg-slate-900/20 relative transition-all duration-300 flex flex-col ${activityCollapsed ? 'w-10 shrink-0' : 'min-h-0'}`}
+            style={activityCollapsed ? { width: 40, minHeight: '100%' } : { width: activityWidth }}
           >
             {/* Resizer handle on the LEFT edge of this panel */}
             {!activityCollapsed && (
@@ -1514,10 +1515,10 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => setActivityCollapsed(false)}
-                className="h-full w-full flex items-center justify-center hover:bg-card/30 transition-colors"
+                className="h-full w-10 flex items-center justify-center hover:bg-card/30 transition-colors border-l border-slate-700/50 bg-slate-900/40"
                 title="Expand Activity Log"
               >
-                <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold">{ICONS.activity} Activity</span>
+                <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold whitespace-nowrap">{ICONS.activity} Activity ▶</span>
               </button>
             ) : (
               <div className="h-full flex flex-col overflow-hidden">
@@ -1543,7 +1544,6 @@ export default function HomePage() {
               <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
                 <WorkProductViewer />
               </div>
-              <SessionContinuityWidget />
               <HeartbeatWidget />
               <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
                 <TaskPanel />

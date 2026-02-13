@@ -136,8 +136,48 @@ def fetch_toolkit_meta(composio_client: Any, slug: str) -> Dict[str, Any]:
             meta['description'] = "Read, write, and manage files in the local workspace."
         elif slug == 'browserbase':
             meta['description'] = "Headless browser for web scraping and interaction."
+        elif slug == 'browserbase_tool':
+            meta['description'] = "Browser automation and scraping via Browserbase."
         elif slug == 'gmail':
             meta['description'] = "Google's email service."
+        elif slug == 'googlecalendar':
+            meta['description'] = "Google Calendar for scheduling, events, and reminders."
+        elif slug == 'google_maps':
+            meta['description'] = "Maps, geocoding, and place lookup via Google Maps APIs."
+        elif slug == 'googledocs':
+            meta['description'] = "Create and edit Google Docs documents."
+        elif slug == 'googledrive':
+            meta['description'] = "Manage files and folders in Google Drive."
+        elif slug == 'googlesheets':
+            meta['description'] = "Read and update Google Sheets spreadsheets."
+        elif slug == 'googlesuper':
+            meta['description'] = "Google Workspace super admin and directory operations."
+        elif slug == 'airtable':
+            meta['description'] = "Cloud database and spreadsheet hybrid for structured records and workflows."
+        elif slug == 'hubspot':
+            meta['description'] = "CRM platform for contacts, deals, pipelines, and marketing automation."
+        elif slug == 'linear':
+            meta['description'] = "Issue tracking and product planning for engineering teams."
+        elif slug == 'notion':
+            meta['description'] = "Workspace for docs, tasks, and knowledge bases in Notion."
+        elif slug == 'slack':
+            meta['description'] = "Team messaging and collaboration in Slack workspaces."
+        elif slug == 'discord':
+            meta['description'] = "Community chat, messaging, and server management in Discord."
+        elif slug == 'reddit':
+            meta['description'] = "Read and post content on Reddit communities."
+        elif slug == 'twitter':
+            meta['description'] = "Post, read, and manage content on Twitter/X."
+        elif slug == 'youtube':
+            meta['description'] = "Search, manage, and publish content on YouTube."
+        elif slug == 'telegram':
+            meta['description'] = "Send and receive messages via Telegram bots."
+        elif slug == 'openweather_api':
+            meta['description'] = "Weather forecasts and current conditions from OpenWeather."
+        elif slug == 'perplexityai':
+            meta['description'] = "Web research and question answering via Perplexity."
+        elif slug == 'figma':
+            meta['description'] = "Design file access and collaboration via Figma."
         elif slug == 'github':
             meta['description'] = "Code hosting and collaboration platform."
             

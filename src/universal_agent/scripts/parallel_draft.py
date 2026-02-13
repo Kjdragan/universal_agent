@@ -75,6 +75,8 @@ async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, o
                 error_str = str(e).lower()
                 is_rate_limit = "429" in error_str or "too many requests" in error_str or "high concurrency" in error_str
                 
+                is_timeout = "timed out" in error_str or "timeout" in error_str or "interrupted" in error_str or "connection" in error_str
+
                 if is_rate_limit:
                     await limiter.record_429(context)
                     last_error = e
@@ -84,6 +86,16 @@ async def write_section(limiter: ZAIRateLimiter, client, section, corpus_text, o
                         print(f"  ⚠️ [429] Rate limited ({context}). Backoff: {delay:.1f}s (Attempt {attempt+1}/{MAX_RETRIES})")
                         await asyncio.sleep(delay)
                         continue
+                elif is_timeout:
+                    last_error = e
+                    if attempt < MAX_RETRIES - 1:
+                        delay = min(10.0 * (attempt + 1), 30.0)
+                        print(f"  ⚠️ [Timeout] {context} timed out. Retry in {delay:.0f}s (Attempt {attempt+1}/{MAX_RETRIES})")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        print(f"❌ Error {section['id']} (timeout after {MAX_RETRIES} attempts): {e}")
+                        return
                 else:
                     print(f"❌ Error {section['id']}: {e}")
                     return
@@ -139,7 +151,7 @@ async def draft_report_async(
 
     # 3. Initialize Client and Rate Limiter
     # Set max_retries=0 on SDK - we handle retries with the centralized rate limiter
-    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL, max_retries=0, timeout=60.0)
+    client = AsyncAnthropic(api_key=API_KEY, base_url=BASE_URL, max_retries=0, timeout=120.0)
     limiter = ZAIRateLimiter.get_instance()
 
     # 4. Run Parallel - rate limiter controls concurrency

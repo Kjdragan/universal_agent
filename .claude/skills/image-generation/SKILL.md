@@ -6,7 +6,7 @@ description: "AI-powered image generation and editing using Gemini. Use when Cla
 # Image Generation & Editing
 
 ## Overview
-Generate and edit images using Gemini 2.5 Flash Image model via MCP tools.
+Generate and edit images using Gemini image models via MCP tools.
 
 ## Quick Start
 
@@ -50,8 +50,9 @@ Primary tool for image generation and editing.
 - `output_dir` (optional): Output directory (defaults to `work_products/media/`)
 - `output_filename` (optional): Custom filename (auto-generated if not provided)
 - `preview` (optional): Launch Gradio viewer after generation
-- `model_name` (optional): Gemini model to use. Defaults to `gemini-3-pro-image-preview`.
-  - Options: `gemini-3-pro-image-preview`, `gemini-2.5-flash-image`.
+- `model_name` (optional): Gemini model to use. Defaults to `gemini-2.5-flash-image`.
+  - Valid options: `gemini-2.5-flash-image`, `gemini-2.0-flash-exp-image-generation`.
+  - Do NOT guess other model names — only use one of these exact strings.
 
 **Returns**: JSON with `output_path`, `description`, `size_bytes`, and optionally `viewer_url`
 
@@ -134,7 +135,7 @@ Ensure `GEMINI_API_KEY` is set in `.env` file.
 
 ### Error: "No image data in response"
 - Check your prompt is clear and specific
-- Ensure Gemini 2.0 Flash model supports the request
+- Ensure you are using a valid model: `gemini-2.5-flash-image` or `gemini-2.0-flash-exp-image-generation`
 - Try simplifying the prompt
 
 ### Preview not working

@@ -2013,16 +2013,19 @@ def _calendar_project_cron_events(
                 enabled=bool(job.enabled),
                 is_running=is_running,
             )
+            metadata = job.metadata or {}
+            workspace_dir = str(getattr(job, "workspace_dir", "") or "")
+            workspace_session_id = Path(workspace_dir).name if workspace_dir else ""
             event = {
                 "event_id": event_id,
                 "source": "cron",
                 "source_ref": str(job.job_id),
                 "owner_id": str(job.user_id),
-                "session_id": str((job.metadata or {}).get("session_id") or ""),
-                "channel": str((job.metadata or {}).get("channel") or "cron"),
-                "title": str((job.metadata or {}).get("title") or f"Chron: {str(job.command)[:40]}"),
+                "session_id": str(metadata.get("session_id") or workspace_session_id or ""),
+                "channel": str(metadata.get("channel") or "cron"),
+                "title": str(metadata.get("title") or f"Chron: {str(job.command)[:40]}"),
                 "description": str(job.command),
-                "category": str((job.metadata or {}).get("priority") or "normal"),
+                "category": str(metadata.get("priority") or "normal"),
                 "color_key": "cron",
                 "status": status_value,
                 "scheduled_at_epoch": scheduled_at,

@@ -1,6 +1,7 @@
 from typing import Any
 import os
 import sys
+import subprocess
 from pathlib import Path
 from claude_agent_sdk import tool
 
@@ -18,6 +19,34 @@ def _resolve_path(path_value: str) -> str:
     if workspace:
         return str(Path(workspace) / candidate)
     return str(candidate)
+
+
+_PLAYWRIGHT_CHECKED = False
+
+
+def _ensure_playwright_chromium() -> None:
+    """Auto-install Playwright Chromium if missing. Runs once per process."""
+    global _PLAYWRIGHT_CHECKED
+    if _PLAYWRIGHT_CHECKED:
+        return
+    _PLAYWRIGHT_CHECKED = True
+
+    cache_dir = Path.home() / ".cache" / "ms-playwright"
+    if any(cache_dir.glob("chromium-*")) if cache_dir.exists() else False:
+        return
+
+    print("[pdf_bridge] Playwright Chromium not found — installing automatically...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
+            timeout=300,
+            capture_output=True,
+            text=True,
+        )
+        print("[pdf_bridge] Playwright Chromium installed successfully.")
+    except Exception as e:
+        print(f"[pdf_bridge] Warning: auto-install failed: {e}")
 
 
 @tool(
@@ -47,6 +76,8 @@ async def html_to_pdf_wrapper(args: dict[str, Any]) -> dict[str, Any]:
 
     with StdoutToEventStream(prefix="[Local Toolkit]"):
         try:
+            _ensure_playwright_chromium()
+
             # Preferred: Chrome headless via Playwright
             from playwright.async_api import async_playwright
 

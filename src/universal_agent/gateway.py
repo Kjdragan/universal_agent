@@ -322,6 +322,13 @@ class InProcessGateway(Gateway):
                 adapter.config.__dict__["_memory_policy"] = dict(memory_policy)
             else:
                 adapter.config.__dict__["_memory_policy"] = {}
+            # System events are ephemeral “out-of-band” signals that should be
+            # prefixed into the next LLM prompt (Clawdbot parity).
+            system_events = request.metadata.get("system_events")
+            if isinstance(system_events, list):
+                adapter.config.__dict__["_system_events"] = list(system_events)
+            else:
+                adapter.config.__dict__["_system_events"] = []
             
             # Execute through unified engine
             async for event in adapter.execute(request.user_input):
