@@ -741,11 +741,61 @@ class ProcessTurnAdapter:
         logger.info("Session reset: client history cleared")
 
     async def close(self) -> None:
-        """Clean up resources."""
+        """Clean up resources and flush memory."""
+        # Flush memory before tearing down (mirrors main.py post-run flush)
+        await self._flush_memory()
         await self.reset()
         self._initialized = False
         self._options = None
         self._session = None
+
+    async def _flush_memory(self) -> None:
+        """Persist session memory and sync transcript to long-term store."""
+        try:
+            from universal_agent.feature_flags import (
+                memory_enabled,
+                memory_flush_on_exit,
+                memory_flush_max_chars,
+                memory_session_index_on_end,
+            )
+            if not memory_enabled(default=False):
+                return
+
+            workspace_dir = self.config.workspace_dir
+            session_id = self._trace.get("session_id") or self._trace.get("run_id") or Path(workspace_dir).name
+            transcript_path = os.path.join(workspace_dir, "transcript.md")
+
+            # Use shared memory dir for cross-workspace accumulation
+            shared_memory_dir = os.getenv("UA_SHARED_MEMORY_DIR") or workspace_dir
+
+            # 1. Pre-compact flush: save transcript tail as long-term memory
+            if memory_flush_on_exit(default=False):
+                from universal_agent.memory.memory_flush import flush_pre_compact_memory
+                flush_pre_compact_memory(
+                    workspace_dir=shared_memory_dir,
+                    session_id=session_id,
+                    transcript_path=transcript_path,
+                    trigger="gateway_close",
+                    max_chars=memory_flush_max_chars(default=4000),
+                )
+                logger.info("Memory flush complete for session %s", session_id)
+
+            # 2. Session index sync: index the transcript for cross-session search
+            if memory_session_index_on_end(default=True):
+                try:
+                    from universal_agent.memory.orchestrator import get_memory_orchestrator
+                    broker = get_memory_orchestrator(workspace_dir=shared_memory_dir)
+                    result = broker.sync_session(
+                        session_id=session_id,
+                        transcript_path=transcript_path,
+                        force=True,  # Always sync on close, ignore delta thresholds
+                    )
+                    logger.info("Session sync on close: %s", result)
+                except Exception as exc:
+                    logger.warning("Session sync failed on close: %s", exc)
+
+        except Exception as exc:
+            logger.warning("Memory flush failed during close: %s", exc)
 
 
 class ExecutionEngineFactory:

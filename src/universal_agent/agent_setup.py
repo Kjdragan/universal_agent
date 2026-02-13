@@ -269,7 +269,15 @@ class AgentSetup:
             return []
 
     def _load_memory_context(self) -> str:
-        """Load memory context for system prompt."""
+        """Load memory context for system prompt.
+        
+        Reads from TWO sources:
+        1. Legacy MemoryManager (global agent_core.db — core blocks + archival)
+        2. UA File Memory (shared dir or per-workspace — recent entries index)
+        
+        The shared memory dir (UA_SHARED_MEMORY_DIR) enables cross-workspace
+        memory accumulation. Without it, each session's file memory is isolated.
+        """
         try:
             from Memory_System.manager import MemoryManager
             from universal_agent.agent_college.integration import setup_agent_college
@@ -281,8 +289,12 @@ class AgentSetup:
             mem_mgr = MemoryManager(storage_dir=storage_path, workspace_dir=self.workspace_dir)
             setup_agent_college(mem_mgr)
             context = mem_mgr.get_system_prompt_addition()
+
+            # Use shared memory directory for cross-workspace continuity.
+            # Falls back to per-workspace memory if UA_SHARED_MEMORY_DIR is not set.
+            shared_memory_dir = os.getenv("UA_SHARED_MEMORY_DIR") or self.workspace_dir
             file_context = build_file_memory_context(
-                self.workspace_dir,
+                shared_memory_dir,
                 max_tokens=self.memory_max_tokens,
                 index_mode=self.memory_index_mode,
                 recent_limit=int(os.getenv("UA_MEMORY_RECENT_ENTRIES", "8")),
