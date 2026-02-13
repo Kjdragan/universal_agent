@@ -11,6 +11,8 @@ from typing import Optional, Dict, Callable
 
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.gateway import InProcessGateway, GatewaySession, GatewayRequest
+import shutil
+
 
 try:
     import logfire
@@ -27,6 +29,9 @@ import re
 import pytz
 
 # Constants
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+GLOBAL_HEARTBEAT_PATH = PROJECT_ROOT / "memory" / "HEARTBEAT.md"
+
 HEARTBEAT_FILE = "HEARTBEAT.md"
 HEARTBEAT_STATE_FILE = "heartbeat_state.json"
 DEFAULT_HEARTBEAT_PROMPT = (
@@ -771,6 +776,15 @@ class HeartbeatService:
 
         # Check HEARTBEAT.md (optional)
         hb_file = workspace / HEARTBEAT_FILE
+        
+        # Seed HEARTBEAT.md if missing
+        if not hb_file.exists() and GLOBAL_HEARTBEAT_PATH.exists():
+            try:
+                shutil.copy(GLOBAL_HEARTBEAT_PATH, hb_file)
+                logger.info("Seeded %s from global memory for session %s", HEARTBEAT_FILE, session.session_id)
+            except Exception as e:
+                logger.warning("Failed to seed HEARTBEAT.md for %s: %s", session.session_id, e)
+
         heartbeat_content = ""
         if hb_file.exists():
             heartbeat_content = hb_file.read_text()
