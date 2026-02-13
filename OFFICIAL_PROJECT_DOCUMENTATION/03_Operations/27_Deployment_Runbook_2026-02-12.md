@@ -27,6 +27,12 @@ Deployment must be file-sync based from local workspace.
 3. Deploy local `HEAD` to VPS via `scripts/deploy_vps.sh`.
 4. Validate services and public endpoints.
 
+Alternative (small incremental deploys):
+- If you only need to push a few files and restart one service, use the `scp`-based flow in:
+  - `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/22_VPS_Remote_Dev_Deploy_And_File_Transfer_Runbook_2026-02-11.md`
+- Helper wrapper:
+  - `scripts/vpsctl.sh`
+
 ## Standard Command
 Run from local project root:
 

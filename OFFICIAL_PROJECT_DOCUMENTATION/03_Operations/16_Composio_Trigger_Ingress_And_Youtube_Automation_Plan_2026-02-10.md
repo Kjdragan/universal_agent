@@ -292,18 +292,21 @@ Fallback strategy when Composio trigger setup fails:
 1. Ensure secrets are configured:
    1. `COMPOSIO_WEBHOOK_SECRET`
    2. `UA_HOOKS_TOKEN` (recommended for manual endpoint auth)
-2. Bootstrap mappings (dry-run):
+2. Optional: mirror VPS Composio YouTube events into your local dev stack (reverse SSH tunnel):
+   1. See: `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md`
+   2. This is best-effort and should not affect VPS processing if your laptop is offline.
+3. Bootstrap mappings (dry-run):
    1. `uv run python scripts/bootstrap_composio_youtube_hooks.py`
-3. Write mappings to ops config:
+4. Write mappings to ops config:
    1. `uv run python scripts/bootstrap_composio_youtube_hooks.py --write`
-4. Enable hooks and set token from env:
+5. Enable hooks and set token from env:
    1. `uv run python scripts/bootstrap_composio_youtube_hooks.py --write --enable-hooks --set-token-from-env`
-5. Or set an explicit token directly:
+6. Or set an explicit token directly:
    1. `uv run python scripts/bootstrap_composio_youtube_hooks.py --write --enable-hooks --token "<your-token>"`
-6. Register/update Composio webhook subscription (recommended helper):
+7. Register/update Composio webhook subscription (recommended helper):
    1. `uv run python scripts/register_composio_webhook_subscription.py --webhook-url "https://<gateway-host>/api/v1/hooks/composio"`
    2. This helper handles single-subscription replacement and writes `COMPOSIO_WEBHOOK_SECRET` to `.env`.
-7. Configure Composio subscription webhook URL (manual alternative):
+8. Configure Composio subscription webhook URL (manual alternative):
    1. `https://<gateway-host>/api/v1/hooks/composio`
-8. Manual URL ingestion endpoint remains:
+9. Manual URL ingestion endpoint remains:
    1. `POST /api/v1/hooks/youtube/manual`

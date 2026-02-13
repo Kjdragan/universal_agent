@@ -1467,6 +1467,14 @@ export default function HomePage() {
           {/* Right: Metrics, Status */}
           <div className="ml-auto flex items-center gap-4">
             <a
+              href="/files/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
+            >
+              File Browser
+            </a>
+            <a
               href="/dashboard"
               className="rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
             >

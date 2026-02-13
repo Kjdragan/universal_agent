@@ -59,6 +59,8 @@ Transform modules in active use:
 2. Run local readiness check:
    `uv run python scripts/check_youtube_ingress_readiness.py`
 3. Execute one manual URL smoke test and one Composio-trigger test.
-4. Confirm generated outputs match:
+4. If you want Composio events on VPS to also trigger your local stack automatically, set up hook mirroring:
+   `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md`
+5. Confirm generated outputs match:
    `/.claude/skills/youtube-tutorial-explainer/references/output_contract.md`
-5. Add run status metrics (`full`, `degraded_transcript_only`, `failed`) to ops dashboard.
+6. Add run status metrics (`full`, `degraded_transcript_only`, `failed`) to ops dashboard.

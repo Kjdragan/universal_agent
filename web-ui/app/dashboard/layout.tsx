@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
-const NAV_ITEMS = [
+const NAV_ITEMS: { href: string; label: string; external?: boolean }[] = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/chat", label: "Chat Launch" },
   { href: "/dashboard/skills", label: "Skills" },
@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { href: "/dashboard/cron-jobs", label: "Cron Jobs" },
   { href: "/dashboard/channels", label: "Channels" },
   { href: "/dashboard/settings", label: "Settings" },
+  { href: "/files/", label: "File Browser", external: true },
 ];
 
 type DashboardAuthSession = {
@@ -160,7 +161,21 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </div>
           <nav className="flex-1 space-y-1 overflow-y-auto">
             {NAV_ITEMS.map((item) => {
-              const active = pathname === item.href;
+              const active = !item.external && pathname === item.href;
+              if (item.external) {
+                return (
+                  <a
+                    key={item.href}
+                    href={item.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-slate-300 transition hover:bg-slate-800/70"
+                  >
+                    {item.label}
+                    <span className="text-[10px] text-slate-500">&#x2197;</span>
+                  </a>
+                );
+              }
               return (
                 <Link
                   key={item.href}

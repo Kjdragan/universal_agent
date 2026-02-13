@@ -19,6 +19,8 @@ This is the source-of-truth explanation of exactly what was done to deploy Unive
 6. Manual webhook endpoint enabled:
    `https://api.clearspringcg.com/api/v1/hooks/youtube/manual`
 7. Both test paths returning `HTTP 202 Accepted`
+8. Optional best-effort mirroring of Composio YouTube playlist events from VPS into the local dev stack (reverse SSH tunnel)
+   - See: `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md`
 
 ## Architecture (What Talks To What)
 

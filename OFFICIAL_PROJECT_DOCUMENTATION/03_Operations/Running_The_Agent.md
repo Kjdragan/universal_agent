@@ -29,6 +29,23 @@ The project includes a modern, interactive Web UI built with **Gradio**. This pr
 uv run python -m universal_agent.api.gradio_app
 ```
 
+## 2b. Gateway Mode (Recommended Local Dev Stack)
+
+This starts the production-like local stack:
+- gateway (`:8002`)
+- API server (`:8001`)
+- Web UI (`:3000`)
+
+Launch:
+```bash
+./start_gateway.sh
+```
+
+If you want VPS YouTube Composio events mirrored into your local stack automatically, use:
+```bash
+./start_local_dev_with_youtube_forwarding.sh
+```
+
 ### Features
 
 - **Conversation Threading**: Clean chat interface with streaming responses.
