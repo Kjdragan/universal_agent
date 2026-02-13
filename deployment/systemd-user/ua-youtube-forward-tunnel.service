@@ -5,11 +5,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/kjdragan/lrepos/universal_agent
-ExecStart=/home/kjdragan/lrepos/universal_agent/scripts/forward_youtube_hooks_to_local.sh
+# Template unit: install via scripts/install_ua_youtube_forward_tunnel_user_service.sh
+# which renders __REPO_ROOT__ to your actual checkout path.
+WorkingDirectory=__REPO_ROOT__
+ExecStart=__REPO_ROOT__/scripts/forward_youtube_hooks_to_local.sh
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=default.target
-

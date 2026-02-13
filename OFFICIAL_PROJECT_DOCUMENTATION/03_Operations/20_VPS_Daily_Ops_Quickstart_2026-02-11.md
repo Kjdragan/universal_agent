@@ -10,6 +10,8 @@ Primary references:
 3. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/21_Web_Chat_And_Session_Security_Hardening_Explainer_2026-02-11.md`
 4. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/23_Agent_Workspace_Inspector_Skill_2026-02-11.md`
 5. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/26_VPS_Host_Security_Hardening_Runbook_2026-02-12.md`
+6. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/29_YouTube_Hook_Mirroring_VPS_To_Local_Reverse_Tunnel_Runbook_2026-02-13.md`
+7. `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/30_Local_Dev_Startup_With_Youtube_Forwarding_Tunnel_2026-02-13.md`
 
 ---
 
@@ -138,6 +140,16 @@ tail -f /var/log/nginx/access.log
 ```
 
 ---
+
+## YouTube Hook Mirroring Quick Check (VPS -> Local)
+Use this when you expect a playlist-add event to trigger both VPS processing and local mirroring.
+
+On VPS:
+```bash
+journalctl -u universal-agent-gateway --since '15 minutes ago' --no-pager | grep -E 'Hook ingress accepted|composio-youtube-trigger|Hook forward ok|Hook forward failed|Hook forward error' | tail -n 120 || true
+```
+
+If forwarding is failing because your laptop is offline, that is expected; VPS processing should still continue.
 
 ## Optional: Local Mirror for Remote Debugging
 

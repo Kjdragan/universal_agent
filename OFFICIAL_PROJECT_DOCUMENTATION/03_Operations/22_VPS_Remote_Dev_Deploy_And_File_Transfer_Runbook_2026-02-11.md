@@ -202,3 +202,13 @@ This would make “work in web UI only” practical while still moving assets/de
 3. Restart only required unit(s).
 4. Verify `systemctl is-active` and recent logs.
 5. Ask user to hard refresh and validate in UI.
+
+---
+
+## `vpsctl` helper (local)
+For safer/faster repetitive deploy loops, use:
+- `scripts/vpsctl.sh push <path...>`
+- `scripts/vpsctl.sh restart gateway|api|webui|telegram|all`
+- `scripts/vpsctl.sh logs gateway|api|webui|telegram`
+
+This uses only `scp`/`ssh` and preserves the “copy exact files + restart only what changed” workflow.
