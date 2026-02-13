@@ -14,8 +14,6 @@ import json
 import os
 from typing import Any
 
-from dotenv import load_dotenv
-
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
 
 
@@ -31,7 +29,29 @@ def _mapping_index(mappings: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 
 def main() -> int:
-    load_dotenv()
+    # Optional dotenv support. If python-dotenv isn't installed, continue with
+    # whatever environment is already set (and/or values loaded by your shell).
+    try:
+        from dotenv import load_dotenv  # type: ignore
+        load_dotenv()
+    except Exception:
+        # Minimal fallback: load KEY=VALUE lines from local .env if present.
+        env_path = os.path.join(os.getcwd(), ".env")
+        try:
+            if os.path.exists(env_path):
+                with open(env_path, "r", encoding="utf-8", errors="replace") as handle:
+                    for line in handle:
+                        stripped = line.strip()
+                        if not stripped or stripped.startswith("#") or "=" not in stripped:
+                            continue
+                        key, value = stripped.split("=", 1)
+                        key = key.strip()
+                        if not key:
+                            continue
+                        # Do not override already-set environment.
+                        os.environ.setdefault(key, value.strip())
+        except Exception:
+            pass
 
     cfg = load_ops_config()
     hooks = cfg.get("hooks", {}) if isinstance(cfg, dict) else {}
