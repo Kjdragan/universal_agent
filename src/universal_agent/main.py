@@ -7333,6 +7333,17 @@ async def process_turn(
     is_simple = (complexity == "SIMPLE") and not force_complex
 
     final_response_text = ""
+
+    def _stdin_is_interactive() -> bool:
+        """Return True when we're running in an interactive TTY.
+
+        Gateway/chron runs are non-interactive (no stdin), so we must never
+        block on `input()` for auth continuation.
+        """
+        try:
+            return bool(sys.stdin) and hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+        except Exception:
+            return False
     
     if is_simple:
         # Try Fast Path
@@ -7372,13 +7383,27 @@ async def process_turn(
                     type=EventType.AUTH_REQUIRED,
                     data={"auth_link": auth_link},
                 ))
+                auth_msg = (
+                    "Authentication required to continue.\n\n"
+                    f"Open this link in your browser:\n{auth_link}\n\n"
+                    "After completing authentication, re-run the job (or click Run again)."
+                )
                 print(f"\n{'=' * 80}")
                 print("🔐 AUTHENTICATION REQUIRED")
                 print(f"{'=' * 80}")
                 print(f"\nPlease open this link in your browser:\n")
                 print(f"  {auth_link}\n")
+                if not final_response_text:
+                    final_response_text = auth_msg
+                else:
+                    final_response_text = final_response_text.rstrip() + "\n\n" + auth_msg
+
+                # Headless execution (gateway/chron): do not block on stdin.
+                if not _stdin_is_interactive():
+                    break
+
                 print("After completing authentication, press Enter to continue...")
-                input()  # Non-blocking mock in headless, real input in CLI
+                input()
 
                 current_query = "I have completed the authentication. Please continue with the task."
                 iteration += 1
@@ -8575,6 +8600,19 @@ async def main(args: argparse.Namespace):
                                                 print(f"{'=' * 80}")
                                                 print(f"\nPlease open this link in your browser:\n")
                                                 print(f"  {event_result['auth_link']}\n")
+                                                auth_msg = (
+                                                    "Authentication required to continue.\n\n"
+                                                    f"Open this link in your browser:\n{event_result['auth_link']}\n\n"
+                                                    "After completing authentication, re-run the job."
+                                                )
+                                                if not final_response_text:
+                                                    final_response_text = auth_msg
+                                                else:
+                                                    final_response_text = final_response_text.rstrip() + "\n\n" + auth_msg
+
+                                                if not _stdin_is_interactive():
+                                                    break
+
                                                 print("After completing authentication, press Enter to continue...")
                                                 input()
                                                 next_input = "I have completed the authentication. Please continue with the task."
