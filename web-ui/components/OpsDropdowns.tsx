@@ -121,6 +121,7 @@ function safeJsonParse(v: string): { ok: true; data: Record<string, unknown> } |
 
 type OpsCtx = {
   sessions: SessionSummary[]; skills: SkillStatus[]; channels: ChannelStatus[]; approvals: ApprovalRecord[];
+  sessionsError: string | null;
   selected: string | null; setSelected: (id: string | null) => void;
   logTail: string; loading: boolean; heartbeatState: HeartbeatState; continuityState: SessionContinuityState; mergedEvents: SystemEventItem[];
   schedulingPushState: SchedulingPushState;
@@ -144,6 +145,7 @@ function useOps() { const c = useContext(OpsContext); if (!c) throw new Error("u
 
 export function OpsProvider({ children }: { children: React.ReactNode }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [skills, setSkills] = useState<SkillStatus[]>([]);
   const [channels, setChannels] = useState<ChannelStatus[]>([]);
   const [approvals, setApprovals] = useState<ApprovalRecord[]>([]);
@@ -182,15 +184,22 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
 
   const fetchSessions = useCallback(async () => {
     setLoading(true);
+    setSessionsError(null);
     try {
       const r = await fetch(`${API_BASE}/api/v1/ops/sessions`, { headers: buildHeaders() });
       if (!r.ok) {
-        throw new Error(`Ops sessions fetch failed (${r.status})`);
+        const dt = await r.text().catch(() => "");
+        setSessionsError(dt || `Ops sessions fetch failed (${r.status})`);
+        return;
       }
       const d = await r.json(); const ns = d.sessions || [];
       setSessions(ns);
       if (ns.length > 0) setSelected((p) => p ?? ns[0].session_id);
-    } catch (e) { console.error("Ops sessions fetch failed", e); }
+    } catch (e) {
+      // Avoid console.error here: Next dev overlays console errors, and this
+      // can happen transiently during local startup.
+      setSessionsError((e as Error).message || "Ops sessions fetch failed");
+    }
     finally { setLoading(false); }
   }, []);
 
@@ -608,11 +617,11 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
   }, [schedulingPushState.status, currentChatSessionId, selected, fetchHeartbeat, fetchSessionContinuityMetrics]);
 
   const val: OpsCtx = useMemo(() => ({
-    sessions, skills, channels, approvals, selected, setSelected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
+    sessions, sessionsError, skills, channels, approvals, selected, setSelected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
     deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, setOpsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, remoteSyncEnabled, remoteSyncStatus, remoteSyncError, remoteSyncSaving, loadRemoteSync, setRemoteSync, opsSchemaText, opsSchemaStatus, refreshAll,
-  }), [sessions, skills, channels, approvals, selected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
+  }), [sessions, sessionsError, skills, channels, approvals, selected, logTail, loading, heartbeatState, continuityState, mergedEvents, schedulingPushState,
     fetchSessions, fetchSkills, fetchChannels, fetchSessionContinuityMetrics, fetchApprovals, probeChannel, updateApproval, fetchLogs,
     deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession, opsConfigText, opsConfigStatus, opsConfigError,
     opsConfigSaving, loadOpsConfig, saveOpsConfig, remoteSyncEnabled, remoteSyncStatus, remoteSyncError, remoteSyncSaving, loadRemoteSync, setRemoteSync, opsSchemaText, opsSchemaStatus, refreshAll]);
@@ -623,7 +632,7 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
 // ---- Section Components ----
 
 export function SessionsSection() {
-  const { sessions, selected, setSelected, loading, logTail, fetchSessions, fetchLogs, deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession } = useOps();
+  const { sessions, sessionsError, selected, setSelected, loading, logTail, fetchSessions, fetchLogs, deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession } = useOps();
   const [attaching, setAttaching] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "running" | "idle" | "terminal">("all");
   const [sourceFilter, setSourceFilter] = useState<"all" | "chat" | "telegram" | "api" | "local">("all");
@@ -708,6 +717,11 @@ export function SessionsSection() {
           </select>
         </div>
         <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
+          {sessionsError && (
+            <div className="text-[10px] text-amber-400 whitespace-pre-wrap">
+              {sessionsError}
+            </div>
+          )}
           {filteredSessions.length === 0 && <div className="text-muted-foreground">No sessions found</div>}
           {filteredSessions.map((s) => (
             <button key={s.session_id} onClick={() => setSelected(s.session_id)} className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === s.session_id ? "border-primary text-primary" : "border-border/50 text-muted-foreground"}`}>
