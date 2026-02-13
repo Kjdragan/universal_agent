@@ -64,6 +64,11 @@ async def test_heartbeat_seeds_file(tmp_path, mock_gateway, mock_connection_mana
         assert seeded_file.exists()
         assert seeded_file.read_text() == "# Global Heartbeat Instructions"
 
+        # Also seed into workspace/memory/ for tooling conventions.
+        seeded_mem_file = workspace / "memory" / "HEARTBEAT.md"
+        assert seeded_mem_file.exists()
+        assert seeded_mem_file.read_text() == "# Global Heartbeat Instructions"
+
 @pytest.mark.asyncio
 async def test_heartbeat_does_not_overwrite(tmp_path, mock_gateway, mock_connection_manager):
     """Verify that existing HEARTBEAT.md is NOT overwritten."""

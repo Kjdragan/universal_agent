@@ -331,6 +331,10 @@ class ProcessTurnAdapter:
         """
         if not self._initialized:
             await self.initialize()
+
+        # Propagate the gateway-provided run source (e.g., "heartbeat") into
+        # status events so the Web UI can treat background runs differently.
+        run_source = self.config.__dict__.get("_run_source", "user")
         
         # Emit session info
         yield AgentEvent(
@@ -345,7 +349,7 @@ class ProcessTurnAdapter:
         # Emit processing status
         yield AgentEvent(
             type=EventType.STATUS,
-            data={"status": "processing", "query": user_input[:100]},
+            data={"status": "processing", "query": user_input[:100], "source": run_source},
         )
         
         # Import here to avoid circular imports
@@ -401,6 +405,10 @@ class ProcessTurnAdapter:
         def event_callback(event: AgentEvent) -> None:
             """Callback to capture events from process_turn."""
             try:
+                # Ensure all status events carry a source so the UI can avoid
+                # showing "ABORT"/redirect UX for background runs (heartbeat).
+                if event.type == EventType.STATUS and isinstance(event.data, dict):
+                    event.data.setdefault("source", run_source)
                 event_queue.put_nowait(event)
             except Exception:
                 pass
