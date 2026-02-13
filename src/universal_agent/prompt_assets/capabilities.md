@@ -128,12 +128,42 @@ Main agent should pass video paths and desired operations in task description.
 - **research-specialist**: Sub-agent for a unified research pipeline: Search followed by automated Crawl & Refine.
 
   -> Delegate: `Task(subagent_type='research-specialist', ...)`
+- **data-analyst**: Statistical analysis, data processing, and visualization specialist.
+
+**WHEN TO DELEGATE:**
+- Task requires numerical analysis, statistics, or data science
+- Research results need quantitative comparison or trend analysis
+- Charts, graphs, or data visualizations are needed
+- Data needs to be extracted, transformed, or modeled
+
+**THIS SUB-AGENT:**
+- Uses Composio CodeInterpreter for sandboxed Python execution (pandas, numpy, scipy, matplotlib)
+- Generates charts and visualizations saved to work_products/analysis/
+- Produces structured findings as JSON for downstream phases
+- Handles data transformation, cleaning, and statistical modeling
+
+  -> Delegate: `Task(subagent_type='data-analyst', ...)`
 - **professor**: Academic oversight and skill creation.
   -> Delegate: `Task(subagent_type='professor', ...)`
 - **scribe**: Memory logging and fact recording.
   -> Delegate: `Task(subagent_type='scribe', ...)`
 
 #### 🏢 Operations & Communication
+- **action-coordinator**: Multi-channel delivery and real-world side effects coordinator.
+
+**WHEN TO DELEGATE:**
+- Task requires delivering work products via email, Slack, Discord, or other channels
+- Task requires scheduling calendar events or follow-up reminders
+- Task requires multi-channel notification (email + Slack + calendar in one flow)
+- Task requires setting up monitoring or recurring actions
+
+**THIS SUB-AGENT:**
+- Uses Composio Gmail, Calendar, Slack, Drive for authenticated delivery
+- Bridges local files to Composio via upload_to_composio for attachments
+- Coordinates multi-channel delivery in a single workflow
+- Schedules follow-ups and reminders via Google Calendar
+
+  -> Delegate: `Task(subagent_type='action-coordinator', ...)`
 - **slack-expert**: Expert for Slack workspace interactions.
 
 **WHEN TO DELEGATE:**

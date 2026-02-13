@@ -521,7 +521,14 @@ class SubAgentDecomposer(Decomposer):
 
 ## Instructions
 Create `macro_tasks.json` with phases and tasks for this request.
-Consider available sub-agents: research-specialist, report-writer.
+
+**Composio-Anchored Decomposition:** Prefer Composio tools for deterministic atomic actions (search, email, calendar, code execution). Use subagents for multi-step workflows. Use local MCP tools for processing. Define handoff points between local phases and the Composio backbone.
+
+**Available Sub-Agents:** research-specialist, report-writer, image-expert, video-creation-expert, video-remotion-expert, mermaid-expert, browserbase, slack-expert, youtube-explainer-expert, system-configuration-agent, data-analyst, action-coordinator.
+
+**Available Composio Toolkits:** composio_search, gmail, googlecalendar, slack, codeinterpreter, googledrive, googlesheets, googledocs, github, notion, discord, youtube, twitter, airtable, hubspot, linear, browserbase, filetool, sqltool.
+
+**Think beyond research-and-report.** Consider: Does this need computation? Media creation? Real-world actions? Monitoring? Code/engineering? Knowledge capture?
 """
 
     def _parse_macro_tasks(self, macro_tasks: Dict[str, Any], original_request: str) -> List[Task]:

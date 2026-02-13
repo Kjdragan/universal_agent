@@ -777,4 +777,44 @@ The goal is simple: when someone says "do something amazing," the agent should t
 
 ---
 
-*Next steps: Implement Phase 1 (Expand Task Decomposer) and Phase 3 (Build data-analysis skill) as the highest-impact changes.*
+## 11. Implementation Status (2026-02-13)
+
+All critical-path changes have been implemented:
+
+### Completed Changes
+
+| Step | File(s) | What Changed |
+|------|---------|--------------|
+| 1. Task Decomposer Rewrite | `.claude/agents/task-decomposer.md` | Full capability matrix (20+ Composio toolkits, 12 subagent coordinators, 8 local MCP tools), 6 execution patterns, `macro_tasks.json` v2 schema with `tool_type`, `handoff`, `evaluation_gate`, `parallel` fields |
+| 2. Decomposition Prompt | `src/universal_agent/urw/decomposer.py` | Expanded from 2 delegates to full list. Added Composio-anchored decomposition principle and all toolkit slugs. |
+| 3. System Prompt | `src/universal_agent/main.py` | Added "Capability Domains" block with 8 domains. Softened mandatory report delegation to be one pattern among many. Added autonomy guidelines. |
+| 4. Data Analyst Agent | `.claude/agents/data-analyst.md` (NEW) | Composio CodeInterpreter-based analysis, charts, structured findings. Handoff-aware. |
+| 5. Action Coordinator Agent | `.claude/agents/action-coordinator.md` (NEW) | Multi-channel delivery via Composio Gmail/Calendar/Slack/Drive. Bridges local files to Composio backbone. |
+| 6. Post-Task Hook | `src/universal_agent/main.py` `on_post_task_guidance` | Graph-aware next-step guidance per subagent type. After research-specialist completes, suggests data-analyst/report-writer/image-expert instead of defaulting to report. |
+| 7. Capabilities Registry | `src/universal_agent/prompt_assets/capabilities.md` | Added `data-analyst` and `action-coordinator` entries with delegation instructions. |
+| 8. Skills Map | `src/universal_agent/main.py` `SUBAGENT_EXPECTED_SKILLS` | Registered both new subagents in the hook system. |
+
+### Core Architectural Decision: Composio-Anchored Decomposition
+
+The decomposition philosophy preserves the existing Composio-first design:
+
+```
+Composio Tools = Deterministic Hands (OAuth-authenticated atomic actions)
+Local MCP Tools = Processing Brain (crawl, compile, render, generate)
+Subagents       = Workflow Coordinators (orchestrate Composio + local sequences)
+```
+
+**Not every phase uses Composio.** Pure-local phases (Manim rendering, image generation, PDF compilation) are first-class. The key is that local-only phases define **handoff points** — explicit artifact bridges back into the Composio backbone for downstream delivery phases.
+
+### How Execution Patterns Map to Task() Dispatch
+
+Each pattern is implemented through the existing Claude Agent SDK `Task(subagent_type=...)` dispatch:
+
+| Pattern | Task() Sequence |
+|---------|----------------|
+| Linear Pipeline | `Task(research-specialist)` → `Task(report-writer)` → `GMAIL_SEND_EMAIL` |
+| Fan-Out | Multiple parallel `Task(research-specialist)` → `Task(data-analyst)` → `Task(report-writer)` |
+| Iterative Deepening | `Task(research-specialist)` → `Task(data-analyst)` → evaluate → loop back or continue |
+| Pipeline + Side Effects | `Task(research-specialist)` → `Task(report-writer)` + `GMAIL_*` + `SLACK_*` + `GOOGLECALENDAR_*` |
+| Recursive Refinement | `Task(image-expert)` → evaluate → `Task(image-expert)` with feedback → ... |
+| Monitor-React | `Task(system-configuration-agent)` to create cron → cron triggers → `Task(research-specialist)` → `Task(action-coordinator)` |
