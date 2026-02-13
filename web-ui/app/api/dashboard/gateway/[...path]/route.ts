@@ -79,13 +79,26 @@ async function proxyRequest(request: NextRequest, path: string[]) {
   const method = request.method.toUpperCase();
   const body = method === "GET" || method === "HEAD" ? undefined : await request.arrayBuffer();
 
-  const upstreamResponse = await fetch(upstreamUrl, {
-    method,
-    headers,
-    body,
-    cache: "no-store",
-    redirect: "manual",
-  });
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(upstreamUrl, {
+      method,
+      headers,
+      body,
+      cache: "no-store",
+      redirect: "manual",
+    });
+  } catch (err) {
+    // Most common local-dev failure: web UI started before gateway is reachable.
+    return NextResponse.json(
+      {
+        detail: "Gateway upstream unavailable.",
+        upstream: upstreamUrl.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      },
+      { status: 502 },
+    );
+  }
 
   const responseHeaders = new Headers();
   upstreamResponse.headers.forEach((value, key) => {
