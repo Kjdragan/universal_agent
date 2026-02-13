@@ -1,80 +1,77 @@
 # 27. Universal Agent Deployment Runbook (2026-02-12)
 
 ## Purpose
+This runbook defines the standard production deployment path for the VPS.
 
-This runbook defines the standard procedure for deploying changes to the production VPS.
+Target:
+1. Host: `root@187.77.16.29`
+2. App dir: `/opt/universal_agent`
+3. Services:
+   1. `universal-agent-gateway`
+   2. `universal-agent-api`
+   3. `universal-agent-webui`
+   4. `universal-agent-telegram`
 
-**Target Environment:**
+## Important Reality
+The VPS app directory is not guaranteed to be a git clone.
 
-- **Host**: `187.77.16.29`
-- **User**: `root`
-- **Directory**: `/opt/universal_agent`
-- **Services**: `universal-agent-webui`, `universal-agent-gateway`
+Do not assume:
+1. `git pull` works on VPS.
+2. VPS branch state matches local branch state.
 
-## Prerequisite
+Deployment must be file-sync based from local workspace.
 
-- SSH access to the VPS via key (`~/.ssh/id_ed25519`).
-- Local repository on `dev-telegram` (or main) branch pushed to remote.
+## Recommended Workflow
+1. Commit local changes.
+2. Push branch to remote (for source-of-truth history).
+3. Deploy local `HEAD` to VPS via `scripts/deploy_vps.sh`.
+4. Validate services and public endpoints.
 
-## Deployment Method
-
-### Option 1: Automated Script (Recommended)
-
-Run the deployment script from the project root:
+## Standard Command
+Run from local project root:
 
 ```bash
 ./scripts/deploy_vps.sh
 ```
 
-This script performs the following:
+What this script does:
+1. `rsync` local workspace to `/opt/universal_agent` (excluding runtime state/secrets).
+2. Preserves `.env` on VPS.
+3. Reapplies secure `.env` mode (`root:ua`, `640`).
+4. Runs `uv sync` as user `ua` when available.
+5. Runs `npm install && npm run build` for `web-ui` as user `ua`.
+6. Restarts all core services.
+7. Verifies service health and public endpoint responses.
+8. Verifies ops auth gate (`401` unauth, `200` auth) when token is present.
 
-1. SSH into the VPS.
-2. Navigates to the application directory.
-3. Pulls the latest code (`git pull`).
-4. Syncs Python dependencies (`uv sync`).
-5. Restarts the systemd services.
-6. Verifies service status.
+## Why this method
+1. Works even when `/opt/universal_agent` is not a git repository.
+2. Prevents accidental `.env` overwrite.
+3. Keeps ownership consistent so builds do not fail with `EACCES`.
+4. Produces deterministic deploy behavior from your local tested state.
 
-### Option 2: Manual Deployment
+## Failure Handling
+If deploy fails:
+1. Check build errors first:
+   1. `journalctl -u universal-agent-webui -n 200 --no-pager`
+2. Check gateway/api status:
+   1. `journalctl -u universal-agent-gateway -n 200 --no-pager`
+   2. `journalctl -u universal-agent-api -n 200 --no-pager`
+3. Re-run deploy after fixing source errors locally.
 
-If the script fails or you need granular control:
+## Security Guardrails
+1. Never overwrite VPS `.env` blindly from local.
+2. Keep deployment profile in VPS mode:
+   1. `UA_DEPLOYMENT_PROFILE=vps`
+3. Ensure ops/internal tokens remain present in VPS `.env`.
+4. Keep SSH key-based access and host hardening controls active.
 
-1. **SSH into the VPS:**
-
-   ```bash
-   ssh -i ~/.ssh/id_ed25519 root@187.77.16.29
-   ```
-
-2. **Update Code:**
-
-   ```bash
-   cd /opt/universal_agent
-   git pull
-   ```
-
-3. **Update Dependencies:**
-
-   ```bash
-   uv sync
-   ```
-
-   *(Note: Ensure `uv` is in path, or use `/root/.cargo/bin/uv` if needed)*
-
-4. **Restart Services:**
-
-   ```bash
-   systemctl restart universal-agent-webui
-   systemctl restart universal-agent-gateway
-   ```
-
-5. **Verify Status:**
-
-   ```bash
-   systemctl status universal-agent-webui universal-agent-gateway
-   ```
-
-## Troubleshooting
-
-- **Git Auth Errors:** Ensure the VPS has a valid deployment key or SSH agent forwarding is enabled.
-- **Permission Errors:** Ensure you are running as `root` or have sudo privileges.
-- **Service Failures:** Check logs: `journalctl -u universal-agent-gateway -f`.
+## Quick Post-Deploy Check
+```bash
+ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+for s in universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram; do
+  printf "%s=" "$s"; systemctl is-active "$s"
+done
+curl -s https://api.clearspringcg.com/api/v1/health | head -c 220; echo
+'
+```
