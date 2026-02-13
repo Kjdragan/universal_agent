@@ -785,6 +785,21 @@ class HeartbeatService:
             except Exception as e:
                 logger.warning("Failed to seed HEARTBEAT.md for %s: %s", session.session_id, e)
 
+        # Some agent/tooling conventions look for memory files under
+        # <workspace>/memory/. Seed there too (without overwriting) so heartbeat
+        # runs don't fail if the model chooses that path.
+        try:
+            mem_dir = workspace / "memory"
+            mem_dir.mkdir(exist_ok=True)
+            mem_hb_file = mem_dir / HEARTBEAT_FILE
+            if not mem_hb_file.exists():
+                if hb_file.exists():
+                    shutil.copy(hb_file, mem_hb_file)
+                elif GLOBAL_HEARTBEAT_PATH.exists():
+                    shutil.copy(GLOBAL_HEARTBEAT_PATH, mem_hb_file)
+        except Exception as e:
+            logger.debug("Failed to seed memory/HEARTBEAT.md for %s: %s", session.session_id, e)
+
         heartbeat_content = ""
         if hb_file.exists():
             heartbeat_content = hb_file.read_text()
