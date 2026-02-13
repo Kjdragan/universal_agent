@@ -1,0 +1,15 @@
+[Unit]
+Description=UA reverse tunnel (VPS -> local gateway) for YouTube hook mirroring
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/kjdragan/lrepos/universal_agent
+ExecStart=/home/kjdragan/lrepos/universal_agent/scripts/forward_youtube_hooks_to_local.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+

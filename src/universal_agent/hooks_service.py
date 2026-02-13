@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import Request, Response
 from pydantic import BaseModel, Field
 
@@ -89,6 +90,12 @@ class HooksService:
         self.config = self._load_config()
         self.transform_cache = {}
         self._seen_webhook_ids: Dict[str, float] = {}
+        self._forward_youtube_manual_url = (os.getenv("UA_HOOKS_FORWARD_YOUTUBE_MANUAL_URL") or "").strip()
+        self._forward_youtube_token = (os.getenv("UA_HOOKS_FORWARD_YOUTUBE_TOKEN") or "").strip()
+        # Best-effort forwarding must not degrade primary hook handling when the
+        # local stack is offline. Use a simple cooldown to avoid log spam.
+        self._forward_failures = 0
+        self._forward_disabled_until_ts = 0.0
 
     def _load_config(self) -> HooksConfig:
         ops_config = load_ops_config()
@@ -180,6 +187,7 @@ class HooksService:
                     )
 
                 asyncio.create_task(self._dispatch_action(action))
+                asyncio.create_task(self._maybe_forward_youtube_manual(mapping_id, action))
                 logger.info(
                     "Hook ingress accepted path=%s mapping=%s action=%s",
                     subpath,
@@ -200,6 +208,82 @@ class HooksService:
         except Exception as e:
             logger.exception("Error processing hook")
             return Response(json.dumps({"ok": False, "error": str(e)}), status_code=500, media_type="application/json")
+
+    def _extract_action_field(self, message: str, key: str) -> str:
+        if not message:
+            return ""
+        prefix = f"{key}:"
+        for line in message.splitlines():
+            stripped = line.strip()
+            if not stripped.lower().startswith(prefix.lower()):
+                continue
+            return stripped.split(":", 1)[1].strip()
+        return ""
+
+    async def _maybe_forward_youtube_manual(self, mapping_id: str, action: HookAction) -> None:
+        """
+        Optional YouTube hook mirroring:
+
+        If this gateway receives a Composio YouTube playlist webhook (mapping id
+        'composio-youtube-trigger'), optionally forward a normalized payload to a
+        secondary UA gateway running elsewhere (typically a local dev stack).
+
+        This is disabled unless `UA_HOOKS_FORWARD_YOUTUBE_MANUAL_URL` is set.
+        """
+        url = self._forward_youtube_manual_url
+        if not url:
+            return
+        now = time.time()
+        if self._forward_disabled_until_ts and now < self._forward_disabled_until_ts:
+            return
+        if (mapping_id or "").strip().lower() != "composio-youtube-trigger":
+            return
+        if action.kind != "agent" or not action.message:
+            return
+
+        video_url = self._extract_action_field(action.message, "video_url")
+        if not video_url:
+            return
+        video_id = self._extract_action_field(action.message, "video_id")
+        mode = self._extract_action_field(action.message, "mode")
+        allow_degraded_raw = self._extract_action_field(action.message, "allow_degraded_transcript_only")
+        allow_degraded = True
+        if allow_degraded_raw:
+            allow_degraded = allow_degraded_raw.strip().lower() in {"1", "true", "yes", "on"}
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._forward_youtube_token:
+            headers["Authorization"] = f"Bearer {self._forward_youtube_token}"
+        payload = {
+            "video_url": video_url,
+            "video_id": video_id,
+            "mode": mode or "explainer_plus_code",
+            "allow_degraded_transcript_only": allow_degraded,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+            if 200 <= resp.status_code < 300:
+                self._forward_failures = 0
+                self._forward_disabled_until_ts = 0.0
+                logger.info("Hook forward ok mapping=%s url=%s status=%s", mapping_id, url, resp.status_code)
+            else:
+                self._forward_failures += 1
+                if self._forward_failures >= 3:
+                    self._forward_disabled_until_ts = now + 300.0
+                logger.warning(
+                    "Hook forward failed mapping=%s url=%s status=%s body=%s",
+                    mapping_id,
+                    url,
+                    resp.status_code,
+                    (resp.text or "")[:200],
+                )
+        except Exception as exc:
+            self._forward_failures += 1
+            if self._forward_failures >= 3:
+                self._forward_disabled_until_ts = now + 300.0
+            logger.warning("Hook forward error mapping=%s url=%s err=%s", mapping_id, url, exc)
 
     def _extract_token(self, request: Request) -> Optional[str]:
         auth = request.headers.get("Authorization", "")
