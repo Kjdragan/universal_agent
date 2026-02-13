@@ -51,6 +51,8 @@ from functools import wraps
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+import hashlib
+import time
 
 # Setup logger for MCP server
 logger = logging.getLogger("mcp_server")
@@ -165,6 +167,9 @@ def trace_tool_output(func):
 
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
+            blocked = _tool_circuit_breaker_precheck(func.__name__, kwargs)
+            if blocked is not None:
+                return _attach_trace_output(blocked)
             result = await func(*args, **kwargs)
             if isinstance(result, str):
                 return _attach_trace_output(result)
@@ -174,12 +179,104 @@ def trace_tool_output(func):
 
     @wraps(func)
     def sync_wrapper(*args, **kwargs):
+        blocked = _tool_circuit_breaker_precheck(func.__name__, kwargs)
+        if blocked is not None:
+            return _attach_trace_output(blocked)
         result = func(*args, **kwargs)
         if isinstance(result, str):
             return _attach_trace_output(result)
         return result
 
     return sync_wrapper
+
+
+# =============================================================================
+# TOOL CIRCUIT BREAKERS (RUNAWAY GUARDRAILS)
+# =============================================================================
+
+_SESSION_TOOL_TOTAL_CALLS: dict[str, int] = {}
+_SESSION_TOOL_CALLS_BY_NAME: dict[str, dict[str, int]] = {}
+
+
+def _load_session_policy_limits(workspace: str | None) -> dict[str, Any]:
+    if not workspace:
+        return {}
+    try:
+        policy_path = Path(workspace) / "session_policy.json"
+        if not policy_path.exists():
+            return {}
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return {}
+        limits = payload.get("limits") or {}
+        return limits if isinstance(limits, dict) else {}
+    except Exception:
+        return {}
+
+
+def _tool_circuit_breaker_precheck(tool_name: str, tool_input: dict[str, Any] | None) -> str | None:
+    """
+    Best-effort tool-side guardrail to prevent runaway loops from burning tool budget.
+
+    This is intentionally conservative:
+    - Only enforces limits when a session workspace can be resolved.
+    - Uses session_policy.json limits when present.
+    - Otherwise does nothing (so we don't unexpectedly break ad-hoc usage).
+    """
+    workspace = _resolve_workspace()
+    if not workspace:
+        return None
+
+    limits = _load_session_policy_limits(workspace)
+    max_total = limits.get("max_tool_calls")
+    max_by_tool = limits.get("max_tool_calls_by_tool") or {}
+
+    # Only enforce when explicitly set to a positive integer.
+    try:
+        max_total_int = int(max_total) if max_total is not None else 0
+    except Exception:
+        max_total_int = 0
+
+    max_tool_int = 0
+    if isinstance(max_by_tool, dict):
+        try:
+            max_tool_int = int(max_by_tool.get(tool_name) or 0)
+        except Exception:
+            max_tool_int = 0
+
+    # Increment counts (pre-execution).
+    _SESSION_TOOL_TOTAL_CALLS[workspace] = int(_SESSION_TOOL_TOTAL_CALLS.get(workspace, 0)) + 1
+    per_tool = _SESSION_TOOL_CALLS_BY_NAME.setdefault(workspace, {})
+    per_tool[tool_name] = int(per_tool.get(tool_name, 0)) + 1
+
+    total_calls = _SESSION_TOOL_TOTAL_CALLS[workspace]
+    tool_calls = per_tool[tool_name]
+
+    if max_total_int > 0 and total_calls > max_total_int:
+        return json.dumps(
+            {
+                "error": "Tool circuit breaker: max_tool_calls exceeded for this session.",
+                "tool": tool_name,
+                "total_calls": total_calls,
+                "max_tool_calls": max_total_int,
+                "workspace": workspace,
+                "blocked_by": "session_policy",
+            }
+        )
+
+    if max_tool_int > 0 and tool_calls > max_tool_int:
+        return json.dumps(
+            {
+                "error": "Tool circuit breaker: per-tool max_tool_calls exceeded for this session.",
+                "tool": tool_name,
+                "tool_calls": tool_calls,
+                "max_tool_calls_for_tool": max_tool_int,
+                "workspace": workspace,
+                "blocked_by": "session_policy",
+            }
+        )
+
+    return None
 
 
 try:
@@ -3461,6 +3558,107 @@ def generate_image(
         output_dir = str(session_media_dir)
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(artifacts_media_dir, exist_ok=True)
+
+        def _looks_like_copy_only_prompt(text: str | None) -> bool:
+            t = (text or "").strip().lower()
+            if not t:
+                return False
+            # These phrases were present in the runaway loop. Treat them as "copy/preserve", not "edit".
+            copy_markers = (
+                "no changes",
+                "no change",
+                "no modifications",
+                "zero modifications",
+                "exactly as is",
+                "exactly the same",
+                "identical copy",
+                "duplicate",
+                "copy this",
+                "direct copy",
+                "file copy",
+                "preserve",
+                "as provided",
+                "as shown",
+                "recreate this exact image",
+                "regenerate this exact image",
+            )
+            return any(marker in t for marker in copy_markers)
+
+        # If the request is "copy/duplicate with no changes", do a real filesystem copy
+        # instead of invoking the image model (prevents runaway re-generation + billing).
+        if input_image_path and _looks_like_copy_only_prompt(prompt):
+            import shutil
+
+            # Safety: prevent absolute/path-traversal filename overrides.
+            requested_name = os.path.basename(str(output_filename or "").strip())
+            if not requested_name:
+                requested_name = os.path.basename(str(input_image_path).strip()) or "image_copy.png"
+            if not requested_name.lower().endswith(".png"):
+                requested_name = f"{requested_name}.png"
+
+            dst_path = Path(output_dir).resolve() / requested_name
+            src_path = Path(input_image_path).resolve()
+
+            # Ensure destination directory exists.
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Idempotent copy: if destination already exists and matches source size+hash, no-op.
+            def _sha256(path: Path) -> str:
+                h = hashlib.sha256()
+                with open(path, "rb") as f:
+                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                        h.update(chunk)
+                return h.hexdigest()
+
+            try:
+                if dst_path.exists() and src_path.exists():
+                    if dst_path.stat().st_size == src_path.stat().st_size and _sha256(dst_path) == _sha256(src_path):
+                        pass
+                    else:
+                        shutil.copy2(src_path, dst_path)
+                else:
+                    shutil.copy2(src_path, dst_path)
+            except Exception as exc:
+                return json.dumps(
+                    {
+                        "error": f"Image copy failed: {exc}",
+                        "input_image_path": str(src_path),
+                        "output_path": str(dst_path),
+                    }
+                )
+
+            # If source is already under artifacts/, do not create a new persistent artifact.
+            persistent_path = None
+            try:
+                artifacts_root = Path(_resolve_artifacts_root()).resolve()
+                if _is_within_root(str(artifacts_root), str(src_path)):
+                    persistent_path = str(src_path)
+            except Exception:
+                persistent_path = None
+
+            size_bytes = dst_path.stat().st_size if dst_path.exists() else None
+            width = height = None
+            try:
+                img = Image.open(dst_path)
+                width, height = img.size
+            except Exception:
+                pass
+
+            result = {
+                "success": True,
+                "output_path": str(dst_path),
+                "session_output_path": str(dst_path),
+                "size_bytes": size_bytes,
+                "text_output": None,
+                "copy_mode": True,
+                "copy_source": str(src_path),
+            }
+            if width is not None and height is not None:
+                result["width_px"] = width
+                result["height_px"] = height
+            if persistent_path is not None:
+                result["persistent_path"] = persistent_path
+            return json.dumps(result, indent=2)
 
         # Prepare content for generation
         parts = []

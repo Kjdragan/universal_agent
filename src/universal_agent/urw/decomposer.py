@@ -526,7 +526,11 @@ Create `macro_tasks.json` with phases and tasks for this request.
 
 **Available Sub-Agents:** research-specialist, report-writer, image-expert, video-creation-expert, video-remotion-expert, mermaid-expert, browserbase, slack-expert, youtube-explainer-expert, system-configuration-agent, data-analyst, action-coordinator.
 
-**Available Composio Toolkits:** composio_search, gmail, googlecalendar, slack, codeinterpreter, googledrive, googlesheets, googledocs, github, notion, discord, youtube, twitter, airtable, hubspot, linear, browserbase, filetool, sqltool.
+**Available Composio Toolkits:** composio_search, gmail, googlecalendar, slack, codeinterpreter, googledrive, googlesheets, googledocs, github, notion, discord, youtube, airtable, hubspot, linear, browserbase, filetool, sqltool.
+
+**X (Twitter) trends:** Use the `grok-x-trends` skill (xAI `x_search`), not a Composio toolkit.
+
+**Weather:** Use the `openweather` skill for current + forecast for any location.
 
 **Think beyond research-and-report.** Consider: Does this need computation? Media creation? Real-world actions? Monitoring? Code/engineering? Knowledge capture?
 """

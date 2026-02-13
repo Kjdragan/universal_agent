@@ -1,6 +1,6 @@
 <!-- Agent Capabilities Registry -->
 
-<!-- Generated: 2026-02-12 20:21:23 -->
+<!-- Generated: 2026-02-13 15:30:35 -->
 
 ### 🤖 Specialist Agents (Micro-Agents)
 Delegate full workflows to these specialists based on value-add.
@@ -8,6 +8,15 @@ Delegate full workflows to these specialists based on value-add.
 #### 🛠 General Tools
 - **Freelance-scout**: Internal specialized agent.
   -> Delegate: `Task(subagent_type='Freelance-scout', ...)`
+- **action-coordinator**: **Sub-Agent Purpose:** Multi-channel delivery and real-world side effects.
+
+**WHEN TO USE:**
+- Task requires delivering work products via email, Slack, Discord, or other channels
+- Task requires scheduling calendar events or follow-up reminders
+- Task requires multi-channel notification (email + Slack + calendar in one flow)
+- Task requires setting up monitoring or recurring actions via Cron
+
+  -> Delegate: `Task(subagent_type='action-coordinator', ...)`
 - **browserbase**: Expert for browser automation using Browserbase cloud infrastructure.
 
 **WHEN TO DELEGATE:**
@@ -27,6 +36,15 @@ Delegate full workflows to these specialists based on value-add.
 - Saves artifacts to work_products/browser/
 
   -> Delegate: `Task(subagent_type='browserbase', ...)`
+- **data-analyst**: **Sub-Agent Purpose:** Statistical analysis, data processing, and visualization.
+
+**WHEN TO USE:**
+- Task requires numerical analysis, statistics, or data science
+- Research results need quantitative comparison or trend analysis
+- Charts, graphs, or data visualizations are needed
+- Data needs to be extracted, transformed, or modeled
+
+  -> Delegate: `Task(subagent_type='data-analyst', ...)`
 - **evaluation-judge**: **Sub-Agent Purpose:** Evaluate task completion by inspecting workspace artifacts.
 
 **WHEN TO USE:**
@@ -37,7 +55,7 @@ Delegate full workflows to these specialists based on value-add.
   -> Delegate: `Task(subagent_type='evaluation-judge', ...)`
 - **mermaid-expert**: Create Mermaid diagrams for flowcharts, sequences, ERDs, and architectures. Masters syntax for all diagram types and styling. Use PROACTIVELY for visual documentation, system diagrams, or process flows.
   -> Delegate: `Task(subagent_type='mermaid-expert', ...)`
-- **report-writer**: Multi-phase research report generator.
+- **report-writer**: Multi-phase research report generator with image integration support.
   -> Delegate: `Task(subagent_type='report-writer', ...)`
 - **youtube-explainer-expert**: MANDATORY delegation target for YouTube tutorial learning runs, including webhook-triggered playlist events.
 
@@ -75,13 +93,11 @@ This sub-agent:
 - Report-writer needs visual assets for a report
 
 **THIS SUB-AGENT:**
-- Generates images using Gemini (default model: `gemini-2.5-flash-image`)
-- Valid models: `gemini-2.5-flash-image`, `gemini-2.0-flash-exp-image-generation`. Do NOT guess other model names.
+- Generates images using Gemini (default: `gemini-2.5-flash-image`)
 - Edits existing images with natural language instructions
 - Creates infographics and visual content for reports
-- Writes an image manifest (`work_products/media/manifest.json`) for report integration
-- Saves outputs to work_products/media/
-- For reports: generates 3-6 images mapped to outline sections via `section_hint`
+- Writes an image manifest (`work_products/media/manifest.json`) so other agents can consume outputs
+- Saves all outputs to `work_products/media/`
 
   -> Delegate: `Task(subagent_type='image-expert', ...)`
 - **video-creation-expert**: 🎬 MANDATORY DELEGATION TARGET for ALL video and audio tasks.
@@ -128,42 +144,12 @@ Main agent should pass video paths and desired operations in task description.
 - **research-specialist**: Sub-agent for a unified research pipeline: Search followed by automated Crawl & Refine.
 
   -> Delegate: `Task(subagent_type='research-specialist', ...)`
-- **data-analyst**: Statistical analysis, data processing, and visualization specialist.
-
-**WHEN TO DELEGATE:**
-- Task requires numerical analysis, statistics, or data science
-- Research results need quantitative comparison or trend analysis
-- Charts, graphs, or data visualizations are needed
-- Data needs to be extracted, transformed, or modeled
-
-**THIS SUB-AGENT:**
-- Uses Composio CodeInterpreter for sandboxed Python execution (pandas, numpy, scipy, matplotlib)
-- Generates charts and visualizations saved to work_products/analysis/
-- Produces structured findings as JSON for downstream phases
-- Handles data transformation, cleaning, and statistical modeling
-
-  -> Delegate: `Task(subagent_type='data-analyst', ...)`
 - **professor**: Academic oversight and skill creation.
   -> Delegate: `Task(subagent_type='professor', ...)`
 - **scribe**: Memory logging and fact recording.
   -> Delegate: `Task(subagent_type='scribe', ...)`
 
 #### 🏢 Operations & Communication
-- **action-coordinator**: Multi-channel delivery and real-world side effects coordinator.
-
-**WHEN TO DELEGATE:**
-- Task requires delivering work products via email, Slack, Discord, or other channels
-- Task requires scheduling calendar events or follow-up reminders
-- Task requires multi-channel notification (email + Slack + calendar in one flow)
-- Task requires setting up monitoring or recurring actions
-
-**THIS SUB-AGENT:**
-- Uses Composio Gmail, Calendar, Slack, Drive for authenticated delivery
-- Bridges local files to Composio via upload_to_composio for attachments
-- Coordinates multi-channel delivery in a single workflow
-- Schedules follow-ups and reminders via Google Calendar
-
-  -> Delegate: `Task(subagent_type='action-coordinator', ...)`
 - **slack-expert**: Expert for Slack workspace interactions.
 
 **WHEN TO DELEGATE:**
@@ -493,6 +479,22 @@ metadata:
       label: Install goplaces (brew)
 ```
 
+#### grok-x-trends
+Get "what's trending" on X (Twitter) for a given query using Grok/xAI's `x_search` tool via the xAI Responses API.
+Use when the user asks for trending topics, hot takes, or high-engagement posts on X about a topic, and Composio X/Twitter tooling is unavailable or unreliable.
+
+Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/grok-x-trends/SKILL.md`
+```yaml
+name: grok-x-trends
+description: 'Get "what''s trending" on X (Twitter) for a given query using Grok/xAI''s
+  `x_search` tool via the xAI Responses API.
+
+  Use when the user asks for trending topics, hot takes, or high-engagement posts
+  on X about a topic, and Composio X/Twitter tooling is unavailable or unreliable.
+
+  '
+```
+
 #### image-generation
 AI-powered image generation and editing using Gemini. Use when Claude needs to: (1) Generate images from text descriptions, (2) Edit existing images with instructions, (3) Create infographics or charts, (4) Generate visual assets for reports/presentations, (5) Work with .png, .jpg, .jpeg, .webp files for editing.
 Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/image-generation/SKILL.md`
@@ -739,6 +741,28 @@ metadata:
 
 #### ~~obsidian~~ (Unavailable)
 > **Reason**: Missing binary: obsidian-cli
+#### openweather
+Fetch current weather and forecasts for any location using the OpenWeather API.
+Use when an agent needs current conditions or a short-term forecast for a city/address/zip or coordinates, and the API key is available in `.env` as OPENWEATHER_API_KEY.
+
+Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/openweather/SKILL.md`
+```yaml
+name: openweather
+description: 'Fetch current weather and forecasts for any location using the OpenWeather
+  API.
+
+  Use when an agent needs current conditions or a short-term forecast for a city/address/zip
+  or coordinates, and the API key is available in `.env` as OPENWEATHER_API_KEY.
+
+  '
+metadata:
+  clawdbot:
+    requires:
+      bins:
+      - python3
+      - uv
+```
+
 #### pdf
 Comprehensive PDF manipulation toolkit for extracting text and tables, creating new PDFs, merging/splitting documents, and handling forms. When Claude needs to fill in a PDF form or programmatically process, generate, or analyze PDF documents at scale.
 Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/pdf/SKILL.md`
@@ -1056,7 +1080,6 @@ description: Read documentation and code from open source GitHub repositories us
 - **Reddit** (`reddit`): Read and post content on Reddit communities.
 - **Slack** (`slack`): Team messaging and collaboration in Slack workspaces.
 - **Sqltool** (`sqltool`): Execute SQL queries against connected databases.
-- **Twitter** (`twitter`): Post, read, and manage content on Twitter/X.
 - **YouTube** (`youtube`): Search, manage, and publish content on YouTube.
 - **Telegram** (`telegram`): Send and receive messages via Telegram bots.
 - **Figma** (`figma`): Design file access and collaboration via Figma.

@@ -28,6 +28,7 @@ import signal
 import sqlite3
 import time
 import json
+import hashlib
 import re
 import uuid
 import inspect
@@ -226,6 +227,26 @@ class BudgetExceeded(RuntimeError):
         }
 
 
+class CircuitBreakerTriggered(RuntimeError):
+    """Raised when a runaway or non-converging tool loop is detected."""
+
+    def __init__(self, breaker_name: str, detail: dict[str, Any] | None = None):
+        self.breaker_name = str(breaker_name)
+        self.detail = detail or {}
+        message = f"Circuit breaker triggered: {self.breaker_name}"
+        if self.detail:
+            # Keep the exception message bounded for logs/transport.
+            try:
+                detail_preview = json.dumps(self.detail, sort_keys=True)[:800]
+            except Exception:
+                detail_preview = str(self.detail)[:800]
+            message = f"{message} - {detail_preview}"
+        super().__init__(message)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"breaker_name": self.breaker_name, "detail": self.detail}
+
+
 def _get_env_int(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None or value == "":
@@ -242,6 +263,169 @@ def load_budget_config() -> dict:
         "max_steps": _get_env_int("UA_MAX_STEPS", 50),
         "max_tool_calls": _get_env_int("UA_MAX_TOOL_CALLS", 250),
     }
+
+
+# =============================================================================
+# CIRCUIT BREAKERS (RUNAWAY / NON-CONVERGENCE GUARDRAILS)
+# =============================================================================
+
+_COPY_ONLY_PROMPT_MARKERS = (
+    "no changes",
+    "no change",
+    "no modifications",
+    "zero modifications",
+    "exactly as is",
+    "exactly the same",
+    "identical copy",
+    "duplicate",
+    "copy this",
+    "direct copy",
+    "file copy",
+    "preserve",
+    "as provided",
+    "as shown",
+    "recreate this exact image",
+    "regenerate this exact image",
+)
+
+
+def _normalize_prompt_for_circuit(prompt: str) -> str:
+    text = (prompt or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text[:400]
+
+
+def _looks_like_copy_only_prompt(prompt: str) -> bool:
+    text = _normalize_prompt_for_circuit(prompt)
+    return any(marker in text for marker in _COPY_ONLY_PROMPT_MARKERS)
+
+
+def _tool_signature_for_circuit(tool_name: str, tool_input: Any) -> tuple[str, dict[str, Any]]:
+    """
+    Produce a stable signature for detecting non-converging tool loops.
+
+    Returns (signature_hash, debug_payload) where debug_payload is safe for logs.
+    """
+    debug_payload: dict[str, Any] = {"tool": tool_name}
+    payload_obj: dict[str, Any]
+
+    if isinstance(tool_input, dict):
+        # Tool-specific normalization for known runaway patterns.
+        if tool_name.endswith("generate_image"):
+            prompt = str(tool_input.get("prompt") or "")
+            copy_only = _looks_like_copy_only_prompt(prompt)
+            payload_obj = {
+                "tool": tool_name,
+                "model_name": tool_input.get("model_name"),
+                "output_filename": tool_input.get("output_filename"),
+                "prompt": "<copy_only>" if copy_only else _normalize_prompt_for_circuit(prompt),
+            }
+            if not copy_only:
+                payload_obj["input_image_path"] = tool_input.get("input_image_path")
+            debug_payload.update(
+                {
+                    "model_name": payload_obj.get("model_name"),
+                    "output_filename": payload_obj.get("output_filename"),
+                    "prompt_norm": payload_obj.get("prompt"),
+                }
+            )
+        else:
+            # Generic normalization: strip common non-semantic keys that cause churn.
+            sanitized = dict(tool_input)
+            for k in ("thought", "current_step", "next_step", "session_id", "session"):
+                sanitized.pop(k, None)
+            payload_obj = {"tool": tool_name, "input": sanitized}
+            debug_payload["input_keys"] = sorted(list(sanitized.keys()))[:40]
+    else:
+        payload_obj = {"tool": tool_name, "input": str(tool_input)}
+
+    payload = json.dumps(payload_obj, sort_keys=True, default=str, separators=(",", ":"))
+    sig = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return sig, debug_payload
+
+
+def _maybe_trip_tool_loop_circuit_breaker(
+    *,
+    tool_name: str,
+    tool_input: Any,
+    step_id: str,
+    iteration: int,
+) -> None:
+    """
+    Detect repeated non-converging tool calls and stop the run.
+
+    This is intentionally conservative: it only trips on strongly repetitive patterns.
+    """
+    enabled = (os.getenv("UA_CIRCUIT_BREAKER_ENABLED", "1") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    if not enabled:
+        return
+
+    # These thresholds are separate from budgets: they guard against "same move forever".
+    max_consecutive_same_sig = _get_env_int("UA_CIRCUIT_BREAKER_MAX_CONSECUTIVE_SAME_SIGNATURE", 8)
+    max_generate_image_copy_only = _get_env_int("UA_CIRCUIT_BREAKER_MAX_GENERATE_IMAGE_COPY_ONLY_CALLS", 4)
+
+    state = trace.setdefault(
+        "_tool_loop_circuit",
+        {
+            "last_sig": None,
+            "last_tool": None,
+            "consecutive": 0,
+            "generate_image_copy_only_calls": 0,
+            "recent": [],
+        },
+    )
+    if not isinstance(state, dict):
+        return
+
+    sig, dbg = _tool_signature_for_circuit(tool_name, tool_input)
+
+    # Track copy-only image loops explicitly (this was a real incident class).
+    if tool_name.endswith("generate_image") and isinstance(tool_input, dict):
+        prompt = str(tool_input.get("prompt") or "")
+        if _looks_like_copy_only_prompt(prompt):
+            state["generate_image_copy_only_calls"] = int(state.get("generate_image_copy_only_calls", 0)) + 1
+            if state["generate_image_copy_only_calls"] > max_generate_image_copy_only:
+                raise CircuitBreakerTriggered(
+                    "generate_image_copy_only_loop",
+                    detail={
+                        "tool": tool_name,
+                        "iteration": iteration,
+                        "step_id": step_id,
+                        "copy_only_calls": state["generate_image_copy_only_calls"],
+                        "threshold": max_generate_image_copy_only,
+                        "debug": dbg,
+                    },
+                )
+        else:
+            state["generate_image_copy_only_calls"] = 0
+
+    if sig == state.get("last_sig") and tool_name == state.get("last_tool"):
+        state["consecutive"] = int(state.get("consecutive", 0)) + 1
+    else:
+        state["last_sig"] = sig
+        state["last_tool"] = tool_name
+        state["consecutive"] = 1
+
+    state["recent"] = (state.get("recent") or [])[-19:] + [
+        {"tool": tool_name, "sig": sig, "iteration": iteration, "step_id": step_id, "debug": dbg}
+    ]
+
+    if int(state.get("consecutive", 0)) > max_consecutive_same_sig:
+        raise CircuitBreakerTriggered(
+            "consecutive_identical_tool_calls",
+            detail={
+                "tool": tool_name,
+                "iteration": iteration,
+                "step_id": step_id,
+                "consecutive": state.get("consecutive", 0),
+                "threshold": max_consecutive_same_sig,
+                "debug": dbg,
+            },
+        )
 
 
 def _resolve_global_memory_dir() -> str:
@@ -5559,40 +5743,36 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         "iteration": iteration,
                                         "name": block.name,
                                         "id": block.id,
-                                        "time_offset_seconds": round(
-                                            time.time() - start_ts, 3
+                                        "time_offset_seconds": round(time.time() - start_ts, 3),
+                                        "input": block.input if hasattr(block, "input") else None,
+                                        "input_size_bytes": (
+                                            len(json.dumps(block.input))
+                                            if hasattr(block, "input") and block.input
+                                            else 0
                                         ),
-                                        "input": block.input
-                                        if hasattr(block, "input")
-                                        else None,
-                                        "input_size_bytes": len(json.dumps(block.input))
-                                        if hasattr(block, "input") and block.input
-                                        else 0,
                                     }
+
+                                    # Circuit breaker: detect non-converging tool loops early and stop.
+                                    _maybe_trip_tool_loop_circuit_breaker(
+                                        tool_name=block.name,
+                                        tool_input=block.input if hasattr(block, "input") else None,
+                                        step_id=step_id,
+                                        iteration=iteration,
+                                    )
+
                                     if tool_ledger:
-                                        ledger_entry = tool_ledger.get_tool_call(
-                                            str(block.id)
-                                        )
+                                        ledger_entry = tool_ledger.get_tool_call(str(block.id))
                                         if ledger_entry:
-                                            tool_record["idempotency_key"] = (
-                                                ledger_entry.get("idempotency_key")
-                                            )
-                                            tool_record["side_effect_class"] = (
-                                                ledger_entry.get("side_effect_class")
-                                            )
-                                            tool_record["replay_policy"] = ledger_entry.get(
-                                                "replay_policy"
-                                            )
-                                            tool_record["ledger_status"] = ledger_entry.get(
-                                                "status"
-                                            )
+                                            tool_record["idempotency_key"] = ledger_entry.get("idempotency_key")
+                                            tool_record["side_effect_class"] = ledger_entry.get("side_effect_class")
+                                            tool_record["replay_policy"] = ledger_entry.get("replay_policy")
+                                            tool_record["ledger_status"] = ledger_entry.get("status")
+
                                     trace["tool_calls"].append(tool_record)
                                     tool_calls_this_iter.append(tool_record)
                                     if block.id:
                                         stream_tool_id = str(block.id)
-                                        tool_execution_stream_start_times[
-                                            stream_tool_id
-                                        ] = (time.time(), block.name)
+                                        tool_execution_stream_start_times[stream_tool_id] = (time.time(), block.name)
                                         # Allow re-emission if this ID is reused in a later turn.
                                         tool_execution_emitted_ids.discard(stream_tool_id)
                                     
@@ -7186,6 +7366,9 @@ async def process_turn(
     tool_execution_start_times.clear()
     tool_execution_stream_start_times.clear()
     tool_execution_emitted_ids.clear()
+    # Reset per-turn circuit breaker state (prevents cross-turn contamination).
+    if isinstance(trace, dict):
+        trace.pop("_tool_loop_circuit", None)
     
     # Helper to emit events via callback (defined early for all paths)
     def emit_event(event: AgentEvent) -> None:
@@ -7371,11 +7554,96 @@ async def process_turn(
         emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "complex", "iteration": iteration}))
 
         while True:
-            needs_input, auth_link, final_text = await run_conversation(
-                client, current_query, start_ts, iteration, max_iterations=max_iterations,
-                event_callback=event_callback  # Forward callback for tool event streaming
-            )
-            final_response_text = final_text  # Capture for printing after summary
+            try:
+                needs_input, auth_link, final_text = await run_conversation(
+                    client,
+                    current_query,
+                    start_ts,
+                    iteration,
+                    max_iterations=max_iterations,
+                    event_callback=event_callback,  # Forward callback for tool event streaming
+                )
+                final_response_text = final_text  # Capture for printing after summary
+            except (CircuitBreakerTriggered, BudgetExceeded) as exc:
+                # Guardrail tripped: persist a recovery handoff packet so a fresh client can resume.
+                handoff_md_path = None
+                try:
+                    from universal_agent.recovery_handoff import write_recovery_handoff
+                    from universal_agent import transcript_builder
+
+                    err_dict = exc.to_dict() if hasattr(exc, "to_dict") else {"error": str(exc)}
+                    reason = (
+                        "circuit_breaker"
+                        if isinstance(exc, CircuitBreakerTriggered)
+                        else "budget_exceeded"
+                    )
+                    paths = write_recovery_handoff(
+                        workspace_dir=workspace_dir,
+                        reason=reason,
+                        error_dict=err_dict,
+                        user_query=user_input,
+                        trace=trace if isinstance(trace, dict) else None,
+                    )
+                    handoff_md_path = getattr(paths, "md_path", None)
+                    if isinstance(trace, dict):
+                        trace["recovery_handoff_md_path"] = paths.md_path
+                        trace["recovery_handoff_json_path"] = paths.json_path
+
+                    # Best-effort transcript + trace snapshot before the client is reset upstream.
+                    try:
+                        trace["end_time"] = datetime.now().isoformat()
+                        trace["total_duration_seconds"] = round(time.time() - start_ts, 3)
+                    except Exception:
+                        pass
+                    try:
+                        transcript_path = os.path.join(workspace_dir, "transcript.md")
+                        transcript_builder.generate_transcript(trace, transcript_path)
+                    except Exception:
+                        pass
+                    try:
+                        write_trace(trace, workspace_dir)
+                    except Exception:
+                        pass
+
+                    try:
+                        hook_events.emit_status_event(
+                            f"Guardrail tripped ({reason}). Recovery handoff written to {paths.md_path}",
+                            level="WARNING",
+                            prefix="Recovery",
+                        )
+                    except Exception:
+                        pass
+                except Exception as handoff_err:
+                    try:
+                        hook_events.emit_status_event(
+                            f"Guardrail tripped, but failed to write recovery handoff: {handoff_err}",
+                            level="ERROR",
+                            prefix="Recovery",
+                        )
+                    except Exception:
+                        pass
+
+                # Ensure we don't leave event callbacks/log bridges attached on exceptions.
+                _clear_hook_events()
+                if isinstance(exc, CircuitBreakerTriggered):
+                    # Graceful stop: return a result that triggers a client reset upstream.
+                    # The next run will automatically ingest RECOVERY_HANDOFF.md via prompt_builder.
+                    msg = (
+                        "Circuit breaker triggered to stop a runaway/non-converging tool loop.\n\n"
+                        f"Recovery handoff written to: {handoff_md_path or os.path.join(workspace_dir, 'RECOVERY_HANDOFF.md')}\n"
+                        "The SDK client will be reset to ensure no orphaned subprocess keeps running.\n"
+                        "Re-run the job to continue; the next run will read the handoff automatically."
+                    )
+                    return ExecutionResult(
+                        response_text=msg,
+                        execution_time_seconds=round(time.time() - start_ts, 2),
+                        workspace_path=workspace_dir,
+                        trace_id=trace.get("trace_id") if isinstance(trace, dict) else None,
+                        reset_session=True,
+                    )
+
+                # BudgetExceeded: hard stop by default.
+                raise
 
             if needs_input and auth_link:
                 # Emit auth required event for gateway/adapters

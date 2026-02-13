@@ -555,6 +555,16 @@ class ProcessTurnAdapter:
                 result_holder["error"] = str(e)
                 result_holder["error_detail"] = traceback.format_exc()
                 result_holder["success"] = False
+                # Circuit breaker / budget exits should tear down the underlying Claude subprocess
+                # to avoid orphaned long-running loops. Next call will recreate the client.
+                try:
+                    from universal_agent.main import BudgetExceeded, CircuitBreakerTriggered
+
+                    if isinstance(e, (BudgetExceeded, CircuitBreakerTriggered)):
+                        logger.warning("Resetting SDK client after guardrail: %s", type(e).__name__)
+                        await self.reset()
+                except Exception:
+                    pass
             finally:
                 # Signal completion
                 await event_queue.put(AgentEvent(

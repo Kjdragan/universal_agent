@@ -19,6 +19,15 @@ _DESTRUCTIVE_RE = re.compile(
 )
 _MEMORY_MODES = {"off", "session_only", "selective", "full"}
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        return default
+
 
 def _notification_email_default() -> str:
     return (
@@ -129,8 +138,15 @@ def default_session_policy(session_id: str, user_id: str) -> dict[str, Any]:
             ],
         },
         "limits": {
-            "max_runtime_seconds": 0,
-            "max_tool_calls": 0,
+            # 0 means unlimited. Defaults are intentionally finite to prevent runaway loops.
+            # These are guardrails, not guarantees of completion; degraded/partial output is preferred
+            # over unbounded tool spend for most sessions.
+            "max_runtime_seconds": _env_int("UA_SESSION_MAX_RUNTIME_SECONDS", 5400),  # 90 min
+            "max_tool_calls": _env_int("UA_SESSION_MAX_TOOL_CALLS", 500),
+            # Optional per-tool limits (enforced by local toolkit where supported).
+            "max_tool_calls_by_tool": {
+                "generate_image": _env_int("UA_SESSION_MAX_GENERATE_IMAGE_CALLS", 20),
+            },
         },
         "hard_stops": {
             "no_payments": True,

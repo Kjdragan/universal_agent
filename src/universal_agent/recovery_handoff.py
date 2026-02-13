@@ -1,0 +1,220 @@
+"""
+recovery_handoff.py
+
+Write a bounded, redacted "handoff packet" to the session workspace when a
+guardrail trips (budget/circuit breaker). The goal is to preserve enough
+actionable context so a fresh SDK client (or even a different model) can resume
+without relying on in-memory chat history.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+
+_SENSITIVE_KEY_RE = re.compile(
+    r"(?i)(api[_-]?key|apikey|token|secret|password|authorization|bearer|cookie|session|private[_-]?key|client[_-]?secret)"
+)
+
+# Common API key shapes. These are best-effort; also redact by key-name.
+_SENSITIVE_VALUE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}\b"), "[REDACTED]"),
+    (re.compile(r"\bxai-[A-Za-z0-9]{20,}\b"), "[REDACTED]"),
+    (re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"), "[REDACTED]"),
+    (re.compile(r"\bAIzaSy[0-9A-Za-z_\-]{20,}\b"), "[REDACTED]"),
+    (re.compile(r"\bpylf_v1_[0-9A-Za-z_\\-]{8,}\b"), "[REDACTED]"),
+]
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def redact_secrets_in_text(text: str) -> str:
+    if not text:
+        return ""
+    redacted = text
+    for pat, replacement in _SENSITIVE_VALUE_PATTERNS:
+        redacted = pat.sub(replacement, redacted)
+
+    # Redact common KEY=VALUE and "key: value" formats inside arbitrary text.
+    # Example: OPENAI_API_KEY=... or "token: abc123"
+    redacted = re.sub(
+        r"(?im)\b([A-Z0-9_\\-]*?(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_\\-]*)\\s*[:=]\\s*([^\\s\"']+)",
+        r"\\1=[REDACTED]",
+        redacted,
+    )
+    return redacted
+
+
+def _redact_obj(obj: Any, *, max_str_len: int = 2000, _depth: int = 0) -> Any:
+    # Keep recursion bounded.
+    if _depth > 10:
+        return "<max_depth>"
+
+    if obj is None:
+        return None
+
+    if isinstance(obj, (int, float, bool)):
+        return obj
+
+    if isinstance(obj, str):
+        s = redact_secrets_in_text(obj)
+        s = s.strip()
+        if len(s) > max_str_len:
+            return s[: max_str_len - 3] + "..."
+        return s
+
+    if isinstance(obj, (bytes, bytearray)):
+        return "<bytes>"
+
+    if isinstance(obj, list):
+        return [_redact_obj(x, max_str_len=max_str_len, _depth=_depth + 1) for x in obj[:200]]
+
+    if isinstance(obj, tuple):
+        return tuple(_redact_obj(x, max_str_len=max_str_len, _depth=_depth + 1) for x in obj[:200])
+
+    if isinstance(obj, dict):
+        out: dict[str, Any] = {}
+        for k, v in list(obj.items())[:500]:
+            ks = str(k)
+            if _SENSITIVE_KEY_RE.search(ks):
+                out[ks] = "[REDACTED]"
+                continue
+            out[ks] = _redact_obj(v, max_str_len=max_str_len, _depth=_depth + 1)
+        return out
+
+    # Fallback for unknown objects.
+    try:
+        return _redact_obj(str(obj), max_str_len=max_str_len, _depth=_depth + 1)
+    except Exception:
+        return "<unserializable>"
+
+
+def _safe_tail(items: Iterable[Any] | None, n: int) -> list[Any]:
+    if not items:
+        return []
+    try:
+        seq = list(items)
+    except Exception:
+        return []
+    return seq[-n:]
+
+
+@dataclass(frozen=True)
+class RecoveryHandoffPaths:
+    md_path: str
+    json_path: str
+
+
+def write_recovery_handoff(
+    *,
+    workspace_dir: str,
+    reason: str,
+    error_dict: dict[str, Any],
+    user_query: str,
+    trace: dict[str, Any] | None,
+    max_tool_calls: int = 30,
+) -> RecoveryHandoffPaths:
+    """
+    Writes:
+    - RECOVERY_HANDOFF.md (human-readable)
+    - recovery_handoff.json (structured, redacted)
+    """
+    ws = Path(workspace_dir)
+    ws.mkdir(parents=True, exist_ok=True)
+
+    tool_calls = []
+    circuit_state = {}
+    trace_catalog_path = None
+    transcript_path = None
+
+    if isinstance(trace, dict):
+        tool_calls = _safe_tail(trace.get("tool_calls"), max_tool_calls)
+        circuit_state = trace.get("_tool_loop_circuit") or {}
+        trace_catalog_path = trace.get("trace_catalog_path") or trace.get("trace_catalog_work_product_path")
+        transcript_path = os.path.join(workspace_dir, "transcript.md")
+
+    payload = {
+        "schema_version": 1,
+        "created_at_utc": _utc_now_iso(),
+        "workspace_dir": str(ws),
+        "reason": reason,
+        "error": error_dict,
+        "user_query": user_query,
+        "trace_catalog_path": trace_catalog_path,
+        "transcript_path": transcript_path if transcript_path and os.path.exists(transcript_path) else None,
+        "circuit_state": circuit_state,
+        "recent_tool_calls": tool_calls,
+    }
+
+    redacted_payload = _redact_obj(payload, max_str_len=2500)
+
+    md_lines: list[str] = []
+    md_lines.append("# Recovery Handoff")
+    md_lines.append("")
+    md_lines.append(
+        "This file was autogenerated because a guardrail tripped (budget or circuit breaker). "
+        "It is designed to let a fresh model/client resume safely without repeating runaway behavior."
+    )
+    md_lines.append("")
+    md_lines.append("## What Happened")
+    md_lines.append(f"- Created (UTC): `{redacted_payload.get('created_at_utc')}`")
+    md_lines.append(f"- Reason: `{redacted_payload.get('reason')}`")
+    err = redacted_payload.get("error") or {}
+    if isinstance(err, dict):
+        md_lines.append(f"- Error: `{err.get('breaker_name') or err.get('budget_name') or 'unknown'}`")
+    md_lines.append("")
+    md_lines.append("## Workspace Pointers")
+    md_lines.append(f"- Workspace: `{redacted_payload.get('workspace_dir')}`")
+    if redacted_payload.get("trace_catalog_path"):
+        md_lines.append(f"- Trace catalog: `{redacted_payload.get('trace_catalog_path')}`")
+    if redacted_payload.get("transcript_path"):
+        md_lines.append(f"- Transcript: `{redacted_payload.get('transcript_path')}`")
+    md_lines.append("")
+    md_lines.append("## Resume Instructions (Mandatory)")
+    md_lines.append("- Read this file first, then inspect the trace catalog and transcript.")
+    md_lines.append("- Do NOT repeat tool calls that already succeeded; reuse existing artifacts in the workspace.")
+    md_lines.append("- Identify the last safe checkpoint and continue from there.")
+    md_lines.append("- If you detect a non-converging loop, change strategy (different tool, fewer iterations, ask a focused question).")
+    md_lines.append(
+        "- Degraded/partial output is allowed only after multiple reasonable recovery attempts, "
+        "and must clearly state what succeeded and what did not."
+    )
+    md_lines.append("")
+    md_lines.append("## Original User Query (Redacted, Truncated)")
+    query = str(redacted_payload.get("user_query") or "").strip()
+    if len(query) > 2500:
+        query = query[:2497] + "..."
+    md_lines.append("```")
+    md_lines.append(query)
+    md_lines.append("```")
+    md_lines.append("")
+    md_lines.append("## Recent Tool Calls (Redacted)")
+    recent = redacted_payload.get("recent_tool_calls") or []
+    if not isinstance(recent, list) or not recent:
+        md_lines.append("_None captured._")
+    else:
+        # Keep it compact and easy to scan.
+        md_lines.append("```json")
+        md_lines.append(json.dumps(recent, indent=2, sort_keys=True)[:20000])
+        md_lines.append("```")
+    md_lines.append("")
+    md_lines.append("## Circuit State (Redacted)")
+    md_lines.append("```json")
+    md_lines.append(json.dumps(redacted_payload.get("circuit_state") or {}, indent=2, sort_keys=True)[:12000])
+    md_lines.append("```")
+
+    md_path = ws / "RECOVERY_HANDOFF.md"
+    json_path = ws / "recovery_handoff.json"
+    md_path.write_text("\n".join(md_lines).rstrip() + "\n", encoding="utf-8")
+    json_path.write_text(json.dumps(redacted_payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    return RecoveryHandoffPaths(md_path=str(md_path), json_path=str(json_path))
+
