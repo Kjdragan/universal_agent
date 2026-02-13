@@ -933,7 +933,9 @@ export function CalendarSection() {
   }, [events, weekDays]);
 
   const statusBadge = (event: CalendarEventItem) => {
-    if (event.source === "heartbeat") return "bg-red-500/20 border-red-500/50 text-red-300";
+    // Heartbeat should read as low-stakes background activity (light blue),
+    // not an error condition (red).
+    if (event.source === "heartbeat") return "bg-sky-500/15 border-sky-400/40 text-sky-200";
     if (event.status === "missed") return "bg-amber-500/20 border-amber-500/50 text-amber-300";
     if (event.status === "failed") return "bg-rose-500/20 border-rose-500/50 text-rose-300";
     if (event.status === "success") return "bg-emerald-500/20 border-emerald-500/50 text-emerald-300";
@@ -974,7 +976,7 @@ export function CalendarSection() {
             push: {schedulingPushState.status.toLowerCase()} (v{schedulingPushState.projection_version})
           </span>
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-red-500/80" />heartbeat</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-sky-400/80" />heartbeat</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-blue-500/80" />scheduled</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-amber-500/80" />missed</span>
           </div>
@@ -987,8 +989,13 @@ export function CalendarSection() {
         {alwaysRunning.length === 0 && <div className="text-muted-foreground text-[10px]">No always-running entries</div>}
         <div className="flex flex-wrap gap-1">
           {alwaysRunning.map((item) => (
-            <button key={item.event_id} onClick={() => performAction(item, "run_now")} className="px-2 py-1 rounded border border-red-500/40 bg-red-500/10 text-red-300 hover:bg-red-500/20">
-              {item.title} • every {item.description?.split("every ").pop() || "n/a"}
+            <button
+              key={item.event_id}
+              onClick={() => performAction(item, "delete")}
+              className="px-2 py-1 rounded border border-sky-400/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20"
+              title="Disable heartbeat delivery for this session (calendar will stop showing it)."
+            >
+              Delete • {item.title}
             </button>
           ))}
         </div>
@@ -1032,12 +1039,24 @@ export function CalendarSection() {
                     <div className="font-semibold truncate">{event.title}</div>
                     <div className="text-[10px] opacity-90">{new Date(event.scheduled_at_local).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} • {event.status}</div>
                     <div className="mt-1 flex flex-wrap gap-1">
-                      {(event.actions || []).map((action) => (
-                        <button key={`${event.event_id}-${action}`} onClick={() => performAction(event, action)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">
-                          {action}
+                      {event.source === "heartbeat" ? (
+                        <button
+                          onClick={() => performAction(event, "delete")}
+                          className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]"
+                          title="Disable heartbeat delivery for this session (calendar will stop showing it)."
+                        >
+                          Delete
                         </button>
-                      ))}
-                      <button onClick={() => requestChange(event)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">change</button>
+                      ) : (
+                        <>
+                          {(event.actions || []).map((action) => (
+                            <button key={`${event.event_id}-${action}`} onClick={() => performAction(event, action)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">
+                              {action}
+                            </button>
+                          ))}
+                          <button onClick={() => requestChange(event)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">change</button>
+                        </>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1058,12 +1077,24 @@ export function CalendarSection() {
                 {new Date(event.scheduled_at_local).toLocaleString()} • {event.status}
               </div>
               <div className="mt-1 flex flex-wrap gap-1">
-                {(event.actions || []).map((action) => (
-                  <button key={`${event.event_id}-${action}`} onClick={() => performAction(event, action)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">
-                    {action}
+                {event.source === "heartbeat" ? (
+                  <button
+                    onClick={() => performAction(event, "delete")}
+                    className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]"
+                    title="Disable heartbeat delivery for this session (calendar will stop showing it)."
+                  >
+                    Delete
                   </button>
-                ))}
-                <button onClick={() => requestChange(event)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">change</button>
+                ) : (
+                  <>
+                    {(event.actions || []).map((action) => (
+                      <button key={`${event.event_id}-${action}`} onClick={() => performAction(event, action)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">
+                        {action}
+                      </button>
+                    ))}
+                    <button onClick={() => requestChange(event)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">change</button>
+                  </>
+                )}
               </div>
             </div>
           ))}

@@ -2123,6 +2123,13 @@ def _calendar_project_heartbeat_events(
             every_seconds = HEARTBEAT_INTERVAL_SECONDS
             delivery_mode = "last"
         every_seconds = max(HEARTBEAT_INTERVAL_SECONDS, every_seconds)
+
+        # Calendar UX: if heartbeat delivery is disabled for a session, treat it as
+        # "deleted" from the calendar to avoid noise (the session can still be
+        # managed elsewhere via config/tools).
+        if delivery_mode == "none":
+            continue
+
         hb_state = _read_heartbeat_state(workspace_dir) or {}
         last_run = float(hb_state.get("last_run") or 0.0)
         raw_next_run = (last_run + every_seconds) if last_run > 0 else (now_ts + every_seconds)
@@ -2132,9 +2139,7 @@ def _calendar_project_heartbeat_events(
         else:
             next_run = raw_next_run
         busy = bool(_heartbeat_service and session_id in _heartbeat_service.busy_sessions)
-        if delivery_mode == "none":
-            status_value = "disabled"
-        elif busy:
+        if busy:
             status_value = "running"
         else:
             status_value = "scheduled"
@@ -2159,13 +2164,7 @@ def _calendar_project_heartbeat_events(
                 "scheduled_at_local": _calendar_local_iso(next_run, timezone_name),
                 "timezone_display": timezone_name,
                 "always_running": False,
-                "actions": [
-                    "run_now",
-                    "pause" if delivery_mode != "none" else "resume",
-                    "disable",
-                    "open_logs",
-                    "open_session",
-                ],
+                "actions": ["delete"],
             }
             events.append(event)
 
@@ -2190,13 +2189,7 @@ def _calendar_project_heartbeat_events(
             "scheduled_at_local": _calendar_local_iso(next_run, timezone_name),
             "timezone_display": timezone_name,
             "always_running": True,
-            "actions": [
-                "run_now",
-                "pause" if delivery_mode != "none" else "resume",
-                "disable",
-                "open_logs",
-                "open_session",
-            ],
+            "actions": ["delete"],
         }
         if is_live_monitor:
             always_running.append(always_event)
@@ -2482,7 +2475,7 @@ async def _calendar_apply_event_action(
                 raise HTTPException(status_code=503, detail="Heartbeat service not available")
             _heartbeat_service.request_heartbeat_now(session_id, reason="calendar_action")
             return {"status": "ok", "action": action_norm, "session_id": session_id}
-        if action_norm in {"pause", "disable"}:
+        if action_norm in {"pause", "disable", "delete"}:
             result = _calendar_apply_heartbeat_delivery_mode(session_id, "none")
             return {"status": "ok", "action": action_norm, "session_id": session_id, **result}
         if action_norm == "resume":
@@ -4113,7 +4106,7 @@ async def ops_calendar_events(
         "always_running": feed["always_running"],
         "stasis_queue": stasis_items,
         "legend": {
-            "heartbeat": "red",
+            "heartbeat": "sky",
             "cron": "blue",
             "missed": "amber",
             "success": "emerald",
