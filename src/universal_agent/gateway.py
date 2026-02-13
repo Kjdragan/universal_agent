@@ -366,6 +366,9 @@ class InProcessGateway(Gateway):
         tool_calls = 0
         trace_id = None
         code_execution_used = False
+        auth_required = False
+        auth_link: Optional[str] = None
+        errors: list[str] = []
         
         async for event in self.execute(session, request):
             if event.type == EventType.TEXT:
@@ -378,6 +381,17 @@ class InProcessGateway(Gateway):
                 tool_name = (event.data.get("name") or "").upper()
                 if any(x in tool_name for x in ["CODE", "EXECUTE", "BASH", "PYTHON"]):
                     code_execution_used = True
+            if event.type == EventType.AUTH_REQUIRED:
+                auth_required = True
+                if isinstance(event.data, dict):
+                    link = event.data.get("auth_link")
+                    if isinstance(link, str) and link.strip():
+                        auth_link = link.strip()
+            if event.type == EventType.ERROR:
+                if isinstance(event.data, dict):
+                    msg = event.data.get("message") or event.data.get("error") or "Unknown error"
+                    if isinstance(msg, str) and msg.strip():
+                        errors.append(msg.strip())
             if event.type == EventType.ITERATION_END:
                 trace_id = event.data.get("trace_id")
         
@@ -394,6 +408,11 @@ class InProcessGateway(Gateway):
             execution_time=duration,
             code_execution_used=code_execution_used,
             trace_id=trace_id,
+            metadata={
+                "auth_required": auth_required,
+                "auth_link": auth_link,
+                "errors": errors,
+            },
         )
 
     async def resolve_input(self, session_id: str, input_id: str, response: str) -> bool:

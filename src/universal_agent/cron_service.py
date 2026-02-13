@@ -649,9 +649,33 @@ class CronService:
                         result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
                     else:
                         result = await run_coro
-                    record.status = "success"
+                    meta = getattr(result, "metadata", None)
+                    auth_required = False
+                    auth_link = None
+                    errors: list[str] = []
+                    if isinstance(meta, dict):
+                        auth_required = bool(meta.get("auth_required"))
+                        raw_link = meta.get("auth_link")
+                        auth_link = raw_link if isinstance(raw_link, str) and raw_link.strip() else None
+                        raw_errors = meta.get("errors")
+                        if isinstance(raw_errors, list):
+                            errors = [str(e) for e in raw_errors if str(e).strip()]
+
+                    if auth_required:
+                        record.status = "auth_required"
+                        # Preserve the link in output so the Web UI can display it without terminal access.
+                        if auth_link:
+                            record.output_preview = f"AUTH REQUIRED: {auth_link}"
+                        else:
+                            record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
+                    elif errors:
+                        record.status = "error"
+                        record.error = errors[0]
+                        record.output_preview = ((getattr(result, "response_text", "") or "")[:400]) or record.error[:400]
+                    else:
+                        record.status = "success"
+                        record.output_preview = (getattr(result, "response_text", "") or "")[:400]
                     record.finished_at = time.time()
-                    record.output_preview = (result.response_text or "")[:400]
                     self._persist_run_output(job, record, result)
             except asyncio.TimeoutError:
                 record.status = "error"

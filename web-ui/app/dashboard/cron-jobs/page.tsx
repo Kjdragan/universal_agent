@@ -20,6 +20,17 @@ type CronJob = {
   metadata?: Record<string, unknown> | null;
 };
 
+type CronRun = {
+  run_id: string;
+  job_id: string;
+  status: string;
+  scheduled_at?: number | null;
+  started_at: number;
+  finished_at?: number | null;
+  error?: string | null;
+  output_preview?: string | null;
+};
+
 function toLocalDateTime(value?: string | number | null): string {
   if (value === null || value === undefined || value === "") return "n/a";
   if (typeof value === "number") return new Date(value * 1000).toLocaleString();
@@ -50,6 +61,13 @@ function formatEverySeconds(value?: number | null): string {
   return `${seconds}s`;
 }
 
+function extractComposioConnectLink(raw?: string | null): string | null {
+  if (!raw) return null;
+  const text = String(raw);
+  const m = text.match(/https?:\/\/connect\.composio\.dev\/link\/[A-Za-z0-9_-]+/);
+  return m ? m[0] : null;
+}
+
 function extractJobSessionId(job: CronJob): string {
   const metadata = (job.metadata || {}) as Record<string, unknown>;
   const fromMetadata = String(
@@ -72,6 +90,7 @@ function extractJobSessionId(job: CronJob): string {
 
 export default function DashboardCronJobsPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
+  const [runsByJob, setRunsByJob] = useState<Record<string, CronRun | undefined>>({});
   const [command, setCommand] = useState("");
   const [scheduleTime, setScheduleTime] = useState("in 30 minutes");
   const [repeat, setRepeat] = useState(false);
@@ -85,13 +104,35 @@ export default function DashboardCronJobsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/cron/jobs`);
-      if (!res.ok) {
-        const detail = await res.text();
-        throw new Error(parseErrorDetail(detail) || `Load failed (${res.status})`);
+      const [jobsRes, runsRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/cron/jobs`),
+        fetch(`${API_BASE}/api/v1/cron/runs?limit=500`),
+      ]);
+
+      if (!jobsRes.ok) {
+        const detail = await jobsRes.text();
+        throw new Error(parseErrorDetail(detail) || `Load failed (${jobsRes.status})`);
       }
-      const data = await res.json();
-      setJobs(data.jobs || []);
+      const jobsData = await jobsRes.json();
+      setJobs(jobsData.jobs || []);
+
+      if (runsRes.ok) {
+        const runsData = await runsRes.json();
+        const runs = (runsData.runs || []) as CronRun[];
+        const latest: Record<string, CronRun> = {};
+        for (const r of runs) {
+          const key = String(r.job_id || "").trim();
+          if (!key) continue;
+          const cur = latest[key];
+          if (!cur || Number(r.started_at || 0) > Number(cur.started_at || 0)) {
+            latest[key] = r;
+          }
+        }
+        setRunsByJob(latest);
+      } else {
+        // Runs are best-effort; don't block job list rendering on transient issues.
+        setRunsByJob({});
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -322,6 +363,41 @@ export default function DashboardCronJobsPage() {
                       {job.running ? "running" : job.enabled ? "enabled" : "disabled"} · next: {toLocalDateTime(job.next_run_at)}
                       {job.timeout_seconds ? ` · timeout ${job.timeout_seconds}s` : ""}
                     </p>
+                    {(() => {
+                      const run = runsByJob[job.job_id];
+                      if (!run) return null;
+                      const link = extractComposioConnectLink(run.output_preview || "") || extractComposioConnectLink(run.error || "");
+                      const status = String(run.status || "unknown").toLowerCase();
+                      const isAuth = status === "auth_required" || Boolean(link);
+                      return (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                          <span className="text-slate-500">
+                            last run: <span className="font-mono text-slate-300">{status}</span> · {toLocalDateTime(run.started_at)}
+                          </span>
+                          {run.error && (
+                            <span className="text-rose-300/90">
+                              error: <span className="font-mono">{String(run.error).slice(0, 140)}</span>
+                            </span>
+                          )}
+                          {isAuth && link && (
+                            <a
+                              href={link}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="rounded-md border border-amber-700 bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-500/25"
+                              title="Open Composio to connect Gmail (required for this job to send email)."
+                            >
+                              Connect Gmail
+                            </a>
+                          )}
+                          {isAuth && !link && (
+                            <span className="text-amber-200/90">
+                              auth required (open run logs for the connect link)
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {(() => {
                       const sessionId = extractJobSessionId(job);
                       if (!sessionId) return null;
