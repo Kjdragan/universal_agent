@@ -2709,6 +2709,8 @@ SUBAGENT_EXPECTED_SKILLS = {
     "browserbase": [],  # Uses Composio MCP tools, not skills
     "video-remotion-expert": ["video-remotion"],
     "system-configuration-agent": [],
+    "data-analyst": [],  # Uses Composio CodeInterpreter + local Python
+    "action-coordinator": ["gmail"],  # Uses Composio delivery tools
 }
 
 
@@ -2827,11 +2829,51 @@ async def on_post_task_guidance(
             },
         }
     
-    # Standard guidance: prevent TaskOutput usage
+    # Graph-aware next-step guidance + prevent TaskOutput usage
+    tool_input = input_data.get("tool_input", {})
+    subagent_type = ""
+    if isinstance(tool_input, dict):
+        subagent_type = tool_input.get("subagent_type", "")
+
+    next_step_hint = ""
+    if subagent_type == "research-specialist":
+        next_step_hint = (
+            "Research phase complete. Consider what comes NEXT based on the original task:\n"
+            "- Need analysis/computation? → Delegate to `data-analyst`\n"
+            "- Need a report? → Delegate to `report-writer`\n"
+            "- Need media? → Delegate to `image-expert` or `video-creation-expert`\n"
+            "- Need delivery? → Delegate to `action-coordinator` or use Composio tools directly\n"
+            "Do NOT default to report-writer unless a report was specifically requested."
+        )
+    elif subagent_type == "report-writer":
+        next_step_hint = (
+            "Report generation complete. Consider delivery:\n"
+            "- Email the report? → Use `upload_to_composio` then `GMAIL_SEND_EMAIL`\n"
+            "- Post summary to Slack? → Use `SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL`\n"
+            "- Schedule follow-up? → Use `GOOGLECALENDAR_CREATE_EVENT`\n"
+            "- Or delegate all delivery to `action-coordinator`."
+        )
+    elif subagent_type == "data-analyst":
+        next_step_hint = (
+            "Analysis complete. Results are in work_products/analysis/. Next steps:\n"
+            "- Need a report incorporating these findings? → Delegate to `report-writer`\n"
+            "- Need visualizations in a video? → Delegate to `video-creation-expert`\n"
+            "- Ready to deliver? → Use Composio tools or delegate to `action-coordinator`."
+        )
+    elif subagent_type == "image-expert":
+        next_step_hint = (
+            "Image generation complete. Images are in work_products/media/. Next steps:\n"
+            "- Embed in report? → Delegate to `report-writer` (it reads the image manifest)\n"
+            "- Deliver directly? → Use Composio email/Slack tools."
+        )
+
     return {
+        "systemMessage": next_step_hint if next_step_hint else None,
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",
             "additionalContext": (
+                f"{next_step_hint}\n\n" if next_step_hint else ""
+            ) + (
                 "TaskOutput/TaskResult are disabled and will not work. "
                 "Do NOT call them. Wait for SubagentStop guidance or relaunch the Task "
                 "with the original inputs if output is needed."
@@ -6908,6 +6950,21 @@ async def setup_session(
             "REMOTE vs LOCAL WORKFLOW:\n"
             "- The 'COMPOSIO' tools act as your Hands (Search, Email, Remote Execution).\n"
             "- The 'LOCAL_TOOLKIT' and your own capabilities act as your Brain (Analysis, Writing, Reasoning).\n"
+            "- Sub-agents are your Workflow Coordinators (research, reports, media, delivery).\n\n"
+            "🌐 CAPABILITY DOMAINS (THINK BEYOND RESEARCH & REPORTS):\n"
+            "When given an open-ended or complex task, consider ALL your capability domains:\n"
+            "- **Intelligence**: Composio search, web scraping (browserbase), URL/PDF extraction\n"
+            "- **Computation**: CodeInterpreter for statistics, data analysis, charts, modeling\n"
+            "- **Media Creation**: image-expert, video-creation-expert, mermaid-expert, Manim, PDF\n"
+            "- **Communication**: Gmail, Slack, Discord, Calendar — multi-channel delivery\n"
+            "- **Real-World Actions**: GoPlaces, browser automation, form filling, booking\n"
+            "- **Engineering**: GitHub ops, coding-agent, test execution\n"
+            "- **Knowledge Capture**: Notion, memory tools, skill creation\n"
+            "- **System Ops**: Cron scheduling, heartbeat config, monitoring\n\n"
+            "Do NOT default to research-and-report unless that is specifically what was asked.\n"
+            "For complex tasks, think in phases: Input (Composio) → Processing (local) → Delivery (Composio).\n"
+            "Pure-local phases (image gen, video render, PDF compile) are valid — they just need handoff\n"
+            "points back to the Composio backbone for delivery.\n\n"
             "GUIDELINES:\n"
             "1. DATA FLOW POLICY (LOCAL-FIRST): Prefer receiving data DIRECTLY into your context.\n"
             "   - Do NOT set `sync_response_to_workbench=True` unless you expect massive data (>5MB).\n"
@@ -6955,16 +7012,15 @@ async def setup_session(
             "   - NOTE: If native `Write` is restricted to the session workspace, use `mcp__internal__write_text_file`.\n"
             "   - ALWAYS write a small `manifest.json` in the artifact directory.\n"
             "   - Mark deletable outputs as retention=temp inside the manifest.\n\n"
-            "9. 🔗 MANDATORY REPORT DELEGATION (YOU MUST DELEGATE):\n"
-            "   🚨 TRIGGER KEYWORDS REQUIRING DELEGATION: 'report', 'comprehensive', 'detailed', 'in-depth', 'analysis', 'research'.\n"
-            "   IF the user query contains ANY of these keywords, you MUST delegate to 'report-creation-expert'.\n"
+            "9. 🔗 REPORT DELEGATION (WHEN REPORTS ARE NEEDED):\n"
+            "   WHEN the task specifically calls for a research report, follow this proven pipeline:\n"
+            "   - Delegate to `research-specialist` for deep search + crawl + corpus.\n"
+            "   - Then delegate to `report-writer` for HTML/PDF generation from refined_corpus.md.\n"
             "   - After a Composio search, the Observer AUTO-SAVES results to `search_results/` directory.\n"
-            "   - You will see: '📁 [OBSERVER] Saved: search_results/xxx.json'.\n"
-            "   - DO NOT write the report yourself. DO NOT call `crawl_parallel` yourself.\n"
-            "   - IMMEDIATELY delegate to 'report-creation-expert' with: 'Call finalize_research, then use refined_corpus.md to generate the report.'\n"
-            "   - WHY: The sub-agent will scrape ALL URLs for full article content. Your search only has snippets.\n"
-            "   - WITHOUT DELEGATION: Your report will be shallow (snippets only). WITH DELEGATION: Deep research (full articles).\n"
-            "   - Trust the Observer. Trust the sub-agent. Your job is to search and delegate.\n\n"
+            "   - DO NOT write reports yourself. The sub-agent scrapes ALL URLs for full article content.\n"
+            "   - Trust the Observer. Trust the sub-agent.\n"
+            "   NOTE: This is ONE execution pattern. If the task needs computation, media, real-world actions,\n"
+            "   or delivery beyond a report, use appropriate Composio tools and subagents for those phases too.\n\n"
             "10. 💡 PROACTIVE FOLLOW-UP SUGGESTIONS:\n"
             "   - After completing a task, suggest 2-3 helpful follow-up actions based on what was just accomplished.\n"
             "   - Examples: 'Would you like me to email this report?', 'Should I save this to a different format?',\n"
