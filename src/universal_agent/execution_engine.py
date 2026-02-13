@@ -794,6 +794,30 @@ class ProcessTurnAdapter:
                 except Exception as exc:
                     logger.warning("Session sync failed on close: %s", exc)
 
+            # 3. Record in processed_traces (legacy MemoryManager table)
+            trace_id = self._trace.get("trace_id")
+            if trace_id:
+                try:
+                    import sqlite3
+                    db_path = os.path.join(
+                        os.getenv("PERSIST_DIRECTORY", os.path.join(
+                            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                            "Memory_System_Data",
+                        )),
+                        "agent_core.db",
+                    )
+                    if os.path.exists(db_path):
+                        conn = sqlite3.connect(db_path, timeout=5)
+                        conn.execute(
+                            "INSERT OR IGNORE INTO processed_traces (trace_id, timestamp) VALUES (?, ?)",
+                            (trace_id, datetime.now().isoformat()),
+                        )
+                        conn.commit()
+                        conn.close()
+                        logger.info("Recorded processed trace: %s", trace_id)
+                except Exception as exc:
+                    logger.warning("Failed to record processed trace: %s", exc)
+
         except Exception as exc:
             logger.warning("Memory flush failed during close: %s", exc)
 
