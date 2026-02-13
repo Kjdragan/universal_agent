@@ -28,7 +28,6 @@ RSYNC_RSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no"
 
 # Sync tracked project content while preserving runtime secrets/state on VPS.
 rsync -az \
-  --delete \
   --exclude ".git/" \
   --exclude ".venv/" \
   --exclude ".env" \
@@ -82,14 +81,22 @@ ssh -i "$SSH_KEY" "$VPS_HOST" "
 
   echo
   echo '== Public health =='
-  printf 'API='
-  curl -s -o /tmp/deploy_api_health.json -w '%{http_code}' https://api.clearspringcg.com/api/v1/health
-  echo
+  api_code=''
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    api_code=\$(curl -s -o /tmp/deploy_api_health.json -w '%{http_code}' https://api.clearspringcg.com/api/v1/health || true)
+    if [ \"\$api_code\" = '200' ]; then break; fi
+    sleep 2
+  done
+  echo \"API=\$api_code\"
   head -c 220 /tmp/deploy_api_health.json || true
   echo
-  printf 'APP='
-  curl -s -o /dev/null -w '%{http_code}' https://app.clearspringcg.com/
-  echo
+  app_code=''
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    app_code=\$(curl -s -o /dev/null -w '%{http_code}' https://app.clearspringcg.com/ || true)
+    if [ \"\$app_code\" = '200' ]; then break; fi
+    sleep 2
+  done
+  echo \"APP=\$app_code\"
 
   if [ -f .env ]; then
     token=\$(grep '^UA_OPS_TOKEN=' .env | tail -n1 | cut -d= -f2- || true)
