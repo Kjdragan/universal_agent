@@ -11,6 +11,8 @@ try:
         upload_to_composio as upload_to_composio_core,
         list_directory as list_directory_core,
         inspect_session_workspace as inspect_session_workspace_core,
+        list_agent_sessions as list_agent_sessions_core,
+        read_vps_file as read_vps_file_core,
         append_to_file as append_to_file_core,
         write_text_file as write_text_file_core,
         generate_image as generate_image_core,
@@ -30,6 +32,8 @@ except ImportError:
         upload_to_composio as upload_to_composio_core,
         list_directory as list_directory_core,
         inspect_session_workspace as inspect_session_workspace_core,
+        list_agent_sessions as list_agent_sessions_core,
+        read_vps_file as read_vps_file_core,
         append_to_file as append_to_file_core,
         write_text_file as write_text_file_core,
         generate_image as generate_image_core,
@@ -118,6 +122,52 @@ async def inspect_session_workspace_wrapper(args: dict[str, Any]) -> dict[str, A
             tail_lines=args.get("tail_lines", 120),
             max_bytes_per_file=args.get("max_bytes_per_file", 65536),
             recent_file_limit=args.get("recent_file_limit", 25),
+        )
+    return {"content": [{"type": "text", "text": result_str}]}
+
+
+@tool(
+    name="list_agent_sessions",
+    description=(
+        "List available agent session workspaces with metadata. "
+        "Use to discover past sessions for debugging, cross-session file access, or review."
+    ),
+    input_schema={
+        "limit": int,
+        "source_filter": str,
+        "include_stats": bool,
+    },
+)
+async def list_agent_sessions_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result_str = list_agent_sessions_core(
+            limit=args.get("limit", 30),
+            source_filter=args.get("source_filter", ""),
+            include_stats=args.get("include_stats", True),
+        )
+    return {"content": [{"type": "text", "text": result_str}]}
+
+
+@tool(
+    name="read_vps_file",
+    description=(
+        "Read a file from the VPS filesystem (read-only). "
+        "Supports project-relative or absolute paths within allowed roots: "
+        "AGENT_RUN_WORKSPACES, artifacts, config, src, OFFICIAL_PROJECT_DOCUMENTATION, "
+        ".claude, scripts, web-ui, deployment. Directories return listing."
+    ),
+    input_schema={
+        "path": str,
+        "max_bytes": int,
+        "tail_lines": int,
+    },
+)
+async def read_vps_file_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result_str = read_vps_file_core(
+            path=args.get("path", ""),
+            max_bytes=args.get("max_bytes", 65536),
+            tail_lines=args.get("tail_lines", 0),
         )
     return {"content": [{"type": "text", "text": result_str}]}
 

@@ -1315,6 +1315,166 @@ def inspect_session_workspace(
 
 @mcp.tool()
 @trace_tool_output
+def list_agent_sessions(
+    limit: int = 30,
+    source_filter: str = "",
+    include_stats: bool = True,
+) -> str:
+    """
+    List available agent session workspaces with metadata.
+
+    Use this to discover past or active sessions for debugging, review,
+    or cross-session file access.  Combine with inspect_session_workspace
+    or read_vps_file to drill into a specific session.
+
+    Args:
+        limit: Maximum number of sessions to return (most recent first).
+        source_filter: Optional filter — 'chat', 'cron', 'hook', 'tg_', or '' for all.
+        include_stats: Include file counts and total size per session.
+    """
+    limit = max(1, min(int(limit or 30), 200))
+    workspaces_root = _resolve_workspaces_root()
+    if not workspaces_root.exists():
+        return json.dumps({"ok": False, "error": f"Workspaces root not found: {workspaces_root}"})
+
+    sessions: list[dict[str, Any]] = []
+    for entry in sorted(workspaces_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+        if source_filter:
+            if not entry.name.lower().startswith(source_filter.lower()):
+                continue
+
+        info: dict[str, Any] = {
+            "session_id": entry.name,
+            "modified": datetime.fromtimestamp(entry.stat().st_mtime).isoformat(),
+        }
+
+        if include_stats:
+            file_count = 0
+            total_size = 0
+            for f in entry.rglob("*"):
+                if f.is_file():
+                    file_count += 1
+                    total_size += f.stat().st_size
+            info["file_count"] = file_count
+            info["total_size_bytes"] = total_size
+            info["has_transcript"] = (entry / "transcript.md").exists()
+            info["has_run_log"] = (entry / "run.log").exists()
+            wp_dir = entry / "work_products"
+            info["work_product_count"] = len(list(wp_dir.rglob("*"))) if wp_dir.exists() else 0
+
+        sessions.append(info)
+        if len(sessions) >= limit:
+            break
+
+    return json.dumps({"ok": True, "count": len(sessions), "sessions": sessions}, indent=2)
+
+
+@mcp.tool()
+@trace_tool_output
+def read_vps_file(
+    path: str,
+    max_bytes: int = 65536,
+    tail_lines: int = 0,
+) -> str:
+    """
+    Read a file from the VPS filesystem (read-only).
+
+    Allowed roots: AGENT_RUN_WORKSPACES, artifacts, config, src,
+    OFFICIAL_PROJECT_DOCUMENTATION, .claude/agents, scripts.
+    Binary files return size info only.
+
+    Args:
+        path: Absolute or project-relative path to the file.
+        max_bytes: Maximum bytes to return (default 64 KB).
+        tail_lines: If > 0, return only the last N lines.
+    """
+    max_bytes = max(1024, min(int(max_bytes or 65536), 262144))
+    tail_lines = max(0, min(int(tail_lines or 0), 2000))
+
+    path = fix_path_typos(path)
+
+    # Resolve to absolute
+    if not os.path.isabs(path):
+        path = os.path.join(PROJECT_ROOT, path)
+    abs_path = Path(path).resolve()
+
+    # Allowed root prefixes (security)
+    project = Path(PROJECT_ROOT).resolve()
+    allowed_prefixes = [
+        project / "AGENT_RUN_WORKSPACES",
+        project / "artifacts",
+        project / "config",
+        project / "src",
+        project / "OFFICIAL_PROJECT_DOCUMENTATION",
+        project / ".claude",
+        project / "scripts",
+        project / "web-ui",
+        project / "deployment",
+    ]
+    if not any(str(abs_path).startswith(str(prefix)) for prefix in allowed_prefixes):
+        return json.dumps({
+            "ok": False,
+            "error": f"Access denied. Path must be under one of: {[str(p.relative_to(project)) for p in allowed_prefixes]}",
+        })
+
+    if not abs_path.exists():
+        return json.dumps({"ok": False, "error": f"File not found: {path}"})
+
+    if abs_path.is_dir():
+        items = []
+        for entry in sorted(abs_path.iterdir()):
+            stat = entry.stat()
+            items.append({
+                "name": entry.name,
+                "is_dir": entry.is_dir(),
+                "size": stat.st_size if entry.is_file() else None,
+            })
+        return json.dumps({"ok": True, "type": "directory", "path": str(abs_path), "entries": items}, indent=2)
+
+    # File
+    stat = abs_path.stat()
+    TEXT_EXTENSIONS = {
+        ".txt", ".md", ".log", ".py", ".js", ".ts", ".tsx", ".json", ".yaml", ".yml",
+        ".toml", ".cfg", ".ini", ".sh", ".bash", ".html", ".css", ".xml", ".csv",
+        ".env", ".conf", ".service", ".sql", ".r", ".rst",
+    }
+    is_text = abs_path.suffix.lower() in TEXT_EXTENSIONS
+
+    if not is_text:
+        return json.dumps({
+            "ok": True,
+            "type": "binary",
+            "path": str(abs_path),
+            "size_bytes": stat.st_size,
+            "extension": abs_path.suffix,
+        })
+
+    try:
+        with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+            if tail_lines > 0:
+                from collections import deque
+                lines = deque(f, maxlen=tail_lines)
+                content = "".join(lines)
+            else:
+                content = f.read(max_bytes)
+                if stat.st_size > max_bytes:
+                    content += f"\n\n... [truncated at {max_bytes} of {stat.st_size} bytes]"
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)})
+
+    return json.dumps({
+        "ok": True,
+        "type": "text",
+        "path": str(abs_path),
+        "size_bytes": stat.st_size,
+        "content": content,
+    }, indent=2)
+
+
+@mcp.tool()
+@trace_tool_output
 def compress_files(files: list[str], output_archive: str) -> str:
     """
     Compress a list of files into a zip archive.
