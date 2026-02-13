@@ -2517,6 +2517,7 @@ async def _calendar_apply_event_action(
 
 
 def _load_skill_catalog() -> list[dict]:
+    logger.info("Loading skill catalog...")
     skills_dir = os.getenv("UA_SKILLS_DIR") or str(BASE_DIR / ".claude" / "skills")
     overrides = load_ops_config().get("skills", {}).get("entries", {})
     normalized_overrides = {}
@@ -4026,20 +4027,26 @@ async def ops_list_sessions(
     memory_mode: str = "all",
 ):
     _require_ops_auth(request)
-    if not _ops_service:
-        raise HTTPException(status_code=503, detail="Ops service not initialized")
-    summaries = _ops_service.list_sessions(
-        status_filter=status,
-        source_filter=source,
-        owner_filter=owner,
-        memory_mode_filter=memory_mode,
-    )
-    return {
-        "sessions": summaries[offset : offset + limit],
-        "total": len(summaries),
-        "limit": limit,
-        "offset": offset,
-    }
+    try:
+        if not _ops_service:
+            raise HTTPException(status_code=503, detail="Ops service not initialized")
+        summaries = _ops_service.list_sessions(
+            status_filter=status,
+            source_filter=source,
+            owner_filter=owner,
+            memory_mode_filter=memory_mode,
+        )
+        return {
+            "sessions": summaries[offset : offset + limit],
+            "total": len(summaries),
+            "limit": limit,
+            "offset": offset,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("CRITICAL: Failed to list sessions")
+        raise HTTPException(status_code=500, detail="Internal Server Error: check gateway logs")
 
 
 @app.post("/api/v1/ops/sessions/cancel")
@@ -4529,7 +4536,11 @@ async def ops_logs_tail(
 @app.get("/api/v1/ops/skills")
 async def ops_skills_status(request: Request):
     _require_ops_auth(request)
-    return {"skills": _load_skill_catalog()}
+    try:
+        return {"skills": _load_skill_catalog()}
+    except Exception:
+        logger.exception("CRITICAL: Failed to list skills")
+        raise HTTPException(status_code=500, detail="Internal Server Error: check gateway logs")
 
 
 @app.patch("/api/v1/ops/skills/{skill_key}")

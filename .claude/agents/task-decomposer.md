@@ -158,13 +158,16 @@ You MUST create `macro_tasks.json` in the workspace with this structure:
 | `notion` / `NOTION_*` | Pages, databases, knowledge bases |
 | `discord` / `DISCORD_*` | Messages, channels, reactions |
 | `youtube` / `YOUTUBE_*` | Search, manage, publish |
-| `twitter` / `TWITTER_*` | Post, read, manage content |
 | `airtable` / `AIRTABLE_*` | Structured records and workflows |
 | `hubspot` / `HUBSPOT_*` | CRM contacts, deals, pipelines |
 | `linear` / `LINEAR_*` | Issue tracking, project planning |
 | `browserbase` / `BROWSERBASE_*` | Headless browser, web scraping |
 | `filetool` | File read/write in workspace |
 | `sqltool` | SQL queries against databases |
+
+Notes:
+- X (Twitter) “trending” discovery should use the `grok-x-trends` skill (xAI `x_search`), not a Composio toolkit.
+- Weather (current + forecast) should use the `openweather` skill (OpenWeather API) or `weather` (wttr.in) when API keys aren't available.
 
 ### Subagent Workflow Coordinators
 | Sub-Agent | Use For | Key Tools Used |

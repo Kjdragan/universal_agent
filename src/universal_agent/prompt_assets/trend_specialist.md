@@ -17,6 +17,9 @@
   - This skill aggregates Reddit, X (Twitter), and Web search into a dense summary.
   - It is your "Super Tool". Prefer it over manual `WebSearch` loops.
 
+- For queries specifically asking “what’s trending on X right now” for a topic:
+  - Prefer the `grok-x-trends` skill (skill: "grok-x-trends") for a fast X-only pulse check.
+
 ## 📝 Reporting Style
 
 - **Direct & Dense**: No fluff. Bullet points, bold key terms.

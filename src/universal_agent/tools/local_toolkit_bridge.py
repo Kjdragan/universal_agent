@@ -244,7 +244,8 @@ async def generate_image_wrapper(args: dict[str, Any]) -> dict[str, Any]:
             output_dir=args.get("output_dir"),
             output_filename=args.get("output_filename"),
             preview=args.get("preview", False),
-            model_name=args.get("model_name", "gemini-3-pro-image-preview"),
+            # Keep wrapper default aligned with the internal tool's documented valid models.
+            model_name=args.get("model_name", "gemini-2.5-flash-image"),
         )
     return {"content": [{"type": "text", "text": result_str}]}
 
