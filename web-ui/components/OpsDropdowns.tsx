@@ -1301,15 +1301,17 @@ export function OpsConfigSection() {
     remoteSyncSaving,
     loadRemoteSync,
     setRemoteSync,
+    opsSchemaText,
     opsSchemaStatus,
   } = useOps();
+  const [purgeRemoteSaving, setPurgeRemoteSaving] = useState(false);
 
   const purgeRemoteData = useCallback(async () => {
     if (!confirm("⚠️ DANGER: This will delete ALL session workspaces and artifacts on the specific remote VPS.\n\nRunning sessions may fail. Local files are NOT affected.\n\nAre you sure you want to PURGE ALL REMOTE DATA?")) {
       return;
     }
     try {
-      setRemoteSyncSaving(true); // Re-using this specific loading state for now
+      setPurgeRemoteSaving(true);
       const r = await fetch(`${API_BASE}/api/v1/ops/workspaces/purge?confirm=true`, {
         method: "POST",
         headers: buildHeaders(),
@@ -1323,7 +1325,7 @@ export function OpsConfigSection() {
     } catch (e) {
       alert(`Purge failed: ${(e as Error).message}`);
     } finally {
-      setRemoteSyncSaving(false);
+      setPurgeRemoteSaving(false);
     }
   }, []);
 
@@ -1368,9 +1370,9 @@ export function OpsConfigSection() {
             type="button"
             className="text-xs px-2 py-1 rounded border border-rose-500/50 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 transition-colors disabled:opacity-50"
             onClick={purgeRemoteData}
-            disabled={remoteSyncSaving}
+            disabled={remoteSyncSaving || purgeRemoteSaving}
           >
-            Purge All Remote Data
+            {purgeRemoteSaving ? "Purging..." : "Purge All Remote Data"}
           </button>
         </div>
       </div>
