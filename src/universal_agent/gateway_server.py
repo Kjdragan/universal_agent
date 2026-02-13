@@ -2114,6 +2114,11 @@ def _calendar_project_heartbeat_events(
             continue
         workspace_dir = str(summary.get("workspace_dir") or str(WORKSPACES_DIR / session_id))
         overrides = _calendar_read_heartbeat_overrides(workspace_dir)
+        hidden_flag = overrides.get("calendar_hidden", False)
+        if isinstance(hidden_flag, str):
+            hidden_flag = hidden_flag.strip().lower() in {"1", "true", "yes", "y", "on"}
+        if bool(hidden_flag):
+            continue
         if _heartbeat_service:
             schedule = _heartbeat_service._resolve_schedule(overrides)  # type: ignore[attr-defined]
             delivery = _heartbeat_service._resolve_delivery(overrides, session_id)  # type: ignore[attr-defined]
@@ -2124,12 +2129,6 @@ def _calendar_project_heartbeat_events(
             delivery_mode = "last"
         every_seconds = max(HEARTBEAT_INTERVAL_SECONDS, every_seconds)
 
-        # Calendar UX: if heartbeat delivery is disabled for a session, treat it as
-        # "deleted" from the calendar to avoid noise (the session can still be
-        # managed elsewhere via config/tools).
-        if delivery_mode == "none":
-            continue
-
         hb_state = _read_heartbeat_state(workspace_dir) or {}
         last_run = float(hb_state.get("last_run") or 0.0)
         raw_next_run = (last_run + every_seconds) if last_run > 0 else (now_ts + every_seconds)
@@ -2139,7 +2138,9 @@ def _calendar_project_heartbeat_events(
         else:
             next_run = raw_next_run
         busy = bool(_heartbeat_service and session_id in _heartbeat_service.busy_sessions)
-        if busy:
+        if delivery_mode == "none":
+            status_value = "disabled"
+        elif busy:
             status_value = "running"
         else:
             status_value = "scheduled"
@@ -2265,6 +2266,16 @@ def _calendar_apply_heartbeat_delivery_mode(session_id: str, mode: str) -> dict[
     merged = _calendar_merge_dict(existing, {"delivery": {"mode": mode}})
     path = _calendar_write_heartbeat_overrides(session_id, merged)
     return {"path": path, "mode": mode}
+
+
+def _calendar_apply_heartbeat_calendar_hidden(session_id: str, hidden: bool) -> dict[str, Any]:
+    workspace = WORKSPACES_DIR / session_id
+    if not workspace.exists():
+        raise HTTPException(status_code=404, detail="Session not found")
+    existing = _calendar_read_heartbeat_overrides(str(workspace))
+    merged = _calendar_merge_dict(existing, {"calendar_hidden": bool(hidden)})
+    path = _calendar_write_heartbeat_overrides(session_id, merged)
+    return {"path": path, "calendar_hidden": bool(hidden)}
 
 
 def _calendar_apply_heartbeat_interval(session_id: str, every_seconds: int) -> dict[str, Any]:
@@ -2475,8 +2486,11 @@ async def _calendar_apply_event_action(
                 raise HTTPException(status_code=503, detail="Heartbeat service not available")
             _heartbeat_service.request_heartbeat_now(session_id, reason="calendar_action")
             return {"status": "ok", "action": action_norm, "session_id": session_id}
-        if action_norm in {"pause", "disable", "delete"}:
+        if action_norm in {"pause", "disable"}:
             result = _calendar_apply_heartbeat_delivery_mode(session_id, "none")
+            return {"status": "ok", "action": action_norm, "session_id": session_id, **result}
+        if action_norm == "delete":
+            result = _calendar_apply_heartbeat_calendar_hidden(session_id, True)
             return {"status": "ok", "action": action_norm, "session_id": session_id, **result}
         if action_norm == "resume":
             result = _calendar_apply_heartbeat_delivery_mode(session_id, "last")
