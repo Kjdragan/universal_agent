@@ -930,21 +930,33 @@ export function CalendarSection() {
     return Array.from({ length: 7 }, (_, i) => addDays(range.start, i));
   }, [range.start, view]);
 
-  const eventsByDay = useMemo(() => {
-    const map = new Map<string, CalendarEventItem[]>();
+  const RESULT_STATUSES = new Set(["success", "failed", "missed"]);
+
+  const { scheduledByDay, resultsByDay } = useMemo(() => {
+    const sMap = new Map<string, CalendarEventItem[]>();
+    const rMap = new Map<string, CalendarEventItem[]>();
     for (const day of weekDays) {
-      map.set(day.toDateString(), []);
+      sMap.set(day.toDateString(), []);
+      rMap.set(day.toDateString(), []);
     }
     for (const event of events) {
       const key = new Date(event.scheduled_at_local).toDateString();
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(event);
+      const isResult = RESULT_STATUSES.has(event.status);
+      const target = isResult ? rMap : sMap;
+      if (!target.has(key)) target.set(key, []);
+      target.get(key)!.push(event);
     }
-    for (const [, bucket] of map) {
-      bucket.sort((a, b) => a.scheduled_at_epoch - b.scheduled_at_epoch);
-    }
-    return map;
+    for (const [, bucket] of sMap) bucket.sort((a, b) => a.scheduled_at_epoch - b.scheduled_at_epoch);
+    for (const [, bucket] of rMap) bucket.sort((a, b) => a.scheduled_at_epoch - b.scheduled_at_epoch);
+    return { scheduledByDay: sMap, resultsByDay: rMap };
   }, [events, weekDays]);
+
+  const hasAnyResults = useMemo(() => {
+    for (const [, bucket] of resultsByDay) {
+      if (bucket.length > 0) return true;
+    }
+    return false;
+  }, [resultsByDay]);
 
   const statusBadge = (event: CalendarEventItem) => {
     // Heartbeat should read as low-stakes background activity (light blue),
@@ -992,6 +1004,8 @@ export function CalendarSection() {
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-sky-400/80" />heartbeat</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-blue-500/80" />scheduled</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-emerald-500/80" />success</span>
+            <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-rose-500/80" />failed</span>
             <span className="inline-flex items-center gap-1"><span className="w-2 h-2 rounded bg-amber-500/80" />missed</span>
           </div>
         </div>
@@ -1039,46 +1053,78 @@ export function CalendarSection() {
         </div>
       </div>
 
-      <div className="hidden md:grid grid-cols-7 gap-2">
-        {weekDays.map((day) => {
-          const key = day.toDateString();
-          const bucket = eventsByDay.get(key) || [];
-          return (
-            <div key={key} className="border rounded bg-background/40 p-2 min-h-[220px]">
-              <div className="font-semibold text-[11px] mb-2">{day.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" })}</div>
-              <div className="space-y-1">
-                {bucket.length === 0 && <div className="text-[10px] text-muted-foreground">No events</div>}
-                {bucket.map((event) => (
-                  <div key={event.event_id} className={`rounded border px-2 py-1 ${statusBadge(event)}`}>
-                    <div className="font-semibold truncate">{event.title}</div>
-                    <div className="text-[10px] opacity-90">{new Date(event.scheduled_at_local).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} • {event.status}</div>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      {event.source === "heartbeat" ? (
-                        <button
-                          onClick={() => performAction(event, "delete")}
-                          className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]"
-                          title="Disable heartbeat delivery for this session (calendar will stop showing it)."
-                        >
-                          Delete
-                        </button>
-                      ) : (
-                        <>
-                          {(event.actions || []).map((action) => (
-                            <button key={`${event.event_id}-${action}`} onClick={() => performAction(event, action)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">
-                              {action}
-                            </button>
-                          ))}
-                          <button onClick={() => requestChange(event)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">change</button>
-                        </>
-                      )}
+      {/* Row 1: Scheduled / Upcoming */}
+      <div className="hidden md:block space-y-1">
+        <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">Scheduled</div>
+        <div className="grid grid-cols-7 gap-2">
+          {weekDays.map((day) => {
+            const key = day.toDateString();
+            const bucket = scheduledByDay.get(key) || [];
+            return (
+              <div key={key} className="border rounded bg-background/40 p-2 min-h-[180px]">
+                <div className="font-semibold text-[11px] mb-2">{day.toLocaleDateString(undefined, { weekday: "short", month: "numeric", day: "numeric" })}</div>
+                <div className="space-y-1">
+                  {bucket.length === 0 && <div className="text-[10px] text-muted-foreground">—</div>}
+                  {bucket.map((event) => (
+                    <div key={event.event_id} className={`rounded border px-2 py-1 ${statusBadge(event)}`}>
+                      <div className="font-semibold truncate">{event.title}</div>
+                      <div className="text-[10px] opacity-90">{new Date(event.scheduled_at_local).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} • {event.status}</div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {event.source === "heartbeat" ? (
+                          <button
+                            onClick={() => performAction(event, "delete")}
+                            className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]"
+                            title="Disable heartbeat delivery for this session (calendar will stop showing it)."
+                          >
+                            Delete
+                          </button>
+                        ) : (
+                          <>
+                            {(event.actions || []).map((action) => (
+                              <button key={`${event.event_id}-${action}`} onClick={() => performAction(event, action)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">
+                                {action}
+                              </button>
+                            ))}
+                            <button onClick={() => requestChange(event)} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">change</button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
+
+      {/* Row 2: Results (completed / failed / missed) */}
+      {hasAnyResults && (
+        <div className="hidden md:block space-y-1">
+          <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">Results</div>
+          <div className="grid grid-cols-7 gap-2">
+            {weekDays.map((day) => {
+              const key = day.toDateString();
+              const bucket = resultsByDay.get(key) || [];
+              return (
+                <div key={`result-${key}`} className="border rounded bg-background/40 p-2 min-h-[80px]">
+                  <div className="font-semibold text-[11px] mb-1 text-muted-foreground">{day.toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}</div>
+                  <div className="space-y-1">
+                    {bucket.length === 0 && <div className="text-[10px] text-muted-foreground">—</div>}
+                    {bucket.map((event) => (
+                      <div key={event.event_id} className={`rounded border px-2 py-1 ${statusBadge(event)} cursor-pointer hover:opacity-80`} onClick={() => event.session_id && attachToChat(event.session_id)} title={event.session_id ? `Open session ${event.session_id}` : undefined}>
+                        <div className="font-semibold truncate">{event.title}</div>
+                        <div className="text-[10px] opacity-90">{new Date(event.scheduled_at_local).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} • {event.status}</div>
+                        {event.session_id && <div className="text-[9px] opacity-70 truncate mt-0.5">📎 {event.session_id.slice(0, 24)}…</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="md:hidden border rounded bg-background/40 p-2">
         <div className="font-semibold mb-2">{view === "day" ? "Day" : "Events"}</div>

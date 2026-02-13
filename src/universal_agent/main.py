@@ -7199,6 +7199,37 @@ async def process_turn(
         workspace_dir, absolute=True, observer_setter=_set_observer_workspace
     )
 
+    # Ephemeral system events (cron completions, exec finishes, monitors) are
+    # injected by the gateway/heartbeat service via env for this single turn.
+    # This is intentionally not persisted in chat history.
+    def _system_events_prompt_from_env() -> str:
+        raw = (os.getenv("UA_SYSTEM_EVENTS_PROMPT") or "").strip()
+        if raw:
+            return raw
+        raw_json = (os.getenv("UA_SYSTEM_EVENTS_JSON") or "").strip()
+        if not raw_json:
+            return ""
+        try:
+            parsed = json.loads(raw_json)
+        except Exception:
+            return ""
+        if not isinstance(parsed, list) or not parsed:
+            return ""
+        lines: list[str] = []
+        for evt in parsed:
+            if isinstance(evt, dict):
+                text = str(evt.get("text") or "").strip()
+                if not text:
+                    continue
+                lines.append(f"System: {text}")
+        return "\n".join(lines)
+
+    system_events_block = _system_events_prompt_from_env()
+    # If we have pending system events, force the Complex Path so the agent can
+    # use tools and resolve them (Clawdbot parity).
+    if system_events_block:
+        force_complex = True
+
     trace["query"] = user_input
     trace["start_time"] = datetime.now().isoformat()
     start_ts = time.time()
@@ -7374,7 +7405,7 @@ async def process_turn(
         # Complex Path (Tool Loop) - track per-request timing
         request_start_ts = time.time()
         iteration = 1
-        current_query = user_input
+        current_query = f"{system_events_block}\n\n{user_input}" if system_events_block else user_input
         
         # Emit processing started for complex path
         emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "complex", "iteration": iteration}))

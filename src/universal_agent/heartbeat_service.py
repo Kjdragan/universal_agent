@@ -35,19 +35,12 @@ GLOBAL_HEARTBEAT_PATH = PROJECT_ROOT / "memory" / "HEARTBEAT.md"
 HEARTBEAT_FILE = "HEARTBEAT.md"
 HEARTBEAT_STATE_FILE = "heartbeat_state.json"
 DEFAULT_HEARTBEAT_PROMPT = (
-    "Read HEARTBEAT.md (workspace context). This is your checklist.\n"
-    "\n"
-    "Checkbox meaning (IMPORTANT):\n"
-    "- [ ] = ACTIVE / PENDING (eligible to run if conditions match)\n"
-    "- [x] = COMPLETED / DISABLED (do not run)\n"
-    "\n"
-    "Steps:\n"
-    "1) Check the current time (use `date`).\n"
-    "2) Evaluate ONLY the ACTIVE / PENDING items (`- [ ] ...`). If any match current time/conditions, execute them now.\n"
-    "3) If and only if NO items match, reply with EXACTLY: HEARTBEAT_OK\n"
-    "   - No extra words.\n"
-    "   - No markdown.\n"
-    "   - No explanations.\n"
+    # Keep it short and avoid encouraging the model to invent/rehash "open loops"
+    # from prior chat context. HEARTBEAT.md should be the canonical checklist.
+    "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
+    "Checkbox meaning: '- [ ]' = ACTIVE/PENDING, '- [x]' = COMPLETED/DISABLED. "
+    "Do not infer or repeat old tasks from prior chats. "
+    "If nothing needs attention, reply HEARTBEAT_OK."
 )
 DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default
 MIN_INTERVAL_SECONDS = 30 * 60      # Never run heartbeats more frequently than 30 minutes
@@ -719,9 +712,6 @@ class HeartbeatService:
         if self._check_session_idle(session):
             return
 
-        if session.session_id in self.busy_sessions:
-            return  # Skip if busy executing normal request
-
         # Load state
         workspace = Path(session.workspace_dir)
         state_path = workspace / HEARTBEAT_STATE_FILE
@@ -738,6 +728,38 @@ class HeartbeatService:
         delivery = self._resolve_delivery(overrides, session.session_id)
         visibility = self._resolve_visibility(overrides)
         now = time.time()
+
+        # Required scheduling behavior: missed windows are not backfilled.
+        # If the session is busy and this would have been a scheduled run, consume
+        # the window by advancing last_run. Do not consume explicit wake requests.
+        if session.session_id in self.busy_sessions:
+            if session.session_id in self.wake_sessions or session.session_id in self.wake_next_sessions:
+                return
+            elapsed = now - state.last_run
+            if elapsed >= schedule.every_seconds and _within_active_hours(schedule, now):
+                state.last_run = now
+                state.last_summary = {
+                    "timestamp": datetime.now().isoformat(),
+                    "ok_only": True,
+                    "text": None,
+                    "token": None,
+                    "sent": False,
+                    "artifacts": {"writes": [], "work_products": [], "bash_commands": []},
+                    "delivery": {
+                        "mode": delivery.mode,
+                        "targets": [],
+                        "connected_targets": [],
+                        "indicator_only": False,
+                    },
+                    "suppressed_reason": "busy_skip_no_backfill",
+                }
+                try:
+                    with open(state_path, "w") as f:
+                        json.dump(state.to_dict(), f)
+                except Exception:
+                    pass
+            return
+
         wake_requested = session.session_id in self.wake_sessions
         wake_reason = None
         if wake_requested:
@@ -772,6 +794,30 @@ class HeartbeatService:
                 if target in self.connection_manager.session_connections
             ]
             if not connected_targets:
+                # Heartbeats do not backfill: consume this window even if no
+                # explicit targets are connected, so we don't "catch up" as
+                # soon as a client attaches.
+                state.last_run = now
+                state.last_summary = {
+                    "timestamp": datetime.now().isoformat(),
+                    "ok_only": True,
+                    "text": None,
+                    "token": None,
+                    "sent": False,
+                    "artifacts": {"writes": [], "work_products": [], "bash_commands": []},
+                    "delivery": {
+                        "mode": delivery.mode,
+                        "targets": delivery_targets,
+                        "connected_targets": [],
+                        "indicator_only": False,
+                    },
+                    "suppressed_reason": "no_connected_targets",
+                }
+                try:
+                    with open(state_path, "w") as f:
+                        json.dump(state.to_dict(), f)
+                except Exception:
+                    pass
                 return
 
         # Check HEARTBEAT.md (optional)

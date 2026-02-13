@@ -3236,7 +3236,7 @@ def generate_image(
     output_dir: str = None,
     output_filename: str = None,
     preview: bool = False,
-    model_name: str = "gemini-3-pro-image-preview",
+    model_name: str = "gemini-2.5-flash-image",
 ) -> str:
     """
     Generate or edit an image using Gemini models.
@@ -3247,7 +3247,9 @@ def generate_image(
         output_dir: Optional preferred directory. Final output is always normalized under session work_products/media.
         output_filename: Optional filename. Directory components are ignored for safety.
         preview: If True, launches Gradio viewer with the generated image.
-        model_name: Gemini model to use. Defaults to "gemini-3-pro-image-preview".
+        model_name: Gemini model to use. Defaults to "gemini-2.5-flash-image".
+            Valid options: "gemini-2.5-flash-image", "gemini-2.0-flash-exp-image-generation".
+            Do NOT guess model names — use one of these exact strings.
 
     Returns:
         JSON with status, output_path, description, and viewer_url (if preview=True).
@@ -3422,8 +3424,36 @@ def generate_image(
 
 
 def describe_image_internal(image: "Image.Image") -> str:
-    """Internal helper to describe image without ZAI Vision (uses simple analysis)."""
-    # Simple fallback description based on image properties
+    """Internal helper to describe image using Gemini vision, with simple fallback."""
+    try:
+        from google import genai
+        from google.genai.types import GenerateContentConfig, Part
+        import base64
+        from io import BytesIO
+
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise RuntimeError("No GEMINI_API_KEY set")
+
+        client = genai.Client(api_key=api_key)
+
+        buf = BytesIO()
+        image.save(buf, format="PNG")
+        image_bytes = buf.getvalue()
+
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[
+                Part.from_bytes(data=image_bytes, mime_type="image/png"),
+                "Describe this image in 10 words or fewer. Be specific and descriptive. Output ONLY the description, no quotes or extra text.",
+            ],
+        )
+        desc = (response.text or "").strip().strip('"').strip("'")
+        if desc:
+            return desc
+    except Exception as e:
+        mcp_log(f"Gemini vision fallback: {e}", level="debug")
+
     width, height = image.size
     mode = image.mode
     return f"{mode}_image_{width}x{height}"
@@ -3433,33 +3463,25 @@ def describe_image_internal(image: "Image.Image") -> str:
 @trace_tool_output
 def describe_image(image_path: str, max_words: int = 10) -> str:
     """
-    Get a short description of an image using ZAI Vision (free).
-    Useful for generating descriptive filenames.
+    Get a short description of an image using Gemini vision.
+    Useful for generating descriptive filenames and alt-text.
 
     Args:
         image_path: Path to the image file.
         max_words: Maximum words in description (default 10).
 
     Returns:
-        Short description suitable for filenames.
+        JSON with short description suitable for filenames.
     """
     try:
         if not os.path.exists(image_path):
             return json.dumps({"error": f"Image not found: {image_path}"})
 
-        # Try ZAI Vision via MCP if available
-        try:
-            # This would require calling the zai_vision MCP server
-            # For now, fall back to simple description
-            from PIL import Image
+        from PIL import Image
 
-            img = Image.open(image_path)
-            desc = describe_image_internal(img)
-            return json.dumps({"description": desc})
-        except Exception:
-            # Fallback to basic file info
-            filename = os.path.basename(image_path)
-            return json.dumps({"description": f"image_{filename}"})
+        img = Image.open(image_path)
+        desc = describe_image_internal(img)
+        return json.dumps({"description": desc})
 
     except Exception as e:
         return json.dumps({"error": str(e)})

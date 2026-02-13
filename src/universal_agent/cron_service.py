@@ -62,6 +62,7 @@ _CRON_WORKSPACE_KEEP_FILES = {
     "trace_catalog.md",
     "MEMORY.md",
 }
+_CRON_OUTPUT_FILENAME = "cron_result.md"
 
 
 def _normalize_timeout_seconds(value: Any) -> Optional[int]:
@@ -493,6 +494,9 @@ class CronService:
         
         job_id = uuid.uuid4().hex[:10]
         workspace = workspace_dir or str(self.workspaces_dir / f"cron_{job_id}")
+        metadata = dict(metadata or {})
+        if not metadata.get("session_id"):
+            metadata["session_id"] = Path(workspace).name
         job = CronJob(
             job_id=job_id,
             user_id=user_id or f"cron:{job_id}",
@@ -506,7 +510,7 @@ class CronService:
             model=model,
             timeout_seconds=_normalize_timeout_seconds(timeout_seconds),
             enabled=enabled,
-            metadata=metadata or {},
+            metadata=metadata,
         )
         job.schedule_next(time.time())
         self.jobs[job_id] = job
@@ -573,6 +577,7 @@ class CronService:
         scheduled_at: Optional[float] = None,
     ) -> CronRunRecord:
         job = self.jobs[job_id]
+        self.running_jobs.add(job.job_id)
         return await self._run_job(job, scheduled_at=scheduled_at, reason=reason)
 
     async def _scheduler_loop(self) -> None:
@@ -582,41 +587,28 @@ class CronService:
                 if not job.enabled:
                     continue
                 if job.job_id in self.running_jobs:
-                    # Prevent repeated "already running" skips while a prior dispatch is active.
                     continue
                 if job.next_run_at is None:
                     job.schedule_next(now)
                 if job.next_run_at and now >= job.next_run_at:
                     scheduled_at = float(job.next_run_at)
                     if job.run_at is not None:
-                        # One-shot jobs should only be consumed after a real run attempt starts.
-                        # Keep them retriable across short restarts by moving next_run forward
-                        # until _run_job finalizes state.
                         job.next_run_at = now + 5.0
                     else:
                         job.last_run_at = now
                         job.schedule_next(now)
+                    # Mark as running BEFORE dispatching to prevent race where
+                    # the next scheduler tick fires a duplicate task before
+                    # _run_job acquires the semaphore.
+                    self.running_jobs.add(job.job_id)
                     self.store.save_jobs(self.jobs.values())
                     asyncio.create_task(self._run_job(job, scheduled_at=scheduled_at, reason="schedule"))
             await asyncio.sleep(1)
 
     async def _run_job(self, job: CronJob, scheduled_at: Optional[float], reason: str) -> CronRunRecord:
-        if job.job_id in self.running_jobs:
-            logger.info("Chron job %s already running, skipping", job.job_id)
-            record = CronRunRecord(
-                run_id=uuid.uuid4().hex[:12],
-                job_id=job.job_id,
-                status="skipped",
-                scheduled_at=scheduled_at,
-                started_at=time.time(),
-                finished_at=time.time(),
-                error="already running",
-            )
-            self.store.append_run(record)
-            return record
-
+        # running_jobs is set by the caller (_scheduler_loop or run_job_now)
+        # before dispatching, so no duplicate-guard needed here.
         async with self._semaphore:
-            self.running_jobs.add(job.job_id)
             record = CronRunRecord(
                 run_id=uuid.uuid4().hex[:12],
                 job_id=job.job_id,
@@ -660,6 +652,7 @@ class CronService:
                     record.status = "success"
                     record.finished_at = time.time()
                     record.output_preview = (result.response_text or "")[:400]
+                    self._persist_run_output(job, record, result)
             except asyncio.TimeoutError:
                 record.status = "error"
                 record.finished_at = time.time()
@@ -749,6 +742,37 @@ class CronService:
         except Exception as exc:
             logger.warning("Failed organizing chron workspace outputs for %s: %s", workspace_dir, exc)
             return []
+
+    def _persist_run_output(self, job: CronJob, record: CronRunRecord, result: Any) -> None:
+        """Save cron run outputs into work_products and optional artifacts directory."""
+        response_text = (getattr(result, "response_text", "") or "").strip()
+        if not response_text:
+            return
+        try:
+            workspace = Path(job.workspace_dir).resolve()
+            work_products_dir = workspace / "work_products"
+            work_products_dir.mkdir(parents=True, exist_ok=True)
+            target = self._dedupe_destination(work_products_dir / _CRON_OUTPUT_FILENAME)
+            content = (
+                f"# Chron Output\n\n"
+                f"- Job ID: {job.job_id}\n"
+                f"- Run ID: {record.run_id}\n"
+                f"- Status: {record.status}\n"
+                f"- Finished At: {datetime.fromtimestamp(record.finished_at or time.time()).isoformat()}\n\n"
+                f"## Response\n\n{response_text}\n"
+            )
+            target.write_text(content, encoding="utf-8")
+
+            artifacts_root = os.getenv("UA_ARTIFACTS_DIR")
+            if not artifacts_root:
+                artifacts_root = str(Path(__file__).resolve().parent.parent.parent / "artifacts")
+            if artifacts_root:
+                artifacts_dir = Path(artifacts_root).resolve() / "cron" / job.job_id
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+                artifacts_target = self._dedupe_destination(artifacts_dir / target.name)
+                artifacts_target.write_text(content, encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Failed to persist chron output for %s: %s", job.job_id, exc)
 
     def _dedupe_destination(self, path: Path) -> Path:
         if not path.exists():

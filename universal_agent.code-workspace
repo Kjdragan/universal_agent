@@ -7,5 +7,7 @@
 			"path": "../clawdbot"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"makefile.configureOnOpen": false
+	}
 }

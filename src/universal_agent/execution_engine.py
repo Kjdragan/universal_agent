@@ -14,6 +14,7 @@ The adapter ensures that:
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import sys
 import time
@@ -200,6 +201,28 @@ def _build_memory_env_overrides(memory_policy: dict[str, Any] | None) -> dict[st
     else:  # full
         overrides["UA_MEMORY_PROFILE_MODE"] = "prod"
     return overrides
+
+
+def _format_system_events_for_prompt(events: list[dict[str, Any]]) -> str:
+    """
+    Render ephemeral system events into a compact preamble that can be prefixed
+    to the next model prompt (Clawdbot parity).
+    """
+    lines: list[str] = []
+    for evt in events:
+        if not isinstance(evt, dict):
+            continue
+        text = str(evt.get("text") or "").strip()
+        if not text:
+            # Fall back to a compact JSON repr when no text exists.
+            try:
+                text = json.dumps(evt, ensure_ascii=True, sort_keys=True)
+            except Exception:
+                text = str(evt).strip()
+        if not text:
+            continue
+        lines.append(f"System: {text}")
+    return "\n".join(lines)
 
 
 @dataclass
@@ -452,6 +475,19 @@ class ProcessTurnAdapter:
                 env_overrides = _build_memory_env_overrides(
                     memory_policy if isinstance(memory_policy, dict) else {}
                 )
+                system_events = self.config.__dict__.get("_system_events")
+                if isinstance(system_events, list) and system_events:
+                    # Keep the raw JSON in env so the engine can choose formatting/filters.
+                    # This is scoped to this single turn via _temporary_env().
+                    try:
+                        env_overrides["UA_SYSTEM_EVENTS_JSON"] = json.dumps(system_events, ensure_ascii=True)
+                    except Exception:
+                        env_overrides["UA_SYSTEM_EVENTS_JSON"] = None
+                    # Also include a pre-rendered block for convenience.
+                    env_overrides["UA_SYSTEM_EVENTS_PROMPT"] = _format_system_events_for_prompt(system_events) or None
+                else:
+                    env_overrides["UA_SYSTEM_EVENTS_JSON"] = None
+                    env_overrides["UA_SYSTEM_EVENTS_PROMPT"] = None
 
                 with _temporary_env(env_overrides):
                     if USE_PROCESS_STDIO_REDIRECT:
