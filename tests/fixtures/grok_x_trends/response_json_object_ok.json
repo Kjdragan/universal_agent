@@ -1,0 +1,15 @@
+{
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "{\n  \"themes\": [\n    {\n      \"label\": \"Model release chatter\",\n      \"keywords\": [\"OpenAI\", \"release\"],\n      \"why_trending\": \"Multiple posts discuss a new model release and early impressions.\",\n      \"example_urls\": [\"https://x.com/alice/status/1\", \"https://x.com/bob/status/2\"]\n    }\n  ],\n  \"posts\": [\n    {\n      \"text\": \"OpenAI just shipped something new.\",\n      \"url\": \"https://x.com/alice/status/1\",\n      \"author_handle\": \"alice\",\n      \"date\": \"2026-02-13\",\n      \"engagement\": {\"likes\": 10, \"reposts\": 2, \"replies\": 1, \"quotes\": 0}\n    },\n    {\n      \"text\": \"Quick thoughts on the OpenAI release.\",\n      \"url\": \"https://x.com/bob/status/2\",\n      \"author_handle\": \"bob\",\n      \"date\": null,\n      \"engagement\": null\n    }\n  ]\n}\n"
+        }
+      ]
+    }
+  ]
+}
+

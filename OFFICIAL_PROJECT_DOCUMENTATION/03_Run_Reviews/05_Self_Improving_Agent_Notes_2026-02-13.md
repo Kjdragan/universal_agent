@@ -55,3 +55,25 @@ Purpose: capture recurring failure modes, recovery patterns, and system-level gu
 ## Operating Principle
 Default behavior is to push for full success with creative recovery. "Partial output" is a deliberate last resort after recovery attempts, not an excuse to stop early.
 
+## Incident: Grok X Trends Returned "No Posts" (Parser Bug)
+
+### What Happened
+- A run invoked the `grok-x-trends` skill and the script printed:
+  - `Themes: 0`
+  - `Posts: 0`
+- This led the agent to conclude “X is returning empty results” and pivot away from X, even though the upstream API call succeeded and contained usable post URLs.
+
+### Root Cause Pattern
+- Silent parse failure: the script extracted the model output text but failed to parse the JSON due to incorrectly escaped regex patterns (`[\\s\\S]` instead of `[\s\S]`, `\\d` instead of `\d`).
+- The raw model output actually contained valid JSON with themes and post URLs, but the script discarded it and surfaced an empty result.
+
+### Fix Implemented
+- Corrected the regex patterns in `.claude/skills/grok-x-trends/scripts/lib/xai_x_search.py` so valid JSON is parsed into structured `themes`/`posts`.
+- Removed a noisy `datetime.utcnow()` deprecation warning in `.claude/skills/grok-x-trends/scripts/grok_x_trends.py` by using timezone-aware UTC time.
+
+### Generalizable Lessons
+- Any “wrapper script” around an LLM/tool should treat parse failures as first-class errors, not as “empty results”.
+- When a parser returns empty, preserve and surface a bounded `raw_text` preview so operators can tell the difference between:
+  - “tool returned nothing”
+  - “tool returned something but our parser dropped it”
+- Add a minimal regression test for parsers using a recorded fixture response (no live API dependency) when feasible.

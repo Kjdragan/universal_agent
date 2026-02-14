@@ -46,6 +46,9 @@ from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 # Memory Tools
 from universal_agent.tools.memory import ua_memory_get_wrapper, ua_memory_search_wrapper
 
+# X Trends (xAI/Grok x_search) evidence fetch
+from universal_agent.tools.x_trends_bridge import x_trends_posts_wrapper
+
 
 def get_core_internal_tools() -> List[Callable]:
     """
@@ -77,6 +80,7 @@ def get_core_internal_tools() -> List[Callable]:
         get_core_memory_blocks_wrapper,
         ask_user_questions_wrapper,
         batch_tool_execute_wrapper,
+        x_trends_posts_wrapper,
     ]
 
 def get_memory_tools() -> List[Callable]:

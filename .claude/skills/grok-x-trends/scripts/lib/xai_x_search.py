@@ -18,6 +18,50 @@ DEPTH_CONFIG: Dict[str, Tuple[int, int]] = {
     "deep": (40, 60),
 }
 
+# Hard cap on tool calls to reduce runaway spend. The x_search tool may fan out
+# into multiple internal calls (e.g., keyword + semantic searches), so these are
+# intentionally not too tight.
+MAX_TOOL_CALLS_BY_DEPTH: Dict[str, int] = {
+    "quick": 8,
+    "default": 14,
+    "deep": 24,
+}
+
+# Prefer native JSON output. This removes the need for regex extraction and
+# makes downstream parsing deterministic.
+RESPONSE_FORMAT_JSON_OBJECT: Dict[str, Any] = {"type": "json_object"}
+
+
+def _build_x_search_tool(
+    *,
+    from_date: str,
+    to_date: str,
+    allowed_x_handles: Optional[List[str]] = None,
+    excluded_x_handles: Optional[List[str]] = None,
+    enable_image_understanding: bool = False,
+    enable_video_understanding: bool = False,
+) -> Dict[str, Any]:
+    # Per docs: allowed and excluded are mutually exclusive; max 10 entries.
+    allowed = [h.strip().lstrip("@") for h in (allowed_x_handles or []) if str(h).strip()]
+    excluded = [h.strip().lstrip("@") for h in (excluded_x_handles or []) if str(h).strip()]
+    if allowed and excluded:
+        raise ValueError("allowed_x_handles and excluded_x_handles cannot be set together")
+    if len(allowed) > 10:
+        allowed = allowed[:10]
+    if len(excluded) > 10:
+        excluded = excluded[:10]
+
+    tool: Dict[str, Any] = {"type": "x_search", "from_date": from_date, "to_date": to_date}
+    if allowed:
+        tool["allowed_x_handles"] = allowed
+    if excluded:
+        tool["excluded_x_handles"] = excluded
+    if enable_image_understanding:
+        tool["enable_image_understanding"] = True
+    if enable_video_understanding:
+        tool["enable_video_understanding"] = True
+    return tool
+
 
 def _log_error(msg: str) -> None:
     sys.stderr.write(f"[X ERROR] {msg}\n")
@@ -32,39 +76,37 @@ Time window: {from_date} to {to_date} (inclusive).
 
 Instructions:
 1) Use x_search to retrieve {min_items}-{max_items} high-quality, high-engagement posts about the query in the time window.
-2) From those posts, infer up to {max_themes} distinct trending themes/angles (not just repeated phrasing).
-3) Prefer posts with substantive content; avoid low-signal spam, pure giveaways, and link-only posts when possible.
+2) Infer up to {max_themes} distinct trending themes/angles from those posts.
+3) Prefer substantive posts; avoid low-signal spam, pure giveaways, and link-only posts when possible.
 
-Return ONLY valid JSON in this exact format (no markdown, no extra keys, no commentary):
-{{
-  "themes": [
-    {{
-      "label": "Short theme label",
-      "keywords": ["keyword1", "keyword2"],
-      "why_trending": "1-2 sentences explaining why this theme is showing up",
-      "example_urls": ["https://x.com/user/status/...", "https://x.com/user/status/..."]
-    }}
-  ],
-  "posts": [
-    {{
-      "text": "Post text (truncate if long)",
-      "url": "https://x.com/user/status/...",
-      "author_handle": "username",
-      "date": "YYYY-MM-DD or null if unknown",
-      "engagement": {{
-        "likes": 100,
-        "reposts": 25,
-        "replies": 15,
-        "quotes": 5
-      }}
-    }}
-  ]
-}}
+Output JSON with keys:
+- themes: list of objects with keys: label, keywords, why_trending, example_urls
+- posts: list of objects with keys: text, url, author_handle, date, engagement
 
 Rules:
 - date must be YYYY-MM-DD format or null
 - engagement can be null if unknown
-- example_urls must reference URLs from returned posts when possible
+- example_urls should reference URLs from returned posts when possible
+"""
+
+X_POSTS_ONLY_PROMPT = """You have access to real-time X (Twitter) data via the x_search tool.
+
+Task: Retrieve high-quality, high-engagement X posts about: {query}
+
+Time window: {from_date} to {to_date} (inclusive).
+
+Instructions:
+1) Use x_search to retrieve {min_items}-{max_items} high-quality, high-engagement posts about the query in the time window.
+2) Prefer substantive posts; avoid low-signal spam, pure giveaways, and link-only posts when possible.
+3) Do NOT infer themes in this mode. Set themes to an empty list: [].
+
+Output JSON with keys:
+- themes: []
+- posts: list of objects with keys: text, url, author_handle, date, engagement
+
+Rules:
+- date must be YYYY-MM-DD format or null
+- engagement can be null if unknown
 """
 
 X_GLOBAL_TRENDS_PROMPT = """You have access to real-time X (Twitter) data via the x_search tool.
@@ -85,36 +127,40 @@ Instructions:
 3) From those posts, infer up to {max_themes} distinct trending themes/hashtags/events.
 4) Prefer posts with substantive content; avoid spam, giveaways, and link-only posts when possible.
 
-Return ONLY valid JSON in this exact format (no markdown, no extra keys, no commentary):
-{
-  "themes": [
-    {
-      "label": "Short theme label",
-      "keywords": ["keyword1", "keyword2"],
-      "why_trending": "1-2 sentences explaining why this theme is showing up",
-      "example_urls": ["https://x.com/user/status/...", "https://x.com/user/status/..."]
-    }
-  ],
-  "posts": [
-    {
-      "text": "Post text (truncate if long)",
-      "url": "https://x.com/user/status/...",
-      "author_handle": "username",
-      "date": "YYYY-MM-DD or null if unknown",
-      "engagement": {
-        "likes": 100,
-        "reposts": 25,
-        "replies": 15,
-        "quotes": 5
-      }
-    }
-  ]
-}
+Output JSON with keys:
+- themes: list of objects with keys: label, keywords, why_trending, example_urls
+- posts: list of objects with keys: text, url, author_handle, date, engagement
 
 Rules:
 - date must be YYYY-MM-DD format or null
 - engagement can be null if unknown
-- example_urls must reference URLs from returned posts when possible
+- example_urls should reference URLs from returned posts when possible
+"""
+
+X_GLOBAL_POSTS_ONLY_PROMPT = """You have access to real-time X (Twitter) data via the x_search tool.
+
+Task: Retrieve high-quality, high-engagement X posts representing what is broadly trending for region: {region}
+
+Time window: {from_date} to {to_date} (inclusive).
+
+Instructions:
+1) Use x_search multiple times with diverse broad queries (at least 5 searches), spanning:
+   - breaking news / politics
+   - tech / AI
+   - sports
+   - entertainment / pop culture
+   - finance / markets
+   - memes / general chatter
+2) Across all searches, collect {min_items}-{max_items} total high-quality, high-engagement posts.
+3) Do NOT infer themes in this mode. Set themes to an empty list: [].
+
+Output JSON with keys:
+- themes: []
+- posts: list of objects with keys: text, url, author_handle, date, engagement
+
+Rules:
+- date must be YYYY-MM-DD format or null
+- engagement can be null if unknown
 """
 
 
@@ -127,13 +173,20 @@ def trends_for_query(
     to_date: str,
     depth: str = "default",
     max_themes: int = 8,
+    posts_only: bool = False,
+    allowed_x_handles: Optional[List[str]] = None,
+    excluded_x_handles: Optional[List[str]] = None,
+    enable_image_understanding: bool = False,
+    enable_video_understanding: bool = False,
     timeout_s: int = 180,
     mock_response: Optional[Dict[str, Any]] = None,
+    response_format: Optional[Dict[str, Any]] = RESPONSE_FORMAT_JSON_OBJECT,
 ) -> Dict[str, Any]:
     if mock_response is not None:
         return mock_response
 
     min_items, max_items = DEPTH_CONFIG.get(depth, DEPTH_CONFIG["default"])
+    max_tool_calls = MAX_TOOL_CALLS_BY_DEPTH.get(depth, MAX_TOOL_CALLS_BY_DEPTH["default"])
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -142,11 +195,22 @@ def trends_for_query(
 
     payload = {
         "model": model,
-        "tools": [{"type": "x_search"}],
+        "tools": [
+            _build_x_search_tool(
+                from_date=from_date,
+                to_date=to_date,
+                allowed_x_handles=allowed_x_handles,
+                excluded_x_handles=excluded_x_handles,
+                enable_image_understanding=enable_image_understanding,
+                enable_video_understanding=enable_video_understanding,
+            )
+        ],
+        "response_format": response_format,
+        "max_tool_calls": max_tool_calls,
         "input": [
             {
                 "role": "user",
-                "content": X_TRENDS_PROMPT.format(
+                "content": (X_POSTS_ONLY_PROMPT if posts_only else X_TRENDS_PROMPT).format(
                     query=query,
                     from_date=from_date,
                     to_date=to_date,
@@ -170,13 +234,20 @@ def global_trends(
     to_date: str,
     depth: str = "default",
     max_themes: int = 10,
+    posts_only: bool = False,
+    allowed_x_handles: Optional[List[str]] = None,
+    excluded_x_handles: Optional[List[str]] = None,
+    enable_image_understanding: bool = False,
+    enable_video_understanding: bool = False,
     timeout_s: int = 240,
     mock_response: Optional[Dict[str, Any]] = None,
+    response_format: Optional[Dict[str, Any]] = RESPONSE_FORMAT_JSON_OBJECT,
 ) -> Dict[str, Any]:
     if mock_response is not None:
         return mock_response
 
     min_items, max_items = DEPTH_CONFIG.get(depth, DEPTH_CONFIG["default"])
+    max_tool_calls = MAX_TOOL_CALLS_BY_DEPTH.get(depth, MAX_TOOL_CALLS_BY_DEPTH["default"])
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -185,11 +256,22 @@ def global_trends(
 
     payload = {
         "model": model,
-        "tools": [{"type": "x_search"}],
+        "tools": [
+            _build_x_search_tool(
+                from_date=from_date,
+                to_date=to_date,
+                allowed_x_handles=allowed_x_handles,
+                excluded_x_handles=excluded_x_handles,
+                enable_image_understanding=enable_image_understanding,
+                enable_video_understanding=enable_video_understanding,
+            )
+        ],
+        "response_format": response_format,
+        "max_tool_calls": max_tool_calls,
         "input": [
             {
                 "role": "user",
-                "content": X_GLOBAL_TRENDS_PROMPT.format(
+                "content": (X_GLOBAL_POSTS_ONLY_PROMPT if posts_only else X_GLOBAL_TRENDS_PROMPT).format(
                     region=region,
                     from_date=from_date,
                     to_date=to_date,
@@ -249,15 +331,30 @@ def parse_trends_response(response: Dict[str, Any]) -> Dict[str, Any]:
     if not text:
         return {"themes": [], "posts": [], "raw_text": ""}
 
-    # Extract JSON object.
-    json_match = re.search(r"\{[\\s\\S]*\"posts\"[\\s\\S]*\}", text)
-    if not json_match:
-        return {"themes": [], "posts": [], "raw_text": text}
+    raw_text = text
+    data: Dict[str, Any] | None = None
 
+    # Preferred path: when using response_format=json_object, the entire output
+    # should be a JSON object. This avoids regex extraction entirely.
     try:
-        data = json.loads(json_match.group(0))
+        if text.lstrip().startswith("{"):
+            data = json.loads(text)
     except json.JSONDecodeError:
-        return {"themes": [], "posts": [], "raw_text": text}
+        data = None
+
+    # Fallback: extract the first JSON object that contains a "posts" key.
+    # This is only for backward compatibility if response_format isn't applied
+    # or the model violated the contract.
+    if data is None:
+        json_match = re.search(r'\{[\s\S]*"posts"[\s\S]*\}', text)
+        if not json_match:
+            return {"themes": [], "posts": [], "raw_text": raw_text}
+        try:
+            data = json.loads(json_match.group(0))
+        except json.JSONDecodeError:
+            return {"themes": [], "posts": [], "raw_text": raw_text}
+    if not isinstance(data, dict):
+        return {"themes": [], "posts": [], "raw_text": raw_text}
 
     themes = data.get("themes") if isinstance(data.get("themes"), list) else []
     posts = data.get("posts") if isinstance(data.get("posts"), list) else []
@@ -271,7 +368,7 @@ def parse_trends_response(response: Dict[str, Any]) -> Dict[str, Any]:
         if not url:
             continue
         date = p.get("date")
-        if date and not re.match(r"^\\d{4}-\\d{2}-\\d{2}$", str(date)):
+        if date and not re.match(r"^\d{4}-\d{2}-\d{2}$", str(date)):
             date = None
         cleaned_posts.append(
             {

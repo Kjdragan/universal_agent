@@ -18,7 +18,9 @@
   - It is your "Super Tool". Prefer it over manual `WebSearch` loops.
 
 - For queries specifically asking “what’s trending on X right now” for a topic:
-  - Prefer the `grok-x-trends` skill (skill: "grok-x-trends") for a fast X-only pulse check.
+  - Prefer `mcp__internal__x_trends_posts` for a fast X-only evidence pull.
+  - Fallback: `grok-x-trends` skill in evidence mode (`--posts-only --json`).
+  - You infer themes and write the narrative yourself.
 
 ## 📝 Reporting Style
 
