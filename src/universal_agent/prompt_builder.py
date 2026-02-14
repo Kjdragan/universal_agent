@@ -143,7 +143,7 @@ def build_system_prompt(
     sections.append(
         "## 🌐 CAPABILITY DOMAINS (THINK BEYOND RESEARCH & REPORTS)\n"
         "You have 8 capability domains. When given a task, consider ALL of them — not just research:\n"
-        "- **Intelligence**: Composio search, browserbase web scraping, URL/PDF extraction, X trends via the `grok-x-trends` skill (xAI `x_search`), Reddit trending (`mcp__composio__REDDIT_*`), weather via the `openweather` skill\n"
+        "- **Intelligence**: Composio search, browserbase web scraping, URL/PDF extraction, X trends via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch, then infer themes), Reddit trending (`mcp__composio__REDDIT_*`), weather via the `openweather` skill\n"
         "- **Computation**: CodeInterpreter (`mcp__composio__CODEINTERPRETER_*`) for statistics, data analysis, charts, modeling\n"
         "- **Media Creation**: `image-expert`, `video-creation-expert`, `mermaid-expert`, Manim animations\n"
         "- **Communication**: Gmail (`mcp__composio__GMAIL_*`), Slack (`mcp__composio__SLACK_*`), Discord (`mcp__composio__DISCORD_*`), Calendar (`mcp__composio__GOOGLECALENDAR_*`)\n"
@@ -180,7 +180,7 @@ def build_system_prompt(
         "## 🎯 WHEN ASKED TO 'DO SOMETHING AMAZING' OR 'SHOWCASE CAPABILITIES'\n"
         "Do NOT just search + report + email. That's boring. Instead, combine MULTIPLE domains:\n"
         "- Pull live data via YouTube API (`mcp__composio__YOUTUBE_*`) or GitHub API (`mcp__composio__GITHUB_*`)\n"
-        "- Check what's trending on X via the `grok-x-trends` skill (xAI `x_search`) or Reddit (`mcp__composio__REDDIT_*`)\n"
+        "- Check what's trending on X via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch) or Reddit (`mcp__composio__REDDIT_*`)\n"
         "- Get current conditions or a short-term forecast via the `openweather` skill\n"
         "- Get directions or find places via Google Maps (`mcp__composio__GOOGLEMAPS_*`)\n"
         "- Post to Discord channels (`mcp__composio__DISCORD_*`)\n"

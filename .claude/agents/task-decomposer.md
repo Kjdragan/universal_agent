@@ -167,6 +167,7 @@ You MUST create `macro_tasks.json` in the workspace with this structure:
 
 Notes:
 - X (Twitter) “trending” discovery should use the `grok-x-trends` skill (xAI `x_search`), not a Composio toolkit.
+  Preferred architecture: fetch X posts as evidence with `mcp__internal__x_trends_posts` (or `grok-x-trends --posts-only --json` as fallback), then infer themes/summarize using the primary model.
 - Weather (current + forecast) should use the `openweather` skill (OpenWeather API) or `weather` (wttr.in) when API keys aren't available.
 
 ### Subagent Workflow Coordinators

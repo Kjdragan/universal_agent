@@ -1,0 +1,15 @@
+{
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Here you go (JSON below):\n\n{\n  \"themes\": [],\n  \"posts\": [\n    {\n      \"text\": \"Embedded JSON example.\",\n      \"url\": \"https://x.com/charlie/status/3\",\n      \"author_handle\": \"charlie\",\n      \"date\": \"not-a-date\",\n      \"engagement\": {\"likes\": 1}\n    }\n  ]\n}\n\n(End.)\n"
+        }
+      ]
+    }
+  ]
+}
+

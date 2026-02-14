@@ -528,7 +528,7 @@ Create `macro_tasks.json` with phases and tasks for this request.
 
 **Available Composio Toolkits:** composio_search, gmail, googlecalendar, slack, codeinterpreter, googledrive, googlesheets, googledocs, github, notion, discord, youtube, airtable, hubspot, linear, browserbase, filetool, sqltool.
 
-**X (Twitter) trends:** Use the `grok-x-trends` skill (xAI `x_search`), not a Composio toolkit.
+**X (Twitter) trends:** Prefer the internal tool `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch). Fallback: `grok-x-trends` skill. Do NOT use a Composio toolkit. Preferred pattern: fetch evidence posts only, then infer themes/summarize using the primary model.
 
 **Weather:** Use the `openweather` skill for current + forecast for any location.
 

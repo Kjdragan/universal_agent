@@ -22,11 +22,36 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--query", help="Topic/query to search on X (required unless --global).")
     p.add_argument("--global", dest="global_mode", action="store_true", help="Infer broad/global trends (no query).")
     p.add_argument("--region", default="US", help="Region label to include in the prompt for --global (default: US).")
+    p.add_argument(
+        "--allow-handles",
+        default="",
+        help="Comma-separated X handles to include only (maps to x_search.allowed_x_handles; max 10).",
+    )
+    p.add_argument(
+        "--exclude-handles",
+        default="",
+        help="Comma-separated X handles to exclude (maps to x_search.excluded_x_handles; max 10).",
+    )
+    p.add_argument(
+        "--image-understanding",
+        action="store_true",
+        help="Enable analysis of images in X posts during x_search.",
+    )
+    p.add_argument(
+        "--video-understanding",
+        action="store_true",
+        help="Enable analysis of videos in X posts during x_search.",
+    )
     p.add_argument("--from", dest="from_date", help="Start date YYYY-MM-DD (inclusive).")
     p.add_argument("--to", dest="to_date", help="End date YYYY-MM-DD (inclusive).")
     p.add_argument("--days", type=int, default=1, help="If --from/--to not set, use last N days (default: 1).")
     p.add_argument("--depth", choices=["quick", "default", "deep"], default="default", help="How many posts to pull.")
     p.add_argument("--max-themes", type=int, default=8, help="Max number of themes to infer.")
+    p.add_argument(
+        "--posts-only",
+        action="store_true",
+        help="Fetch posts only (themes=[]). Intended when the primary agent will infer themes itself.",
+    )
     p.add_argument("--model", default=DEFAULT_MODEL, help=f"xAI model to use (default: {DEFAULT_MODEL}).")
     p.add_argument("--json", action="store_true", help="Output JSON (themes + posts) only.")
     return p.parse_args(argv)
@@ -71,7 +96,7 @@ def _compute_window(args: argparse.Namespace) -> tuple[str, str]:
         return args.from_date, args.to_date
 
     # Inclusive day-level window (UTC). This is a limitation of current prompt + parsing.
-    today = dt.datetime.utcnow().date()
+    today = dt.datetime.now(dt.timezone.utc).date()
     days = max(1, int(args.days))
     start = today - dt.timedelta(days=days)
     return start.isoformat(), today.isoformat()
@@ -125,6 +150,12 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("error: --query is required unless --global is set\n")
         return 2
 
+    allow_handles = [h.strip() for h in (args.allow_handles or "").split(",") if h.strip()]
+    exclude_handles = [h.strip() for h in (args.exclude_handles or "").split(",") if h.strip()]
+    if allow_handles and exclude_handles:
+        sys.stderr.write("error: --allow-handles and --exclude-handles cannot be set together\n")
+        return 2
+
     _maybe_load_project_env()
     api_key = _env_api_key()
     if not api_key:
@@ -141,7 +172,12 @@ def main(argv: list[str]) -> int:
             from_date=from_date,
             to_date=to_date,
             depth=args.depth,
-            max_themes=max(1, int(args.max_themes)),
+            max_themes=max(0, int(args.max_themes)),
+            posts_only=bool(args.posts_only),
+            allowed_x_handles=allow_handles or None,
+            excluded_x_handles=exclude_handles or None,
+            enable_image_understanding=bool(args.image_understanding),
+            enable_video_understanding=bool(args.video_understanding),
         )
         query_label = f"GLOBAL ({args.region})"
     else:
@@ -152,7 +188,12 @@ def main(argv: list[str]) -> int:
             from_date=from_date,
             to_date=to_date,
             depth=args.depth,
-            max_themes=max(1, int(args.max_themes)),
+            max_themes=max(0, int(args.max_themes)),
+            posts_only=bool(args.posts_only),
+            allowed_x_handles=allow_handles or None,
+            excluded_x_handles=exclude_handles or None,
+            enable_image_understanding=bool(args.image_understanding),
+            enable_video_understanding=bool(args.video_understanding),
         )
         query_label = args.query
     parsed = parse_trends_response(raw)
