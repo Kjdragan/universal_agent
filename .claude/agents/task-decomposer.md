@@ -78,7 +78,7 @@ You MUST create `macro_tasks.json` in the workspace with this structure:
           "task_id": "2.1",
           "title": "Statistical analysis of findings",
           "tool_type": "composio_action",
-          "composio_tools_used": ["CODEINTERPRETER_EXECUTE"],
+          "composio_tools_used": ["CODEINTERPRETER_EXECUTE_CODE"],
           "description": "Run Python analysis on extracted data, generate charts",
           "success_criteria": ["Analysis output exists", "At least 2 visualizations created"],
           "expected_artifacts": ["work_products/analysis/results.json"],
@@ -183,7 +183,8 @@ Notes:
 | `slack-expert` | Slack workspace interactions | Composio Slack tools |
 | `youtube-explainer-expert` | YouTube tutorial learning artifacts | Composio YouTube + local processing |
 | `system-configuration-agent` | Cron jobs, heartbeat, runtime config | Internal APIs |
-| `data-analyst` | Statistical analysis, data processing, visualization | Composio CodeInterpreter + local Python |
+| `data-analyst` | Statistical analysis, data processing, visualization | Local Python (preferred) + CodeInterpreter fallback |
+| `code-writer` | Implement repo code changes (features, refactors, tests) | Local Bash + Read/Write (uv/pytest loop) |
 | `action-coordinator` | Multi-channel delivery and real-world side effects | Composio Gmail/Calendar/Slack/Drive |
 
 ### Local MCP Tools (processing-only, no auth needed)
@@ -246,7 +247,8 @@ For: Ongoing surveillance, automated responses. Duration: Hours to days (via Cro
 
 ### 3. Not Just Research → Report
 Think broadly about what the request ACTUALLY needs:
-- Does it need **computation**? → CodeInterpreter, data-analyst
+- Does it need **computation**? → local Bash+Python first, then CodeInterpreter if isolation is needed
+- Does it need **repo code changes**? → code-writer
 - Does it need **media creation**? → image-expert, video-creation-expert, mermaid-expert
 - Does it need **real-world actions**? → Gmail, Calendar, Slack, browser automation
 - Does it need **monitoring**? → Cron job setup via system-configuration-agent

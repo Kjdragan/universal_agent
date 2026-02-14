@@ -1,6 +1,6 @@
 <!-- Agent Capabilities Registry -->
 
-<!-- Generated: 2026-02-13 15:30:35 -->
+<!-- Generated: 2026-02-13 20:34:00 -->
 
 ### 🤖 Specialist Agents (Micro-Agents)
 Delegate full workflows to these specialists based on value-add.
@@ -82,6 +82,30 @@ This sub-agent:
 - **runner**: Internal specialized agent.
   -> Delegate: `Task(subagent_type='runner', ...)`
 
+#### ⚙️ Engineering & Code
+- **code-writer**: Focused code authoring agent for repo changes (features, refactors, bug fixes, tests).
+
+**WHEN TO DELEGATE:**
+- Implement a new feature or script inside this repo
+- Fix a failing test / bug / runtime error
+- Refactor code safely (with tests)
+- Add guardrails, tooling, or internal MCP tools
+
+**THIS SUB-AGENT:**
+- Reads/writes the local repo
+- Runs local commands (prefer `uv run ...`)
+- Produces small, reviewable diffs with tests
+
+  -> Delegate: `Task(subagent_type='code-writer', ...)`
+- **task-decomposer**: **Sub-Agent Purpose:** Decompose complex requests into phases for harness execution.
+
+**WHEN TO USE:**
+- URW Orchestrator delegates decomposition tasks here.
+- You analyze request complexity and create phased plans.
+- Output: `macro_tasks.json` with phases, tasks, and success criteria.
+
+  -> Delegate: `Task(subagent_type='task-decomposer', ...)`
+
 #### 🎨 Creative & Media
 - **image-expert**: MANDATORY DELEGATION TARGET for ALL image generation and editing tasks.
 
@@ -93,7 +117,7 @@ This sub-agent:
 - Report-writer needs visual assets for a report
 
 **THIS SUB-AGENT:**
-- Generates images using Gemini (default: `gemini-2.5-flash-image`)
+- Generates images using Gemini (default: `gemini-2.5-flash-image`; for infographics prefer `gemini-3-pro-image-preview` with review)
 - Edits existing images with natural language instructions
 - Creates infographics and visual content for reports
 - Writes an image manifest (`work_products/media/manifest.json`) so other agents can consume outputs
@@ -177,16 +201,6 @@ This sub-agent:
 - Produces auditable before/after summaries.
 
   -> Delegate: `Task(subagent_type='system-configuration-agent', ...)`
-
-#### ⚙️ Engineering & Code
-- **task-decomposer**: **Sub-Agent Purpose:** Decompose complex requests into phases for harness execution.
-
-**WHEN TO USE:**
-- URW Orchestrator delegates decomposition tasks here.
-- You analyze request complexity and create phased plans.
-- Output: `macro_tasks.json` with phases, tasks, and success criteria.
-
-  -> Delegate: `Task(subagent_type='task-decomposer', ...)`
 
 #### 🛠 Mandatory System Operations Routing
 - **system-configuration-agent**: Platform/runtime operations specialist for Chron scheduling, heartbeat, and ops config.

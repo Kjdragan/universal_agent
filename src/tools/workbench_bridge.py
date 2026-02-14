@@ -15,55 +15,54 @@ class WorkbenchBridge:
         self.user_id = user_id
         self.sandbox_id = None
 
-    def _ensure_sandbox(self, session_id: Optional[str] = None) -> str:
+    def _ensure_sandbox(self, keep_alive: int = 900) -> str:
         """
-        Ensures a sandbox is created/retrieved.
-        If session_id is provided, it uses that sessions's sandbox or joins that session?
-        Composio SDK `execute` with `session_id` handles the routing.
-        We just need to store the ID if we are persisting it.
-        """
-        if session_id:
-            # If a session ID is provided, we use it directly in future calls?
-            # Or we assume the user passed it to the specific method.
-            # We don't necessarily overwrite self.sandbox_id unless we want to lock to it.
-            # But the 'sandbox_id' param in execute is legacy?
-            # If we pass 'session_id' to execute, we might not need 'sandbox_id'.
-            pass
+        Ensure a CodeInterpreter sandbox exists and cache its sandbox_id for reuse.
 
+        Note: CodeInterpreter is NO_AUTH but still requires a user_id for Composio routing
+        in most deployments. If user_id is None, this will still be attempted.
+        """
         if self.sandbox_id:
             return self.sandbox_id
 
-            # if we don't pass it (SDK might manage it)?
-            # But Schema said REQUIRED for file ops.
-            # Let's hope the SDK cache it or the response has it.
-            print(
-                f"   ⚠️ Warning: Could not extract sandbox_id from init response: {resp}"
-            )
-        else:
-            print(f"   ✅ Sandbox Active: {self.sandbox_id}")
+        resp = self.client.tools.execute(
+            slug="CODEINTERPRETER_CREATE_SANDBOX",
+            arguments={"keep_alive": int(keep_alive)},
+            user_id=self.user_id,
+            dangerously_skip_version_check=True,
+        )
+        if hasattr(resp, "model_dump"):
+            resp = resp.model_dump()
 
+        sandbox_id = None
+        if isinstance(resp, dict):
+            data = resp.get("data") or {}
+            if isinstance(data, dict):
+                sandbox_id = data.get("sandbox_id") or data.get("id")
+
+        if not sandbox_id:
+            raise RuntimeError(f"Could not extract sandbox_id from response: {resp}")
+
+        self.sandbox_id = str(sandbox_id)
         return self.sandbox_id
 
     def download(
-        self, remote_path: str, local_path: str, session_id: Optional[str] = None
+        self, remote_path: str, local_path: str
     ) -> Dict[str, Any]:
         """
-        Download a file from the remote Composio Workbench (CodeInterpreter) to the local file system.
+        Download a file from the CodeInterpreter sandbox to the local file system.
 
         Args:
             remote_path: Absolute path to the file on the remote workbench.
             local_path: Path where the file should be saved locally.
-            session_id: Optional Composio session ID to target a specific sandbox.
         """
         print(f"🌉 [BRIDGE] Downloading: {remote_path} -> {local_path}")
-        self._ensure_sandbox(session_id)
+        sandbox_id = self._ensure_sandbox()
 
         try:
-            # Session context is maintained by the Composio client automatically
-            # session_id is NOT a valid parameter for tools.execute()
             resp = self.client.tools.execute(
                 slug="CODEINTERPRETER_GET_FILE_CMD",
-                arguments={"file_path": remote_path},
+                arguments={"file_path": remote_path, "sandbox_id": sandbox_id},
                 user_id=self.user_id,
                 dangerously_skip_version_check=True,
             )
@@ -129,42 +128,28 @@ class WorkbenchBridge:
             return {"error": f"Download Failed: {e}"}
 
     def upload(
-        self, local_path: str, remote_path: str, session_id: Optional[str] = None
+        self, local_path: str, remote_path: str, overwrite: bool = False
     ) -> Dict[str, Any]:
         """
-        Upload a file using Python execution on the remote workbench.
-        Adapted to use COMPOSIO_REMOTE_WORKBENCH since specific file tools may be missing.
+        Upload a file to the CodeInterpreter sandbox (to /home/user/...).
         """
         print(f"🌉 [BRIDGE] Uploading: {local_path} -> {remote_path}")
-        self._ensure_sandbox(session_id)
+        sandbox_id = self._ensure_sandbox()
 
         try:
-            # Read local file content
             with open(local_path, "rb") as f:
                 content_bytes = f.read()
 
-            # Base64 encode
             encoded = base64.b64encode(content_bytes).decode("utf-8")
 
-            # Python script to decode and write
-            script = (
-                "import os, base64\n"
-                f"path = '{remote_path}'\n"
-                "os.makedirs(os.path.dirname(path), exist_ok=True)\n"
-                f"with open(path, 'wb') as f: f.write(base64.b64decode('{encoded}'))\n"
-                "print(f'Successfully uploaded to {path}')"
-            )
-
-            payload = {
-                "code_to_execute": script,
-            }
-            if session_id:
-                payload["session_id"] = session_id
-
-            # Execute via Remote Workbench
             response = self.client.tools.execute(
-                slug="COMPOSIO_REMOTE_WORKBENCH",
-                arguments=payload,
+                slug="CODEINTERPRETER_UPLOAD_FILE_CMD",
+                arguments={
+                    "destination_path": remote_path,
+                    "file": {"name": os.path.basename(local_path), "content": encoded},
+                    "overwrite": bool(overwrite),
+                    "sandbox_id": sandbox_id,
+                },
                 user_id=self.user_id,
                 dangerously_skip_version_check=True,
             )
@@ -172,42 +157,7 @@ class WorkbenchBridge:
             if hasattr(response, "model_dump"):
                 response = response.model_dump()
 
-            # Check for execution errors in response structure
-            execution_data = {}
-            if hasattr(response, "data"): # Handle response object
-                execution_data = response.data
-            elif isinstance(response, dict):
-                execution_data = response.get("data", {})
-
-            # Check stdout for success message
-            stdout = execution_data.get("stdout", "")
-            stderr = execution_data.get("stderr", "")
-            
-            if "Successfully uploaded" not in stdout and not execution_data.get("success"):
-                 print(f"   ❌ Upload Script Failed. Stdout: {stdout}, Stderr: {stderr}")
-                 return {"success": False, "error": f"Upload Script Failed: {stderr or stdout}"}
-
-            # Double Check: Verify file exists
-            verify_script = f"import os; print('EXISTS' if os.path.exists('{remote_path}') else 'MISSING')"
-            verify_resp = self.client.tools.execute(
-                slug="COMPOSIO_REMOTE_WORKBENCH",
-                arguments={"code_to_execute": verify_script, "session_id": session_id} if session_id else {"code_to_execute": verify_script},
-                user_id=self.user_id,
-                dangerously_skip_version_check=True
-            )
-            
-            verify_stdout = ""
-            if hasattr(verify_resp, "data"):
-                 verify_stdout = verify_resp.data.get("stdout", "")
-            elif isinstance(verify_resp, dict):
-                 verify_stdout = verify_resp.get("data", {}).get("stdout", "")
-
-            if "EXISTS" not in verify_stdout:
-                print(f"   ❌ Verification Failed: File not found at {remote_path}")
-                return {"success": False, "error": f"Verification Failed: File not found at {remote_path}"}
-
-            print("   ✅ Upload Verified (Exists on Remote)")
-            return {"success": True}
+            return {"success": True, "response": response}
 
         except Exception as e:
             print(f"   ❌ Upload Failed: {e}")

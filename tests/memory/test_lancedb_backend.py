@@ -7,6 +7,14 @@ import shutil
 import tempfile
 import pytest
 
+if (os.getenv("RUN_LANCEDB_TESTS", "") or "").strip().lower() not in {"1", "true", "yes"}:
+    # LanceDB can hard-crash the interpreter on some CPUs due to native extension
+    # instruction set requirements. Keep these tests opt-in so `pytest` is safe by default.
+    pytest.skip(
+        "Skipping LanceDB tests (set RUN_LANCEDB_TESTS=1 to enable).",
+        allow_module_level=True,
+    )
+
 from universal_agent.memory.lancedb_backend import LanceDBMemory
 from universal_agent.memory.embeddings import (
     EmbeddingProvider,

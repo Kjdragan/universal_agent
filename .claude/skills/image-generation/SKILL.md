@@ -50,8 +50,8 @@ Primary tool for image generation and editing.
 - `output_dir` (optional): Output directory (defaults to `work_products/media/`)
 - `output_filename` (optional): Custom filename (auto-generated if not provided)
 - `preview` (optional): Launch Gradio viewer after generation
-- `model_name` (optional): Gemini model to use. Defaults to `gemini-2.5-flash-image`.
-  - Valid options: `gemini-2.5-flash-image`, `gemini-2.0-flash-exp-image-generation`.
+- `model_name` (optional): Gemini model to use. Defaults to `gemini-2.5-flash-image` unless overridden by `UA_GEMINI_IMAGE_MODEL`.
+  - Valid options: `gemini-3-pro-image-preview`, `gemini-2.5-flash-image`, `gemini-2.0-flash-exp-image-generation`.
   - Do NOT guess other model names — only use one of these exact strings.
 
 **Returns**: JSON with `output_path`, `description`, `size_bytes`, and optionally `viewer_url`
@@ -135,7 +135,7 @@ Ensure `GEMINI_API_KEY` is set in `.env` file.
 
 ### Error: "No image data in response"
 - Check your prompt is clear and specific
-- Ensure you are using a valid model: `gemini-2.5-flash-image` or `gemini-2.0-flash-exp-image-generation`
+- Ensure you are using a valid model: `gemini-3-pro-image-preview`, `gemini-2.5-flash-image`, or `gemini-2.0-flash-exp-image-generation`
 - Try simplifying the prompt
 
 ### Preview not working

@@ -3505,8 +3505,12 @@ def generate_image(
         output_filename: Optional filename. Directory components are ignored for safety.
         preview: If True, launches Gradio viewer with the generated image.
         model_name: Gemini model to use. Defaults to "gemini-2.5-flash-image".
-            Valid options: "gemini-2.5-flash-image", "gemini-2.0-flash-exp-image-generation".
-            Do NOT guess model names — use one of these exact strings.
+            Valid options (as wired in this repo):
+              - "gemini-3-pro-image-preview" (highest quality for text-heavy infographics)
+              - "gemini-2.5-flash-image" (fast default)
+              - "gemini-2.0-flash-exp-image-generation" (legacy/experimental)
+            Note: If `UA_GEMINI_IMAGE_MODEL` is set, it overrides the default model
+            when callers haven't explicitly chosen another.
 
     Returns:
         JSON with status, output_path, description, and viewer_url (if preview=True).
@@ -3523,6 +3527,26 @@ def generate_image(
         api_key = os.environ.get("GEMINI_API_KEY")
         if not api_key:
             return json.dumps({"error": "GEMINI_API_KEY not set in environment"})
+
+        # Allow env override for the default image model (lets us upgrade without chasing prompt changes).
+        # If callers explicitly pick a different model_name, keep their choice.
+        env_default_model = (os.getenv("UA_GEMINI_IMAGE_MODEL") or "").strip()
+        if env_default_model and (model_name or "").strip() == "gemini-2.5-flash-image":
+            model_name = env_default_model
+
+        valid_models = {
+            "gemini-3-pro-image-preview",
+            "gemini-2.5-flash-image",
+            "gemini-2.0-flash-exp-image-generation",
+        }
+        if (model_name or "").strip() not in valid_models:
+            return json.dumps(
+                {
+                    "error": "Invalid model_name for generate_image.",
+                    "model_name": model_name,
+                    "valid_models": sorted(valid_models),
+                }
+            )
 
         client = genai.Client(api_key=api_key)
 
@@ -3779,6 +3803,245 @@ def generate_image(
         import traceback
 
         return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+
+
+def _parse_json_lenient(text: str) -> dict:
+    """
+    Parse JSON from an LLM response that *should* be JSON.
+    Conservative fallback: try whole-string, else extract first {...} block.
+    """
+    import re
+
+    t = (text or "").strip()
+    if not t:
+        raise ValueError("empty json text")
+    try:
+        return json.loads(t)
+    except Exception:
+        pass
+    m = re.search(r"\{.*\}", t, flags=re.DOTALL)
+    if not m:
+        raise
+    return json.loads(m.group(0))
+
+
+def _review_generated_image_against_prompt(
+    *,
+    image_path: str,
+    creation_prompt: str,
+    model_name: str,
+) -> dict[str, Any]:
+    """
+    Use Gemini to read the generated image and evaluate adherence to the creation prompt,
+    focusing on text correctness (typos, numbers, labels) for infographics.
+
+    Expected output (strict JSON, but we parse leniently):
+      {"passes": bool, "issues": [{"type": str, "detail": str}], "edit_prompt": str}
+    """
+    try:
+        from google import genai
+        from google.genai import types
+        from google.genai.types import GenerateContentConfig, Part
+    except Exception as exc:
+        return {
+            "passes": False,
+            "issues": [{"type": "import_error", "detail": str(exc)}],
+            "edit_prompt": "",
+        }
+
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return {
+            "passes": False,
+            "issues": [{"type": "config", "detail": "GEMINI_API_KEY not set"}],
+            "edit_prompt": "",
+        }
+
+    if not os.path.exists(image_path):
+        return {
+            "passes": False,
+            "issues": [{"type": "missing_image", "detail": f"not found: {image_path}"}],
+            "edit_prompt": "",
+        }
+
+    client = genai.Client(api_key=api_key)
+
+    with open(image_path, "rb") as f:
+        img_bytes = f.read()
+
+    review_instruction = (
+        "You are a meticulous QA reviewer for a generated infographic image.\n"
+        "Compare the IMAGE against the CREATION PROMPT. Focus on:\n"
+        "- Text accuracy: exact spellings, correct numbers, correct model names, correct dates.\n"
+        "- Missing required elements from the prompt.\n"
+        "- Any obvious typos or hallucinated labels.\n"
+        "Return STRICT JSON with keys:\n"
+        "{\"passes\": boolean, \"issues\": [{\"type\": string, \"detail\": string}], \"edit_prompt\": string}\n"
+        "If passes=true: issues=[] and edit_prompt=\"\".\n"
+        "If passes=false: edit_prompt must be a concise instruction to EDIT THE EXISTING IMAGE, "
+        "fixing only the issues (do not redesign the whole infographic).\n"
+        "\nCREATION PROMPT:\n"
+        f"{creation_prompt}\n"
+    )
+
+    parts = [
+        Part.from_bytes(data=img_bytes, mime_type="image/png"),
+        types.Part.from_text(text=review_instruction),
+    ]
+    content_obj = types.Content(role="user", parts=parts)
+
+    resp = client.models.generate_content(
+        model=model_name,
+        contents=[content_obj],
+        config=GenerateContentConfig(response_modalities=["TEXT"]),
+    )
+
+    text_out = ""
+    try:
+        for cand in resp.candidates or []:
+            for p in (cand.content.parts or []):
+                if getattr(p, "text", None):
+                    text_out += p.text
+    except Exception:
+        text_out = getattr(resp, "text", "") or ""
+
+    try:
+        parsed = _parse_json_lenient(text_out)
+    except Exception:
+        parsed = {
+            "passes": False,
+            "issues": [{"type": "non_json_review", "detail": (text_out or "")[:800]}],
+            "edit_prompt": "",
+        }
+
+    # Normalize shape
+    parsed.setdefault("passes", False)
+    parsed.setdefault("issues", [])
+    parsed.setdefault("edit_prompt", "")
+    return parsed
+
+
+@mcp.tool()
+@trace_tool_output
+def generate_image_with_review(
+    prompt: str,
+    output_dir: str = None,
+    output_filename: str = None,
+    preview: bool = False,
+    model_name: str = "gemini-3-pro-image-preview",
+    max_attempts: int = 3,
+) -> str:
+    """
+    Generate an image (usually an infographic) using a Pro image model, then have the same model
+    read the image and correct typos/missing elements via iterative edit passes.
+
+    This is intentionally capped to prevent runaway.
+    """
+    try:
+        max_attempts = int(max_attempts or 0)
+    except Exception:
+        max_attempts = 3
+    if max_attempts < 1:
+        max_attempts = 1
+    if max_attempts > 5:
+        max_attempts = 5
+
+    history: list[dict[str, Any]] = []
+    seen_edit_prompts: set[str] = set()
+
+    # First attempt: generate from scratch
+    result_str = generate_image(
+        prompt=prompt,
+        input_image_path=None,
+        output_dir=output_dir,
+        output_filename=output_filename,
+        preview=False,
+        model_name=model_name,
+    )
+    try:
+        result_obj = json.loads(result_str)
+    except Exception:
+        return json.dumps(
+            {"error": "generate_image returned non-JSON", "raw": result_str[:5000]},
+            indent=2,
+        )
+
+    if not result_obj.get("success"):
+        result_obj["review_history"] = history
+        return json.dumps(result_obj, indent=2)
+
+    # Review + iterative edits
+    for attempt in range(1, max_attempts + 1):
+        image_path = result_obj.get("session_output_path") or result_obj.get("output_path")
+        if not image_path:
+            break
+
+        review = _review_generated_image_against_prompt(
+            image_path=image_path,
+            creation_prompt=prompt,
+            model_name=model_name,
+        )
+        history.append({"attempt": attempt, "review": review})
+
+        if bool(review.get("passes")) is True:
+            result_obj["review_history"] = history
+            if preview:
+                try:
+                    viewer_result = preview_image(str(image_path))
+                    viewer_data = json.loads(viewer_result)
+                    if "viewer_url" in viewer_data:
+                        result_obj["viewer_url"] = viewer_data["viewer_url"]
+                except Exception:
+                    pass
+            return json.dumps(result_obj, indent=2)
+
+        edit_prompt = (review.get("edit_prompt") or "").strip()
+        if not edit_prompt:
+            break
+
+        if edit_prompt in seen_edit_prompts:
+            history.append(
+                {
+                    "attempt": attempt,
+                    "note": "edit_prompt_repeated; stopping to avoid loop",
+                    "edit_prompt": edit_prompt[:500],
+                }
+            )
+            break
+        seen_edit_prompts.add(edit_prompt)
+
+        # Next attempt: edit the existing image
+        result_str = generate_image(
+            prompt=edit_prompt,
+            input_image_path=image_path,
+            output_dir=output_dir,
+            output_filename=output_filename,
+            preview=False,
+            model_name=model_name,
+        )
+        try:
+            next_obj = json.loads(result_str)
+        except Exception:
+            history.append({"attempt": attempt, "error": "edit_generate_image_non_json", "raw": result_str[:2000]})
+            break
+        result_obj = next_obj
+        if not result_obj.get("success"):
+            break
+
+    # Best-effort return
+    result_obj["review_history"] = history
+    result_obj["qc_converged"] = False
+    if preview:
+        try:
+            image_path = result_obj.get("session_output_path") or result_obj.get("output_path")
+            if image_path and os.path.exists(image_path):
+                viewer_result = preview_image(str(image_path))
+                viewer_data = json.loads(viewer_result)
+                if "viewer_url" in viewer_data:
+                    result_obj["viewer_url"] = viewer_data["viewer_url"]
+        except Exception:
+            pass
+    return json.dumps(result_obj, indent=2)
 
 
 def describe_image_internal(image: "Image.Image") -> str:
