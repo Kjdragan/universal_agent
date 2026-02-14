@@ -27,6 +27,80 @@ CACHE_TTL_S = 600  # 10 minutes
 def _api_key() -> Optional[str]:
     return os.environ.get("OPENWEATHER_API_KEY")
 
+_US_STATE_CODES = {
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA",
+    "ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK",
+    "OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC",
+}
+
+_COUNTRY_SYNONYMS = {
+    # OpenWeather expects ISO 3166-1 alpha-2 codes (e.g. GB, JP). "UK" is a common user input.
+    "UK": "GB",
+    "U.K.": "GB",
+    "UNITED KINGDOM": "GB",
+    "GREAT BRITAIN": "GB",
+    "ENGLAND": "GB",
+    "SCOTLAND": "GB",
+    "WALES": "GB",
+    "JAPAN": "JP",
+    "UNITED STATES": "US",
+    "USA": "US",
+    "U.S.": "US",
+}
+
+
+def _normalize_country_token(token: str) -> str:
+    cleaned = (token or "").strip()
+    if not cleaned:
+        return ""
+    upper = cleaned.upper()
+    return _COUNTRY_SYNONYMS.get(upper, upper)
+
+
+def _geocode_candidates(q: str, default_country: str) -> list[str]:
+    """Generate likely OpenWeather geocode query variants.
+
+    OpenWeather geocoding expects: "city[,state][,country_code]" where country_code is ISO alpha-2.
+    Users often provide "London, UK" which does not resolve ("UK" isn't accepted); we normalize to GB.
+    """
+    q = (q or "").strip()
+    if not q:
+        return []
+
+    candidates = [q]
+    if q.count(",") != 1:
+        return candidates
+
+    parts = [p.strip() for p in q.split(",")]
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        return candidates
+
+    city, region = parts[0], parts[1]
+    region_upper = region.upper()
+
+    # If the second token looks like a US state code, append the default country.
+    if region_upper in _US_STATE_CODES:
+        dc = _normalize_country_token(default_country)
+        if dc:
+            candidates.append(f"{city},{region_upper},{dc}")
+        return candidates
+
+    # Otherwise, treat the second token as a country-ish token and normalize.
+    cc = _normalize_country_token(region)
+    if cc and len(cc) == 2:
+        candidates.append(f"{city},{cc}")
+    # Also try "city,region,cc" for some cases (e.g. "London,England,GB").
+    if cc:
+        candidates.append(f"{city},{region},{cc}")
+    return list(dict.fromkeys(candidates))
+
+
+def _print_json_error(*, error: str, resolved_location: Optional[dict] = None) -> None:
+    payload: dict[str, Any] = {"successful": False, "error": error}
+    if resolved_location is not None:
+        payload["resolved_location"] = resolved_location
+    print(json.dumps(payload, indent=2, ensure_ascii=True))
+
 
 def _parse_args(argv: List[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="OpenWeather current + forecast for any location.")
@@ -85,15 +159,15 @@ def _ensure_latlon(args: argparse.Namespace) -> Tuple[float, float, Dict[str, An
 
     if args.location:
         q = args.location
-        matches = openweather.geocode_direct(api_key=api_key, q=q, limit=5)
-        # Common convenience: "City, ST" in the US often needs the country suffix.
-        if not matches and isinstance(q, str) and q.count(",") == 1 and args.country:
-            parts = [p.strip() for p in q.split(",")]
-            if len(parts) == 2 and parts[0] and parts[1]:
-                alt = f"{parts[0]},{parts[1]},{args.country}".replace(", ", ",")
-                matches = openweather.geocode_direct(api_key=api_key, q=alt, limit=5)
+        matches: List[Dict[str, Any]] = []
+        for cand in _geocode_candidates(str(q), str(args.country or "")):
+            matches = openweather.geocode_direct(api_key=api_key, q=cand, limit=5)
+            if matches:
+                break
         if not matches:
-            raise ValueError(f"Could not geocode location: {args.location}")
+            raise ValueError(
+                f"Could not geocode location: {args.location} (try ISO country code, e.g. 'London, GB')"
+            )
         best = matches[0]
         return float(best["lat"]), float(best["lon"]), {
             "source": "direct",
@@ -248,12 +322,19 @@ def main(argv: List[str]) -> int:
 
     api_key = _api_key()
     if not api_key:
-        sys.stderr.write("error: missing OPENWEATHER_API_KEY (set it in .env)\n")
+        msg = "missing OPENWEATHER_API_KEY (set it in .env)"
+        if args.json:
+            _print_json_error(error=msg)
+            return 0
+        sys.stderr.write(f"error: {msg}\n")
         return 2
 
     try:
         lat, lon, resolved = _ensure_latlon(args)
     except ValueError as e:
+        if args.json:
+            _print_json_error(error=str(e))
+            return 0
         sys.stderr.write(f"error: {e}\n")
         return 2
 

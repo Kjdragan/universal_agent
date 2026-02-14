@@ -51,3 +51,11 @@ uv run .claude/skills/openweather/scripts/openweather_weather.py current --locat
   - `current` or `forecast`
   - `source` metadata (cache hit/miss, endpoint)
 
+## Error Handling (Important For Agents)
+- In `--json` mode, the script **does not** exit non-zero on input/geocoding errors.
+- Instead, it prints a JSON error object like:
+  - `{ "successful": false, "error": "..." }`
+- This avoids sibling-tool cascades when the coordinator runs multiple locations in parallel.
+
+## Location Notes
+- OpenWeather geocoding expects ISO country codes. `"London, UK"` is normalized internally to `"London, GB"`.

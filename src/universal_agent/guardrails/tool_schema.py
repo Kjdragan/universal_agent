@@ -302,15 +302,35 @@ def _looks_like_system_configuration_intent(text: str) -> bool:
     lowered = (text or "").strip().lower()
     if not lowered:
         return False
+    # Avoid false positives for documentation/visualization requests that merely mention ops concepts
+    # (e.g. "Create a Mermaid system architecture diagram that includes Cron Scheduling").
+    documentation_markers = [
+        r"\bmermaid\b",
+        r"\bdiagram\b",
+        r"\bflowchart\b",
+        r"\barchitecture\b",
+        r"\bvisuali[sz]e\b",
+        r"\bdocument\b",
+        r"\brender\b",
+        r"\bsvg\b",
+        r"\bpng\b",
+    ]
+    if any(re.search(pattern, lowered) for pattern in documentation_markers):
+        return False
+
     target_patterns = [
         r"\bchron\b",
-        r"\bcron\b",
-        r"\bheartbeat\b",
+        # Cron/heartbeat are high-frequency words in UA docs; require a stronger scheduling/config context.
+        r"\bcron\b.*\b(job|schedule|interval|run)\b",
+        r"\b(job|schedule|interval|run)\b.*\bcron\b",
+        r"\bheartbeat\b.*\b(interval|schedule|enable|disable|run)\b",
+        r"\b(interval|schedule|enable|disable|run)\b.*\bheartbeat\b",
         r"\bops\s+config\b",
         r"\bruntime\s+config\b",
         r"\bservice\s+(settings|config|configuration)\b",
     ]
     action_patterns = [
+        # "create" is only considered a config intent when combined with a clear target pattern above.
         r"\bcreate\b",
         r"\bset\b",
         r"\bchange\b",

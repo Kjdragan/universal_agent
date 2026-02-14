@@ -17,7 +17,7 @@ description: |
   - Writes an image manifest (`work_products/media/manifest.json`) so other agents can consume outputs
   - Saves all outputs to `work_products/media/`
 
-tools: mcp__internal__generate_image, mcp__internal__generate_image_with_review, mcp__internal__describe_image, mcp__internal__preview_image, mcp__zai_vision__analyze_image
+tools: Read, Write, Bash, mcp__internal__list_directory, mcp__internal__generate_image, mcp__internal__generate_image_with_review, mcp__internal__describe_image, mcp__internal__preview_image, mcp__zai_vision__analyze_image
 model: inherit
 ---
 
@@ -46,6 +46,12 @@ Use the Pro model + review loop so the model can read its own output and fix typ
    - `model_name="gemini-3-pro-image-preview"`
    - `max_attempts=3` (hard cap; avoid runaway)
 2. If the tool returns `qc_converged=false`, stop and surface the remaining issues for human decision.
+
+## Critical Pitfall: Do Not Use Image Tools To Write Non-Images
+The tools `mcp__internal__generate_image` and `mcp__internal__generate_image_with_review` only generate image outputs.
+
+- Do NOT attempt to create `manifest.json` (or any `.json`) by calling an image tool with `output_filename="manifest.json"`.
+- Instead, write the manifest with the native `Write` tool to `work_products/media/manifest.json`.
 
 ---
 
