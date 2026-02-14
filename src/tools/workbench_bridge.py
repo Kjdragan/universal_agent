@@ -77,6 +77,23 @@ class WorkbenchBridge:
             if isinstance(resp, dict):
                 data = resp.get("data", {})
 
+                # Common Composio SDK behavior: returns a local downloaded file path as a string.
+                if isinstance(data, dict) and isinstance(data.get("file"), str):
+                    downloaded_file = data["file"]
+                    if downloaded_file and os.path.exists(downloaded_file):
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        import shutil
+
+                        shutil.copy2(downloaded_file, local_path)
+                        size = os.path.getsize(local_path)
+                        print(f"   ✅ Downloaded {size} bytes via SDK file path")
+                        return {
+                            "local_path": local_path,
+                            "size": size,
+                            "source": downloaded_file,
+                            "method": "sdk_file_path",
+                        }
+
                 # Check for direct content (Format B)
                 if "content" in data:
                     content = data["content"]
