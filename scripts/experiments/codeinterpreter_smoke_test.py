@@ -21,6 +21,7 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
 from composio import Composio
 
 
@@ -53,6 +54,9 @@ def _extract_sandbox_id(resp_dict: dict) -> str | None:
 
 
 def main() -> int:
+    # Ensure local `.env` is respected for interactive smoke runs.
+    load_dotenv()
+
     api_key = (os.getenv("COMPOSIO_API_KEY") or "").strip()
     if not api_key:
         print("ERROR: COMPOSIO_API_KEY is not set", file=sys.stderr)
@@ -118,6 +122,15 @@ def main() -> int:
     data = get_d.get("data") or {}
     content = None
     if isinstance(data, dict):
+        # Common SDK behavior: returns a local downloaded file path as a string.
+        if content is None and isinstance(data.get("file"), str):
+            p = Path(data["file"])
+            if p.exists():
+                try:
+                    content = p.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    content = None
+
         # direct content
         if isinstance(data.get("content"), str):
             content = data["content"]
@@ -150,4 +163,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
