@@ -518,7 +518,7 @@ class AgentSetup:
             domains = {
                 "🔬 Research & Analysis": ["research-specialist", "trend-specialist", "professor", "scribe"],
                 "🎨 Creative & Media": ["image-expert", "video-creation-expert", "video-remotion-expert"],
-                "⚙️ Engineering & Code": ["task-decomposer", "codeinterpreter", "github"],
+                "⚙️ Engineering & Code": ["task-decomposer", "code-writer", "codeinterpreter", "github"],
                 "🏢 Operations & Communication": [
                     "slack-expert",
                     "gmail",

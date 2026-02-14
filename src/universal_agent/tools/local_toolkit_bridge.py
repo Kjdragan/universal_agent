@@ -16,6 +16,7 @@ try:
         append_to_file as append_to_file_core,
         write_text_file as write_text_file_core,
         generate_image as generate_image_core,
+        generate_image_with_review as generate_image_with_review_core,
         finalize_research as finalize_research_core,
         describe_image as describe_image_core,
         preview_image as preview_image_core,
@@ -37,6 +38,7 @@ except ImportError:
         append_to_file as append_to_file_core,
         write_text_file as write_text_file_core,
         generate_image as generate_image_core,
+        generate_image_with_review as generate_image_with_review_core,
         finalize_research as finalize_research_core,
         describe_image as describe_image_core,
         preview_image as preview_image_core,
@@ -246,6 +248,31 @@ async def generate_image_wrapper(args: dict[str, Any]) -> dict[str, Any]:
             preview=args.get("preview", False),
             # Keep wrapper default aligned with the internal tool's documented valid models.
             model_name=args.get("model_name", "gemini-2.5-flash-image"),
+        )
+    return {"content": [{"type": "text", "text": result_str}]}
+
+
+@tool(
+    name="generate_image_with_review",
+    description="Generate an image then have Gemini review and iteratively fix typos/missing elements (in-process).",
+    input_schema={
+        "prompt": str,
+        "output_dir": str,
+        "output_filename": str,
+        "preview": bool,
+        "model_name": str,
+        "max_attempts": int,
+    },
+)
+async def generate_image_with_review_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    with StdoutToEventStream(prefix="[Local Toolkit]"):
+        result_str = generate_image_with_review_core(
+            prompt=args.get("prompt"),
+            output_dir=args.get("output_dir"),
+            output_filename=args.get("output_filename"),
+            preview=args.get("preview", False),
+            model_name=args.get("model_name", "gemini-3-pro-image-preview"),
+            max_attempts=args.get("max_attempts", 3),
         )
     return {"content": [{"type": "text", "text": result_str}]}
 

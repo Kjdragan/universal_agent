@@ -77,3 +77,23 @@ Default behavior is to push for full success with creative recovery. "Partial ou
   - “tool returned nothing”
   - “tool returned something but our parser dropped it”
 - Add a minimal regression test for parsers using a recorded fixture response (no live API dependency) when feasible.
+
+## Incident: Code Interpreter Discovery Misrouted to Databricks
+
+### What Happened
+- A run tried to locate “Code Interpreter” capabilities via `mcp__composio__COMPOSIO_SEARCH_TOOLS`.
+- The discovery results emphasized Databricks job submission, which is unrelated to our “run Python for charts” intent.
+
+### Root Cause Pattern
+- Tool discovery is inherently fuzzy: the query matched “execute python” and the router suggested an enterprise compute platform.
+- Our agent prompts/docs also mixed “local Python”, “CodeInterpreter”, and “tool discovery” as interchangeable, which increased the chance of misrouting.
+
+### Fix Implemented
+- Updated `data-analyst` to be **local-first** and treat CodeInterpreter as fallback/isolation.
+- Updated orchestration prompts to stop implying CodeInterpreter is the default compute lane.
+- Updated references to the correct CodeInterpreter slugs (e.g. `CODEINTERPRETER_EXECUTE_CODE`).
+- Added a live smoke test harness: `scripts/experiments/codeinterpreter_smoke_test.py`.
+
+### Generalizable Lessons
+- Avoid using tool discovery for capabilities we already know exist (especially for compute).
+- Treat analytics as a “local default” unless isolation/persistence is explicitly needed.
