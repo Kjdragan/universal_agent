@@ -88,9 +88,10 @@ def discover_connected_toolkits(composio_client: Any, user_id: str) -> List[str]
                      if is_active:
                          connected_slugs.append(item.toolkit.slug)
         
-        # Tools that are "always on" / utilities that don't need auth
-        # We explicitly list them so the user sees the full capability set in the terminal
-        defaults = ['codeinterpreter', 'composio_search', 'sqltool', 'filetool']
+        # Tools that are "always on" / utilities that don't need auth.
+        # NOTE: `sqltool` and `filetool` are *not* valid Composio toolkit slugs; they are local tools.
+        # Keep this list limited to valid Composio toolkits to avoid confusing downstream logic.
+        defaults = ['codeinterpreter', 'composio_search']
         for d in defaults:
             if d not in connected_slugs:
                 connected_slugs.append(d)
