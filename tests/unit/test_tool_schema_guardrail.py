@@ -82,6 +82,28 @@ async def test_schema_guardrail_allows_non_system_config_task_routing():
 
 
 @pytest.mark.anyio
+async def test_schema_guardrail_allows_architecture_diagram_task_even_if_it_mentions_cron():
+    # Regression: the system-config misrouting guardrail should not block documentation tasks
+    # that merely reference ops concepts like cron/heartbeat.
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Task",
+            "tool_input": {
+                "subagent_type": "mermaid-expert",
+                "prompt": (
+                    "Create a Mermaid diagram showing the system architecture.\n\n"
+                    "Include a 'System Ops' section (Cron scheduling, monitoring) and a heartbeat note.\n"
+                    "Save to work_products/diagrams/architecture_diagram.mmd."
+                ),
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    assert result.get("decision") != "block"
+
+
+@pytest.mark.anyio
 async def test_schema_guardrail_blocks_malformed_tool_name():
     result = await pre_tool_use_schema_guardrail(
         {

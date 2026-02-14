@@ -136,7 +136,11 @@ def build_system_prompt(
         "**Tool Namespaces:**\n"
         "- `mcp__composio__*` - Remote tools (Gmail, Slack, Calendar, YouTube, GitHub, Sheets, Drive, CodeInterpreter, etc.) -> Call directly\n"
         "- `mcp__internal__*` - Local tools (File I/O, Memory, image gen, PDF, upload_to_composio) -> Call directly\n"
-        "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents."
+        "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
+        "**Reliability note (important):** If you issue multiple tool calls in the same assistant message, they are treated as siblings.\n"
+        "If one sibling fails (non-zero exit, blocked by a hook, network error), other siblings may be auto-failed with\n"
+        "`<tool_use_error>Sibling tool call errored</tool_use_error>`.\n"
+        "Prefer sequential tool calls when any step is likely to fail or needs error handling."
     )
 
     # ── 6. CAPABILITY DOMAINS ─────────────────────────────────────────
