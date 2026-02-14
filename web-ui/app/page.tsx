@@ -890,7 +890,8 @@ function ChatInterface() {
     try {
       await ws.sendQuery(query);
     } catch (error) {
-      console.error("Failed to send query:", error);
+      // Avoid triggering Next.js dev overlay for transient connectivity issues.
+      console.warn("Failed to send query:", error);
       useAgentStore.getState().setLastError("Failed to send query. Check connection.");
     } finally {
 
@@ -1048,13 +1049,14 @@ function ChatInterface() {
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 if (chatRole === "viewer") return;
-                if (connectionStatus === "connected") {
-                  handleSend();
-                } else if (connectionStatus === "processing" && input.trim()) {
+                if (connectionStatus === "processing" && input.trim()) {
                   // Stop & Send
                   setPendingQuery(input);
                   setInput("");
                   ws.sendCancel(`Interrupted by user query: ${input}`);
+                } else {
+                  // Allow sending even if currently disconnected; `sendQuery` will auto-connect.
+                  handleSend();
                 }
               }
             }}
@@ -1065,7 +1067,7 @@ function ChatInterface() {
                   ? "Type to redirect (Enter to stop & send)..."
                   : "Enter your neural query..."
             }
-            disabled={chatRole === "viewer" || connectionStatus === "disconnected" || connectionStatus === "connecting"}
+            disabled={chatRole === "viewer"}
             className="flex-1 bg-slate-950/50 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500/50 focus:shadow-glow-sm disabled:opacity-50 transition-all font-mono"
           />
           {connectionStatus === "processing" && chatRole !== "viewer" ? (
@@ -1079,7 +1081,7 @@ function ChatInterface() {
           ) : (
             <button
               onClick={() => handleSend()}
-              disabled={chatRole === "viewer" || connectionStatus !== "connected" || isSending || !input.trim()}
+              disabled={chatRole === "viewer" || isSending || !input.trim()}
               className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-600/20 disabled:text-cyan-400/40 text-white px-5 py-2 rounded-lg transition-all btn-primary text-xs font-bold uppercase tracking-wider flex items-center gap-2"
             >
               <span>Send</span>
