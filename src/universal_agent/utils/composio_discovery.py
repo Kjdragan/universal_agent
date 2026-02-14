@@ -103,6 +103,8 @@ def discover_connected_toolkits(composio_client: Any, user_id: str) -> List[str]
         print(f"⚠️ [Discovery] Failed to fetch user connections: {e}")
         return []
 
+    # Project policy: Do not expose Composio Twitter/X toolkit to agents.
+    connected_slugs = [s for s in connected_slugs if str(s).strip().lower() != "twitter"]
     return connected_slugs
 
 def fetch_toolkit_meta(composio_client: Any, slug: str) -> Dict[str, Any]:

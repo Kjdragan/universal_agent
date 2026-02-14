@@ -47,7 +47,7 @@ class WorkbenchBridge:
         return self.sandbox_id
 
     def download(
-        self, remote_path: str, local_path: str
+        self, remote_path: str, local_path: str, session_id: str | None = None
     ) -> Dict[str, Any]:
         """
         Download a file from the CodeInterpreter sandbox to the local file system.
@@ -55,6 +55,7 @@ class WorkbenchBridge:
         Args:
             remote_path: Absolute path to the file on the remote workbench.
             local_path: Path where the file should be saved locally.
+            session_id: Optional Composio session identifier (currently unused; reserved for future sandbox routing).
         """
         print(f"🌉 [BRIDGE] Downloading: {remote_path} -> {local_path}")
         sandbox_id = self._ensure_sandbox()

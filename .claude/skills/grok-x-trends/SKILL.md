@@ -78,3 +78,27 @@ uv run .claude/skills/grok-x-trends/scripts/grok_x_trends.py --query "Apple Visi
   - `posts`: high-engagement posts with basic engagement stats when available
 - Engagement metrics may be missing depending on what `x_search` returns.
 - Spend guardrail: the script sets a depth-based `max_tool_calls` cap in the Responses API request to reduce runaway tool fan-out. If you need more coverage, prefer increasing `--days` or `--depth` rather than looping retries.
+
+## Interim Work Product Schema (Session Workspace)
+
+When this skill is used as part of a larger agent run, **save the evidence you collected** as an interim work product inside the active session workspace so other agents (or later turns) can reliably reuse it.
+
+Canonical location:
+
+- `$CURRENT_SESSION_WORKSPACE/work_products/social/x/evidence_posts/<run_slug>__<YYYYMMDD_HHMMSS>/`
+
+Files:
+
+- `request.json`: the tool/script inputs (query, time window, depth, etc.)
+- `result.json`: the structured JSON output (posts evidence)
+- `manifest.json`: minimal metadata and relative paths
+
+If you're using the internal tool `mcp__internal__x_trends_posts`, it will **best-effort auto-save** to this schema (unless `save_to_workspace=false`).
+
+If you're using the script directly, create the folder and redirect the JSON output:
+
+```bash
+RUN_DIR=\"$CURRENT_SESSION_WORKSPACE/work_products/social/x/evidence_posts/openai__$(date -u +%Y%m%d_%H%M%S)\"
+mkdir -p \"$RUN_DIR\"
+uv run .claude/skills/grok-x-trends/scripts/grok_x_trends.py --query \"OpenAI\" --days 1 --posts-only --json > \"$RUN_DIR/result.json\"
+```

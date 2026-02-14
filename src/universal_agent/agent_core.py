@@ -23,6 +23,8 @@ from enum import Enum
 from dotenv import load_dotenv
 
 load_dotenv()
+from universal_agent.utils.env_aliases import apply_xai_key_aliases
+apply_xai_key_aliases()
 
 import logfire
 from claude_agent_sdk.client import ClaudeSDKClient
@@ -376,7 +378,8 @@ async def malformed_tool_guardrail_hook(
                     "**USE MCP TOOLS INSTEAD:**\n"
                     "- For email: Use `GMAIL_SEND_EMAIL` tool directly.\n"
                     "- For file upload: `mcp__internal__upload_to_composio`\n"
-                    "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool.\n\n"
+                    "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool (EXCEPT X/Twitter).\n"
+                    "  For X/Twitter evidence, use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n\n"
                     "The Composio SDK is not available in the Bash environment. "
                     "All actions must go through specific MCP tools which handle auth automatically.\n\n"
                     "If you cannot find a tool, use `COMPOSIO_SEARCH_TOOLS` to look for it."
