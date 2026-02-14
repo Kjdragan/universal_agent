@@ -174,13 +174,23 @@ export class AgentWebSocket {
       };
 
       this.ws.onerror = (event) => {
-        console.error("WebSocket error:", event);
-        this.updateStatus("error");
-        this.notifyError(new Error("WebSocket connection error"));
+        // In Next.js dev mode, `console.error` triggers the full-screen error overlay.
+        // A transient WS failure should not block typing in the chat UI.
+        console.warn("[AgentWebSocket] WebSocket error:", { url: wsUrl, event });
+        this.updateStatus("disconnected");
+        this.notifyError(
+          new Error(
+            `WebSocket connection error (${wsUrl}). If you are using an SSH tunnel to access the Web UI on localhost:3000, also forward port 8001.`
+          )
+        );
       };
 
-      this.ws.onclose = () => {
-        console.log("WebSocket closed");
+      this.ws.onclose = (event) => {
+        console.log("[AgentWebSocket] WebSocket closed", {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean,
+        });
         this.stopPing();
         this.updateStatus("disconnected");
 
@@ -189,7 +199,8 @@ export class AgentWebSocket {
         }
       };
     } catch (error) {
-      console.error("Failed to create WebSocket:", error);
+      // Avoid Next.js dev overlay for environment/connection issues.
+      console.warn("[AgentWebSocket] Failed to create WebSocket:", error);
       this.updateStatus("error");
       this.notifyError(error as Error);
     }
@@ -246,7 +257,8 @@ export class AgentWebSocket {
         }
       }
     } catch (error) {
-      console.error("Failed to parse WebSocket message:", error);
+      // Do not crash the UI for a single bad event.
+      console.warn("[AgentWebSocket] Failed to parse WebSocket message:", error);
     }
   }
 
@@ -271,8 +283,10 @@ export class AgentWebSocket {
 
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       const state = this.ws ? this.ws.readyState : "null";
-      console.error(`[AgentWebSocket] Cannot send, socket state: ${state}`);
-      throw new Error(`WebSocket is not connected (State: ${state})`);
+      console.warn(`[AgentWebSocket] Cannot send, socket state: ${state}`);
+      throw new Error(
+        `WebSocket is not connected (State: ${state}). If you are accessing the UI via an SSH tunnel on localhost:3000, also forward port 8001 (API).`
+      );
     }
 
     const event: WebSocketEvent = {
