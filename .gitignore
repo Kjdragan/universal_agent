@@ -76,6 +76,10 @@ russia_ukraine_war_search_urls.json
 RESEARCH_SPECIALIST_COMPLETION_SUMMARY.txt
 scripts/test_results.json
 
+# === Local User Profile (PII) ===
+config/user_profile.json
+config/user_profile.md
+
 
 # === OS Specific ===
 .DS_Store

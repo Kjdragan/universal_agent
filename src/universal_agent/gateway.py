@@ -394,6 +394,30 @@ class InProcessGateway(Gateway):
                         errors.append(msg.strip())
             if event.type == EventType.ITERATION_END:
                 trace_id = event.data.get("trace_id")
+
+        # Best-effort: sync session transcript into session memory after each query.
+        # This reduces the chance of losing session memories when a session is abandoned
+        # without an adapter close (e.g., browser closed, machine sleep, process killed).
+        try:
+            from universal_agent.feature_flags import memory_enabled
+
+            if memory_enabled(default=False):
+                from universal_agent.memory.orchestrator import get_memory_orchestrator
+
+                workspace_dir = str(Path(session.workspace_dir).resolve())
+                transcript_path = os.path.join(workspace_dir, "transcript.md")
+                if os.path.exists(transcript_path):
+                    shared_root = (os.getenv("UA_SHARED_MEMORY_DIR") or workspace_dir).strip() or workspace_dir
+                    broker = get_memory_orchestrator(workspace_dir=shared_root)
+                    # Force indexing so short runs still get captured.
+                    broker.sync_session(
+                        session_id=session.session_id,
+                        transcript_path=transcript_path,
+                        force=True,
+                    )
+        except Exception:
+            # Memory is best-effort; never fail the user request due to persistence issues.
+            pass
         
         # Fallback trace_id from legacy bridge
         if not trace_id and self._use_legacy and self._bridge:
