@@ -31,6 +31,8 @@ import httpx
 # Load .env early so SDK/CLI subprocesses inherit API keys and settings.
 BASE_DIR = Path(__file__).parent.parent.parent
 load_dotenv(BASE_DIR / ".env", override=False)
+from universal_agent.utils.env_aliases import apply_xai_key_aliases
+apply_xai_key_aliases()
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse

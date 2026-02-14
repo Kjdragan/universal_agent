@@ -174,7 +174,7 @@ def build_system_prompt(
     sections.append(
         "## 🌐 CAPABILITY DOMAINS (THINK BEYOND RESEARCH & REPORTS)\n"
         "You have 8 capability domains. When given a task, consider ALL of them — not just research:\n"
-        "- **Intelligence**: Composio search, browserbase web scraping, URL/PDF extraction, X trends via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch, then infer themes), Reddit trending (`mcp__composio__REDDIT_*`), weather via the `openweather` skill\n"
+        "- **Intelligence**: Composio search, browserbase web scraping, URL/PDF extraction, X trends via `mcp__internal__x_trends_posts` (Grok/xAI `x_search` evidence fetch), Reddit trending (`mcp__composio__REDDIT_*`), weather via the `openweather` skill\n"
         "- **Computation**: Prefer local `Bash` + `uv run python ...` for stats/charts. Use CodeInterpreter (`mcp__composio__CODEINTERPRETER_*`) when you need isolation or a persistent sandbox.\n"
         "- **Media Creation**: `image-expert`, `video-creation-expert`, `mermaid-expert`, Manim animations\n"
         "- **Communication**: Gmail (`mcp__composio__GMAIL_*`), Slack (`mcp__composio__SLACK_*`), Discord (`mcp__composio__DISCORD_*`), Calendar (`mcp__composio__GOOGLECALENDAR_*`)\n"
@@ -182,7 +182,8 @@ def build_system_prompt(
         "- **Engineering**: GitHub (`mcp__composio__GITHUB_*`), code analysis, test execution\n"
         "- **Knowledge Capture**: Notion (`mcp__composio__NOTION_*`), memory tools, Google Docs/Sheets/Drive\n"
         "- **System Ops**: Cron scheduling, heartbeat config, monitoring via `system-configuration-agent`\n"
-        "- **...and many more**: You have 250+ Composio integrations available. Use `mcp__composio__COMPOSIO_SEARCH_TOOLS` to discover tools for ANY service not listed above."
+        "- **...and many more**: You have 250+ Composio integrations available. Use `mcp__composio__COMPOSIO_SEARCH_TOOLS` to discover tools for ANY service not listed above.\n"
+        "  Exception: **Never** use Composio for X/Twitter. Always use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback)."
     )
 
     # ── 7. EXECUTION STRATEGY ─────────────────────────────────────────
@@ -212,7 +213,7 @@ def build_system_prompt(
         "## 🎯 WHEN ASKED TO 'DO SOMETHING AMAZING' OR 'SHOWCASE CAPABILITIES'\n"
         "Do NOT just search + report + email. That's boring. Instead, combine MULTIPLE domains:\n"
         "- Pull live data via YouTube API (`mcp__composio__YOUTUBE_*`) or GitHub API (`mcp__composio__GITHUB_*`)\n"
-        "- Check what's trending on X via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch) or Reddit (`mcp__composio__REDDIT_*`)\n"
+        "- Check what's trending on X via `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch) or Reddit via `mcp__internal__reddit_top_posts`\n"
         "- Get current conditions or a short-term forecast via the `openweather` skill\n"
         "- Get directions or find places via Google Maps (`mcp__composio__GOOGLEMAPS_*`)\n"
         "- Post to Discord channels (`mcp__composio__DISCORD_*`)\n"
@@ -232,6 +233,8 @@ def build_system_prompt(
     sections.append(
         "## 🔍 SEARCH TOOL PREFERENCE & HYGIENE\n"
         "- For web/news research, ALWAYS use Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
+        "- **X/Twitter exception:** do NOT use Composio toolkits or Composio tool discovery for X/Twitter.\n"
+        "  Use `mcp__internal__x_trends_posts` (preferred) or `grok-x-trends` (fallback).\n"
         "- Do NOT use native 'WebSearch' — it bypasses our artifact saving system.\n"
         "- Composio search results are auto-saved by the Observer for sub-agent access.\n"
         "- ALWAYS append `-site:wikipedia.org` to EVERY search query. Wikipedia wastes search query slots.\n"
@@ -246,7 +249,12 @@ def build_system_prompt(
         "- Do NOT set `sync_response_to_workbench=True` unless you expect massive data (>5MB).\n"
         "- Default behavior (`sync=False`) is faster and avoids unnecessary download steps.\n"
         "- If a tool returns 'data_preview' or says 'Saved large response to <FILE>', the data was TRUNCATED.\n"
-        "  In these cases (and ONLY these cases), use 'workbench_download' to fetch the full file."
+        "  In these cases (and ONLY these cases), use 'workbench_download' (or `mcp__composio__COMPOSIO_REMOTE_BASH_TOOL` if needed) to fetch/parse the full file.\n"
+        "\n"
+        "**Reddit Listing parsing gotcha (common failure mode):**\n"
+        "- For `mcp__composio__REDDIT_GET_R_TOP` and similar Listing tools, posts are nested at:\n"
+        "  `results[0].response.data.data.children[*].data` (NOT `...response.data.children`).\n"
+        "- The remote sandbox may not include `jq`; use Python for parsing."
     )
 
     # ── 11. WORKBENCH RESTRICTIONS ────────────────────────────────────

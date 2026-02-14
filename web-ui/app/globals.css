@@ -387,6 +387,57 @@
     animation: processing-scan 1.5s ease-in-out infinite;
   }
 
+  /* Chat streaming feedback:
+     - A one-shot scanline that replays per chunk (element remount via React key).
+     - A blink cursor while streaming (no latency added; purely visual). */
+  @keyframes ua-scanline-pulse {
+    0% { left: -140%; opacity: 0; }
+    15% { opacity: 0.85; }
+    100% { left: 140%; opacity: 0; }
+  }
+
+  .ua-scanline-pulse {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border-radius: inherit;
+    overflow: hidden;
+    display: block;
+  }
+
+  .ua-scanline-pulse::after {
+    content: '';
+    position: absolute;
+    top: -20%;
+    left: -140%;
+    width: 140%;
+    height: 24px;
+    background: linear-gradient(90deg,
+      transparent,
+      hsl(var(--primary) / 0.55),
+      transparent
+    );
+    filter: blur(0.4px);
+    transform: rotate(-1.5deg);
+    animation: ua-scanline-pulse 260ms ease-out 1;
+  }
+
+  @keyframes ua-cursor-blink {
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
+  }
+
+  .ua-stream-cursor {
+    display: inline-block;
+    width: 0.6ch;
+    height: 1.15em;
+    margin-left: 0.35rem;
+    vertical-align: -0.15em;
+    background: hsl(var(--primary));
+    border-radius: 2px;
+    animation: ua-cursor-blink 1s steps(2, end) infinite;
+  }
+
   /* ========================================
      BUTTON & INTERACTIVE STATES
      ======================================== */

@@ -9,6 +9,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from claude_agent_sdk import tool
 
+from universal_agent.utils.session_workspace import (
+    build_interim_work_product_paths,
+    resolve_current_session_workspace,
+    safe_slug,
+    write_json,
+)
 
 _SKILL_FUNCS: Optional[Tuple[Callable[..., Dict[str, Any]], Callable[..., Dict[str, Any]], Callable[[Dict[str, Any]], Dict[str, Any]]]] = None
 
@@ -73,6 +79,7 @@ def _compute_window(from_date: Optional[str], to_date: Optional[str], days: int)
         "enable_video_understanding": bool,
         "model": str,
         "max_posts": int,  # optional clamp for output size
+        "save_to_workspace": bool,  # default true; best-effort save under session work_products/
     },
 )
 async def x_trends_posts_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -101,6 +108,7 @@ async def _x_trends_posts_impl(args: Dict[str, Any]) -> Dict[str, Any]:
     model = str(args.get("model", "grok-4-1-fast") or "grok-4-1-fast").strip()
     max_posts = int(args.get("max_posts", 40) or 40)
     max_posts = max(1, min(max_posts, 120))
+    save_to_workspace = bool(args.get("save_to_workspace", True))
 
     if not global_mode and not query:
         return {"content": [{"type": "text", "text": "error: query is required unless global_mode=true"}]}
@@ -163,5 +171,43 @@ async def _x_trends_posts_impl(args: Dict[str, Any]) -> Dict[str, Any]:
         "posts": posts,
         "raw_text": parsed.get("raw_text", "") if not posts else "",
     }
+
+    # Best-effort session capture for downstream agents.
+    if save_to_workspace:
+        ws = resolve_current_session_workspace(repo_root=str(Path(__file__).resolve().parents[3]))
+        if ws:
+            wp = build_interim_work_product_paths(
+                workspace_dir=ws,
+                domain="evidence_posts",
+                source="x",
+                run_slug=safe_slug(query_label, fallback="x_global" if global_mode else "x_query"),
+            )
+            try:
+                write_json(
+                    wp.request_path,
+                    {
+                        "tool": "x_trends_posts",
+                        "args": {k: v for k, v in args.items() if k not in {"GROK_API_KEY", "XAI_API_KEY"}},
+                        "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    },
+                )
+                write_json(wp.result_path, out)
+                write_json(
+                    wp.manifest_path,
+                    {
+                        "type": "interim_work_product",
+                        "domain": "social_intel",
+                        "source": "x",
+                        "kind": "evidence_posts",
+                        "paths": {
+                            "request": str(wp.request_path.relative_to(ws)),
+                            "result": str(wp.result_path.relative_to(ws)),
+                        },
+                        "retention": "session",
+                    },
+                )
+            except Exception:
+                # Never fail the tool call due to file IO.
+                pass
 
     return {"content": [{"type": "text", "text": json.dumps(out, indent=2, ensure_ascii=True)}]}

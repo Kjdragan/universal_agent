@@ -3,6 +3,7 @@ import { useAgentStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
 import { ChevronRight, ChevronDown, Terminal, Play, CheckCircle2, XCircle, AlertCircle, Info } from 'lucide-react';
 import { format } from 'date-fns';
+import { LinkifiedText } from "@/components/LinkifiedText";
 
 interface LogEntry {
     id: string;
@@ -152,7 +153,7 @@ const CollapsibleData = ({ label, data, isError = false, expandMode }: { label: 
                         "p-2 text-xs font-mono whitespace-pre-wrap break-words",
                         isError ? "text-red-400" : "text-slate-300"
                     )}>
-                        {data?.content_preview || jsonString}
+                        <LinkifiedText text={String(data?.content_preview ?? jsonString)} />
                     </pre>
                 </div>
             )}
@@ -251,14 +252,14 @@ function LogRow({ log, expandMode }: { log: LogEntry; expandMode: ExpandMode }) 
                 </span>
                 <div className="flex-1 whitespace-pre-wrap break-words">
                     {log.prefix && <span className="text-blue-500 mr-1">{log.prefix}</span>}
-                    {headerPreview}
+                    <LinkifiedText text={headerPreview} />
                     {hasMore && !effectiveOpen && <span className="text-muted-foreground ml-1">...</span>}
                 </div>
             </div>
 
             {effectiveOpen && hasMore && (
                 <div className="mt-1 pl-[110px] text-muted-foreground whitespace-pre-wrap break-words">
-                    {log.message}
+                    <LinkifiedText text={log.message} />
                 </div>
             )}
         </div>

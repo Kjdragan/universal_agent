@@ -17,6 +17,8 @@ import yaml
 from dotenv import load_dotenv
 
 load_dotenv()
+from universal_agent.utils.env_aliases import apply_xai_key_aliases
+apply_xai_key_aliases()
 
 from composio import Composio
 from claude_agent_sdk.types import ClaudeAgentOptions, HookMatcher

@@ -789,6 +789,25 @@ async def pre_tool_use_schema_guardrail(
                         
                     inner_slug = item.get("tool_slug")
                     inner_args = item.get("arguments") or {}
+
+                    # Policy: Composio Twitter/X toolkit is disabled in this project.
+                    # Use Grok/xAI evidence fetch via internal tools instead.
+                    if isinstance(inner_slug, str) and inner_slug.upper().startswith("TWITTER_"):
+                        return {
+                            "systemMessage": (
+                                "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
+                                "Use X evidence via Grok/xAI instead:\n"
+                                "- Preferred: `mcp__internal__x_trends_posts` (structured JSON)\n"
+                                "- Fallback: `grok-x-trends` skill (`--posts-only --json`)\n\n"
+                                f"Blocked Composio tool_slug: {inner_slug}"
+                            ),
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": "Composio Twitter/X tools are disabled by policy.",
+                            },
+                        }
                     
                     # We can reuse the existing validation logic for the inner tool
                     # Note: validate_tool_input is available in this module scope
@@ -840,6 +859,28 @@ async def pre_tool_use_schema_guardrail(
                 for idx, item in enumerate(queries_value):
                     if not isinstance(item, dict) or not item.get("use_case"):
                         invalid_indices.append(str(idx))
+
+                    # Policy: Don't use Composio tool discovery for X/Twitter. It will recommend TWITTER_* tools.
+                    if isinstance(item, dict):
+                        use_case = str(item.get("use_case") or "")
+                        known_fields = str(item.get("known_fields") or "")
+                        combined = f"{use_case}\n{known_fields}".lower()
+                        if any(token in combined for token in ("twitter", "x/twitter", "x.com", "tweet")):
+                            return {
+                                "systemMessage": (
+                                    "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
+                                    "Do not call `COMPOSIO_SEARCH_TOOLS` for X/Twitter. "
+                                    "Use Grok/xAI evidence fetch instead:\n"
+                                    "- Preferred: `mcp__internal__x_trends_posts`\n"
+                                    "- Fallback: `grok-x-trends` skill (`--posts-only --json`)\n"
+                                ),
+                                "decision": "block",
+                                "hookSpecificOutput": {
+                                    "hookEventName": "PreToolUse",
+                                    "permissionDecision": "deny",
+                                    "permissionDecisionReason": "Blocked Composio X/Twitter tool discovery by policy.",
+                                },
+                            }
                 if invalid_indices:
                     return {
                         "systemMessage": (
@@ -854,6 +895,26 @@ async def pre_tool_use_schema_guardrail(
                             "permissionDecisionReason": "queries entries missing use_case.",
                         },
                     }
+
+        # Policy: never initiate Composio Twitter/X OAuth connections.
+        if normalized_name.endswith("composio_manage_connections"):
+            toolkits = tool_input.get("toolkits")
+            if isinstance(toolkits, list) and any(str(t).strip().lower() == "twitter" for t in toolkits):
+                return {
+                    "systemMessage": (
+                        "⚠️ Twitter/X via Composio is DISABLED in this project.\n\n"
+                        "Do not initiate a Composio Twitter/X connection. "
+                        "Use Grok/xAI evidence fetch instead:\n"
+                        "- Preferred: `mcp__internal__x_trends_posts`\n"
+                        "- Fallback: `grok-x-trends` skill\n"
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Blocked Composio Twitter/X connection initiation by policy.",
+                    },
+                }
             
 
 
