@@ -2895,6 +2895,7 @@ SUBAGENT_EXPECTED_SKILLS = {
     "system-configuration-agent": [],
     "data-analyst": [],  # Uses Composio CodeInterpreter + local Python
     "action-coordinator": ["gmail"],  # Uses Composio delivery tools
+    "banana-squad-expert": ["banana-squad", "image-generation"],
 }
 
 

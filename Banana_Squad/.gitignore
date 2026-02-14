@@ -1,0 +1,6 @@
+# Keep the repo small; do not commit downloaded inspiration images by default.
+reference_images/style_inspiration/visualcapitalist/downloads/
+
+# Keep metadata (URLs/attribution) tracked for reproducibility.
+!reference_images/style_inspiration/visualcapitalist/sources.json
+

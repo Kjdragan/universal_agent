@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "collected_at": "2026-02-14T04:50:04Z",
+  "site": "https://www.visualcapitalist.com",
+  "max_images": 5,
+  "download_dir": "Banana_Squad/reference_images/style_inspiration/visualcapitalist/downloads",
+  "items": [
+    {
+      "url": "https://www.visualcapitalist.com/smart-home-tomorrow/",
+      "title": "The Smart Home of Tomorrow",
+      "image_url": "https://www.visualcapitalist.com/wp-content/uploads/2016/09/smart-home-share.jpg",
+      "saved_as": "Banana_Squad/reference_images/style_inspiration/visualcapitalist/downloads/vc_32cc4bdce094.jpg",
+      "collected_at": "2026-02-14T04:49:42Z"
+    },
+    {
+      "url": "https://www.visualcapitalist.com/climate-targets-of-fortune-500-companies/",
+      "title": "Visualizing the Climate Targets of Fortune 500 Companies",
+      "image_url": "https://www.visualcapitalist.com/wp-content/uploads/2021/05/Fortune-500-Climate-Action-Shareable.jpg",
+      "saved_as": "Banana_Squad/reference_images/style_inspiration/visualcapitalist/downloads/vc_1020b29f2da7.jpg",
+      "collected_at": "2026-02-14T04:49:51Z"
+    },
+    {
+      "url": "https://www.visualcapitalist.com/ranked-the-10-worst-u-s-states-to-retire-in/",
+      "title": "Ranked: The 10 Worst U.S. States to Retire In",
+      "image_url": "https://www.visualcapitalist.com/wp-content/uploads/2024/08/VORO_WorstStatestoRetirein_shareable.jpg",
+      "saved_as": "Banana_Squad/reference_images/style_inspiration/visualcapitalist/downloads/vc_8b37892d5cca.jpg",
+      "collected_at": "2026-02-14T04:49:55Z"
+    },
+    {
+      "url": "https://www.visualcapitalist.com/all-of-the-worlds-billion-dollar-companies/",
+      "title": "All of the World\u2019s Billion Dollar Companies by Country",
+      "image_url": "https://www.visualcapitalist.com/wp-content/uploads/2025/05/Billion-Dollar-Companies-by-Region-in-2025_shareable1_May7.jpg",
+      "saved_as": "Banana_Squad/reference_images/style_inspiration/visualcapitalist/downloads/vc_5b90651e8ad9.jpg",
+      "collected_at": "2026-02-14T04:50:01Z"
+    },
+    {
+      "url": "https://www.visualcapitalist.com/charted-americas-preferred-smartphone-brands/",
+      "title": "Ranked: The Most Popular Smartphone Brands in the U.S.",
+      "image_url": "https://www.visualcapitalist.com/wp-content/uploads/2024/03/VORO_Most-Popular-Smartphones-in-America_Shareable_03222024.jpg",
+      "saved_as": "Banana_Squad/reference_images/style_inspiration/visualcapitalist/downloads/vc_43246d3ca755.jpg",
+      "collected_at": "2026-02-14T04:50:04Z"
+    }
+  ]
+}

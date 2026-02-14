@@ -107,6 +107,8 @@ This sub-agent:
   -> Delegate: `Task(subagent_type='task-decomposer', ...)`
 
 #### 🎨 Creative & Media
+- **banana-squad-expert**: Prompt-first "design agency" workflow for high-quality infographic generation (Banana Squad).
+  -> Delegate: `Task(subagent_type='banana-squad-expert', ...)`
 - **image-expert**: MANDATORY DELEGATION TARGET for ALL image generation and editing tasks.
 
 **WHEN TO DELEGATE:**
