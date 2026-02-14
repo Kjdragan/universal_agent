@@ -180,10 +180,50 @@ class AgentSetup:
 
         # Create session and discover apps in parallel
         self._log("⏳ Starting Composio Session initialization...")
+
+        # IMPORTANT: Composio sessions only expose tools for toolkits explicitly enabled for the session.
+        # If we don't enable a connected toolkit (e.g. reddit), it can appear "disconnected" even when
+        # connected accounts exist. Prefer enabling toolkits that are ACTIVE for this user.
+        enabled_toolkits: list[str] = []
+        try:
+            connections = await asyncio.to_thread(
+                self._composio.connected_accounts.list,
+                user_ids=[self.user_id],
+                limit=200,
+            )
+            items = getattr(connections, "items", []) or []
+            active_slugs: set[str] = set()
+            for item in items:
+                toolkit = getattr(item, "toolkit", None)
+                slug = getattr(toolkit, "slug", "") if toolkit else ""
+                status = getattr(item, "status", "")
+                if slug and status == "ACTIVE":
+                    active_slugs.add(slug)
+
+            # Ensure critical Composio-native toolkits are available for orchestration.
+            active_slugs.update({"composio_search", "codeinterpreter"})
+
+            blacklist = {"firecrawl", "exa", "jira", "semanticscholar"}
+            enabled_toolkits = sorted(s for s in active_slugs if s not in blacklist)
+
+            if enabled_toolkits:
+                self._log(
+                    f"🧩 Enabling {len(enabled_toolkits)} Composio toolkits for session (ACTIVE + core)."
+                )
+        except Exception as e:
+            # Safe fallback: keep legacy behavior (default toolkit set) if discovery fails.
+            self._log(f"⚠️ Failed to build enabled toolkit list; falling back to defaults: {e}")
+
+        # If we have an explicit allowlist, use it. Otherwise preserve legacy behavior.
+        toolkits_payload: dict = (
+            {"enable": enabled_toolkits}
+            if enabled_toolkits
+            else {"disable": ["firecrawl", "exa", "jira", "semanticscholar"]}
+        )
         session_future = asyncio.to_thread(
             self._composio.create,
             user_id=self.user_id,
-            toolkits={"disable": ["firecrawl", "exa", "jira", "semanticscholar"]},
+            toolkits=toolkits_payload,
         )
 
         self._log("⏳ Discovering connected apps...")
@@ -418,7 +458,10 @@ class AgentSetup:
         # Load the dynamic capabilities registry
         capabilities_content = ""
         try:
-            capabilities_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
+            # Prefer a per-workspace generated registry (avoid mutating repo assets at runtime).
+            workspace_caps = os.path.join(workspace_path, "capabilities.md")
+            assets_caps = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
+            capabilities_path = workspace_caps if os.path.exists(workspace_caps) else assets_caps
             if os.path.exists(capabilities_path):
                 with open(capabilities_path, "r", encoding="utf-8") as f:
                     capabilities_content = f.read()
@@ -683,7 +726,7 @@ class AgentSetup:
                 lines.extend(app_lines)
                 
             # Write file
-            output_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
+            output_path = os.path.join(self.workspace_dir, "capabilities.md")
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
             
