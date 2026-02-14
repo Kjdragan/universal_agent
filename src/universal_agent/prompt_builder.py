@@ -20,6 +20,28 @@ def _load_file(path: str) -> str:
         pass
     return ""
 
+def _load_user_profile(max_chars: int = 4000) -> str:
+    """Load optional user profile context from local config (may contain PII)."""
+    try:
+        profile_path = (os.getenv("UA_USER_PROFILE_PATH") or "config/user_profile.json").strip()
+        if not profile_path:
+            return ""
+        content = _load_file(profile_path)
+        if not content:
+            return ""
+        if len(content) > max_chars:
+            content = content[: max_chars - 3] + "..."
+        return (
+            "## 👤 USER PROFILE (LOCAL CONFIG)\n"
+            "This is private, user-supplied profile data. Use it to pick defaults (timezone, home location, preferred name), "
+            "but do not reveal it unless the user explicitly asks.\n\n"
+            "```json\n"
+            f"{content}\n"
+            "```"
+        )
+    except Exception:
+        return ""
+
 def _load_recovery_handoff(workspace_path: str, *, max_chars: int = 4000) -> str:
     """
     Load a recovery handoff packet if present in the session workspace.
@@ -128,6 +150,11 @@ def build_system_prompt(
             "preferences. Use them to personalize responses and maintain continuity.\n\n"
             f"{memory_context}"
         )
+
+    # ── 4b. USER PROFILE (local config, optional) ─────────────────────
+    user_profile = _load_user_profile(max_chars=4000)
+    if user_profile:
+        sections.append(user_profile)
 
     # ── 5. ARCHITECTURE & TOOL USAGE ──────────────────────────────────
     sections.append(
