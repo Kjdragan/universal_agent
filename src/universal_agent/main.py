@@ -1614,10 +1614,11 @@ async def on_pre_tool_use_ledger(
                         f"{reason}\n"
                         f"Path: {abs_path}\n\n"
                         "Use one of these instead (no base64 in context):\n"
-                        f"1) Vision: `describe_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
-                        f"2) Human viewer: `preview_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
-                        "3) Shell metadata: `Bash` `ls -lh` / `file`\n"
-                        "4) For edits: `generate_image` with `input_image_path` (do not Read the bytes)\n"
+                        "1) Vision (preferred): use the external vision MCP server `zai_vision` to analyze the image\n"
+                        f"2) Vision (fallback): `describe_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
+                        f"3) Human viewer: `preview_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
+                        "4) Shell metadata: `Bash` `ls -lh` / `file`\n"
+                        "5) For edits: `generate_image` with `input_image_path` (do not Read the bytes)\n"
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {

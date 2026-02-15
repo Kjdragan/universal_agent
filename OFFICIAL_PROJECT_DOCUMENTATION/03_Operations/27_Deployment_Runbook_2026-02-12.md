@@ -92,7 +92,7 @@ If deploy fails:
 ## Quick Post-Deploy Check
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 for s in universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram; do
   printf "%s=" "$s"; systemctl is-active "$s"
 done
