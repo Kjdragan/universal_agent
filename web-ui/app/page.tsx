@@ -1570,52 +1570,50 @@ export default function HomePage() {
           </a>
         </div>
 
-      </div>
+        {/* Mobile Bottom Tab Bar */}
+        <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-slate-950/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-50 safe-area-bottom pb-env">
+          <button
+            onClick={() => setActiveMobileTab('chat')}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'chat' ? 'text-cyan-400' : 'text-slate-500'}`}
+          >
+            <span className="text-xl">{ICONS.chat}</span>
+            <span className="text-[9px] uppercase tracking-widest font-bold">Chat</span>
+          </button>
+          <button
+            onClick={() => setActiveMobileTab('activity')}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'activity' ? 'text-amber-400' : 'text-slate-500'}`}
+          >
+            <span className="text-xl">{ICONS.activity}</span>
+            <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
+          </button>
+          <button
+            onClick={() => setActiveMobileTab('files')}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-purple-400' : 'text-slate-500'}`}
+          >
+            <span className="text-xl">{ICONS.folder}</span>
+            <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
+          </button>
+          <button
+            onClick={() => setActiveMobileTab('dashboard')}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'dashboard' ? 'text-emerald-400' : 'text-slate-500'}`}
+          >
+            <span className="text-xl">☰</span>
+            <span className="text-[9px] uppercase tracking-widest font-bold">Menu</span>
+          </button>
+        </div>
 
-      {/* Mobile Bottom Tab Bar */}
-      <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-slate-950/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-50 safe-area-bottom pb-env">
-        <button
-          onClick={() => setActiveMobileTab('chat')}
-          className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'chat' ? 'text-cyan-400' : 'text-slate-500'}`}
-        >
-          <span className="text-xl">{ICONS.chat}</span>
-          <span className="text-[9px] uppercase tracking-widest font-bold">Chat</span>
-        </button>
-        <button
-          onClick={() => setActiveMobileTab('activity')}
-          className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'activity' ? 'text-amber-400' : 'text-slate-500'}`}
-        >
-          <span className="text-xl">{ICONS.activity}</span>
-          <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
-        </button>
-        <button
-          onClick={() => setActiveMobileTab('files')}
-          className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-purple-400' : 'text-slate-500'}`}
-        >
-          <span className="text-xl">{ICONS.folder}</span>
-          <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
-        </button>
-        <button
-          onClick={() => setActiveMobileTab('dashboard')}
-          className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'dashboard' ? 'text-emerald-400' : 'text-slate-500'}`}
-        >
-          <span className="text-xl">☰</span>
-          <span className="text-[9px] uppercase tracking-widest font-bold">Menu</span>
-        </button>
-      </div>
-
-      {/* Approval Modal */}
-      <ApprovalModal
-        request={pendingApproval}
-        onApprove={handleApprove}
-        onReject={handleReject}
-      />
-      <InputModal
-        request={pendingInput}
-        onSubmit={handleInputSubmit}
-        onCancel={handleInputCancel}
-      />
-    </div >
+        {/* Approval Modal */}
+        <ApprovalModal
+          request={pendingApproval}
+          onApprove={handleApprove}
+          onReject={handleReject}
+        />
+        <InputModal
+          request={pendingInput}
+          onSubmit={handleInputSubmit}
+          onCancel={handleInputCancel}
+        />
+      </div >
     </OpsProvider >
   );
 }
