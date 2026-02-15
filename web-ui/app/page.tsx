@@ -920,7 +920,7 @@ function ChatInterface() {
       </div>
 
       {/* Input - Floating Bar Style */}
-      <div className="p-4 bg-slate-900/60 border border-slate-800 backdrop-blur-md mb-10 ml-64 mr-6 rounded-2xl shadow-xl">
+      <div className="p-4 bg-slate-900/60 border border-slate-800 backdrop-blur-md mb-20 md:mb-10 ml-4 md:ml-64 mr-4 md:mr-6 rounded-2xl shadow-xl transition-all duration-300">
         <div className="flex gap-3">
           <input
             type="text"
@@ -1148,7 +1148,7 @@ export default function HomePage() {
   };
 
   // Responsive State
-  const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'files'>('chat');
+  const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'files' | 'dashboard'>('chat');
   const [showTabletFiles, setShowTabletFiles] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [isDesktop, setIsDesktop] = useState(true);
@@ -1526,43 +1526,96 @@ export default function HomePage() {
 
         </div>
 
-        {/* Mobile Bottom Tab Bar */}
-        <div className="md:hidden fixed bottom-0 left-0 right-0 h-14 bg-slate-950/90 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-50 safe-area-bottom">
-          <button
-            onClick={() => setActiveMobileTab('chat')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'chat' ? 'text-cyan-400' : 'text-slate-500'}`}
+        {/* MOBILE DASHBOARD MENU (Visible only on Mobile AND tab=='dashboard') */}
+        {/* Note: Desktop header items are hidden on mobile. We expose them here. */}
+        <div
+          className={`
+               flex-1 flex-col overflow-y-auto bg-slate-950/95 p-4 space-y-4 pb-20
+               ${activeMobileTab === 'dashboard' ? 'flex' : 'hidden'}
+               md:hidden
+             `}
+        >
+          <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground border-b border-border/40 pb-2 mb-2">Dashboard Menu</h2>
+
+          {/* Render the sections that are usually in the Header Popovers */}
+          {[
+            { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection /> },
+            { key: "calendar", label: "Calendar", icon: "🗓️", content: <CalendarSection /> },
+            { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection /> },
+            { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection /> },
+            { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection /> },
+            { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection /> },
+            { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection /> },
+            { key: "continuity", label: "Continuity", icon: "📈", content: <SessionContinuityWidget /> },
+          ].map((item) => (
+            <div key={item.key} className="bg-card/20 rounded-lg border border-border/40 overflow-hidden">
+              <div className="p-3 bg-card/40 font-bold uppercase tracking-wider text-xs flex items-center gap-2">
+                <span>{item.icon}</span> {item.label}
+              </div>
+              <div className="p-2">
+                {/* Most sections are designed for popovers/dropdowns. 
+                       They might be wide. We let them flow naturally or scroll horizontally if needed. */}
+                <div className="overflow-x-auto">
+                  {item.content}
+                </div>
+              </div>
+            </div>
+          ))}
+
+          <a
+            href="/dashboard"
+            className="block rounded-lg border border-border/50 bg-card/40 px-4 py-3 text-center text-sm uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary mt-4"
           >
-            <span className="text-xl">{ICONS.chat}</span>
-            <span className="text-[9px] uppercase tracking-widest font-bold">Chat</span>
-          </button>
-          <button
-            onClick={() => setActiveMobileTab('activity')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'activity' ? 'text-amber-400' : 'text-slate-500'}`}
-          >
-            <span className="text-xl">{ICONS.activity}</span>
-            <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
-          </button>
-          <button
-            onClick={() => setActiveMobileTab('files')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-purple-400' : 'text-slate-500'}`}
-          >
-            <span className="text-xl">{ICONS.folder}</span>
-            <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
-          </button>
+            Go to Dashboard Shell
+          </a>
         </div>
 
-        {/* Approval Modal */}
-        <ApprovalModal
-          request={pendingApproval}
-          onApprove={handleApprove}
-          onReject={handleReject}
-        />
-        <InputModal
-          request={pendingInput}
-          onSubmit={handleInputSubmit}
-          onCancel={handleInputCancel}
-        />
-      </div >
+      </div>
+
+      {/* Mobile Bottom Tab Bar */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-slate-950/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-50 safe-area-bottom pb-env">
+        <button
+          onClick={() => setActiveMobileTab('chat')}
+          className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'chat' ? 'text-cyan-400' : 'text-slate-500'}`}
+        >
+          <span className="text-xl">{ICONS.chat}</span>
+          <span className="text-[9px] uppercase tracking-widest font-bold">Chat</span>
+        </button>
+        <button
+          onClick={() => setActiveMobileTab('activity')}
+          className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'activity' ? 'text-amber-400' : 'text-slate-500'}`}
+        >
+          <span className="text-xl">{ICONS.activity}</span>
+          <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
+        </button>
+        <button
+          onClick={() => setActiveMobileTab('files')}
+          className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-purple-400' : 'text-slate-500'}`}
+        >
+          <span className="text-xl">{ICONS.folder}</span>
+          <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
+        </button>
+        <button
+          onClick={() => setActiveMobileTab('dashboard')}
+          className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'dashboard' ? 'text-emerald-400' : 'text-slate-500'}`}
+        >
+          <span className="text-xl">☰</span>
+          <span className="text-[9px] uppercase tracking-widest font-bold">Menu</span>
+        </button>
+      </div>
+
+      {/* Approval Modal */}
+      <ApprovalModal
+        request={pendingApproval}
+        onApprove={handleApprove}
+        onReject={handleReject}
+      />
+      <InputModal
+        request={pendingInput}
+        onSubmit={handleInputSubmit}
+        onCancel={handleInputCancel}
+      />
+    </div >
     </OpsProvider >
   );
 }
