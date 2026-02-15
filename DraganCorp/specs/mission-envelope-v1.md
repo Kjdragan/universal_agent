@@ -7,6 +7,9 @@ Defines the minimum interoperable payload and lifecycle events for Simone contro
 ```json
 {
   "mission_id": "string (globally unique)",
+  "vp_id": "string (example: vp.coder.primary)",
+  "vp_session_id": "string (stable session identity if already allocated)",
+  "vp_runtime_id": "string (runtime lane/service identifier)",
   "source_instance_id": "string",
   "target_instance_id": "string",
   "mission_type": "coding|research|automation|custom",
@@ -43,6 +46,13 @@ Defines the minimum interoperable payload and lifecycle events for Simone contro
 }
 ```
 
+### 1.1 Phase A persistence guidance
+
+1. `vp_id` is required for all VP-routed missions.
+2. `vp_session_id` may be omitted for first dispatch; control plane should allocate/resolve and persist it.
+3. `vp_runtime_id` identifies the runtime lane handling the VP session.
+4. `(vp_id, vp_session_id)` must map to a deterministic workspace/session record in the VP session registry.
+
 ## 2) Lifecycle events
 
 Required events from factory -> Simone:
@@ -61,6 +71,9 @@ Required events from factory -> Simone:
 ```json
 {
   "mission_id": "string",
+  "vp_id": "string",
+  "vp_session_id": "string",
+  "vp_runtime_id": "string",
   "event_type": "string",
   "status": "queued|running|blocked|completed|failed|cancelled|timed_out",
   "summary": "string",
@@ -82,6 +95,7 @@ Required events from factory -> Simone:
 2. **Idempotency key required** for every dispatch and callback.
 3. **Timeout + retry policy** must avoid infinite loops.
 4. **Final state required** (`completed|failed|cancelled|timed_out`) for mission closure.
+5. **VP identity continuity required**: callback `vp_id` and `vp_session_id` must match dispatch assignment.
 
 ## 5) Safety requirements
 
