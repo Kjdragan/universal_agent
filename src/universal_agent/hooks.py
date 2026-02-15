@@ -195,6 +195,72 @@ def _extract_tool_result_text(result: Any) -> str:
         return final_str
 
 
+_READ_BLOCK_IMAGE_EXTS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".ico",
+    ".heic",
+    ".heif",
+}
+
+
+def _tool_read_path_from_input(tool_input: Any) -> str | None:
+    if not isinstance(tool_input, dict):
+        return None
+    for key in ("file_path", "path"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _maybe_abs_path(path_value: str, workspace_dir: str | None) -> str:
+    try:
+        if os.path.isabs(path_value):
+            return path_value
+        root = workspace_dir or os.getcwd()
+        return os.path.abspath(os.path.join(root, path_value))
+    except Exception:
+        return path_value
+
+
+def _should_block_large_image_read(file_path: str, workspace_dir: str | None) -> tuple[bool, dict]:
+    try:
+        # Default 0 means "block all image reads" (prevents base64 injection entirely).
+        max_bytes = int(os.getenv("UA_READ_IMAGE_MAX_BYTES", "0"))
+    except Exception:
+        max_bytes = 0
+    max_bytes = max(0, min(max_bytes, 5_000_000))
+    enabled = str(os.getenv("UA_BLOCK_LARGE_IMAGE_READS", "1") or "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if not enabled:
+        return False, {}
+
+    abs_path = _maybe_abs_path(file_path, workspace_dir)
+    ext = Path(abs_path).suffix.lower()
+    if ext not in _READ_BLOCK_IMAGE_EXTS:
+        return False, {}
+
+    try:
+        if os.path.exists(abs_path):
+            size = os.path.getsize(abs_path)
+            if size > max_bytes:
+                return True, {"abs_path": abs_path, "size_bytes": size, "max_bytes": max_bytes, "ext": ext}
+    except Exception:
+        return False, {}
+    return False, {}
+
+
 def emit_tool_result_event(
     *,
     tool_use_id: object,
@@ -489,6 +555,36 @@ class AgentHookSet:
     async def on_pre_tool_use_ledger(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
         """Main guardrail and ledger hook."""
         tool_name = input_data.get("tool_name", "")
+        tool_input = input_data.get("tool_input", {}) or {}
+
+        if tool_name == "Read":
+            file_path = _tool_read_path_from_input(tool_input)
+            if file_path:
+                should_block, meta = _should_block_large_image_read(file_path, self.workspace_dir)
+                if should_block:
+                    abs_path = meta.get("abs_path") or file_path
+                    size_bytes = meta.get("size_bytes")
+                    max_bytes = meta.get("max_bytes")
+                    reason = f"Refusing to Read image file (size {size_bytes:,} bytes > {max_bytes:,} bytes)."
+                    return {
+                        "systemMessage": (
+                            "⚠️ Blocked: `Read` on a large image file would inject base64 into the model context and "
+                            "can overflow the context window.\n\n"
+                            f"{reason}\n"
+                            f"Path: {abs_path}\n\n"
+                            "Use one of these instead (no base64 in context):\n"
+                            f"1) Vision: `describe_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
+                            f"2) Human viewer: `preview_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
+                            "3) Shell metadata: `Bash` `ls -lh` / `file`\n"
+                            "4) For edits: `generate_image` with `input_image_path` (do not Read the bytes)\n"
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "Blocked Read of large image file (base64 context blowup).",
+                        },
+                    }
         
         # 1. Disallowed Tools Guardrail
         if tool_name in DISALLOWED_TOOLS:
