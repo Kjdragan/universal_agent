@@ -41,6 +41,8 @@ const ICONS = {
   refresh: "🔄",
   close: "✕",
   download: "⬇️",
+  maximize: "⛶",
+  minimize: "❐",
 };
 
 
@@ -51,6 +53,7 @@ const ICONS = {
 function FileViewer() {
   const viewingFile = useAgentStore((s) => s.viewingFile);
   const setViewingFile = useAgentStore((s) => s.setViewingFile);
+  const [isMaximized, setIsMaximized] = useState(false);
 
   const isHtml = viewingFile?.name.endsWith(".html") ?? false;
   const isPdf = viewingFile?.name.endsWith(".pdf") ?? false;
@@ -59,7 +62,6 @@ function FileViewer() {
   const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
 
   // For PDF/HTML, we use the server's get_file endpoint.
-  // Endpoint: /api/files/{session_id}/{file_path}
   const currentSession = useAgentStore.getState().currentSession;
   const fileUrl = viewingFile
     ? (viewingFile.type === "artifact"
@@ -69,52 +71,48 @@ function FileViewer() {
         : ""))
     : "";
 
-  // Fetch content if missing and not an iframe type
   useEffect(() => {
     if (!viewingFile || !fileUrl || isHtml || isPdf || isImage || viewingFile.content) return;
-
-    // Important: if the user closes the viewer while a fetch is in-flight, the old
-    // promise can resolve and re-open the file (because it captured a stale viewingFile).
-    // Use an AbortController + "is still current" check to prevent that.
     const controller = new AbortController();
-
     fetch(fileUrl, { signal: controller.signal })
       .then(res => res.text())
       .then(text => {
-        // Auto-format if JSON or similar
         if (viewingFile.name.endsWith(".json")) {
           try {
             const obj = JSON.parse(text);
             text = JSON.stringify(obj, null, 2);
-          } catch (e) {
-            // Keep original text on parse error
-          }
+          } catch (e) { }
         }
-
         const current = useAgentStore.getState().viewingFile;
         if (!current || current.path !== viewingFile.path) return;
         useAgentStore.getState().setViewingFile({ ...viewingFile, content: text });
       })
       .catch(err => {
-        // Abort is expected on close/unmount; ignore it.
         if (err?.name === "AbortError") return;
         console.error("Failed to fetch file content:", err);
       });
-
     return () => controller.abort();
   }, [viewingFile, fileUrl, isHtml, isPdf, isImage]);
 
   if (!viewingFile) return null;
 
   return (
-    <div className="flex flex-col h-full bg-slate-950 animate-in fade-in zoom-in-95 duration-200">
-      <div className="h-10 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/60">
-        <div className="flex items-center gap-2">
-          <span className="text-lg">{ICONS.file}</span>
-          <span className="font-semibold text-sm">{viewingFile.name}</span>
-          <span className="text-xs text-muted-foreground ml-2 opacity-50">{viewingFile.path}</span>
+    <div className={`flex flex-col bg-slate-950 animate-in fade-in transition-all duration-300 ${isMaximized ? "fixed inset-0 z-[60] h-screen w-screen" : "h-full w-full relative"
+      }`}>
+      <div className="h-10 border-b border-slate-800 flex items-center justify-between px-4 bg-slate-900/60 shrink-0">
+        <div className="flex items-center gap-2 truncate pr-4">
+          <span className="text-lg shrink-0">{ICONS.file}</span>
+          <span className="font-semibold text-sm truncate">{viewingFile.name}</span>
+          <span className="text-xs text-muted-foreground ml-2 opacity-50 truncate hidden sm:inline">{viewingFile.path}</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 shrink-0">
+          <button
+            onClick={() => setIsMaximized(!isMaximized)}
+            className="p-1 px-2 hover:bg-cyan-500/20 rounded text-cyan-400 border border-transparent hover:border-cyan-500/30 transition-all text-sm"
+            title={isMaximized ? "Restore" : "Full Screen"}
+          >
+            {isMaximized ? ICONS.minimize : ICONS.maximize}
+          </button>
           <button
             onClick={() => window.open(fileUrl, '_blank')}
             className="p-1 hover:bg-black/10 rounded text-muted-foreground hover:text-foreground transition-colors"
@@ -123,7 +121,10 @@ function FileViewer() {
             {ICONS.download}
           </button>
           <button
-            onClick={() => setViewingFile(null)}
+            onClick={() => {
+              setIsMaximized(false);
+              setViewingFile(null);
+            }}
             className="p-1 hover:bg-red-500/10 rounded text-muted-foreground hover:text-red-500 transition-colors"
             title="Close Preview"
           >
@@ -131,8 +132,17 @@ function FileViewer() {
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-hidden relative bg-white">
-        {isHtml || isPdf || isImage ? (
+      <div className={`flex-1 overflow-hidden relative ${isImage ? "bg-slate-950/40" : "bg-white"}`}>
+        {isImage ? (
+          <div className="w-full h-full flex items-center justify-center p-4">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={fileUrl}
+              alt={viewingFile.name}
+              className="max-w-full max-h-full object-contain shadow-2xl"
+            />
+          </div>
+        ) : (isHtml || isPdf) ? (
           <iframe
             src={fileUrl}
             className="w-full h-full border-0 block"
