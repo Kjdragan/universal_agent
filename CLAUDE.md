@@ -1,16 +1,27 @@
-# CLAUDE.md - Context & Rules for Claude (Universal Agent)
+# CLAUDE.md
 
-## Project Overview
-This is the **Universal Agent** project. 
-- **Gateway**: FastAPI-based server (`src/universal_agent/gateway_server.py`)
-- **Telegram Bot**: (`src/universal_agent/bot/main.py`)
-- **CLI**: (`src/universal_agent/main.py`)
+This file provides quick working context for Claude (and other coding agents) in this repository.
 
-## Core Principles
-1.  **Source of Truth**: Always read the code in `src/` to understand behavior. Do not rely on old docs.
-2.  **Tool Usage**: Use `uv run` for all python commands.
-3.  **Testing**: Use `uv run pytest`.
+## Project Description
+`universal_agent` is a Python-based agent runtime and orchestration project.
 
-## Key Architectures
-- **Memory**: Hindsight system (JSON/Files).
-- **Heartbeat**: Periodic wake-ups checked against `memory/HEARTBEAT.md`.
+It includes:
+- Agent execution and orchestration logic under `src/universal_agent/`
+- Operational docs under `OFFICIAL_PROJECT_DOCUMENTATION/`
+- Environment-driven feature flags and scheduler controls via `.env`
+
+## Key Commands
+- Install deps: `uv sync`
+- Run app: `uv run python -m src.universal_agent.main`
+- Run tests: `uv run pytest`
+- Lint/format (if configured): `uv run ruff check .` / `uv run ruff format .`
+
+## Working Rules
+- Keep changes small and targeted.
+- Do not commit secrets, credentials, or local state files.
+- Prefer root-cause fixes over temporary workarounds.
+- Update docs when behavior or operations change.
+
+## Caveats
+- _(Living section — add caveats as we discover them.)_
+- VPS deploys should follow the runbook and use file-sync deployment (`scripts/deploy_vps.sh`) rather than assuming `git pull` on the server.
