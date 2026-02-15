@@ -688,7 +688,7 @@ export function SessionsSection() {
             <button onClick={fetchSessions} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻"}</button>
           </div>
         </div>
-        <div className="mb-2 grid grid-cols-4 gap-1">
+        <div className="mb-2 grid grid-cols-2 md:grid-cols-4 gap-1">
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
             <option value="all">status: all</option>
             <option value="running">running</option>
@@ -988,7 +988,7 @@ export function CalendarSection() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select value={view} onChange={(e) => setView(e.target.value as typeof view)} className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[10px]">
+          <select value={view} onChange={(e) => setView(e.target.value as typeof view)} className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[10px] flex-1 md:flex-none min-w-[60px]">
             <option value="week">week</option>
             <option value="day">day</option>
           </select>
@@ -1203,9 +1203,9 @@ export function SkillsSection() {
         <h2 className="font-semibold text-sm">Skills Management</h2>
         <button onClick={fetchSkills} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all">↻ Refresh catalog</button>
       </div>
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         {/* Left: Skill List */}
-        <div className="w-1/3 border-r border-border/40 overflow-y-auto scrollbar-thin p-2 space-y-1 bg-background/20">
+        <div className="w-full md:w-1/3 h-1/3 md:h-auto border-b md:border-b-0 md:border-r border-border/40 overflow-y-auto scrollbar-thin p-2 space-y-1 bg-background/20 shrink-0">
           {skills.length === 0 && <div className="text-muted-foreground p-2">No skills found</div>}
           {skills.map((s) => (
             <button
