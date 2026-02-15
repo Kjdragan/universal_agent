@@ -1471,6 +1471,21 @@ export default function HomePage() {
                   : {}
               }
             >
+              {/* Mobile Header for Files View */}
+              {activeMobileTab === 'files' && (
+                <div className="p-3 border-b border-slate-800 bg-slate-900/80 flex items-center justify-between shrink-0 md:hidden">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">{ICONS.folder}</span>
+                    <span className="font-bold uppercase tracking-wider text-sm">File Browser</span>
+                  </div>
+                  <button
+                    onClick={() => setActiveMobileTab('chat')}
+                    className="p-2 -mr-2 rounded-full hover:bg-slate-800 transition-colors text-slate-400"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               {/* Desktop Resizer */}
               <div className="hidden xl:block">
                 <div
@@ -1538,6 +1553,7 @@ export default function HomePage() {
                   {[
                     { key: "sessions", label: "Sessions", icon: "📋" },
                     { key: "skills", label: "Skills", icon: "🧩" },
+                    { key: "files_shortcut", label: "Files", icon: "📁" },
                     { key: "calendar", label: "Calendar", icon: "🗓️" },
                     { key: "channels", label: "Channels", icon: "📡" },
                     { key: "approvals", label: "Approvals", icon: "✅" },
@@ -1547,7 +1563,13 @@ export default function HomePage() {
                   ].map((item) => (
                     <button
                       key={item.key}
-                      onClick={() => setDashboardView(item.key)}
+                      onClick={() => {
+                        if (item.key === 'files_shortcut') {
+                          setActiveMobileTab('files');
+                        } else {
+                          setDashboardView(item.key);
+                        }
+                      }}
                       className="w-full text-left p-4 rounded-lg border border-border/40 bg-card/20 hover:bg-card/40 active:bg-card/60 transition-all flex items-center gap-3"
                     >
                       <span className="text-xl">{item.icon}</span>

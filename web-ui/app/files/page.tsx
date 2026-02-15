@@ -33,9 +33,9 @@ export default function FilesPage() {
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <Link
             href="/"
-            className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800/70"
+            className="flex-1 text-center rounded-md border border-cyan-700 bg-cyan-600/20 px-4 py-3 text-sm font-bold uppercase tracking-widest text-cyan-100 hover:bg-cyan-600/30 transition-all shadow-lg shadow-cyan-900/20"
           >
-            Back to Chat
+            ← Back to Main App
           </Link>
           {configured && (
             <a
