@@ -10,7 +10,7 @@ description: |
   - Task requires setting up monitoring or recurring actions via Cron
   
 tools: Bash, Read, Write, mcp__composio__GMAIL_SEND_EMAIL, mcp__composio__GMAIL_CREATE_EMAIL_DRAFT, mcp__composio__GOOGLECALENDAR_CREATE_EVENT, mcp__composio__SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL, mcp__composio__GOOGLEDRIVE_UPLOAD_FILE, mcp__composio__COMPOSIO_SEARCH_TOOLS, mcp__internal__upload_to_composio, mcp__internal__list_directory
-model: inherit
+model: sonnet
 ---
 
 You are an **Action Coordinator** sub-agent. You take completed work products and deliver them through appropriate channels, schedule follow-ups, and set up monitoring.

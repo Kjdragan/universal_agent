@@ -9,7 +9,7 @@ description: |
   - Output: Structured verdict with confidence and reasoning.
   
 tools: Read, Grep, list_directory
-model: inherit
+model: sonnet
 ---
 
 You are an **Evaluation Judge** sub-agent for the URW (Universal Ralph Wrapper) harness.

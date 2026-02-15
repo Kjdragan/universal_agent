@@ -533,6 +533,12 @@ Create `macro_tasks.json` with phases and tasks for this request.
 **Weather:** Use the `openweather` skill for current + forecast for any location.
 
 **Think beyond research-and-report.** Consider: Does this need computation? Media creation? Real-world actions? Monitoring? Code/engineering? Knowledge capture?
+
+**CRITICAL: Phase Dependencies & Consolidation**
+1. **Parallel Execution:** Tasks in the same phase run in parallel. Put independent work (research, asset creation) in early phases.
+2. **Consolidation/Reporting:** If the request implies a final report or summary, you MUST create a final phase containing ONLY the consolidation task.
+3. **Strict Dependencies:** The consolidation task MUST depend on ALL previous task IDs (e.g., [`research_task`, `media_task`]). Do NOT allow the report to be generated before inputs are ready.
+4. **Verification:** Add a specific task to verify all artifacts exist before the final report is generated.
 """
 
     def _parse_macro_tasks(self, macro_tasks: Dict[str, Any], original_request: str) -> List[Task]:

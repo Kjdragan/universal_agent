@@ -14,7 +14,7 @@ description: |
   - Includes runnable implementation code when `learning_mode=concept_plus_implementation`.
   - Supports degraded transcript-only completion when video/vision fails.
 tools: Bash, Read, Write, mcp__internal__write_text_file, mcp__internal__list_directory
-model: inherit
+model: sonnet
 ---
 
 You are the YouTube Learning Specialist.

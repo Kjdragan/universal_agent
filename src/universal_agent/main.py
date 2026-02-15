@@ -48,6 +48,7 @@ import glob
 from universal_agent.harness.verifier import TaskVerifier
 from universal_agent.agent_core import UniversalAgent, AgentEvent, EventType, HarnessError
 from claude_agent_sdk import create_sdk_mcp_server, HookMatcher
+from claude_agent_sdk.types import ToolUseBlock
 from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
     crawl_parallel_wrapper,
@@ -3069,12 +3070,15 @@ async def on_post_task_guidance(
 
 
 async def on_user_prompt_skill_awareness(
-    input_data: dict, tool_use_id: object, context: dict
+    input_data: dict, context: dict
 ) -> dict:
     """
-    UserPromptSubmit Hook: EARLY skill awareness injection.
-    Fires when user submits their prompt, BEFORE agent starts planning.
-    This guides the agent to consider skills during initial approach.
+    Hook called when a user prompt is submitted.
+    
+    Responsibilities:
+    1. Suggest existing skills based on prompt keywords (SKILL_PROMPT_TRIGGERS).
+    2. Detect potential NEW skills by analyzing previous assistant turn for long tool chains.
+       (UA_SKILL_CANDIDATE_THRESHOLD, default 8).
 
     Note: Multiple skills may match a single prompt (e.g., "create PDF and Excel").
     All matching skills are listed to give agent full awareness.
@@ -3083,6 +3087,86 @@ async def on_user_prompt_skill_awareness(
     NOT systemMessage like other hooks.
     """
     try:
+
+        # --- Part 1: Skill Candidate Detection (Tool Chain Analysis) ---
+        threshold = int(os.environ.get("UA_SKILL_CANDIDATE_THRESHOLD", "8"))
+        
+        # Try to access agent from context (hooks often receive it)
+        # Context usually contains 'agent' or 'client'
+        agent = context.get("agent")
+
+        
+        # If agent is not in context, fall back to global/local scope check 
+        # (though this hook is standalone in main.py, 'agent' variable from main() might effectively be global/closed over)
+        if not agent:
+             # This assumes 'agent' is available in the module scope or closure, which might be true if defined inside main()
+             # But this function seems to be top-level in the file structure based on indentation?
+             # If top-level, it can't access 'agent' unless passed.
+             # Let's rely on 'context' first.
+             pass
+
+        if agent and hasattr(agent, "history"):
+            history = agent.history.messages
+            if history:
+                # Find last assistant message
+                last_assist_msg = None
+                for msg in reversed(history):
+                    if msg.role == "assistant":
+                        last_assist_msg = msg
+                        break
+                
+                if last_assist_msg:
+                    # Count tool calls
+                    tool_call_count = 0
+                    if hasattr(last_assist_msg, "content"):
+                        for block in last_assist_msg.content:
+                            if isinstance(block, ToolUseBlock):
+                                tool_call_count += 1
+                    
+
+                    
+                    if tool_call_count >= threshold:
+                        # Log candidate
+                        candidate_log = {
+                            "timestamp": datetime.now().isoformat(),
+                            "tool_call_count": tool_call_count,
+                            "threshold": threshold,
+                            "tool_sequence": [
+                                b.name for b in last_assist_msg.content 
+                                if isinstance(b, ToolUseBlock)
+                            ]
+                        }
+                        
+                        # Try to find the user prompt that triggered this
+                        try:
+                            assist_idx = history.index(last_assist_msg)
+                            if assist_idx > 0:
+                                prev_msg = history[assist_idx - 1]
+                                if prev_msg.role == "user":
+                                    candidate_log["triggering_prompt"] = prev_msg.content[0].text if isinstance(prev_msg.content, list) else str(prev_msg.content)
+                        except Exception:
+                            pass
+
+                        # Determine workspace dir
+                        ws_dir = getattr(agent, "workspace_dir", os.getcwd())
+                        log_path = os.path.join(ws_dir, "skill_candidates.log")
+                        
+                        try:
+                            with open(log_path, "a") as f:
+                                f.write(json.dumps(candidate_log) + "\n")
+                            
+                            # Emit notification if possible
+                            if hasattr(agent, "send_agent_event"):
+                                await agent.send_agent_event(EventType.STATUS, {
+                                    "status": f"💡 Skill Candidate Detected: {tool_call_count} tools used in previous turn. Logged.",
+                                    "level": "INFO", 
+                                    "prefix": "SKILL",
+                                    "is_log": True
+                                })
+                        except Exception as e:
+                            print(f"Failed to log skill candidate: {e}")
+
+        # --- Part 2: Existing Skill Suggestion Logic ---
         import yaml
 
         # Safely extract prompt from input_data
@@ -7092,13 +7176,21 @@ async def setup_session(
         active_workspace=str(workspace_dir)
     )
 
+    # Override with local hook implementation that includes skill candidate detection
+    hooks_manager.on_user_prompt_skill_awareness = on_user_prompt_skill_awareness
+
     capabilities_registry = get_capabilities_content(src_dir)
 
-    agent = UniversalAgent(workspace_dir=workspace_dir)
+    agent = UniversalAgent(
+        workspace_dir=workspace_dir,
+        hooks=hooks_manager.build_hooks()
+    )
     if attach_stdio:
         setup_log_bridge(agent)
+    from universal_agent.utils.model_resolution import resolve_claude_code_model
+
     options = ClaudeAgentOptions(
-        model=_resolve_default_anthropic_model(),
+        model=resolve_claude_code_model(default="sonnet"),
         add_dirs=[os.path.join(src_dir, ".claude")],
         setting_sources=["project"],  # Enable loading agents from .claude/agents/
         disallowed_tools=disallowed_tools,

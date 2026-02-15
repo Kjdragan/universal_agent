@@ -1,0 +1,12 @@
+[
+  {
+    "id": "gap_1771128402_db71",
+    "timestamp": 1771128402.412582,
+    "question": "What is your favorite color? (Test 130582310185760)",
+    "category": "profile_context",
+    "urgency": "deferred",
+    "context_source": "test_script",
+    "status": "resolved",
+    "resolved_at": 1771128415.5129597
+  }
+]

@@ -516,4 +516,11 @@
       transparent 70%
     );
   }
+
+  /* ========================================
+     MOBILE UTILITIES
+     ======================================== */
+  .safe-area-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
 }

@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VPS_HOST="${UA_VPS_HOST:-root@187.77.16.29}"
+VPS_HOST="${UA_VPS_HOST:-root@100.106.113.93}"
 SSH_KEY="${UA_VPS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 REMOTE_DIR="${UA_VPS_APP_DIR:-/opt/universal_agent}"
 
@@ -23,6 +23,17 @@ echo "Deploying local HEAD to VPS"
 echo "Host: $VPS_HOST"
 echo "Remote dir: $REMOTE_DIR"
 echo "Local commit: $(cd "$REPO_ROOT" && git rev-parse --short HEAD)"
+
+# Pre-flight check: Verify connectivity before attempting deployment
+echo "Checking connectivity to $VPS_HOST..."
+if ! ssh -q -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i "$SSH_KEY" "$VPS_HOST" "echo 'Connection established'" >/dev/null 2>&1; then
+  echo "ERROR: Cannot connect to $VPS_HOST."
+  echo "  - Check if Tailscale is up (if using VPN)"
+  echo "  - Check if SSH key is valid: $SSH_KEY"
+  echo "  - Check if host is online"
+  exit 1
+fi
+echo "Connectivity confirmed."
 
 RSYNC_RSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no"
 

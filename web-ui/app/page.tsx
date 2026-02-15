@@ -1147,6 +1147,27 @@ export default function HomePage() {
     document.addEventListener("mouseup", onMouseUp);
   };
 
+  // Responsive State
+  const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'files'>('chat');
+  const [showTabletFiles, setShowTabletFiles] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(true);
+
+  // Track screen size to conditionally apply inline styles (avoiding hydration mismatch)
+  useEffect(() => {
+    const handleResize = () => {
+      const w = window.innerWidth;
+      setIsMobile(w < 768);
+      setIsDesktop(w >= 1280);
+    };
+
+    // Initial check
+    handleResize();
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Approval modal hook
   const { pendingApproval, handleApprove, handleReject } = useApprovalModal();
   const { pendingInput, handleSubmit: handleInputSubmit, handleCancel: handleInputCancel } = useInputModal();
@@ -1299,7 +1320,7 @@ export default function HomePage() {
           {/* Left: Logo & Brand */}
           <div className="flex items-center gap-4 shrink-0 h-full">
             {/* Logo Image */}
-            <div className="relative h-full w-48 py-2">
+            <div className="relative h-full w-32 md:w-48 py-2">
               <Image
                 src="/simon_logo_v2.png"
                 alt="Simon"
@@ -1310,8 +1331,8 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Center: Ops dropdown buttons - REPOSITIONED to be part of flow */}
-          <div className="flex items-center gap-2 shrink-0">
+          {/* Center: Ops dropdown buttons - Hidden on Mobile */}
+          <div className="hidden md:flex items-center gap-2 shrink-0">
             {([
               { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: "w-[800px]" },
               { key: "calendar", label: "Calendar", icon: "🗓️", content: <CalendarSection />, width: "w-[1100px]" },
@@ -1347,59 +1368,80 @@ export default function HomePage() {
           </div>
 
           {/* Right: Metrics, Status */}
-          <div className="ml-auto flex items-center gap-4">
+          <div className="ml-auto flex items-center gap-2 md:gap-4">
             <a
               href="/files/"
               target="_blank"
               rel="noopener noreferrer"
-              className="rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
+              className="hidden md:block rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
             >
               File Browser
             </a>
-            <a
-              href="/dashboard"
-              className="rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
-            >
-              Dashboard Shell
-            </a>
+            {/* Mobile/Tablet Menu Button could go here */}
+
             <HeaderMetrics />
             <ConnectionIndicator />
           </div>
         </header>
 
         {/* Main Content Area */}
-        {/* Layout: [Chat (Left, Flex)] | [Activity (Center, Fixed)] | [Files (Right, Fixed)] */}
-        <div className="flex-1 flex overflow-hidden relative">
+        {/* Responsive Layout:
+            - Mobile (<768px): Vertical Stack via activeTab 
+            - Tablet (768px-1280px): Flex Row (Chat | Activity). Files hidden/toggleable.
+            - Desktop (>1280px): Flex Row (Chat | Activity | Files).
+        */}
+        <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative pb-14 md:pb-0">
 
-          {viewingFile ? (
-            <div className="flex-1 flex overflow-hidden">
-              {/* If viewing a file, we might want to hide chat or just overlay? 
-                 Current logic expects viewingFile to take over the main area.
-                 Let's keep it simple: if viewingFile, it takes the 'Chat' slot.
-             */}
-              <div className="flex-1 min-w-0 bg-background/30 flex relative">
-                <FileViewer />
-              </div>
-            </div>
-          ) : (
-            <main className="flex-1 min-w-0 bg-background/30 flex relative flex-col border-r border-border/40">
-              <ChatInterface />
-            </main>
-          )}
-
-          {/* Center: Activity Log */}
-          {/* This panel sits between Chat (Left) and Files (Right) */}
-          <div
-            className={`border-r border-slate-800 bg-slate-900/20 relative transition-all duration-300 flex flex-col ${activityCollapsed ? 'w-10 shrink-0' : 'min-h-0'}`}
-            style={activityCollapsed ? { width: 40, minHeight: '100%' } : { width: activityWidth }}
+          {/* PANEL 1: CHAT / VIEWER */}
+          {/* Visible if: Desktop/Tablet OR (Mobile AND tab=='chat') */}
+          <main
+            className={`
+              flex-1 min-w-0 bg-background/30 flex relative flex-col border-r border-border/40
+              ${activeMobileTab === 'chat' ? 'flex' : 'hidden md:flex'}
+            `}
           >
-            {/* Resizer handle on the LEFT edge of this panel */}
-            {!activityCollapsed && (
-              <div
-                className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
-                onMouseDown={startResizing('activity')}
-              />
+            {viewingFile ? (
+              <div className="flex-1 flex overflow-hidden">
+                <div className="flex-1 min-w-0 bg-background/30 flex relative">
+                  <FileViewer />
+                </div>
+              </div>
+            ) : (
+              <ChatInterface />
             )}
+          </main>
+
+          {/* PANEL 2: ACTIVITY LOG */}
+          {/* Visible if: Desktop OR Tablet OR (Mobile AND tab=='activity') */}
+          <div
+            className={`
+              border-r border-slate-800 bg-slate-900/20 relative transition-all duration-300 flex-col
+              ${activeMobileTab === 'activity' ? 'flex w-full' : 'hidden md:flex'}
+              ${activityCollapsed ? 'w-10 shrink-0' : ''}
+            `}
+            style={
+              // On Desktop/Tablet: Use dynamic width. 
+              // On Mobile: width is auto/full (handled by flex class above).
+              // We only apply inline width style for md+ (which we track via !isMobile to match server assumption of desktop)
+              // Note: We use !isMobile here which is updated after mount. On server it's false (isMobile=false),
+              // so it renders the width style. Logic:
+              // Server: isMobile=false -> renders width style.
+              // Client Mount: isMobile=false -> renders width style.
+              // Client Effect: Detects isMobile=true -> removes width style.
+              !isMobile
+                ? (activityCollapsed ? { width: 40, minHeight: '100%' } : { width: activityWidth })
+                : {}
+            }
+          >
+            {/* Desktop/Tablet Resizer */}
+            <div className="hidden md:block">
+              {!activityCollapsed && (
+                <div
+                  className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
+                  onMouseDown={startResizing('activity')}
+                />
+              )}
+            </div>
 
             {activityCollapsed ? (
               <button
@@ -1417,19 +1459,28 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* Right Sidebar: Files & Tasks */}
+          {/* PANEL 3: FILES & TASKS */}
+          {/* Visible if: Desktop OR (Mobile AND tab=='files') OR Tablet Overlay */}
           <aside
-            className="shrink-0 flex flex-col overflow-hidden bg-slate-900/30 backdrop-blur-sm relative"
-            style={{ width: filesWidth }}
+            className={`
+              shrink-0 flex-col overflow-hidden bg-slate-900/30 backdrop-blur-sm relative
+              ${activeMobileTab === 'files' ? 'flex w-full' : 'hidden xl:flex'}
+            `}
+            style={
+              isDesktop
+                ? { width: filesWidth }
+                : {}
+            }
           >
-            {/* Resizer on the LEFT edge */}
-            <div
-              className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
-              onMouseDown={startResizing('files')}
-            />
+            {/* Desktop Resizer */}
+            <div className="hidden xl:block">
+              <div
+                className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
+                onMouseDown={startResizing('files')}
+              />
+            </div>
 
             <div className="flex-1 flex flex-col min-h-0 pl-1">
-              {/* Added pl-1 to avoid overlap with resizer */}
               <FileExplorer />
               <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
                 <WorkProductViewer />
@@ -1441,6 +1492,63 @@ export default function HomePage() {
             </div>
           </aside>
 
+          {/* Tablet "Files" Overlay Button */}
+          {/* Only shown on Tablet (md) but not Desktop (xl), if files hidden */}
+          <div className="hidden md:flex xl:hidden absolute right-0 top-1/2 -translate-y-1/2 z-30">
+            <button
+              onClick={() => setShowTabletFiles(!showTabletFiles)}
+              className="bg-slate-800/80 border border-slate-700 text-slate-300 p-2 rounded-l-lg shadow-xl hover:bg-slate-700"
+              title="Toggle Files"
+            >
+              {ICONS.folder}
+            </button>
+          </div>
+
+          {/* Tablet Files Overlay Drawer */}
+          {showTabletFiles && (
+            <div className="absolute right-0 top-0 h-full w-[320px] bg-slate-950/95 border-l border-slate-700 z-40 flex flex-col shadow-2xl animate-in slide-in-from-right-10 duration-200">
+              <div className="p-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                <span className="text-xs font-bold uppercase tracking-wider pl-2">Files & Tasks</span>
+                <button onClick={() => setShowTabletFiles(false)} className="p-1 hover:text-white text-slate-400">✕</button>
+              </div>
+              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                <FileExplorer />
+                <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
+                  <WorkProductViewer />
+                </div>
+                <HeartbeatWidget />
+                <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
+                  <TaskPanel />
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+
+        {/* Mobile Bottom Tab Bar */}
+        <div className="md:hidden fixed bottom-0 left-0 right-0 h-14 bg-slate-950/90 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-50 safe-area-bottom">
+          <button
+            onClick={() => setActiveMobileTab('chat')}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'chat' ? 'text-cyan-400' : 'text-slate-500'}`}
+          >
+            <span className="text-xl">{ICONS.chat}</span>
+            <span className="text-[9px] uppercase tracking-widest font-bold">Chat</span>
+          </button>
+          <button
+            onClick={() => setActiveMobileTab('activity')}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'activity' ? 'text-amber-400' : 'text-slate-500'}`}
+          >
+            <span className="text-xl">{ICONS.activity}</span>
+            <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
+          </button>
+          <button
+            onClick={() => setActiveMobileTab('files')}
+            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-purple-400' : 'text-slate-500'}`}
+          >
+            <span className="text-xl">{ICONS.folder}</span>
+            <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
+          </button>
         </div>
 
         {/* Approval Modal */}

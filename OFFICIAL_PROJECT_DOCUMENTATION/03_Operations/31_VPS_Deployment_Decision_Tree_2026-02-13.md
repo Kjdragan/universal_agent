@@ -1,17 +1,20 @@
-# 31. VPS Deployment Decision Tree (2026-02-13)
+# 31. VPS Deployment Decision Tree (2026-02-14)
 
 ## Purpose
+
 Single reference for deploying local changes to the production VPS. Replaces the need to cross-reference Docs 22 and 27.
 
 ## Environment
+
 - Local repo: `/home/kjdragan/lrepos/universal_agent`
-- VPS host: `root@187.77.16.29`
+- VPS host: `root@100.106.113.93` (Tailscale VPN)
 - VPS app root: `/opt/universal_agent`
 - SSH key: `~/.ssh/id_ed25519`
 - Services: `universal-agent-gateway`, `universal-agent-api`, `universal-agent-webui`, `universal-agent-telegram`
 
 ## Critical Rule
-The VPS app directory is **not a git clone**. Never use `git pull` on the VPS. All deployments are file-sync from local.
+
+The VPS app directory is **not a git clone**. Never use `git pull` on the VPS. All deployments are file-sync from local via VPN.
 
 ---
 
@@ -32,7 +35,7 @@ scripts/vpsctl.sh restart gateway
 **Which service to restart?**
 
 | What you changed | Restart |
-|---|---|
+| --- | --- |
 | `src/universal_agent/gateway_server.py`, `src/universal_agent/execution_engine.py`, `src/universal_agent/agent_setup.py`, `src/universal_agent/main.py`, anything under `src/universal_agent/memory/`, `src/universal_agent/hooks*`, `src/universal_agent/cron*`, `src/universal_agent/urw/` | `gateway` |
 | `src/universal_agent/api/` | `api` |
 | `web-ui/` source files | `webui` (after rebuild, see below) |
@@ -68,7 +71,7 @@ Prompt assets, skill files, and agent definitions are loaded at session start, s
 scripts/vpsctl.sh push web-ui/
 
 # Rebuild and restart on VPS
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   set -e
   cd /opt/universal_agent
   runuser -u ua -- bash -lc "cd /opt/universal_agent/web-ui && npm install && npm run build"
@@ -88,7 +91,7 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
 ```bash
 scripts/vpsctl.sh push pyproject.toml uv.lock
 
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   set -e
   cd /opt/universal_agent
   runuser -u ua -- bash -lc "cd /opt/universal_agent && /home/ua/.local/bin/uv sync"
@@ -105,13 +108,14 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
 
 ### 5) I changed many files across multiple areas (big feature, refactor)
 
-**Use: Full deploy script**
+### Use: Full deploy script
 
 ```bash
 ./scripts/deploy_vps.sh
 ```
 
 This does:
+
 1. `rsync` entire workspace to VPS (excludes `.git`, `.venv`, `.env`, `AGENT_RUN_WORKSPACES`, `artifacts`, `tmp`)
 2. Preserves VPS `.env` and runtime data
 3. Runs `uv sync` for Python deps
@@ -130,10 +134,10 @@ This does:
 
 ```bash
 # Edit directly on VPS
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 'nano /opt/universal_agent/.env'
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 'nano /opt/universal_agent/.env'
 
 # Then restart affected services
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
 '
 ```
@@ -146,12 +150,12 @@ These are VPS-only files not in the repo. Edit directly:
 
 ```bash
 # Edit nginx
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 'nano /etc/nginx/sites-enabled/universal-agent-app'
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 'nginx -t && systemctl reload nginx'
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 'nano /etc/nginx/sites-enabled/universal-agent-app'
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 'nginx -t && systemctl reload nginx'
 
 # Edit systemd unit
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 'nano /etc/systemd/system/universal-agent-gateway.service'
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 'systemctl daemon-reload && systemctl restart universal-agent-gateway'
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 'nano /etc/systemd/system/universal-agent-gateway.service'
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 'systemctl daemon-reload && systemctl restart universal-agent-gateway'
 ```
 
 ---
@@ -159,13 +163,15 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 'systemctl daemon-reload && systemctl
 ## Post-Deploy Verification (always do this)
 
 ### Quick check
+
 ```bash
 scripts/vpsctl.sh status all
 ```
 
 ### Full check (after big deploys)
+
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   for s in universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram; do
     printf "%s=" "$s"; systemctl is-active "$s"
   done
@@ -176,6 +182,7 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
 ```
 
 ### If something is broken
+
 ```bash
 # Check logs for the failing service
 scripts/vpsctl.sh logs gateway   # or api, webui, telegram
@@ -203,7 +210,7 @@ When Cascade or any agent makes changes during a session:
 ## Tool Reference
 
 | Tool | When | Command |
-|---|---|---|
+| --- | --- | --- |
 | **vpsctl push** | 1-5 files, targeted | `scripts/vpsctl.sh push <path...>` |
 | **vpsctl restart** | After push | `scripts/vpsctl.sh restart gateway\|api\|webui\|telegram\|all` |
 | **vpsctl status** | Quick health check | `scripts/vpsctl.sh status all` |
