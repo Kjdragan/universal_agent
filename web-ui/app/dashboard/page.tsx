@@ -320,13 +320,28 @@ export default function DashboardPage() {
             Profile: {summary?.deployment_profile?.profile ?? "local_workstation"}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
-        >
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              openOrFocusChatWindow({
+                role: "writer",
+                newSession: true,
+                focusInput: true,
+              })
+            }
+            className="rounded-lg border border-emerald-700/60 bg-emerald-600/15 px-3 py-1.5 text-sm text-emerald-200 hover:bg-emerald-600/25"
+          >
+            New Session
+          </button>
+          <button
+            type="button"
+            onClick={load}
+            className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">

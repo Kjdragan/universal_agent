@@ -4,6 +4,8 @@ type ChatWindowOptions = {
   sessionId?: string | null;
   attachMode?: "default" | "tail";
   role?: "writer" | "viewer";
+  newSession?: boolean;
+  focusInput?: boolean;
 };
 
 export function buildChatUrl(options?: ChatWindowOptions): string {
@@ -17,6 +19,12 @@ export function buildChatUrl(options?: ChatWindowOptions): string {
   }
   if (options?.role === "viewer") {
     params.set("role", "viewer");
+  }
+  if (options?.newSession) {
+    params.set("new_session", "1");
+  }
+  if (options?.focusInput) {
+    params.set("focus_input", "1");
   }
   const query = params.toString();
   return query ? `/?${query}` : "/";

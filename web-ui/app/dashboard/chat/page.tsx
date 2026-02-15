@@ -80,13 +80,28 @@ export default function DashboardChatPage() {
             Open or focus the dedicated full-screen chat tab. Choose writer or viewer attach mode.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={openSelected}
-          className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
-        >
-          Open/Focus Full Chat
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              openOrFocusChatWindow({
+                role: "writer",
+                newSession: true,
+                focusInput: true,
+              })
+            }
+            className="rounded-lg border border-emerald-700/60 bg-emerald-500/20 px-3 py-1.5 text-sm text-emerald-100 hover:bg-emerald-500/30"
+          >
+            New Session
+          </button>
+          <button
+            type="button"
+            onClick={openSelected}
+            className="rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-sm hover:bg-slate-800"
+          >
+            Open/Focus Full Chat
+          </button>
+        </div>
       </div>
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 space-y-3">
@@ -101,10 +116,16 @@ export default function DashboardChatPage() {
           </button>
           <button
             type="button"
-            onClick={() => openOrFocusChatWindow({ role: "writer" })}
+            onClick={() =>
+              openOrFocusChatWindow({
+                role: "writer",
+                newSession: true,
+                focusInput: true,
+              })
+            }
             className="rounded-md border border-cyan-700 bg-cyan-500/20 px-3 py-1.5 text-sm text-cyan-100 hover:bg-cyan-500/30"
           >
-            Open Chat
+            New Session Chat
           </button>
         </div>
 
