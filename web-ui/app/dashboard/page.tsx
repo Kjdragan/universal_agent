@@ -495,6 +495,16 @@ export default function DashboardPage() {
               <p className="mt-1 text-[11px] text-slate-400">
                 {inferSourceCategory(session)} · {session.owner}
               </p>
+              {session.description ? (
+                <p
+                  className="mt-1 text-[11px] text-slate-300/90 truncate"
+                  title={session.description}
+                >
+                  {session.description}
+                </p>
+              ) : (
+                <p className="mt-1 text-[11px] text-slate-600 italic truncate">no description yet</p>
+              )}
               <p className="mt-1 text-[11px] text-slate-500">
                 memory: {session.memory_mode}
               </p>

@@ -141,6 +141,13 @@ export default function DashboardChatPage() {
                     <span className="text-[11px] text-slate-400">
                       {(session.source || "local")} · {session.status || "unknown"}
                     </span>
+                    {session.description ? (
+                      <span className="mt-0.5 block text-[11px] text-slate-300/90 truncate" title={session.description}>
+                        {session.description}
+                      </span>
+                    ) : (
+                      <span className="mt-0.5 block text-[11px] text-slate-600 italic truncate">no description yet</span>
+                    )}
                   </button>
                   <button
                     type="button"

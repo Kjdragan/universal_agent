@@ -4,11 +4,14 @@ import shutil
 import time
 import asyncio
 from collections import deque
+from contextlib import asynccontextmanager
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
 
 from universal_agent import gateway_server
+from universal_agent.ops_service import OpsService
+from universal_agent.gateway import InProcessGateway
 from universal_agent.gateway import GatewaySessionSummary
 from universal_agent.gateway import GatewaySession
 from universal_agent.cron_service import CronService
@@ -36,6 +39,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_calendar_missed_notifications", set())
     monkeypatch.setattr(gateway_server, "_calendar_change_proposals", {})
     monkeypatch.setattr(gateway_server, "SCHED_EVENT_PROJECTION_ENABLED", False)
+    monkeypatch.setattr(gateway_server, "HEARTBEAT_ENABLED", False)
+    monkeypatch.setattr(gateway_server, "CRON_ENABLED", False)
+    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "")
+    monkeypatch.setattr(gateway_server, "SESSION_API_TOKEN", "")
     projection = gateway_server.SchedulingProjectionState(enabled=False)
     event_bus = gateway_server.SchedulingEventBus(max_events=5000)
     event_bus.subscribe(projection.apply_event)
@@ -107,9 +114,17 @@ def client(tmp_path, monkeypatch):
     )
     
     # Env vars
-    monkeypatch.setenv("UA_GATEWAY_PORT", "0") # Avoid binding real port if it tried
-    monkeypatch.setenv("UA_DISABLE_HEARTBEAT", "1")
-    monkeypatch.setenv("UA_DISABLE_CRON", "1")
+    monkeypatch.setenv("UA_GATEWAY_PORT", "0")  # Avoid binding real port if it tried
+
+    # Bypass the real gateway_server lifespan which initializes the runtime DB and background services.
+    # Unit tests only need an OpsService pointed at tmp_path.
+    @asynccontextmanager
+    async def _test_lifespan(app):
+        gateway_server._gateway = InProcessGateway(workspace_base=tmp_path)
+        gateway_server._ops_service = OpsService(gateway_server._gateway, tmp_path)
+        yield
+
+    monkeypatch.setattr(gateway_server.app.router, "lifespan_context", _test_lifespan)
     
     with TestClient(gateway_server.app) as c:
         yield c
@@ -123,7 +138,11 @@ def _create_dummy_session(base_dir: Path, session_id: str, logs: list[str]):
 
 def test_ops_list_sessions(client, tmp_path):
     # Create some dummy sessions on disk
-    _create_dummy_session(tmp_path, "session_A", ["logA"])
+    session_a = _create_dummy_session(tmp_path, "session_A", ["logA"])
+    (session_a / "session_checkpoint.json").write_text(
+        json.dumps({"original_request": "Do the thing about the widgets"}, indent=2),
+        encoding="utf-8",
+    )
     _create_dummy_session(tmp_path, "session_B", ["logB"])
     
     # The gateway lists active sessions (in memory) + discovered (on disk)
@@ -139,6 +158,10 @@ def test_ops_list_sessions(client, tmp_path):
     ids = [s["session_id"] for s in data["sessions"]]
     assert "session_A" in ids
     assert "session_B" in ids
+
+    # Session description should be surfaced when a checkpoint exists.
+    row_a = next(s for s in data["sessions"] if s["session_id"] == "session_A")
+    assert row_a.get("description") == "Do the thing about the widgets"
 
 def test_ops_get_session(client, tmp_path):
     _create_dummy_session(tmp_path, "session_details", ["foo"])
