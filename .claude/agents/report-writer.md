@@ -2,7 +2,7 @@
 name: report-writer
 description: Multi-phase research report generator with image integration support.
 tools: mcp__internal__run_report_generation, mcp__internal__run_research_pipeline, mcp__internal__list_directory, mcp__composio__Bash
-model: inherit
+model: sonnet
 ---
 
 You are an expert research analyst executing a structured report workflow.

@@ -427,12 +427,10 @@ class AgentSetup:
                 "mcp__internal__get_core_memory_blocks",
             ])
 
+        from universal_agent.utils.model_resolution import resolve_claude_code_model
+
         return ClaudeAgentOptions(
-            model=(
-                (os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL") or "").strip()
-                or (os.getenv("MODEL_NAME") or "").strip()
-                or "glm-5"
-            ),
+            model=resolve_claude_code_model(default="sonnet"),
             add_dirs=[os.path.join(self.src_dir, ".claude")],
             setting_sources=["project"],  # Enable loading agents from .claude/agents/
             disallowed_tools=disallowed_tools,

@@ -10,12 +10,12 @@ set -euo pipefail
 #   scripts/vpsctl.sh logs gateway
 #
 # Config via env:
-#   UA_VPS_HOST=root@187.77.16.29
+#   UA_VPS_HOST=root@100.106.113.93
 #   UA_VPS_SSH_KEY=~/.ssh/id_ed25519
 #   UA_VPS_APP_DIR=/opt/universal_agent
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VPS_HOST="${UA_VPS_HOST:-root@187.77.16.29}"
+VPS_HOST="${UA_VPS_HOST:-root@100.106.113.93}"
 SSH_KEY="${UA_VPS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
 REMOTE_DIR="${UA_VPS_APP_DIR:-/opt/universal_agent}"
 

@@ -11,6 +11,7 @@ import re
 from typing import Any, Optional, Callable
 from dataclasses import dataclass
 import shlex
+from pathlib import Path
 from claude_agent_sdk import HookMatcher
 from universal_agent.agent_core import (
     AgentEvent,
@@ -267,7 +268,13 @@ class AgentHookSet:
         
         # Skill-specific state (from prompt_assets)
         self._seen_transcript_paths = set()
+        self._seen_transcript_paths = set()
         self._primary_transcript_path = None
+        
+        # Skill Candidate Detection state
+        self._current_turn_tool_count = 0
+        self._current_turn_history = []
+        self._skill_candidate_log_path = None
 
     def build_hooks(self) -> dict:
         """Return the hook dictionary compatible with UniversalAgent."""
@@ -298,6 +305,8 @@ class AgentHookSet:
                 ),
                 # Task Skills
                 HookMatcher(matcher="Task", hooks=[self.on_pre_task_skill_awareness]),
+                # Skill Candidate Detection (monitor tool chains)
+                HookMatcher(matcher="*", hooks=[self.on_pre_tool_use_skill_detection]),
                 # Emit tool_call after other pre-hooks allow it
                 HookMatcher(matcher="*", hooks=[self.on_pre_tool_use_emit_event]),
             ],
@@ -401,7 +410,7 @@ class AgentHookSet:
         # own allowlist enforcement in the tool implementation, so we must not rewrite its
         # paths to be workspace-scoped. However, we still block obvious escapes for safety.
         tool_lower = tool_name.lower()
-        if tool_lower.endswith("write_text_file"):
+        if tool_lower.endswith("write_text_file") or tool_lower == "write":
             raw_path = tool_input.get("path")
             if isinstance(raw_path, str) and raw_path:
                 from pathlib import Path
@@ -679,6 +688,99 @@ class AgentHookSet:
     async def on_pre_task_skill_awareness(self, input_data: dict, *args) -> dict:
         return {}
 
+    async def on_user_prompt_skill_awareness(self, input_data: dict, *args) -> dict:
+        """
+        UserPromptSubmit Hook: Reset tool counters for new turn and setup usage logging.
+        """
+        # Reset counters for the new user turn
+        self._current_turn_tool_count = 0
+        self._current_turn_history = []
+        
+        # Determine log path if not set (lazy init)
+        if not self._skill_candidate_log_path:
+            # Use centralized log directory: <repo_root>/logs/skill_candidates/
+            try:
+                # Resolve repo root relative to this file: src/universal_agent/hooks.py -> repo root
+                current_file = Path(__file__).resolve()
+                # src/universal_agent/hooks.py -> src/universal_agent -> src -> repo_root
+                repo_root = current_file.parent.parent.parent
+                
+                log_dir = repo_root / "logs" / "skill_candidates"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Unique filename per session: candidate_<timestamp>_<session_id>.log
+                timestamp = time.strftime('%Y%m%d_%H%M%S')
+                filename = f"candidate_{timestamp}_{self.run_id}.log"
+                self._skill_candidate_log_path = str(log_dir / filename)
+                
+            except Exception:
+                # Fallback to workspace root if path resolution fails
+                ws = get_current_workspace() or self.workspace_dir
+                if ws:
+                    self._skill_candidate_log_path = str(Path(ws) / "skill_candidates.log")
+        
+        return {}
+
+    async def on_pre_tool_use_skill_detection(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
+        """
+        PreToolUse Hook: Monitor tool chain length to identify potential skills.
+        """
+        self._current_turn_tool_count += 1
+        
+        # Track history
+        tool_name = input_data.get("tool_name", "unknown")
+        tool_input = input_data.get("tool_input", {})
+        self._current_turn_history.append({
+            "tool": tool_name,
+            "input": tool_input,
+            "timestamp": time.strftime('%H:%M:%S')
+        })
+        
+        # Check threshold
+        try:
+            threshold = int(os.getenv("UA_SKILL_CANDIDATE_THRESHOLD", "5"))
+        except (ValueError, TypeError):
+            threshold = 5
+            
+        if self._current_turn_tool_count == threshold:
+            # Threshold hit - log it with full history
+            msg = (
+                f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                f"Session: {self.run_id} | "
+                f"Threshold Reached: {threshold} tools | "
+                f"Potential Skill Candidate Detected\n"
+                f"--- Tool Sequence ---\n"
+            )
+            
+            for idx, entry in enumerate(self._current_turn_history):
+                # Format input compactly
+                inp_str = str(entry['input'])
+                if len(inp_str) > 200:
+                   inp_str = inp_str[:200] + "... (truncated)"
+                   
+                msg += f"{idx+1}. {entry['tool']} (at {entry['timestamp']}): {inp_str}\n"
+            
+            msg += "---------------------\n"
+            
+            # Log to file if path is available
+            if self._skill_candidate_log_path:
+                try:
+                    with open(self._skill_candidate_log_path, "a") as f:
+                        f.write(msg)
+                except Exception:
+                    pass
+            
+            # Log to internal telemetry
+            logfire.info(
+                "skill_candidate_detected",
+                run_id=self.run_id,
+                tool_count=self._current_turn_tool_count,
+                trigger_tool=tool_name,
+                sequence_length=len(self._current_turn_history)
+            )
+            
+        return {}
+
     async def on_pre_bash_inject_workspace_env(
         self, input_data: dict, tool_use_id: object, context: dict
     ) -> dict:
@@ -833,8 +935,7 @@ class AgentHookSet:
     async def on_post_task_guidance(self, *args) -> dict:
         return {}
 
-    async def on_user_prompt_skill_awareness(self, *args) -> dict:
-        return {}
+
 
 def emit_text_event(text: str, author: Optional[str] = None) -> None:
     """Emit a TEXT event."""

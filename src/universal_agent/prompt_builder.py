@@ -283,7 +283,9 @@ def build_system_prompt(
         "  - `content`: The full output you're about to show the user\n"
         "- NOTE: If native `Write` is restricted, use `mcp__internal__write_text_file`.\n"
         "- ALWAYS write a small `manifest.json` in the artifact directory.\n"
-        "- Mark deletable outputs as `retention=temp` inside the manifest."
+        "- Mark deletable outputs as `retention=temp` inside the manifest.\n"
+        "- **MANDATORY**: For data analysis/charts, ALWAYS save the raw source data (CSV/JSON) to `work_products/analysis_data/` for auditability.\n"
+        "- **MD LINKS**: When linking files in your final response, YOU MUST use absolute paths: `[Name](file:///absolute/path/to/file)`."
     )
 
     # ── 13. EMAIL & ATTACHMENTS ───────────────────────────────────────

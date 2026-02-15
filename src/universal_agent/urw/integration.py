@@ -90,6 +90,7 @@ all relevant history is provided above in the context section.
 
 1. Work towards completing the task fully
 2. Save all outputs to the workspace artifacts directory
+   - For data analysis tasks, save raw data/CSVs to `work_products/analysis_data/` for auditability.
 3. If you encounter blockers, document them clearly
 4. Extract learnings that might help future iterations
 5. If an approach fails, note it so it won't be repeated
@@ -99,6 +100,7 @@ all relevant history is provided above in the context section.
 When complete, provide a summary of:
 - What was accomplished
 - Files created (if any)
+  - IMPORTANT: MUST use absolute file paths for all links: `[Name](file:///absolute/path/to/file)`
 - Any actions taken (emails sent, APIs called, etc.)
 - Key learnings
 - Any approaches that failed
@@ -138,6 +140,20 @@ class UniversalAgentAdapter(BaseAgentAdapter):
                 enable_memory=None,
                 verbose=self.config.get("verbose", False),
             )
+            
+            # Use shared AgentHookSet logic (matching main.py CLI behavior)
+            try:
+                from universal_agent.hooks import AgentHookSet
+                import uuid
+                hooks_manager = AgentHookSet(
+                    run_id=str(uuid.uuid4()),
+                    enable_skills=True,
+                    active_workspace=workspace_dir
+                )
+                self._setup.set_hooks(hooks_manager.build_hooks())
+            except ImportError:
+                pass  # Fallback to default hooks if hooks module missing
+                
             await self._setup.initialize()
             return await UniversalAgent.from_setup(self._setup)
         else:

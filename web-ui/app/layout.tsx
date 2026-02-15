@@ -14,6 +14,13 @@ export const metadata: Metadata = {
   description: "AGI-era universal agent interface with real-time monitoring and work product visualization",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{

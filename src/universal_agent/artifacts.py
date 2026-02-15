@@ -27,7 +27,14 @@ def resolve_artifacts_dir() -> Path:
     raw = (os.getenv("UA_ARTIFACTS_DIR") or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()
-    return (repo_root() / "artifacts").resolve()
+    
+    # Auto-detect "UA_ARTIFACTS_DIR" if it exists (legacy/user preference)
+    root = repo_root()
+    legacy = root / "UA_ARTIFACTS_DIR"
+    if legacy.exists() and legacy.is_dir():
+        return legacy.resolve()
+        
+    return (root / "artifacts").resolve()
 
 
 def ensure_artifacts_dir() -> Path:

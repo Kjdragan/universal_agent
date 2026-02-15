@@ -207,7 +207,10 @@ class InterviewConductor:
     
     def _get_interview_options(self) -> ClaudeAgentOptions:
         """Build options for the interview agent."""
+        from universal_agent.utils.model_resolution import resolve_claude_code_model
+
         return ClaudeAgentOptions(
+            model=resolve_claude_code_model(default="sonnet"),
             mcp_servers={"interview": interview_server},
             allowed_tools=[
                 "mcp__interview__ask_user",

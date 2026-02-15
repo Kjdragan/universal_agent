@@ -49,18 +49,7 @@ def _ensure_playwright_chromium() -> None:
         print(f"[pdf_bridge] Warning: auto-install failed: {e}")
 
 
-@tool(
-    name="html_to_pdf",
-    description=(
-        "Convert an HTML file to PDF. Preferred path uses Chrome headless (Playwright). "
-        "Falls back to WeasyPrint if Chromium is unavailable."
-    ),
-    input_schema={
-        "html_path": str,
-        "pdf_path": str,
-    },
-)
-async def html_to_pdf_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+async def _html_to_pdf_impl(args: dict[str, Any]) -> dict[str, Any]:
     html_path = _resolve_path(args.get("html_path"))
     pdf_path = _resolve_path(args.get("pdf_path"))
 
@@ -105,3 +94,17 @@ async def html_to_pdf_wrapper(args: dict[str, Any]) -> dict[str, Any]:
                 )
 
     return {"content": [{"type": "text", "text": result}]}
+
+@tool(
+    name="html_to_pdf",
+    description=(
+        "Convert an HTML file to PDF. Preferred path uses Chrome headless (Playwright). "
+        "Falls back to WeasyPrint if Chromium is unavailable."
+    ),
+    input_schema={
+        "html_path": str,
+        "pdf_path": str,
+    },
+)
+async def html_to_pdf_wrapper(args: dict[str, Any]) -> dict[str, Any]:
+    return await _html_to_pdf_impl(args)

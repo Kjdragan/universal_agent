@@ -729,6 +729,24 @@ class HeartbeatService:
         visibility = self._resolve_visibility(overrides)
         now = time.time()
 
+        # If this is a fresh state (last_run=0), align to the previous scheduled slot
+        # to prevent an immediate run on startup. The heartbeat will trigger at the
+        # next natural interval boundary.
+        if state.last_run == 0:
+             # Example: interval=1800 (30m). now=1000.
+             # last_run = (1000 // 1800) * 1800 = 0 (if now < 1800) or aligned floor
+             # Actually we want: last_run = now - (now % interval)
+             # If now is 12:05 and interval is 30m, last_run becomes 12:00.
+             # elapsed = 5m < 30m. Next run at 12:30.
+             state.last_run = now - (now % schedule.every_seconds)
+             # Optimization: Save this initial state so we don't recalculate on every tick if we restart
+             try:
+                 with open(state_path, "w") as f:
+                     json.dump(state.to_dict(), f)
+             except Exception:
+                 pass
+
+
         # Required scheduling behavior: missed windows are not backfilled.
         # If the session is busy and this would have been a scheduled run, consume
         # the window by advancing last_run. Do not consume explicit wake requests.
