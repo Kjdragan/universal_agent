@@ -1144,374 +1144,342 @@ export default function HomePage() {
 
     document.body.style.cursor = 'col-resize';
     document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  };
+    // Responsive State
+    const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'files' | 'dashboard'>('chat');
+    const [showTabletFiles, setShowTabletFiles] = useState(false);
+    const [dashboardView, setDashboardView] = useState<string | null>(null);
+    const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const [isMobile, setIsMobile] = useState(false);
+    const [isDesktop, setIsDesktop] = useState(true);
 
-  // Responsive State
-  const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'files' | 'dashboard'>('chat');
-  const [showTabletFiles, setShowTabletFiles] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-  const [isDesktop, setIsDesktop] = useState(true);
+    // Track screen size to conditionally apply inline styles (avoiding hydration mismatch)
+    useEffect(() => {
+      const handleResize = () => {
+        const w = window.innerWidth;
+        setIsMobile(w < 768);
+        setIsDesktop(w >= 1280);
+      };
 
-  // Track screen size to conditionally apply inline styles (avoiding hydration mismatch)
-  useEffect(() => {
-    const handleResize = () => {
-      const w = window.innerWidth;
-      setIsMobile(w < 768);
-      setIsDesktop(w >= 1280);
-    };
+      // Initial check
+      handleResize();
 
-    // Initial check
-    handleResize();
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+    // Approval modal hook
+    const { pendingApproval, handleApprove, handleReject } = useApprovalModal();
+    const { pendingInput, handleSubmit: handleInputSubmit, handleCancel: handleInputCancel } = useInputModal();
 
-  // Approval modal hook
-  const { pendingApproval, handleApprove, handleReject } = useApprovalModal();
-  const { pendingInput, handleSubmit: handleInputSubmit, handleCancel: handleInputCancel } = useInputModal();
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/dashboard/auth/session", { cache: "no-store" })
-      .then(async (response) => {
-        const payload = (await response.json()) as DashboardAuthSession;
-        if (cancelled) return;
-        if (!response.ok && response.status !== 401) {
-          throw new Error(`Auth check failed (${response.status})`);
-        }
-        setAuthSession(payload);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setAuthError((error as Error).message || "Auth check failed");
-        setAuthSession({
-          authenticated: false,
-          auth_required: true,
-          owner_id: "owner_primary",
+    useEffect(() => {
+      let cancelled = false;
+      fetch("/api/dashboard/auth/session", { cache: "no-store" })
+        .then(async (response) => {
+          const payload = (await response.json()) as DashboardAuthSession;
+          if (cancelled) return;
+          if (!response.ok && response.status !== 401) {
+            throw new Error(`Auth check failed (${response.status})`);
+          }
+          setAuthSession(payload);
+        })
+        .catch((error) => {
+          if (cancelled) return;
+          setAuthError((error as Error).message || "Auth check failed");
+          setAuthSession({
+            authenticated: false,
+            auth_required: true,
+            owner_id: "owner_primary",
+          });
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingAuth(false);
         });
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingAuth(false);
+
+      return () => {
+        cancelled = true;
+      };
+    }, []);
+
+    useEffect(() => {
+      if (loadingAuth) return;
+      if (authSession?.auth_required && !authSession.authenticated) {
+        ws.disconnect();
+        return;
+      }
+
+      // Connect to WebSocket on mount. If a session is explicitly requested in URL,
+      // attach to that session in this tab before opening the socket.
+      const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+      const requestedSessionId = (params?.get("session_id") || "").trim();
+      const requestedAttach = (params?.get("attach") || "").trim().toLowerCase();
+
+      if (requestedSessionId) {
+        const store = useAgentStore.getState();
+        store.setSessionAttachMode(requestedAttach === "tail" ? "tail" : "default");
+        ws.attachToSession(requestedSessionId);
+      } else {
+        ws.connect();
+      }
+
+      // Set up event listeners
+      const unsubscribes: (() => void)[] = [];
+
+      // Listen for all events
+      Object.values(useAgentStore.getState().messages).forEach((message) => {
+        // This will be handled by the event callback
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+      const unsubscribeStatus = ws.onStatus((status) => {
+        useAgentStore.getState().setConnectionStatus(status);
+      });
 
-  useEffect(() => {
-    if (loadingAuth) return;
+      const unsubscribeError = ws.onError((error) => {
+        useAgentStore.getState().setLastError(error.message);
+      });
+
+      // Set up individual event listeners
+      const eventTypes: WebSocketEvent["type"][] = [
+        "connected",
+        "text",
+        "tool_call",
+        "tool_result",
+        "thinking",
+        "status",
+        "work_product",
+        "query_complete",
+        "cancelled",
+        "error",
+        "iteration_end",
+        "system_event",
+        "system_presence",
+      ];
+
+      eventTypes.forEach((eventType) => {
+        const unsubscribe = ws.on(eventType, (event) => {
+          processWebSocketEvent(event);
+        });
+        unsubscribes.push(unsubscribe);
+      });
+
+      unsubscribes.push(unsubscribeStatus, unsubscribeError);
+
+      // Cleanup on unmount
+      return () => {
+        unsubscribes.forEach((unsub) => unsub());
+      };
+    }, [ws, loadingAuth, authSession?.auth_required, authSession?.authenticated]);
+
+    if (loadingAuth) {
+      return (
+        <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-200">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-6 py-5 text-sm text-slate-300">
+            Verifying access...
+          </div>
+        </div>
+      );
+    }
+
     if (authSession?.auth_required && !authSession.authenticated) {
-      ws.disconnect();
-      return;
-    }
-
-    // Connect to WebSocket on mount. If a session is explicitly requested in URL,
-    // attach to that session in this tab before opening the socket.
-    const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
-    const requestedSessionId = (params?.get("session_id") || "").trim();
-    const requestedAttach = (params?.get("attach") || "").trim().toLowerCase();
-
-    if (requestedSessionId) {
-      const store = useAgentStore.getState();
-      store.setSessionAttachMode(requestedAttach === "tail" ? "tail" : "default");
-      ws.attachToSession(requestedSessionId);
-    } else {
-      ws.connect();
-    }
-
-    // Set up event listeners
-    const unsubscribes: (() => void)[] = [];
-
-    // Listen for all events
-    Object.values(useAgentStore.getState().messages).forEach((message) => {
-      // This will be handled by the event callback
-    });
-
-    const unsubscribeStatus = ws.onStatus((status) => {
-      useAgentStore.getState().setConnectionStatus(status);
-    });
-
-    const unsubscribeError = ws.onError((error) => {
-      useAgentStore.getState().setLastError(error.message);
-    });
-
-    // Set up individual event listeners
-    const eventTypes: WebSocketEvent["type"][] = [
-      "connected",
-      "text",
-      "tool_call",
-      "tool_result",
-      "thinking",
-      "status",
-      "work_product",
-      "query_complete",
-      "cancelled",
-      "error",
-      "iteration_end",
-      "system_event",
-      "system_presence",
-    ];
-
-    eventTypes.forEach((eventType) => {
-      const unsubscribe = ws.on(eventType, (event) => {
-        processWebSocketEvent(event);
-      });
-      unsubscribes.push(unsubscribe);
-    });
-
-    unsubscribes.push(unsubscribeStatus, unsubscribeError);
-
-    // Cleanup on unmount
-    return () => {
-      unsubscribes.forEach((unsub) => unsub());
-    };
-  }, [ws, loadingAuth, authSession?.auth_required, authSession?.authenticated]);
-
-  if (loadingAuth) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-200">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/70 px-6 py-5 text-sm text-slate-300">
-          Verifying access...
-        </div>
-      </div>
-    );
-  }
-
-  if (authSession?.auth_required && !authSession.authenticated) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 p-4">
-        <div className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900/80 p-5">
-          <h1 className="text-lg font-semibold">Dashboard Access Required</h1>
-          <p className="mt-1 text-sm text-slate-400">Sign in from the dashboard shell to use chat and session controls.</p>
-          {authError && (
-            <div className="mt-3 rounded-md border border-rose-800/70 bg-rose-900/20 px-3 py-2 text-xs text-rose-200">
-              {authError}
-            </div>
-          )}
-          <div className="mt-4 flex items-center gap-2">
-            <a
-              href="/dashboard"
-              className="rounded-md border border-cyan-700 bg-cyan-600/20 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-600/30"
-            >
-              Go to Login
-            </a>
-            <button
-              type="button"
-              onClick={() => window.location.reload()}
-              className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800/70"
-            >
-              Retry
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <OpsProvider>
-      <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 relative z-10">
-        {/* Header */}
-        <header className="h-14 border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md flex items-center px-4 shrink-0 z-20 relative gap-4">
-
-          {/* Left: Logo & Brand */}
-          <div className="flex items-center gap-4 shrink-0 h-full">
-            {/* Logo Image */}
-            <div className="relative h-full w-32 md:w-48 py-2">
-              <Image
-                src="/simon_logo_v2.png"
-                alt="Simon"
-                fill
-                className="object-contain object-left"
-                priority
-              />
+      return (
+        <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 p-4">
+          <div className="w-full max-w-md rounded-xl border border-slate-800 bg-slate-900/80 p-5">
+            <h1 className="text-lg font-semibold">Dashboard Access Required</h1>
+            <p className="mt-1 text-sm text-slate-400">Sign in from the dashboard shell to use chat and session controls.</p>
+            {authError && (
+              <div className="mt-3 rounded-md border border-rose-800/70 bg-rose-900/20 px-3 py-2 text-xs text-rose-200">
+                {authError}
+              </div>
+            )}
+            <div className="mt-4 flex items-center gap-2">
+              <a
+                href="/dashboard"
+                className="rounded-md border border-cyan-700 bg-cyan-600/20 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-600/30"
+              >
+                Go to Login
+              </a>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800/70"
+              >
+                Retry
+              </button>
             </div>
           </div>
+        </div>
+      );
+    }
 
-          {/* Center: Ops dropdown buttons - Hidden on Mobile */}
-          <div className="hidden md:flex items-center gap-2 shrink-0">
-            {([
-              { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: "w-[800px]" },
-              { key: "calendar", label: "Calendar", icon: "🗓️", content: <CalendarSection />, width: "w-[1100px]" },
-              { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: "w-[800px]" },
-              { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: "w-[600px]" },
-              { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: "w-[600px]" },
-              { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection />, width: "w-[800px]" },
-              { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection />, width: "w-[800px]" },
-              { key: "continuity", label: "Continuity", icon: "📈", content: <SessionContinuityWidget />, width: "w-[520px]" },
-            ] as const).map((item) => (
-              <Popover key={item.key}>
-                <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60 data-[state=open]:border-primary/50 data-[state=open]:bg-primary/10 data-[state=open]:text-primary"
+    return (
+      <OpsProvider>
+        <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 relative z-10">
+          {/* Header */}
+          <header className="h-14 border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md flex items-center px-4 shrink-0 z-20 relative gap-4">
+
+            {/* Left: Logo & Brand */}
+            <div className="flex items-center gap-4 shrink-0 h-full">
+              {/* Logo Image */}
+              <div className="relative h-full w-32 md:w-48 py-2">
+                <Image
+                  src="/simon_logo_v2.png"
+                  alt="Simon"
+                  fill
+                  className="object-contain object-left"
+                  priority
+                />
+              </div>
+            </div>
+
+            {/* Center: Ops dropdown buttons - Hidden on Mobile */}
+            <div className="hidden md:flex items-center gap-2 shrink-0">
+              {([
+                { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: "w-[800px]" },
+                { key: "calendar", label: "Calendar", icon: "🗓️", content: <CalendarSection />, width: "w-[1100px]" },
+                { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: "w-[800px]" },
+                { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: "w-[600px]" },
+                { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: "w-[600px]" },
+                { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection />, width: "w-[800px]" },
+                { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection />, width: "w-[800px]" },
+                { key: "continuity", label: "Continuity", icon: "📈", content: <SessionContinuityWidget />, width: "w-[520px]" },
+              ] as const).map((item) => (
+                <Popover key={item.key}>
+                  <PopoverTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60 data-[state=open]:border-primary/50 data-[state=open]:bg-primary/10 data-[state=open]:text-primary"
+                    >
+                      <span className="text-xs">{item.icon}</span>
+                      <span>{item.label}</span>
+                      <span className="text-[8px] transition-transform group-data-[state=open]:rotate-180">▾</span>
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className={`p-0 overflow-hidden bg-background/95 backdrop-blur-xl border-border/60 shadow-2xl ${item.width}`}
+                    align="start"
+                    collisionPadding={10}
                   >
-                    <span className="text-xs">{item.icon}</span>
-                    <span>{item.label}</span>
-                    <span className="text-[8px] transition-transform group-data-[state=open]:rotate-180">▾</span>
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent
-                  className={`p-0 overflow-hidden bg-background/95 backdrop-blur-xl border-border/60 shadow-2xl ${item.width}`}
-                  align="start"
-                  collisionPadding={10}
-                >
-                  <div className="max-h-[85vh] overflow-y-auto scrollbar-thin">
-                    {item.content}
-                  </div>
-                </PopoverContent>
-              </Popover>
-            ))}
-          </div>
+                    <div className="max-h-[85vh] overflow-y-auto scrollbar-thin">
+                      {item.content}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              ))}
+            </div>
 
-          {/* Right: Metrics, Status */}
-          <div className="ml-auto flex items-center gap-2 md:gap-4">
-            <a
-              href="/files/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hidden md:block rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
-            >
-              File Browser
-            </a>
-            {/* Mobile/Tablet Menu Button could go here */}
+            {/* Right: Metrics, Status */}
+            <div className="ml-auto flex items-center gap-2 md:gap-4">
+              <a
+                href="/files/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hidden md:block rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
+              >
+                File Browser
+              </a>
+              {/* Mobile/Tablet Menu Button could go here */}
 
-            <HeaderMetrics />
-            <ConnectionIndicator />
-          </div>
-        </header>
+              <HeaderMetrics />
+              <ConnectionIndicator />
+            </div>
+          </header>
 
-        {/* Main Content Area */}
-        {/* Responsive Layout:
+          {/* Main Content Area */}
+          {/* Responsive Layout:
             - Mobile (<768px): Vertical Stack via activeTab 
             - Tablet (768px-1280px): Flex Row (Chat | Activity). Files hidden/toggleable.
             - Desktop (>1280px): Flex Row (Chat | Activity | Files).
         */}
-        <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative pb-14 md:pb-0">
+          <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative pb-14 md:pb-0">
 
-          {/* PANEL 1: CHAT / VIEWER */}
-          {/* Visible if: Desktop/Tablet OR (Mobile AND tab=='chat') */}
-          <main
-            className={`
+            {/* PANEL 1: CHAT / VIEWER */}
+            {/* Visible if: Desktop/Tablet OR (Mobile AND tab=='chat') */}
+            <main
+              className={`
               flex-1 min-w-0 bg-background/30 flex relative flex-col border-r border-border/40
               ${activeMobileTab === 'chat' ? 'flex' : 'hidden md:flex'}
             `}
-          >
-            {viewingFile ? (
-              <div className="flex-1 flex overflow-hidden">
-                <div className="flex-1 min-w-0 bg-background/30 flex relative">
-                  <FileViewer />
+            >
+              {viewingFile ? (
+                <div className="flex-1 flex overflow-hidden">
+                  <div className="flex-1 min-w-0 bg-background/30 flex relative">
+                    <FileViewer />
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <ChatInterface />
-            )}
-          </main>
+              ) : (
+                <ChatInterface />
+              )}
+            </main>
 
-          {/* PANEL 2: ACTIVITY LOG */}
-          {/* Visible if: Desktop OR Tablet OR (Mobile AND tab=='activity') */}
-          <div
-            className={`
+            {/* PANEL 2: ACTIVITY LOG */}
+            {/* Visible if: Desktop OR Tablet OR (Mobile AND tab=='activity') */}
+            <div
+              className={`
               border-r border-slate-800 bg-slate-900/20 relative transition-all duration-300 flex-col
               ${activeMobileTab === 'activity' ? 'flex w-full' : 'hidden md:flex'}
               ${activityCollapsed ? 'w-10 shrink-0' : ''}
             `}
-            style={
-              // On Desktop/Tablet: Use dynamic width. 
-              // On Mobile: width is auto/full (handled by flex class above).
-              // We only apply inline width style for md+ (which we track via !isMobile to match server assumption of desktop)
-              // Note: We use !isMobile here which is updated after mount. On server it's false (isMobile=false),
-              // so it renders the width style. Logic:
-              // Server: isMobile=false -> renders width style.
-              // Client Mount: isMobile=false -> renders width style.
-              // Client Effect: Detects isMobile=true -> removes width style.
-              !isMobile
-                ? (activityCollapsed ? { width: 40, minHeight: '100%' } : { width: activityWidth })
-                : {}
-            }
-          >
-            {/* Desktop/Tablet Resizer */}
-            <div className="hidden md:block">
-              {!activityCollapsed && (
-                <div
-                  className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
-                  onMouseDown={startResizing('activity')}
-                />
+              style={
+                // On Desktop/Tablet: Use dynamic width. 
+                // On Mobile: width is auto/full (handled by flex class above).
+                // We only apply inline width style for md+ (which we track via !isMobile to match server assumption of desktop)
+                // Note: We use !isMobile here which is updated after mount. On server it's false (isMobile=false),
+                // so it renders the width style. Logic:
+                // Server: isMobile=false -> renders width style.
+                // Client Mount: isMobile=false -> renders width style.
+                // Client Effect: Detects isMobile=true -> removes width style.
+                !isMobile
+                  ? (activityCollapsed ? { width: 40, minHeight: '100%' } : { width: activityWidth })
+                  : {}
+              }
+            >
+              {/* Desktop/Tablet Resizer */}
+              <div className="hidden md:block">
+                {!activityCollapsed && (
+                  <div
+                    className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
+                    onMouseDown={startResizing('activity')}
+                  />
+                )}
+              </div>
+
+              {activityCollapsed ? (
+                <button
+                  type="button"
+                  onClick={() => setActivityCollapsed(false)}
+                  className="h-full w-10 flex items-center justify-center hover:bg-card/30 transition-colors border-l border-slate-700/50 bg-slate-900/40"
+                  title="Expand Activity Log"
+                >
+                  <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold whitespace-nowrap">{ICONS.activity} Activity ▶</span>
+                </button>
+              ) : (
+                <div className="h-full flex flex-col overflow-hidden">
+                  <CombinedActivityLog onCollapse={() => setActivityCollapsed(true)} />
+                </div>
               )}
             </div>
 
-            {activityCollapsed ? (
-              <button
-                type="button"
-                onClick={() => setActivityCollapsed(false)}
-                className="h-full w-10 flex items-center justify-center hover:bg-card/30 transition-colors border-l border-slate-700/50 bg-slate-900/40"
-                title="Expand Activity Log"
-              >
-                <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold whitespace-nowrap">{ICONS.activity} Activity ▶</span>
-              </button>
-            ) : (
-              <div className="h-full flex flex-col overflow-hidden">
-                <CombinedActivityLog onCollapse={() => setActivityCollapsed(true)} />
-              </div>
-            )}
-          </div>
-
-          {/* PANEL 3: FILES & TASKS */}
-          {/* Visible if: Desktop OR (Mobile AND tab=='files') OR Tablet Overlay */}
-          <aside
-            className={`
+            {/* PANEL 3: FILES & TASKS */}
+            {/* Visible if: Desktop OR (Mobile AND tab=='files') OR Tablet Overlay */}
+            <aside
+              className={`
               shrink-0 flex-col overflow-hidden bg-slate-900/30 backdrop-blur-sm relative
               ${activeMobileTab === 'files' ? 'flex w-full' : 'hidden xl:flex'}
             `}
-            style={
-              isDesktop
-                ? { width: filesWidth }
-                : {}
-            }
-          >
-            {/* Desktop Resizer */}
-            <div className="hidden xl:block">
-              <div
-                className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
-                onMouseDown={startResizing('files')}
-              />
-            </div>
-
-            <div className="flex-1 flex flex-col min-h-0 pl-1">
-              <FileExplorer />
-              <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
-                <WorkProductViewer />
-              </div>
-              <HeartbeatWidget />
-              <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
-                <TaskPanel />
-              </div>
-            </div>
-          </aside>
-
-          {/* Tablet "Files" Overlay Button */}
-          {/* Only shown on Tablet (md) but not Desktop (xl), if files hidden */}
-          <div className="hidden md:flex xl:hidden absolute right-0 top-1/2 -translate-y-1/2 z-30">
-            <button
-              onClick={() => setShowTabletFiles(!showTabletFiles)}
-              className="bg-slate-800/80 border border-slate-700 text-slate-300 p-2 rounded-l-lg shadow-xl hover:bg-slate-700"
-              title="Toggle Files"
+              style={
+                isDesktop
+                  ? { width: filesWidth }
+                  : {}
+              }
             >
-              {ICONS.folder}
-            </button>
-          </div>
-
-          {/* Tablet Files Overlay Drawer */}
-          {showTabletFiles && (
-            <div className="absolute right-0 top-0 h-full w-[320px] bg-slate-950/95 border-l border-slate-700 z-40 flex flex-col shadow-2xl animate-in slide-in-from-right-10 duration-200">
-              <div className="p-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
-                <span className="text-xs font-bold uppercase tracking-wider pl-2">Files & Tasks</span>
-                <button onClick={() => setShowTabletFiles(false)} className="p-1 hover:text-white text-slate-400">✕</button>
+              {/* Desktop Resizer */}
+              <div className="hidden xl:block">
+                <div
+                  className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
+                  onMouseDown={startResizing('files')}
+                />
               </div>
-              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+
+              <div className="flex-1 flex flex-col min-h-0 pl-1">
                 <FileExplorer />
                 <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
                   <WorkProductViewer />
@@ -1521,99 +1489,156 @@ export default function HomePage() {
                   <TaskPanel />
                 </div>
               </div>
+            </aside>
+
+            {/* Tablet "Files" Overlay Button */}
+            {/* Only shown on Tablet (md) but not Desktop (xl), if files hidden */}
+            <div className="hidden md:flex xl:hidden absolute right-0 top-1/2 -translate-y-1/2 z-30">
+              <button
+                onClick={() => setShowTabletFiles(!showTabletFiles)}
+                className="bg-slate-800/80 border border-slate-700 text-slate-300 p-2 rounded-l-lg shadow-xl hover:bg-slate-700"
+                title="Toggle Files"
+              >
+                {ICONS.folder}
+              </button>
+            </div>
+
+            {/* Tablet Files Overlay Drawer */}
+            {showTabletFiles && (
+              <div className="absolute right-0 top-0 h-full w-[320px] bg-slate-950/95 border-l border-slate-700 z-40 flex flex-col shadow-2xl animate-in slide-in-from-right-10 duration-200">
+                <div className="p-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                  <span className="text-xs font-bold uppercase tracking-wider pl-2">Files & Tasks</span>
+                  <button onClick={() => setShowTabletFiles(false)} className="p-1 hover:text-white text-slate-400">✕</button>
+                </div>
+                <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                  <FileExplorer />
+                  <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
+                    <WorkProductViewer />
+                  </div>
+                  <HeartbeatWidget />
+                  <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
+                    <TaskPanel />
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
+
+          {/* MOBILE DASHBOARD MENU (Visible only on Mobile AND tab=='dashboard') */}
+          {/* Note: Desktop header items are hidden on mobile. We expose them here. */}
+          {/* Mobile Dashboard "Menu" Panel */}
+          {activeMobileTab === 'dashboard' && (
+            <div className="flex-1 flex flex-col overflow-hidden bg-slate-950/95 pb-20 md:hidden">
+              {/* If no specific dashboard view is selected, show the Menu */}
+              {!dashboardView ? (
+                <div className="p-4 space-y-2 overflow-y-auto">
+                  <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground border-b border-border/40 pb-2 mb-2">Dashboard Menu</h2>
+
+                  {[
+                    { key: "sessions", label: "Sessions", icon: "📋" },
+                    { key: "skills", label: "Skills", icon: "🧩" },
+                    { key: "calendar", label: "Calendar", icon: "🗓️" },
+                    { key: "channels", label: "Channels", icon: "📡" },
+                    { key: "approvals", label: "Approvals", icon: "✅" },
+                    { key: "events", label: "Events", icon: "⚡" },
+                    { key: "config", label: "Config", icon: "⚙️" },
+                    { key: "continuity", label: "Continuity", icon: "📈" },
+                  ].map((item) => (
+                    <button
+                      key={item.key}
+                      onClick={() => setDashboardView(item.key)}
+                      className="w-full text-left p-4 rounded-lg border border-border/40 bg-card/20 hover:bg-card/40 active:bg-card/60 transition-all flex items-center gap-3"
+                    >
+                      <span className="text-xl">{item.icon}</span>
+                      <span className="font-bold uppercase tracking-wider text-sm">{item.label}</span>
+                      <span className="ml-auto opacity-50">›</span>
+                    </button>
+                  ))}
+
+                  <a
+                    href="/dashboard"
+                    className="block rounded-lg border border-border/50 bg-card/40 px-4 py-3 text-center text-sm uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary mt-4"
+                  >
+                    Go to Dashboard Shell
+                  </a>
+                </div>
+              ) : (
+                /* If a view is selected, show that specific component full-screen */
+                <div className="flex-1 flex flex-col h-full">
+                  {/* Header with Back Button */}
+                  <div className="p-3 border-b border-border/40 flex items-center gap-2 bg-background/50 backdrop-blur-sm shrink-0">
+                    <button
+                      onClick={() => setDashboardView(null)}
+                      className="p-2 -ml-2 rounded-full hover:bg-slate-800 transition-colors"
+                    >
+                      ←
+                    </button>
+                    <span className="font-bold uppercase tracking-wider text-sm">
+                      {dashboardView.charAt(0).toUpperCase() + dashboardView.slice(1)}
+                    </span>
+                  </div>
+
+                  {/* Scrollable Content Area */}
+                  <div className="flex-1 overflow-y-auto overflow-x-hidden p-2">
+                    {dashboardView === 'sessions' && <SessionsSection />}
+                    {dashboardView === 'skills' && <SkillsSection />}
+                    {dashboardView === 'calendar' && <CalendarSection />}
+                    {dashboardView === 'channels' && <ChannelsSection />}
+                    {dashboardView === 'approvals' && <ApprovalsSection />}
+                    {dashboardView === 'events' && <SystemEventsSection />}
+                    {dashboardView === 'config' && <OpsConfigSection />}
+                    {dashboardView === 'continuity' && <SessionContinuityWidget />}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-        </div>
+          {/* Mobile Bottom Tab Bar */}
+          <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-slate-950/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-50 safe-area-bottom pb-env">
+            <button
+              onClick={() => setActiveMobileTab('chat')}
+              className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'chat' ? 'text-cyan-400' : 'text-slate-500'}`}
+            >
+              <span className="text-xl">{ICONS.chat}</span>
+              <span className="text-[9px] uppercase tracking-widest font-bold">Chat</span>
+            </button>
+            <button
+              onClick={() => setActiveMobileTab('activity')}
+              className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'activity' ? 'text-amber-400' : 'text-slate-500'}`}
+            >
+              <span className="text-xl">{ICONS.activity}</span>
+              <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
+            </button>
+            <button
+              onClick={() => setActiveMobileTab('files')}
+              className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-purple-400' : 'text-slate-500'}`}
+            >
+              <span className="text-xl">{ICONS.folder}</span>
+              <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
+            </button>
+            <button
+              onClick={() => setActiveMobileTab('dashboard')}
+              className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'dashboard' ? 'text-emerald-400' : 'text-slate-500'}`}
+            >
+              <span className="text-xl">☰</span>
+              <span className="text-[9px] uppercase tracking-widest font-bold">Menu</span>
+            </button>
+          </div>
 
-        {/* MOBILE DASHBOARD MENU (Visible only on Mobile AND tab=='dashboard') */}
-        {/* Note: Desktop header items are hidden on mobile. We expose them here. */}
-        <div
-          className={`
-               flex-1 flex-col overflow-y-auto bg-slate-950/95 p-4 space-y-4 pb-20
-               ${activeMobileTab === 'dashboard' ? 'flex' : 'hidden'}
-               md:hidden
-             `}
-        >
-          <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground border-b border-border/40 pb-2 mb-2">Dashboard Menu</h2>
-
-          {/* Render the sections that are usually in the Header Popovers */}
-          {[
-            { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection /> },
-            { key: "calendar", label: "Calendar", icon: "🗓️", content: <CalendarSection /> },
-            { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection /> },
-            { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection /> },
-            { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection /> },
-            { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection /> },
-            { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection /> },
-            { key: "continuity", label: "Continuity", icon: "📈", content: <SessionContinuityWidget /> },
-          ].map((item) => (
-            <div key={item.key} className="bg-card/20 rounded-lg border border-border/40 overflow-hidden">
-              <div className="p-3 bg-card/40 font-bold uppercase tracking-wider text-xs flex items-center gap-2">
-                <span>{item.icon}</span> {item.label}
-              </div>
-              <div className="p-2">
-                {/* Most sections are designed for popovers/dropdowns. 
-                       They might be wide. We let them flow naturally or scroll horizontally if needed. */}
-                <div className="overflow-x-auto">
-                  {item.content}
-                </div>
-              </div>
-            </div>
-          ))}
-
-          <a
-            href="/dashboard"
-            className="block rounded-lg border border-border/50 bg-card/40 px-4 py-3 text-center text-sm uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary mt-4"
-          >
-            Go to Dashboard Shell
-          </a>
-        </div>
-
-        {/* Mobile Bottom Tab Bar */}
-        <div className="md:hidden fixed bottom-0 left-0 right-0 h-16 bg-slate-950/95 border-t border-slate-800 backdrop-blur-lg flex items-center justify-around z-50 safe-area-bottom pb-env">
-          <button
-            onClick={() => setActiveMobileTab('chat')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'chat' ? 'text-cyan-400' : 'text-slate-500'}`}
-          >
-            <span className="text-xl">{ICONS.chat}</span>
-            <span className="text-[9px] uppercase tracking-widest font-bold">Chat</span>
-          </button>
-          <button
-            onClick={() => setActiveMobileTab('activity')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'activity' ? 'text-amber-400' : 'text-slate-500'}`}
-          >
-            <span className="text-xl">{ICONS.activity}</span>
-            <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
-          </button>
-          <button
-            onClick={() => setActiveMobileTab('files')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-purple-400' : 'text-slate-500'}`}
-          >
-            <span className="text-xl">{ICONS.folder}</span>
-            <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
-          </button>
-          <button
-            onClick={() => setActiveMobileTab('dashboard')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'dashboard' ? 'text-emerald-400' : 'text-slate-500'}`}
-          >
-            <span className="text-xl">☰</span>
-            <span className="text-[9px] uppercase tracking-widest font-bold">Menu</span>
-          </button>
-        </div>
-
-        {/* Approval Modal */}
-        <ApprovalModal
-          request={pendingApproval}
-          onApprove={handleApprove}
-          onReject={handleReject}
-        />
-        <InputModal
-          request={pendingInput}
-          onSubmit={handleInputSubmit}
-          onCancel={handleInputCancel}
-        />
-      </div >
-    </OpsProvider >
-  );
-}
+          {/* Approval Modal */}
+          <ApprovalModal
+            request={pendingApproval}
+            onApprove={handleApprove}
+            onReject={handleReject}
+          />
+          <InputModal
+            request={pendingInput}
+            onSubmit={handleInputSubmit}
+            onCancel={handleInputCancel}
+          />
+        </div >
+      </OpsProvider >
+    );
+  }

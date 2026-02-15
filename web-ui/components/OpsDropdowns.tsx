@@ -688,6 +688,12 @@ export function SessionsSection() {
             <button onClick={() => setShowList(!showList)} className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" title={showList ? "Collapse List" : "Expand List"}>
               {showList ? "▼" : "▶"}
             </button>
+            {/* Mobile-friendly Back button when list is collapsed */}
+            {!showList && (
+              <button onClick={() => setShowList(true)} className="ml-2 text-[10px] px-2 py-0.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20">
+                ← Back to List
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-1">
             <button onClick={cancelOutstandingRuns} className="text-[10px] px-2 py-0.5 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
@@ -732,7 +738,7 @@ export function SessionsSection() {
               )}
               {filteredSessions.length === 0 && <div className="text-muted-foreground">No sessions found</div>}
               {filteredSessions.map((s) => (
-                <button key={s.session_id} onClick={() => setSelected(s.session_id)} className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === s.session_id ? "border-primary text-primary" : "border-border/50 text-muted-foreground"}`}>
+                <button key={s.session_id} onClick={() => { setSelected(s.session_id); setShowList(false); }} className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === s.session_id ? "border-primary text-primary" : "border-border/50 text-muted-foreground"}`}>
                   <div className="font-mono truncate">{s.session_id}</div>
                   <div className="flex justify-between"><span>{s.status}</span><span className="opacity-60">{s.last_activity?.slice(11, 19) ?? "--:--:--"}</span></div>
                   <div className="flex justify-between opacity-70">
@@ -1225,6 +1231,12 @@ export function SkillsSection() {
           <button onClick={() => setShowList(!showList)} className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" title={showList ? "Collapse List" : "Expand List"}>
             {showList ? "▼" : "▶"}
           </button>
+          {/* Mobile-friendly Back button when list is collapsed */}
+          {!showList && (
+            <button onClick={() => setShowList(true)} className="ml-2 text-[10px] px-2 py-0.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20">
+              ← Back to List
+            </button>
+          )}
         </div>
         <button onClick={fetchSkills} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all">↻ Refresh catalog</button>
       </div>
@@ -1236,7 +1248,7 @@ export function SkillsSection() {
             {skills.map((s) => (
               <button
                 key={s.name}
-                onClick={() => setSelectedSkill(s)}
+                onClick={() => { setSelectedSkill(s); setShowList(false); }}
                 className={`w-full text-left p-2 rounded-lg border transition-all ${selectedSkill?.name === s.name
                   ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200"
                   : "border-transparent hover:bg-slate-800/40 text-slate-400"
