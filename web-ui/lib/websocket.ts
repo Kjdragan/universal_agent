@@ -391,6 +391,12 @@ export class AgentWebSocket {
     this.connect();
   }
 
+  startNewSession(): void {
+    this.setStoredSessionId(null);
+    this.disconnect();
+    this.connect();
+  }
+
   // ==========================================================================
   // Event Management
   // ==========================================================================

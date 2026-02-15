@@ -735,22 +735,56 @@ function ChatInterface() {
   const [chatRole, setChatRole] = useState<"writer" | "viewer">("writer");
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  const focusInput = React.useCallback(() => {
+    if (chatRole === "viewer") return;
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    const len = el.value.length;
+    el.setSelectionRange(len, len);
+  }, [chatRole]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
     const role = (params.get("role") || "").trim().toLowerCase();
-    setChatRole(role === "viewer" ? "viewer" : "writer");
+    const nextRole = role === "viewer" ? "viewer" : "writer";
+    setChatRole(nextRole);
     // Pre-fill input from ?message= query param (used by dashboard Quick Command)
     const prefill = (params.get("message") || "").trim();
+    const shouldFocusInput = params.get("focus_input") === "1";
+
     if (prefill) {
       setInput(prefill);
-      // Clean up the URL so refreshing doesn't re-fill
+    }
+
+    if ((prefill || shouldFocusInput) && nextRole !== "viewer") {
+      window.requestAnimationFrame(() => {
+        focusInput();
+      });
+    }
+
+    if (prefill || shouldFocusInput) {
+      // Clean up one-shot URL flags so refresh doesn't repeat actions.
       const url = new URL(window.location.href);
       url.searchParams.delete("message");
+      url.searchParams.delete("focus_input");
       window.history.replaceState({}, "", url.toString());
     }
-  }, []);
+  }, [focusInput]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleFocusInput = () => {
+      window.requestAnimationFrame(() => {
+        focusInput();
+      });
+    };
+    window.addEventListener("ua:focus-input", handleFocusInput);
+    return () => window.removeEventListener("ua:focus-input", handleFocusInput);
+  }, [focusInput]);
 
   const handleSend = async (textOverride?: string) => {
     if (chatRole === "viewer") return;
@@ -933,6 +967,7 @@ function ChatInterface() {
       <div className="p-4 bg-slate-900/60 border border-slate-800 backdrop-blur-md mb-20 md:mb-10 ml-4 md:ml-64 mr-4 md:mr-6 rounded-2xl shadow-xl transition-all duration-300">
         <div className="flex gap-3">
           <input
+            ref={inputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -1165,6 +1200,23 @@ export default function HomePage() {
   const [isMobile, setIsMobile] = useState(false);
   const [isDesktop, setIsDesktop] = useState(true);
 
+  const handleStartNewSession = () => {
+    const store = useAgentStore.getState();
+    store.reset();
+    store.setCurrentSession(null);
+    store.setSessionAttachMode("default");
+    ws.startNewSession();
+    setActiveMobileTab("chat");
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("session_id");
+      url.searchParams.delete("attach");
+      url.searchParams.set("focus_input", "1");
+      window.history.replaceState({}, "", url.toString());
+      window.dispatchEvent(new Event("ua:focus-input"));
+    }
+  };
+
   // Track screen size to conditionally apply inline styles (avoiding hydration mismatch)
   useEffect(() => {
     const handleResize = () => {
@@ -1225,8 +1277,22 @@ export default function HomePage() {
     const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
     const requestedSessionId = (params?.get("session_id") || "").trim();
     const requestedAttach = (params?.get("attach") || "").trim().toLowerCase();
+    const requestedNewSession = (params?.get("new_session") || "").trim() === "1";
 
-    if (requestedSessionId) {
+    if (requestedNewSession) {
+      const store = useAgentStore.getState();
+      store.reset();
+      store.setCurrentSession(null);
+      store.setSessionAttachMode("default");
+      ws.startNewSession();
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("new_session");
+        url.searchParams.delete("session_id");
+        url.searchParams.delete("attach");
+        window.history.replaceState({}, "", url.toString());
+      }
+    } else if (requestedSessionId) {
       const store = useAgentStore.getState();
       store.setSessionAttachMode(requestedAttach === "tail" ? "tail" : "default");
       ws.attachToSession(requestedSessionId);
@@ -1381,6 +1447,20 @@ export default function HomePage() {
 
           {/* Right: Metrics, Status */}
           <div className="ml-auto flex items-center gap-2 md:gap-4">
+            <a
+              href="/dashboard"
+              className="hidden md:block rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
+            >
+              Dashboard
+            </a>
+            <button
+              type="button"
+              onClick={handleStartNewSession}
+              className="hidden md:block rounded-lg border border-emerald-700/50 bg-emerald-600/15 px-3 py-2 text-[15px] uppercase tracking-widest text-emerald-200 hover:border-emerald-400/60 hover:bg-emerald-600/25"
+              title="Start a fresh chat session"
+            >
+              New Session
+            </button>
             <a
               href="/files"
               target="_blank"
