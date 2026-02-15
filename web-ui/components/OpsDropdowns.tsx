@@ -638,6 +638,7 @@ export function SessionsSection() {
   const [sourceFilter, setSourceFilter] = useState<"all" | "chat" | "telegram" | "api" | "local">("all");
   const [memoryModeFilter, setMemoryModeFilter] = useState<"all" | "off" | "session_only" | "selective" | "full">("all");
   const [ownerFilter, setOwnerFilter] = useState("");
+  const [showList, setShowList] = useState(true);
 
   const attachToChat = async (sessionId: string) => {
     setAttaching(true);
@@ -682,60 +683,78 @@ export function SessionsSection() {
     <div className="p-3 text-xs space-y-3">
       <div className="border rounded bg-background/40 p-2">
         <div className="font-semibold mb-2 flex items-center justify-between">
-          <span>Sessions</span>
+          <div className="flex items-center gap-2">
+            <span>Sessions</span>
+            <button onClick={() => setShowList(!showList)} className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" title={showList ? "Collapse List" : "Expand List"}>
+              {showList ? "▼" : "▶"}
+            </button>
+          </div>
           <div className="flex items-center gap-1">
             <button onClick={cancelOutstandingRuns} className="text-[10px] px-2 py-0.5 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
             <button onClick={fetchSessions} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻"}</button>
           </div>
         </div>
-        <div className="mb-2 grid grid-cols-2 md:grid-cols-4 gap-1">
-          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
-            <option value="all">status: all</option>
-            <option value="running">running</option>
-            <option value="idle">idle</option>
-            <option value="terminal">terminal</option>
-          </select>
-          <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
-            <option value="all">source: all</option>
-            <option value="chat">chat</option>
-            <option value="telegram">telegram</option>
-            <option value="api">api</option>
-            <option value="local">local</option>
-          </select>
-          <input
-            value={ownerFilter}
-            onChange={(e) => setOwnerFilter(e.target.value)}
-            placeholder="owner"
-            className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]"
-          />
-          <select value={memoryModeFilter} onChange={(e) => setMemoryModeFilter(e.target.value as typeof memoryModeFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
-            <option value="all">memory: all</option>
-            <option value="off">off</option>
-            <option value="session_only">session_only</option>
-            <option value="selective">selective</option>
-            <option value="full">full</option>
-          </select>
-        </div>
-        <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
-          {sessionsError && (
-            <div className="text-[10px] text-amber-400 whitespace-pre-wrap">
-              {sessionsError}
+        {showList && (
+          <>
+            <div className="mb-2 grid grid-cols-2 md:grid-cols-4 gap-1">
+              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
+                <option value="all">status: all</option>
+                <option value="running">running</option>
+                <option value="idle">idle</option>
+                <option value="terminal">terminal</option>
+              </select>
+              <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value as typeof sourceFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
+                <option value="all">source: all</option>
+                <option value="chat">chat</option>
+                <option value="telegram">telegram</option>
+                <option value="api">api</option>
+                <option value="local">local</option>
+              </select>
+              <input
+                value={ownerFilter}
+                onChange={(e) => setOwnerFilter(e.target.value)}
+                placeholder="owner"
+                className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]"
+              />
+              <select value={memoryModeFilter} onChange={(e) => setMemoryModeFilter(e.target.value as typeof memoryModeFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
+                <option value="all">memory: all</option>
+                <option value="off">off</option>
+                <option value="session_only">session_only</option>
+                <option value="selective">selective</option>
+                <option value="full">full</option>
+              </select>
             </div>
-          )}
-          {filteredSessions.length === 0 && <div className="text-muted-foreground">No sessions found</div>}
-          {filteredSessions.map((s) => (
-            <button key={s.session_id} onClick={() => setSelected(s.session_id)} className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === s.session_id ? "border-primary text-primary" : "border-border/50 text-muted-foreground"}`}>
-              <div className="font-mono truncate">{s.session_id}</div>
-              <div className="flex justify-between"><span>{s.status}</span><span className="opacity-60">{s.last_activity?.slice(11, 19) ?? "--:--:--"}</span></div>
-              <div className="flex justify-between opacity-70">
-                <span>{s.source || s.channel || "local"}</span>
-                <span>{s.owner || "unknown"}</span>
-              </div>
-              <div className="opacity-60 text-[10px]">memory: {s.memory_mode || "session_only"}</div>
-            </button>
-          ))}
-        </div>
+            <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
+              {sessionsError && (
+                <div className="text-[10px] text-amber-400 whitespace-pre-wrap">
+                  {sessionsError}
+                </div>
+              )}
+              {filteredSessions.length === 0 && <div className="text-muted-foreground">No sessions found</div>}
+              {filteredSessions.map((s) => (
+                <button key={s.session_id} onClick={() => setSelected(s.session_id)} className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === s.session_id ? "border-primary text-primary" : "border-border/50 text-muted-foreground"}`}>
+                  <div className="font-mono truncate">{s.session_id}</div>
+                  <div className="flex justify-between"><span>{s.status}</span><span className="opacity-60">{s.last_activity?.slice(11, 19) ?? "--:--:--"}</span></div>
+                  <div className="flex justify-between opacity-70">
+                    <span>{s.source || s.channel || "local"}</span>
+                    <span>{s.owner || "unknown"}</span>
+                  </div>
+                  <div className="opacity-60 text-[10px]">memory: {s.memory_mode || "session_only"}</div>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
+
+      {/* If list is hidden and we have a selection, show a mini header to re-expand */}
+      {!showList && selected && (
+        <div className="flex items-center justify-between px-2 py-1 bg-background/40 border rounded text-[10px]">
+          <span className="font-mono">{selected}</span>
+          <button onClick={() => setShowList(true)} className="text-primary hover:underline">Show List</button>
+        </div>
+      )}
+
       {selected && (
         <>
           <div className="border rounded bg-background/40 p-2">
@@ -1169,6 +1188,7 @@ export function SkillsSection() {
   const [selectedSkill, setSelectedSkill] = useState<SkillStatus | null>(null);
   const [docContent, setDocContent] = useState<string | null>(null);
   const [loadingDoc, setLoadingDoc] = useState(false);
+  const [showList, setShowList] = useState(true);
 
   useEffect(() => {
     if (skills.length > 0 && !selectedSkill) {
@@ -1200,32 +1220,38 @@ export function SkillsSection() {
   return (
     <div className="flex flex-col h-full min-h-[500px]">
       <div className="p-3 border-b border-border/40 flex items-center justify-between shrink-0">
-        <h2 className="font-semibold text-sm">Skills Management</h2>
+        <div className="flex items-center gap-2">
+          <h2 className="font-semibold text-sm">Skills Management</h2>
+          <button onClick={() => setShowList(!showList)} className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" title={showList ? "Collapse List" : "Expand List"}>
+            {showList ? "▼" : "▶"}
+          </button>
+        </div>
         <button onClick={fetchSkills} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all">↻ Refresh catalog</button>
       </div>
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         {/* Left: Skill List */}
-        <div className="w-full md:w-1/3 h-1/3 md:h-auto border-b md:border-b-0 md:border-r border-border/40 overflow-y-auto scrollbar-thin p-2 space-y-1 bg-background/20 shrink-0">
-          {skills.length === 0 && <div className="text-muted-foreground p-2">No skills found</div>}
-          {skills.map((s) => (
-            <button
-              key={s.name}
-              onClick={() => setSelectedSkill(s)}
-              className={`w-full text-left p-2 rounded-lg border transition-all ${selectedSkill?.name === s.name
-                ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200"
-                : "border-transparent hover:bg-slate-800/40 text-slate-400"
-                }`}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-medium truncate">{s.name}</span>
-                <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${s.enabled && s.available ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" : "bg-amber-500/10 text-amber-500 border border-amber-500/20"}`}>
-                  {s.enabled && s.available ? "active" : "disabled"}
-                </span>
-              </div>
-            </button>
-          ))}
-        </div>
-        {/* Right: Markdown Preview */}
+        {showList && (
+          <div className="w-full md:w-1/3 h-1/3 md:h-auto border-b md:border-b-0 md:border-r border-border/40 overflow-y-auto scrollbar-thin p-2 space-y-1 bg-background/20 shrink-0">
+            {skills.length === 0 && <div className="text-muted-foreground p-2">No skills found</div>}
+            {skills.map((s) => (
+              <button
+                key={s.name}
+                onClick={() => setSelectedSkill(s)}
+                className={`w-full text-left p-2 rounded-lg border transition-all ${selectedSkill?.name === s.name
+                  ? "border-cyan-500/50 bg-cyan-500/10 text-cyan-200"
+                  : "border-transparent hover:bg-slate-800/40 text-slate-400"
+                  }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium truncate">{s.name}</span>
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${s.enabled && s.available ? "bg-emerald-500/10 text-emerald-500 border border-emerald-500/20" : "bg-amber-500/10 text-amber-500 border border-amber-500/20"}`}>
+                    {s.enabled && s.available ? "active" : "disabled"}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex-1 overflow-y-auto p-4 bg-slate-950/30">
           {loadingDoc ? (
             <div className="h-full flex items-center justify-center text-slate-500 text-xs italic">Loading documentation...</div>
