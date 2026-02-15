@@ -7,6 +7,7 @@ export type SessionDirectoryItem = {
   channel: string;
   owner: string;
   memory_mode: string;
+  description?: string;
   workspace_dir?: string;
   last_activity?: string;
   active_connections?: number;
@@ -43,6 +44,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
           channel,
           owner: String(row.owner || "unknown"),
           memory_mode: String(row.memory_mode || "session_only"),
+          description: row.description ? String(row.description) : undefined,
           workspace_dir: row.workspace_dir ? String(row.workspace_dir) : undefined,
           last_activity: row.last_activity ? String(row.last_activity) : undefined,
           active_connections: Number(row.active_connections || 0),
@@ -69,6 +71,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
       channel: source,
       owner: "unknown",
       memory_mode: "session_only",
+      description: row.description ? String(row.description) : undefined,
       workspace_dir: row.workspace_dir
         ? String(row.workspace_dir)
         : row.workspace_path

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,10 @@ DEFAULT_LOG_LIMIT = 500
 DEFAULT_LOG_MAX_BYTES = 250_000
 MAX_LOG_LIMIT = 5000
 MAX_LOG_MAX_BYTES = 1_000_000
+
+# Session directory UX: attempt to show a short "what was this session about?"
+_SESSION_DESC_MAX_CHARS = 160
+_SESSION_DESC_MAX_FILE_BYTES = 96_000
 
 def clamp(value: int, min_val: int, max_val: int) -> int:
     return max(min_val, min(max_val, value))
@@ -72,6 +77,100 @@ class OpsService:
         if sid.startswith("api_"):
             return "api"
         return "local"
+
+    def _normalize_session_description(self, text: str) -> str:
+        # Collapse whitespace/newlines, trim, and cap length for UI cards.
+        cleaned = re.sub(r"\s+", " ", (text or "").strip())
+        if len(cleaned) > _SESSION_DESC_MAX_CHARS:
+            cleaned = cleaned[: _SESSION_DESC_MAX_CHARS - 1].rstrip() + "…"
+        return cleaned
+
+    def _read_text_prefix(self, path: Path, max_bytes: int = _SESSION_DESC_MAX_FILE_BYTES) -> Optional[str]:
+        try:
+            if not path.exists() or not path.is_file():
+                return None
+            raw = path.open("rb").read(max_bytes)
+            return raw.decode("utf-8", errors="ignore")
+        except Exception:
+            return None
+
+    def _try_read_checkpoint_description(self, session_path: Path) -> Optional[str]:
+        # Preferred: session_checkpoint.json carries a clean "original_request".
+        checkpoint_path = session_path / "session_checkpoint.json"
+        if checkpoint_path.exists():
+            try:
+                payload = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                if isinstance(payload, dict):
+                    for key in ("original_request", "query", "prompt", "task", "description", "title"):
+                        val = payload.get(key)
+                        if isinstance(val, str) and val.strip():
+                            return val.strip()
+            except Exception:
+                pass
+
+        # Fallback: session_checkpoint.md has a "### Original Request" block quote.
+        checkpoint_md_path = session_path / "session_checkpoint.md"
+        md = self._read_text_prefix(checkpoint_md_path)
+        if not md:
+            return None
+
+        # Look for the first blockquote after the "Original Request" heading.
+        m = re.search(r"^###\s+Original Request\s*\n(?P<body>(?:>.*\n)+)", md, flags=re.MULTILINE)
+        if not m:
+            return None
+        body = m.group("body")
+        # Strip leading '> ' markers and join.
+        lines = []
+        for ln in body.splitlines():
+            if not ln.lstrip().startswith(">"):
+                continue
+            lines.append(ln.lstrip()[1:].lstrip())
+        joined = " ".join(lines).strip()
+        return joined or None
+
+    def _try_read_trace_description(self, session_path: Path) -> Optional[str]:
+        trace_path = session_path / "trace.json"
+        if not trace_path.exists():
+            return None
+        try:
+            payload = json.loads(trace_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                q = payload.get("query")
+                if isinstance(q, str) and q.strip():
+                    return q.strip()
+        except Exception:
+            return None
+        return None
+
+    def _try_read_transcript_description(self, session_path: Path) -> Optional[str]:
+        # Transcript is larger; only read prefix and extract "User Request" quote.
+        transcript_path = session_path / "transcript.md"
+        md = self._read_text_prefix(transcript_path)
+        if not md:
+            return None
+        m = re.search(r"^###\s+👤\s+User Request\s*\n>\\s*(?P<req>.+?)\\s*(?:\n\n|\\n---|$)", md, flags=re.MULTILINE | re.DOTALL)
+        if not m:
+            # Older format: "### User Request"
+            m = re.search(r"^###\s+User Request\s*\n>\\s*(?P<req>.+?)\\s*(?:\n\n|\\n---|$)", md, flags=re.MULTILINE | re.DOTALL)
+        if not m:
+            return None
+        req = m.group("req")
+        # If blockquote spans multiple lines, strip '>' and join.
+        req_lines = []
+        for ln in req.splitlines():
+            req_lines.append(ln.lstrip(">").strip())
+        return " ".join([l for l in req_lines if l]).strip() or None
+
+    def _derive_session_description(self, session_path: Path) -> Optional[str]:
+        raw = (
+            self._try_read_checkpoint_description(session_path)
+            or self._try_read_trace_description(session_path)
+            or self._try_read_transcript_description(session_path)
+        )
+        if not raw:
+            return None
+        normalized = self._normalize_session_description(raw)
+        return normalized or None
 
     def list_sessions(
         self,
@@ -143,6 +242,7 @@ class OpsService:
             if log_activity > last_activity:
                 last_activity = log_activity
             
+        description = self._derive_session_description(session_path)
         summary = {
             "session_id": session_id,
             "workspace_dir": str(session_path),
@@ -151,6 +251,7 @@ class OpsService:
             "channel": source,
             "owner": owner or "unknown",
             "memory_mode": memory_mode,
+            "description": description,
             "last_modified": last_modified,
             "last_activity": last_activity,
             "active_connections": int(runtime.get("active_connections", 0) or 0),
