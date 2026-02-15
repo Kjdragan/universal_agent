@@ -6,7 +6,8 @@ import { usePathname } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 
-const NAV_ITEMS: { href: string; label: string; external?: boolean }[] = [
+const NAV_ITEMS: { href: string; label: string; external?: boolean; primary?: boolean }[] = [
+  { href: "/", label: "← Back to Main App", primary: true },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/chat", label: "Chat Launch" },
   { href: "/dashboard/skills", label: "Skills" },
@@ -15,7 +16,7 @@ const NAV_ITEMS: { href: string; label: string; external?: boolean }[] = [
   { href: "/dashboard/cron-jobs", label: "Cron Jobs" },
   { href: "/dashboard/channels", label: "Channels" },
   { href: "/dashboard/settings", label: "Settings" },
-  { href: "/files/", label: "File Browser", external: true },
+  { href: "/files", label: "File Browser", external: true },
 ];
 
 type DashboardAuthSession = {
@@ -32,6 +33,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState<string | null>(null);
   const [password, setPassword] = useState("");
   const [ownerId, setOwnerId] = useState("owner_primary");
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   const loadAuthSession = useCallback(async () => {
     setLoadingAuth(true);
@@ -55,6 +57,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     void loadAuthSession();
   }, [loadAuthSession]);
+
+  useEffect(() => {
+    setIsMobileSidebarOpen(false);
+  }, [pathname]);
 
   const handleLogin = useCallback(
     async (event: FormEvent) => {
@@ -145,11 +151,37 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="h-screen overflow-hidden bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100">
-      <div className="mx-auto flex h-full max-w-full gap-4 p-4 md:p-6">
-        <aside className="flex w-64 shrink-0 flex-col rounded-xl border border-slate-800/80 bg-slate-900/60 p-4 backdrop-blur">
+    <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100">
+      {/* Mobile Header */}
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/80 px-4 backdrop-blur md:hidden">
+        <div className="relative h-8 w-32">
+          <Image src="/simon_logo_v2.png" alt="Simon" fill className="object-contain object-left" />
+        </div>
+        <button
+          onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
+          className="rounded-md border border-slate-700 bg-slate-800/60 p-2 text-slate-300"
+        >
+          {isMobileSidebarOpen ? "✕" : "☰"}
+        </button>
+      </header>
+
+      <div className="flex h-full flex-1 overflow-hidden p-0 md:p-6 lg:gap-4">
+        {/* Sidebar Overlay (Mobile) */}
+        {isMobileSidebarOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-sm md:hidden"
+            onClick={() => setIsMobileSidebarOpen(false)}
+          />
+        )}
+
+        <aside
+          className={[
+            "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-slate-800 bg-slate-900/95 p-4 transition-transform duration-300 md:relative md:inset-0 md:flex md:w-64 md:translate-x-0 md:rounded-xl md:border md:bg-slate-900/60 md:backdrop-blur",
+            isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
+          ].join(" ")}
+        >
           <div className="mb-4 border-b border-slate-800 pb-3">
-            <div className="relative h-12 w-48 mb-2">
+            <div className="relative hidden h-12 w-48 mb-2 md:block">
               <Image
                 src="/simon_logo_v2.png"
                 alt="Simon"
@@ -184,7 +216,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     "block rounded-lg px-3 py-2 text-sm transition",
                     active
                       ? "bg-cyan-500/15 text-cyan-200 ring-1 ring-cyan-500/30"
-                      : "text-slate-300 hover:bg-slate-800/70",
+                      : item.primary
+                        ? "bg-cyan-600/10 text-cyan-400 font-bold hover:bg-cyan-600/20 border border-cyan-700/30"
+                        : "text-slate-300 hover:bg-slate-800/70",
                   ].join(" ")}
                 >
                   {item.label}
@@ -205,7 +239,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             )}
           </div>
         </aside>
-        <main className="flex h-full flex-1 flex-col overflow-hidden rounded-xl border border-slate-800/80 bg-slate-900/50 p-4 backdrop-blur md:p-6">
+
+        <main className="flex h-full flex-1 flex-col overflow-hidden bg-slate-900/50 p-4 backdrop-blur md:rounded-xl md:border md:border-slate-800/80 md:p-6">
           {children}
         </main>
       </div>
