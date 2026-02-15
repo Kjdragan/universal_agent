@@ -1228,6 +1228,79 @@ DOCUMENT_SKILL_TRIGGERS = {
     "xlsx": ["xlsx", "openpyxl", "excel", "spreadsheet"],
 }
 
+_READ_BLOCK_IMAGE_EXTS = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".tif",
+    ".ico",
+    ".heic",
+    ".heif",
+}
+
+
+def _tool_read_path_from_input(tool_input: Any) -> str | None:
+    if not isinstance(tool_input, dict):
+        return None
+    for key in ("file_path", "path"):
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _maybe_abs_path(path_value: str) -> str:
+    # Read/Write/Edit tools sometimes pass relative paths.
+    # Resolve relative to the active observer workspace when available, otherwise cwd.
+    try:
+        if os.path.isabs(path_value):
+            return path_value
+        root = OBSERVER_WORKSPACE_DIR or os.getcwd()
+        return os.path.abspath(os.path.join(root, path_value))
+    except Exception:
+        return path_value
+
+
+def _should_block_read_binary(file_path: str) -> tuple[bool, dict]:
+    """
+    Claude-native Read tool returns base64 for images, which is frequently large enough
+    to blow the model context window. We block reads for large image files and steer
+    the agent to tools that return metadata/text instead.
+    """
+    try:
+        # Default 0 means "block all image reads" (prevents base64 injection entirely).
+        max_bytes = int(os.getenv("UA_READ_IMAGE_MAX_BYTES", "0"))
+    except Exception:
+        max_bytes = 0
+    max_bytes = max(0, min(max_bytes, 5_000_000))
+    enabled = str(os.getenv("UA_BLOCK_LARGE_IMAGE_READS", "1") or "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if not enabled:
+        return False, {}
+
+    abs_path = _maybe_abs_path(file_path)
+    ext = Path(abs_path).suffix.lower()
+    if ext not in _READ_BLOCK_IMAGE_EXTS:
+        return False, {}
+
+    try:
+        if os.path.exists(abs_path):
+            size = os.path.getsize(abs_path)
+            if size > max_bytes:
+                return True, {"abs_path": abs_path, "size_bytes": size, "max_bytes": max_bytes, "ext": ext}
+    except Exception:
+        # If we can't stat it, don't block; let the tool fail naturally.
+        return False, {}
+    return False, {}
+
 
 async def on_pre_tool_use_ledger(
     input_data: dict, tool_use_id: object, context: dict
@@ -1523,6 +1596,36 @@ async def on_pre_tool_use_ledger(
             if changed:
                 updated_tool_input = normalized_input
                 tool_input = normalized_input
+
+    if tool_name == "Read":
+        file_path = _tool_read_path_from_input(tool_input)
+        if file_path:
+            should_block, meta = _should_block_read_binary(file_path)
+            if should_block:
+                # Avoid pulling base64 image blobs into the model context. Provide safe alternatives.
+                abs_path = meta.get("abs_path") or file_path
+                size_bytes = meta.get("size_bytes")
+                max_bytes = meta.get("max_bytes")
+                reason = f"Refusing to Read image file (size {size_bytes:,} bytes > {max_bytes:,} bytes)."
+                return {
+                    "systemMessage": (
+                        "⚠️ Blocked: `Read` on a large image file would inject base64 into the model context and "
+                        "can overflow the context window.\n\n"
+                        f"{reason}\n"
+                        f"Path: {abs_path}\n\n"
+                        "Use one of these instead (no base64 in context):\n"
+                        f"1) Vision: `describe_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
+                        f"2) Human viewer: `preview_image` with `{{\"image_path\": \"{abs_path}\"}}`\n"
+                        "3) Shell metadata: `Bash` `ls -lh` / `file`\n"
+                        "4) For edits: `generate_image` with `input_image_path` (do not Read the bytes)\n"
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Blocked Read of large image file (base64 context blowup).",
+                    },
+                }
 
     # Keep Bash execution rooted in the active session workspace by default to
     # prevent accidental repo-root artifacts.

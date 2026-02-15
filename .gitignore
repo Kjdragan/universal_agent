@@ -33,6 +33,7 @@ identity_registry.json
 
 # === Databases & State ===
 *.db
+*.bf
 *.db-shm
 *.db-wal
 *.sqlite3
@@ -84,4 +85,5 @@ config/user_profile.md
 # === OS Specific ===
 .DS_Store
 Thumbs.db
+*.png
 *.Zone.Identifier

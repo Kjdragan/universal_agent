@@ -28,6 +28,7 @@ class Request:
     style: str = "visual_capitalist_like"
     data_points: list[str] = field(default_factory=list)
     constraints: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
     count: int = 5
 
 
@@ -143,6 +144,11 @@ def _build_prompt(req: Request, variation_idx: int, style_name: str) -> str:
         "and a strong visual hierarchy. The result should look publication-ready."
     )
 
+    if req.sources:
+        parts.append(
+            "Cite data sources clearly (e.g., in a footer or legend): " + "; ".join(req.sources) + "."
+        )
+
     # Single-paragraph narrative prompt (Gemini responds better to coherent prose).
     prompt = " ".join(parts)
     prompt = " ".join(prompt.split())
@@ -171,6 +177,7 @@ def main() -> int:
     )
     parser.add_argument("--data", action="append", default=[], help="Repeatable data points to include verbatim.")
     parser.add_argument("--constraint", action="append", default=[], help="Repeatable constraints.")
+    parser.add_argument("--sources", action="append", default=[], help="Repeatable sources to cite.")
     parser.add_argument("--count", type=int, default=5, help="Number of prompt variations (1-10).")
     parser.add_argument("--out-dir", default=None, help="Override output dir (defaults to session run dir).")
 
@@ -183,6 +190,7 @@ def main() -> int:
         style=args.style,
         data_points=_clean_sentence_list(args.data),
         constraints=_clean_sentence_list(args.constraint),
+        sources=_clean_sentence_list(args.sources),
         count=count,
     )
 
