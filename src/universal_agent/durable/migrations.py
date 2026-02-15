@@ -91,9 +91,54 @@ CREATE TABLE IF NOT EXISTS checkpoints (
   FOREIGN KEY(step_id) REFERENCES run_steps(step_id)
 );
 
+CREATE TABLE IF NOT EXISTS vp_sessions (
+  vp_id TEXT PRIMARY KEY,
+  runtime_id TEXT NOT NULL,
+  session_id TEXT,
+  workspace_dir TEXT,
+  status TEXT NOT NULL,
+  lease_owner TEXT,
+  lease_expires_at TEXT,
+  last_heartbeat_at TEXT,
+  last_error TEXT,
+  metadata_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS vp_missions (
+  mission_id TEXT PRIMARY KEY,
+  vp_id TEXT NOT NULL,
+  run_id TEXT,
+  status TEXT NOT NULL,
+  objective TEXT NOT NULL,
+  budget_json TEXT,
+  result_ref TEXT,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(vp_id) REFERENCES vp_sessions(vp_id)
+);
+
+CREATE TABLE IF NOT EXISTS vp_events (
+  event_id TEXT PRIMARY KEY,
+  mission_id TEXT NOT NULL,
+  vp_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(mission_id) REFERENCES vp_missions(mission_id),
+  FOREIGN KEY(vp_id) REFERENCES vp_sessions(vp_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tool_calls_run_step ON tool_calls(run_id, step_id);
 CREATE INDEX IF NOT EXISTS idx_run_steps_run ON run_steps(run_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_tool_receipts_run ON tool_receipts(run_id);
+CREATE INDEX IF NOT EXISTS idx_vp_sessions_status ON vp_sessions(status);
+CREATE INDEX IF NOT EXISTS idx_vp_missions_vp_status ON vp_missions(vp_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_vp_events_mission ON vp_events(mission_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_vp_events_vp ON vp_events(vp_id, created_at);
 """
 
 

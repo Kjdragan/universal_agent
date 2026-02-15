@@ -45,8 +45,8 @@ Deliver a production-safe CODER VP session lane with persistent identity/session
 
 ### 4.2 Active checklist
 
-- [ ] A0: finalize Phase A acceptance contract
-- [ ] A1: implement VP session registry schema + data API
+- [x] A0: finalize Phase A acceptance contract
+- [x] A1: implement VP session registry schema + data API
 - [ ] A2: implement CODER VP mission dispatch contract
 - [ ] A3: integrate Simone routing with guarded rollout flag
 - [ ] A4: implement observability fields + dashboards/log queries
@@ -61,6 +61,7 @@ Deliver a production-safe CODER VP session lane with persistent identity/session
 |---|---|---|---|---|
 | 2026-02-15 | Architecture | Updated to persistent VP-first phased model (A -> B -> clones) | Clarifies immediate implementation sequence | Execute Phase A implementation blueprint |
 | 2026-02-15 | Documentation | DraganCorp scaffold + architecture memo + ADR + baseline specs created | Foundation established | Add detailed Phase A implementation documents |
+| 2026-02-15 | Phase A Implementation | Added VP session registry spec and mission-envelope VP linkage updates; implemented durable VP registry state APIs + tests | Completes A0/A1 baseline for persistence contract and data layer | Start A2 CODER VP mission dispatch runtime adapter |
 
 ---
 
@@ -79,6 +80,7 @@ Deliver a production-safe CODER VP session lane with persistent identity/session
 |---|---|---|---|---|
 | D-IMP-001 | 2026-02-15 | Use gateway-managed session lifecycle + VP session registry as persistence anchor | Avoid CLI `--resume` ambiguity; improve deterministic continuity | If gateway persistence model changes materially |
 | D-IMP-002 | 2026-02-15 | Preserve `code-writer` path as fallback during Phase A | Zero-regression rollout requirement | If fallback usage remains high beyond stabilization window |
+| D-IMP-003 | 2026-02-15 | Implement VP registry as durable DB-first contract before runtime adapter wiring | Enables deterministic resume/recovery semantics and testable lifecycle operations | If runtime adapter requires additional registry fields beyond current schema |
 
 ---
 

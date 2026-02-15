@@ -51,6 +51,15 @@ Phase A design aligns with current code reality:
 6. **Test Suite + Rollout Artifacts**
    - unit, integration, regression, and rollback playbook updates.
 
+### 3.1 Status snapshot (2026-02-15)
+
+Completed now:
+
+1. `DraganCorp/specs/vp-session-registry-v1.md` (registry contract)
+2. `DraganCorp/specs/mission-envelope-v1.md` updated with `vp_id` / `vp_session_id` / `vp_runtime_id` linkage
+3. Durable DB schema for `vp_sessions`, `vp_missions`, `vp_events`
+4. Durable state APIs + tests for VP session/mission/event lifecycle operations
+
 ---
 
 ## 4) Workstream breakdown
