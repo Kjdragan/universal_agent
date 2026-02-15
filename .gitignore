@@ -31,6 +31,9 @@ identity_registry.json
 .windsurf/
 *.code-workspace
 
+# === Prompt scratch ===
+Prompt_Assets/
+
 # === Databases & State ===
 *.db
 *.bf
