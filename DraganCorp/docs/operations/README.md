@@ -11,6 +11,7 @@ Operational guidance for DraganCorp factory lifecycle, including clone deploymen
 5. `04_Phase_A_Controlled_Rollout_Evidence_Log.md` (guarded rollout windows, evidence snapshots, and promotion decisions)
 6. `05_Phase_A_Execution_Operating_Model_and_Meta_Prompt.md` (methodology, verification gates, and reusable meta prompt for AI coders)
 7. `06_Phase_B_Shared_VPS_Multi_Runtime_Operating_Model_and_Meta_Prompt.md` (Phase B scaling approach, lane-governance gates, and reusable Phase B meta prompt)
+8. `07_Phase_A_Sustained_Default_On_Operating_Model_and_Meta_Prompt.md` (default-on monitoring cadence, rollback guardrails, and sustained-ops meta prompt)
 
 ## Additional planned docs
 

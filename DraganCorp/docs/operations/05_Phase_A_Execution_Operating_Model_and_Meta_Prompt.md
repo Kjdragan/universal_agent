@@ -4,6 +4,8 @@ This document explains **how to run development the way we just did**: structure
 
 It is written for non-specialists and AI coding agents.
 
+For naming clarity, the Phase A coding lane is referred to as **CODIE** (legacy identifier: CODER VP).
+
 ---
 
 ## 1) What this is

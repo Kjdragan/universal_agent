@@ -1,6 +1,6 @@
 # 04. Phase A Controlled Rollout Evidence Log
 
-This log tracks guarded rollout checkpoints for CODER VP in Phase A.
+This log tracks guarded rollout checkpoints for CODIE (CODER VP lane) in Phase A.
 
 ## Rollout policy (Phase A)
 
@@ -32,6 +32,7 @@ This log tracks guarded rollout checkpoints for CODER VP in Phase A.
 | 2026-02-16T15:41:01Z | Broadened rollout window #3 (real traffic) | Three additional real coding prompts under broadened rollout guardrails via WS execute + HTTP capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 35.964s | GO_BROADER_TRAFFIC_ACTIVE | Real sample increased to `missions_considered=12` / `missions_with_fallback=0` with `event_counts={vp.mission.dispatched:12,vp.mission.completed:12}`. All three probes in this window reported `delegated_to_coder_vp`. |
 | 2026-02-16T15:45:51Z | Broadened rollout window #4 (real traffic) | Three additional real coding prompts under broadened rollout guardrails via WS execute + HTTP capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 35.964s | GO_BROADER_TRAFFIC_ACTIVE | Real sample increased to `missions_considered=15` / `missions_with_fallback=0` with `event_counts={vp.mission.dispatched:15,vp.mission.completed:15}`. All three probes in this window reported `delegated_to_coder_vp`. |
 | 2026-02-16T15:58:47Z | Broadened rollout window #5 (real traffic) | Three additional real coding prompts under broadened rollout guardrails via WS execute + HTTP capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 35.964s | GO_BROADER_TRAFFIC_ACTIVE | Real sample increased to `missions_considered=18` / `missions_with_fallback=0` with `event_counts={vp.mission.dispatched:18,vp.mission.completed:18}`. All three probes in this window reported `delegated_to_coder_vp`; post-promotion observation target (next 10 real missions) is now satisfied. |
+| 2026-02-16T16:17:34Z | Sustained default-on monitor cycle #1 (real traffic) | Three additional real coding prompts with default-on posture + low-cost sustained snapshot profile | `scripts/coder_vp_rollout_capture.py --mode http --assessment-profile sustained --mission-limit 60 --event-limit 180` | 0.000 | 35.964s | SUSTAINED_DEFAULT_ON_HEALTHY | Real sample increased to `missions_considered=20` / `missions_with_fallback=0` with `event_counts={vp.mission.dispatched:20,vp.mission.completed:20}`. Routing mix in this cycle was 2 delegated, 1 primary; keep intent-routing share as a watch metric while remaining default-on. |
 
 ---
 
@@ -46,11 +47,11 @@ Promote from shadow to broader traffic only when all conditions hold for at leas
 
 ### Promotion recommendation (2026-02-16)
 
-- **Recommendation:** `GO_BROADER_TRAFFIC_ACTIVE` (guarded)
-- **Basis:** broadened rollout started after four clean limited-cohort windows; current real sample is eighteen CODER VP missions with `fallback.rate=0.000`, no `vp.mission.failed`, and stable observed p95 (`35.964s`). The post-promotion observation target has been met.
-- **Guardrails for broadened rollout:**
+- **Recommendation:** `SUSTAINED_DEFAULT_ON_ACTIVE` (guarded)
+- **Basis:** broadened rollout started after four clean limited-cohort windows; current real sample is twenty CODIE missions with `fallback.rate=0.000`, no `vp.mission.failed`, and stable observed p95 (`35.964s`). Post-promotion observation target is complete and first sustained monitoring cycle is healthy.
+- **Guardrails for sustained default-on:**
   1. Keep cancellation recovery monitor active (`active_runs` must return to 0 after cancel operations).
-  2. Continue recording each window via `scripts/coder_vp_rollout_capture.py --mode http` for at least the next 10 real missions.
+  2. Run low-cost sustained snapshots (2-4/day steady-state, 30-60m cadence during active implementation windows).
   3. Auto-revert to shadow/primary fallback if fallback rate exceeds 10% over a rolling 20-mission window or any sustained `vp.mission.failed` pattern appears.
 
 ---

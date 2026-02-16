@@ -1,0 +1,99 @@
+import sqlite3
+
+from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import get_vp_mission, get_vp_session, list_vp_events
+from universal_agent.vp import CoderVPRuntime
+
+
+def _conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON;")
+    ensure_schema(conn)
+    return conn
+
+
+def test_coder_vp_route_decision_respects_flags(monkeypatch, tmp_path):
+    conn = _conn()
+    runtime = CoderVPRuntime(conn, workspace_base=tmp_path)
+
+    monkeypatch.delenv("UA_ENABLE_CODER_VP", raising=False)
+    monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
+    monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
+
+    disabled = runtime.route_decision("Please fix this Python bug in the parser")
+    assert disabled.use_coder_vp is False
+    assert disabled.reason == "feature_disabled"
+
+    monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+    enabled = runtime.route_decision("Please fix this Python bug in the parser")
+    assert enabled.use_coder_vp is True
+    assert enabled.intent_matched is True
+
+    monkeypatch.setenv("UA_CODER_VP_SHADOW_MODE", "1")
+    shadow = runtime.route_decision("Please fix this Python bug in the parser")
+    assert shadow.use_coder_vp is False
+    assert shadow.shadow_mode is True
+    assert shadow.reason == "shadow_mode"
+
+    monkeypatch.setenv("UA_CODER_VP_FORCE_FALLBACK", "1")
+    forced = runtime.route_decision("Please fix this Python bug in the parser")
+    assert forced.use_coder_vp is False
+    assert forced.force_fallback is True
+    assert forced.reason == "forced_fallback"
+
+
+def test_coder_vp_session_and_mission_lifecycle(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+
+    conn = _conn()
+    runtime = CoderVPRuntime(conn, workspace_base=tmp_path)
+
+    session = runtime.ensure_session(lease_owner="simone-control", owner_user_id="owner_primary")
+    assert session is not None
+    assert session["vp_id"] == "vp.coder.primary"
+
+    runtime.bind_session_identity(session_id="vp_lane_session_1")
+    session = get_vp_session(conn, "vp.coder.primary")
+    assert session is not None
+    assert session["session_id"] == "vp_lane_session_1"
+
+    mission_id = runtime.start_mission(
+        objective="Implement a robust parser",
+        run_id="run-123",
+        trace_id="trace-abc",
+    )
+    mission = get_vp_mission(conn, mission_id)
+    assert mission is not None
+    assert mission["status"] == "running"
+
+    runtime.append_progress(mission_id, summary="Started coding")
+    runtime.mark_mission_completed(
+        mission_id,
+        result_ref="workspace://vp.coder.primary",
+        trace_id="trace-final",
+    )
+
+    mission = get_vp_mission(conn, mission_id)
+    assert mission is not None
+    assert mission["status"] == "completed"
+
+    events = list_vp_events(conn, mission_id=mission_id)
+    event_types = [row["event_type"] for row in events]
+    assert "vp.mission.dispatched" in event_types
+    assert "vp.mission.progress" in event_types
+    assert "vp.mission.completed" in event_types
+
+
+def test_coder_vp_session_seeds_codie_soul(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+
+    conn = _conn()
+    runtime = CoderVPRuntime(conn, workspace_base=tmp_path)
+    session = runtime.ensure_session(lease_owner="simone-control", owner_user_id="owner_primary")
+
+    assert session is not None
+    soul_path = tmp_path / "vp_coder_primary" / "SOUL.md"
+    assert soul_path.exists()
+    content = soul_path.read_text(encoding="utf-8")
+    assert "# CODIE" in content

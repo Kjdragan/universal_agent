@@ -320,3 +320,61 @@ def memory_embedding_fallback_to_non_batch(default: bool = True) -> bool:
     if _is_truthy(os.getenv("UA_MEMORY_DISABLE_EMBEDDING_FALLBACK_NON_BATCH")):
         return False
     return default
+
+
+def coder_vp_enabled(default: bool = False) -> bool:
+    """Enable CODER VP routing lane (Phase A)."""
+    if _is_truthy(os.getenv("UA_DISABLE_CODER_VP")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_CODER_VP")):
+        return True
+    return default
+
+
+def coder_vp_shadow_mode(default: bool = False) -> bool:
+    """Run CODER VP routing in shadow mode (no user-visible delegation)."""
+    if _is_truthy(os.getenv("UA_DISABLE_CODER_VP_SHADOW_MODE")):
+        return False
+    if _is_truthy(os.getenv("UA_CODER_VP_SHADOW_MODE")):
+        return True
+    return default
+
+
+def coder_vp_force_fallback(default: bool = False) -> bool:
+    """Force all eligible CODER VP requests to fallback path."""
+    if _is_truthy(os.getenv("UA_DISABLE_CODER_VP_FORCE_FALLBACK")):
+        return False
+    if _is_truthy(os.getenv("UA_CODER_VP_FORCE_FALLBACK")):
+        return True
+    return default
+
+
+def coder_vp_id(default: str = "vp.coder.primary") -> str:
+    """Stable registry ID for the Phase A CODER VP lane."""
+    value = (os.getenv("UA_CODER_VP_ID") or "").strip()
+    return value or default
+
+
+def coder_vp_runtime_id(default: str = "runtime.coder_vp.inprocess") -> str:
+    """Runtime lane identifier for CODER VP."""
+    value = (os.getenv("UA_CODER_VP_RUNTIME_ID") or "").strip()
+    return value or default
+
+
+def coder_vp_workspace_dir(default: str = "") -> str:
+    """Optional absolute workspace override for CODER VP lane."""
+    value = (os.getenv("UA_CODER_VP_WORKSPACE_DIR") or "").strip()
+    if value:
+        return value
+    return default
+
+
+def coder_vp_display_name(default: str = "CODIE") -> str:
+    """Human-readable lane name for user-facing status and docs."""
+    value = (os.getenv("UA_CODER_VP_DISPLAY_NAME") or "").strip()
+    return value or default
+
+
+def coder_vp_lease_ttl_seconds(default: int = 300) -> int:
+    """Lease TTL for CODER VP session ownership."""
+    return _read_int("UA_CODER_VP_LEASE_TTL_SECONDS", default, minimum=30)

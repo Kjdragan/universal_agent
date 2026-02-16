@@ -11,6 +11,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
+from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.migrations import ensure_schema
+from universal_agent.feature_flags import coder_vp_display_name
+from universal_agent.vp import CoderVPRuntime
+
 try:
     from universal_agent.agent_core import AgentEvent, EventType
 except Exception:  # pragma: no cover - import safety for tooling
@@ -132,7 +137,22 @@ class InProcessGateway(Gateway):
         # New unified engine adapters
         self._adapters: dict[str, ProcessTurnAdapter] = {}
         self._sessions: dict[str, GatewaySession] = {}
-        
+        self._coder_vp_adapter: Optional[ProcessTurnAdapter] = None
+        self._coder_vp_session: Optional[GatewaySession] = None
+        self._runtime_db_conn = None
+        self._coder_vp_runtime: Optional[CoderVPRuntime] = None
+
+        try:
+            self._runtime_db_conn = connect_runtime_db(get_runtime_db_path())
+            ensure_schema(self._runtime_db_conn)
+            self._coder_vp_runtime = CoderVPRuntime(
+                conn=self._runtime_db_conn,
+                workspace_base=self._workspace_base,
+            )
+        except Exception:
+            self._runtime_db_conn = None
+            self._coder_vp_runtime = None
+
         if self._use_legacy:
             self._bridge = AgentBridge(hooks=hooks)
 
@@ -293,6 +313,78 @@ class InProcessGateway(Gateway):
             },
         )
 
+    def _apply_request_config(
+        self,
+        adapter: ProcessTurnAdapter,
+        request: GatewayRequest,
+        *,
+        run_source_override: Optional[str] = None,
+        extra_metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        metadata = dict(request.metadata or {})
+        if extra_metadata:
+            metadata.update(extra_metadata)
+
+        adapter.config.force_complex = request.force_complex
+        run_source = run_source_override or metadata.get("source", "user")
+        adapter.config.__dict__["_run_source"] = run_source
+
+        memory_policy = metadata.get("memory_policy", {})
+        if isinstance(memory_policy, dict):
+            adapter.config.__dict__["_memory_policy"] = dict(memory_policy)
+        else:
+            adapter.config.__dict__["_memory_policy"] = {}
+
+        # System events are ephemeral “out-of-band” signals that should be
+        # prefixed into the next LLM prompt (Clawdbot parity).
+        system_events = metadata.get("system_events")
+        if isinstance(system_events, list):
+            adapter.config.__dict__["_system_events"] = list(system_events)
+        else:
+            adapter.config.__dict__["_system_events"] = []
+
+    async def _ensure_coder_vp_adapter(self, owner_user_id: str) -> tuple[ProcessTurnAdapter, Any]:
+        if not self._coder_vp_runtime:
+            raise RuntimeError("CODER VP runtime is not initialized")
+
+        vp_session_row = self._coder_vp_runtime.ensure_session(
+            lease_owner="simone-control-plane",
+            owner_user_id=owner_user_id,
+        )
+        if vp_session_row is None:
+            raise RuntimeError("CODER VP session could not be created")
+
+        workspace_dir = str(vp_session_row["workspace_dir"] or "").strip()
+        if not workspace_dir:
+            raise RuntimeError("CODER VP session has no workspace_dir")
+
+        if (
+            self._coder_vp_adapter is not None
+            and self._coder_vp_session is not None
+            and self._coder_vp_session.workspace_dir == workspace_dir
+        ):
+            return self._coder_vp_adapter, vp_session_row
+
+        config = EngineConfig(workspace_dir=workspace_dir, user_id=owner_user_id)
+        adapter = ProcessTurnAdapter(config)
+        await adapter.initialize()
+
+        lane_session_id = Path(workspace_dir).name
+        self._coder_vp_runtime.bind_session_identity(session_id=lane_session_id, status="active")
+
+        self._coder_vp_adapter = adapter
+        self._coder_vp_session = GatewaySession(
+            session_id=lane_session_id,
+            user_id=owner_user_id,
+            workspace_dir=workspace_dir,
+            metadata={
+                "engine": "process_turn",
+                "lane": "coder_vp",
+                "vp_id": str(vp_session_row["vp_id"]),
+            },
+        )
+        return adapter, vp_session_row
+
     async def execute(
         self, session: GatewaySession, request: GatewayRequest
     ) -> AsyncIterator[AgentEvent]:
@@ -311,34 +403,188 @@ class InProcessGateway(Gateway):
             
             if not adapter:
                 raise RuntimeError(f"No adapter for session: {session.session_id}")
-            
-            # Propagate request metadata into the adapter config so spans
-            # carry run_source, force_complex, etc.
-            adapter.config.force_complex = request.force_complex
-            run_source = request.metadata.get("source", "user")
-            adapter.config.__dict__["_run_source"] = run_source
-            memory_policy = request.metadata.get("memory_policy", {})
-            if isinstance(memory_policy, dict):
-                adapter.config.__dict__["_memory_policy"] = dict(memory_policy)
+
+            active_adapter = adapter
+            vp_mission_id: Optional[str] = None
+            vp_trace_id: Optional[str] = None
+            vp_had_error = False
+            vp_error_detail: Optional[str] = None
+            vp_display_name = coder_vp_display_name(default="CODIE")
+
+            if self._coder_vp_runtime:
+                decision = self._coder_vp_runtime.route_decision(request.user_input)
+                if decision.use_coder_vp:
+                    try:
+                        vp_adapter, vp_session_row = await self._ensure_coder_vp_adapter(session.user_id)
+                        active_adapter = vp_adapter
+                        vp_run_id = getattr(vp_adapter.config, "run_id", None)
+                        vp_mission_id = self._coder_vp_runtime.start_mission(
+                            objective=request.user_input,
+                            run_id=vp_run_id,
+                            trace_id=(request.metadata or {}).get("trace_id"),
+                            budget=(request.metadata or {}).get("budget")
+                            if isinstance((request.metadata or {}).get("budget"), dict)
+                            else None,
+                        )
+                        self._apply_request_config(
+                            active_adapter,
+                            request,
+                            run_source_override="vp.coder",
+                            extra_metadata={
+                                "source": "vp.coder",
+                                "vp_context": {
+                                    "vp_id": str(vp_session_row["vp_id"]),
+                                    "vp_mission_id": vp_mission_id,
+                                    "vp_session_id": str(vp_session_row["session_id"] or ""),
+                                },
+                            },
+                        )
+                        yield AgentEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "status": f"Delegated to {vp_display_name} lane.",
+                                "is_log": True,
+                                "vp_mission_id": vp_mission_id,
+                                "vp_id": str(vp_session_row["vp_id"]),
+                                "routing": "delegated_to_coder_vp",
+                            },
+                        )
+                    except Exception as exc:
+                        vp_error_detail = str(exc)
+                        active_adapter = adapter
+                        self._apply_request_config(
+                            active_adapter,
+                            request,
+                            extra_metadata={
+                                "routing": "fallback_primary",
+                                "coder_vp_bootstrap_error": vp_error_detail,
+                            },
+                        )
+                        yield AgentEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "status": f"{vp_display_name} lane bootstrap failed; using primary code-writer path.",
+                                "is_log": True,
+                                "routing": "coder_vp_bootstrap_fallback",
+                                "error": vp_error_detail,
+                            },
+                        )
+                else:
+                    self._apply_request_config(active_adapter, request)
+                    if decision.shadow_mode and decision.intent_matched:
+                        yield AgentEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "status": f"{vp_display_name} shadow mode candidate detected; served by Simone direct path.",
+                                "is_log": True,
+                                "routing": "coder_vp_shadow_mode",
+                            },
+                        )
             else:
-                adapter.config.__dict__["_memory_policy"] = {}
-            # System events are ephemeral “out-of-band” signals that should be
-            # prefixed into the next LLM prompt (Clawdbot parity).
-            system_events = request.metadata.get("system_events")
-            if isinstance(system_events, list):
-                adapter.config.__dict__["_system_events"] = list(system_events)
-            else:
-                adapter.config.__dict__["_system_events"] = []
-            
-            # Execute through unified engine
-            async for event in adapter.execute(request.user_input):
-                # Capture token usage for session metadata
-                if event.type == EventType.STATUS and isinstance(event.data, dict):
-                    if "token_usage" in event.data:
-                        # Update the in-memory session metadata
-                        session.metadata["usage"] = event.data["token_usage"]
-                        
-                yield event
+                self._apply_request_config(active_adapter, request)
+
+            # Execute through unified engine (possibly delegated to CODER VP lane)
+            try:
+                async for event in active_adapter.execute(request.user_input):
+                    if event.type == EventType.STATUS and isinstance(event.data, dict):
+                        if "token_usage" in event.data:
+                            session.metadata["usage"] = event.data["token_usage"]
+                    if vp_mission_id and event.type == EventType.ERROR:
+                        vp_had_error = True
+                        if isinstance(event.data, dict):
+                            msg = event.data.get("message") or event.data.get("error")
+                            if isinstance(msg, str) and msg.strip():
+                                vp_error_detail = msg.strip()
+                    if vp_mission_id and event.type == EventType.ITERATION_END and isinstance(event.data, dict):
+                        vp_trace_id = event.data.get("trace_id")
+                    yield event
+            except Exception as exc:
+                if vp_mission_id:
+                    vp_had_error = True
+                    vp_error_detail = str(exc)
+                    yield AgentEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "status": f"{vp_display_name} lane raised an exception; falling back to primary code-writer path.",
+                            "is_log": True,
+                            "routing": "coder_vp_exception",
+                            "vp_mission_id": vp_mission_id,
+                            "error": vp_error_detail,
+                        },
+                    )
+                else:
+                    raise
+
+            if vp_mission_id and self._coder_vp_runtime:
+                if vp_had_error:
+                    fallback_payload = {"error": vp_error_detail} if vp_error_detail else None
+                    self._coder_vp_runtime.mark_mission_fallback(
+                        vp_mission_id,
+                        reason="vp_execution_error",
+                        trace_id=vp_trace_id,
+                        payload=fallback_payload,
+                    )
+                    yield AgentEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "status": f"{vp_display_name} failed; falling back to primary code-writer path.",
+                            "is_log": True,
+                            "routing": "coder_vp_fallback",
+                            "vp_mission_id": vp_mission_id,
+                        },
+                    )
+
+                    fallback_trace_id: Optional[str] = None
+                    fallback_had_error = False
+                    self._apply_request_config(
+                        adapter,
+                        request,
+                        extra_metadata={
+                            "vp_fallback_mission_id": vp_mission_id,
+                            "routing": "fallback_primary",
+                        },
+                    )
+                    async for event in adapter.execute(request.user_input):
+                        if event.type == EventType.STATUS and isinstance(event.data, dict):
+                            if "token_usage" in event.data:
+                                session.metadata["usage"] = event.data["token_usage"]
+                        if event.type == EventType.ERROR:
+                            fallback_had_error = True
+                        if event.type == EventType.ITERATION_END and isinstance(event.data, dict):
+                            fallback_trace_id = event.data.get("trace_id")
+                        yield event
+
+                    if fallback_had_error:
+                        failure_payload: dict[str, Any] = {"failed_after_fallback": True}
+                        if vp_error_detail:
+                            failure_payload["vp_error"] = vp_error_detail
+                        self._coder_vp_runtime.mark_mission_failed(
+                            vp_mission_id,
+                            error_message="Fallback primary path failed after CODER VP failure.",
+                            trace_id=fallback_trace_id,
+                            payload=failure_payload,
+                        )
+                    else:
+                        completion_payload: dict[str, Any] = {"completed_via": "fallback_primary_path"}
+                        if vp_error_detail:
+                            completion_payload["vp_error"] = vp_error_detail
+                        self._coder_vp_runtime.mark_mission_completed(
+                            vp_mission_id,
+                            result_ref=f"workspace://{session.workspace_dir}",
+                            trace_id=fallback_trace_id,
+                            payload=completion_payload,
+                        )
+                else:
+                    self._coder_vp_runtime.mark_mission_completed(
+                        vp_mission_id,
+                        result_ref=(
+                            f"workspace://{self._coder_vp_session.workspace_dir}"
+                            if self._coder_vp_session is not None
+                            else None
+                        ),
+                        trace_id=vp_trace_id,
+                        payload={"completed_via": "coder_vp"},
+                    )
 
     async def _execute_legacy(
         self, session: GatewaySession, request: GatewayRequest
@@ -520,6 +766,14 @@ class InProcessGateway(Gateway):
 
     async def close(self) -> None:
         """Clean up all active adapters and sessions."""
+        if self._coder_vp_adapter:
+            try:
+                await self._coder_vp_adapter.close()
+            except Exception:
+                pass
+            self._coder_vp_adapter = None
+            self._coder_vp_session = None
+
         # 1. Close all active adapters
         for session_id in list(self._adapters.keys()):
             adapter = self._adapters.pop(session_id)
@@ -539,6 +793,13 @@ class InProcessGateway(Gateway):
             self._bridge = None
         
         self._sessions.clear()
+
+        if self._runtime_db_conn is not None:
+            try:
+                self._runtime_db_conn.close()
+            except Exception:
+                pass
+            self._runtime_db_conn = None
 
 
 class ExternalGateway(Gateway):
