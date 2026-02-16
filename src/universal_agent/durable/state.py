@@ -487,7 +487,10 @@ def acquire_vp_session_lease(
             lease_expires_at = ?,
             last_heartbeat_at = ?,
             updated_at = ?,
-            status = CASE WHEN status = 'idle' THEN 'active' ELSE status END
+            status = CASE
+                WHEN status IN ('idle', 'paused', 'degraded', 'recovering') THEN 'active'
+                ELSE status
+            END
         WHERE vp_id = ?
           AND status IN ('idle', 'active', 'paused', 'degraded', 'recovering')
           AND (
@@ -549,6 +552,64 @@ def release_vp_session_lease(
         (_now(), vp_id, lease_owner),
     )
     conn.commit()
+
+
+def append_vp_session_event(
+    conn: sqlite3.Connection,
+    event_id: str,
+    vp_id: str,
+    event_type: str,
+    payload: Optional[dict[str, Any]] = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO vp_session_events (
+            event_id,
+            vp_id,
+            event_type,
+            payload_json,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (event_id, vp_id, event_type, _json_or_none(payload), _now()),
+    )
+    conn.commit()
+
+
+def list_vp_session_events(
+    conn: sqlite3.Connection,
+    vp_id: Optional[str] = None,
+    event_types: Optional[Iterable[str]] = None,
+    limit: int = 250,
+) -> list[sqlite3.Row]:
+    params: list[Any] = []
+    where_clauses: list[str] = []
+
+    if vp_id:
+        where_clauses.append("vp_id = ?")
+        params.append(vp_id)
+
+    if event_types:
+        event_type_values = [event_type for event_type in event_types if event_type]
+        if event_type_values:
+            placeholders = ", ".join("?" for _ in event_type_values)
+            where_clauses.append(f"event_type IN ({placeholders})")
+            params.extend(event_type_values)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    params.append(limit)
+
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM vp_session_events
+        {where_sql}
+        ORDER BY created_at ASC
+        LIMIT ?
+        """,
+        tuple(params),
+    ).fetchall()
+    return list(rows)
 
 
 def upsert_vp_mission(

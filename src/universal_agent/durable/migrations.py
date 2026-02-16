@@ -121,6 +121,15 @@ CREATE TABLE IF NOT EXISTS vp_missions (
   FOREIGN KEY(vp_id) REFERENCES vp_sessions(vp_id)
 );
 
+CREATE TABLE IF NOT EXISTS vp_session_events (
+  event_id TEXT PRIMARY KEY,
+  vp_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(vp_id) REFERENCES vp_sessions(vp_id)
+);
+
 CREATE TABLE IF NOT EXISTS vp_events (
   event_id TEXT PRIMARY KEY,
   mission_id TEXT NOT NULL,
@@ -139,6 +148,8 @@ CREATE INDEX IF NOT EXISTS idx_vp_sessions_status ON vp_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_vp_missions_vp_status ON vp_missions(vp_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_events_mission ON vp_events(mission_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_vp_events_vp ON vp_events(vp_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_vp_session_events_vp ON vp_session_events(vp_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_vp_session_events_type ON vp_session_events(event_type, created_at);
 """
 
 

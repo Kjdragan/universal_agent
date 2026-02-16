@@ -12,8 +12,12 @@ import sqlite3
 from universal_agent.durable.state import (
     acquire_vp_session_lease,
     append_vp_event,
+    append_vp_session_event,
     get_vp_mission,
     get_vp_session,
+    heartbeat_vp_session_lease,
+    release_vp_session_lease,
+    update_vp_session_status,
     upsert_vp_mission,
     upsert_vp_session,
 )
@@ -31,6 +35,8 @@ from universal_agent.feature_flags import (
 _CODING_INTENT_MARKERS = (
     "code",
     "python",
+    "bash",
+    "shell",
     "typescript",
     "javascript",
     "refactor",
@@ -43,6 +49,38 @@ _CODING_INTENT_MARKERS = (
     "api",
     "endpoint",
 )
+
+_CODIE_SCOPE_MARKERS = (
+    "script",
+    "project",
+    "module",
+    "service",
+    "workflow",
+    "autonomous",
+    "end-to-end",
+    "multi-file",
+    "across files",
+    "test suite",
+    "integration test",
+    "full implementation",
+    "production-ready",
+)
+
+_UTILITY_REQUEST_MARKERS = (
+    "bash command",
+    "shell command",
+    "cli command",
+    "one-liner",
+    "one liner",
+    "quick command",
+    "utility function",
+    "helper function",
+    "small helper",
+    "small snippet",
+    "quick snippet",
+)
+
+_RECOVERY_STATUSES = {"degraded", "recovering"}
 
 
 @dataclass(frozen=True)
@@ -63,6 +101,7 @@ class CoderVPRuntime:
 
     def route_decision(self, user_input: str) -> CoderVPRoutingDecision:
         intent_matched = self.is_coding_intent(user_input)
+        meets_threshold = self.meets_delegation_threshold(user_input)
         force_fallback = coder_vp_force_fallback(default=False)
         shadow_mode = coder_vp_shadow_mode(default=False)
 
@@ -75,7 +114,9 @@ class CoderVPRuntime:
                 force_fallback=True,
             )
 
-        if not coder_vp_enabled(default=False):
+        # Phase A has moved to sustained default-on posture: treat CODIE as enabled
+        # unless explicitly disabled via UA_DISABLE_CODER_VP.
+        if not coder_vp_enabled(default=True):
             return CoderVPRoutingDecision(
                 use_coder_vp=False,
                 intent_matched=intent_matched,
@@ -89,6 +130,15 @@ class CoderVPRuntime:
                 use_coder_vp=False,
                 intent_matched=False,
                 reason="intent_not_coding",
+                shadow_mode=shadow_mode,
+                force_fallback=False,
+            )
+
+        if not meets_threshold:
+            return CoderVPRoutingDecision(
+                use_coder_vp=False,
+                intent_matched=True,
+                reason="below_codie_threshold",
                 shadow_mode=shadow_mode,
                 force_fallback=False,
             )
@@ -116,12 +166,22 @@ class CoderVPRuntime:
             return True
         return any(marker in text for marker in _CODING_INTENT_MARKERS)
 
+    def meets_delegation_threshold(self, user_input: str) -> bool:
+        text = (user_input or "").lower()
+        if not self.is_coding_intent(text):
+            return False
+        if any(marker in text for marker in _CODIE_SCOPE_MARKERS):
+            return True
+        return not any(marker in text for marker in _UTILITY_REQUEST_MARKERS)
+
     def ensure_session(self, lease_owner: str, owner_user_id: Optional[str] = None) -> Optional[sqlite3.Row]:
         vp_identifier = coder_vp_id()
         runtime_identifier = coder_vp_runtime_id()
         workspace_dir = self._resolve_workspace_dir(vp_identifier)
         workspace_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_lane_soul(workspace_dir)
+        previous_row = get_vp_session(self._conn, vp_identifier)
+        previous_status = str(previous_row["status"] or "") if previous_row is not None else None
 
         metadata = {"lane": "coder_vp"}
         if owner_user_id:
@@ -136,12 +196,37 @@ class CoderVPRuntime:
             workspace_dir=str(workspace_dir),
             metadata=metadata,
         )
-        acquire_vp_session_lease(
+        lease_acquired = acquire_vp_session_lease(
             self._conn,
             vp_id=vp_identifier,
             lease_owner=lease_owner,
             lease_ttl_seconds=coder_vp_lease_ttl_seconds(default=300),
         )
+        if lease_acquired:
+            event_type = "vp.session.created" if previous_row is None else "vp.session.resumed"
+            payload = {
+                "lease_owner": lease_owner,
+                "workspace_dir": str(workspace_dir),
+                "session_id": f"{vp_identifier}.session",
+            }
+            if previous_status in _RECOVERY_STATUSES:
+                payload["recovered_from_status"] = previous_status
+            self._append_session_event(vp_id=vp_identifier, event_type=event_type, payload=payload)
+        else:
+            update_vp_session_status(
+                self._conn,
+                vp_id=vp_identifier,
+                status="degraded",
+                last_error="vp lease acquisition failed",
+            )
+            self._append_session_event(
+                vp_id=vp_identifier,
+                event_type="vp.session.degraded",
+                payload={
+                    "lease_owner": lease_owner,
+                    "reason": "lease_acquisition_failed",
+                },
+            )
         return get_vp_session(self._conn, vp_identifier)
 
     @staticmethod
@@ -178,7 +263,64 @@ class CoderVPRuntime:
             session_id=session_id,
             workspace_dir=str(workspace_dir),
         )
+        if row is None:
+            self._append_session_event(
+                vp_id=vp_identifier,
+                event_type="vp.session.created",
+                payload={"session_id": session_id, "status": status},
+            )
+        elif str(row["session_id"] or "") != session_id or str(row["status"] or "") != status:
+            self._append_session_event(
+                vp_id=vp_identifier,
+                event_type="vp.session.resumed",
+                payload={
+                    "session_id": session_id,
+                    "previous_session_id": row["session_id"],
+                    "status": status,
+                    "previous_status": row["status"],
+                },
+            )
         return get_vp_session(self._conn, vp_identifier)
+
+    def heartbeat_session_lease(self, lease_owner: str) -> bool:
+        vp_identifier = coder_vp_id()
+        heartbeat_ok = heartbeat_vp_session_lease(
+            self._conn,
+            vp_id=vp_identifier,
+            lease_owner=lease_owner,
+            lease_ttl_seconds=coder_vp_lease_ttl_seconds(default=300),
+        )
+        if not heartbeat_ok:
+            update_vp_session_status(
+                self._conn,
+                vp_id=vp_identifier,
+                status="degraded",
+                last_error="vp lease heartbeat failed",
+            )
+            self._append_session_event(
+                vp_id=vp_identifier,
+                event_type="vp.session.degraded",
+                payload={"lease_owner": lease_owner, "reason": "lease_heartbeat_failed"},
+            )
+        return heartbeat_ok
+
+    def release_session_lease(self, lease_owner: str) -> None:
+        vp_identifier = coder_vp_id()
+        release_vp_session_lease(
+            self._conn,
+            vp_id=vp_identifier,
+            lease_owner=lease_owner,
+        )
+        update_vp_session_status(
+            self._conn,
+            vp_id=vp_identifier,
+            status="idle",
+        )
+        self._append_session_event(
+            vp_id=vp_identifier,
+            event_type="vp.session.resumed",
+            payload={"lease_owner": lease_owner, "status": "idle", "reason": "lease_released"},
+        )
 
     def start_mission(
         self,
@@ -344,6 +486,20 @@ class CoderVPRuntime:
             return Path(configured).expanduser().resolve()
         safe_name = vp_identifier.replace(".", "_")
         return (self._workspace_base / safe_name).resolve()
+
+    def _append_session_event(
+        self,
+        vp_id: str,
+        event_type: str,
+        payload: Optional[dict[str, Any]] = None,
+    ) -> None:
+        append_vp_session_event(
+            self._conn,
+            event_id=f"vp-session-event-{uuid.uuid4().hex}",
+            vp_id=vp_id,
+            event_type=event_type,
+            payload=payload,
+        )
 
     @staticmethod
     def _parse_budget(raw_budget: Any) -> Optional[dict[str, Any]]:

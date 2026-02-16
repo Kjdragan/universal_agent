@@ -5,6 +5,7 @@ import time
 import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -15,6 +16,12 @@ from universal_agent.gateway import InProcessGateway
 from universal_agent.gateway import GatewaySessionSummary
 from universal_agent.gateway import GatewaySession
 from universal_agent.cron_service import CronService
+from universal_agent.durable.state import (
+    append_vp_event,
+    append_vp_session_event,
+    upsert_vp_mission,
+    upsert_vp_session,
+)
 
 # Mock OpsService to avoid full gateway dependency chains in unit tests
 # OR rely on the fact that lifespan will init a real OpsService with a real InProcessGateway pointing to tmp_path?
@@ -24,6 +31,7 @@ from universal_agent.cron_service import CronService
 def client(tmp_path, monkeypatch):
     # Patch WORKSPACES_DIR to use tmp_path
     monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
     
     # We must reset the global singletons to force re-init with new path
     monkeypatch.setattr(gateway_server, "_gateway", None)
@@ -41,6 +49,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "SCHED_EVENT_PROJECTION_ENABLED", False)
     monkeypatch.setattr(gateway_server, "HEARTBEAT_ENABLED", False)
     monkeypatch.setattr(gateway_server, "CRON_ENABLED", False)
+    monkeypatch.setattr(gateway_server, "_DEPLOYMENT_PROFILE", "local_workstation")
     monkeypatch.setattr(gateway_server, "OPS_TOKEN", "")
     monkeypatch.setattr(gateway_server, "SESSION_API_TOKEN", "")
     projection = gateway_server.SchedulingProjectionState(enabled=False)
@@ -322,6 +331,62 @@ def test_dashboard_summary_and_notifications(client, tmp_path):
     assert snoozed["metadata"]["note"] == "snooze continuity alert"
 
 
+def test_dashboard_coder_vp_metrics_endpoint(client, tmp_path):
+    gateway = gateway_server.get_gateway()
+    conn = gateway._runtime_db_conn
+    assert conn is not None
+
+    vp_id = f"vp.coder.dashboard.{time.time_ns()}"
+    now = datetime.now(timezone.utc)
+    started = (now - timedelta(seconds=10)).isoformat()
+    completed = (now - timedelta(seconds=3)).isoformat()
+
+    upsert_vp_session(
+        conn,
+        vp_id=vp_id,
+        runtime_id="runtime.coder_vp.inprocess",
+        status="active",
+        session_id=f"{vp_id}.session",
+        workspace_dir=str((tmp_path / vp_id.replace('.', '_')).resolve()),
+        metadata={"lane": "coder_vp"},
+    )
+    mission_id = f"{vp_id}.mission"
+    upsert_vp_mission(
+        conn,
+        mission_id=mission_id,
+        vp_id=vp_id,
+        status="completed",
+        objective="dashboard aggregation",
+        run_id="run-dashboard",
+        started_at=started,
+        completed_at=completed,
+    )
+    append_vp_event(
+        conn,
+        event_id=f"{mission_id}.dispatch",
+        mission_id=mission_id,
+        vp_id=vp_id,
+        event_type="vp.mission.dispatched",
+        payload={"run_id": "run-dashboard"},
+    )
+    append_vp_event(
+        conn,
+        event_id=f"{mission_id}.completed",
+        mission_id=mission_id,
+        vp_id=vp_id,
+        event_type="vp.mission.completed",
+        payload={"trace_id": "trace-dashboard"},
+    )
+
+    resp = client.get(f"/api/v1/dashboard/metrics/coder-vp?vp_id={vp_id}&mission_limit=10&event_limit=10")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["metrics"]["vp_id"] == vp_id
+    assert payload["metrics"]["mission_counts"]["completed"] == 1
+    assert payload["metrics"]["event_counts"]["vp.mission.completed"] == 1
+
+
 def test_dashboard_notification_snooze_expiry_reactivates(client):
     from universal_agent import gateway_server
     gateway_server._notifications.append(  # type: ignore[attr-defined]
@@ -488,6 +553,149 @@ def test_ops_session_continuity_metrics_use_rolling_window(client):
     assert payload["window"]["resume_failures"] == 0
     assert payload["window"]["ws_attach_failures"] == 0
     assert payload["alerts"] == []
+
+
+def test_ops_coder_vp_metrics_endpoint(client, tmp_path):
+    gateway = gateway_server.get_gateway()
+    conn = gateway._runtime_db_conn
+    assert conn is not None
+
+    vp_id = f"vp.coder.test.{time.time_ns()}"
+    now = datetime.now(timezone.utc)
+    started_a = (now - timedelta(seconds=12)).isoformat()
+    completed_a = (now - timedelta(seconds=2)).isoformat()
+    started_b = (now - timedelta(seconds=9)).isoformat()
+    completed_b = (now - timedelta(seconds=1)).isoformat()
+
+    upsert_vp_session(
+        conn,
+        vp_id=vp_id,
+        runtime_id="runtime.coder_vp.inprocess",
+        status="active",
+        session_id=f"{vp_id}.session",
+        workspace_dir=str((tmp_path / vp_id.replace('.', '_')).resolve()),
+        metadata={"lane": "coder_vp", "owner_user_id": "owner_primary"},
+    )
+
+    mission_a = f"{vp_id}.mission.a"
+    mission_b = f"{vp_id}.mission.b"
+    upsert_vp_mission(
+        conn,
+        mission_id=mission_a,
+        vp_id=vp_id,
+        status="completed",
+        objective="Implement parser improvements",
+        run_id="run-a",
+        started_at=started_a,
+        completed_at=completed_a,
+    )
+    upsert_vp_mission(
+        conn,
+        mission_id=mission_b,
+        vp_id=vp_id,
+        status="completed",
+        objective="Refactor retry logic",
+        run_id="run-b",
+        started_at=started_b,
+        completed_at=completed_b,
+    )
+
+    append_vp_event(
+        conn,
+        event_id=f"{mission_a}.dispatch",
+        mission_id=mission_a,
+        vp_id=vp_id,
+        event_type="vp.mission.dispatched",
+        payload={"run_id": "run-a"},
+    )
+    append_vp_event(
+        conn,
+        event_id=f"{mission_a}.completed",
+        mission_id=mission_a,
+        vp_id=vp_id,
+        event_type="vp.mission.completed",
+        payload={"trace_id": "trace-a"},
+    )
+    append_vp_event(
+        conn,
+        event_id=f"{mission_b}.dispatch",
+        mission_id=mission_b,
+        vp_id=vp_id,
+        event_type="vp.mission.dispatched",
+        payload={"run_id": "run-b"},
+    )
+    append_vp_event(
+        conn,
+        event_id=f"{mission_b}.fallback",
+        mission_id=mission_b,
+        vp_id=vp_id,
+        event_type="vp.mission.fallback",
+        payload={"reason": "vp_execution_error", "error": "simulated-vp-error"},
+    )
+    append_vp_event(
+        conn,
+        event_id=f"{mission_b}.completed",
+        mission_id=mission_b,
+        vp_id=vp_id,
+        event_type="vp.mission.completed",
+        payload={"trace_id": "trace-b"},
+    )
+    append_vp_session_event(
+        conn,
+        event_id=f"{vp_id}.session.created",
+        vp_id=vp_id,
+        event_type="vp.session.created",
+        payload={"session_id": f"{vp_id}.session"},
+    )
+    append_vp_session_event(
+        conn,
+        event_id=f"{vp_id}.session.degraded",
+        vp_id=vp_id,
+        event_type="vp.session.degraded",
+        payload={"reason": "lease_heartbeat_failed"},
+    )
+    append_vp_session_event(
+        conn,
+        event_id=f"{vp_id}.session.resumed",
+        vp_id=vp_id,
+        event_type="vp.session.resumed",
+        payload={"reason": "lease_recovered"},
+    )
+
+    resp = client.get(f"/api/v1/ops/metrics/coder-vp?vp_id={vp_id}&mission_limit=20&event_limit=50")
+    assert resp.status_code == 200
+    payload = resp.json()
+
+    assert payload["vp_id"] == vp_id
+    assert payload["session"]["vp_id"] == vp_id
+    assert payload["mission_counts"]["completed"] == 2
+    assert payload["event_counts"]["vp.mission.dispatched"] == 2
+    assert payload["event_counts"]["vp.mission.completed"] == 2
+    assert payload["event_counts"]["vp.mission.fallback"] == 1
+    assert payload["session_event_counts"]["vp.session.degraded"] == 1
+    assert payload["session_event_counts"]["vp.session.resumed"] == 1
+    assert payload["fallback"]["missions_with_fallback"] == 1
+    assert payload["fallback"]["missions_considered"] == 2
+    assert payload["fallback"]["rate"] == 0.5
+    assert payload["latency_seconds"]["count"] == 2
+    assert payload["latency_seconds"]["p50_seconds"] is not None
+    assert payload["recovery"]["attempts"] == 1
+    assert payload["recovery"]["successes"] == 1
+    assert payload["recovery"]["success_rate"] == 1.0
+    assert payload["session_health"]["currently_orphaned"] is False
+    assert payload["session_health"]["orphan_rate"] == 0.0
+    assert any(item["event_type"] == "vp.session.degraded" for item in payload["recent_session_events"])
+    assert any(item["fallback_seen"] for item in payload["recent_missions"])
+    assert any(item["event_type"] == "vp.mission.fallback" for item in payload["recent_events"])
+
+
+def test_ops_coder_vp_metrics_requires_runtime_db(client, monkeypatch):
+    gateway = gateway_server.get_gateway()
+    monkeypatch.setattr(gateway, "_runtime_db_conn", None)
+
+    resp = client.get("/api/v1/ops/metrics/coder-vp")
+    assert resp.status_code == 503
+    assert "Runtime DB not initialized" in str(resp.json().get("detail"))
 
 
 def test_ops_scheduling_runtime_metrics_endpoint(client):

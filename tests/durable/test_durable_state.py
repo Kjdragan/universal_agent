@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
@@ -103,6 +104,14 @@ def test_vp_session_registry_lifecycle_and_leases():
     )
     assert acquired is True
 
+    blocked = acquire_vp_session_lease(
+        conn,
+        vp_id="vp.coder.primary",
+        lease_owner="simone-secondary",
+        lease_ttl_seconds=60,
+    )
+    assert blocked is False
+
     beat = heartbeat_vp_session_lease(
         conn,
         vp_id="vp.coder.primary",
@@ -111,7 +120,32 @@ def test_vp_session_registry_lifecycle_and_leases():
     )
     assert beat is True
 
-    release_vp_session_lease(conn, "vp.coder.primary", "simone-control")
+    stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    conn.execute(
+        """
+        UPDATE vp_sessions
+        SET status = 'degraded',
+            lease_owner = 'stale-worker',
+            lease_expires_at = ?
+        WHERE vp_id = ?
+        """,
+        (stale_ts, "vp.coder.primary"),
+    )
+    conn.commit()
+
+    reclaimed = acquire_vp_session_lease(
+        conn,
+        vp_id="vp.coder.primary",
+        lease_owner="simone-recovery",
+        lease_ttl_seconds=60,
+    )
+    assert reclaimed is True
+    row = get_vp_session(conn, "vp.coder.primary")
+    assert row is not None
+    assert row["lease_owner"] == "simone-recovery"
+    assert row["status"] == "active"
+
+    release_vp_session_lease(conn, "vp.coder.primary", "simone-recovery")
     row = get_vp_session(conn, "vp.coder.primary")
     assert row["lease_owner"] is None
     assert row["lease_expires_at"] is None

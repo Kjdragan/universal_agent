@@ -1,7 +1,12 @@
 import sqlite3
 
 from universal_agent.durable.migrations import ensure_schema
-from universal_agent.durable.state import get_vp_mission, get_vp_session, list_vp_events
+from universal_agent.durable.state import (
+    get_vp_mission,
+    get_vp_session,
+    list_vp_events,
+    list_vp_session_events,
+)
 from universal_agent.vp import CoderVPRuntime
 
 
@@ -18,12 +23,38 @@ def test_coder_vp_route_decision_respects_flags(monkeypatch, tmp_path):
     runtime = CoderVPRuntime(conn, workspace_base=tmp_path)
 
     monkeypatch.delenv("UA_ENABLE_CODER_VP", raising=False)
+    monkeypatch.delenv("UA_DISABLE_CODER_VP", raising=False)
     monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
     monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
 
+    default_on = runtime.route_decision("Please fix this Python bug in the parser")
+    assert default_on.use_coder_vp is True
+    assert default_on.reason == "eligible"
+
+    utility_bash = runtime.route_decision(
+        "Write a bash command to recursively find .py files and print their line counts"
+    )
+    assert utility_bash.use_coder_vp is False
+    assert utility_bash.reason == "below_codie_threshold"
+
+    utility_python = runtime.route_decision(
+        "Give me a small helper function in Python to slugify a string"
+    )
+    assert utility_python.use_coder_vp is False
+    assert utility_python.reason == "below_codie_threshold"
+
+    scoped_work = runtime.route_decision(
+        "Build an end-to-end Python script project with integration test coverage"
+    )
+    assert scoped_work.use_coder_vp is True
+    assert scoped_work.reason == "eligible"
+
+    monkeypatch.setenv("UA_DISABLE_CODER_VP", "1")
     disabled = runtime.route_decision("Please fix this Python bug in the parser")
     assert disabled.use_coder_vp is False
     assert disabled.reason == "feature_disabled"
+
+    monkeypatch.delenv("UA_DISABLE_CODER_VP", raising=False)
 
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
     enabled = runtime.route_decision("Please fix this Python bug in the parser")
@@ -52,11 +83,15 @@ def test_coder_vp_session_and_mission_lifecycle(monkeypatch, tmp_path):
     session = runtime.ensure_session(lease_owner="simone-control", owner_user_id="owner_primary")
     assert session is not None
     assert session["vp_id"] == "vp.coder.primary"
+    session_events = list_vp_session_events(conn, vp_id="vp.coder.primary")
+    assert any(row["event_type"] == "vp.session.created" for row in session_events)
 
     runtime.bind_session_identity(session_id="vp_lane_session_1")
     session = get_vp_session(conn, "vp.coder.primary")
     assert session is not None
     assert session["session_id"] == "vp_lane_session_1"
+    session_events = list_vp_session_events(conn, vp_id="vp.coder.primary")
+    assert any(row["event_type"] == "vp.session.resumed" for row in session_events)
 
     mission_id = runtime.start_mission(
         objective="Implement a robust parser",
@@ -97,3 +132,44 @@ def test_coder_vp_session_seeds_codie_soul(monkeypatch, tmp_path):
     assert soul_path.exists()
     content = soul_path.read_text(encoding="utf-8")
     assert "# CODIE" in content
+
+
+def test_coder_vp_lease_heartbeat_failure_marks_degraded(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+
+    conn = _conn()
+    runtime = CoderVPRuntime(conn, workspace_base=tmp_path)
+    session = runtime.ensure_session(lease_owner="simone-control", owner_user_id="owner_primary")
+    assert session is not None
+
+    heartbeat_ok = runtime.heartbeat_session_lease(lease_owner="different-owner")
+    assert heartbeat_ok is False
+
+    session = get_vp_session(conn, "vp.coder.primary")
+    assert session is not None
+    assert session["status"] == "degraded"
+
+    session_events = list_vp_session_events(conn, vp_id="vp.coder.primary")
+    assert any(row["event_type"] == "vp.session.degraded" for row in session_events)
+
+
+def test_coder_vp_release_lease_sets_idle_and_session_event(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+
+    conn = _conn()
+    runtime = CoderVPRuntime(conn, workspace_base=tmp_path)
+    session = runtime.ensure_session(lease_owner="simone-control", owner_user_id="owner_primary")
+    assert session is not None
+
+    runtime.release_session_lease(lease_owner="simone-control")
+    session = get_vp_session(conn, "vp.coder.primary")
+    assert session is not None
+    assert session["status"] == "idle"
+    assert session["lease_owner"] is None
+
+    session_events = list_vp_session_events(conn, vp_id="vp.coder.primary")
+    assert any(
+        row["event_type"] == "vp.session.resumed"
+        and "lease_released" in str(row["payload_json"] or "")
+        for row in session_events
+    )

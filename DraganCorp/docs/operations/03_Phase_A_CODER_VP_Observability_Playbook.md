@@ -48,6 +48,8 @@ curl -sS \
   | jq '.latency_seconds'
 ```
 
+`latency_seconds` now includes `p50_seconds`, `p95_seconds`, `avg_seconds`, and `max_seconds`.
+
 ## 2.5 Event mix and recent failures
 
 ```bash
@@ -55,6 +57,15 @@ curl -sS \
   -H "x-ua-ops-token: ${UA_OPS_TOKEN}" \
   "http://127.0.0.1:8002/api/v1/ops/metrics/coder-vp?vp_id=vp.coder.primary&event_limit=500" \
   | jq '{event_counts, recent_events: [.recent_events[] | select(.event_type=="vp.mission.fallback" or .event_type=="vp.mission.failed")]}'
+```
+
+## 2.6 Session lifecycle and recovery signals
+
+```bash
+curl -sS \
+  -H "x-ua-ops-token: ${UA_OPS_TOKEN}" \
+  "http://127.0.0.1:8002/api/v1/ops/metrics/coder-vp?vp_id=vp.coder.primary&event_limit=500" \
+  | jq '{session_event_counts, recovery, session_health, recent_session_events}'
 ```
 
 ---
@@ -92,6 +103,8 @@ Escalation indicators:
 - `session.status` should typically be `active` or `idle` during steady-state.
 - Repeated `degraded` / `recovering` should trigger lease/recovery drill.
 - `session == null` indicates registry/session bootstrap has not happened or runtime DB is unavailable.
+- Use `recovery.success_rate` and `session_health.orphan_rate` as lane-local drift indicators.
+- Track `session_event_counts` for expected lifecycle sequence (`vp.session.created` -> `vp.session.resumed` and rare `vp.session.degraded`).
 
 ---
 

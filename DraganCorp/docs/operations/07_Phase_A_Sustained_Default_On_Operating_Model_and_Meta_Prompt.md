@@ -4,6 +4,8 @@ This document explains how to run CODIE in **sustained default-on mode** after g
 
 It is written for operators and AI coding agents.
 
+> **Status note (2026-02-16):** Phase A is formally complete. Phase B is ready-to-start but intentionally deferred. This document governs ongoing CODIE operations until a deliberate Phase B kickoff decision is recorded.
+
 ---
 
 ## 1) What this mode is
@@ -31,6 +33,8 @@ In this mode:
    - sustained cycle evidence rows.
 4. `05_Phase_A_Execution_Operating_Model_and_Meta_Prompt.md`
    - packetized implementation discipline.
+5. `06_Phase_B_Shared_VPS_Multi_Runtime_Operating_Model_and_Meta_Prompt.md`
+   - next-phase operating model to activate only when Phase B is explicitly started.
 
 ---
 
@@ -148,6 +152,9 @@ Required process:
    - evidence row,
    - control-center status,
    - decision/lesson entries when policy or interpretation changes.
+6) Respect phase boundary:
+   - do not begin Phase B implementation unless explicitly instructed,
+   - if Phase B is intentionally started, switch to `06_Phase_B_Shared_VPS_Multi_Runtime_Operating_Model_and_Meta_Prompt.md`.
 
 Must-pass gates:
 - S1 signal captured
@@ -180,6 +187,7 @@ Run CODIE in sustained default-on mode with low-cost monitoring, explicit rollba
 - [ ] Rollback path validated or reaffirmed.
 - [ ] Evidence log updated.
 - [ ] Program control center updated.
+- [ ] Program phase board in `00` still reflects intended boundary (Phase A complete, Phase B deferred unless explicitly changed).
 - [ ] Risks and next check time documented.
 
 ---
@@ -193,3 +201,14 @@ This design can be reused for future VP lanes because it separates:
 3. **Operator actions** (watch vs fallback).
 
 That gives a modular monitoring template for broader DraganCorp rollout phases.
+
+---
+
+## 12) Deferred investigation: heartbeat + cron self-maintenance integration
+
+Out of scope for the current CODIE rollout, but explicitly queued for follow-up:
+
+1. Add a heartbeat-driven maintenance trigger that can request a CODIE health snapshot during scheduled heartbeat windows.
+2. Add cron-managed sustained-monitoring jobs (ad hoc + recurring) so operators can schedule low-cost CODIE checks without manual execution.
+3. Define guardrails for auto-actions (for example, when to only alert vs when to set `UA_CODER_VP_FORCE_FALLBACK=1`).
+4. Keep this integration additive: no disruption to existing heartbeat cadence, cron scheduler semantics, or current Phase A default-on behavior.
