@@ -27,6 +27,42 @@ type DashboardNotification = {
   metadata?: Record<string, unknown>;
 };
 
+type CoderVpSessionSnapshot = {
+  status?: string;
+  session_id?: string;
+};
+
+type CoderVpEvent = {
+  event_type?: string;
+  payload?: Record<string, unknown> | null;
+  created_at?: string;
+};
+
+type CoderVpMetricsSnapshot = {
+  generated_at?: string;
+  vp_id?: string;
+  session?: CoderVpSessionSnapshot | null;
+  mission_counts?: Record<string, number>;
+  fallback?: {
+    missions_with_fallback?: number;
+    missions_considered?: number;
+    rate?: number;
+  };
+  latency_seconds?: {
+    count?: number;
+    avg_seconds?: number | null;
+    p95_seconds?: number | null;
+    max_seconds?: number | null;
+  };
+  recent_events?: CoderVpEvent[];
+};
+
+type CoderVpDashboardResponse = {
+  status?: string;
+  detail?: string;
+  metrics?: CoderVpMetricsSnapshot | null;
+};
+
 const EMPTY_SUMMARY: SummaryResponse = {
   sessions: { active: 0, total: 0 },
   approvals: { pending: 0, total: 0 },
@@ -52,13 +88,18 @@ export default function DashboardPage() {
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const [commandText, setCommandText] = useState("");
   const [commandSending, setCommandSending] = useState(false);
+  const [coderVpSnapshot, setCoderVpSnapshot] = useState<CoderVpDashboardResponse>({
+    status: "loading",
+    metrics: null,
+  });
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [summaryRes, notificationsRes] = await Promise.all([
+      const [summaryRes, notificationsRes, coderVpRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/summary`),
         fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=30`),
+        fetch(`${API_BASE}/api/v1/dashboard/metrics/coder-vp?vp_id=vp.coder.primary&mission_limit=50&event_limit=200`),
       ]);
       const summaryData = summaryRes.ok
         ? await summaryRes.json()
@@ -66,6 +107,13 @@ export default function DashboardPage() {
       const notificationsData = notificationsRes.ok
         ? await notificationsRes.json()
         : { notifications: [] };
+      const coderVpData = coderVpRes.ok
+        ? (await coderVpRes.json()) as CoderVpDashboardResponse
+        : {
+            status: "unavailable",
+            detail: `CODER VP metrics unavailable (${coderVpRes.status})`,
+            metrics: null,
+          };
       const sessions = await fetchSessionDirectory(120);
       setSummary({
         ...EMPTY_SUMMARY,
@@ -88,6 +136,11 @@ export default function DashboardPage() {
         },
       });
       setNotifications(Array.isArray(notificationsData.notifications) ? notificationsData.notifications : []);
+      setCoderVpSnapshot({
+        status: coderVpData.status || "unavailable",
+        detail: coderVpData.detail,
+        metrics: coderVpData.metrics || null,
+      });
       setSessionDirectory(sessions);
     } finally {
       setLoading(false);
@@ -192,6 +245,33 @@ export default function DashboardPage() {
       ),
     [notifications],
   );
+  const coderVpMetrics = coderVpSnapshot.metrics || null;
+  const coderFallback = coderVpMetrics?.fallback;
+  const coderLatency = coderVpMetrics?.latency_seconds;
+  const fallbackRateText =
+    typeof coderFallback?.rate === "number"
+      ? `${(coderFallback.rate * 100).toFixed(1)}%`
+      : "--";
+  const p95LatencyText =
+    typeof coderLatency?.p95_seconds === "number"
+      ? `${coderLatency.p95_seconds.toFixed(1)}s`
+      : "--";
+  const recentFallbackEvents = useMemo(
+    () =>
+      (coderVpMetrics?.recent_events || [])
+        .filter((event) => event.event_type === "vp.mission.fallback")
+        .slice(-3)
+        .reverse(),
+    [coderVpMetrics],
+  );
+
+  const formatFallbackEvent = useCallback((event: CoderVpEvent): string => {
+    const payload = event.payload;
+    if (!payload || typeof payload !== "object") return "fallback recorded";
+    const error = typeof payload.error === "string" ? payload.error : "";
+    const reason = typeof payload.reason === "string" ? payload.reason : "";
+    return error || reason || "fallback recorded";
+  }, []);
 
   const SOURCE_FILTERS = ["all", "chat", "cron", "telegram", "hook", "local", "api"] as const;
 
@@ -358,6 +438,77 @@ export default function DashboardPage() {
             <p className="mt-2 text-3xl font-semibold text-cyan-200">{card.value}</p>
           </article>
         ))}
+      </section>
+
+      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">CODER VP Rollout</h2>
+            <p className="text-[11px] text-slate-500">
+              VP: {coderVpMetrics?.vp_id || "vp.coder.primary"} · status: {coderVpSnapshot.status || "unknown"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={load}
+            className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60"
+          >
+            Refresh VP
+          </button>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Fallback Rate</p>
+            <p className="mt-1 text-xl font-semibold text-amber-200">{fallbackRateText}</p>
+          </div>
+          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">p95 Latency</p>
+            <p className="mt-1 text-xl font-semibold text-cyan-200">{p95LatencyText}</p>
+          </div>
+          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Missions Considered</p>
+            <p className="mt-1 text-xl font-semibold text-slate-100">{coderFallback?.missions_considered ?? 0}</p>
+          </div>
+          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Fallback Missions</p>
+            <p className="mt-1 text-xl font-semibold text-rose-200">{coderFallback?.missions_with_fallback ?? 0}</p>
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs text-slate-300">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Session</p>
+            <p className="mt-1">Runtime status: {coderVpMetrics?.session?.status || "unknown"}</p>
+            <p className="mt-1">Session ID: {coderVpMetrics?.session?.session_id || "--"}</p>
+            <p className="mt-1 text-slate-500">Generated: {coderVpMetrics?.generated_at || "--"}</p>
+          </div>
+          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs text-slate-300">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Mission mix</p>
+            <div className="mt-1 space-y-1">
+              <p>completed: {coderVpMetrics?.mission_counts?.completed ?? 0}</p>
+              <p>running: {coderVpMetrics?.mission_counts?.running ?? 0}</p>
+              <p>failed: {coderVpMetrics?.mission_counts?.failed ?? 0}</p>
+            </div>
+          </div>
+        </div>
+
+        {recentFallbackEvents.length > 0 && (
+          <div className="mt-3 rounded-lg border border-amber-800/60 bg-amber-950/20 p-3 text-xs">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-amber-300">Recent fallback signals</p>
+            <div className="mt-2 space-y-1 text-amber-100">
+              {recentFallbackEvents.map((event, idx) => (
+                <p key={`${event.created_at || "fallback"}-${idx}`}>
+                  {(event.created_at || "").toString().replace("T", " ").slice(0, 19) || "event"}: {formatFallbackEvent(event)}
+                </p>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {coderVpSnapshot.detail && (
+          <p className="mt-2 text-xs text-amber-400">{coderVpSnapshot.detail}</p>
+        )}
       </section>
 
       {/* Quick Command Input */}

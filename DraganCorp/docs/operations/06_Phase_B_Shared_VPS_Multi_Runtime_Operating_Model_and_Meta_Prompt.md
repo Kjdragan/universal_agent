@@ -4,6 +4,8 @@ This document is the **Phase B equivalent** of the Phase A execution model.
 
 It explains how to run Phase B work in a structured, evidence-first way, with explicit governance, verification gates, and documentation discipline.
 
+> **Status note (2026-02-16):** Phase B has **not started yet**. It is marked ready-to-start but intentionally deferred in Program Control Center. Treat this document as prepared operating guidance to activate only after an explicit Phase B kickoff decision is recorded in `00_DraganCorp_Program_Control_Center.md`.
+
 ---
 
 ## 1) What changes from Phase A to Phase B

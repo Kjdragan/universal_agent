@@ -33,6 +33,7 @@ Welcome to the official technical documentation for the **Universal Agent**. Thi
 - **[Testing Strategy](03_Operations/Testing_Strategy.md)**: QA and CI.
 - **[OpenCLAW Release Parity Assessment (2026-02-06)](03_Operations/03_OpenCLAW_Release_Parity_Assessment_2026-02-06.md)**: Security and feature gap triage against recent OpenCLAW releases.
 - **[VPS Host Security Hardening Runbook (2026-02-12)](03_Operations/26_VPS_Host_Security_Hardening_Runbook_2026-02-12.md)**: Solo-dev-safe VPS hardening steps with validation and rollback.
+- **[Bowser Integration: Strategic Capability Expansion (2026-02-16)](03_Operations/40_Bowser_Integration_Strategic_Capability_Expansion_2026-02-16.md)**: How Bowser's layered browser automation stack expands UA from report-centric flows into browser-native execution, validation, and orchestration.
 
 ### 5. [API Reference](04_API_Reference)
 

@@ -50,6 +50,12 @@ from universal_agent.feature_flags import heartbeat_enabled, memory_index_enable
 from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
+from universal_agent.durable.state import (
+    get_vp_session,
+    list_vp_events,
+    list_vp_missions,
+    list_vp_session_events,
+)
 from universal_agent.heartbeat_service import HeartbeatService
 from universal_agent.cron_service import CronService, parse_run_at
 from universal_agent.ops_service import OpsService
@@ -379,6 +385,7 @@ _continuity_metric_events: deque[dict[str, Any]] = deque(
 _pending_gated_requests: dict[str, dict] = {}
 _session_turn_state: dict[str, dict[str, Any]] = {}
 _session_turn_locks: dict[str, asyncio.Lock] = {}
+_session_execution_tasks: dict[str, asyncio.Task[Any]] = {}
 _calendar_missed_events: dict[str, dict[str, Any]] = {}
 _calendar_missed_notifications: set[str] = set()
 _calendar_change_proposals: dict[str, dict[str, Any]] = {}
@@ -452,6 +459,7 @@ SESSION_STATE_TERMINAL = "terminal"
 TURN_STATUS_RUNNING = "running"
 TURN_STATUS_COMPLETED = "completed"
 TURN_STATUS_FAILED = "failed"
+TURN_STATUS_CANCELLED = "cancelled"
 TURN_HISTORY_LIMIT = int(os.getenv("UA_TURN_HISTORY_LIMIT", "200"))
 TURN_FINGERPRINT_DEDUPE_WINDOW_SECONDS = int(os.getenv("UA_TURN_FINGERPRINT_DEDUPE_WINDOW_SECONDS", "120"))
 CONTINUITY_RESUME_SUCCESS_MIN = float(os.getenv("UA_CONTINUITY_RESUME_SUCCESS_MIN", "0.90") or 0.90)
@@ -996,6 +1004,230 @@ def _observability_metrics_snapshot() -> dict[str, Any]:
     }
 
 
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _vp_mission_duration_seconds(started_at: Any, completed_at: Any) -> Optional[float]:
+    started = _parse_iso_datetime(started_at)
+    completed = _parse_iso_datetime(completed_at)
+    if not started or not completed:
+        return None
+    return max(0.0, (completed - started).total_seconds())
+
+
+def _parse_json_text(raw: Any) -> Any:
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        return None
+
+
+def _vp_session_to_dict(row: Any) -> Optional[dict[str, Any]]:
+    if row is None:
+        return None
+    payload = {k: row[k] for k in row.keys()} if hasattr(row, "keys") else dict(row)
+    metadata = _parse_json_text(payload.get("metadata_json"))
+    if isinstance(metadata, dict):
+        payload["metadata"] = metadata
+    return payload
+
+
+def _vp_recovery_snapshot(
+    session_row: Any,
+    parsed_session_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    recovery_attempts = 0
+    recovery_successes = 0
+    unresolved_recoveries = 0
+
+    for item in parsed_session_events:
+        event_type = str(item.get("event_type") or "")
+        if event_type == "vp.session.degraded":
+            recovery_attempts += 1
+            unresolved_recoveries += 1
+            continue
+        if event_type == "vp.session.resumed" and unresolved_recoveries > 0:
+            recovery_successes += 1
+            unresolved_recoveries -= 1
+
+    session_status = ""
+    if session_row is not None:
+        session_status = str(session_row["status"] or "")
+
+    currently_orphaned = session_status in {"degraded", "recovering"}
+    if currently_orphaned and unresolved_recoveries == 0:
+        unresolved_recoveries = 1
+
+    recovery_success_rate = (
+        recovery_successes / recovery_attempts if recovery_attempts > 0 else None
+    )
+    orphan_rate = (
+        unresolved_recoveries / recovery_attempts
+        if recovery_attempts > 0
+        else (1.0 if currently_orphaned else 0.0)
+    )
+    return {
+        "attempts": recovery_attempts,
+        "successes": recovery_successes,
+        "success_rate": recovery_success_rate,
+        "currently_orphaned": currently_orphaned,
+        "orphan_signals": unresolved_recoveries,
+        "orphan_rate": orphan_rate,
+    }
+
+
+def _vp_metrics_snapshot(
+    vp_id: str,
+    mission_limit: int,
+    event_limit: int,
+) -> dict[str, Any]:
+    gateway = get_gateway()
+    conn = getattr(gateway, "_runtime_db_conn", None)
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Runtime DB not initialized")
+
+    session_row = get_vp_session(conn, vp_id)
+    missions = list_vp_missions(conn, vp_id=vp_id, limit=mission_limit)
+    events = list_vp_events(conn, vp_id=vp_id, limit=event_limit)
+    session_events = list_vp_session_events(conn, vp_id=vp_id, limit=event_limit)
+
+    mission_counts: dict[str, int] = {}
+    mission_ids: set[str] = set()
+    mission_rows: list[dict[str, Any]] = []
+    duration_samples: list[float] = []
+    for row in missions:
+        status = str(row["status"] or "unknown")
+        mission_counts[status] = mission_counts.get(status, 0) + 1
+        mission_id = str(row["mission_id"] or "")
+        if mission_id:
+            mission_ids.add(mission_id)
+
+        duration_seconds = _vp_mission_duration_seconds(row["started_at"], row["completed_at"])
+        if duration_seconds is not None:
+            duration_samples.append(duration_seconds)
+
+        mission_rows.append(
+            {
+                "mission_id": mission_id,
+                "status": status,
+                "objective": row["objective"],
+                "run_id": row["run_id"],
+                "started_at": row["started_at"],
+                "completed_at": row["completed_at"],
+                "updated_at": row["updated_at"],
+                "result_ref": row["result_ref"],
+                "duration_seconds": duration_seconds,
+            }
+        )
+
+    event_counts: dict[str, int] = {}
+    fallback_mission_ids: set[str] = set()
+    parsed_events: list[dict[str, Any]] = []
+    for row in events:
+        event_type = str(row["event_type"] or "unknown")
+        event_counts[event_type] = event_counts.get(event_type, 0) + 1
+        mission_id = str(row["mission_id"] or "")
+        if event_type == "vp.mission.fallback" and mission_id:
+            fallback_mission_ids.add(mission_id)
+
+        parsed_events.append(
+            {
+                "event_id": row["event_id"],
+                "mission_id": row["mission_id"],
+                "vp_id": row["vp_id"],
+                "event_type": event_type,
+                "payload": _parse_json_text(row["payload_json"]),
+                "created_at": row["created_at"],
+            }
+        )
+
+    session_event_counts: dict[str, int] = {}
+    parsed_session_events: list[dict[str, Any]] = []
+    for row in session_events:
+        event_type = str(row["event_type"] or "unknown")
+        session_event_counts[event_type] = session_event_counts.get(event_type, 0) + 1
+        parsed_session_events.append(
+            {
+                "event_id": row["event_id"],
+                "vp_id": row["vp_id"],
+                "event_type": event_type,
+                "payload": _parse_json_text(row["payload_json"]),
+                "created_at": row["created_at"],
+            }
+        )
+
+    for mission in mission_rows:
+        mission["fallback_seen"] = mission["mission_id"] in fallback_mission_ids
+
+    duration_stats: dict[str, Any] = {
+        "count": 0,
+        "avg_seconds": None,
+        "p50_seconds": None,
+        "p95_seconds": None,
+        "max_seconds": None,
+    }
+    if duration_samples:
+        sorted_durations = sorted(duration_samples)
+        count = len(sorted_durations)
+        p50_index = int(round((count - 1) * 0.50))
+        p95_index = int(round((count - 1) * 0.95))
+        duration_stats = {
+            "count": count,
+            "avg_seconds": sum(sorted_durations) / count,
+            "p50_seconds": sorted_durations[p50_index],
+            "p95_seconds": sorted_durations[p95_index],
+            "max_seconds": sorted_durations[-1],
+        }
+
+    fallback_mission_count = len(mission_ids.intersection(fallback_mission_ids))
+    fallback_rate = (fallback_mission_count / len(mission_ids)) if mission_ids else 0.0
+    recovery = _vp_recovery_snapshot(session_row, parsed_session_events)
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "vp_id": vp_id,
+        "session": _vp_session_to_dict(session_row),
+        "mission_counts": mission_counts,
+        "event_counts": event_counts,
+        "session_event_counts": session_event_counts,
+        "fallback": {
+            "missions_with_fallback": fallback_mission_count,
+            "missions_considered": len(mission_ids),
+            "rate": fallback_rate,
+        },
+        "latency_seconds": duration_stats,
+        "recovery": {
+            "attempts": recovery["attempts"],
+            "successes": recovery["successes"],
+            "success_rate": recovery["success_rate"],
+        },
+        "session_health": {
+            "currently_orphaned": recovery["currently_orphaned"],
+            "orphan_signals": recovery["orphan_signals"],
+            "orphan_rate": recovery["orphan_rate"],
+        },
+        "recent_missions": mission_rows,
+        "recent_events": parsed_events,
+        "recent_session_events": parsed_session_events,
+    }
+
+
 def _session_runtime_snapshot(session_id: str) -> dict[str, Any]:
     state = _session_runtime.get(session_id)
     if not state:
@@ -1050,6 +1282,36 @@ def _session_turn_lock(session_id: str) -> asyncio.Lock:
         lock = asyncio.Lock()
         _session_turn_locks[session_id] = lock
     return lock
+
+
+def _register_execution_task(session_id: str, task: asyncio.Task[Any]) -> None:
+    _session_execution_tasks[session_id] = task
+
+    def _cleanup(done_task: asyncio.Task[Any]) -> None:
+        current = _session_execution_tasks.get(session_id)
+        if current is done_task:
+            _session_execution_tasks.pop(session_id, None)
+
+    task.add_done_callback(_cleanup)
+
+
+async def _cancel_execution_task(session_id: str, timeout_seconds: float = 5.0) -> bool:
+    task = _session_execution_tasks.get(session_id)
+    if task is None or task.done():
+        return False
+
+    task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=max(0.1, float(timeout_seconds)))
+    except asyncio.CancelledError:
+        return True
+    except asyncio.TimeoutError:
+        logger.warning("Timed out waiting for execution task cancellation (session=%s)", session_id)
+        return False
+    except Exception as exc:
+        logger.warning("Execution task cancellation raised (session=%s): %s", session_id, exc)
+        return False
+    return task.cancelled()
 
 
 def _session_turn_snapshot(session_id: str) -> dict[str, Any]:
@@ -2056,6 +2318,17 @@ def _calendar_project_cron_events(
         if latest_missed_event:
             missed_event_id = str(latest_missed_event.get("event_id") or "")
             resolution = _calendar_missed_resolution(missed_event_id)
+            if resolution in {"rescheduled", "deleted", "skipped", "skipped_superseded"}:
+                continue
+            if resolution == "approved_and_run":
+                # Preserve the event for operator visibility, but mark it resolved.
+                # A completed backfill run usually flips status to success via matched run.
+                if str(latest_missed_event.get("status") or "").strip().lower() == "missed":
+                    latest_missed_event["status"] = "success"
+                latest_missed_event["resolution"] = "approved_and_run"
+                latest_missed_event["actions"] = ["open_logs", "open_session"]
+                events.append(latest_missed_event)
+                continue
             if not resolution:
                 latest_missed_event["actions"] = [
                     "approve_backfill_run",
@@ -2752,6 +3025,21 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
         session = get_session(session_id)
         if session:
             run_id = session.metadata.get("run_id")
+
+    cancelled_task = await _cancel_execution_task(
+        session_id,
+        timeout_seconds=float(os.getenv("UA_SESSION_CANCEL_WAIT_SECONDS", "5") or 5),
+    )
+
+    if not cancelled_task:
+        # Fallback for stale turns/tasks that predate task tracking or failed to unwind.
+        state = _session_turn_snapshot(session_id)
+        active_turn_id = str(state.get("active_turn_id") or "")
+        if active_turn_id:
+            async with _session_turn_lock(session_id):
+                _finalize_turn(session_id, active_turn_id, TURN_STATUS_CANCELLED, error_message=reason)
+            _decrement_session_active_runs(session_id)
+
     marked_run_id = _mark_run_cancel_requested(run_id, reason)
 
     await manager.broadcast(
@@ -2776,7 +3064,13 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
         metadata={"source": "ops"},
     )
 
-    return {"status": "cancel_requested", "session_id": session_id, "run_id": marked_run_id, "reason": reason}
+    return {
+        "status": "cancel_requested",
+        "session_id": session_id,
+        "run_id": marked_run_id,
+        "reason": reason,
+        "task_cancelled": cancelled_task,
+    }
 
 
 def is_user_allowed(user_id: str) -> bool:
@@ -3079,6 +3373,30 @@ async def health(response: Response):
         "db_error": db_error,
         "deployment_profile": _deployment_profile_defaults(),
     }
+
+
+@app.get("/api/v1/dashboard/metrics/coder-vp")
+async def dashboard_coder_vp_metrics(
+    vp_id: str = "vp.coder.primary",
+    mission_limit: int = 20,
+    event_limit: int = 100,
+):
+    vp_identifier = (vp_id or "").strip()
+    if not vp_identifier:
+        raise HTTPException(status_code=400, detail="vp_id is required")
+
+    clamped_mission_limit = max(1, min(int(mission_limit), 500))
+    clamped_event_limit = max(1, min(int(event_limit), 1000))
+    try:
+        metrics = _vp_metrics_snapshot(
+            vp_id=vp_identifier,
+            mission_limit=clamped_mission_limit,
+            event_limit=clamped_event_limit,
+        )
+        return {"status": "ok", "metrics": metrics}
+    except HTTPException as exc:
+        # Keep dashboard summary surfaces resilient when runtime DB is unavailable.
+        return {"status": "unavailable", "detail": str(exc.detail), "metrics": None}
 
 
 @app.post("/api/v1/sessions", response_model=CreateSessionResponse)
@@ -4309,6 +4627,27 @@ async def ops_scheduling_runtime_metrics(request: Request):
     return {"metrics": _scheduling_runtime_metrics_snapshot()}
 
 
+@app.get("/api/v1/ops/metrics/coder-vp")
+async def ops_coder_vp_metrics(
+    request: Request,
+    vp_id: str = "vp.coder.primary",
+    mission_limit: int = 50,
+    event_limit: int = 200,
+):
+    _require_ops_auth(request)
+    vp_identifier = (vp_id or "").strip()
+    if not vp_identifier:
+        raise HTTPException(status_code=400, detail="vp_id is required")
+
+    clamped_mission_limit = max(1, min(int(mission_limit), 500))
+    clamped_event_limit = max(1, min(int(event_limit), 1000))
+    return _vp_metrics_snapshot(
+        vp_id=vp_identifier,
+        mission_limit=clamped_mission_limit,
+        event_limit=clamped_event_limit,
+    )
+
+
 @app.get("/api/v1/ops/scheduling/events")
 async def ops_scheduling_events(
     request: Request,
@@ -5241,6 +5580,31 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 _pending_gated_requests.pop(session_id, None)
                             async with _session_turn_lock(session_id):
                                 _finalize_turn(session_id, turn_id, TURN_STATUS_COMPLETED)
+                        except asyncio.CancelledError:
+                            logger.warning("Execution cancelled for session %s turn %s", session_id, turn_id)
+                            await manager.broadcast(
+                                session_id,
+                                {
+                                    "type": "status",
+                                    "data": {
+                                        "status": "turn_cancelled",
+                                        "turn_id": turn_id,
+                                        "message": "Execution cancelled.",
+                                    },
+                                    "timestamp": datetime.now().isoformat(),
+                                },
+                            )
+                            await manager.broadcast(
+                                session_id,
+                                {
+                                    "type": "query_complete",
+                                    "data": {"turn_id": turn_id, "cancelled": True},
+                                    "timestamp": datetime.now().isoformat(),
+                                },
+                            )
+                            async with _session_turn_lock(session_id):
+                                _finalize_turn(session_id, turn_id, TURN_STATUS_CANCELLED, error_message="cancelled")
+                            raise
                         except Exception as e:
                             logger.error("Execution error for session %s: %s", session_id, e, exc_info=True)
                             _add_notification(
@@ -5265,8 +5629,9 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             _decrement_session_active_runs(session_id)
                             if _heartbeat_service:
                                 _heartbeat_service.busy_sessions.discard(session.session_id)
-                    
-                    asyncio.create_task(run_execution(admitted_turn_id))
+
+                    execution_task = asyncio.create_task(run_execution(admitted_turn_id))
+                    _register_execution_task(session_id, execution_task)
                 
                 elif msg_type == "input_response":
                     input_id = msg.get("data", {}).get("input_id", "default")

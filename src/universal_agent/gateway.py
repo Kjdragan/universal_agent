@@ -139,6 +139,7 @@ class InProcessGateway(Gateway):
         self._sessions: dict[str, GatewaySession] = {}
         self._coder_vp_adapter: Optional[ProcessTurnAdapter] = None
         self._coder_vp_session: Optional[GatewaySession] = None
+        self._coder_vp_lease_owner = "simone-control-plane"
         self._runtime_db_conn = None
         self._coder_vp_runtime: Optional[CoderVPRuntime] = None
 
@@ -348,11 +349,17 @@ class InProcessGateway(Gateway):
             raise RuntimeError("CODER VP runtime is not initialized")
 
         vp_session_row = self._coder_vp_runtime.ensure_session(
-            lease_owner="simone-control-plane",
+            lease_owner=self._coder_vp_lease_owner,
             owner_user_id=owner_user_id,
         )
         if vp_session_row is None:
             raise RuntimeError("CODER VP session could not be created")
+
+        active_lease_owner = str(vp_session_row["lease_owner"] or "")
+        if active_lease_owner and active_lease_owner != self._coder_vp_lease_owner:
+            raise RuntimeError(
+                f"CODER VP lease held by {active_lease_owner}; cannot delegate safely"
+            )
 
         workspace_dir = str(vp_session_row["workspace_dir"] or "").strip()
         if not workspace_dir:
@@ -410,6 +417,7 @@ class InProcessGateway(Gateway):
             vp_had_error = False
             vp_error_detail: Optional[str] = None
             vp_display_name = coder_vp_display_name(default="CODIE")
+            next_lease_heartbeat_at: Optional[float] = None
 
             if self._coder_vp_runtime:
                 decision = self._coder_vp_runtime.route_decision(request.user_input)
@@ -439,6 +447,7 @@ class InProcessGateway(Gateway):
                                 },
                             },
                         )
+                        next_lease_heartbeat_at = time.monotonic() + 60.0
                         yield AgentEvent(
                             type=EventType.STATUS,
                             data={
@@ -486,6 +495,29 @@ class InProcessGateway(Gateway):
             # Execute through unified engine (possibly delegated to CODER VP lane)
             try:
                 async for event in active_adapter.execute(request.user_input):
+                    if (
+                        vp_mission_id
+                        and self._coder_vp_runtime is not None
+                        and next_lease_heartbeat_at is not None
+                        and time.monotonic() >= next_lease_heartbeat_at
+                    ):
+                        lease_ok = self._coder_vp_runtime.heartbeat_session_lease(self._coder_vp_lease_owner)
+                        next_lease_heartbeat_at = time.monotonic() + 60.0
+                        if not lease_ok:
+                            vp_had_error = True
+                            vp_error_detail = "vp lease heartbeat failed"
+                            yield AgentEvent(
+                                type=EventType.STATUS,
+                                data={
+                                    "status": f"{vp_display_name} lease heartbeat failed; falling back to primary code-writer path.",
+                                    "is_log": True,
+                                    "routing": "coder_vp_lease_degraded",
+                                    "vp_mission_id": vp_mission_id,
+                                    "error": vp_error_detail,
+                                },
+                            )
+                            break
+
                     if event.type == EventType.STATUS and isinstance(event.data, dict):
                         if "token_usage" in event.data:
                             session.metadata["usage"] = event.data["token_usage"]
@@ -766,6 +798,12 @@ class InProcessGateway(Gateway):
 
     async def close(self) -> None:
         """Clean up all active adapters and sessions."""
+        if self._coder_vp_runtime is not None:
+            try:
+                self._coder_vp_runtime.release_session_lease(self._coder_vp_lease_owner)
+            except Exception:
+                pass
+
         if self._coder_vp_adapter:
             try:
                 await self._coder_vp_adapter.close()

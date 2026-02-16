@@ -6,11 +6,13 @@ It is written for non-specialists and AI coding agents.
 
 For naming clarity, the Phase A coding lane is referred to as **CODIE** (legacy identifier: CODER VP).
 
+> **Status note (2026-02-16):** Phase A is formally complete and Phase B is ready-to-start but intentionally deferred. This document remains the implementation doctrine baseline; active day-to-day CODIE monitoring runs through `07_Phase_A_Sustained_Default_On_Operating_Model_and_Meta_Prompt.md`.
+
 ---
 
 ## 1) What this is
 
-This is a practical operating system for Phase A work.
+This is a practical operating system for Phase A work and closure-quality execution.
 
 It gives you:
 
@@ -19,6 +21,7 @@ It gives you:
 3. Verification and rollback discipline.
 4. Documentation sync rules (so docs stay true as code changes).
 5. A copy/paste **meta prompt** you can use with future AI coders.
+6. A handoff boundary so the team can pause at Phase A completion and restart safely later.
 
 ---
 
@@ -34,8 +37,12 @@ Use these as the required source of truth:
    - Ops queries, interpretation, and recovery steps.
 4. `04_Phase_A_Controlled_Rollout_Evidence_Log.md`
    - Every rollout window + objective evidence + recommendation.
+5. `07_Phase_A_Sustained_Default_On_Operating_Model_and_Meta_Prompt.md`
+   - Active sustained monitoring cadence and default-on guardrail operations.
+6. `06_Phase_B_Shared_VPS_Multi_Runtime_Operating_Model_and_Meta_Prompt.md`
+   - Next-phase execution model to activate only when Phase B is intentionally started.
 
-This file (`05_...`) defines **how to execute and keep all four in sync**.
+This file (`05_...`) defines the baseline execution doctrine and transition rules across these documents.
 
 ---
 
@@ -59,6 +66,9 @@ Each meaningful change updates:
 
 ### E) Use guardrails for promotion
 Never broaden rollout without explicit rollback triggers.
+
+### F) Treat post-closure operation as deliberate maintenance
+After Phase A closure, default mode is sustained monitoring + documentation hygiene, not constant architectural churn.
 
 ---
 
@@ -154,9 +164,9 @@ If a future operator could be misled without a doc update, the update is mandato
 
 ---
 
-## 7) Rollout decision model (Phase A)
+## 7) Rollout and sustained decision model (Phase A closed)
 
-### Promote carefully
+### During active rollout or re-validation windows
 Use objective criteria over rolling windows:
 - low fallback rate,
 - no sustained failure pattern,
@@ -173,6 +183,11 @@ When broadening traffic, always include:
 - Fallback rate > 10% over rolling 20 missions, or
 - sustained `vp.mission.failed` pattern.
 
+### Steady-state (current default)
+- Keep CODIE in sustained default-on mode with low-cost snapshot cadence.
+- Reopen Phase A implementation only for regressions, SLO drift, or explicit scope changes.
+- Start Phase B only by explicit prioritization decision in Program Control Center.
+
 ---
 
 ## 8) Meta prompt (copy/paste for AI coder)
@@ -180,7 +195,7 @@ When broadening traffic, always include:
 Use this as your default instruction block.
 
 ```text
-You are the implementation operator for DraganCorp Phase A.
+You are the execution operator for DraganCorp Phase A (currently closed, sustained default-on mode).
 
 Objective:
 - [INSERT CURRENT OBJECTIVE]
@@ -208,6 +223,9 @@ Required process:
    - update 00 decisions if governance changed,
    - update 00 lessons.
 6) Use clean, scoped commits only.
+7) Respect phase boundary:
+   - do not start Phase B implementation unless explicitly instructed,
+   - if Phase B is requested, switch to the Phase B operating model doc (`06_...`).
 
 Enforcement gates (must pass before marking complete):
 - G1 Functional behavior confirmed
@@ -229,7 +247,7 @@ Output format each cycle:
 ## 9) Short meta prompt (fast mode)
 
 ```text
-Follow the DraganCorp Phase A operating model: packetized changes, immediate verification, evidence-first rollout decisions, and mandatory doc sync (00/03/04). No change is complete without tests/probes + updated evidence/status/decision logs when applicable.
+Follow the DraganCorp Phase A operating model in sustained default-on mode: packetized changes, immediate verification, evidence-first decisions, and mandatory doc sync (00/03/04/07). Do not start Phase B unless explicitly directed.
 ```
 
 ---
@@ -243,6 +261,7 @@ Before ending a session, verify:
 - [ ] Rollout evidence captured (if applicable).
 - [ ] `04` updated with new window(s) and decision notes.
 - [ ] `00` updated (status/decision/lessons as needed).
+- [ ] Phase board/decision state in `00` still reflects intended boundary (Phase A complete, Phase B deferred unless explicitly changed).
 - [ ] Commits are scoped and understandable.
 - [ ] Open risks and next actions are explicit.
 

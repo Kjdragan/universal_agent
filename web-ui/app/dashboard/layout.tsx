@@ -241,7 +241,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </div>
         </aside>
 
-        <main className="flex h-full flex-1 flex-col overflow-hidden bg-slate-900/50 p-4 backdrop-blur md:rounded-xl md:border md:border-slate-800/80 md:p-6">
+        <main className="flex h-full flex-1 flex-col overflow-y-auto overflow-x-hidden scrollbar-thin bg-slate-900/50 p-4 pr-2 backdrop-blur md:rounded-xl md:border md:border-slate-800/80 md:p-6 md:pr-4">
           {children}
         </main>
       </div>

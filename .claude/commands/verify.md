@@ -1,0 +1,1 @@
+Double check every claim and statistic, make a table of what you could verify.
