@@ -5,6 +5,7 @@ This directory contains the core "personality" and "instructional" assets for th
 ## Files
 
 *   **`SOUL.md`**: The Persona Definition. Defines *who* the agent is (e.g., "Simon, the Senior Staff Engineer"). This content is injected at the **very top** of the System Prompt, overriding default behaviors.
+*   **`CODIE_SOUL.md`**: Persona template for the CODIE coding VP lane. Seeded into lane workspaces as `SOUL.md` when absent.
 
 ## Usage
 

@@ -9,7 +9,7 @@ It explains how to run Phase B work in a structured, evidence-first way, with ex
 ## 1) What changes from Phase A to Phase B
 
 Phase A focus:
-- One persistent CODER VP lane in-core, with guarded rollout and fallback.
+- One persistent CODIE lane in-core (legacy identifier: CODER VP), with guarded rollout and fallback.
 
 Phase B focus:
 - Multiple VP runtime lanes on the same VPS (separate runtime processes / ports / session namespaces).

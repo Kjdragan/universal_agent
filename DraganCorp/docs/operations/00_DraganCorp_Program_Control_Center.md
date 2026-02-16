@@ -25,6 +25,8 @@ This is the canonical control document for DraganCorp execution status, scope ch
 | Agent/skill overlay spec | `specs/agent-skill-overlay-contract-v1.md` |
 | Phase A VP observability playbook | `docs/operations/03_Phase_A_CODER_VP_Observability_Playbook.md` |
 | Phase A rollout evidence log | `docs/operations/04_Phase_A_Controlled_Rollout_Evidence_Log.md` |
+| Phase A execution operating model | `docs/operations/05_Phase_A_Execution_Operating_Model_and_Meta_Prompt.md` |
+| Phase A sustained default-on model | `docs/operations/07_Phase_A_Sustained_Default_On_Operating_Model_and_Meta_Prompt.md` |
 
 ---
 
@@ -32,7 +34,7 @@ This is the canonical control document for DraganCorp execution status, scope ch
 
 | Phase | Goal | Status | Owner | Exit criteria |
 |---|---|---|---|---|
-| Phase A | Persistent CODER VP session (no factories) | IN_PROGRESS | DraganCorp Core | CODER VP can be dispatched/resumed/recovered with mission ledger + fallback path |
+| Phase A | Persistent CODIE session (no factories) | IN_PROGRESS | DraganCorp Core | CODIE can be dispatched/resumed/recovered with mission ledger + fallback path |
 | Phase B | Shared-VPS multi-runtime VP lanes | PLANNED | DraganCorp Core | Separate VP runtime service operational with quotas + callbacks |
 | Phase C | Clone-ready template package | PLANNED | DraganCorp Core | Reusable clone profile + deployment checklist validated |
 | Phase D | First autonomous factory pilot | PLANNED | DraganCorp Core | Pilot SLOs met with acceptable maintenance overhead |
@@ -43,7 +45,7 @@ This is the canonical control document for DraganCorp execution status, scope ch
 
 ### 4.1 Sprint objective
 
-Deliver a production-safe CODER VP session lane with persistent identity/session/workspace continuity, while preserving existing `code-writer` fallback and no regression to current Simone orchestration paths.
+Deliver a production-safe CODIE (CODER VP) session lane with persistent identity/session/workspace continuity, while preserving existing `code-writer` fallback and no regression to current Simone orchestration paths.
 
 ### 4.2 Active checklist
 
@@ -53,7 +55,7 @@ Deliver a production-safe CODER VP session lane with persistent identity/session
 - [x] A3: integrate Simone routing with guarded rollout flag
 - [x] A4: implement observability fields + dashboards/log queries
 - [x] A5: add fallback/recovery + test suite (includes bootstrap/exception + restart/lease-recovery/stale-session coverage)
-- [ ] A6: run controlled rollout and capture lessons (in progress: baseline + traffic-bearing shadow windows captured; rollout capture helper added; ready for limited cohort pilot)
+- [x] A6: run controlled rollout and capture lessons (completed: limited cohort + broadened windows + first sustained default-on monitoring cycle captured)
 
 ### 4.3 Acceptance evidence snapshots (A2/A3 close)
 
@@ -91,6 +93,7 @@ Deliver a production-safe CODER VP session lane with persistent identity/session
 | 2026-02-16 | Phase A Controlled Rollout | Executed third broadened rollout window (three additional real coding prompts) and advanced CODER VP metrics to `missions_considered=12` with `missions_with_fallback=0` | Confirms broadened rollout remains stable at higher real-traffic volume while preserving zero fallback/failure profile and improved p95 (`35.964s`) | Continue broadened evidence cadence toward sustained default-on recommendation |
 | 2026-02-16 | Phase A Controlled Rollout | Executed fourth broadened rollout window (three additional real coding prompts) and advanced CODER VP metrics to `missions_considered=15` with `missions_with_fallback=0` | Strengthens broadened-rollout confidence with larger real sample and unchanged zero fallback/failure profile while p95 remains stable (`35.964s`) | Continue broadened windows until post-promotion observation target is met |
 | 2026-02-16 | Phase A Controlled Rollout | Executed fifth broadened rollout window (three additional real coding prompts) and advanced CODER VP metrics to `missions_considered=18` with `missions_with_fallback=0` | Completes post-promotion observation target (next 10+ real missions) while preserving zero fallback/failure profile and stable p95 (`35.964s`) | Prepare sustained default-on operating posture and continue periodic evidence snapshots |
+| 2026-02-16 | Phase A Sustained Monitoring | Executed first sustained default-on monitoring cycle (three real coding prompts + low-cost snapshot profile) and advanced CODIE metrics to `missions_considered=20` with `missions_with_fallback=0` | Confirms default-on posture health with zero fallback/failure and stable p95 (`35.964s`) while keeping resource usage modest (`mission_limit=60`, `event_limit=180`) | Continue low-cost sustained cadence (2-4/day steady state; 30-60m during active implementation windows) |
 
 ---
 
@@ -119,6 +122,7 @@ Deliver a production-safe CODER VP session lane with persistent identity/session
 | D-IMP-010 | 2026-02-16 | Approve conditional broadened CODER VP traffic after four real limited-cohort missions with zero fallback | Evidence now shows `missions_considered=4`, `missions_with_fallback=0`, stable p95, and no sustained `vp.mission.failed`; broadening can proceed under explicit rollback guardrails | If fallback exceeds 10% over rolling 20 missions, sustained VP failures appear, or continuity regression alerts fire |
 | D-IMP-011 | 2026-02-16 | Activate broadened CODER VP traffic under guardrails and continue scripted evidence capture | Broadened rollout now spans fifteen real missions with fallback still at 0 and no VP failures; phased expansion remains justified with close monitoring | If delegated-routing share materially drops for coding prompts, fallback rate rises above threshold, or VP failure patterns emerge |
 | D-IMP-012 | 2026-02-16 | Mark post-promotion observation target complete after broadened sample reached eighteen real missions | Guardrail target (next 10 real missions after broadened activation) is satisfied with `fallback.rate=0.000`, no sustained failures, and stable p95; ready for sustained default-on posture with periodic monitoring | If fallback/failure trend regresses or continuity alerts indicate degradation |
+| D-IMP-013 | 2026-02-16 | Shift Phase A CODIE lane to sustained default-on monitoring cadence with lightweight snapshot profile | Post-promotion target and first sustained cycle are healthy; low-cost checks preserve safety signal while avoiding unnecessary load | If sustained snapshots show fallback/failure trend increase or latency degradation beyond watch/critical thresholds |
 
 ---
 
@@ -153,6 +157,7 @@ Deliver a production-safe CODER VP session lane with persistent identity/session
 | 2026-02-16 | As broadened traffic volume increases, trend confidence should prioritize rolling fallback/failure outcomes over single-window latency spikes | Extended broadened evidence to twelve real missions with zero fallback/failure while p95 improved to 35.964s |
 | 2026-02-16 | Sustained broadened stability should be judged on cumulative mission outcomes; incremental windows mainly confirm trend durability | Extended broadened evidence to fifteen real missions with zero fallback/failure and no routing regressions in latest window |
 | 2026-02-16 | Promotion guardrails are easier to operationalize when observation targets are numeric and explicit | Used a concrete post-promotion target (next 10 real missions), reached eighteen real missions with zero fallback, then transitioned recommendation to sustained default-on readiness |
+| 2026-02-16 | Sustainable monitoring should optimize for signal quality per query cost, not maximum data pull every cycle | Introduced low-cost sustained profile (`mission_limit=60`, `event_limit=180`) and cadence guidance that stays lightweight while preserving rollback triggers |
 
 ---
 
