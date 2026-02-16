@@ -84,6 +84,7 @@ Deliver a production-safe CODER VP session lane with persistent identity/session
 | 2026-02-16 | Phase A Controlled Rollout | Investigated execution stalls and found two rollout blockers: gateway was running with CODER VP disabled (`UA_ENABLE_CODER_VP=0`) and stale session runs could remain `active_runs=1` after cancellation | Identified root cause of repeated `missions_considered=0` despite cohort probes and explained timeout behavior from WS clients | Restart gateway with CODER VP enabled and harden cancellation path for stale task cleanup |
 | 2026-02-16 | Phase A Controlled Rollout | Added gateway session execution-task tracking + cancellation hardening (`TURN_STATUS_CANCELLED`, per-session task registry, cancel-time task abort/fallback turn finalization), then verified first non-synthetic limited cohort mission (`fallback=0`, `missions_considered=1`) | Converts A6 from blocked to measurable real traffic with deterministic operator controls for stuck runs | Capture at least one additional real cohort window before final promotion decision |
 | 2026-02-16 | Phase A Controlled Rollout | Ran second limited cohort window: first probe timed out but cleanup path reconciled session to `active_runs=0`; follow-up probe completed and metrics advanced to `missions_considered=2` with zero fallback | Confirms cancellation fallback cleanup works operationally and rollout health remains within gate thresholds on real traffic | Capture one more real window and decide whether to expand beyond limited cohort |
+| 2026-02-16 | Phase A Controlled Rollout | Completed third limited real cohort window (`missions_considered=3`, `missions_with_fallback=0`, `fallback.rate=0.0`) after successful WS delegated execution and HTTP capture | Establishes a three-mission real cohort sample with no fallback events and stable p95 at observed range, strengthening promotion readiness evidence | Review promotion gates and decide on broadened traffic enablement |
 
 ---
 
@@ -136,6 +137,7 @@ Deliver a production-safe CODER VP session lane with persistent identity/session
 | 2026-02-16 | Rollout-gate decisions are easier to keep consistent when evidence-row generation is scripted | Added `scripts/coder_vp_rollout_capture.py` and documented standard usage in the observability playbook |
 | 2026-02-16 | Real cohort traffic evidence requires runtime feature-flag parity with rollout intent, not just observability readiness | Restarted gateway with `UA_ENABLE_CODER_VP=1` (and no shadow/force-fallback override) before running limited cohort verification |
 | 2026-02-16 | Limited cohort WS probes can still hit occasional long-tail execution latency; operational cancel fallback remains necessary even after task-cancel hardening | Captured timeout-recovery evidence row and validated that cancel fallback resets `active_runs` to keep subsequent real cohort windows unblocked |
+| 2026-02-16 | Promotion confidence improves materially when limited cohort evidence includes multiple successful real windows, not just a single pass | Extended real cohort sample to three completed missions with zero fallback before recommending broadened rollout |
 
 ---
 
