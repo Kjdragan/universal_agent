@@ -28,6 +28,7 @@ This log tracks guarded rollout checkpoints for CODER VP in Phase A.
 | 2026-02-16T15:26:59Z | Limited cohort window #3 (real traffic) | Real coding probe via `/api/v1/sessions` WS execute, followed by HTTP metrics capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 38.305s | READY_FOR_LIMITED_COHORT_PILOT | Cohort sample now at `missions_considered=3` with `missions_with_fallback=0`; `event_counts={vp.mission.dispatched:3,vp.mission.completed:3}` and no observed fallback events in limited cohort traffic. |
 | 2026-02-16T15:29:04Z | Limited cohort window #4 (real traffic) | Real coding probe via `/api/v1/sessions` WS execute, followed by HTTP metrics capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 38.305s | READY_FOR_LIMITED_COHORT_PILOT | Four-mission real cohort sample remains healthy: `missions_considered=4`, `missions_with_fallback=0`, `mission_counts={completed:4}`, `event_counts={vp.mission.dispatched:4,vp.mission.completed:4}`. |
 | 2026-02-16T15:34:45Z | Broadened rollout window #1 (real traffic) | Three real coding prompts under broadened rollout guardrails via WS execute + HTTP capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 38.305s | GO_BROADER_TRAFFIC_ACTIVE | VP metrics advanced to `missions_considered=6` / `missions_with_fallback=0` (`event_counts={vp.mission.dispatched:6,vp.mission.completed:6}`). Two of three probes explicitly routed `delegated_to_coder_vp`; one remained on primary route, indicating intent-routing coverage should be monitored as traffic broadens. |
+| 2026-02-16T15:37:49Z | Broadened rollout window #2 (real traffic) | Three additional real coding prompts under broadened rollout guardrails via WS execute + HTTP capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 38.305s | GO_BROADER_TRAFFIC_ACTIVE | Real sample increased to `missions_considered=9` / `missions_with_fallback=0` with `event_counts={vp.mission.dispatched:9,vp.mission.completed:9}`. All three probes in this window reported `delegated_to_coder_vp`. |
 
 ---
 
@@ -43,7 +44,7 @@ Promote from shadow to broader traffic only when all conditions hold for at leas
 ### Promotion recommendation (2026-02-16)
 
 - **Recommendation:** `GO_BROADER_TRAFFIC_ACTIVE` (guarded)
-- **Basis:** broadened rollout started after four clean limited-cohort windows; current real sample is six CODER VP missions with `fallback.rate=0.000`, no `vp.mission.failed`, and stable observed p95 (`38.305s`).
+- **Basis:** broadened rollout started after four clean limited-cohort windows; current real sample is nine CODER VP missions with `fallback.rate=0.000`, no `vp.mission.failed`, and stable observed p95 (`38.305s`).
 - **Guardrails for broadened rollout:**
   1. Keep cancellation recovery monitor active (`active_runs` must return to 0 after cancel operations).
   2. Continue recording each window via `scripts/coder_vp_rollout_capture.py --mode http` for at least the next 10 real missions.
