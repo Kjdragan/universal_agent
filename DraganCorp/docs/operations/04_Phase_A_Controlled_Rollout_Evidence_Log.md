@@ -26,6 +26,7 @@ This log tracks guarded rollout checkpoints for CODER VP in Phase A.
 | 2026-02-16T15:19:33Z | Limited cohort window #2 (execution probe) | WS execute probe for second real cohort run with internal token auth | `aiohttp` WS probe + `/api/v1/ops/sessions/{id}/cancel` | n/a | n/a | PARTIAL_TIMEOUT_RECOVERED | Initial probe timed out waiting for `query_complete`; ops cancel endpoint returned `task_cancelled=false` but session reconciled to `active_runs=0`, confirming fallback cleanup path still unblocks stale run state. |
 | 2026-02-16T15:21:04Z | Limited cohort window #2 (real traffic) | Follow-up real coding turn via session WS execute and HTTP rollout capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 38.305s | READY_FOR_LIMITED_COHORT_PILOT | Second traffic-bearing window remains healthy: `missions_considered=2`, `missions_with_fallback=0`, `mission_counts={completed:2}`, `event_counts={vp.mission.dispatched:2,vp.mission.completed:2}`. No fallback events observed across real cohort sample. |
 | 2026-02-16T15:26:59Z | Limited cohort window #3 (real traffic) | Real coding probe via `/api/v1/sessions` WS execute, followed by HTTP metrics capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 38.305s | READY_FOR_LIMITED_COHORT_PILOT | Cohort sample now at `missions_considered=3` with `missions_with_fallback=0`; `event_counts={vp.mission.dispatched:3,vp.mission.completed:3}` and no observed fallback events in limited cohort traffic. |
+| 2026-02-16T15:29:04Z | Limited cohort window #4 (real traffic) | Real coding probe via `/api/v1/sessions` WS execute, followed by HTTP metrics capture | `scripts/coder_vp_rollout_capture.py --mode http` | 0.000 | 38.305s | READY_FOR_LIMITED_COHORT_PILOT | Four-mission real cohort sample remains healthy: `missions_considered=4`, `missions_with_fallback=0`, `mission_counts={completed:4}`, `event_counts={vp.mission.dispatched:4,vp.mission.completed:4}`. |
 
 ---
 
@@ -37,3 +38,14 @@ Promote from shadow to broader traffic only when all conditions hold for at leas
 2. No sustained `vp.mission.failed` pattern in recent events.
 3. Latency p95 is stable within acceptable operational range.
 4. No active regressions in gateway/session continuity suites.
+
+### Promotion recommendation (2026-02-16)
+
+- **Recommendation:** `CONDITIONAL_GO_BROADER_TRAFFIC`
+- **Basis:** four real limited-cohort missions observed with `fallback.rate=0.000`, no `vp.mission.failed`, and stable observed p95 (`38.305s`).
+- **Guardrails for broadened rollout:**
+  1. Keep cancellation recovery monitor active (`active_runs` must return to 0 after cancel operations).
+  2. Continue recording each window via `scripts/coder_vp_rollout_capture.py --mode http` for at least the next 10 real missions.
+  3. Auto-revert to shadow/primary fallback if fallback rate exceeds 10% over a rolling 20-mission window or any sustained `vp.mission.failed` pattern appears.
+
+---
