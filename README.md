@@ -55,6 +55,7 @@ For detailed usage, see **[Getting Started](Project_Documentation/02_Getting_Sta
 ## 📂 Project Structure
 
 -   `src/universal_agent/`: Core agent logic (Brain & Harness).
+-   `src/universal_agent/utils/`: Shared utility modules (including AST-based Python parsing helpers in `python_parser.py`).
 -   `Project_Documentation/`: **The primary source of truth for docs.**
 -   `AgentCollege/`: Sidecar service for trace analysis.
 -   `Memory_System/`: Database and memory management.
