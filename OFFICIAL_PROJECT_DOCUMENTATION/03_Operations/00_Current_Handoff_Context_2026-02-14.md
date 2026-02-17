@@ -154,3 +154,82 @@ Before commit/push, the maintainer should explicitly choose one:
 - Automatic work-thread creation from approved brainstorms (kept manual in v1)
 
 These were intentional scope boundaries, not missing work.
+
+---
+
+## 7. Post-push Live Validation Evidence (2026-02-16)
+
+### A. Guarded live Todoist integration tests
+
+Executed:
+
+```bash
+set -a; source .env; set +a
+export TODOIST_API_TOKEN="${TODOIST_API_TOKEN:-$TODOIST_API_KEY}"
+RUN_TODOIST_LIVE_TESTS=1 uv run pytest tests/integration/test_todoist_live_guarded.py -q
+```
+
+Observed result:
+
+- `2 failed` (after env alias correction from `TODOIST_API_KEY` -> `TODOIST_API_TOKEN`)
+- Failure mode: taxonomy bootstrap unavailable during `ensure_taxonomy()`
+
+Root-cause evidence collected during diagnostics:
+
+- `todoist_api_python` installed in this environment exposes paginated iterators (`Iterator[list[...]]`) and `get_tasks()` does **not** accept a `filter=` kwarg.
+- Current `TodoService` implementation still assumes legacy flat-list/filter-kwarg behavior.
+- This mismatch causes deterministic heartbeat actionable query path to return empty results.
+
+### B. Real heartbeat actionable/non-actionable probe
+
+Executed live probe with direct Todoist API task lifecycle (create `agent-ready` task -> update to `blocked` -> query `TodoService().heartbeat_summary()` both times):
+
+- `actionable_case.task_present=false`
+- `actionable_case.actionable_count=0`
+- `non_actionable_case.task_present=false`
+- `non_actionable_case.actionable_count=0`
+
+Interpretation:
+
+- Heartbeat summary did not surface a known live actionable task.
+- This confirms a functional compatibility bug in current Todoist service query logic under the installed SDK/API behavior.
+
+Cleanup confirmation:
+
+- Temporary validation tasks were deleted after probe.
+- Temporary diagnostic project (`UA Diagnostic Tmp`) was deleted.
+
+### C. Remediation + re-validation (same session)
+
+Applied compatibility patch in `src/universal_agent/services/todoist_service.py`:
+
+- Added paginator flattening (`Iterator[list[...]]` support) for projects/sections/labels/tasks.
+- Added API token fallback support for `TODOIST_API_KEY` when `TODOIST_API_TOKEN` is unset.
+- Reworked actionable query path to use `label="agent-ready"` + local deterministic filtering when SDK does not support `filter=`.
+
+Added regression coverage in `tests/unit/test_todoist_service.py`:
+
+- paged iterator taxonomy bootstrap compatibility test,
+- no-`filter`-kwarg actionable filtering compatibility test.
+
+Re-run evidence:
+
+1. Guarded live Todoist tests:
+
+```bash
+set -a; source .env; set +a
+RUN_TODOIST_LIVE_TESTS=1 uv run pytest tests/integration/test_todoist_live_guarded.py -q
+```
+
+Result: `2 passed`.
+
+2. Real heartbeat actionable/non-actionable probe:
+
+- `actionable_case.task_present=true`
+- `actionable_case.actionable_count=1`
+- `non_actionable_case.task_present=false`
+- `non_actionable_case.actionable_count=0`
+
+Interpretation:
+
+- Deterministic heartbeat summary now correctly includes a live actionable task and excludes the same task once blocked.

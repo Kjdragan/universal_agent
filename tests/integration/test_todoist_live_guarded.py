@@ -24,9 +24,9 @@ pytestmark = [
 
 
 def _service() -> TodoService:
-    token = (os.getenv("TODOIST_API_TOKEN") or "").strip()
+    token = (os.getenv("TODOIST_API_TOKEN") or os.getenv("TODOIST_API_KEY") or "").strip()
     if not token:
-        pytest.skip("TODOIST_API_TOKEN is required for RUN_TODOIST_LIVE_TESTS")
+        pytest.skip("TODOIST_API_TOKEN or TODOIST_API_KEY is required for RUN_TODOIST_LIVE_TESTS")
     return TodoService(api_token=token)
 
 
