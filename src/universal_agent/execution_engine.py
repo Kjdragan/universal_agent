@@ -475,6 +475,28 @@ class ProcessTurnAdapter:
                 env_overrides = _build_memory_env_overrides(
                     memory_policy if isinstance(memory_policy, dict) else {}
                 )
+                run_source_env = str(self.config.__dict__.get("_run_source", "user") or "user")
+                request_metadata = self.config.__dict__.get("_request_metadata")
+                request_md = request_metadata if isinstance(request_metadata, dict) else {}
+                raw_investigation_only = request_md.get(
+                    "heartbeat_investigation_only",
+                    run_source_env == "heartbeat",
+                )
+                if isinstance(raw_investigation_only, bool):
+                    heartbeat_investigation_only = raw_investigation_only
+                else:
+                    heartbeat_investigation_only = str(raw_investigation_only).strip().lower() not in {
+                        "0",
+                        "false",
+                        "no",
+                        "off",
+                        "",
+                    }
+                env_overrides["UA_RUN_SOURCE"] = run_source_env
+                env_overrides["UA_HEARTBEAT_INVESTIGATION_ONLY"] = (
+                    "1" if heartbeat_investigation_only else "0"
+                )
+
                 system_events = self.config.__dict__.get("_system_events")
                 if isinstance(system_events, list) and system_events:
                     # Keep the raw JSON in env so the engine can choose formatting/filters.

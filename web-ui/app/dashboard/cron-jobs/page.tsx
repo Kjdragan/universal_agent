@@ -363,16 +363,23 @@ export default function DashboardCronJobsPage() {
                       {job.running ? "running" : job.enabled ? "enabled" : "disabled"} · next: {toLocalDateTime(job.next_run_at)}
                       {job.timeout_seconds ? ` · timeout ${job.timeout_seconds}s` : ""}
                     </p>
+                    {job.running && (
+                      <div className="mt-2 inline-flex items-center gap-2 rounded-md border border-cyan-700/60 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-200">
+                        <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 animate-pulse" />
+                        Running now... latest persisted run details are shown below.
+                      </div>
+                    )}
                     {(() => {
                       const run = runsByJob[job.job_id];
                       if (!run) return null;
                       const link = extractComposioConnectLink(run.output_preview || "") || extractComposioConnectLink(run.error || "");
                       const status = String(run.status || "unknown").toLowerCase();
                       const isAuth = status === "auth_required" || Boolean(link);
+                      const runLabel = job.running ? "latest recorded run" : "last run";
                       return (
                         <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
                           <span className="text-slate-500">
-                            last run: <span className="font-mono text-slate-300">{status}</span> · {toLocalDateTime(run.started_at)}
+                            {runLabel}: <span className="font-mono text-slate-300">{status}</span> · {toLocalDateTime(run.started_at)}
                           </span>
                           {run.error && (
                             <span className="text-rose-300/90">

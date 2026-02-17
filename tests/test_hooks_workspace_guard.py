@@ -140,3 +140,56 @@ async def test_pre_bash_respects_auto_cd_disable_flag(tmp_path, monkeypatch):
     assert "tool_input" in out
     cmd = out["tool_input"]["command"]
     assert f"cd {workspace}" not in cmd
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_investigation_blocks_bash_in_ledger(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    monkeypatch.setenv("UA_RUN_SOURCE", "heartbeat")
+    monkeypatch.setenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "1")
+
+    hooks = AgentHookSet(active_workspace=str(workspace))
+    input_data = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "echo hi"},
+    }
+
+    with workspace_context(str(workspace)):
+        out = await hooks.on_pre_tool_use_ledger(input_data, tool_use_id="hb1", context={})
+
+    assert out.get("decision") == "block"
+    assert out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_investigation_write_path_policy(tmp_path, monkeypatch):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "work_products").mkdir()
+    monkeypatch.setenv("UA_RUN_SOURCE", "heartbeat")
+    monkeypatch.setenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "1")
+
+    hooks = AgentHookSet(active_workspace=str(workspace))
+
+    allowed = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(workspace / "work_products" / "draft.md"),
+            "content": "draft",
+        },
+    }
+    blocked = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": str(workspace / "src" / "feature.py"),
+            "content": "print('x')",
+        },
+    }
+
+    with workspace_context(str(workspace)):
+        out_allowed = await hooks.on_pre_tool_use_ledger(allowed, tool_use_id="hb2", context={})
+        out_blocked = await hooks.on_pre_tool_use_ledger(blocked, tool_use_id="hb3", context={})
+
+    assert out_allowed == {}
+    assert out_blocked.get("decision") == "block"

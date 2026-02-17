@@ -430,6 +430,66 @@ class TodoService:
             self.add_comment(task_id, f"**Parked / Rejected:** {rationale}")
         return True
 
+    def promote_idea_to_heartbeat_candidate(self, target: str) -> dict[str, Any]:
+        """Promote a brainstorm idea to heartbeat_candidate via task id or dedupe key."""
+        token = str(target or "").strip()
+        if not token:
+            return {
+                "success": False,
+                "error": "target is required (task id or dedupe key)",
+            }
+
+        task_id_hint: Optional[str] = None
+        dedupe_hint: Optional[str] = None
+        if ":" in token:
+            prefix, value = token.split(":", 1)
+            key = prefix.strip().lower()
+            val = value.strip()
+            if key in {"id", "task", "task_id"}:
+                task_id_hint = val
+            elif key in {"dedupe", "key", "dedupe_key"}:
+                dedupe_hint = val
+
+        if not task_id_hint and not dedupe_hint:
+            task_id_hint = token
+
+        task: Optional[dict[str, Any]] = None
+        if task_id_hint:
+            task = self.get_task_detail(task_id_hint)
+
+        if task is None:
+            key = (dedupe_hint or token).strip()
+            if key:
+                task = self._find_existing_idea_by_dedupe_key(key)
+
+        if not task:
+            return {
+                "success": False,
+                "error": "idea not found",
+                "target": token,
+            }
+
+        task_id = str(task.get("id") or "")
+        if not task_id:
+            return {
+                "success": False,
+                "error": "resolved idea has no id",
+                "target": token,
+            }
+
+        taxonomy = self._get_taxonomy_or_bootstrap()
+        reverse = {v: k for k, v in taxonomy.brainstorm_sections.items()}
+        previous_section = reverse.get(str(task.get("section_id") or "")) or ""
+        ok = self.promote_idea(task_id, target_section="heartbeat_candidate")
+        return {
+            "success": bool(ok),
+            "task_id": task_id,
+            "content": str(task.get("content") or ""),
+            "previous_section": previous_section,
+            "target_section": "heartbeat_candidate",
+            "already_candidate": previous_section == "heartbeat_candidate",
+        }
+
     def get_pipeline_summary(self) -> dict[str, int]:
         taxonomy = self._get_taxonomy_or_bootstrap()
         reverse = {v: k for k, v in taxonomy.brainstorm_sections.items()}
@@ -442,6 +502,78 @@ class TodoService:
                 continue
             counts[key] = int(counts.get(key) or 0) + 1
         return counts
+
+    def heartbeat_brainstorm_candidates(
+        self,
+        limit: int = 3,
+        *,
+        include_sections: Optional[list[str]] = None,
+    ) -> list[dict[str, Any]]:
+        """Return shortlist of brainstorm items suitable for proactive heartbeat investigation.
+
+        Default policy is conservative: only `heartbeat_candidate` items are surfaced.
+        Additional sections can be enabled via explicit call-site intent or
+        UA_TODOIST_HEARTBEAT_SECTIONS (comma-separated section keys).
+        """
+        taxonomy = self._get_taxonomy_or_bootstrap()
+        tasks = self.get_all_tasks(project_id=taxonomy.brainstorm_project_id, label="brainstorm")
+        reverse = {v: k for k, v in taxonomy.brainstorm_sections.items()}
+
+        configured_sections = include_sections
+        if configured_sections is None:
+            raw_sections = str(os.getenv("UA_TODOIST_HEARTBEAT_SECTIONS") or "").strip()
+            if raw_sections:
+                configured_sections = [
+                    part.strip().lower()
+                    for part in raw_sections.split(",")
+                    if part.strip()
+                ]
+            else:
+                configured_sections = ["heartbeat_candidate"]
+
+        allowed_sections = {
+            section
+            for section in (configured_sections or [])
+            if section in taxonomy.brainstorm_sections
+        }
+        if not allowed_sections:
+            allowed_sections = {"heartbeat_candidate"}
+
+        section_rank = {
+            section: rank
+            for rank, section in enumerate(["heartbeat_candidate", "approved", "triaging", "inbox"])
+        }
+
+        candidates: list[dict[str, Any]] = []
+        for task in tasks:
+            section_id = str(task.get("section_id") or "")
+            section_key = reverse.get(section_id) or ""
+            if section_key not in allowed_sections:
+                continue
+
+            frontmatter, _ = _parse_frontmatter(str(task.get("description") or ""))
+            confidence = _safe_int(frontmatter.get("confidence"), default=1)
+            candidates.append(
+                {
+                    "id": str(task.get("id") or ""),
+                    "content": str(task.get("content") or ""),
+                    "section": section_key,
+                    "confidence": confidence,
+                    "impact": str(frontmatter.get("impact") or "M"),
+                    "effort": str(frontmatter.get("effort") or "M"),
+                    "dedupe_key": str(frontmatter.get("dedupe_key") or "") or None,
+                    "url": str(task.get("url") or ""),
+                }
+            )
+
+        candidates.sort(
+            key=lambda row: (
+                int(section_rank.get(str(row.get("section") or ""), 99)),
+                -int(row.get("confidence") or 1),
+            )
+        )
+        n = max(1, int(limit or 1))
+        return candidates[:n]
 
     def _get_taxonomy_or_bootstrap(self) -> TodoistTaxonomy:
         if self._taxonomy is None:

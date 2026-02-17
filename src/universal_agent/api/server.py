@@ -52,6 +52,18 @@ from universal_agent.api.events import (
 )
 
 
+_USE_BRAINSTORM_TONIGHT_PATTERNS = [
+    re.compile(
+        r"^/(?:use[-_ ]?brainstorm[-_ ]?tonight|brainstorm[-_ ]?tonight)\s*(?P<target>.+)?$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(?:please\s+)?(?:use|promote)\s+(?:this\s+)?brainstorm(?:\s+idea)?\s+tonight\s*(?P<target>.+)?$",
+        re.IGNORECASE,
+    ),
+]
+
+
 # =============================================================================
 # Auth Helpers
 # =============================================================================
@@ -136,6 +148,96 @@ def _dashboard_auth_required() -> bool:
     if _owners_configured():
         return True
     return bool((os.getenv("UA_DASHBOARD_PASSWORD") or "").strip())
+
+
+def _parse_use_brainstorm_tonight_command(query: str) -> tuple[bool, str]:
+    text = str(query or "").strip()
+    if not text:
+        return False, ""
+    for pattern in _USE_BRAINSTORM_TONIGHT_PATTERNS:
+        match = pattern.fullmatch(text)
+        if not match:
+            continue
+        target = str(match.group("target") or "").strip().lstrip(":=- ").strip("`\"'")
+        return True, target
+    return False, ""
+
+
+async def _try_handle_todoist_quick_command(connection_id: str, query: str) -> bool:
+    is_match, target = _parse_use_brainstorm_tonight_command(query)
+    if not is_match:
+        return False
+
+    if not target:
+        await manager.send_event(
+            connection_id,
+            WebSocketEvent(
+                type=WSEventType.TEXT,
+                data={
+                    "text": (
+                        "Usage: `/use-brainstorm-tonight <task_id|dedupe_key>` "
+                        "(example: `/use-brainstorm-tonight dedupe:retry-policy`)"
+                    ),
+                    "final": True,
+                },
+            ),
+        )
+        await manager.send_event(
+            connection_id,
+            WebSocketEvent(type=WSEventType.QUERY_COMPLETE, data={"quick_command": "use_brainstorm_tonight"}),
+        )
+        return True
+
+    try:
+        from universal_agent.services.todoist_service import TodoService
+
+        result = TodoService().promote_idea_to_heartbeat_candidate(target)
+    except Exception as exc:
+        await manager.send_event(
+            connection_id,
+            WebSocketEvent(
+                type=WSEventType.ERROR,
+                data={"message": f"Todoist quick command failed: {exc}"},
+            ),
+        )
+        await manager.send_event(
+            connection_id,
+            WebSocketEvent(type=WSEventType.QUERY_COMPLETE, data={"quick_command": "use_brainstorm_tonight"}),
+        )
+        return True
+
+    if not bool(result.get("success")):
+        error = str(result.get("error") or "promotion failed")
+        await manager.send_event(
+            connection_id,
+            WebSocketEvent(
+                type=WSEventType.TEXT,
+                data={"text": f"Could not promote brainstorm item: {error}", "final": True},
+            ),
+        )
+        await manager.send_event(
+            connection_id,
+            WebSocketEvent(type=WSEventType.QUERY_COMPLETE, data={"quick_command": "use_brainstorm_tonight"}),
+        )
+        return True
+
+    previous = str(result.get("previous_section") or "")
+    task_id = str(result.get("task_id") or "")
+    content = str(result.get("content") or "")
+    msg = (
+        f"Promoted brainstorm to Heartbeat Candidate: {task_id}"
+        + (f" ({content})" if content else "")
+        + (f" [from {previous}]" if previous else "")
+    )
+    await manager.send_event(
+        connection_id,
+        WebSocketEvent(type=WSEventType.TEXT, data={"text": msg, "final": True}),
+    )
+    await manager.send_event(
+        connection_id,
+        WebSocketEvent(type=WSEventType.QUERY_COMPLETE, data={"quick_command": "use_brainstorm_tonight"}),
+    )
+    return True
 
 
 def _dashboard_session_secret() -> str:
@@ -830,6 +932,10 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
                             continue
                         if last_query_text == query and last_query_ts and (now_ts - last_query_ts) < 2.0:
                             logger.warning("Duplicate query ignored (recent)", extra={"query": query[:200]})
+                            continue
+                        if await _try_handle_todoist_quick_command(connection_id, query):
+                            last_query_text = query
+                            last_query_ts = now_ts
                             continue
                         in_flight = True
                         last_query_text = query

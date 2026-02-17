@@ -81,6 +81,8 @@ RESEARCH_SPECIALIST_COMPLETION_SUMMARY.txt
 scripts/test_results.json
 
 # === Local User Profile (PII) ===
+config/USER.md
+config/user.md
 config/user_profile.json
 config/user_profile.md
 

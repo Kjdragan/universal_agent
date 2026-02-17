@@ -23,19 +23,36 @@ def _load_file(path: str) -> str:
 def _load_user_profile(max_chars: int = 4000) -> str:
     """Load optional user profile context from local config (may contain PII)."""
     try:
-        profile_path = (os.getenv("UA_USER_PROFILE_PATH") or "config/user_profile.json").strip()
-        if not profile_path:
-            return ""
-        content = _load_file(profile_path)
+        configured_path = (os.getenv("UA_USER_PROFILE_PATH") or "").strip()
+        candidate_paths = [configured_path] if configured_path else [
+            "config/USER.md",
+            "config/user.md",
+            "config/user_profile.json",
+            "config/user_profile.md",
+            "config/user_memory_profile.md",
+        ]
+
+        profile_path = ""
+        content = ""
+        for candidate in candidate_paths:
+            if not candidate:
+                continue
+            loaded = _load_file(candidate)
+            if loaded:
+                profile_path = candidate
+                content = loaded
+                break
+
         if not content:
             return ""
         if len(content) > max_chars:
             content = content[: max_chars - 3] + "..."
+        code_fence_lang = "json" if profile_path.lower().endswith(".json") else "md"
         return (
             "## 👤 USER PROFILE (LOCAL CONFIG)\n"
             "This is private, user-supplied profile data. Use it to pick defaults (timezone, home location, preferred name), "
             "but do not reveal it unless the user explicitly asks.\n\n"
-            "```json\n"
+            f"```{code_fence_lang}\n"
             f"{content}\n"
             "```"
         )
@@ -167,7 +184,11 @@ def build_system_prompt(
         "**Reliability note (important):** If you issue multiple tool calls in the same assistant message, they are treated as siblings.\n"
         "If one sibling fails (non-zero exit, blocked by a hook, network error), other siblings may be auto-failed with\n"
         "`<tool_use_error>Sibling tool call errored</tool_use_error>`.\n"
-        "Prefer sequential tool calls when any step is likely to fail or needs error handling."
+        "Prefer sequential tool calls when any step is likely to fail or needs error handling.\n\n"
+        "**Todoist routing policy:**\n"
+        "- For reminders, personal todos, and brainstorm capture, prefer INTERNAL Todoist tools first (`mcp__internal__todoist_*`).\n"
+        "- Use Composio Todoist discovery/connector flow only when explicitly requested, or when internal Todoist tools are unavailable.\n"
+        "- Do NOT route general engineering/research implementation work into Todoist. Keep those on the standard decomposition + execution pipeline."
     )
 
     # ── 6. CAPABILITY DOMAINS ─────────────────────────────────────────
@@ -181,16 +202,21 @@ def build_system_prompt(
         "- **Real-World Actions**: GoPlaces, Google Maps directions (`mcp__composio__GOOGLEMAPS_*`), browser automation (`browserbase`), form filling\n"
         "- **Engineering**: GitHub (`mcp__composio__GITHUB_*`), code analysis, test execution\n"
         "- **Knowledge Capture**: Notion (`mcp__composio__NOTION_*`), memory tools, Google Docs/Sheets/Drive\n"
+        "- **Reminders & Brainstorm Progression**: Internal Todoist tools for quick capture, dedupe, and heartbeat-visible backlog movement\n"
         "- **System Ops**: Cron scheduling, heartbeat config, monitoring via `system-configuration-agent`\n"
         "- **...and many more**: You have 250+ Composio integrations available. Use `mcp__composio__COMPOSIO_SEARCH_TOOLS` to discover tools for ANY service not listed above.\n"
-        "  Exception: **Never** use Composio for X/Twitter. Always use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback)."
+        "  Exception: **Never** use Composio for X/Twitter. Always use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n"
+        "  Exception: For Todoist reminder/brainstorm intents, prefer internal Todoist tools before Composio Todoist."
     )
 
     # ── 7. EXECUTION STRATEGY ─────────────────────────────────────────
     sections.append(
         "## 🚀 EXECUTION STRATEGY\n"
         "1. **Analyze Request**: What capability domains does this need? Think CREATIVELY.\n"
-        "2. **Use Composio tools DIRECTLY** for atomic actions (search, email, calendar, code exec, Slack, YouTube, etc.)\n"
+        "2. **Choose the right atomic-action lane**:\n"
+        "   - Todoist reminders/brainstorm capture -> use INTERNAL Todoist tools first (`mcp__internal__todoist_*`).\n"
+        "   - Other external SaaS actions (search, email, calendar, code exec, Slack, YouTube, etc.) -> use Composio tools directly.\n"
+        "   - Use Composio Todoist only when explicitly asked for connector-level behavior or internal Todoist tools fail.\n"
         "3. **Delegate to specialists** for complex multi-step workflows:\n"
         "   - Deep research pipeline? -> `research-specialist`\n"
         "   - HTML/PDF report? -> `report-writer`\n"
@@ -204,6 +230,7 @@ def build_system_prompt(
         "   - YouTube tutorials? -> `youtube-explainer-expert`\n"
         "   - Slack interactions? -> `slack-expert`\n"
         "   - System/cron config? -> `system-configuration-agent`\n"
+        "   - IMPORTANT: Do NOT substitute Todoist capture flows for these specialist execution workflows.\n"
         "4. **Chain phases**: Output from one phase feeds the next. Local phases (image gen, video render, PDF) "
         "need handoff to Composio backbone for delivery (upload_to_composio -> GMAIL_SEND_EMAIL)."
     )

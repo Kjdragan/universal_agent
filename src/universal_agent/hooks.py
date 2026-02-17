@@ -230,6 +230,69 @@ def _maybe_abs_path(path_value: str, workspace_dir: str | None) -> str:
         return path_value
 
 
+def _is_heartbeat_investigation_mode() -> bool:
+    run_source = str(os.getenv("UA_RUN_SOURCE") or "").strip().lower()
+    if run_source != "heartbeat":
+        return False
+    raw = str(os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "1") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off", ""}
+
+
+def _resolve_tool_target_path(path_value: Any, workspace_dir: str | None) -> Path | None:
+    if not isinstance(path_value, str) or not path_value.strip():
+        return None
+    raw = path_value.strip()
+    try:
+        candidate = Path(raw)
+        if candidate.is_absolute():
+            return candidate.resolve()
+        root = Path(workspace_dir or get_current_workspace() or os.getcwd()).resolve()
+        return (root / candidate).resolve()
+    except Exception:
+        return None
+
+
+def _is_allowed_heartbeat_write_path(path_value: Any, workspace_dir: str | None) -> bool:
+    resolved = _resolve_tool_target_path(path_value, workspace_dir)
+    if resolved is None:
+        return False
+
+    workspace_root = Path(workspace_dir or get_current_workspace() or os.getcwd()).resolve()
+    try:
+        from universal_agent.artifacts import repo_root, resolve_artifacts_dir
+
+        artifacts_root = resolve_artifacts_dir()
+        repo_memory_root = (repo_root() / "memory").resolve()
+    except Exception:
+        artifacts_root = None
+        repo_memory_root = None
+
+    allowed_roots = [
+        (workspace_root / "work_products").resolve(),
+    ]
+    if artifacts_root is not None:
+        allowed_roots.append(artifacts_root.resolve())
+    if repo_memory_root is not None:
+        allowed_roots.append(repo_memory_root)
+
+    for root in allowed_roots:
+        try:
+            resolved.relative_to(root)
+            return True
+        except Exception:
+            continue
+
+    # Keep HEARTBEAT.md updates allowed inside workspace root.
+    if resolved.name.lower() == "heartbeat.md":
+        try:
+            resolved.relative_to(workspace_root)
+            return True
+        except Exception:
+            return False
+
+    return False
+
+
 def _should_block_large_image_read(file_path: str, workspace_dir: str | None) -> tuple[bool, dict]:
     try:
         # Default 0 means "block all image reads" (prevents base64 injection entirely).
@@ -554,8 +617,47 @@ class AgentHookSet:
 
     async def on_pre_tool_use_ledger(self, input_data: dict, tool_use_id: object, context: dict) -> dict:
         """Main guardrail and ledger hook."""
-        tool_name = input_data.get("tool_name", "")
+        tool_name = str(input_data.get("tool_name", "") or "")
         tool_input = input_data.get("tool_input", {}) or {}
+        if not isinstance(tool_input, dict):
+            tool_input = {}
+
+        if _is_heartbeat_investigation_mode():
+            upper_name = tool_name.upper()
+            if upper_name in {"BASH"} or upper_name.endswith("__COMPOSIO_MULTI_EXECUTE_TOOL"):
+                return {
+                    "systemMessage": (
+                        "⚠️ BLOCKED: Heartbeat is running in investigation-only mode. "
+                        "Mutating shell commands and generic Composio execute calls are disabled."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Heartbeat investigation-only mode blocks mutating execution tools.",
+                    },
+                }
+
+            is_write_like = (
+                upper_name in {"WRITE", "EDIT", "MULTIEDIT"}
+                or upper_name.endswith("__WRITE_TEXT_FILE")
+                or upper_name.endswith("__APPEND_TO_FILE")
+            )
+            if is_write_like:
+                target_path = tool_input.get("file_path") or tool_input.get("path")
+                if not _is_allowed_heartbeat_write_path(target_path, self.workspace_dir):
+                    return {
+                        "systemMessage": (
+                            "⚠️ BLOCKED: Heartbeat investigation-only mode allows writes only to draft-safe "
+                            "locations (work_products/, UA_ARTIFACTS_DIR, or memory/)."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "Write/edit path is outside heartbeat draft-safe locations.",
+                        },
+                    }
 
         if tool_name == "Read":
             file_path = _tool_read_path_from_input(tool_input)

@@ -1,4 +1,4 @@
-# User Memory Profile: Kenneth Dragan
+# User Memory Profile: Kevin Dragan
 
 **Role & Background:**
 
