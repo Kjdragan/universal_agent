@@ -124,6 +124,7 @@ def client(tmp_path, monkeypatch):
     
     # Env vars
     monkeypatch.setenv("UA_GATEWAY_PORT", "0")  # Avoid binding real port if it tried
+    monkeypatch.setenv("UA_WORK_THREADS_PATH", str((tmp_path / "work_threads.json").resolve()))
 
     # Bypass the real gateway_server lifespan which initializes the runtime DB and background services.
     # Unit tests only need an OpsService pointed at tmp_path.
@@ -1341,3 +1342,58 @@ def test_ops_calendar_change_request_confirm_for_cron_interval(client, tmp_path)
     updated = gateway_server._cron_service.get_job(job.job_id)
     assert updated is not None
     assert updated.every_seconds == 45 * 60
+
+
+def test_ops_work_thread_decision_roundtrip(client):
+    session_id = "session_delivery_workflow"
+
+    iterate_resp = client.post(
+        "/api/v1/ops/work-threads/decide",
+        json={
+            "session_id": session_id,
+            "decision": "iterate",
+            "note": "Continue with tighter acceptance criteria.",
+            "metadata": {"source": "test"},
+        },
+    )
+    assert iterate_resp.status_code == 200
+    iterate_thread = iterate_resp.json()["thread"]
+    assert iterate_thread["session_id"] == session_id
+    assert iterate_thread["decision"] == "iterate"
+    assert iterate_thread["status"] == "active"
+    assert iterate_thread["patch_version"] == 2
+    assert len(iterate_thread.get("history", [])) == 1
+
+    list_resp = client.get(f"/api/v1/ops/work-threads?session_id={session_id}")
+    assert list_resp.status_code == 200
+    listed = list_resp.json().get("threads", [])
+    assert len(listed) == 1
+    assert listed[0]["thread_id"] == iterate_thread["thread_id"]
+
+    promote_resp = client.post(
+        "/api/v1/ops/work-threads/decide",
+        json={
+            "session_id": session_id,
+            "decision": "promote",
+            "note": "Promotion approved after checks.",
+        },
+    )
+    assert promote_resp.status_code == 200
+    promote_thread = promote_resp.json()["thread"]
+    assert promote_thread["thread_id"] == iterate_thread["thread_id"]
+    assert promote_thread["decision"] == "promote"
+    assert promote_thread["status"] == "promoted"
+    assert promote_thread["patch_version"] == 2
+    assert len(promote_thread.get("history", [])) == 2
+
+
+def test_ops_work_thread_rejects_invalid_decision(client):
+    resp = client.post(
+        "/api/v1/ops/work-threads/decide",
+        json={
+            "session_id": "session_delivery_invalid",
+            "decision": "ship_it",
+        },
+    )
+    assert resp.status_code == 400
+    assert "Unsupported decision" in resp.text

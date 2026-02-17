@@ -68,6 +68,12 @@ from universal_agent.ops_config import (
 )
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.approvals import list_approvals, update_approval, upsert_approval
+from universal_agent.work_threads import (
+    append_work_thread_decision,
+    list_work_threads,
+    update_work_thread,
+    upsert_work_thread,
+)
 from universal_agent.hooks_service import HooksService
 from universal_agent.security_paths import (
     allow_external_workspaces_from_env,
@@ -297,6 +303,47 @@ class OpsApprovalCreateRequest(BaseModel):
 class OpsApprovalUpdateRequest(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class OpsWorkThreadUpsertRequest(BaseModel):
+    thread_id: Optional[str] = None
+    session_id: str
+    title: Optional[str] = None
+    target: Optional[str] = None
+    branch: Optional[str] = None
+    workspace_dir: Optional[str] = None
+    summary: Optional[str] = None
+    status: Optional[str] = None
+    acceptance_criteria: Optional[list[str]] = None
+    open_questions: Optional[list[str]] = None
+    patch_version: Optional[int] = None
+    test_status: Optional[str] = None
+    risk_notes: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class OpsWorkThreadUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    target: Optional[str] = None
+    branch: Optional[str] = None
+    workspace_dir: Optional[str] = None
+    summary: Optional[str] = None
+    status: Optional[str] = None
+    acceptance_criteria: Optional[list[str]] = None
+    open_questions: Optional[list[str]] = None
+    patch_version: Optional[int] = None
+    test_status: Optional[str] = None
+    risk_notes: Optional[str] = None
+    decision: Optional[str] = None
+    decision_note: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class OpsWorkThreadDecisionRequest(BaseModel):
+    session_id: str
+    decision: str
+    note: Optional[str] = None
     metadata: Optional[dict] = None
 
 
@@ -5122,6 +5169,59 @@ async def ops_approvals_update(
             pending["status"] = record.get("status")
             pending["updated_at"] = datetime.now().isoformat()
     return {"approval": record}
+
+
+@app.get("/api/v1/ops/work-threads")
+async def ops_work_threads_list(
+    request: Request,
+    status: Optional[str] = None,
+    session_id: Optional[str] = None,
+):
+    _require_ops_auth(request)
+    return {"threads": list_work_threads(status=status, session_id=session_id)}
+
+
+@app.post("/api/v1/ops/work-threads")
+async def ops_work_threads_upsert(request: Request, payload: OpsWorkThreadUpsertRequest):
+    _require_ops_auth(request)
+    try:
+        record = upsert_work_thread(payload.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"thread": record}
+
+
+@app.post("/api/v1/ops/work-threads/decide")
+async def ops_work_threads_decide(request: Request, payload: OpsWorkThreadDecisionRequest):
+    _require_ops_auth(request)
+    decided_by = (
+        str(request.headers.get("x-ua-dashboard-owner") or "").strip()
+        or "dashboard_operator"
+    )
+    try:
+        record = append_work_thread_decision(
+            session_id=payload.session_id,
+            decision=payload.decision,
+            note=payload.note,
+            decided_by=decided_by,
+            metadata=payload.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"thread": record}
+
+
+@app.patch("/api/v1/ops/work-threads/{thread_id}")
+async def ops_work_threads_update(
+    request: Request,
+    thread_id: str,
+    payload: OpsWorkThreadUpdateRequest,
+):
+    _require_ops_auth(request)
+    record = update_work_thread(thread_id, payload.model_dump(exclude_none=True))
+    if record is None:
+        raise HTTPException(status_code=404, detail="Work thread not found")
+    return {"thread": record}
 
 
 @app.get("/api/v1/ops/models")

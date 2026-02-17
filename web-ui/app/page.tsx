@@ -45,6 +45,34 @@ const ICONS = {
   minimize: "❐",
 };
 
+type HydratedChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+const RUN_LOG_USER_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+👤\s+USER:\s*(.+)$/;
+const RUN_LOG_ASSISTANT_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+🤖\s+ASSISTANT:\s*(.+)$/;
+
+function extractChatHistoryFromRunLog(raw: string): HydratedChatMessage[] {
+  const entries: HydratedChatMessage[] = [];
+  const lines = raw.split(/\r?\n/);
+  for (const line of lines) {
+    const userMatch = line.match(RUN_LOG_USER_LINE);
+    if (userMatch?.[1]) {
+      const content = userMatch[1].trim();
+      if (content) entries.push({ role: "user", content });
+      continue;
+    }
+
+    const assistantMatch = line.match(RUN_LOG_ASSISTANT_LINE);
+    if (assistantMatch?.[1]) {
+      const content = assistantMatch[1].trim();
+      if (content) entries.push({ role: "assistant", content });
+    }
+  }
+  return entries;
+}
+
 
 // =============================================================================
 // Components
@@ -733,9 +761,12 @@ function ChatInterface() {
   const [isSending, setIsSending] = useState(false);
   const [pendingQuery, setPendingQuery] = useState<string | null>(null);
   const [chatRole, setChatRole] = useState<"writer" | "viewer">("writer");
+  const [historyHydrationNotice, setHistoryHydrationNotice] = useState<string | null>(null);
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const hydratedSessionIdsRef = React.useRef<Set<string>>(new Set());
+  const isVpObserverSession = /^vp_/i.test((currentSession?.session_id || "").trim());
 
   const focusInput = React.useCallback(() => {
     if (chatRole === "viewer") return;
@@ -774,6 +805,11 @@ function ChatInterface() {
       window.history.replaceState({}, "", url.toString());
     }
   }, [focusInput]);
+
+  useEffect(() => {
+    if (!isVpObserverSession) return;
+    setChatRole("viewer");
+  }, [isVpObserverSession]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -834,13 +870,70 @@ function ChatInterface() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, currentStreamingMessage]);
 
+  useEffect(() => {
+    const sessionId = (currentSession?.session_id || "").trim();
+    if (!sessionId) return;
+    setHistoryHydrationNotice(null);
+    if (hydratedSessionIdsRef.current.has(sessionId)) return;
+
+    // If stream events have already populated the timeline, avoid duplicate hydration.
+    if (useAgentStore.getState().messages.length > 0) {
+      hydratedSessionIdsRef.current.add(sessionId);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`);
+        if (!response.ok) return;
+        const raw = await response.text();
+        const history = extractChatHistoryFromRunLog(raw).slice(-80);
+        if (cancelled || history.length === 0) return;
+
+        const store = useAgentStore.getState();
+        if (store.messages.length > 0) return;
+
+        for (const msg of history) {
+          store.addMessage({
+            role: msg.role,
+            content: msg.content,
+            time_offset: 0,
+            is_complete: true,
+          });
+        }
+        setHistoryHydrationNotice(`Hydrated ${history.length} messages from run.log`);
+      } catch (error) {
+        console.warn("Failed to rehydrate chat history from run.log", error);
+      } finally {
+        hydratedSessionIdsRef.current.add(sessionId);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSession?.session_id]);
+
   return (
     <div className="flex flex-col h-full">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto scrollbar-thin p-4">
+        {historyHydrationNotice && (
+          <div className="mb-3 rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-emerald-300">
+            {historyHydrationNotice}
+          </div>
+        )}
         {chatRole === "viewer" && (
           <div className="mb-3 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-amber-300">
-            Viewer mode: read-only attachment. Open as writer to send messages.
+            {isVpObserverSession
+              ? "VP Observer Mode: This lane is controlled by Simone. You can monitor only."
+              : "Viewer mode: read-only attachment. Open as writer to send messages."}
+          </div>
+        )}
+        {isVpObserverSession && (
+          <div className="mb-3 rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-rose-300">
+            Commands are disabled in this session. Use the primary Simone chat to direct CODIE.
           </div>
         )}
         {sessionAttachMode === "tail" && currentSession?.session_id && (
@@ -986,16 +1079,16 @@ function ChatInterface() {
               }
             }}
             placeholder={
-              chatRole === "viewer"
+              (chatRole === "viewer" || isVpObserverSession)
                 ? "Viewer mode: input disabled"
                 : connectionStatus === "processing"
                   ? "Type to redirect (Enter to stop & send)..."
                   : "Enter your neural query..."
             }
-            disabled={chatRole === "viewer"}
+            disabled={chatRole === "viewer" || isVpObserverSession}
             className="flex-1 bg-slate-950/50 border border-slate-800 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-cyan-500/50 focus:shadow-glow-sm disabled:opacity-50 transition-all font-mono"
           />
-          {connectionStatus === "processing" && chatRole !== "viewer" ? (
+          {connectionStatus === "processing" && chatRole !== "viewer" && !isVpObserverSession ? (
             <button
               onClick={() => ws.sendCancel()}
               className="bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-400 px-4 py-2 rounded-lg transition-all flex items-center gap-2 text-xs font-bold uppercase tracking-wider"
@@ -1006,7 +1099,7 @@ function ChatInterface() {
           ) : (
             <button
               onClick={() => handleSend()}
-              disabled={chatRole === "viewer" || isSending || !input.trim()}
+              disabled={chatRole === "viewer" || isVpObserverSession || isSending || !input.trim()}
               className="bg-cyan-600 hover:bg-cyan-500 disabled:bg-cyan-600/20 disabled:text-cyan-400/40 text-white px-5 py-2 rounded-lg transition-all btn-primary text-xs font-bold uppercase tracking-wider flex items-center gap-2"
             >
               <span>Send</span>
