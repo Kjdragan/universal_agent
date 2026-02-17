@@ -135,6 +135,38 @@ class FakeTodoistAPI:
         )
 
 
+class FakePagedTodoistAPI(FakeTodoistAPI):
+    """Simulate newer SDK shape: iterator pages of lists and no filter= kwarg."""
+
+    def get_projects(self):
+        return [list(self.projects)]
+
+    def get_sections(self, project_id: str):
+        rows = [s for s in self.sections if s.project_id == project_id]
+        return [rows]
+
+    def get_labels(self):
+        return [list(self.labels)]
+
+    # Signature intentionally omits filter kwarg to emulate current SDK.
+    def get_tasks(
+        self,
+        *,
+        project_id: str | None = None,
+        section_id: str | None = None,
+        parent_id: str | None = None,
+        label: str | None = None,
+        ids: list[str] | None = None,
+        limit: int | None = None,
+    ):
+        rows = list(self.tasks.values())
+        if project_id:
+            rows = [t for t in rows if t.project_id == project_id]
+        if label:
+            rows = [t for t in rows if label in (t.labels or [])]
+        return [rows]
+
+
 def test_ensure_taxonomy_idempotent_creates_projects_sections_and_labels():
     from universal_agent.services.todoist_service import (
         AGENT_TASKS_PROJECT,
@@ -265,3 +297,54 @@ def test_pipeline_promote_park_and_summary_counts():
 
     counts2 = svc.get_pipeline_summary()
     assert counts2["parked"] == 1
+
+
+def test_sdk_compat_paged_iterators_bootstrap_taxonomy():
+    from universal_agent.services.todoist_service import TodoService
+
+    api = FakePagedTodoistAPI()
+    svc = TodoService(api_token="test", api=api)
+
+    res = svc.ensure_taxonomy()
+    assert res["agent_project_id"]
+    assert res["brainstorm_project_id"]
+    assert set(res["agent_sections"].keys()) == {"immediate", "scheduled", "background", "recurring"}
+    assert set(res["brainstorm_sections"].keys()) == {
+        "inbox",
+        "triaging",
+        "heartbeat_candidate",
+        "approved",
+        "in_implementation",
+        "parked",
+    }
+
+
+def test_sdk_compat_actionable_tasks_without_filter_kwarg_uses_local_filtering():
+    from universal_agent.services.todoist_service import TodoService
+
+    api = FakePagedTodoistAPI()
+    svc = TodoService(api_token="test", api=api)
+    taxonomy = svc.ensure_taxonomy()
+
+    api.add_task(
+        content="ready task",
+        project_id=taxonomy["agent_project_id"],
+        labels=["agent-ready"],
+    )
+    api.add_task(
+        content="blocked task",
+        project_id=taxonomy["agent_project_id"],
+        labels=["agent-ready", "blocked"],
+    )
+    api.add_task(
+        content="not ready task",
+        project_id=taxonomy["agent_project_id"],
+        labels=[],
+    )
+
+    rows = svc.get_actionable_tasks()
+    contents = {row["content"] for row in rows}
+
+    assert "ready task" in contents
+    assert "blocked task" not in contents
+    assert "not ready task" not in contents

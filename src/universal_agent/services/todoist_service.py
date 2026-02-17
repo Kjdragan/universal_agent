@@ -74,7 +74,14 @@ class TodoService:
     """Pure Todoist API service. No LLM/tool coupling."""
 
     def __init__(self, api_token: str | None = None, *, api: Optional[object] = None):
-        token = (api_token or os.getenv("TODOIST_API_TOKEN") or "").strip()
+        if api_token is None:
+            token = (
+                os.getenv("TODOIST_API_TOKEN")
+                or os.getenv("TODOIST_API_KEY")
+                or ""
+            ).strip()
+        else:
+            token = str(api_token).strip()
         if api is None:
             if not token:
                 raise ValueError("TODOIST_API_TOKEN is required")
@@ -94,24 +101,40 @@ class TodoService:
         """Idempotently create projects, sections, labels."""
 
         try:
-            projects = list(self.api.get_projects() or [])
+            projects = _collect_items(self.api.get_projects())
+            fallback_project = projects[0] if projects else None
             agent_project = _find_by_name(projects, AGENT_TASKS_PROJECT)
             if not agent_project:
-                agent_project = self.api.add_project(name=AGENT_TASKS_PROJECT)
+                try:
+                    agent_project = self.api.add_project(name=AGENT_TASKS_PROJECT)
+                except Exception:
+                    agent_project = fallback_project
 
             brainstorm_project = _find_by_name(projects, BRAINSTORM_PROJECT)
             if not brainstorm_project:
-                brainstorm_project = self.api.add_project(name=BRAINSTORM_PROJECT)
+                try:
+                    brainstorm_project = self.api.add_project(name=BRAINSTORM_PROJECT)
+                except Exception:
+                    brainstorm_project = agent_project or fallback_project
 
-            agent_project_id = str(getattr(agent_project, "id"))
-            brainstorm_project_id = str(getattr(brainstorm_project, "id"))
+            if not agent_project or not brainstorm_project:
+                raise RuntimeError("Todoist projects unavailable")
+
+            agent_project_id = str(_get_field(agent_project, "id", "") or "")
+            brainstorm_project_id = str(_get_field(brainstorm_project, "id", "") or "")
+            if not agent_project_id or not brainstorm_project_id:
+                raise RuntimeError("Todoist project ids unavailable")
 
             agent_sections = self._ensure_sections(agent_project_id, AGENT_SECTIONS)
             brainstorm_sections = self._ensure_sections(brainstorm_project_id, BRAINSTORM_SECTIONS)
 
             labels_created: list[str] = []
-            labels = list(self.api.get_labels() or [])
-            existing_labels = {str(getattr(lbl, "name")) for lbl in labels}
+            labels = _collect_items(self.api.get_labels())
+            existing_labels = {
+                str(_get_field(lbl, "name", "") or "").strip()
+                for lbl in labels
+                if str(_get_field(lbl, "name", "") or "").strip()
+            }
             for name in [*DEFAULT_AGENT_LABELS, *DEFAULT_BRAINSTORM_LABELS]:
                 if name not in existing_labels:
                     try:
@@ -153,8 +176,22 @@ class TodoService:
                 (filter_str or "").strip()
                 or "(overdue | today | no date) & @agent-ready & !@blocked"
             )
-            tasks = list(self.api.get_tasks(filter=filter_value) or [])
+
+            tasks: list[object]
+            if not (filter_str or "").strip():
+                # SDK compatibility path: newer API prefers keyword args (e.g. label)
+                # and does not accept filter=. Pull agent-ready tasks, then apply
+                # deterministic local filtering for blocked/due semantics.
+                tasks = _collect_items(self.api.get_tasks(label="agent-ready"))
+            else:
+                try:
+                    # Backward-compatible path for SDKs supporting Todoist filter syntax.
+                    tasks = _collect_items(self.api.get_tasks(filter=filter_value))
+                except TypeError:
+                    tasks = _collect_items(self.api.get_tasks())
+
             out = [self._task_to_dict(task) for task in tasks]
+            out = _apply_local_filter(out, filter_value)
             out.sort(
                 key=lambda row: (
                     -int(DISPLAY_TO_API.get(str(row.get("priority") or ""), 1)),
@@ -174,7 +211,7 @@ class TodoService:
                 kwargs["project_id"] = project_id
             if label:
                 kwargs["label"] = label
-            tasks = list(self.api.get_tasks(**kwargs) or [])
+            tasks = _collect_items(self.api.get_tasks(**kwargs))
             return [self._task_to_dict(task) for task in tasks]
         except Exception:
             return []
@@ -415,12 +452,15 @@ class TodoService:
 
     def _ensure_sections(self, project_id: str, desired: dict[str, str]) -> dict[str, str]:
         out: dict[str, str] = {}
-        existing = list(self.api.get_sections(project_id=project_id) or [])
+        existing = _collect_items(self.api.get_sections(project_id=project_id))
         for key, name in desired.items():
             found = _find_by_name(existing, name)
             if not found:
-                found = self.api.add_section(name=name, project_id=project_id)
-            out[key] = str(getattr(found, "id"))
+                try:
+                    found = self.api.add_section(name=name, project_id=project_id)
+                except Exception:
+                    found = None
+            out[key] = str(_get_field(found, "id", "") or "")
         return out
 
     def _find_existing_idea_by_dedupe_key(self, dedupe_key: str) -> Optional[dict[str, Any]]:
@@ -482,9 +522,58 @@ class TodoService:
 
 def _find_by_name(items: list[object], name: str) -> Optional[object]:
     for item in items:
-        if str(getattr(item, "name", "")).strip() == name:
+        if str(_get_field(item, "name", "") or "").strip() == name:
             return item
     return None
+
+
+def _collect_items(values: object) -> list[object]:
+    out: list[object] = []
+    for item in list(values or []):
+        if isinstance(item, list):
+            out.extend(item)
+        else:
+            out.append(item)
+    return out
+
+
+def _get_field(item: object, field: str, default: Any = None) -> Any:
+    if item is None:
+        return default
+    if isinstance(item, dict):
+        return item.get(field, default)
+    return getattr(item, field, default)
+
+
+def _apply_local_filter(rows: list[dict[str, Any]], filter_value: str) -> list[dict[str, Any]]:
+    q = (filter_value or "").strip().lower()
+    if not q:
+        return rows
+
+    out = list(rows)
+    wants_agent_ready = "@agent-ready" in q
+    wants_blocked = "@blocked" in q and "!@blocked" not in q
+    excludes_blocked = "!@blocked" in q
+    wants_due_window = any(token in q for token in ("overdue", "today", "no date"))
+
+    if wants_agent_ready:
+        out = [row for row in out if "agent-ready" in (row.get("labels") or [])]
+    if wants_blocked:
+        out = [row for row in out if "blocked" in (row.get("labels") or [])]
+    if excludes_blocked:
+        out = [row for row in out if "blocked" not in (row.get("labels") or [])]
+    if wants_due_window:
+        out = [row for row in out if _matches_due_window(row)]
+
+    return out
+
+
+def _matches_due_window(row: dict[str, Any]) -> bool:
+    due = str(row.get("due_date") or "").strip()
+    if not due:
+        return True
+    today = datetime.now(timezone.utc).date().isoformat()
+    return due <= today
 
 
 def _format_idea_description(
