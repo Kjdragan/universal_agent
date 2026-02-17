@@ -524,6 +524,12 @@ Create `macro_tasks.json` with phases and tasks for this request.
 
 **Composio-Anchored Decomposition:** Prefer Composio tools for deterministic atomic actions (search, email, calendar, code execution). Use subagents for multi-step workflows. Use local MCP tools for processing. Define handoff points between local phases and the Composio backbone.
 
+**Todoist boundary policy:**
+- Keep complex engineering/research execution on the normal decomposition + specialist pipeline.
+- Use Todoist only for reminders, lightweight personal todos, and brainstorm backlog capture/progression.
+- For Todoist intents, prefer internal `mcp__internal__todoist_*` tools before Composio Todoist connector flow.
+- Do NOT rewrite multi-step implementation tasks into Todoist bookkeeping phases.
+
 **Available Sub-Agents:** research-specialist, report-writer, image-expert, video-creation-expert, video-remotion-expert, mermaid-expert, browserbase, slack-expert, youtube-explainer-expert, system-configuration-agent, data-analyst, action-coordinator, code-writer.
 
 **Available Composio Toolkits:** composio_search, gmail, googlecalendar, slack, codeinterpreter, googledrive, googlesheets, googledocs, github, notion, discord, youtube, airtable, hubspot, linear, browserbase, filetool, sqltool.

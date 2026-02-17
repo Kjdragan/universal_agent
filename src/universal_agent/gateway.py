@@ -329,6 +329,7 @@ class InProcessGateway(Gateway):
         adapter.config.force_complex = request.force_complex
         run_source = run_source_override or metadata.get("source", "user")
         adapter.config.__dict__["_run_source"] = run_source
+        adapter.config.__dict__["_request_metadata"] = dict(metadata)
 
         memory_policy = metadata.get("memory_policy", {})
         if isinstance(memory_policy, dict):

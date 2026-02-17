@@ -299,6 +299,69 @@ def test_pipeline_promote_park_and_summary_counts():
     assert counts2["parked"] == 1
 
 
+def test_heartbeat_brainstorm_candidates_rank_and_limit():
+    from universal_agent.services.todoist_service import TodoService
+
+    api = FakeTodoistAPI()
+    svc = TodoService(api_token="test", api=api)
+    taxonomy = svc.ensure_taxonomy()
+
+    # Inbox item (lower priority than heartbeat_candidate)
+    svc.record_idea(content="Inbox idea", dedupe_key="idea-inbox")
+
+    # Heartbeat candidate item (higher priority)
+    hb = svc.record_idea(content="HB idea", dedupe_key="idea-hb")
+    ok = svc.promote_idea(hb["id"], target_section="heartbeat_candidate")
+    assert ok is True
+
+    # Triaging item with higher confidence than inbox
+    tri = svc.record_idea(content="Triaging idea", dedupe_key="idea-tri")
+    ok2 = svc.promote_idea(tri["id"], target_section="triaging")
+    assert ok2 is True
+    svc.record_idea(content="Triaging idea", dedupe_key="idea-tri")  # bump confidence
+
+    # Conservative default: only heartbeat_candidate is surfaced.
+    rows = svc.heartbeat_brainstorm_candidates(limit=2)
+    assert len(rows) == 1
+    assert rows[0]["section"] == "heartbeat_candidate"
+
+    # Explicit override can opt-in additional sections.
+    rows2 = svc.heartbeat_brainstorm_candidates(
+        limit=2,
+        include_sections=["heartbeat_candidate", "triaging"],
+    )
+    assert len(rows2) == 2
+    assert rows2[0]["section"] == "heartbeat_candidate"
+    assert rows2[1]["section"] == "triaging"
+    assert rows2[1]["confidence"] >= 2
+    assert rows2[0]["id"] != rows2[1]["id"]
+
+
+def test_promote_idea_to_heartbeat_candidate_by_dedupe_key_and_task_id():
+    from universal_agent.services.todoist_service import TodoService
+
+    api = FakeTodoistAPI()
+    svc = TodoService(api_token="test", api=api)
+    taxonomy = svc.ensure_taxonomy()
+
+    first = svc.record_idea(content="Retry policy", dedupe_key="retry-policy")
+    second = svc.record_idea(content="Cache cleanup", dedupe_key="cache-cleanup")
+
+    by_key = svc.promote_idea_to_heartbeat_candidate("dedupe:retry-policy")
+    assert by_key["success"] is True
+    assert by_key["task_id"] == first["id"]
+    assert by_key["target_section"] == "heartbeat_candidate"
+    assert api.get_task(first["id"]).section_id == taxonomy["brainstorm_sections"]["heartbeat_candidate"]
+
+    by_id = svc.promote_idea_to_heartbeat_candidate(second["id"])
+    assert by_id["success"] is True
+    assert by_id["task_id"] == second["id"]
+    assert api.get_task(second["id"]).section_id == taxonomy["brainstorm_sections"]["heartbeat_candidate"]
+
+    miss = svc.promote_idea_to_heartbeat_candidate("dedupe:not-found")
+    assert miss["success"] is False
+
+
 def test_sdk_compat_paged_iterators_bootstrap_taxonomy():
     from universal_agent.services.todoist_service import TodoService
 

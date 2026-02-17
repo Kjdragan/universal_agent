@@ -3272,7 +3272,9 @@ async def lifespan(app: FastAPI):
     main_module.runtime_db_conn = connect_runtime_db(db_path)
     # Enable WAL mode for concurrent access (CLI + gateway can coexist)
     main_module.runtime_db_conn.execute("PRAGMA journal_mode=WAL")
-    main_module.runtime_db_conn.execute("PRAGMA busy_timeout=5000")
+    # Keep timeout aligned with durable.db connect_runtime_db() defaults to reduce
+    # transient lock errors during concurrent cron + VP runtime activity.
+    main_module.runtime_db_conn.execute("PRAGMA busy_timeout=60000")
     ensure_schema(main_module.runtime_db_conn)
     
     # Load budget config (defined in main.py)

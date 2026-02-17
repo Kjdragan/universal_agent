@@ -71,6 +71,16 @@ const EMPTY_SUMMARY: SummaryResponse = {
   deployment_profile: { profile: "local_workstation" },
 };
 
+function formatLocalDateTime(value?: string | number | null): string {
+  if (!value) return "--";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const sessionSectionRef = useRef<HTMLElement>(null);
@@ -135,7 +145,13 @@ export default function DashboardPage() {
           ...((summaryData && (summaryData as Partial<SummaryResponse>).notifications) || {}),
         },
       });
-      setNotifications(Array.isArray(notificationsData.notifications) ? notificationsData.notifications : []);
+      setNotifications(
+        Array.isArray(notificationsData.notifications)
+          ? notificationsData.notifications.filter(
+              (item: DashboardNotification) => item.status !== "dismissed",
+            )
+          : [],
+      );
       setCoderVpSnapshot({
         status: coderVpData.status || "unavailable",
         detail: coderVpData.detail,
@@ -164,7 +180,12 @@ export default function DashboardPage() {
         if (!res.ok) return;
         const data = await res.json();
         const updated = data.notification as DashboardNotification;
-        setNotifications((prev) => prev.map((item) => (item.id === id ? updated : item)));
+        setNotifications((prev) => {
+          if (updated.status === "dismissed") {
+            return prev.filter((item) => item.id !== id);
+          }
+          return prev.map((item) => (item.id === id ? updated : item));
+        });
       } finally {
         setUpdatingId((prev) => (prev === id ? null : prev));
       }
@@ -245,6 +266,39 @@ export default function DashboardPage() {
       ),
     [notifications],
   );
+  const visibleNotifications = useMemo(
+    () =>
+      notificationFilter === "unread"
+        ? notifications.filter((item) => item.status === "new")
+        : notifications,
+    [notificationFilter, notifications],
+  );
+
+  const deleteAllVisibleNotifications = useCallback(async () => {
+    const targetCount = visibleNotifications.length;
+    if (targetCount === 0) return;
+    if (!window.confirm(`Delete ${targetCount} notification${targetCount > 1 ? "s" : ""}?`)) return;
+    setBulkUpdating(true);
+    try {
+      const body: Record<string, unknown> = {
+        status: "dismissed",
+        note: "deleted in dashboard bulk action",
+        limit: 1000,
+      };
+      if (notificationFilter === "unread") {
+        body.current_status = "new";
+      }
+      const res = await fetch(`${API_BASE}/api/v1/dashboard/notifications/bulk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) return;
+      await load();
+    } finally {
+      setBulkUpdating(false);
+    }
+  }, [load, notificationFilter, visibleNotifications.length]);
   const coderVpMetrics = coderVpSnapshot.metrics || null;
   const coderFallback = coderVpMetrics?.fallback;
   const coderLatency = coderVpMetrics?.latency_seconds;
@@ -481,7 +535,7 @@ export default function DashboardPage() {
             <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Session</p>
             <p className="mt-1">Runtime status: {coderVpMetrics?.session?.status || "unknown"}</p>
             <p className="mt-1">Session ID: {coderVpMetrics?.session?.session_id || "--"}</p>
-            <p className="mt-1 text-slate-500">Generated: {coderVpMetrics?.generated_at || "--"}</p>
+            <p className="mt-1 text-slate-500">Generated: {formatLocalDateTime(coderVpMetrics?.generated_at)}</p>
           </div>
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs text-slate-300">
             <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Mission mix</p>
@@ -499,7 +553,7 @@ export default function DashboardPage() {
             <div className="mt-2 space-y-1 text-amber-100">
               {recentFallbackEvents.map((event, idx) => (
                 <p key={`${event.created_at || "fallback"}-${idx}`}>
-                  {(event.created_at || "").toString().replace("T", " ").slice(0, 19) || "event"}: {formatFallbackEvent(event)}
+                  {formatLocalDateTime(event.created_at) || "event"}: {formatFallbackEvent(event)}
                 </p>
               ))}
             </div>
@@ -674,20 +728,25 @@ export default function DashboardPage() {
               <p className="mt-1 text-[11px] text-slate-500">
                 memory: {session.memory_mode}
               </p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                last activity: {formatLocalDateTime(session.last_activity)}
+              </p>
               <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="rounded border border-cyan-700 bg-cyan-900/25 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
-                  onClick={() =>
-                    openOrFocusChatWindow({
-                      sessionId: session.session_id,
-                      attachMode: "tail",
-                      role: "writer",
-                    })
-                  }
-                >
-                  Open Writer
-                </button>
+                {!session.session_id.startsWith("vp_") && (
+                  <button
+                    type="button"
+                    className="rounded border border-cyan-700 bg-cyan-900/25 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
+                    onClick={() =>
+                      openOrFocusChatWindow({
+                        sessionId: session.session_id,
+                        attachMode: "tail",
+                        role: "writer",
+                      })
+                    }
+                  >
+                    Open Writer
+                  </button>
+                )}
                 <button
                   type="button"
                   className="rounded border border-amber-700 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/30"
@@ -728,6 +787,16 @@ export default function DashboardPage() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            {visibleNotifications.length > 0 && (
+              <button
+                type="button"
+                onClick={deleteAllVisibleNotifications}
+                disabled={bulkUpdating}
+                className="rounded border border-rose-800/70 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+              >
+                Delete All ({visibleNotifications.length})
+              </button>
+            )}
             {openContinuityAlerts.length > 0 && (
               <>
                 <button
@@ -765,10 +834,7 @@ export default function DashboardPage() {
               No notifications yet.
             </div>
           )}
-          {(notificationFilter === "unread"
-            ? notifications.filter((item) => item.status === "new")
-            : notifications
-          ).map((item) => (
+          {visibleNotifications.map((item) => (
             <div key={item.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold">{item.title}</p>
@@ -807,7 +873,7 @@ export default function DashboardPage() {
                 </div>
               )}
               {item.kind !== "continuity_alert" && item.status === "new" && (
-                <div className="mt-2">
+                <div className="mt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
                     className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
@@ -815,6 +881,14 @@ export default function DashboardPage() {
                     disabled={updatingId === item.id}
                   >
                     Mark Read
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded border border-rose-800/70 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                    onClick={() => updateNotificationStatus(item.id, "dismissed", "deleted in dashboard")}
+                    disabled={updatingId === item.id}
+                  >
+                    Delete
                   </button>
                 </div>
               )}

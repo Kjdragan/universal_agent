@@ -40,6 +40,8 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. "
     "Checkbox meaning: '- [ ]' = ACTIVE/PENDING, '- [x]' = COMPLETED/DISABLED. "
     "Do not infer or repeat old tasks from prior chats. "
+    "Investigation-only mode: do not modify repository source files or run mutating shell commands. "
+    "If you draft code, write artifacts under work_products/ or UA_ARTIFACTS_DIR only. "
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
 DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default
@@ -979,20 +981,50 @@ class HeartbeatService:
                     prompt = prompt.replace("{ok_token}", ok_token)
             
             # Build metadata with system events
-            metadata: dict = {"source": "heartbeat"}
+            heartbeat_investigation_only = str(
+                os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "1")
+            ).strip().lower() not in {"0", "false", "no", "off"}
+            metadata: dict = {
+                "source": "heartbeat",
+                "heartbeat_investigation_only": heartbeat_investigation_only,
+            }
             if system_events:
                 metadata["system_events"] = system_events
                 logger.info("Injecting %d system events into heartbeat for %s", len(system_events), session.session_id)
 
             todoist_actionable_count: Optional[int] = None
+            todoist_brainstorm_candidate_count: Optional[int] = None
 
-            # Deterministic Todoist pre-step: only inject when actionable tasks exist.
+            # Deterministic Todoist pre-step: inject actionable summary and/or
+            # brainstorm candidates when present.
             try:
                 from universal_agent.services.todoist_service import TodoService
 
-                summary = TodoService().heartbeat_summary()
+                todoist = TodoService()
+                summary = todoist.heartbeat_summary()
                 actionable = int(summary.get("actionable_count") or 0)
                 todoist_actionable_count = actionable
+                candidates = []
+                try:
+                    candidates = todoist.heartbeat_brainstorm_candidates(limit=3)
+                except Exception:
+                    candidates = []
+                todoist_brainstorm_candidate_count = len(candidates)
+
+                if candidates:
+                    brainstorm_event = {
+                        "type": "todoist_brainstorm_candidates",
+                        "payload": {
+                            "count": len(candidates),
+                            "candidates": candidates,
+                        },
+                        "created_at": datetime.now().isoformat(),
+                        "session_id": session.session_id,
+                    }
+                    system_events.append(brainstorm_event)
+                    metadata["system_events"] = system_events
+                    metadata["todoist_brainstorm_candidates"] = candidates
+
                 if actionable > 0:
                     todoist_event = {
                         "type": "todoist_summary",
@@ -1008,6 +1040,12 @@ class HeartbeatService:
                         actionable,
                         session.session_id,
                     )
+                elif candidates:
+                    logger.info(
+                        "Injected Todoist brainstorm candidates (%d) into heartbeat for %s",
+                        len(candidates),
+                        session.session_id,
+                    )
             except Exception as exc:
                 logger.info("Todoist heartbeat pre-step unavailable for %s: %s", session.session_id, exc)
             
@@ -1021,6 +1059,7 @@ class HeartbeatService:
             should_skip_agent_run = (
                 todoist_actionable_count is not None
                 and todoist_actionable_count <= 0
+                and (todoist_brainstorm_candidate_count or 0) <= 0
                 and not system_events
                 and not has_exec_completion
             )

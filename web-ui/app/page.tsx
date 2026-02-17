@@ -855,6 +855,19 @@ function ChatInterface() {
     }
   };
 
+  const handleUseBrainstormTonight = async () => {
+    if (chatRole === "viewer" || isVpObserverSession) return;
+    const target = prompt("Promote which brainstorm item for tonight? Enter task id or dedupe key.");
+    if (!target || !target.trim()) return;
+    const command = `/use-brainstorm-tonight ${target.trim()}`;
+    if (connectionStatus === "processing") {
+      setPendingQuery(command);
+      ws.sendCancel(`Interrupted by quick command: ${command}`);
+      return;
+    }
+    await handleSend(command);
+  };
+
   // Handle pending query after cancellation
   useEffect(() => {
     if (connectionStatus === "connected" && pendingQuery) {
@@ -1058,6 +1071,21 @@ function ChatInterface() {
 
       {/* Input - Floating Bar Style */}
       <div className="p-4 bg-slate-900/60 border border-slate-800 backdrop-blur-md mb-20 md:mb-10 ml-4 md:ml-64 mr-4 md:mr-6 rounded-2xl shadow-xl transition-all duration-300">
+        <div className="mb-2 flex items-center gap-2">
+          <button
+            onClick={() => {
+              void handleUseBrainstormTonight();
+            }}
+            disabled={chatRole === "viewer" || isVpObserverSession || isSending}
+            className="bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-amber-400/40 text-amber-200 px-3 py-1 rounded-md transition-all text-[10px] font-bold uppercase tracking-wider"
+            title="Promote brainstorm item to Heartbeat Candidate for tonight"
+          >
+            Use Brainstorm Tonight
+          </button>
+          <span className="text-[10px] text-slate-400 font-mono">
+            Chat command also works: <code>/use-brainstorm-tonight &lt;task_id|dedupe_key&gt;</code>
+          </span>
+        </div>
         <div className="flex gap-3">
           <input
             ref={inputRef}
