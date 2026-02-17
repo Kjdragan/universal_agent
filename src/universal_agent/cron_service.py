@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 MIN_CRON_TIMEOUT_SECONDS = 1
 MAX_CRON_TIMEOUT_SECONDS = 7200
+_CRON_DB_LOCK_RETRY_DELAY_SECONDS = 1.0
+_CRON_DB_LOCK_RETRY_MAX = 5
 
 _CRON_MEDIA_EXTENSIONS = {
     ".png",
@@ -626,57 +628,85 @@ class CronService:
                     record.finished_at = time.time()
                     record.output_preview = "CRON_OK"
                 else:
-                    session = await self.gateway.create_session(
-                        user_id=job.user_id,
-                        workspace_dir=job.workspace_dir,
-                    )
-                    # Build request metadata with optional model override
-                    request_metadata: dict[str, Any] = {
-                        "source": "cron",
-                        "job_id": job.job_id,
-                        "reason": reason,
-                    }
-                    if job.model:
-                        request_metadata["model"] = job.model
-                    
-                    request = GatewayRequest(
-                        user_input=job.command,
-                        force_complex=False,
-                        metadata=request_metadata,
-                    )
-                    run_coro = self.gateway.run_query(session, request)
-                    if timeout_seconds is not None:
-                        result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
-                    else:
-                        result = await run_coro
-                    meta = getattr(result, "metadata", None)
-                    auth_required = False
-                    auth_link = None
-                    errors: list[str] = []
-                    if isinstance(meta, dict):
-                        auth_required = bool(meta.get("auth_required"))
-                        raw_link = meta.get("auth_link")
-                        auth_link = raw_link if isinstance(raw_link, str) and raw_link.strip() else None
-                        raw_errors = meta.get("errors")
-                        if isinstance(raw_errors, list):
-                            errors = [str(e) for e in raw_errors if str(e).strip()]
+                    configured_retries = 2
+                    retries_raw = (os.getenv("UA_CRON_DB_LOCK_RETRIES") or "").strip()
+                    if retries_raw:
+                        try:
+                            configured_retries = int(retries_raw)
+                        except ValueError:
+                            configured_retries = 2
+                    max_db_lock_retries = max(0, min(_CRON_DB_LOCK_RETRY_MAX, configured_retries))
 
-                    if auth_required:
-                        record.status = "auth_required"
-                        # Preserve the link in output so the Web UI can display it without terminal access.
-                        if auth_link:
-                            record.output_preview = f"AUTH REQUIRED: {auth_link}"
-                        else:
-                            record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
-                    elif errors:
-                        record.status = "error"
-                        record.error = errors[0]
-                        record.output_preview = ((getattr(result, "response_text", "") or "")[:400]) or record.error[:400]
-                    else:
-                        record.status = "success"
-                        record.output_preview = (getattr(result, "response_text", "") or "")[:400]
-                    record.finished_at = time.time()
-                    self._persist_run_output(job, record, result)
+                    attempt = 0
+                    while True:
+                        try:
+                            session = await self.gateway.create_session(
+                                user_id=job.user_id,
+                                workspace_dir=job.workspace_dir,
+                            )
+                            # Build request metadata with optional model override
+                            request_metadata: dict[str, Any] = {
+                                "source": "cron",
+                                "job_id": job.job_id,
+                                "reason": reason,
+                            }
+                            if job.model:
+                                request_metadata["model"] = job.model
+
+                            request = GatewayRequest(
+                                user_input=job.command,
+                                force_complex=False,
+                                metadata=request_metadata,
+                            )
+                            run_coro = self.gateway.run_query(session, request)
+                            if timeout_seconds is not None:
+                                result = await asyncio.wait_for(run_coro, timeout=timeout_seconds)
+                            else:
+                                result = await run_coro
+                            meta = getattr(result, "metadata", None)
+                            auth_required = False
+                            auth_link = None
+                            errors: list[str] = []
+                            if isinstance(meta, dict):
+                                auth_required = bool(meta.get("auth_required"))
+                                raw_link = meta.get("auth_link")
+                                auth_link = raw_link if isinstance(raw_link, str) and raw_link.strip() else None
+                                raw_errors = meta.get("errors")
+                                if isinstance(raw_errors, list):
+                                    errors = [str(e) for e in raw_errors if str(e).strip()]
+
+                            if auth_required:
+                                record.status = "auth_required"
+                                # Preserve the link in output so the Web UI can display it without terminal access.
+                                if auth_link:
+                                    record.output_preview = f"AUTH REQUIRED: {auth_link}"
+                                else:
+                                    record.output_preview = "AUTH REQUIRED: open the Composio connect link shown in the run logs."
+                            elif errors:
+                                record.status = "error"
+                                record.error = errors[0]
+                                record.output_preview = ((getattr(result, "response_text", "") or "")[:400]) or record.error[:400]
+                            else:
+                                record.status = "success"
+                                record.output_preview = (getattr(result, "response_text", "") or "")[:400]
+                            record.finished_at = time.time()
+                            self._persist_run_output(job, record, result)
+                            break
+                        except Exception as exc:
+                            is_locked = "database is locked" in str(exc).lower()
+                            if is_locked and attempt < max_db_lock_retries:
+                                attempt += 1
+                                delay_seconds = _CRON_DB_LOCK_RETRY_DELAY_SECONDS * attempt
+                                logger.warning(
+                                    "Chron job %s encountered database lock (attempt %d/%d); retrying in %.1fs",
+                                    job.job_id,
+                                    attempt,
+                                    max_db_lock_retries,
+                                    delay_seconds,
+                                )
+                                await asyncio.sleep(delay_seconds)
+                                continue
+                            raise
             except asyncio.TimeoutError:
                 record.status = "error"
                 record.finished_at = time.time()

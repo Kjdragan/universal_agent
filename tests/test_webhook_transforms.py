@@ -65,6 +65,43 @@ def test_composio_transform_direct_new_playlist_item_payload():
     assert out["to"] == "youtube-explainer-expert"
 
 
+def test_composio_transform_new_playlist_item_under_body_dict_payload():
+    ctx = {
+        "payload": {
+            "body": {
+                "event_type": "new_playlist_item",
+                "item": {
+                    "snippet": {
+                        "title": "Wrapped Playlist Video",
+                        "resourceId": {
+                            "videoId": "5tOUilBTJ3Q",
+                        },
+                    },
+                },
+            }
+        }
+    }
+
+    out = composio_transform(ctx)
+    assert out is not None
+    assert out["kind"] == "agent"
+    assert "video_id: 5tOUilBTJ3Q" in out["message"]
+    assert "video_url: https://www.youtube.com/watch?v=5tOUilBTJ3Q" in out["message"]
+
+
+def test_composio_transform_new_playlist_item_under_body_json_string_payload():
+    ctx = {
+        "payload": {
+            "body": '{"event_type":"new_playlist_item","item":{"snippet":{"resourceId":{"videoId":"5tOUilBTJ3Q"}}}}'
+        }
+    }
+
+    out = composio_transform(ctx)
+    assert out is not None
+    assert out["kind"] == "agent"
+    assert "video_id: 5tOUilBTJ3Q" in out["message"]
+
+
 def test_composio_transform_prefers_resource_video_id_over_playlist_item_id():
     ctx = {
         "payload": {

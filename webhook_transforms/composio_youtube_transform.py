@@ -5,6 +5,7 @@ Transform Composio trigger webhooks into a normalized YouTube agent action.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -194,7 +195,24 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
 
-    event_type = _first_non_empty(payload.get("type"), payload.get("event_type"))
+    body_payload: dict[str, Any] | None = None
+    raw_body_payload = payload.get("body")
+    if isinstance(raw_body_payload, dict):
+        body_payload = raw_body_payload
+    elif isinstance(raw_body_payload, str):
+        try:
+            parsed = json.loads(raw_body_payload)
+            if isinstance(parsed, dict):
+                body_payload = parsed
+        except Exception:
+            body_payload = None
+
+    event_type = _first_non_empty(
+        payload.get("type"),
+        payload.get("event_type"),
+        body_payload.get("type") if isinstance(body_payload, dict) else None,
+        body_payload.get("event_type") if isinstance(body_payload, dict) else None,
+    )
     if event_type and event_type.strip().lower() not in {
         "composio.trigger.message",
         "new_playlist_item",
@@ -205,12 +223,23 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     data = payload.get("data")
     if not isinstance(data, dict):
         data = {}
+    if not data and isinstance(body_payload, dict):
+        body_data = body_payload.get("data")
+        if isinstance(body_data, dict):
+            data = body_data
 
     event_payload: dict[str, Any] | Any = data.get("data")
     if not isinstance(event_payload, dict) or not event_payload:
         candidate = data.get("payload")
         if isinstance(candidate, dict) and candidate:
             event_payload = candidate
+    if not isinstance(event_payload, dict) or not event_payload:
+        if isinstance(body_payload, dict):
+            body_candidate = body_payload.get("data")
+            if isinstance(body_candidate, dict) and body_candidate:
+                event_payload = body_candidate
+            else:
+                event_payload = dict(body_payload)
     if not isinstance(event_payload, dict) or not event_payload:
         # Fallback for webhook payloads where data itself is already the event object.
         if isinstance(data, dict) and data:
