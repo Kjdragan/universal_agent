@@ -515,15 +515,6 @@ class AgentSetup:
                 version="1.0.0",
                 tools=get_all_internal_tools(self.enable_memory)
             ),
-            "taskwarrior": {
-                "type": "stdio",
-                "command": sys.executable,
-                "args": [
-                    os.path.join(
-                        os.path.dirname(__file__), "mcp_server_taskwarrior.py"
-                    )
-                ],
-            },
             "telegram": {
                 "type": "stdio",
                 "command": sys.executable,

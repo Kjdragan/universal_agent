@@ -1116,6 +1116,18 @@ wheels = [
 ]
 
 [[package]]
+name = "dataclass-wizard"
+version = "0.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/36/ea/6b2811092feecbe9d672e3641196ac5fcbec6664074da5dec8b9fd9b9059/dataclass_wizard-0.39.1.tar.gz", hash = "sha256:1679948ed7c62103f40b34df97d03b35e6b2ad50f58173fdbe30074e2e4730f2", size = 361190, upload-time = "2026-01-06T03:30:57.054Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/27/a0/a221942b3fbbafaea4e211744d298366b6a9712c1aa336b05fc1c865ac0c/dataclass_wizard-0.39.1-py3-none-any.whl", hash = "sha256:3324e59eca705882eb34e2b3989b2beadd8c2b523e6269d4002cf1a4a5bf703b", size = 215344, upload-time = "2026-01-06T03:30:54.915Z" },
+]
+
+[[package]]
 name = "decorator"
 version = "5.2.1"
 source = { registry = "https://pypi.org/simple" }
@@ -5723,12 +5735,6 @@ wheels = [
 ]
 
 [[package]]
-name = "tasklib"
-version = "2.5.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/3e/50/3e876f39e31bad8783fd3fe117577cbf1dde836e161f8446631bde71aeb4/tasklib-2.5.1.tar.gz", hash = "sha256:5ccd731b52636dd10457a8b8d858cb0d026ffaab1e3e751baf791bf803e37d7b", size = 23805, upload-time = "2022-11-17T02:48:09.446Z" }
-
-[[package]]
 name = "tenacity"
 version = "9.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -5837,6 +5843,20 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/fd/03/6111ed99e9bf7dfa1c30baeef0e0fb7e0bd387bd07f8e5b270776fe1de3f/tinyhtml5-2.0.0.tar.gz", hash = "sha256:086f998833da24c300c414d9fe81d9b368fd04cb9d2596a008421cbc705fcfcc", size = 179507, upload-time = "2024-10-29T15:37:14.078Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5c/de/27c57899297163a4a84104d5cec0af3b1ac5faf62f44667e506373c6b8ce/tinyhtml5-2.0.0-py3-none-any.whl", hash = "sha256:13683277c5b176d070f82d099d977194b7a1e26815b016114f581a74bbfbf47e", size = 39793, upload-time = "2024-10-29T15:37:11.743Z" },
+]
+
+[[package]]
+name = "todoist-api-python"
+version = "3.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "annotated-types" },
+    { name = "dataclass-wizard" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/bf/6e/1ff0e0e098f2196f6eda3f20ebe0653a978abee5345f5ed1dfd1a9b5bbdc/todoist_api_python-3.2.1.tar.gz", hash = "sha256:22c60230cc616437846f9a6469dddd97548545ef916d2bea98b2ca2f522d92f9", size = 20689, upload-time = "2026-01-22T17:07:13.254Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2d/7c/6baa538db710f8d9cc4ed15f1f757ab9bc8564941d9c3291b9d7fcee7746/todoist_api_python-3.2.1-py3-none-any.whl", hash = "sha256:1091e9b557291380abd79245efe961b0f2261c7b4eb16e52beccfc6357320e95", size = 23541, upload-time = "2026-01-22T17:07:12.311Z" },
 ]
 
 [[package]]
@@ -6124,7 +6144,7 @@ dependencies = [
     { name = "sentence-transformers" },
     { name = "slack-sdk" },
     { name = "starlette" },
-    { name = "tasklib" },
+    { name = "todoist-api-python" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "watchdog" },
     { name = "weasyprint" },
@@ -6197,7 +6217,7 @@ requires-dist = [
     { name = "sentence-transformers", specifier = ">=5.2.0" },
     { name = "slack-sdk", specifier = ">=3.27.0" },
     { name = "starlette", specifier = ">=0.50.0" },
-    { name = "tasklib", specifier = ">=2.5.1" },
+    { name = "todoist-api-python", specifier = ">=3.2.0,<4" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34.0" },
     { name = "watchdog", specifier = ">=6.0.0" },
     { name = "weasyprint", specifier = ">=67.0" },
