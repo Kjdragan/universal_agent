@@ -141,7 +141,7 @@ Web UI toggle behavior:
 
 ```bash
 scripts/sync_remote_workspaces.sh --once \
-  --host root@187.77.16.29 \
+  --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
@@ -153,7 +153,7 @@ scripts/sync_remote_workspaces.sh --once \
 
 ```bash
 scripts/sync_remote_workspaces.sh \
-  --host root@187.77.16.29 \
+  --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
@@ -170,7 +170,7 @@ Behavior note:
 
 ```bash
 scripts/install_remote_workspace_sync_timer.sh \
-  --host root@187.77.16.29 \
+  --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
@@ -183,7 +183,7 @@ Optional remote cleanup (explicitly destructive):
 
 ```bash
 scripts/install_remote_workspace_sync_timer.sh \
-  --host root@187.77.16.29 \
+  --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
   --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \

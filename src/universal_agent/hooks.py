@@ -324,6 +324,42 @@ def _should_block_large_image_read(file_path: str, workspace_dir: str | None) ->
     return False, {}
 
 
+def _rewrite_literal_artifacts_dir_paths(command: str, artifacts_root: str) -> tuple[str, bool]:
+    """Rewrite common literal UA_ARTIFACTS_DIR path mistakes in Bash commands."""
+    if not command or not artifacts_root:
+        return command, False
+
+    root = artifacts_root.rstrip("/")
+    updated = command.replace("/opt/universal_agent/UA_ARTIFACTS_DIR", root)
+    updated = re.sub(r"(?<![$\{])\bUA_ARTIFACTS_DIR\b", root, updated)
+    return updated, updated != command
+
+
+def _extract_bash_command(input_data: dict) -> tuple[str, str, dict]:
+    """Return (command, source, tool_input_dict) from a Bash hook payload."""
+    tool_input = input_data.get("tool_input", {}) if isinstance(input_data, dict) else {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+
+    nested = tool_input.get("command")
+    if isinstance(nested, str):
+        return nested, "tool_input", tool_input
+
+    top_level = input_data.get("command") if isinstance(input_data, dict) else None
+    if isinstance(top_level, str):
+        return top_level, "top_level", tool_input
+
+    return "", "none", tool_input
+
+
+def _build_bash_command_update(command_source: str, tool_input: dict, updated_command: str) -> dict:
+    if command_source == "tool_input":
+        updated = dict(tool_input)
+        updated["command"] = updated_command
+        return {"tool_input": updated}
+    return {"command": updated_command}
+
+
 def emit_tool_result_event(
     *,
     tool_use_id: object,
@@ -540,7 +576,8 @@ class AgentHookSet:
         # paths to be workspace-scoped. However, we still block obvious escapes for safety.
         tool_lower = tool_name.lower()
         if tool_lower.endswith("write_text_file") or tool_lower == "write":
-            raw_path = tool_input.get("path")
+            # Native Write uses `file_path`; internal write_text_file uses `path`.
+            raw_path = tool_input.get("path") or tool_input.get("file_path")
             if isinstance(raw_path, str) and raw_path:
                 from pathlib import Path
                 from universal_agent.artifacts import resolve_artifacts_dir
@@ -772,8 +809,7 @@ class AgentHookSet:
         This prevents agents from bypassing the MCP architecture by brute-forcing
         Python/SDK calls through Bash.
         """
-        tool_input = input_data.get("tool_input", {})
-        command = str(tool_input.get("command", "") or "") if isinstance(tool_input, dict) else ""
+        command, _, _ = _extract_bash_command(input_data)
         command_lower = command.lower()
 
         # Detect Composio SDK usage patterns that should use MCP instead
@@ -822,7 +858,7 @@ class AgentHookSet:
         PreToolUse Hook: Block Playwright-based PDF conversion for non-HTML inputs.
         HTML -> PDF should use Chrome headless (Playwright) only when HTML is explicit.
         """
-        command = str(input_data.get("command", "") or "")
+        command, _, _ = _extract_bash_command(input_data)
         command_lower = command.lower()
 
         if "playwright" not in command_lower:
@@ -852,8 +888,7 @@ class AgentHookSet:
         """
         PreToolUse Hook: Suggest specific skills based on Bash usage patterns.
         """
-        tool_input = input_data.get("tool_input", {})
-        command = str(tool_input.get("command", "") or "") if isinstance(tool_input, dict) else ""
+        command, _, _ = _extract_bash_command(input_data)
         
         # Skill Hint 1: Git Commit
         if "git commit" in command and "mcp-builder" not in command:
@@ -993,11 +1028,7 @@ class AgentHookSet:
         - CURRENT_SESSION_WORKSPACE
         - UA_ARTIFACTS_DIR (defaulting to <repo>/artifacts if env not set)
         """
-        tool_input = input_data.get("tool_input", {})
-        if not isinstance(tool_input, dict):
-            return {}
-
-        command = str(tool_input.get("command", "") or "")
+        command, command_source, tool_input = _extract_bash_command(input_data)
         if not command.strip():
             return {}
 
@@ -1008,7 +1039,20 @@ class AgentHookSet:
             from universal_agent.artifacts import resolve_artifacts_dir
 
             artifacts_root = str(resolve_artifacts_dir())
-            cmd_stripped = command.lstrip()
+            rewritten_command, rewrote_artifacts_paths = _rewrite_literal_artifacts_dir_paths(
+                command,
+                artifacts_root,
+            )
+            if rewrote_artifacts_paths:
+                logfire.info(
+                    "bash_artifacts_path_rewritten_hookset",
+                    tool_use_id=str(tool_use_id),
+                    command_source=command_source,
+                    before_preview=command[:200],
+                    after_preview=rewritten_command[:200],
+                )
+
+            cmd_stripped = rewritten_command.lstrip()
             has_cd_prefix = cmd_stripped.startswith(("cd ", "pushd ", "popd "))
 
             auto_cd_env = str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1").strip().lower()
@@ -1023,11 +1067,12 @@ class AgentHookSet:
                 prefix_parts.append(f"cd {shlex.quote(ws)}")
 
             if not prefix_parts:
-                return {}
+                if not rewrote_artifacts_paths:
+                    return {}
+                return _build_bash_command_update(command_source, tool_input, rewritten_command)
 
-            updated = dict(tool_input)
-            updated["command"] = "; ".join(prefix_parts) + "; " + command
-            return {"tool_input": updated}
+            updated_command = "; ".join(prefix_parts) + "; " + rewritten_command
+            return _build_bash_command_update(command_source, tool_input, updated_command)
         except Exception:
             return {}
 
@@ -1038,10 +1083,7 @@ class AgentHookSet:
         Gentle guardrail: discourage mutating the repo's Python environment during runs.
         Prefer PEP 723 + `uv run` for runnable artifacts.
         """
-        tool_input = input_data.get("tool_input", {})
-        if not isinstance(tool_input, dict):
-            return {}
-        command = str(tool_input.get("command", "") or "")
+        command, _, _ = _extract_bash_command(input_data)
         if not command.strip():
             return {}
 

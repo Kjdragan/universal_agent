@@ -14,7 +14,7 @@ Goal:
 - Local repo path:
   - `/home/kjdragan/lrepos/universal_agent`
 - VPS host:
-  - `root@187.77.16.29`
+  - `root@100.106.113.93` (Tailscale)
 - VPS app root:
   - `/opt/universal_agent`
 - Key runtime service units:
@@ -50,14 +50,14 @@ cd /home/kjdragan/lrepos/universal_agent
 
 scp -i ~/.ssh/id_ed25519 \
   src/universal_agent/gateway_server.py \
-  root@187.77.16.29:/opt/universal_agent/src/universal_agent/gateway_server.py
+  root@100.106.113.93:/opt/universal_agent/src/universal_agent/gateway_server.py
 ```
 
 For multiple files, copy them directly to their exact VPS paths.
 
 ### 2) Restart affected service(s)
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   systemctl restart universal-agent-gateway
   systemctl is-active universal-agent-gateway
   systemctl status universal-agent-gateway --no-pager -n 40
@@ -66,7 +66,7 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
 
 ### 3) If UI files changed, rebuild + restart UI
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   set -e
   cd /opt/universal_agent
   npm --prefix web-ui run build
@@ -77,7 +77,7 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
 
 ### 4) If API protocol/auth files changed, restart API
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   systemctl restart universal-agent-api
   systemctl is-active universal-agent-api
   systemctl status universal-agent-api --no-pager -n 40
@@ -89,19 +89,19 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
 ## Fast debugging commands
 ### Gateway logs
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 \
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
   'journalctl -u universal-agent-gateway -n 200 --no-pager'
 ```
 
 ### API logs
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 \
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
   'journalctl -u universal-agent-api -n 200 --no-pager'
 ```
 
 ### Web UI logs
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 \
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
   'journalctl -u universal-agent-webui -n 200 --no-pager'
 ```
 
@@ -113,27 +113,27 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 \
 ```bash
 scp -i ~/.ssh/id_ed25519 \
   /home/kjdragan/lrepos/universal_agent/path/to/local/file.py \
-  root@187.77.16.29:/opt/universal_agent/path/to/remote/file.py
+  root@100.106.113.93:/opt/universal_agent/path/to/remote/file.py
 ```
 
 ## Upload local assets (example: image) to a specific session workspace
 ```bash
 scp -i ~/.ssh/id_ed25519 \
   /home/kjdragan/Pictures/example.png \
-  root@187.77.16.29:/opt/universal_agent/AGENT_RUN_WORKSPACES/session_YYYYMMDD_xxxxxxxx/work_products/media/
+  root@100.106.113.93:/opt/universal_agent/AGENT_RUN_WORKSPACES/session_YYYYMMDD_xxxxxxxx/work_products/media/
 ```
 
 ## Download remote logs/workspace files back to local
 ```bash
 scp -i ~/.ssh/id_ed25519 \
-  root@187.77.16.29:/opt/universal_agent/AGENT_RUN_WORKSPACES/session_YYYYMMDD_xxxxxxxx/run.log \
+  root@100.106.113.93:/opt/universal_agent/AGENT_RUN_WORKSPACES/session_YYYYMMDD_xxxxxxxx/run.log \
   /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_YYYYMMDD_xxxxxxxx/
 ```
 
 ## Sync an entire remote session folder locally
 ```bash
 rsync -avz -e "ssh -i ~/.ssh/id_ed25519" \
-  root@187.77.16.29:/opt/universal_agent/AGENT_RUN_WORKSPACES/session_YYYYMMDD_xxxxxxxx/ \
+  root@100.106.113.93:/opt/universal_agent/AGENT_RUN_WORKSPACES/session_YYYYMMDD_xxxxxxxx/ \
   /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_YYYYMMDD_xxxxxxxx/
 ```
 

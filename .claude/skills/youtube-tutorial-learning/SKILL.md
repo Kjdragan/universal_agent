@@ -39,6 +39,14 @@ Inside it, write at minimum:
 - `research/`
 - `visuals/` (if any visual analysis performed)
 
+## References / Support Assets
+
+Use these companion docs for consistent ingress, tooling, and output quality:
+
+1. `references/ingestion_and_tooling.md`
+2. `references/composio_wiring_checklist.md`
+3. `references/output_contract.md`
+
 ## Workflow
 
 1. Confirm inputs
@@ -60,11 +68,31 @@ IMPORTANT: Prefer the `mcp__internal__write_text_file` tool for writing into `UA
 Native `Write` may be restricted to the session workspace depending on runtime.
 Do NOT `cp -r` the entire session directory into artifacts; only write/copy the files that belong in the artifact package.
 HARD RULE: Durable outputs must NOT be written under `CURRENT_SESSION_WORKSPACE/artifacts/...`. If `mcp__internal__write_text_file` is unavailable/denied, STOP and report (don’t silently fall back).
+HARD RULE: Never treat `UA_ARTIFACTS_DIR` as a literal directory name in paths.
+- BAD: `/opt/universal_agent/UA_ARTIFACTS_DIR/...`
+- BAD: `UA_ARTIFACTS_DIR/...`
+- GOOD: `<resolved_artifacts_root>/youtube-tutorial-learning/...`
 
 3. Transcript extraction (best effort)
 Preferred: use YouTube captions via `yt-dlp` into session scratch, then copy the final transcript into artifacts:
 - Scratch: `CURRENT_SESSION_WORKSPACE/downloads/`
 - Artifact: `<run_dir>/transcript.txt` (typically `retention: temp`)
+
+Fallback when `yt-dlp` is blocked/rate-limited:
+- Use `youtube-transcript-api` v1 style call (instance API), not the old class method.
+
+```bash
+python3 - <<'PY'
+from youtube_transcript_api import YouTubeTranscriptApi
+
+video_id = "<VIDEO_ID>"
+api = YouTubeTranscriptApi()
+fetched = api.fetch(video_id)
+print("\n".join(snippet.text for snippet in fetched))
+PY
+```
+
+Do NOT use `YouTubeTranscriptApi.get_transcript(...)` in this project; that API shape is outdated for current pinned versions.
 
 Example (scratch):
 `yt-dlp --skip-download --write-auto-subs --sub-lang en --convert-subs srt -o "<scratch>/subs.%(ext)s" "<URL>"`

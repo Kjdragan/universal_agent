@@ -26,6 +26,9 @@ def test_composio_transform_youtube_event():
     assert out["session_key"].startswith("yt_")
     assert out["to"] == "youtube-explainer-expert"
     assert "learning_mode: concept_plus_implementation" in out["message"]
+    assert "resolved_artifacts_root:" in out["message"]
+    assert "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/..." in out["message"]
+    assert "never leave empty run dirs" in out["message"]
 
 
 def test_composio_transform_non_youtube_returns_none():
@@ -135,6 +138,9 @@ def test_manual_transform_from_video_url():
     assert out["to"] == "youtube-explainer-expert"
     assert "mode: explainer_plus_code" in out["message"]
     assert "learning_mode: concept_plus_implementation" in out["message"]
+    assert "resolved_artifacts_root:" in out["message"]
+    assert "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/..." in out["message"]
+    assert "never leave empty run dirs" in out["message"]
 
 
 def test_composio_transform_normalizes_mode_and_degraded_flag():

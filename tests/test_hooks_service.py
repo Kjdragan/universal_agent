@@ -167,6 +167,9 @@ async def test_action_to_injects_routing_prompt_and_metadata(hooks_service, mock
     await asyncio.sleep(0.1)
     gateway_request = mock_gateway.execute.call_args[0][1]
     assert "Task(subagent_type='youtube-explainer-expert'" in gateway_request.user_input
+    assert "Resolved artifacts root (absolute):" in gateway_request.user_input
+    assert "never use a literal UA_ARTIFACTS_DIR folder name" in gateway_request.user_input
+    assert "degraded_transcript_only or failed" in gateway_request.user_input
     assert gateway_request.metadata["hook_route_to"] == "youtube-explainer-expert"
 
 @pytest.mark.asyncio

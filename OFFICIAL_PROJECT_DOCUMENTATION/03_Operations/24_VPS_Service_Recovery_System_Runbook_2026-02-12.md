@@ -11,7 +11,7 @@ Goal:
 ---
 
 ## Environment
-- VPS host: `root@187.77.16.29`
+- VPS host: `root@100.106.113.93` (Tailscale)
 - App root: `/opt/universal_agent`
 - Core services covered by recovery:
   - `universal-agent-gateway`
@@ -104,7 +104,7 @@ What this installer does:
 Run from local machine:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   systemctl is-enabled universal-agent-service-watchdog.timer
   systemctl is-active universal-agent-service-watchdog.timer
   systemctl status universal-agent-service-watchdog.timer --no-pager -n 20
@@ -115,7 +115,7 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
 Tail recent watchdog logs:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 \
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
   "journalctl -u universal-agent-service-watchdog --since '20 minutes ago' --no-pager"
 ```
 
@@ -131,14 +131,14 @@ Use one core service (gateway shown here):
 
 1. Stop service intentionally:
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 'systemctl stop universal-agent-gateway'
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 'systemctl stop universal-agent-gateway'
 ```
 
 2. Wait up to one watchdog interval (`~30s`) plus settle time.
 
 3. Verify restart happened:
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   systemctl is-active universal-agent-gateway
   journalctl -u universal-agent-service-watchdog --since "10 minutes ago" --no-pager | \
     grep -E "service=universal-agent-gateway action=restart|restart_result"
@@ -147,7 +147,7 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
 
 4. Verify gateway health:
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 \
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
   "curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8002/api/v1/health"
 ```
 
@@ -178,7 +178,7 @@ Observed restart evidence from watchdog logs on `2026-02-12`:
 To disable automatic recovery:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   systemctl disable --now universal-agent-service-watchdog.timer
   systemctl stop universal-agent-service-watchdog.service
 '
@@ -187,7 +187,7 @@ ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
 To re-enable:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   systemctl daemon-reload
   systemctl enable --now universal-agent-service-watchdog.timer
 '
