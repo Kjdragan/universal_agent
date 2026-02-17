@@ -19,6 +19,20 @@ class _OutputGateway:
         return SimpleNamespace(response_text="ok")
 
 
+class _RetryGateway:
+    def __init__(self):
+        self.run_attempts = 0
+
+    async def create_session(self, user_id: str, workspace_dir: str):
+        return SimpleNamespace(user_id=user_id, workspace_dir=workspace_dir)
+
+    async def run_query(self, session, request):
+        self.run_attempts += 1
+        if self.run_attempts < 3:
+            raise RuntimeError("database is locked")
+        return SimpleNamespace(response_text="ok after retry")
+
+
 def test_cron_moves_root_outputs_into_work_products(tmp_path: Path):
     service = CronService(_OutputGateway(), tmp_path)
     workspace = tmp_path / "cron_outputs"
@@ -37,3 +51,19 @@ def test_cron_moves_root_outputs_into_work_products(tmp_path: Path):
     assert (workspace / "script.py").exists()
     assert not (workspace / "chart.png").exists()
     assert not (workspace / "notes.md").exists()
+
+
+def test_cron_retries_transient_db_lock_errors(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("UA_CRON_DB_LOCK_RETRIES", "3")
+    gateway = _RetryGateway()
+    service = CronService(gateway, tmp_path)
+    job = service.add_job(
+        user_id="cron",
+        workspace_dir=str(tmp_path / "cron_retry"),
+        command="run with retries",
+        every_raw="10m",
+    )
+
+    record = asyncio.run(service.run_job_now(job.job_id, reason="manual"))
+    assert record.status == "success"
+    assert gateway.run_attempts == 3

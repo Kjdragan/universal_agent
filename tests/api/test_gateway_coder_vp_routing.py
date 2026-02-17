@@ -9,6 +9,7 @@ class FakeProcessTurnAdapter:
     vp_should_error = False
     vp_raise_exception = False
     fail_vp_initialize = False
+    primary_raise_exception = False
 
     def __init__(self, config):
         self.config = config
@@ -27,6 +28,8 @@ class FakeProcessTurnAdapter:
             yield AgentEvent(type=EventType.ERROR, data={"message": "vp lane failure"})
             yield AgentEvent(type=EventType.ITERATION_END, data={"trace_id": "vp-trace"})
             return
+        if run_source != "vp.coder" and self.__class__.primary_raise_exception:
+            raise RuntimeError("primary path exception")
 
         yield AgentEvent(type=EventType.TEXT, data={"text": f"{run_source}:ok"})
         yield AgentEvent(type=EventType.ITERATION_END, data={"trace_id": f"{run_source}-trace"})
@@ -49,6 +52,7 @@ async def test_gateway_routes_to_coder_vp_and_persists_mission(monkeypatch, tmp_
     FakeProcessTurnAdapter.vp_should_error = False
     FakeProcessTurnAdapter.vp_raise_exception = False
     FakeProcessTurnAdapter.fail_vp_initialize = False
+    FakeProcessTurnAdapter.primary_raise_exception = False
 
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
@@ -92,6 +96,7 @@ async def test_gateway_coder_vp_error_falls_back_to_primary_path(monkeypatch, tm
     FakeProcessTurnAdapter.vp_should_error = True
     FakeProcessTurnAdapter.vp_raise_exception = False
     FakeProcessTurnAdapter.fail_vp_initialize = False
+    FakeProcessTurnAdapter.primary_raise_exception = False
 
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
@@ -135,6 +140,7 @@ async def test_gateway_keeps_utility_prompt_on_primary_path(monkeypatch, tmp_pat
     FakeProcessTurnAdapter.vp_should_error = False
     FakeProcessTurnAdapter.vp_raise_exception = False
     FakeProcessTurnAdapter.fail_vp_initialize = False
+    FakeProcessTurnAdapter.primary_raise_exception = False
 
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
@@ -160,6 +166,46 @@ async def test_gateway_keeps_utility_prompt_on_primary_path(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_gateway_skips_coder_vp_for_cron_source(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
+    monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+    monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
+    monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
+
+    import universal_agent.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "ProcessTurnAdapter", FakeProcessTurnAdapter)
+    monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
+    FakeProcessTurnAdapter.vp_should_error = False
+    FakeProcessTurnAdapter.vp_raise_exception = False
+    FakeProcessTurnAdapter.fail_vp_initialize = False
+    FakeProcessTurnAdapter.primary_raise_exception = False
+
+    gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+    session = await gateway.create_session(user_id="cron")
+
+    request = GatewayRequest(
+        user_input="Please implement a Python module with integration tests",
+        metadata={"source": "cron"},
+    )
+    events = [event async for event in gateway.execute(session, request)]
+
+    assert not any(
+        event.type == EventType.STATUS and event.data.get("routing") == "delegated_to_coder_vp"
+        for event in events
+    )
+    assert any(
+        event.type == EventType.TEXT and event.data.get("text") == "cron:ok"
+        for event in events
+    )
+
+    missions = list_vp_missions(gateway._runtime_db_conn, "vp.coder.primary")
+    assert missions == []
+
+    await gateway.close()
+
+
+@pytest.mark.asyncio
 async def test_gateway_coder_vp_bootstrap_failure_falls_back_without_mission(monkeypatch, tmp_path):
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
@@ -173,6 +219,7 @@ async def test_gateway_coder_vp_bootstrap_failure_falls_back_without_mission(mon
     FakeProcessTurnAdapter.vp_should_error = False
     FakeProcessTurnAdapter.vp_raise_exception = False
     FakeProcessTurnAdapter.fail_vp_initialize = True
+    FakeProcessTurnAdapter.primary_raise_exception = False
 
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
@@ -209,6 +256,7 @@ async def test_gateway_coder_vp_hard_exception_falls_back_to_primary_path(monkey
     FakeProcessTurnAdapter.vp_should_error = False
     FakeProcessTurnAdapter.vp_raise_exception = True
     FakeProcessTurnAdapter.fail_vp_initialize = False
+    FakeProcessTurnAdapter.primary_raise_exception = False
 
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
@@ -243,6 +291,43 @@ async def test_gateway_coder_vp_hard_exception_falls_back_to_primary_path(monkey
 
 
 @pytest.mark.asyncio
+async def test_gateway_marks_vp_mission_failed_when_fallback_raises(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
+    monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+    monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
+    monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
+
+    import universal_agent.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "ProcessTurnAdapter", FakeProcessTurnAdapter)
+    monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
+    FakeProcessTurnAdapter.vp_should_error = False
+    FakeProcessTurnAdapter.vp_raise_exception = True
+    FakeProcessTurnAdapter.fail_vp_initialize = False
+    FakeProcessTurnAdapter.primary_raise_exception = True
+
+    gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+    session = await gateway.create_session(user_id="owner_primary")
+
+    request = GatewayRequest(user_input="Please implement a Python function for retries")
+    with pytest.raises(RuntimeError, match="primary path exception"):
+        _ = [event async for event in gateway.execute(session, request)]
+
+    missions = list_vp_missions(gateway._runtime_db_conn, "vp.coder.primary")
+    assert len(missions) == 1
+    assert missions[0]["status"] == "failed"
+
+    mission_id = missions[0]["mission_id"]
+    db_events = list_vp_events(gateway._runtime_db_conn, mission_id=mission_id)
+    db_event_types = [row["event_type"] for row in db_events]
+    assert "vp.mission.fallback" in db_event_types
+    assert "vp.mission.failed" in db_event_types
+
+    FakeProcessTurnAdapter.primary_raise_exception = False
+    await gateway.close()
+
+
+@pytest.mark.asyncio
 async def test_gateway_coder_vp_restart_recovers_session_and_continues_missions(monkeypatch, tmp_path):
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
@@ -256,6 +341,7 @@ async def test_gateway_coder_vp_restart_recovers_session_and_continues_missions(
     FakeProcessTurnAdapter.vp_should_error = False
     FakeProcessTurnAdapter.vp_raise_exception = False
     FakeProcessTurnAdapter.fail_vp_initialize = False
+    FakeProcessTurnAdapter.primary_raise_exception = False
 
     gateway_a = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session_a = await gateway_a.create_session(user_id="owner_primary")

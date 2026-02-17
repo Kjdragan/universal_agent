@@ -419,8 +419,11 @@ class InProcessGateway(Gateway):
             vp_error_detail: Optional[str] = None
             vp_display_name = coder_vp_display_name(default="CODIE")
             next_lease_heartbeat_at: Optional[float] = None
+            vp_cancelled = False
+            vp_exception: Optional[BaseException] = None
+            request_source = str((request.metadata or {}).get("source") or "user").strip().lower()
 
-            if self._coder_vp_runtime:
+            if self._coder_vp_runtime and request_source != "cron":
                 decision = self._coder_vp_runtime.route_decision(request.user_input)
                 if decision.use_coder_vp:
                     try:
@@ -531,20 +534,23 @@ class InProcessGateway(Gateway):
                     if vp_mission_id and event.type == EventType.ITERATION_END and isinstance(event.data, dict):
                         vp_trace_id = event.data.get("trace_id")
                     yield event
-            except Exception as exc:
+            except BaseException as exc:
                 if vp_mission_id:
                     vp_had_error = True
-                    vp_error_detail = str(exc)
-                    yield AgentEvent(
-                        type=EventType.STATUS,
-                        data={
-                            "status": f"{vp_display_name} lane raised an exception; falling back to primary code-writer path.",
-                            "is_log": True,
-                            "routing": "coder_vp_exception",
-                            "vp_mission_id": vp_mission_id,
-                            "error": vp_error_detail,
-                        },
-                    )
+                    vp_error_detail = str(exc) or type(exc).__name__
+                    vp_exception = exc
+                    vp_cancelled = isinstance(exc, asyncio.CancelledError)
+                    if not vp_cancelled:
+                        yield AgentEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "status": f"{vp_display_name} lane raised an exception; falling back to primary code-writer path.",
+                                "is_log": True,
+                                "routing": "coder_vp_exception",
+                                "vp_mission_id": vp_mission_id,
+                                "error": vp_error_detail,
+                            },
+                        )
                 else:
                     raise
 
@@ -557,6 +563,22 @@ class InProcessGateway(Gateway):
                         trace_id=vp_trace_id,
                         payload=fallback_payload,
                     )
+                    if vp_cancelled:
+                        failure_payload: dict[str, Any] = {
+                            "cancelled": True,
+                            "failed_before_fallback": True,
+                        }
+                        if vp_error_detail:
+                            failure_payload["vp_error"] = vp_error_detail
+                        self._coder_vp_runtime.mark_mission_failed(
+                            vp_mission_id,
+                            error_message="CODER VP execution cancelled.",
+                            trace_id=vp_trace_id,
+                            payload=failure_payload,
+                        )
+                        if vp_exception is not None:
+                            raise vp_exception
+                        raise asyncio.CancelledError()
                     yield AgentEvent(
                         type=EventType.STATUS,
                         data={
@@ -569,6 +591,7 @@ class InProcessGateway(Gateway):
 
                     fallback_trace_id: Optional[str] = None
                     fallback_had_error = False
+                    fallback_exception: Optional[BaseException] = None
                     self._apply_request_config(
                         adapter,
                         request,
@@ -577,26 +600,38 @@ class InProcessGateway(Gateway):
                             "routing": "fallback_primary",
                         },
                     )
-                    async for event in adapter.execute(request.user_input):
-                        if event.type == EventType.STATUS and isinstance(event.data, dict):
-                            if "token_usage" in event.data:
-                                session.metadata["usage"] = event.data["token_usage"]
-                        if event.type == EventType.ERROR:
-                            fallback_had_error = True
-                        if event.type == EventType.ITERATION_END and isinstance(event.data, dict):
-                            fallback_trace_id = event.data.get("trace_id")
-                        yield event
+                    try:
+                        async for event in adapter.execute(request.user_input):
+                            if event.type == EventType.STATUS and isinstance(event.data, dict):
+                                if "token_usage" in event.data:
+                                    session.metadata["usage"] = event.data["token_usage"]
+                            if event.type == EventType.ERROR:
+                                fallback_had_error = True
+                            if event.type == EventType.ITERATION_END and isinstance(event.data, dict):
+                                fallback_trace_id = event.data.get("trace_id")
+                            yield event
+                    except BaseException as fallback_exc:
+                        fallback_had_error = True
+                        fallback_exception = fallback_exc
 
                     if fallback_had_error:
                         failure_payload: dict[str, Any] = {"failed_after_fallback": True}
                         if vp_error_detail:
                             failure_payload["vp_error"] = vp_error_detail
+                        if fallback_exception is not None:
+                            failure_payload["fallback_error"] = str(fallback_exception) or type(fallback_exception).__name__
                         self._coder_vp_runtime.mark_mission_failed(
                             vp_mission_id,
-                            error_message="Fallback primary path failed after CODER VP failure.",
+                            error_message=(
+                                "Fallback primary path cancelled after CODER VP failure."
+                                if isinstance(fallback_exception, asyncio.CancelledError)
+                                else "Fallback primary path failed after CODER VP failure."
+                            ),
                             trace_id=fallback_trace_id,
                             payload=failure_payload,
                         )
+                        if fallback_exception is not None:
+                            raise fallback_exception
                     else:
                         completion_payload: dict[str, Any] = {"completed_via": "fallback_primary_path"}
                         if vp_error_detail:
