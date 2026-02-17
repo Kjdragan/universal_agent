@@ -55,6 +55,15 @@ from universal_agent.tools.x_trends_bridge import x_trends_posts_wrapper
 # Reddit (Composio-backed) compact structured output
 from universal_agent.tools.reddit_bridge import reddit_top_posts_wrapper
 
+# Todoist task + brainstorm pipeline tools
+from universal_agent.tools.todoist_bridge import (
+    todoist_setup_wrapper,
+    todoist_query_wrapper,
+    todoist_get_task_wrapper,
+    todoist_task_action_wrapper,
+    todoist_idea_action_wrapper,
+)
+
 
 def get_core_internal_tools() -> List[Callable]:
     """
@@ -90,6 +99,11 @@ def get_core_internal_tools() -> List[Callable]:
         batch_tool_execute_wrapper,
         x_trends_posts_wrapper,
         reddit_top_posts_wrapper,
+        todoist_setup_wrapper,
+        todoist_query_wrapper,
+        todoist_get_task_wrapper,
+        todoist_task_action_wrapper,
+        todoist_idea_action_wrapper,
     ]
 
 def get_memory_tools() -> List[Callable]:

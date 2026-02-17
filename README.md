@@ -64,3 +64,23 @@ For detailed usage, see **[Getting Started](Project_Documentation/02_Getting_Sta
 -   **Context Isolation**: The URW ensures fresh context windows to prevent "prompt injection via history".
 -   **Secrets**: All credentials managed via `.env`.
 -   **Sandboxing**: Code execution is isolated.
+
+## ✅ Todoist Task System (v1)
+
+Universal Agent now uses **Todoist** as the primary task/brainstorm backend.
+
+- Required env var: `TODOIST_API_TOKEN`
+- Taxonomy bootstrap + task/idea flows are available through the internal Todoist service and CLI.
+
+### Quick Todoist CLI examples
+
+```bash
+# Bootstrap projects/sections/labels (idempotent)
+uv run python -m universal_agent.cli.todoist_cli setup
+
+# List actionable tasks
+uv run python -m universal_agent.cli.todoist_cli tasks
+
+# Capture an idea into brainstorm inbox
+uv run python -m universal_agent.cli.todoist_cli idea "Investigate retry backoff policy" --dedupe-key retry-backoff
+```

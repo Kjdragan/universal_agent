@@ -61,10 +61,15 @@ def test_heartbeat_last_endpoint(tmp_path):
     base_url = f"http://127.0.0.1:{port}"
     env = {
         **os.environ,
+        "PYTHONPATH": "src",
+        "UA_DEPLOYMENT_PROFILE": "local_workstation",
+        "UA_INTERNAL_API_TOKEN": "",
+        "UA_OPS_TOKEN": "",
         "UA_GATEWAY_PORT": str(port),
         "UA_WORKSPACES_DIR": str(tmp_path),
         "UA_ENABLE_HEARTBEAT": "1",
         "UA_HEARTBEAT_INTERVAL": "2",
+        "UA_HEARTBEAT_MIN_INTERVAL_SECONDS": "1",
         "UA_HEARTBEAT_MOCK_RESPONSE": "1",
         "UA_HB_SHOW_OK": "true",
     }

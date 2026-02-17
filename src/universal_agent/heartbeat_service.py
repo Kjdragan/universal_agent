@@ -43,7 +43,10 @@ DEFAULT_HEARTBEAT_PROMPT = (
     "If nothing needs attention, reply HEARTBEAT_OK."
 )
 DEFAULT_INTERVAL_SECONDS = 30 * 60  # 30 minutes default
-MIN_INTERVAL_SECONDS = 30 * 60      # Never run heartbeats more frequently than 30 minutes
+MIN_INTERVAL_SECONDS = max(
+    1,
+    int(os.getenv("UA_HEARTBEAT_MIN_INTERVAL_SECONDS", str(30 * 60)) or str(30 * 60)),
+)  # Never run heartbeats more frequently than this minimum
 BUSY_RETRY_DELAY = 10  # Seconds
 DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 300
 MIN_HEARTBEAT_EXEC_TIMEOUT = 300
@@ -980,17 +983,47 @@ class HeartbeatService:
             if system_events:
                 metadata["system_events"] = system_events
                 logger.info("Injecting %d system events into heartbeat for %s", len(system_events), session.session_id)
-            
-            request = GatewayRequest(
-                user_input=prompt,
-                force_complex=True,  # Heartbeat always needs tools — skip classification
-                metadata=metadata,
-            )
+
+            todoist_actionable_count: Optional[int] = None
+
+            # Deterministic Todoist pre-step: only inject when actionable tasks exist.
+            try:
+                from universal_agent.services.todoist_service import TodoService
+
+                summary = TodoService().heartbeat_summary()
+                actionable = int(summary.get("actionable_count") or 0)
+                todoist_actionable_count = actionable
+                if actionable > 0:
+                    todoist_event = {
+                        "type": "todoist_summary",
+                        "payload": summary,
+                        "created_at": datetime.now().isoformat(),
+                        "session_id": session.session_id,
+                    }
+                    system_events.append(todoist_event)
+                    metadata["system_events"] = system_events
+                    metadata["todoist_summary"] = summary
+                    logger.info(
+                        "Injected Todoist heartbeat summary (%d actionable) into heartbeat for %s",
+                        actionable,
+                        session.session_id,
+                    )
+            except Exception as exc:
+                logger.info("Todoist heartbeat pre-step unavailable for %s: %s", session.session_id, exc)
             
             full_response = ""
             streamed_chunks: list[str] = []
             final_text: Optional[str] = None
             saw_streaming_text = False
+
+            # If Todoist is available and there is no actionable work and no other system events,
+            # skip running an expensive LLM heartbeat turn.
+            should_skip_agent_run = (
+                todoist_actionable_count is not None
+                and todoist_actionable_count <= 0
+                and not system_events
+                and not has_exec_completion
+            )
 
             # Track artifacts/commands for UI + last_summary
             write_paths: list[str] = []
@@ -1013,10 +1046,22 @@ class HeartbeatService:
                 },
             )
 
-            if os.getenv("UA_HEARTBEAT_MOCK_RESPONSE", "0").lower() in {"1", "true", "yes"}:
+            if should_skip_agent_run:
+                full_response = schedule.ok_tokens[0] if schedule.ok_tokens else DEFAULT_OK_TOKENS[0]
+                logger.info(
+                    "Skipping heartbeat agent execution for %s (no actionable Todoist tasks)",
+                    session.session_id,
+                )
+            elif os.getenv("UA_HEARTBEAT_MOCK_RESPONSE", "0").lower() in {"1", "true", "yes"}:
                 full_response = _mock_heartbeat_response(heartbeat_content)
                 logger.info("Heartbeat mock response enabled for %s", session.session_id)
             else:
+                request = GatewayRequest(
+                    user_input=prompt,
+                    force_complex=True,  # Heartbeat always needs tools — skip classification
+                    metadata=metadata,
+                )
+
                 async def _collect_events() -> None:
                     nonlocal full_response
                     nonlocal saw_streaming_text, final_text

@@ -54,7 +54,6 @@ dependencies = [
     "matplotlib>=3.10.8",
     "fpdf2>=2.8.5",
     "remotion-lambda>=4.0.409",
-    "tasklib>=2.5.1",
     "manim>=0.19.2",
     "watchdog>=6.0.0",
     "json-repair>=0.55.1",
@@ -70,6 +69,7 @@ dependencies = [
     "slack-sdk>=3.27.0",
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",
+    "todoist-api-python>=3.2.0,<4",
 ]
 
 

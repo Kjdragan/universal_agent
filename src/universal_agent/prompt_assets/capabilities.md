@@ -918,17 +918,6 @@ allowed-tools:
 
 #### ~~summarize~~ (Unavailable)
 > **Reason**: Missing binary: summarize
-#### taskwarrior
-Manage tasks and reminders using Taskwarrior (CLI).
-Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/taskwarrior/SKILL.md`
-```yaml
-name: taskwarrior
-description: Manage tasks and reminders using Taskwarrior (CLI).
-metadata:
-  requires:
-  - taskwarrior
-```
-
 #### telegram
 Send and receive messages via Telegram using a Bot.
 Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/telegram/SKILL.md`
