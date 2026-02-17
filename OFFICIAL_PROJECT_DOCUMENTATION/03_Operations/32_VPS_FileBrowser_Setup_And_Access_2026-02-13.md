@@ -17,7 +17,7 @@ Log in with credentials stored in VPS `.env` (`FILEBROWSER_ADMIN_PASSWORD` or `F
 
 ### Option B: SSH tunnel (no public exposure)
 ```bash
-ssh -i ~/.ssh/id_ed25519 -L 8080:127.0.0.1:8080 root@187.77.16.29
+ssh -i ~/.ssh/id_ed25519 -L 8080:127.0.0.1:8080 root@100.106.113.93
 ```
 Then open: `http://localhost:8080/files/`
 
@@ -79,18 +79,18 @@ FileBrowser (127.0.0.1:8080)
 
 ### Check status
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 'systemctl status filebrowser --no-pager'
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 'systemctl status filebrowser --no-pager'
 ```
 
 ### Restart
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 'systemctl restart filebrowser'
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 'systemctl restart filebrowser'
 ```
 
 ### Reset a user password
 Must stop the service first (SQLite DB lock):
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   systemctl stop filebrowser
   NEW_PASS=$(openssl rand -base64 18)
   filebrowser users update admin --password "$NEW_PASS" -c /etc/filebrowser/filebrowser.json
@@ -102,7 +102,7 @@ Then update `FILEBROWSER_ADMIN_PASSWORD` in `/opt/universal_agent/.env`.
 
 ### Add a new user
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
   systemctl stop filebrowser
   filebrowser users add USERNAME "PASSWORD" \
     -c /etc/filebrowser/filebrowser.json \

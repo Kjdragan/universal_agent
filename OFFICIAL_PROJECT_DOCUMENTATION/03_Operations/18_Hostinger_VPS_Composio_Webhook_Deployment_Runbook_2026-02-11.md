@@ -61,11 +61,15 @@ Expected: IP resolves to `187.77.16.29`.
 
 What:
 
-1. SSH as root:
+1. SSH as root over Tailscale:
 
 ```bash
-ssh root@187.77.16.29
+ssh root@100.106.113.93
 ```
+
+Note:
+1. `187.77.16.29` is the public DNS A-record target for inbound web traffic.
+2. Operator SSH access should use the Tailscale endpoint (`100.106.113.93`).
 
 Why:
 

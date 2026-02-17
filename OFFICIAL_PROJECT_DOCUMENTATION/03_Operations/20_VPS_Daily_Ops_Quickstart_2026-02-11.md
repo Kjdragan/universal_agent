@@ -29,9 +29,13 @@ Public URLs:
 
 ## Login
 ```bash
-ssh root@187.77.16.29
+ssh root@100.106.113.93
 cd /opt/universal_agent
 ```
+
+Tailscale note:
+1. Use `root@100.106.113.93` for all operator SSH commands.
+2. Treat legacy public IP examples as historical only.
 
 ---
 
@@ -193,7 +197,7 @@ Default toggle state is OFF when unset.
 ```bash
 cd /home/kjdragan/lrepos/universal_agent
 scripts/sync_remote_workspaces.sh --once \
-  --host root@187.77.16.29 \
+  --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES \
@@ -205,7 +209,7 @@ Automate every 30s with user systemd timer:
 
 ```bash
 scripts/install_remote_workspace_sync_timer.sh \
-  --host root@187.77.16.29 \
+  --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES \

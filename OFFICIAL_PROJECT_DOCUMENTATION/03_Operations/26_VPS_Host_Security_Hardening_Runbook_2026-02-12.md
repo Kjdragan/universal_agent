@@ -4,7 +4,7 @@
 This runbook defines host-level hardening for the production VPS while preserving fast solo development and uninterrupted agentic execution.
 
 Target environment:
-1. VPS host: `root@187.77.16.29`
+1. VPS host: `root@100.106.113.93` (Tailscale)
 2. App root: `/opt/universal_agent`
 3. Core services:
    1. `universal-agent-gateway`
@@ -45,13 +45,13 @@ Run from local machine.
 
 ### 1) Backup SSH config
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 \
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 \
 "cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak.$(date +%Y%m%d_%H%M%S)"
 ```
 
 ### 2) Apply SSH hardening (solo-safe)
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 set -e
 sshd_cfg=/etc/ssh/sshd_config
 sed -i "s/^#\?PermitRootLogin .*/PermitRootLogin prohibit-password/" "$sshd_cfg"
@@ -67,7 +67,7 @@ systemctl reload ssh
 
 ### 3) Enable UFW with minimal inbound policy
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 set -e
 ufw allow 22/tcp
 ufw allow 80/tcp
@@ -79,7 +79,7 @@ ufw status verbose
 
 ### 4) Install and enable fail2ban
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 set -e
 apt update
 apt install -y fail2ban
@@ -90,7 +90,7 @@ fail2ban-client status
 
 ### 5) Harden `.env` file permissions
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 set -e
 chown root:root /opt/universal_agent/.env
 chmod 600 /opt/universal_agent/.env
@@ -100,7 +100,7 @@ ls -l /opt/universal_agent/.env
 
 ## Validation commands
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 echo "=== SSHD ==="
 sshd -T | egrep "permitrootlogin|passwordauthentication|kbdinteractiveauthentication|pubkeyauthentication" | sort
 echo "=== UFW ==="
@@ -118,7 +118,7 @@ done
 ## Rollback commands
 If access behavior is not as expected, rollback SSH config from backup and reload:
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 '
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
 set -e
 latest_bak="$(ls -1t /etc/ssh/sshd_config.bak.* | head -n 1)"
 cp "$latest_bak" /etc/ssh/sshd_config
@@ -129,12 +129,12 @@ systemctl reload ssh
 
 To relax firewall quickly:
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 "ufw disable"
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 "ufw disable"
 ```
 
 To stop fail2ban:
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@187.77.16.29 "systemctl disable --now fail2ban"
+ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 "systemctl disable --now fail2ban"
 ```
 
 ## Notes on agentic flexibility

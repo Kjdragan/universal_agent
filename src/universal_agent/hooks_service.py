@@ -17,6 +17,7 @@ import httpx
 from fastapi import Request, Response
 from pydantic import BaseModel, Field
 
+from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.gateway import InProcessGateway, GatewayRequest
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
 
@@ -572,11 +573,29 @@ class HooksService:
         if not action.to:
             return message
 
+        route = (action.to or "").strip().lower()
+        extra_lines: list[str] = []
+        if route == "youtube-explainer-expert":
+            try:
+                artifacts_root = str(resolve_artifacts_dir())
+            except Exception:
+                artifacts_root = "<resolve_artifacts_dir_failed>"
+            extra_lines = [
+                f"Resolved artifacts root (absolute): {artifacts_root}",
+                "Path rule: never use a literal UA_ARTIFACTS_DIR folder name in paths.",
+                "Invalid examples: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
+                f"Durable writes must use this root: {artifacts_root}/youtube-tutorial-learning/...",
+                "Create required artifacts first (manifest.json, README.md, CONCEPT.md, IMPLEMENTATION.md, implementation/) before retrieval.",
+                "If transcript/video extraction fails, keep those files and set manifest status to degraded_transcript_only or failed.",
+            ]
+
         routing_lines = [
             f"Webhook route target: {action.to}",
             "Mandatory: delegate this run to the target subagent using Task.",
             f"Use Task(subagent_type='{action.to}', prompt='Use the webhook payload below and complete the run end-to-end.').",
             "",
+            *extra_lines,
+            "" if extra_lines else "",
             message,
         ]
         return "\n".join(routing_lines)

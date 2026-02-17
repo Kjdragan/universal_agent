@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -190,6 +191,18 @@ def _learning_mode_from_mode(mode: str) -> str:
     return LEARNING_MODE_CONCEPT_ONLY
 
 
+def _resolve_artifacts_root_hint() -> str:
+    raw = (os.getenv("UA_ARTIFACTS_DIR") or "").strip()
+    if raw:
+        return raw
+    try:
+        from universal_agent.artifacts import resolve_artifacts_dir
+
+        return str(resolve_artifacts_dir())
+    except Exception:
+        return "artifacts"
+
+
 def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     payload = ctx.get("payload", {}) if isinstance(ctx, dict) else {}
     if not isinstance(payload, dict):
@@ -317,6 +330,7 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     if degraded_raw is None:
         degraded_raw = payload.get("allow_degraded_transcript_only", True)
     allow_degraded = _coerce_bool(degraded_raw, default=True)
+    artifacts_root = _resolve_artifacts_root_hint()
 
     session_key = _session_key(channel_id, video_id, payload)
     name = "ComposioYouTubeTrigger"
@@ -327,7 +341,13 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         f"target_subagent: {YOUTUBE_LEARNING_SUBAGENT}",
         "Use the youtube-tutorial-learning skill workflow.",
         "Produce durable learning artifacts in UA_ARTIFACTS_DIR.",
+        f"resolved_artifacts_root: {artifacts_root}",
+        "Path rule: do not use a literal UA_ARTIFACTS_DIR folder segment in file paths.",
+        "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
+        f"Use this absolute durable base path: {artifacts_root}/youtube-tutorial-learning/...",
         "Required artifacts: README.md, CONCEPT.md, IMPLEMENTATION.md, implementation/, manifest.json.",
+        "Create required artifacts first and keep them even if extraction fails.",
+        "On extraction failure, set manifest status to degraded_transcript_only or failed (never leave empty run dirs).",
         f"video_url: {video_url}",
         f"video_id: {video_id or ''}",
         f"channel_id: {channel_id or ''}",

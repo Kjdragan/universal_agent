@@ -557,6 +557,7 @@ def build_cli_hooks() -> dict:
             HookMatcher(
                 matcher="Bash",
                 hooks=[
+                    on_pre_bash_rewrite_artifacts_literal_paths,
                     on_pre_bash_block_composio_sdk,
                     on_pre_bash_block_playwright_non_html,
                     on_pre_bash_skill_hint,
@@ -1635,6 +1636,32 @@ async def on_pre_tool_use_ledger(
         if bash_workspace:
             cmd = tool_input.get("command") or tool_input.get("cmd")
             if isinstance(cmd, str):
+                try:
+                    from universal_agent.artifacts import resolve_artifacts_dir
+
+                    artifacts_root = str(resolve_artifacts_dir()).rstrip("/")
+                    rewritten_cmd = cmd.replace(
+                        "/opt/universal_agent/UA_ARTIFACTS_DIR", artifacts_root
+                    )
+                    rewritten_cmd = re.sub(
+                        r"(?<![$\{])\bUA_ARTIFACTS_DIR\b",
+                        artifacts_root,
+                        rewritten_cmd,
+                    )
+                    if rewritten_cmd != cmd:
+                        updated_tool_input = dict(tool_input)
+                        updated_tool_input["command"] = rewritten_cmd
+                        tool_input = updated_tool_input
+                        cmd = rewritten_cmd
+                        logfire.info(
+                            "bash_artifacts_path_rewritten_main_ledger",
+                            tool_use_id=tool_call_id,
+                            before_preview=(tool_input.get("command") or "")[:200],
+                            after_preview=rewritten_cmd[:200],
+                        )
+                except Exception:
+                    pass
+
                 cmd_stripped = cmd.lstrip()
                 has_cd_prefix = cmd_stripped.startswith(("cd ", "pushd ", "popd "))
                 auto_cd_env = str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1").strip().lower()
@@ -2707,6 +2734,52 @@ async def on_pre_bash_skill_hint(
     return {}
 
 
+async def on_pre_bash_rewrite_artifacts_literal_paths(
+    input_data: dict, tool_use_id: object, context: dict
+) -> dict:
+    """Normalize common literal UA_ARTIFACTS_DIR path mistakes in Bash commands."""
+    tool_input = input_data.get("tool_input", {}) if isinstance(input_data, dict) else {}
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+
+    command = ""
+    command_source = "top_level"
+    if isinstance(tool_input.get("command"), str):
+        command = str(tool_input.get("command") or "")
+        command_source = "tool_input"
+    else:
+        command = str(input_data.get("command", "") or "")
+
+    if not command.strip():
+        return {}
+
+    try:
+        from universal_agent.artifacts import resolve_artifacts_dir
+
+        artifacts_root = str(resolve_artifacts_dir()).rstrip("/")
+    except Exception:
+        return {}
+
+    updated = command.replace("/opt/universal_agent/UA_ARTIFACTS_DIR", artifacts_root)
+    updated = re.sub(r"(?<![$\{])\bUA_ARTIFACTS_DIR\b", artifacts_root, updated)
+    if updated == command:
+        return {}
+
+    logfire.info(
+        "bash_artifacts_path_rewritten",
+        tool_use_id=str(tool_use_id),
+        before_preview=command[:200],
+        after_preview=updated[:200],
+    )
+    return {
+        **({"tool_input": {**tool_input, "command": updated}} if command_source == "tool_input" else {"command": updated}),
+        "systemMessage": (
+            "Rewrote literal UA_ARTIFACTS_DIR path usage to resolved artifacts root. "
+            "Use resolved absolute artifacts paths for durable writes."
+        ),
+    }
+
+
 async def on_pre_bash_block_composio_sdk(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
@@ -3174,7 +3247,7 @@ async def on_post_task_guidance(
 
 
 async def on_user_prompt_skill_awareness(
-    input_data: dict, context: dict
+    input_data: dict, context: object | None = None, *args
 ) -> dict:
     """
     Hook called when a user prompt is submitted.
@@ -3195,9 +3268,15 @@ async def on_user_prompt_skill_awareness(
         # --- Part 1: Skill Candidate Detection (Tool Chain Analysis) ---
         threshold = int(os.environ.get("UA_SKILL_CANDIDATE_THRESHOLD", "8"))
         
+        resolved_context: dict = {}
+        if isinstance(context, dict):
+            resolved_context = context
+        elif args and isinstance(args[-1], dict):
+            resolved_context = args[-1]
+
         # Try to access agent from context (hooks often receive it)
         # Context usually contains 'agent' or 'client'
-        agent = context.get("agent")
+        agent = resolved_context.get("agent")
 
         
         # If agent is not in context, fall back to global/local scope check 
