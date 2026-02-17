@@ -35,7 +35,7 @@ async def test_heartbeat_injects_todoist_summary_only_when_actionable(monkeypatc
             captured["metadata"] = self.metadata
 
     monkeypatch.setattr(hb, "GatewayRequest", CapturingGatewayRequest)
-    monkeypatch.setenv("UA_HEARTBEAT_MOCK_RESPONSE", "1")
+    monkeypatch.setenv("UA_HEARTBEAT_MOCK_RESPONSE", "0")
     monkeypatch.setenv("UA_HEARTBEAT_OK_TOKENS", "UA_HEARTBEAT_OK")
 
     service = hb.HeartbeatService(DummyGateway(), DummyCM())

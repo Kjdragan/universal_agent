@@ -71,6 +71,7 @@ Universal Agent now uses **Todoist** as the primary task/brainstorm backend.
 
 - Required env var: `TODOIST_API_TOKEN`
 - Taxonomy bootstrap + task/idea flows are available through the internal Todoist service and CLI.
+- Daily operator runbook: `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/41_Todoist_Heartbeat_And_Triage_Operational_Runbook_2026-02-16.md`
 
 ### Quick Todoist CLI examples
 
@@ -83,4 +84,7 @@ uv run python -m universal_agent.cli.todoist_cli tasks
 
 # Capture an idea into brainstorm inbox
 uv run python -m universal_agent.cli.todoist_cli idea "Investigate retry backoff policy" --dedupe-key retry-backoff
+
+# Optional live Todoist integration test (guarded)
+RUN_TODOIST_LIVE_TESTS=1 TODOIST_API_TOKEN=<token> uv run pytest tests/integration/test_todoist_live_guarded.py -q
 ```
