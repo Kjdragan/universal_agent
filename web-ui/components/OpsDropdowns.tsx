@@ -105,6 +105,18 @@ type CalendarFeedResponse = {
   legend?: Record<string, string>;
 };
 
+type DeliveryDecision = "promote" | "iterate" | "archive";
+type WorkThreadRecord = {
+  thread_id: string;
+  session_id: string;
+  status?: string;
+  decision?: DeliveryDecision;
+  decision_note?: string;
+  patch_version?: number;
+  updated_at?: number;
+  history?: Array<{ decided_at?: number }>;
+};
+
 function buildHeaders(): Record<string, string> {
   return {};
 }
@@ -639,6 +651,86 @@ export function SessionsSection() {
   const [memoryModeFilter, setMemoryModeFilter] = useState<"all" | "off" | "session_only" | "selective" | "full">("all");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [showList, setShowList] = useState(true);
+  const [expandLogTail, setExpandLogTail] = useState(true);
+  const [selectedThread, setSelectedThread] = useState<WorkThreadRecord | null>(null);
+  const [deliveryLoading, setDeliveryLoading] = useState(false);
+  const [deliveryDecisionBusy, setDeliveryDecisionBusy] = useState(false);
+  const [deliveryNoteDraft, setDeliveryNoteDraft] = useState("");
+  const [deliveryStatus, setDeliveryStatus] = useState<string>("");
+  const isVpSelected = /^vp_/i.test((selected || "").trim());
+
+  const loadWorkThread = useCallback(async (sessionId: string) => {
+    setDeliveryLoading(true);
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/work-threads?session_id=${encodeURIComponent(sessionId)}`, { headers: buildHeaders() });
+      if (!r.ok) {
+        setSelectedThread(null);
+        return;
+      }
+      const d = await r.json();
+      const rows = Array.isArray(d.threads) ? d.threads : [];
+      setSelectedThread((rows[0] as WorkThreadRecord | undefined) ?? null);
+    } catch {
+      setSelectedThread(null);
+    } finally {
+      setDeliveryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selected) {
+      setSelectedThread(null);
+      setDeliveryNoteDraft("");
+      setDeliveryStatus("");
+      return;
+    }
+    void loadWorkThread(selected);
+    setDeliveryStatus("");
+  }, [selected, loadWorkThread]);
+
+  useEffect(() => {
+    setDeliveryNoteDraft(selectedThread?.decision_note || "");
+  }, [selectedThread]);
+
+  const recordDeliveryDecision = useCallback(async (sessionId: string, decision: DeliveryDecision) => {
+    setDeliveryDecisionBusy(true);
+    const note = deliveryNoteDraft.trim();
+    try {
+      const r = await fetch(`${API_BASE}/api/v1/ops/work-threads/decide`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...buildHeaders() },
+        body: JSON.stringify({
+          session_id: sessionId,
+          decision,
+          note: note || undefined,
+          metadata: {
+            vp_observer_lane: isVpSelected,
+            source: "ops.sessions.delivery_workflow",
+          },
+        }),
+      });
+      if (!r.ok) {
+        const detail = await r.text().catch(() => "");
+        setDeliveryStatus(`Delivery decision failed (${r.status})${detail ? `: ${detail}` : ""}`);
+        return;
+      }
+      const d = await r.json();
+      setSelectedThread((d.thread as WorkThreadRecord) ?? null);
+      setDeliveryStatus(
+        decision === "promote"
+          ? "Promote Now recorded to Work Thread."
+          : decision === "iterate"
+            ? "Open Iteration recorded. Continue refinement in Simone chat."
+            : "Archive Draft recorded to Work Thread."
+      );
+    } catch (e) {
+      setDeliveryStatus(`Delivery decision failed: ${(e as Error).message}`);
+    } finally {
+      setDeliveryDecisionBusy(false);
+    }
+  }, [deliveryNoteDraft, isVpSelected]);
+
+  const selectedDecision = selectedThread;
 
   const attachToChat = async (sessionId: string) => {
     setAttaching(true);
@@ -646,7 +738,11 @@ export function SessionsSection() {
       const dashboardRoute =
         typeof window !== "undefined" && window.location.pathname.startsWith("/dashboard");
       if (dashboardRoute) {
-        openOrFocusChatWindow({ sessionId, attachMode: "tail" });
+        openOrFocusChatWindow({
+          sessionId,
+          attachMode: "tail",
+          role: /^vp_/i.test((sessionId || "").trim()) ? "viewer" : "writer",
+        });
         return;
       }
       const store = useAgentStore.getState();
@@ -763,20 +859,100 @@ export function SessionsSection() {
 
       {selected && (
         <>
+          {isVpSelected && (
+            <div className="rounded border border-rose-500/40 bg-rose-500/10 px-2 py-2 text-[10px] uppercase tracking-wider text-rose-300">
+              VP Observer Mode: This lane is controlled by Simone. Session actions are view-only.
+            </div>
+          )}
           <div className="border rounded bg-background/40 p-2">
             <div className="font-semibold mb-2">Session Actions</div>
             <div className="flex gap-2 flex-wrap">
-              <button onClick={() => attachToChat(selected)} className="px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" disabled={attaching}>{attaching ? "Attaching..." : "Attach To Chat (Tail)"}</button>
-              <button onClick={() => cancelSession(selected)} className="px-2 py-1 rounded border bg-orange-500/10 text-orange-500 hover:bg-orange-500/20">Cancel Run</button>
-              <button onClick={() => archiveSession(selected)} className="px-2 py-1 rounded border bg-sky-500/10 text-sky-500 hover:bg-sky-500/20">Archive</button>
-              <button onClick={() => compactLogs(selected)} className="px-2 py-1 rounded border bg-blue-500/10 text-blue-500 hover:bg-blue-500/20">Compact Logs</button>
-              <button onClick={() => resetSession(selected)} className="px-2 py-1 rounded border bg-amber-500/10 text-amber-500 hover:bg-amber-500/20">Reset</button>
-              <button onClick={() => deleteSession(selected)} className="px-2 py-1 rounded border bg-red-500/10 text-red-500 hover:bg-red-500/20">Delete</button>
+              <button onClick={() => attachToChat(selected)} className="px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" disabled={attaching}>{attaching ? "Attaching..." : isVpSelected ? "Open Observer Chat" : "Attach To Chat (Tail)"}</button>
+              {!isVpSelected && (
+                <>
+                  <button onClick={() => cancelSession(selected)} className="px-2 py-1 rounded border bg-orange-500/10 text-orange-500 hover:bg-orange-500/20">Cancel Run</button>
+                  <button onClick={() => archiveSession(selected)} className="px-2 py-1 rounded border bg-sky-500/10 text-sky-500 hover:bg-sky-500/20">Archive</button>
+                  <button onClick={() => compactLogs(selected)} className="px-2 py-1 rounded border bg-blue-500/10 text-blue-500 hover:bg-blue-500/20">Compact Logs</button>
+                  <button onClick={() => resetSession(selected)} className="px-2 py-1 rounded border bg-amber-500/10 text-amber-500 hover:bg-amber-500/20">Reset</button>
+                  <button onClick={() => deleteSession(selected)} className="px-2 py-1 rounded border bg-red-500/10 text-red-500 hover:bg-red-500/20">Delete</button>
+                </>
+              )}
             </div>
+            {isVpSelected && (
+              <div className="mt-2 text-[10px] text-slate-400">
+                Direct control actions are disabled for VP sessions. Use the primary Simone chat to request CODIE changes.
+              </div>
+            )}
           </div>
           <div className="border rounded bg-background/40 p-2">
-            <div className="font-semibold mb-2">run.log tail</div>
-            <pre className="text-[10px] font-mono whitespace-pre-wrap max-h-32 overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border">{logTail || "(empty)"}</pre>
+            <div className="font-semibold mb-2 flex items-center justify-between">
+              <span>run.log tail</span>
+              <button
+                type="button"
+                onClick={() => setExpandLogTail((prev) => !prev)}
+                className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all"
+              >
+                {expandLogTail ? "Compact" : "Expand"}
+              </button>
+            </div>
+            <pre className={`text-[10px] font-mono whitespace-pre-wrap overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border ${expandLogTail ? "max-h-80" : "max-h-40"}`}>{logTail || "(empty)"}</pre>
+          </div>
+          <div className="border rounded bg-background/40 p-2 space-y-2">
+            <div className="font-semibold">Delivery Workflow</div>
+            <div className="text-[10px] text-slate-400">
+              Choose how to handle this CODIE output: promote, continue iteration, or archive as draft.
+            </div>
+            {deliveryLoading && (
+              <div className="text-[10px] text-slate-500">Loading thread state...</div>
+            )}
+            {selectedDecision && (
+              <div className="rounded border border-cyan-700/40 bg-cyan-900/10 px-2 py-1 text-[10px] text-cyan-200">
+                Current: <span className="font-semibold uppercase">{selectedDecision.decision || "pending"}</span>
+                {" · "}
+                {selectedDecision.updated_at ? new Date(selectedDecision.updated_at * 1000).toLocaleString() : "recent"}
+                {selectedDecision.patch_version ? ` · v${selectedDecision.patch_version}` : ""}
+              </div>
+            )}
+            <div className="flex gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => selected && recordDeliveryDecision(selected, "promote")}
+                disabled={!selected || isVpSelected || deliveryDecisionBusy}
+                className="px-2 py-1 rounded border bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 disabled:opacity-50"
+              >
+                Promote Now
+              </button>
+              <button
+                type="button"
+                onClick={() => selected && recordDeliveryDecision(selected, "iterate")}
+                disabled={!selected || deliveryDecisionBusy}
+                className="px-2 py-1 rounded border bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20 disabled:opacity-50"
+              >
+                Open Iteration
+              </button>
+              <button
+                type="button"
+                onClick={() => selected && recordDeliveryDecision(selected, "archive")}
+                disabled={!selected || isVpSelected || deliveryDecisionBusy}
+                className="px-2 py-1 rounded border bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 disabled:opacity-50"
+              >
+                Archive Draft
+              </button>
+            </div>
+            <textarea
+              value={deliveryNoteDraft}
+              onChange={(e) => setDeliveryNoteDraft(e.target.value)}
+              placeholder="Optional notes (acceptance criteria, follow-up asks, risk notes)"
+              className="w-full rounded border border-border/60 bg-card/40 px-2 py-1.5 text-[11px] min-h-16"
+            />
+            {isVpSelected && (
+              <div className="text-[10px] text-rose-300">
+                VP lane is observer-only. Use Simone chat to execute promote/archive actions.
+              </div>
+            )}
+            {deliveryStatus && (
+              <div className="text-[10px] text-emerald-300">{deliveryStatus}</div>
+            )}
           </div>
         </>
       )}
