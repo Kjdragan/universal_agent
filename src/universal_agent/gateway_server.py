@@ -1636,6 +1636,39 @@ def _finalize_turn(
     )
 
 
+async def _admit_hook_turn(session_id: str, request: GatewayRequest) -> dict[str, Any]:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    client_turn_id = _normalize_client_turn_id(
+        metadata.get("hook_request_id") or metadata.get("hook_event_id")
+    )
+    async with _session_turn_lock(session_id):
+        return _admit_turn(
+            session_id=session_id,
+            connection_id="hook_dispatch",
+            user_input=str(request.user_input or ""),
+            force_complex=bool(request.force_complex),
+            metadata=metadata,
+            client_turn_id=client_turn_id,
+        )
+
+
+async def _finalize_hook_turn(
+    session_id: str,
+    turn_id: str,
+    status: str,
+    error_message: Optional[str],
+    completion: Optional[dict[str, Any]],
+) -> None:
+    async with _session_turn_lock(session_id):
+        _finalize_turn(
+            session_id=session_id,
+            turn_id=turn_id,
+            status=status,
+            error_message=error_message,
+            completion=completion,
+        )
+
+
 def _set_session_connections(session_id: str, count: int) -> None:
     runtime = _session_runtime_snapshot(session_id)
     runtime["active_connections"] = max(0, int(count))
@@ -3465,7 +3498,13 @@ async def lifespan(app: FastAPI):
     _ops_service = OpsService(get_gateway(), WORKSPACES_DIR)
     
     # Initialize Hooks Service
-    _hooks_service = HooksService(get_gateway())
+    _hooks_service = HooksService(
+        get_gateway(),
+        turn_admitter=_admit_hook_turn,
+        turn_finalizer=_finalize_hook_turn,
+        run_counter_start=_increment_session_active_runs,
+        run_counter_finish=_decrement_session_active_runs,
+    )
     logger.info("🪝 Hooks Service Initialized")
 
     if _scheduling_projection.enabled:
