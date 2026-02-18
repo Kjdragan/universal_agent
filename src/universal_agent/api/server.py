@@ -80,6 +80,11 @@ from universal_agent.api.events import (
     ApprovalResponse,
 )
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
+from universal_agent.timeout_policy import (
+    gateway_owner_lookup_timeout_seconds,
+    gateway_ws_send_timeout_seconds,
+    gateway_ws_handshake_timeout_seconds,
+)
 ensure_runtime_path()
 
 
@@ -384,7 +389,7 @@ async def _fetch_gateway_session_owner(session_id: str) -> Optional[str]:
     if not gateway_url:
         return None
     url = f"{gateway_url}/api/v1/sessions/{session_id}"
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=gateway_owner_lookup_timeout_seconds()) as client:
         response = await client.get(url, headers=_gateway_headers())
     if response.status_code == 404:
         return None
@@ -432,6 +437,18 @@ class ApprovalRequest(BaseModel):
 class SessionCreateRequest(BaseModel):
     """Request to create a new session."""
     user_id: Optional[str] = None
+
+
+async def _close_bridge(bridge: Any) -> None:
+    close_fn = getattr(bridge, "close", None)
+    if close_fn is None:
+        return
+    try:
+        maybe_coro = close_fn()
+        if asyncio.iscoroutine(maybe_coro):
+            await maybe_coro
+    except Exception:
+        logger.warning("Bridge close failed", exc_info=True)
 
 
 class VpsSyncRequest(BaseModel):
@@ -608,6 +625,7 @@ class ConnectionManager:
 
     def __init__(self):
         self.active_connections: dict[str, WebSocket] = {}
+        self._send_timeout_seconds = gateway_ws_send_timeout_seconds()
 
     async def connect(self, connection_id: str, websocket: WebSocket):
         await websocket.accept()
@@ -621,14 +639,27 @@ class ConnectionManager:
 
     async def send_event(self, connection_id: str, event: WebSocketEvent):
         if connection_id in self.active_connections:
-            await self.active_connections[connection_id].send_text(event.to_json())
+            try:
+                await asyncio.wait_for(
+                    self.active_connections[connection_id].send_text(event.to_json()),
+                    timeout=self._send_timeout_seconds,
+                )
+            except Exception:
+                self.disconnect(connection_id)
+                raise
 
     async def broadcast(self, event: WebSocketEvent):
-        for connection in self.active_connections.values():
+        stale_ids: list[str] = []
+        for connection_id, connection in list(self.active_connections.items()):
             try:
-                await connection.send_text(event.to_json())
+                await asyncio.wait_for(
+                    connection.send_text(event.to_json()),
+                    timeout=self._send_timeout_seconds,
+                )
             except Exception:
-                pass
+                stale_ids.append(connection_id)
+        for connection_id in stale_ids:
+            self.disconnect(connection_id)
 
 
 manager = ConnectionManager()
@@ -753,6 +784,8 @@ async def create_session(request: SessionCreateRequest, http_request: Request):
     except Exception as e:
         logger.error(f"Failed to create session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await _close_bridge(bridge)
 
 
 @app.get("/api/sessions")
@@ -761,7 +794,10 @@ async def list_sessions(request: Request):
     auth = getattr(request.state, "dashboard_auth", _authenticate_dashboard_request(request))
     owner_id = auth.owner_id if isinstance(auth, DashboardAuthResult) else _normalize_owner_id(None)
     bridge = get_agent_bridge()
-    sessions = bridge.list_sessions()
+    try:
+        sessions = bridge.list_sessions()
+    finally:
+        await _close_bridge(bridge)
     if isinstance(auth, DashboardAuthResult) and not auth.auth_required:
         return {"sessions": sessions}
     filtered = []
@@ -873,7 +909,10 @@ async def get_file(session_id: str, file_path: str, request: Request):
     await _enforce_session_owner(session_id, owner_id, auth_required)
 
     bridge = get_agent_bridge()
-    result = bridge.get_session_file(session_id, file_path)
+    try:
+        result = bridge.get_session_file(session_id, file_path)
+    finally:
+        await _close_bridge(bridge)
 
     if result is None:
         raise HTTPException(status_code=404, detail="File not found")
@@ -1056,8 +1095,13 @@ async def websocket_session_stream_proxy(websocket: WebSocket, session_id: str):
                 exc = task.exception()
                 if exc and not isinstance(exc, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
                     raise exc
-    except WebSocketDisconnect:
-        pass
+    except WebSocketDisconnect as exc:
+        logger.info(
+            "Session stream proxy websocket disconnected session=%s code=%s reason=%s",
+            session_id,
+            getattr(exc, "code", None),
+            getattr(exc, "reason", None),
+        )
     except websockets.exceptions.ConnectionClosed:
         try:
             await websocket.close()
@@ -1069,6 +1113,8 @@ async def websocket_session_stream_proxy(websocket: WebSocket, session_id: str):
             await websocket.close(code=1011, reason="Gateway stream unavailable")
         except Exception:
             pass
+    finally:
+        await _close_bridge(bridge)
 
 
 @app.websocket("/ws/agent")
@@ -1153,7 +1199,10 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
                         ) as ws:
                             # Initial "connected" message from the gateway stream
                             try:
-                                initial_msg = await asyncio.wait_for(ws.recv(), timeout=10.0)
+                                initial_msg = await asyncio.wait_for(
+                                    ws.recv(),
+                                    timeout=gateway_ws_handshake_timeout_seconds(),
+                                )
                                 initial_data = json.loads(initial_msg)
                                 if initial_data.get("type") != "connected":
                                     logger.warning("Unexpected gateway handshake message: %s", initial_data)
@@ -1277,9 +1326,14 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
                     create_error_event(str(e)),
                 )
 
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as exc:
         manager.disconnect(connection_id)
-        logger.info(f"WebSocket disconnected normally: {connection_id}")
+        logger.info(
+            "WebSocket disconnected normally: %s code=%s reason=%s",
+            connection_id,
+            getattr(exc, "code", None),
+            getattr(exc, "reason", None),
+        )
 
     except Exception as e:
         manager.disconnect(connection_id)
@@ -1291,6 +1345,7 @@ async def websocket_agent(websocket: WebSocket, session_id: Optional[str] = None
                 await gateway_forward_task
             except Exception:
                 pass
+        await _close_bridge(bridge)
 
 
 # =============================================================================

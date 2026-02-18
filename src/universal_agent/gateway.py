@@ -6,6 +6,7 @@ import json
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,10 @@ from typing import Any, AsyncIterator, Optional
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.feature_flags import coder_vp_display_name
+from universal_agent.timeout_policy import (
+    gateway_http_timeout_seconds,
+    websocket_connect_kwargs,
+)
 from universal_agent.vp import CoderVPRuntime
 
 try:
@@ -130,6 +135,19 @@ class InProcessGateway(Gateway):
         # (stdout/stderr redirection, env vars, module-level globals). Serialize
         # all gateway execution to prevent cross-session contamination.
         self._execution_lock = asyncio.Lock()
+        self._execution_runtime: dict[str, Any] = {
+            "lock_waiters_current": 0,
+            "lock_waiters_peak": 0,
+            "lock_wait_seconds_total": 0.0,
+            "lock_wait_seconds_max": 0.0,
+            "lock_hold_seconds_total": 0.0,
+            "lock_hold_seconds_max": 0.0,
+            "lock_acquire_count": 0,
+            "lock_in_flight": 0,
+            "lock_wait_last_seconds": 0.0,
+            "lock_hold_last_seconds": 0.0,
+            "lock_last_operation": None,
+        }
         
         # Legacy bridge (deprecated)
         self._bridge: Optional[AgentBridge] = None
@@ -157,10 +175,84 @@ class InProcessGateway(Gateway):
         if self._use_legacy:
             self._bridge = AgentBridge(hooks=hooks)
 
+    @asynccontextmanager
+    async def _timed_execution_lock(self, operation: str) -> AsyncIterator[None]:
+        started_wait = time.monotonic()
+        self._execution_runtime["lock_waiters_current"] = int(
+            self._execution_runtime.get("lock_waiters_current", 0)
+        ) + 1
+        self._execution_runtime["lock_waiters_peak"] = max(
+            int(self._execution_runtime.get("lock_waiters_peak", 0)),
+            int(self._execution_runtime["lock_waiters_current"]),
+        )
+
+        acquired = False
+        try:
+            await self._execution_lock.acquire()
+            acquired = True
+            wait_seconds = max(0.0, time.monotonic() - started_wait)
+            self._execution_runtime["lock_waiters_current"] = max(
+                0, int(self._execution_runtime.get("lock_waiters_current", 0)) - 1
+            )
+            self._execution_runtime["lock_wait_last_seconds"] = wait_seconds
+            self._execution_runtime["lock_wait_seconds_total"] = float(
+                self._execution_runtime.get("lock_wait_seconds_total", 0.0)
+            ) + wait_seconds
+            self._execution_runtime["lock_wait_seconds_max"] = max(
+                float(self._execution_runtime.get("lock_wait_seconds_max", 0.0)),
+                wait_seconds,
+            )
+            self._execution_runtime["lock_acquire_count"] = int(
+                self._execution_runtime.get("lock_acquire_count", 0)
+            ) + 1
+            self._execution_runtime["lock_in_flight"] = int(
+                self._execution_runtime.get("lock_in_flight", 0)
+            ) + 1
+            self._execution_runtime["lock_last_operation"] = operation
+
+            started_hold = time.monotonic()
+            try:
+                yield
+            finally:
+                hold_seconds = max(0.0, time.monotonic() - started_hold)
+                self._execution_runtime["lock_hold_last_seconds"] = hold_seconds
+                self._execution_runtime["lock_hold_seconds_total"] = float(
+                    self._execution_runtime.get("lock_hold_seconds_total", 0.0)
+                ) + hold_seconds
+                self._execution_runtime["lock_hold_seconds_max"] = max(
+                    float(self._execution_runtime.get("lock_hold_seconds_max", 0.0)),
+                    hold_seconds,
+                )
+                self._execution_runtime["lock_in_flight"] = max(
+                    0, int(self._execution_runtime.get("lock_in_flight", 0)) - 1
+                )
+                self._execution_lock.release()
+        finally:
+            if not acquired:
+                self._execution_runtime["lock_waiters_current"] = max(
+                    0, int(self._execution_runtime.get("lock_waiters_current", 0)) - 1
+                )
+
+    def execution_runtime_snapshot(self) -> dict[str, Any]:
+        snapshot = dict(self._execution_runtime)
+        lock_acquire_count = int(snapshot.get("lock_acquire_count", 0))
+        if lock_acquire_count > 0:
+            snapshot["lock_wait_seconds_avg"] = float(
+                snapshot.get("lock_wait_seconds_total", 0.0)
+            ) / lock_acquire_count
+            snapshot["lock_hold_seconds_avg"] = float(
+                snapshot.get("lock_hold_seconds_total", 0.0)
+            ) / lock_acquire_count
+        else:
+            snapshot["lock_wait_seconds_avg"] = 0.0
+            snapshot["lock_hold_seconds_avg"] = 0.0
+        snapshot["lock_locked"] = bool(self._execution_lock.locked())
+        return snapshot
+
     async def create_session(
         self, user_id: str, workspace_dir: Optional[str] = None
     ) -> GatewaySession:
-        async with self._execution_lock:
+        async with self._timed_execution_lock("create_session"):
             if self._use_legacy:
                 return await self._create_session_legacy(user_id, workspace_dir)
         
@@ -235,7 +327,7 @@ class InProcessGateway(Gateway):
         )
 
     async def resume_session(self, session_id: str) -> GatewaySession:
-        async with self._execution_lock:
+        async with self._timed_execution_lock("resume_session"):
             if self._use_legacy:
                 return await self._resume_session_legacy(session_id)
             return await self._resume_session_new(session_id)
@@ -396,7 +488,7 @@ class InProcessGateway(Gateway):
     async def execute(
         self, session: GatewaySession, request: GatewayRequest
     ) -> AsyncIterator[AgentEvent]:
-        async with self._execution_lock:
+        async with self._timed_execution_lock("execute"):
             if self._use_legacy:
                 async for event in self._execute_legacy(session, request):
                     yield event
@@ -885,14 +977,16 @@ class ExternalGateway(Gateway):
     Requires httpx and websockets packages to be installed.
     """
 
-    def __init__(self, base_url: str, timeout: float = 30.0):
+    def __init__(self, base_url: str, timeout: float | None = None):
         if not EXTERNAL_DEPS_AVAILABLE:
             raise RuntimeError(
                 "ExternalGateway requires 'httpx' and 'websockets' packages. "
                 "Install with: pip install httpx websockets"
             )
         self._base_url = base_url.rstrip("/")
-        self._timeout = timeout
+        self._timeout = (
+            float(timeout) if timeout is not None else gateway_http_timeout_seconds()
+        )
         self._http_client: Optional[httpx.AsyncClient] = None
         self._auth_headers = self._build_auth_headers()
         self._ws_headers_param = self._detect_ws_headers_param()
@@ -973,6 +1067,7 @@ class ExternalGateway(Gateway):
         ws_kwargs: dict[str, Any] = {}
         if self._auth_headers:
             ws_kwargs[self._ws_headers_param] = self._auth_headers
+        ws_kwargs.update(websocket_connect_kwargs(websockets.connect))
 
         async with websockets.connect(ws_url, **ws_kwargs) as ws:
             connected_msg = await ws.recv()

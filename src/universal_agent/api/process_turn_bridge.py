@@ -115,6 +115,10 @@ class ProcessTurnBridge:
             for s in self.gateway.list_sessions()
         ]
 
+    async def close(self) -> None:
+        """Release bridge resources for this connection scope."""
+        await self.gateway.close()
+
     def _convert_agent_event(self, agent_event: AgentEvent) -> WebSocketEvent:
         """Convert AgentEvent from gateway to WebSocketEvent."""
         data = agent_event.data.copy() if agent_event.data else {}

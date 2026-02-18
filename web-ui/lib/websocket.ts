@@ -27,11 +27,17 @@ export class AgentWebSocket {
   private ws: WebSocket | null = null;
   private url: string;
   private reconnectAttempts = 0;
-  private maxReconnectAttempts = 5;
-  private reconnectDelay = 1000;
+  private reconnectAttemptsTotal = 0;
+  private maxReconnectAttempts = this.readPositiveIntEnv("NEXT_PUBLIC_UA_WS_MAX_RECONNECT_ATTEMPTS", 20);
+  private reconnectDelay = this.readPositiveIntEnv("NEXT_PUBLIC_UA_WS_RECONNECT_BASE_DELAY_MS", 1000);
+  private reconnectDelayMax = this.readPositiveIntEnv("NEXT_PUBLIC_UA_WS_RECONNECT_MAX_DELAY_MS", 30000);
+  private connectTimeoutMs = this.readPositiveIntEnv("NEXT_PUBLIC_UA_WS_CONNECT_TIMEOUT_MS", 15000);
+  private pingIntervalMs = this.readPositiveIntEnv("NEXT_PUBLIC_UA_WS_PING_INTERVAL_MS", 30000);
+  private staleAfterMs = this.readPositiveIntEnv("NEXT_PUBLIC_UA_WS_STALE_AFTER_MS", 90000);
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private isManualClose = false;
+  private lastPongAt = Date.now();
 
   // Event handlers
   private eventCallbacks: Map<EventType, Set<EventCallback>> = new Map();
@@ -80,6 +86,14 @@ export class AgentWebSocket {
   private isBackgroundStatus(statusData: Record<string, unknown>): boolean {
     const source = String(statusData.source ?? "").trim().toLowerCase();
     return source === "heartbeat";
+  }
+
+  private readPositiveIntEnv(name: string, defaultValue: number): number {
+    const raw = process.env[name];
+    if (!raw) return defaultValue;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
+    return parsed;
   }
 
   constructor(url?: string) {
@@ -165,6 +179,7 @@ export class AgentWebSocket {
       this.ws.onopen = () => {
         console.log("WebSocket connected");
         this.reconnectAttempts = 0;
+        this.lastPongAt = Date.now();
         this.updateStatus("connected");
         this.startPing();
       };
@@ -190,6 +205,7 @@ export class AgentWebSocket {
           code: event.code,
           reason: event.reason,
           wasClean: event.wasClean,
+          reconnect_attempts_total: this.reconnectAttemptsTotal,
         });
         this.stopPing();
         this.updateStatus("disconnected");
@@ -223,7 +239,11 @@ export class AgentWebSocket {
 
   private scheduleReconnect(): void {
     this.reconnectAttempts++;
-    const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1);
+    this.reconnectAttemptsTotal++;
+    const rawDelay = this.reconnectDelay * Math.pow(1.6, this.reconnectAttempts - 1);
+    const cappedDelay = Math.min(rawDelay, this.reconnectDelayMax);
+    const jitterMultiplier = 0.8 + Math.random() * 0.4;
+    const delay = Math.floor(cappedDelay * jitterMultiplier);
 
     console.log(`Scheduling reconnect attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delay}ms`);
 
@@ -248,6 +268,8 @@ export class AgentWebSocket {
         // Save session_id for resumption
         const sessionId = this.extractSessionId(event.data);
         if (sessionId) this.setStoredSessionId(sessionId);
+      } else if (event.type === "pong") {
+        this.lastPongAt = Date.now();
       } else if (event.type === "query_complete" || event.type === "cancelled") {
         this.updateStatus("connected");
       } else if (event.type === "status") {
@@ -300,7 +322,7 @@ export class AgentWebSocket {
     this.updateStatus("processing");
   }
 
-  private waitForConnection(timeout = 5000): Promise<void> {
+  private waitForConnection(timeout: number = this.connectTimeoutMs): Promise<void> {
     return new Promise((resolve, reject) => {
       const start = Date.now();
       const interval = setInterval(() => {
@@ -473,15 +495,41 @@ export class AgentWebSocket {
 
   private startPing(): void {
     this.stopPing();
+    this.lastPongAt = Date.now();
     this.pingTimer = setInterval(() => {
+      if (Date.now() - this.lastPongAt > this.staleAfterMs) {
+        console.warn("[AgentWebSocket] Stale websocket detected; reconnecting");
+        this.forceReconnect("stale_connection");
+        return;
+      }
       this.sendPing();
-    }, 30000); // Ping every 30 seconds
+    }, this.pingIntervalMs);
   }
 
   private stopPing(): void {
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
+    }
+  }
+
+  private forceReconnect(reason: string): void {
+    if (this.isManualClose) return;
+    console.log(`[AgentWebSocket] force reconnect: ${reason}`);
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        // Ignore best-effort close errors.
+      }
+      this.ws = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.scheduleReconnect();
     }
   }
 

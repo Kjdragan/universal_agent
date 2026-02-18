@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from universal_agent.bot.agent_adapter import AgentAdapter, AgentRequest
+from universal_agent.bot.task_manager import Task
 from universal_agent.gateway import GatewayResult, GatewaySession
 from universal_agent.session_checkpoint import SessionCheckpoint
 
@@ -122,3 +123,18 @@ async def test_client_actor_loop_processes_request_and_returns_result():
     adapter.gateway.run_query.assert_awaited()
 
     await adapter.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_execute_honors_telegram_timeout_env(monkeypatch):
+    adapter = AgentAdapter()
+    adapter.initialized = True
+    adapter.gateway = AsyncMock()
+    task = Task(user_id=1001, prompt="long running")
+
+    monkeypatch.setenv("UA_TELEGRAM_TASK_TIMEOUT_SECONDS", "0.01")
+
+    await adapter.execute(task)
+
+    assert task.status == "error"
+    assert "timed out" in str(task.result).lower()

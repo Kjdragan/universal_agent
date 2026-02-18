@@ -28,6 +28,11 @@ from universal_agent.api.events import (
     create_connected_event,
     create_error_event,
 )
+from universal_agent.timeout_policy import (
+    gateway_http_timeout_seconds,
+    gateway_ws_handshake_timeout_seconds,
+    websocket_connect_kwargs,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,23 +70,27 @@ class GatewayBridge:
         }
 
     def websocket_connect_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {}
         headers = self._gateway_headers()
-        if not headers:
-            return {}
-        items = list(headers.items())
-        try:
-            params = inspect.signature(websockets.connect).parameters
-        except (TypeError, ValueError):
-            params = {}
-        if "additional_headers" in params:
-            return {"additional_headers": items}
-        if "extra_headers" in params:
-            return {"extra_headers": items}
-        return {}
+        if headers:
+            items = list(headers.items())
+            try:
+                params = inspect.signature(websockets.connect).parameters
+            except (TypeError, ValueError):
+                params = {}
+            if "additional_headers" in params:
+                kwargs["additional_headers"] = items
+            elif "extra_headers" in params:
+                kwargs["extra_headers"] = items
+
+        kwargs.update(websocket_connect_kwargs(websockets.connect))
+        return kwargs
         
     async def _get_client(self) -> httpx.AsyncClient:
         if self._http_client is None:
-            self._http_client = httpx.AsyncClient(timeout=30.0)
+            self._http_client = httpx.AsyncClient(
+                timeout=gateway_http_timeout_seconds()
+            )
         return self._http_client
 
     async def create_session(self, user_id: Optional[str] = None) -> SessionInfo:
@@ -156,7 +165,10 @@ class GatewayBridge:
             async with websockets.connect(ws_endpoint, **self.websocket_connect_kwargs()) as ws:
                 self._current_ws = ws
                 # Wait for connected event from gateway
-                initial_msg = await asyncio.wait_for(ws.recv(), timeout=10.0)
+                initial_msg = await asyncio.wait_for(
+                    ws.recv(),
+                    timeout=gateway_ws_handshake_timeout_seconds(),
+                )
                 initial_data = json.loads(initial_msg)
                 if initial_data.get("type") == "connected":
                     logger.info(f"Connected to gateway stream for session {self.current_session_id}")
@@ -207,6 +219,13 @@ class GatewayBridge:
             self._current_ws = None
             logger.error(f"Gateway execution error: {e}")
             yield create_error_event(str(e))
+
+    async def close(self) -> None:
+        """Release http client resources held by the bridge."""
+        self._current_ws = None
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
     def _convert_gateway_event(self, event_type: str, event_data: dict) -> Optional[WebSocketEvent]:
         """Convert gateway event format to Web UI WebSocketEvent."""
