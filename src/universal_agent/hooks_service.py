@@ -11,7 +11,7 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 from fastapi import Request, Response
@@ -88,8 +88,22 @@ class HookAction(BaseModel):
 
 
 class HooksService:
-    def __init__(self, gateway: InProcessGateway):
+    def __init__(
+        self,
+        gateway: InProcessGateway,
+        *,
+        turn_admitter: Optional[Callable[[str, GatewayRequest], Awaitable[dict[str, Any]]]] = None,
+        turn_finalizer: Optional[
+            Callable[[str, str, str, Optional[str], Optional[dict[str, Any]]], Awaitable[None]]
+        ] = None,
+        run_counter_start: Optional[Callable[[str, str], None]] = None,
+        run_counter_finish: Optional[Callable[[str, str], None]] = None,
+    ):
         self.gateway = gateway
+        self._turn_admitter = turn_admitter
+        self._turn_finalizer = turn_finalizer
+        self._run_counter_start = run_counter_start
+        self._run_counter_finish = run_counter_finish
         self.config = self._load_config()
         self.transform_cache = {}
         self._seen_webhook_ids: Dict[str, float] = {}
@@ -865,6 +879,7 @@ class HooksService:
             metadata["hook_thinking"] = action.thinking
         if timeout_seconds is not None:
             metadata["hook_timeout_seconds"] = timeout_seconds
+        run_source = str(metadata.get("source") or "webhook").strip().lower() or "webhook"
 
         try:
             session = await self._resolve_or_create_webhook_session(session_id)
@@ -888,12 +903,39 @@ class HooksService:
                 return
 
             request = GatewayRequest(user_input=user_input, metadata=metadata)
+            admitted_turn_id: Optional[str] = None
+            if self._turn_admitter:
+                admission = await self._turn_admitter(session_id, request)
+                decision = str(admission.get("decision", "accepted"))
+                admitted_turn_id = str(admission.get("turn_id") or "") or None
+                if decision != "accepted":
+                    logger.info(
+                        "Hook action skipped session_id=%s decision=%s turn_id=%s",
+                        session_id,
+                        decision,
+                        admitted_turn_id or "",
+                    )
+                    return
+
+            if self._run_counter_start:
+                self._run_counter_start(session_id, run_source)
+
+            start_ts = time.time()
+            execution_summary: dict[str, Any] = {}
             if timeout_seconds is None:
-                await self._consume_gateway_execute(session, request)
+                execution_summary = await self._consume_gateway_execute(session, request)
             else:
-                await asyncio.wait_for(
+                execution_summary = await asyncio.wait_for(
                     self._consume_gateway_execute(session, request),
                     timeout=float(timeout_seconds),
+                )
+            if admitted_turn_id and self._turn_finalizer:
+                await self._turn_finalizer(
+                    session_id,
+                    admitted_turn_id,
+                    "completed",
+                    None,
+                    execution_summary,
                 )
             logger.info("Hook action dispatched session_id=%s hook=%s", session_id, action.name or "Hook")
         except asyncio.TimeoutError:
@@ -903,16 +945,70 @@ class HooksService:
                 session_id,
                 timeout_seconds,
             )
+            if self._turn_finalizer:
+                try:
+                    state = {
+                        "tool_calls": 0,
+                        "duration_seconds": round(max(0.0, time.time() - start_ts), 3),
+                    }
+                    if "admitted_turn_id" in locals() and admitted_turn_id:
+                        await self._turn_finalizer(
+                            session_id,
+                            admitted_turn_id,
+                            "failed",
+                            f"hook_timeout_{timeout_seconds}s",
+                            state,
+                        )
+                except Exception:
+                    logger.exception("Failed finalizing timed-out hook turn session_id=%s", session_id)
         except Exception:
             logger.exception(
                 "Failed dispatching hook action session_key=%s session_id=%s",
                 session_key,
                 session_id,
             )
+            if self._turn_finalizer:
+                try:
+                    state = {
+                        "tool_calls": 0,
+                        "duration_seconds": round(max(0.0, time.time() - start_ts), 3)
+                        if "start_ts" in locals()
+                        else 0.0,
+                    }
+                    if "admitted_turn_id" in locals() and admitted_turn_id:
+                        await self._turn_finalizer(
+                            session_id,
+                            admitted_turn_id,
+                            "failed",
+                            "hook_dispatch_failed",
+                            state,
+                        )
+                except Exception:
+                    logger.exception("Failed finalizing errored hook turn session_id=%s", session_id)
+        finally:
+            if self._run_counter_finish:
+                try:
+                    self._run_counter_finish(session_id, run_source)
+                except Exception:
+                    logger.exception("Failed decrementing hook run counter session_id=%s", session_id)
 
-    async def _consume_gateway_execute(self, session, request: GatewayRequest) -> None:
-        async for _ in self.gateway.execute(session, request):
-            pass
+    async def _consume_gateway_execute(self, session, request: GatewayRequest) -> dict[str, Any]:
+        tool_calls = 0
+        duration_seconds = 0.0
+        started = time.time()
+        async for event in self.gateway.execute(session, request):
+            event_type = getattr(event, "type", None)
+            event_name = event_type.value if hasattr(event_type, "value") else str(event_type)
+            if event_name == "tool_call":
+                tool_calls += 1
+            elif event_name == "iteration_end" and isinstance(getattr(event, "data", None), dict):
+                data = getattr(event, "data", {}) or {}
+                duration_seconds = float(data.get("duration_seconds") or duration_seconds)
+                if isinstance(data.get("tool_calls"), int):
+                    tool_calls = int(data.get("tool_calls"))
+        if duration_seconds <= 0:
+            duration_seconds = round(max(0.0, time.time() - started), 3)
+        return {"tool_calls": tool_calls, "duration_seconds": duration_seconds}
 
     async def _resolve_or_create_webhook_session(self, session_id: str):
         try:
