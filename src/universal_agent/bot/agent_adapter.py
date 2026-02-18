@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Any, AsyncIterator
 from dataclasses import dataclass
 from .config import UA_GATEWAY_URL, UA_TELEGRAM_ALLOW_INPROCESS
+from universal_agent.timeout_policy import telegram_task_timeout_seconds
 from universal_agent.gateway import (
     Gateway, 
     InProcessGateway, 
@@ -289,7 +290,7 @@ class AgentAdapter:
             
             # Wait for result with TIMEOUT
             # Default 15 minutes; override with UA_TELEGRAM_TASK_TIMEOUT_SECONDS
-            timeout_s = float(os.getenv("UA_TELEGRAM_TASK_TIMEOUT_SECONDS", "900"))
+            timeout_s = telegram_task_timeout_seconds()
             result = await asyncio.wait_for(reply_future, timeout=timeout_s)
             
             # Store data

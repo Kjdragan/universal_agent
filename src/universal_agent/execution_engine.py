@@ -31,6 +31,7 @@ from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id
 from universal_agent.api.input_bridge import set_input_handler
 from universal_agent.runtime_env import ensure_runtime_path
+from universal_agent.timeout_policy import process_turn_timeout_seconds
 
 try:
     import logfire
@@ -597,7 +598,7 @@ class ProcessTurnAdapter:
                 ))
         
         engine_task = asyncio.create_task(run_engine())
-        max_runtime_s = float(os.getenv("UA_PROCESS_TURN_TIMEOUT_SECONDS", "0") or 0)
+        max_runtime_s = process_turn_timeout_seconds()
         deadline = (time.time() + max_runtime_s) if max_runtime_s > 0 else None
         
         # Yield events as they come in

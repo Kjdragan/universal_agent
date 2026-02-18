@@ -92,6 +92,10 @@ from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.youtube_ingest import ingest_youtube_transcript, normalize_video_target
 from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
+from universal_agent.timeout_policy import (
+    gateway_ws_send_timeout_seconds,
+    session_cancel_wait_seconds,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -462,6 +466,13 @@ _observability_metrics: dict[str, Any] = {
     "turn_busy_rejected": 0,
     "turn_duplicate_in_progress": 0,
     "turn_duplicate_completed": 0,
+    "ws_send_failures": 0,
+    "ws_send_timeouts": 0,
+    "ws_stale_evictions": 0,
+    "ws_disconnects_total": 0,
+    "ws_close_codes": {},
+    "ws_close_reasons": {},
+    "ws_close_endpoints": {},
 }
 _scheduling_runtime_started_ts = time.time()
 _scheduling_runtime_metrics: dict[str, Any] = {
@@ -534,6 +545,7 @@ CONTINUITY_EVENT_RETENTION_SECONDS = max(
 )
 NOTIFICATION_SNOOZE_MINUTES_DEFAULT = int(os.getenv("UA_NOTIFICATION_SNOOZE_MINUTES_DEFAULT", "30") or 30)
 NOTIFICATION_SNOOZE_MINUTES_MAX = int(os.getenv("UA_NOTIFICATION_SNOOZE_MINUTES_MAX", "1440") or 1440)
+WS_SEND_TIMEOUT_SECONDS = gateway_ws_send_timeout_seconds()
 
 
 def _now_iso() -> str:
@@ -545,6 +557,29 @@ def _increment_metric(name: str, amount: int = 1) -> None:
     _observability_metrics[name] = current + max(0, int(amount))
     _record_continuity_metric_event(name, amount=amount)
     _sync_continuity_notifications()
+
+
+def _increment_bucket_metric(name: str, bucket: str, amount: int = 1) -> None:
+    target = _observability_metrics.get(name)
+    if not isinstance(target, dict):
+        target = {}
+        _observability_metrics[name] = target
+    key = bucket if bucket else "unknown"
+    target[key] = int(target.get(key, 0) or 0) + max(0, int(amount))
+
+
+def _record_ws_close(code: Optional[int], reason: Optional[str], endpoint: str) -> None:
+    _increment_metric("ws_disconnects_total", 1)
+    code_key = str(int(code)) if isinstance(code, int) else "unknown"
+    _increment_bucket_metric("ws_close_codes", code_key)
+    reason_text = str(reason or "").strip()
+    if not reason_text:
+        reason_text = "unknown"
+    # Keep cardinality bounded to prevent metrics bloat.
+    if len(reason_text) > 120:
+        reason_text = reason_text[:120]
+    _increment_bucket_metric("ws_close_reasons", reason_text)
+    _increment_bucket_metric("ws_close_endpoints", endpoint or "unknown")
 
 
 def _record_continuity_metric_event(name: str, amount: int = 1, ts: Optional[float] = None) -> None:
@@ -1049,6 +1084,13 @@ def _observability_metrics_snapshot() -> dict[str, Any]:
         + int(_observability_metrics.get("turn_duplicate_completed", 0) or 0)
     )
     continuity = _continuity_alerts_snapshot()
+    execution_runtime: dict[str, Any] = {}
+    gateway = _gateway
+    if gateway is not None and hasattr(gateway, "execution_runtime_snapshot"):
+        try:
+            execution_runtime = gateway.execution_runtime_snapshot()
+        except Exception:
+            execution_runtime = {}
     return {
         **_observability_metrics,
         "duplicate_turn_prevention_count": duplicate_prevented,
@@ -1062,6 +1104,7 @@ def _observability_metrics_snapshot() -> dict[str, Any]:
         "window": continuity.get("window"),
         "runtime_faults": continuity.get("runtime_faults"),
         "alerts": continuity.get("alerts"),
+        "execution_runtime": execution_runtime,
     }
 
 
@@ -3270,7 +3313,7 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
 
     cancelled_task = await _cancel_execution_task(
         session_id,
-        timeout_seconds=float(os.getenv("UA_SESSION_CANCEL_WAIT_SECONDS", "5") or 5),
+        timeout_seconds=session_cancel_wait_seconds(),
     )
 
     if not cancelled_task:
@@ -3430,13 +3473,41 @@ class ConnectionManager:
                 del self.session_connections[session_id]
         _set_session_connections(session_id, len(self.session_connections.get(session_id, set())))
 
+    def _session_id_for_connection(self, connection_id: str) -> Optional[str]:
+        for session_id, connection_ids in self.session_connections.items():
+            if connection_id in connection_ids:
+                return session_id
+        return None
+
+    async def _send_text_with_timeout(self, websocket: WebSocket, payload: str) -> None:
+        await asyncio.wait_for(
+            websocket.send_text(payload),
+            timeout=WS_SEND_TIMEOUT_SECONDS,
+        )
+
     async def send_json(self, connection_id: str, data: dict, session_id: Optional[str] = None):
         if connection_id in self.active_connections:
             try:
-                await self.active_connections[connection_id].send_text(json.dumps(data))
+                await self._send_text_with_timeout(
+                    self.active_connections[connection_id],
+                    json.dumps(data),
+                )
                 if session_id:
                     _record_session_event(session_id, str(data.get("type", "")))
+            except asyncio.TimeoutError:
+                _increment_metric("ws_send_timeouts")
+                _increment_metric("ws_send_failures")
+                stale_session = session_id or self._session_id_for_connection(connection_id)
+                if stale_session:
+                    self.disconnect(connection_id, stale_session)
+                _increment_metric("ws_stale_evictions")
+                logger.warning("Timed out sending websocket payload to %s", connection_id)
             except Exception as e:
+                _increment_metric("ws_send_failures")
+                stale_session = session_id or self._session_id_for_connection(connection_id)
+                if stale_session:
+                    self.disconnect(connection_id, stale_session)
+                _increment_metric("ws_stale_evictions")
                 logger.error(f"Failed to send to {connection_id}: {e}")
 
     async def broadcast(self, session_id: str, data: dict, exclude_connection_id: Optional[str] = None):
@@ -3448,6 +3519,7 @@ class ConnectionManager:
         payload = json.dumps(data)
         # Snapshot the list to avoid runtime errors if connections drop during iteration
         targets = list(self.session_connections[session_id])
+        stale_connections: list[str] = []
         
         for connection_id in targets:
             if connection_id == exclude_connection_id:
@@ -3455,9 +3527,27 @@ class ConnectionManager:
                 
             if connection_id in self.active_connections:
                 try:
-                    await self.active_connections[connection_id].send_text(payload)
+                    await self._send_text_with_timeout(
+                        self.active_connections[connection_id],
+                        payload,
+                    )
+                except asyncio.TimeoutError:
+                    _increment_metric("ws_send_timeouts")
+                    _increment_metric("ws_send_failures")
+                    stale_connections.append(connection_id)
+                    logger.warning(
+                        "Timed out broadcasting websocket payload to %s (session=%s)",
+                        connection_id,
+                        session_id,
+                    )
                 except Exception as e:
+                    _increment_metric("ws_send_failures")
+                    stale_connections.append(connection_id)
                     logger.error(f"Failed to broadcast to {connection_id}: {e}")
+
+        for stale_connection in stale_connections:
+            self.disconnect(stale_connection, session_id)
+            _increment_metric("ws_stale_evictions")
 
 
 manager = ConnectionManager()
@@ -6168,10 +6258,16 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     session_id=session_id,
                 )
 
-    except WebSocketDisconnect:
+    except WebSocketDisconnect as exc:
+        _record_ws_close(
+            getattr(exc, "code", None),
+            getattr(exc, "reason", None),
+            endpoint="gateway_session_stream",
+        )
         manager.disconnect(connection_id, session_id)
         logger.info(f"Gateway WebSocket disconnected: {connection_id}")
     except Exception as e:
+        _record_ws_close(None, str(e), endpoint="gateway_session_stream")
         manager.disconnect(connection_id, session_id)
         logger.error(f"Gateway WebSocket error: {e}")
 

@@ -287,45 +287,34 @@ class AgentBridge:
         self._session_registry.clear()
 
 
-# Global bridge instance (lazy init to check env at runtime)
-_agent_bridge = None
-_gateway_bridge = None
-_process_turn_bridge = None
+def create_agent_bridge():
+    """
+    Build a fresh bridge instance for one request/connection scope.
+
+    We intentionally avoid a global mutable bridge singleton because bridge
+    instances carry session/socket pointers that can race across concurrent
+    WebSocket clients.
+    """
+    gateway_url = (os.getenv("UA_GATEWAY_URL") or "").strip()
+    force_legacy = os.getenv("UA_FORCE_LEGACY_AGENT_BRIDGE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+    if gateway_url:
+        from universal_agent.api.gateway_bridge import GatewayBridge
+
+        return GatewayBridge(gateway_url)
+
+    if not force_legacy:
+        from universal_agent.api.process_turn_bridge import ProcessTurnBridge
+
+        return ProcessTurnBridge()
+
+    return AgentBridge()
 
 
 def get_agent_bridge():
-    """
-    Get the global agent bridge instance.
-    
-    If UA_GATEWAY_URL is set, returns a GatewayBridge that forwards to the external
-    gateway server. Otherwise, returns the in-process AgentBridge.
-    
-    This allows the Web UI to use the same canonical execution engine as the CLI
-    when running in gateway mode.
-    """
-    global _agent_bridge, _gateway_bridge, _process_turn_bridge
-    
-    gateway_url = os.getenv("UA_GATEWAY_URL")
-    force_legacy = os.getenv("UA_FORCE_LEGACY_AGENT_BRIDGE", "").lower() in {"1", "true", "yes"}
-    
-    if gateway_url:
-        # Use gateway mode - forward to external gateway server
-        if _gateway_bridge is None:
-            from universal_agent.api.gateway_bridge import GatewayBridge
-            _gateway_bridge = GatewayBridge(gateway_url)
-            print(f"🌐 Web UI using external gateway: {gateway_url}")
-        return _gateway_bridge
-
-    if not force_legacy:
-        # Use canonical process_turn path in-process
-        if _process_turn_bridge is None:
-            from universal_agent.api.process_turn_bridge import ProcessTurnBridge
-            _process_turn_bridge = ProcessTurnBridge()
-            print("🏠 Web UI using in-process gateway (process_turn)")
-        return _process_turn_bridge
-
-    # Use legacy direct mode - run agent in-process
-    if _agent_bridge is None:
-        _agent_bridge = AgentBridge()
-        print("🏠 Web UI using in-process agent (legacy direct mode)")
-    return _agent_bridge
+    """Backwards-compatible alias for request/connection-scoped bridge creation."""
+    return create_agent_bridge()

@@ -20,6 +20,7 @@ class Task:
         self.log_file: Optional[str] = None
         self.workspace: Optional[str] = None
         self.execution_summary: Optional[Any] = None  # Holds ExecutionResult object
+        self.queue_wait_seconds: Optional[float] = None
 
 class TaskManager:
     def __init__(self, status_callback=None):
@@ -141,6 +142,16 @@ class TaskManager:
             # Update status
             task.status = "running"
             task.started_at = datetime.now()
+            task.queue_wait_seconds = max(
+                0.0,
+                (task.started_at - task.created_at).total_seconds(),
+            )
+            logger.info(
+                "telegram_task_queue_wait user_id=%s task_id=%s queue_wait_seconds=%.3f",
+                task.user_id,
+                task.id,
+                task.queue_wait_seconds,
+            )
             if self.status_callback:
                 asyncio.create_task(self.status_callback(task))
             
