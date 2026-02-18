@@ -28,7 +28,7 @@ def test_gateway_mode_plumbing(gateway_server):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        timeout=30  # Hard limit for smoke test
+        timeout=90  # Gateway startup + first-turn execution can exceed 30s on cold runs
     )
     duration = time.time() - start_time
     

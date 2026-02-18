@@ -4,7 +4,12 @@
 # Usage: ./run_verification.sh [--full]
 
 MODE="${1:-smoke}"
-TEST_DIR="tests/stabilization"
+SMOKE_TEST_PATHS=(
+  "tests/stabilization"
+  "tests/bot/test_telegram_gateway.py"
+  "tests/bot/test_task_manager.py"
+  "tests/unit/test_telegram_formatter.py"
+)
 
 echo "🧪 Starting Verification Run..."
 echo "----------------------------------------"
@@ -17,10 +22,10 @@ if [ "$MODE" == "--full" ]; then
 else
     echo "⚡ Running FAST Smoke Tests (Estimated: <30s)"
     
-    # Run pytest on the stabilization directory
+    # Run pytest on smoke stabilization + Telegram regression coverage
     # -v: verbose
     # -s: show stdout (useful for debugging)
-    PYTHONPATH=src uv run pytest "$TEST_DIR" -v -s
+    PYTHONPATH=src uv run pytest "${SMOKE_TEST_PATHS[@]}" -v -s
     
     EXIT_CODE=$?
     
