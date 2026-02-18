@@ -25,6 +25,7 @@ class AgentRequest:
     prompt: str
     user_id: str
     workspace_dir: Optional[str]
+    continue_session: bool
     reply_future: asyncio.Future
 
 class AgentAdapter:
@@ -89,7 +90,12 @@ class AgentAdapter:
         self.initialized = True
         print("✅ Agent Adapter Initialized")
 
-    async def _get_or_create_session(self, user_id: str, user_prompt: str = "") -> GatewaySession:
+    async def _get_or_create_session(
+        self,
+        user_id: str,
+        user_prompt: str = "",
+        continue_session: bool = False,
+    ) -> GatewaySession:
         """
         Create a fresh session for each query to prevent context overflow.
         Injects checkpoint from prior session to preserve continuity.
@@ -102,7 +108,23 @@ class AgentAdapter:
         workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", session_id)
         workspace_path = Path(workspace_dir)
         
-        # Load prior checkpoint if exists
+        # Continuation mode: attempt to resume pinned session first.
+        if continue_session:
+            try:
+                session = await self.gateway.resume_session(session_id)
+                print(f"🔁 Resumed session for {user_id}: {session.session_id}")
+
+                if hasattr(self, 'heartbeat_service') and self.heartbeat_service:
+                    self.heartbeat_service.register_session(session)
+                    if hasattr(self, 'connection_adapter'):
+                        self.connection_adapter.register_active_session(session.session_id)
+                    print(f"💓 Registered resumed session {session.session_id} for heartbeat")
+
+                return session
+            except Exception as e:
+                print(f"⚠️ Resume failed for {user_id}; creating fresh session: {e}")
+
+        # Load prior checkpoint if exists (fresh mode behavior)
         prior_checkpoint_context = ""
         if workspace_path.exists():
             try:
@@ -157,7 +179,11 @@ class AgentAdapter:
                         raise RuntimeError("Gateway not initialized")
 
                     # 1. Get Session (fresh per query, with checkpoint injection)
-                    session = await self._get_or_create_session(request.user_id, request.prompt)
+                    session = await self._get_or_create_session(
+                        request.user_id,
+                        request.prompt,
+                        continue_session=request.continue_session,
+                    )
                     
                     # 2. Build Request (inject checkpoint context if available)
                     user_input = request.prompt
@@ -253,6 +279,7 @@ class AgentAdapter:
             prompt=task.prompt,
             user_id=str(task.user_id),
             workspace_dir=None, # Managed by Session mappings now
+            continue_session=continue_session,
             reply_future=reply_future
         )
         
@@ -278,9 +305,11 @@ class AgentAdapter:
         except asyncio.TimeoutError:
             print("🔥 Critical Error during execution: timeout waiting for gateway result")
             task.status = "error"
+            workspace_hint = os.path.join("AGENT_RUN_WORKSPACES", f"tg_{task.user_id}")
             task.result = (
                 "Error: request timed out waiting for the agent response. "
-                "Try a shorter prompt or increase UA_TELEGRAM_TASK_TIMEOUT_SECONDS."
+                "Try a shorter prompt or increase UA_TELEGRAM_TASK_TIMEOUT_SECONDS. "
+                f"Task ID: {task.id}. Workspace: {workspace_hint}."
             )
         except Exception as e:
             msg = str(e)

@@ -2,6 +2,9 @@ import asyncio
 from datetime import datetime
 from typing import Dict, Optional, Any, Set
 import uuid
+import logging
+
+logger = logging.getLogger(__name__)
 
 class Task:
     def __init__(self, user_id: int, prompt: str, continue_session: bool = False):
@@ -30,6 +33,13 @@ class TaskManager:
         # Track which users have continuation mode enabled
         self.continuation_mode: Set[int] = set()
 
+    def _active_task_for_user(self, user_id: int) -> Optional[Task]:
+        """Return a running/pending task for the user if one exists."""
+        for task in self.tasks.values():
+            if task.user_id == user_id and task.status in {"pending", "running"}:
+                return task
+        return None
+
     def enable_continuation(self, user_id: int):
         """Enable continuation mode for a user. Next /agent will reuse session."""
         self.continuation_mode.add(user_id)
@@ -43,6 +53,15 @@ class TaskManager:
         return user_id in self.continuation_mode
 
     async def add_task(self, user_id: int, prompt: str) -> str:
+        existing = self._active_task_for_user(user_id)
+        if existing:
+            logger.warning(
+                "telegram_active_task_rejected user_id=%s active_task_id=%s",
+                user_id,
+                existing.id,
+            )
+            raise ValueError(f"active_task:{existing.id}")
+
         # Check if continuation mode is enabled for this user
         continue_session = self.is_continuation_enabled(user_id)
         
@@ -63,6 +82,39 @@ class TaskManager:
         tasks = [t for t in self.tasks.values() if t.user_id == user_id]
         return sorted(tasks, key=lambda t: t.created_at, reverse=True)
 
+    def cancel_task(self, user_id: int, task_id: Optional[str] = None) -> tuple[bool, str]:
+        """
+        Cancel a queued task for a user.
+        - Pending tasks can be canceled.
+        - Running tasks cannot currently be force-canceled.
+        """
+        target: Optional[Task] = None
+
+        if task_id:
+            target = self.tasks.get(task_id)
+            if not target:
+                return False, "Task not found."
+            if target.user_id != user_id:
+                return False, "Task does not belong to you."
+        else:
+            for task in self.get_user_tasks(user_id):
+                if task.status in {"pending", "running"}:
+                    target = task
+                    break
+            if not target:
+                return False, "No active task found."
+
+        if target.status == "pending":
+            target.status = "canceled"
+            target.completed_at = datetime.now()
+            target.result = "Canceled by user."
+            return True, target.id
+
+        if target.status == "running":
+            return False, "Task is already running and cannot be canceled yet."
+
+        return False, f"Task is already {target.status}."
+
     async def worker(self, agent_adapter):
         """
         Continuous worker loop to process tasks.
@@ -71,13 +123,20 @@ class TaskManager:
         print("👷 Task Manager Worker Started")
         while True:
             task_id = await self.queue.get()
+            task = self.tasks[task_id]
+
+            # Skip pre-canceled queued tasks.
+            if task.status == "canceled":
+                self.queue.task_done()
+                if self.status_callback:
+                    asyncio.create_task(self.status_callback(task))
+                continue
             
             # Simple concurrency control
             while self.active_tasks >= self.max_concurrent:
                 await asyncio.sleep(1)
             
             self.active_tasks += 1
-            task = self.tasks[task_id]
             
             # Update status
             task.status = "running"

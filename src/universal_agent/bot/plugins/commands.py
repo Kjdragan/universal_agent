@@ -65,6 +65,21 @@ async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[N
         ctx.abort()
         return
 
+    # /cancel [task_id]
+    if text.lower().startswith("/cancel"):
+        parts = text.split(maxsplit=1)
+        target_task_id = parts[1].strip() if len(parts) > 1 else None
+        ok, detail = task_manager.cancel_task(user_id, task_id=target_task_id)
+        if ok:
+            await msg.reply_text(
+                f"🛑 Canceled task: `{detail}`",
+                parse_mode="Markdown",
+            )
+        else:
+            await msg.reply_text(f"⚠️ Cancel failed: {detail}")
+        ctx.abort()
+        return
+
     # /agent or implicit
     prompt = None
     if text.lower().startswith("/agent"):
@@ -80,13 +95,25 @@ async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[N
     if prompt:
         is_continue = task_manager.is_continuation_enabled(user_id)
         mode_text = "🔗 Continuing session" if is_continue else "🆕 Fresh session"
-        
-        task_id = await task_manager.add_task(user_id, prompt)
-        
-        await msg.reply_text(
-            f"✅ Task Queued: `{task_id}`\n{mode_text}",
-            parse_mode="Markdown"
-        )
+
+        try:
+            task_id = await task_manager.add_task(user_id, prompt)
+            await msg.reply_text(
+                f"✅ Task Queued: `{task_id}`\n{mode_text}",
+                parse_mode="Markdown"
+            )
+        except ValueError as e:
+            text_error = str(e)
+            if text_error.startswith("active_task:"):
+                active_task_id = text_error.split(":", 1)[1]
+                await msg.reply_text(
+                    "⏳ You already have an active task.\n"
+                    f"Active Task: `{active_task_id}`\n"
+                    "Use `/status` to monitor completion before queuing another request.",
+                    parse_mode="Markdown",
+                )
+            else:
+                await msg.reply_text("⚠️ Could not queue task. Please try again.")
         ctx.abort()
         return
 

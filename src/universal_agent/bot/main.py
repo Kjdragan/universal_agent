@@ -14,7 +14,6 @@ from .plugins.commands import commands_middleware
 from .task_manager import TaskManager
 from .agent_adapter import AgentAdapter
 from .normalization.formatting import format_telegram_response
-from telegram import Bot
 
 
 # Setup Logging
@@ -23,6 +22,34 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+
+async def _send_with_retry(bot, chat_id, text, retries: int = 3, base_delay_s: float = 0.5):
+    """Best-effort Telegram send with bounded retry for transient failures."""
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            await bot.send_message(chat_id=chat_id, text=text)
+            return
+        except Exception as e:
+            last_error = e
+            logger.warning(
+                "telegram_send_retry chat_id=%s attempt=%s/%s error=%s",
+                chat_id,
+                attempt,
+                retries,
+                e,
+            )
+            if attempt >= retries:
+                break
+            await asyncio.sleep(base_delay_s * attempt)
+    logger.error(
+        "telegram_send_retry_exhausted chat_id=%s retries=%s error=%s",
+        chat_id,
+        retries,
+        last_error,
+    )
+    raise RuntimeError(f"telegram_send_failed after {retries} attempts: {last_error}")
 
 async def run_bot():
     if not TELEGRAM_BOT_TOKEN:
@@ -66,7 +93,7 @@ async def run_bot():
             elif task.status == "error":
                 text = f"❌ Task Failed:\n{task.result}"
             elif task.status == "running":
-                text = f"🚀 Task Started: `{task.id}`"
+                text = f"🚀 Task Started: {task.id}"
             
             # Send (assuming user_id is chat_id for DM)
             # In future, we might need a mapping if they are in a group 
@@ -74,7 +101,7 @@ async def run_bot():
             # If we want to support group replies, Task object should store chat_id too.
             # For now, simplistic approach: send to user_id.
             
-            await bot.send_message(chat_id=task.user_id, text=text, parse_mode="Markdown")
+            await _send_with_retry(bot, task.user_id, text)
             
         except Exception as e:
             logger.error(f"Failed to send status update: {e}")
@@ -115,7 +142,7 @@ async def run_bot():
             return
         try:
             # Assuming user_id is chat_id for DM
-            await app_ref["bot"].send_message(chat_id=user_id, text=text, parse_mode="Markdown")
+            await _send_with_retry(app_ref["bot"], user_id, text)
         except Exception as e:
             logger.error(f"Failed to deliver proactive message to {user_id}: {e}")
 
