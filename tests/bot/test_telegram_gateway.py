@@ -1,101 +1,124 @@
-import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
 import os
+from pathlib import Path
+from unittest.mock import AsyncMock
+
 import pytest
 
-if os.getenv("RUN_TELEGRAM_TESTS", "").lower() not in {"1", "true", "yes"}:
-    pytest.skip(
-        "Telegram gateway tests disabled by default. Set RUN_TELEGRAM_TESTS=1 to enable.",
-        allow_module_level=True,
+from universal_agent.bot.agent_adapter import AgentAdapter, AgentRequest
+from universal_agent.gateway import GatewayResult, GatewaySession
+from universal_agent.session_checkpoint import SessionCheckpoint
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_session_uses_telegram_prefix_and_workspace():
+    adapter = AgentAdapter()
+    adapter.initialized = True
+    adapter.gateway = AsyncMock()
+    adapter.gateway.create_session.return_value = GatewaySession(
+        session_id="session_abc123",
+        user_id="telegram_12345",
+        workspace_dir="/tmp/ws",
     )
-from universal_agent.bot.agent_adapter import AgentAdapter
-from universal_agent.gateway import GatewaySession, GatewayResult
 
-class TestTelegramGateway(unittest.TestCase):
-    def setUp(self):
-        self.adapter = AgentAdapter()
-        
-    async def async_test(self, coro):
-        return await coro
-        
-    def test_session_mapping(self):
-        """Verify user_id is mapped to tg_{user_id}."""
-        async def run():
-            # Mock Gateway
-            mock_gateway = AsyncMock()
-            self.adapter.gateway = mock_gateway
-            self.adapter.initialized = True
-            
-            # Setup resume failure to force create
-            mock_gateway.resume_session.side_effect = ValueError("Not found")
-            mock_gateway.create_session.return_value = GatewaySession(
-                session_id="tg_12345", 
-                user_id="telegram_12345", 
-                workspace_dir="/tmp/ws"
-            )
-            
-            session = await self.adapter._get_or_create_session("12345")
-            
-            # Verify resume attempt
-            mock_gateway.resume_session.assert_called_with("tg_12345")
-            
-            # Verify create attempt
-            mock_gateway.create_session.assert_called_with(
-                user_id="telegram_12345", 
-                workspace_dir=None
-            )
-            
-            self.assertEqual(session.session_id, "tg_12345")
-            
-        asyncio.run(run())
+    session = await adapter._get_or_create_session("12345")
 
-    def test_execute_flow(self):
-        """Verify execution flow sends request to gateway."""
-        async def run():
-            # 1. Setup Adapter and Mock Gateway
-            self.adapter.gateway = AsyncMock()
-            self.adapter.initialized = True
-            
-            # Mock Session
-            session = GatewaySession(session_id="tg_user1", user_id="user1", workspace_dir="/tmp")
-            self.adapter.gateway.resume_session.return_value = session
-            
-            # Mock Result
-            expected_result = GatewayResult(
-                response_text="Hello from Gateway",
-                tool_calls=1,
-                trace_id="trace_123"
-            )
-            self.adapter.gateway.run_query.return_value = expected_result
-            
-            # 2. Start Actor Loop in background
-            self.adapter._shutdown_event.clear()
-            worker_task = asyncio.create_task(self.adapter._client_actor_loop())
-            self.adapter.worker_task = worker_task
+    adapter.gateway.create_session.assert_awaited_once_with(
+        user_id="telegram_12345",
+        workspace_dir=os.path.join("AGENT_RUN_WORKSPACES", "tg_12345"),
+    )
+    assert session.session_id == "session_abc123"
 
-            # 3. Create Request
-            future = asyncio.Future()
-            req = MagicMock()
-            req.prompt = "Hello"
-            req.user_id = "user1"
-            req.workspace_dir = None
-            req.reply_future = future
-            
-            # 4. Enqueue
-            await self.adapter.request_queue.put(req)
-            
-            # 5. Wait for result
-            result = await asyncio.wait_for(future, timeout=2.0)
-            
-            # 6. Verify
-            self.assertEqual(result.response_text, "Hello from Gateway")
-            self.assertEqual(result.trace_id, "trace_123")
-            
-            # 7. Cleanup
-            await self.adapter.shutdown()
-            
-        asyncio.run(run())
 
-if __name__ == "__main__":
-    unittest.main()
+@pytest.mark.asyncio
+async def test_get_or_create_session_continuation_prefers_resume():
+    adapter = AgentAdapter()
+    adapter.initialized = True
+    adapter.gateway = AsyncMock()
+    adapter.gateway.resume_session.return_value = GatewaySession(
+        session_id="tg_12345",
+        user_id="telegram_12345",
+        workspace_dir="/tmp/ws",
+    )
+
+    session = await adapter._get_or_create_session("12345", continue_session=True)
+
+    adapter.gateway.resume_session.assert_awaited_once_with("tg_12345")
+    adapter.gateway.create_session.assert_not_called()
+    assert session.session_id == "tg_12345"
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_session_injects_checkpoint_when_present(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    user_id = "u_checkpoint"
+    workspace_dir = Path("AGENT_RUN_WORKSPACES") / f"tg_{user_id}"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    adapter = AgentAdapter()
+    adapter.initialized = True
+    adapter.gateway = AsyncMock()
+    adapter.gateway.create_session.return_value = GatewaySession(
+        session_id="session_ckpt",
+        user_id=f"telegram_{user_id}",
+        workspace_dir=str(workspace_dir),
+    )
+
+    checkpoint = SessionCheckpoint(
+        session_id="prior_session",
+        timestamp="2026-02-18T00:00:00Z",
+        original_request="Prior request",
+        completed_tasks=["Output A", "Follow up B"],
+        artifacts=[{"path": "work_products/report.md", "description": "Report output"}],
+    )
+
+    monkeypatch.setattr(
+        "universal_agent.bot.agent_adapter.SessionCheckpointGenerator.load_latest",
+        lambda self: checkpoint,
+    )
+
+    session = await adapter._get_or_create_session(user_id)
+
+    assert hasattr(session, "_injected_context")
+    assert "Prior request" in session._injected_context
+    assert "Follow up B" in session._injected_context
+
+
+@pytest.mark.asyncio
+async def test_client_actor_loop_processes_request_and_returns_result():
+    adapter = AgentAdapter()
+    adapter.initialized = True
+    adapter.gateway = AsyncMock()
+    adapter.gateway.create_session.return_value = GatewaySession(
+        session_id="session_actor",
+        user_id="telegram_user1",
+        workspace_dir="/tmp/ws_actor",
+    )
+    adapter.gateway.run_query.return_value = GatewayResult(
+        response_text="Hello from gateway",
+        tool_calls=1,
+        trace_id="trace_123",
+    )
+
+    adapter._shutdown_event.clear()
+    adapter.worker_task = asyncio.create_task(adapter._client_actor_loop())
+
+    reply_future = asyncio.get_running_loop().create_future()
+    req = AgentRequest(
+        prompt="Hello",
+        user_id="user1",
+        workspace_dir=None,
+        continue_session=False,
+        reply_future=reply_future,
+    )
+
+    await adapter.request_queue.put(req)
+    result = await asyncio.wait_for(reply_future, timeout=2.0)
+
+    assert result.response_text == "Hello from gateway"
+    assert result.trace_id == "trace_123"
+    adapter.gateway.create_session.assert_awaited()
+    adapter.gateway.run_query.assert_awaited()
+
+    await adapter.shutdown()
