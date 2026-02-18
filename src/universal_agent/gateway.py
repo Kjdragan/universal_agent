@@ -423,7 +423,9 @@ class InProcessGateway(Gateway):
             vp_exception: Optional[BaseException] = None
             request_source = str((request.metadata or {}).get("source") or "user").strip().lower()
 
-            if self._coder_vp_runtime and request_source != "cron":
+            # Keep webhook/cron executions pinned to their explicit session workspace
+            # for deterministic artifacts/log paths and easier ops visibility.
+            if self._coder_vp_runtime and request_source not in {"cron", "webhook"}:
                 decision = self._coder_vp_runtime.route_decision(request.user_input)
                 if decision.use_coder_vp:
                     try:

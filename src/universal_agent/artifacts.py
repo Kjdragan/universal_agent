@@ -27,14 +27,19 @@ def resolve_artifacts_dir() -> Path:
     raw = (os.getenv("UA_ARTIFACTS_DIR") or "").strip()
     if raw:
         return Path(raw).expanduser().resolve()
-    
-    # Auto-detect "UA_ARTIFACTS_DIR" if it exists (legacy/user preference)
+
+    # Default durable root.
     root = repo_root()
+    default_root = root / "artifacts"
+    if default_root.exists() and default_root.is_dir():
+        return default_root.resolve()
+
+    # Backward-compat fallback only when default root does not exist.
     legacy = root / "UA_ARTIFACTS_DIR"
     if legacy.exists() and legacy.is_dir():
         return legacy.resolve()
-        
-    return (root / "artifacts").resolve()
+
+    return default_root.resolve()
 
 
 def ensure_artifacts_dir() -> Path:
@@ -91,4 +96,3 @@ def build_artifact_run_dir(
     root = (artifacts_root or resolve_artifacts_dir()).resolve()
     run_dir = root / safe_skill / date / f"{safe_slug}__{hhmmss}"
     return ArtifactRun(skill_name=safe_skill, run_dir=run_dir, date=date, hhmmss=hhmmss, slug=safe_slug)
-

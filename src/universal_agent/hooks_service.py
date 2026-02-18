@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_HOOKS_PATH = "/hooks"
 DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024
+DEFAULT_BOOTSTRAP_HOOKS_MAX_BODY_BYTES = 1024 * 1024
+DEFAULT_BOOTSTRAP_TRANSFORMS_DIR = "../webhook_transforms"
 HOOK_SESSION_ID_PREFIX = "session_hook_"
 MAX_SESSION_ID_LEN = 128
 SESSION_ID_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -97,21 +99,154 @@ class HooksService:
         # local stack is offline. Use a simple cooldown to avoid log spam.
         self._forward_failures = 0
         self._forward_disabled_until_ts = 0.0
+        self._youtube_ingest_mode = (os.getenv("UA_HOOKS_YOUTUBE_INGEST_MODE") or "").strip().lower()
+        default_ingest_url = ""
+        if self._forward_youtube_manual_url.endswith("/api/v1/hooks/youtube/manual"):
+            default_ingest_url = self._forward_youtube_manual_url.replace(
+                "/api/v1/hooks/youtube/manual",
+                "/api/v1/youtube/ingest",
+            )
+        self._youtube_ingest_url = (
+            os.getenv("UA_HOOKS_YOUTUBE_INGEST_URL", default_ingest_url).strip()
+        )
+        self._youtube_ingest_token = (
+            os.getenv("UA_HOOKS_YOUTUBE_INGEST_TOKEN") or self._forward_youtube_token
+        ).strip()
+        self._youtube_ingest_timeout_seconds = self._safe_int_env(
+            "UA_HOOKS_YOUTUBE_INGEST_TIMEOUT_SECONDS", 120
+        )
+        self._youtube_ingest_retries = max(
+            1, self._safe_int_env("UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS", 3)
+        )
+        self._youtube_ingest_retry_delay_seconds = max(
+            0.0, self._safe_float_env("UA_HOOKS_YOUTUBE_INGEST_RETRY_DELAY_SECONDS", 20.0)
+        )
+        self._youtube_ingest_fail_open = self._safe_bool_env(
+            "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN", False
+        )
+        self._default_hook_timeout_seconds = max(
+            0, self._safe_int_env("UA_HOOKS_DEFAULT_TIMEOUT_SECONDS", 0)
+        )
 
     def _load_config(self) -> HooksConfig:
         ops_config = load_ops_config()
         hooks_data = ops_config.get("hooks", {})
-        
+        if not isinstance(hooks_data, dict):
+            hooks_data = {}
+        hooks_data = dict(hooks_data)
+
+        hooks_data = self._maybe_bootstrap_youtube_hooks(hooks_data)
+
         # Env var overrides
-        if os.getenv("UA_HOOKS_ENABLED") == "true":
+        hooks_enabled_raw = (os.getenv("UA_HOOKS_ENABLED") or "").strip().lower()
+        if hooks_enabled_raw in {"1", "true", "yes", "on"}:
             hooks_data["enabled"] = True
+        elif hooks_enabled_raw in {"0", "false", "no", "off"}:
+            hooks_data["enabled"] = False
         if token := os.getenv("UA_HOOKS_TOKEN"):
             hooks_data["token"] = token
             
         return HooksConfig(**hooks_data)
 
+    def _maybe_bootstrap_youtube_hooks(self, hooks_data: dict[str, Any]) -> dict[str, Any]:
+        """
+        Auto-bootstrap YouTube mappings when hooks config is absent.
+
+        This prevents local stacks from silently disabling hook ingress when
+        `ops_config.json` has not been initialized yet.
+        """
+        auto_bootstrap_raw = (os.getenv("UA_HOOKS_AUTO_BOOTSTRAP") or "").strip().lower()
+        if auto_bootstrap_raw in {"0", "false", "no", "off"}:
+            return hooks_data
+
+        existing_mappings = hooks_data.get("mappings")
+        if isinstance(existing_mappings, list) and existing_mappings:
+            return hooks_data
+
+        transforms_dir = str(hooks_data.get("transforms_dir") or "").strip() or DEFAULT_BOOTSTRAP_TRANSFORMS_DIR
+        ops_dir = resolve_ops_config_path().parent
+        transforms_root = (ops_dir / transforms_dir).resolve()
+        composio_transform_path = transforms_root / "composio_youtube_transform.py"
+        manual_transform_path = transforms_root / "manual_youtube_transform.py"
+
+        token_configured = bool((hooks_data.get("token") or "").strip() or (os.getenv("UA_HOOKS_TOKEN") or "").strip())
+        composio_secret_configured = bool((os.getenv("COMPOSIO_WEBHOOK_SECRET") or "").strip())
+
+        bootstrap_mappings: list[dict[str, Any]] = []
+        if composio_transform_path.exists() and composio_secret_configured:
+            bootstrap_mappings.append(
+                {
+                    "id": "composio-youtube-trigger",
+                    "match": {"path": "composio"},
+                    "action": "agent",
+                    "auth": {
+                        "strategy": "composio_hmac",
+                        "secret_env": "COMPOSIO_WEBHOOK_SECRET",
+                        "timestamp_tolerance_seconds": 300,
+                        "replay_window_seconds": 600,
+                    },
+                    "transform": {
+                        "module": "composio_youtube_transform.py",
+                        "export": "transform",
+                    },
+                }
+            )
+
+        # Never expose manual ingestion without token auth.
+        if manual_transform_path.exists() and token_configured:
+            bootstrap_mappings.append(
+                {
+                    "id": "youtube-manual-url",
+                    "match": {"path": "youtube/manual"},
+                    "action": "agent",
+                    "auth": {"strategy": "token"},
+                    "transform": {
+                        "module": "manual_youtube_transform.py",
+                        "export": "transform",
+                    },
+                }
+            )
+
+        if not bootstrap_mappings:
+            return hooks_data
+
+        hooks_data["mappings"] = bootstrap_mappings
+        hooks_data.setdefault("transforms_dir", transforms_dir)
+        hooks_data.setdefault("max_body_bytes", DEFAULT_BOOTSTRAP_HOOKS_MAX_BODY_BYTES)
+        if "enabled" not in hooks_data:
+            hooks_data["enabled"] = True
+        logger.info(
+            "Hook auto-bootstrap enabled mappings=%s transforms_dir=%s",
+            [str(item.get("id") or "") for item in bootstrap_mappings],
+            hooks_data.get("transforms_dir"),
+        )
+        return hooks_data
+
     def is_enabled(self) -> bool:
         return self.config.enabled
+
+    def readiness_status(self) -> dict[str, Any]:
+        mapping_ids: list[str] = []
+        try:
+            for mapping in self.config.mappings:
+                mapping_id = str(mapping.id or "").strip()
+                if mapping_id:
+                    mapping_ids.append(mapping_id)
+        except Exception:
+            mapping_ids = []
+
+        return {
+            "ready": bool(self.config.enabled),
+            "hooks_enabled": bool(self.config.enabled),
+            "base_path": str(self.config.base_path or "").strip() or "/hooks",
+            "max_body_bytes": int(self.config.max_body_bytes),
+            "mapping_count": len(mapping_ids),
+            "mapping_ids": mapping_ids,
+            "youtube_ingest_mode": self._youtube_ingest_mode or "disabled",
+            "youtube_ingest_url_configured": bool(self._youtube_ingest_url),
+            "youtube_ingest_fail_open": bool(self._youtube_ingest_fail_open),
+            "hook_default_timeout_seconds": int(self._default_hook_timeout_seconds or 0),
+        }
 
     async def handle_request(self, request: Request, subpath: str) -> Response:
         if not self.config.enabled:
@@ -167,7 +302,7 @@ class HooksService:
                         return Response(
                             json.dumps({"ok": True, "deduped": True}),
                             media_type="application/json",
-                            status_code=202,
+                            status_code=200,
                         )
                     auth_failed = True
                     logger.warning(
@@ -184,7 +319,7 @@ class HooksService:
                     return Response(
                         json.dumps({"ok": True, "skipped": True}),
                         media_type="application/json",
-                        status_code=202,
+                        status_code=200,
                     )
 
                 asyncio.create_task(self._dispatch_action(action))
@@ -198,7 +333,7 @@ class HooksService:
                 return Response(
                     json.dumps({"ok": True, "action": action.kind}),
                     media_type="application/json",
-                    status_code=202,
+                    status_code=200,
                 )
             
             if matched and auth_failed:
@@ -285,6 +420,210 @@ class HooksService:
             if self._forward_failures >= 3:
                 self._forward_disabled_until_ts = now + 300.0
             logger.warning("Hook forward error mapping=%s url=%s err=%s", mapping_id, url, exc)
+
+    def _safe_int_env(self, name: str, default: int) -> int:
+        raw = (os.getenv(name) or "").strip()
+        if not raw:
+            return int(default)
+        try:
+            return int(raw)
+        except Exception:
+            return int(default)
+
+    def _safe_float_env(self, name: str, default: float) -> float:
+        raw = (os.getenv(name) or "").strip()
+        if not raw:
+            return float(default)
+        try:
+            return float(raw)
+        except Exception:
+            return float(default)
+
+    def _safe_bool_env(self, name: str, default: bool) -> bool:
+        raw = (os.getenv(name) or "").strip().lower()
+        if not raw:
+            return bool(default)
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        return bool(default)
+
+    def _is_youtube_local_ingest_target(self, action: HookAction) -> bool:
+        return (
+            (action.kind or "").strip().lower() == "agent"
+            and (action.to or "").strip().lower() == "youtube-explainer-expert"
+            and bool((action.message or "").strip())
+            and self._youtube_ingest_mode == "local_worker"
+        )
+
+    def _append_message_lines(self, message: str, extra_lines: list[str]) -> str:
+        base = (message or "").strip()
+        cleaned_lines = [line for line in extra_lines if isinstance(line, str) and line.strip()]
+        if not cleaned_lines:
+            return base
+        if not base:
+            return "\n".join(cleaned_lines)
+        return base + "\n\n" + "\n".join(cleaned_lines)
+
+    async def _call_local_youtube_ingest_worker(
+        self,
+        *,
+        video_url: str,
+        video_id: str,
+        session_id: str,
+    ) -> dict[str, Any]:
+        if not self._youtube_ingest_url:
+            return {"ok": False, "status": "failed", "error": "missing_ingest_url"}
+
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._youtube_ingest_token:
+            headers["Authorization"] = f"Bearer {self._youtube_ingest_token}"
+
+        payload = {
+            "video_url": video_url,
+            "video_id": video_id,
+            "language": "en",
+            "timeout_seconds": self._youtube_ingest_timeout_seconds,
+            "request_id": session_id,
+        }
+
+        try:
+            timeout = httpx.Timeout(timeout=float(max(5, self._youtube_ingest_timeout_seconds + 10)))
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(self._youtube_ingest_url, headers=headers, json=payload)
+            if 200 <= resp.status_code < 300:
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = {"ok": False, "status": "failed", "error": "invalid_json_response"}
+                if isinstance(data, dict):
+                    data.setdefault("http_status", resp.status_code)
+                    return data
+                return {"ok": False, "status": "failed", "error": "invalid_response_shape"}
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": "ingest_http_error",
+                "http_status": resp.status_code,
+                "detail": (resp.text or "")[:2000],
+            }
+        except Exception as exc:
+            return {"ok": False, "status": "failed", "error": "ingest_request_error", "detail": str(exc)}
+
+    def _write_text_file(self, path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    async def _prepare_local_youtube_ingest(
+        self,
+        *,
+        action: HookAction,
+        session_id: str,
+        session_workspace: str,
+    ) -> tuple[HookAction, dict[str, Any], bool]:
+        if not self._is_youtube_local_ingest_target(action):
+            return action, {}, False
+
+        video_url = self._extract_action_field(action.message or "", "video_url")
+        video_id = self._extract_action_field(action.message or "", "video_id")
+        if not video_url:
+            return action, {"hook_youtube_ingest_status": "skipped_no_video_url"}, False
+
+        errors: list[dict[str, Any]] = []
+        ingest_result: dict[str, Any] = {}
+        for attempt_index in range(self._youtube_ingest_retries):
+            ingest_result = await self._call_local_youtube_ingest_worker(
+                video_url=video_url,
+                video_id=video_id,
+                session_id=session_id,
+            )
+            if ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded":
+                break
+            errors.append(
+                {
+                    "attempt": attempt_index + 1,
+                    "error": str(ingest_result.get("error") or "unknown"),
+                    "detail": str(ingest_result.get("detail") or "")[:2000],
+                }
+            )
+            if attempt_index < self._youtube_ingest_retries - 1 and self._youtube_ingest_retry_delay_seconds > 0:
+                await asyncio.sleep(self._youtube_ingest_retry_delay_seconds)
+
+        workspace_root = Path(session_workspace).resolve()
+        ingestion_dir = workspace_root / "ingestion"
+        meta_path = ingestion_dir / "youtube_local_ingest_result.json"
+
+        if ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded":
+            transcript_text = str(ingest_result.get("transcript_text") or "")
+            transcript_path = ingestion_dir / "youtube_transcript.local.txt"
+            try:
+                self._write_text_file(transcript_path, transcript_text)
+                self._write_text_file(meta_path, json.dumps(ingest_result, indent=2))
+            except Exception as exc:
+                logger.warning("Failed persisting local ingest transcript session_id=%s err=%s", session_id, exc)
+
+            result_lines = [
+                "local_youtube_ingest_mode: local_worker",
+                "local_youtube_ingest_status: succeeded",
+                f"local_youtube_ingest_source: {str(ingest_result.get('source') or 'unknown')}",
+                f"local_youtube_ingest_transcript_chars: {int(ingest_result.get('transcript_chars') or 0)}",
+                f"local_youtube_ingest_transcript_file: {transcript_path}",
+                f"local_youtube_ingest_metadata_file: {meta_path}",
+                "Use the local_youtube_ingest_transcript_file as primary transcript input for this run.",
+            ]
+            action = action.model_copy(
+                update={"message": self._append_message_lines(action.message or "", result_lines)}
+            )
+            metadata = {
+                "hook_youtube_ingest_mode": "local_worker",
+                "hook_youtube_ingest_status": "succeeded",
+                "hook_youtube_ingest_source": str(ingest_result.get("source") or "unknown"),
+                "hook_youtube_ingest_transcript_file": str(transcript_path),
+            }
+            return action, metadata, False
+
+        pending_payload = {
+            "status": "pending_local_ingest",
+            "session_id": session_id,
+            "video_url": video_url,
+            "video_id": video_id,
+            "ingest_url": self._youtube_ingest_url,
+            "attempts": errors,
+            "last_result": ingest_result,
+            "created_at_epoch": time.time(),
+        }
+        pending_path = workspace_root / "pending_local_ingest.json"
+        try:
+            self._write_text_file(pending_path, json.dumps(pending_payload, indent=2))
+        except Exception:
+            logger.warning("Failed writing pending_local_ingest marker session_id=%s", session_id)
+
+        metadata = {
+            "hook_youtube_ingest_mode": "local_worker",
+            "hook_youtube_ingest_status": "pending_local_ingest",
+            "hook_youtube_ingest_pending_file": str(pending_path),
+            "hook_youtube_ingest_error": str(ingest_result.get("error") or "local_ingest_failed"),
+        }
+
+        if self._youtube_ingest_fail_open:
+            fail_open_lines = [
+                "local_youtube_ingest_mode: local_worker",
+                "local_youtube_ingest_status: failed_fail_open",
+                f"local_youtube_ingest_pending_file: {pending_path}",
+                "Local transcript ingestion failed; proceed in degraded mode and record this in manifest.",
+            ]
+            action = action.model_copy(
+                update={"message": self._append_message_lines(action.message or "", fail_open_lines)}
+            )
+            return action, metadata, False
+
+        logger.warning(
+            "Deferring youtube dispatch session_id=%s status=pending_local_ingest pending_file=%s",
+            session_id,
+            pending_path,
+        )
+        return action, metadata, True
 
     def _extract_token(self, request: Request) -> Optional[str]:
         auth = request.headers.get("Authorization", "")
@@ -503,12 +842,15 @@ class HooksService:
             logger.warning("Hook agent action missing session_key")
             return
 
-        user_input = self._build_agent_user_input(action)
-        if not user_input:
-            logger.warning("Hook agent action missing message session_key=%s", session_key)
-            return
-
         session_id = self._session_id_from_key(session_key)
+        timeout_seconds = (
+            int(action.timeout_seconds)
+            if action.timeout_seconds is not None
+            else (self._default_hook_timeout_seconds or None)
+        )
+        if timeout_seconds is not None:
+            timeout_seconds = max(1, timeout_seconds)
+
         metadata: Dict[str, Any] = {
             "source": "webhook",
             "hook_name": action.name or "Hook",
@@ -521,21 +863,56 @@ class HooksService:
             metadata["hook_model"] = action.model
         if action.thinking:
             metadata["hook_thinking"] = action.thinking
-        if action.timeout_seconds is not None:
-            metadata["hook_timeout_seconds"] = action.timeout_seconds
+        if timeout_seconds is not None:
+            metadata["hook_timeout_seconds"] = timeout_seconds
 
         try:
             session = await self._resolve_or_create_webhook_session(session_id)
+            action, ingest_metadata, should_skip_dispatch = await self._prepare_local_youtube_ingest(
+                action=action,
+                session_id=session_id,
+                session_workspace=str(session.workspace_dir),
+            )
+            metadata.update(ingest_metadata)
+            if should_skip_dispatch:
+                logger.info(
+                    "Hook action deferred session_id=%s hook=%s reason=pending_local_ingest",
+                    session_id,
+                    action.name or "Hook",
+                )
+                return
+
+            user_input = self._build_agent_user_input(action)
+            if not user_input:
+                logger.warning("Hook agent action missing message session_key=%s", session_key)
+                return
+
             request = GatewayRequest(user_input=user_input, metadata=metadata)
-            async for _ in self.gateway.execute(session, request):
-                pass
+            if timeout_seconds is None:
+                await self._consume_gateway_execute(session, request)
+            else:
+                await asyncio.wait_for(
+                    self._consume_gateway_execute(session, request),
+                    timeout=float(timeout_seconds),
+                )
             logger.info("Hook action dispatched session_id=%s hook=%s", session_id, action.name or "Hook")
+        except asyncio.TimeoutError:
+            logger.error(
+                "Hook action timed out session_key=%s session_id=%s timeout_seconds=%s",
+                session_key,
+                session_id,
+                timeout_seconds,
+            )
         except Exception:
             logger.exception(
                 "Failed dispatching hook action session_key=%s session_id=%s",
                 session_key,
                 session_id,
             )
+
+    async def _consume_gateway_execute(self, session, request: GatewayRequest) -> None:
+        async for _ in self.gateway.execute(session, request):
+            pass
 
     async def _resolve_or_create_webhook_session(self, session_id: str):
         try:
@@ -580,6 +957,8 @@ class HooksService:
                 artifacts_root = str(resolve_artifacts_dir())
             except Exception:
                 artifacts_root = "<resolve_artifacts_dir_failed>"
+            payload_video_id = self._extract_action_field(message, "video_id")
+            payload_video_url = self._extract_action_field(message, "video_url")
             extra_lines = [
                 f"Resolved artifacts root (absolute): {artifacts_root}",
                 "Path rule: never use a literal UA_ARTIFACTS_DIR folder name in paths.",
@@ -588,6 +967,16 @@ class HooksService:
                 "Create required artifacts first (manifest.json, README.md, CONCEPT.md, IMPLEMENTATION.md, implementation/) before retrieval.",
                 "If transcript/video extraction fails, keep those files and set manifest status to degraded_transcript_only or failed.",
             ]
+            if payload_video_id or payload_video_url:
+                extra_lines.extend(
+                    [
+                        "Webhook payload values below are authoritative for this run.",
+                        "Do not substitute video_id/video_url from memory, previous runs, or examples.",
+                        f"authoritative_video_id: {payload_video_id or ''}",
+                        f"authoritative_video_url: {payload_video_url or ''}",
+                        "Before finalizing, ensure manifest.json uses the same authoritative video_id/video_url.",
+                    ]
+                )
 
         routing_lines = [
             f"Webhook route target: {action.to}",

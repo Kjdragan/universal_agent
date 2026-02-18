@@ -1,0 +1,16 @@
+[Unit]
+Description=Universal Agent local gateway (YouTube ingest worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__
+Environment=PYTHONPATH=__REPO_ROOT__/src
+Environment=UA_GATEWAY_PORT=8002
+ExecStart=__REPO_ROOT__/.venv/bin/python -m universal_agent.gateway_server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

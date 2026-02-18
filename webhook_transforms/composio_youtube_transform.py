@@ -111,14 +111,44 @@ def _safe_segment(value: str | None, fallback: str) -> str:
     return safe or fallback
 
 
-def _session_key(channel_id: str | None, video_id: str | None, raw_payload: dict[str, Any]) -> str:
+def _session_key(
+    channel_id: str | None,
+    video_id: str | None,
+    raw_payload: dict[str, Any],
+    run_token: str | None = None,
+) -> str:
     channel = _safe_segment(channel_id, "unknown_channel")
     if video_id:
         video = _safe_segment(video_id, "unknown_video")
     else:
         seed = str(raw_payload).encode("utf-8", errors="replace")
         video = hashlib.sha256(seed).hexdigest()[:12]
+    if run_token:
+        token = _safe_segment(run_token, "run")
+        if token:
+            return f"yt_{channel}_{video}_{token[:24]}"
     return f"yt_{channel}_{video}"
+
+
+def _extract_run_token(payload: dict[str, Any], event_payload: dict[str, Any]) -> str | None:
+    headers = payload.get("headers")
+    if isinstance(headers, dict):
+        header_token = _first_non_empty(
+            headers.get("webhook-id"),
+            headers.get("Webhook-Id"),
+            headers.get("x-request-id"),
+            headers.get("X-Request-Id"),
+            headers.get("x-composio-request-id"),
+            headers.get("X-Composio-Request-Id"),
+        )
+        if header_token:
+            return header_token
+
+    return _first_non_empty(
+        payload.get("webhook_id"),
+        payload.get("request_id"),
+        event_payload.get("request_id") if isinstance(event_payload, dict) else None,
+    )
 
 
 def _is_youtube_event(trigger_slug: str | None, toolkit_slug: str | None, event_payload: dict[str, Any]) -> bool:
@@ -201,6 +231,17 @@ def _resolve_artifacts_root_hint() -> str:
         return str(resolve_artifacts_dir())
     except Exception:
         return "artifacts"
+
+
+def _resolve_timeout_seconds() -> int:
+    raw = (os.getenv("UA_HOOKS_YOUTUBE_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return 1200
+    try:
+        value = int(raw)
+    except Exception:
+        return 1200
+    return max(60, value)
 
 
 def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
@@ -332,7 +373,8 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
     allow_degraded = _coerce_bool(degraded_raw, default=True)
     artifacts_root = _resolve_artifacts_root_hint()
 
-    session_key = _session_key(channel_id, video_id, payload)
+    run_token = _extract_run_token(payload, event_payload)
+    session_key = _session_key(channel_id, video_id, payload, run_token=run_token)
     name = "ComposioYouTubeTrigger"
 
     message_lines = [
@@ -368,5 +410,6 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         "name": name,
         "session_key": session_key,
         "to": YOUTUBE_LEARNING_SUBAGENT,
+        "timeout_seconds": _resolve_timeout_seconds(),
         "message": "\n".join(message_lines),
     }

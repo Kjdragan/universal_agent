@@ -146,6 +146,42 @@ def _create_dummy_session(base_dir: Path, session_id: str, logs: list[str]):
         (session_dir / "run.log").write_text("\n".join(logs), encoding="utf-8")
     return session_dir
 
+
+def test_hooks_readyz_reports_not_initialized(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_hooks_service", None)
+    resp = client.get("/api/v1/hooks/readyz")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ready"] is False
+    assert data["service_initialized"] is False
+    assert data["hooks_enabled"] is False
+
+
+def test_hooks_readyz_reports_initialized_status(client, monkeypatch):
+    class _StubHooksService:
+        def readiness_status(self):
+            return {
+                "ready": True,
+                "hooks_enabled": True,
+                "base_path": "/hooks",
+                "max_body_bytes": 1024,
+                "mapping_count": 2,
+                "mapping_ids": ["composio-youtube-trigger", "youtube-manual-url"],
+                "youtube_ingest_mode": "local_worker",
+                "youtube_ingest_url_configured": True,
+                "youtube_ingest_fail_open": False,
+                "hook_default_timeout_seconds": 0,
+            }
+
+    monkeypatch.setattr(gateway_server, "_hooks_service", _StubHooksService())
+    resp = client.get("/api/v1/hooks/readyz")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ready"] is True
+    assert data["service_initialized"] is True
+    assert data["hooks_enabled"] is True
+    assert data["mapping_count"] == 2
+
 def test_ops_list_sessions(client, tmp_path):
     # Create some dummy sessions on disk
     session_a = _create_dummy_session(tmp_path, "session_A", ["logA"])

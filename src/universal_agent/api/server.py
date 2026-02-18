@@ -14,6 +14,7 @@ import json
 import logging
 import mimetypes
 import os
+import shutil
 import hmac
 import hashlib
 import re
@@ -39,6 +40,34 @@ BASE_DIR = Path(__file__).parent.parent.parent.parent
 WORKSPACES_DIR = BASE_DIR / "AGENT_RUN_WORKSPACES"
 ARTIFACTS_DIR = Path(os.getenv("UA_ARTIFACTS_DIR", str(BASE_DIR / "artifacts"))).expanduser()
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+VPS_WORKSPACES_MIRROR_DIR = Path(
+    os.getenv("UA_VPS_WORKSPACES_MIRROR_DIR", str(BASE_DIR / "tmp" / "remote_vps_workspaces"))
+).expanduser()
+VPS_ARTIFACTS_MIRROR_DIR = Path(
+    os.getenv("UA_VPS_ARTIFACTS_MIRROR_DIR", str(BASE_DIR / "tmp" / "remote_vps_artifacts"))
+).expanduser()
+VPS_PULL_SCRIPT = BASE_DIR / "scripts" / "pull_remote_workspaces_now.sh"
+
+TEXT_EXTENSIONS = (
+    ".txt",
+    ".md",
+    ".log",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".css",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".sh",
+    ".html",
+    ".xml",
+    ".csv",
+)
 
 # Import agent bridge
 from universal_agent.api.agent_bridge import get_agent_bridge
@@ -403,6 +432,170 @@ class SessionCreateRequest(BaseModel):
     user_id: Optional[str] = None
 
 
+class VpsSyncRequest(BaseModel):
+    """Request payload for VPS mirror sync."""
+    session_id: Optional[str] = None
+
+
+def _resolve_path_under_root(root: Path, path: str = "") -> Path:
+    target = root / path if path else root
+    try:
+        target = target.resolve()
+        root_resolved = root.resolve()
+        if not str(target).startswith(str(root_resolved)):
+            raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
+    return target
+
+
+def _list_directory(root: Path, path: str = "") -> dict[str, Any]:
+    target_path = _resolve_path_under_root(root, path)
+    if not target_path.exists():
+        return {"files": [], "path": path, "root": str(root)}
+    if target_path.is_file():
+        return {"files": [], "path": path, "root": str(root), "is_file": True}
+
+    files = []
+    for item in sorted(target_path.iterdir()):
+        try:
+            stat = item.stat()
+            files.append(
+                {
+                    "name": item.name,
+                    "path": str(item.relative_to(root)),
+                    "is_dir": item.is_dir(),
+                    "size": stat.st_size if item.is_file() else None,
+                    "modified": stat.st_mtime,
+                }
+            )
+        except Exception:
+            pass
+    return {"files": files, "path": path, "root": str(root)}
+
+
+def _read_file_from_root(root: Path, file_path: str) -> Response:
+    target_resolved = _resolve_path_under_root(root, file_path)
+    if not target_resolved.exists() or not target_resolved.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    content = target_resolved.read_bytes()
+    filename = target_resolved.name
+    mime, _ = mimetypes.guess_type(str(target_resolved))
+    content_type = mime or "application/octet-stream"
+
+    if filename.endswith(".html"):
+        return Response(content=content, media_type="text/html")
+    if filename.endswith(".json"):
+        try:
+            data = json.loads(content.decode("utf-8"))
+            return Response(content=json.dumps(data, indent=2), media_type="application/json")
+        except Exception:
+            pass
+    if filename.endswith(TEXT_EXTENSIONS):
+        return Response(content=content, media_type="text/plain")
+    return Response(content=content, media_type=content_type)
+
+
+def _copytree_merge(src: Path, dst: Path) -> None:
+    if not src.exists():
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst, dirs_exist_ok=True)
+
+
+def _local_sync_without_ssh(session_id: Optional[str], workspace_mirror: Path, artifacts_mirror: Path) -> dict[str, Any]:
+    """
+    Fallback mirror strategy when SSH key-based sync is unavailable on a VPS host.
+
+    This copies directly from configured remote roots (which are local paths on the VPS).
+    """
+    remote_ws_root = Path(os.getenv("UA_REMOTE_WORKSPACES_DIR", "/opt/universal_agent/AGENT_RUN_WORKSPACES")).expanduser()
+    remote_artifacts_root = Path(os.getenv("UA_REMOTE_ARTIFACTS_DIR", "/opt/universal_agent/artifacts")).expanduser()
+
+    workspace_mirror.mkdir(parents=True, exist_ok=True)
+    artifacts_mirror.mkdir(parents=True, exist_ok=True)
+
+    copied_workspaces = 0
+    cleaned_session_id = (session_id or "").strip()
+    if cleaned_session_id:
+        src_dir = remote_ws_root / cleaned_session_id
+        if src_dir.exists() and src_dir.is_dir():
+            _copytree_merge(src_dir, workspace_mirror / cleaned_session_id)
+            copied_workspaces = 1
+    else:
+        if remote_ws_root.exists():
+            for entry in remote_ws_root.iterdir():
+                if not entry.is_dir():
+                    continue
+                _copytree_merge(entry, workspace_mirror / entry.name)
+                copied_workspaces += 1
+
+    if remote_artifacts_root.exists():
+        _copytree_merge(remote_artifacts_root, artifacts_mirror)
+
+    return {
+        "ok": True,
+        "returncode": 0,
+        "stdout": "",
+        "stderr": "local_fallback_sync_used (no SSH key available for sync script)",
+        "workspace_root": str(workspace_mirror),
+        "artifacts_root": str(artifacts_mirror),
+        "session_id": cleaned_session_id or None,
+        "local_fallback": True,
+        "copied_workspaces": copied_workspaces,
+    }
+
+
+async def _run_vps_pull_sync(session_id: Optional[str] = None) -> dict[str, Any]:
+    if not VPS_PULL_SCRIPT.exists():
+        raise HTTPException(status_code=500, detail=f"Sync script missing: {VPS_PULL_SCRIPT}")
+
+    VPS_WORKSPACES_MIRROR_DIR.mkdir(parents=True, exist_ok=True)
+    VPS_ARTIFACTS_MIRROR_DIR.mkdir(parents=True, exist_ok=True)
+
+    cmd = [str(VPS_PULL_SCRIPT)]
+    cleaned_session_id = (session_id or "").strip()
+    if cleaned_session_id:
+        cmd.append(cleaned_session_id)
+
+    env = os.environ.copy()
+    env["UA_LOCAL_MIRROR_DIR"] = str(VPS_WORKSPACES_MIRROR_DIR)
+    env["UA_LOCAL_ARTIFACTS_MIRROR_DIR"] = str(VPS_ARTIFACTS_MIRROR_DIR)
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(BASE_DIR),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise HTTPException(status_code=504, detail="VPS sync timed out after 180 seconds")
+
+    stdout_text = (stdout or b"").decode("utf-8", errors="replace")
+    stderr_text = (stderr or b"").decode("utf-8", errors="replace")
+    if proc.returncode != 0 and "SSH key does not exist" in stderr_text:
+        logger.warning("VPS sync script failed due missing SSH key; falling back to local copy sync")
+        return _local_sync_without_ssh(session_id, VPS_WORKSPACES_MIRROR_DIR, VPS_ARTIFACTS_MIRROR_DIR)
+
+    return {
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        "stdout": stdout_text[-12000:],
+        "stderr": stderr_text[-12000:],
+        "workspace_root": str(VPS_WORKSPACES_MIRROR_DIR),
+        "artifacts_root": str(VPS_ARTIFACTS_MIRROR_DIR),
+        "session_id": cleaned_session_id or None,
+    }
+
+
 # =============================================================================
 # Connection Manager for WebSocket
 # =============================================================================
@@ -706,82 +899,77 @@ async def get_file(session_id: str, file_path: str, request: Request):
 @app.get("/api/artifacts")
 async def list_artifacts(path: str = ""):
     """List files under the persistent artifacts root."""
-    root = ARTIFACTS_DIR
-    target_path = root / path if path else root
-
-    # Security check
-    try:
-        target_path = target_path.resolve()
-        root_resolved = root.resolve()
-        if not str(target_path).startswith(str(root_resolved)):
-            raise HTTPException(status_code=403, detail="Access denied")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    if not target_path.exists():
-        return {"files": [], "path": path, "artifacts_root": str(root)}
-
-    if target_path.is_file():
-        return {"files": [], "path": path, "is_file": True, "artifacts_root": str(root)}
-
-    files = []
-    for item in sorted(target_path.iterdir()):
-        try:
-            stat = item.stat()
-            files.append(
-                {
-                    "name": item.name,
-                    "path": str(item.relative_to(root)),
-                    "is_dir": item.is_dir(),
-                    "size": stat.st_size if item.is_file() else None,
-                    "modified": stat.st_mtime,
-                }
-            )
-        except Exception:
-            pass
-
-    return {"files": files, "path": path, "artifacts_root": str(root)}
+    payload = _list_directory(ARTIFACTS_DIR, path)
+    payload["artifacts_root"] = str(ARTIFACTS_DIR)
+    return payload
 
 
 @app.get("/api/artifacts/files/{file_path:path}")
 async def get_artifact_file(file_path: str):
     """Get file content from the persistent artifacts root."""
-    root = ARTIFACTS_DIR
-    target = (root / file_path)
+    return _read_file_from_root(ARTIFACTS_DIR, file_path)
 
-    # Security check
-    try:
-        target_resolved = target.resolve()
-        root_resolved = root.resolve()
-        if not str(target_resolved).startswith(str(root_resolved)):
-            raise HTTPException(status_code=403, detail="Access denied")
-    except HTTPException:
-        raise
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid path")
 
-    if not target_resolved.exists() or not target_resolved.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+@app.get("/api/vps/sync/status")
+async def vps_sync_status():
+    """Get local mirror status for VPS workspaces/artifacts."""
+    workspaces_count = 0
+    artifacts_count = 0
+    if VPS_WORKSPACES_MIRROR_DIR.exists():
+        workspaces_count = len([item for item in VPS_WORKSPACES_MIRROR_DIR.iterdir() if item.is_dir()])
+    if VPS_ARTIFACTS_MIRROR_DIR.exists():
+        artifacts_count = len(list(VPS_ARTIFACTS_MIRROR_DIR.iterdir()))
+    return {
+        "workspace_root": str(VPS_WORKSPACES_MIRROR_DIR),
+        "artifacts_root": str(VPS_ARTIFACTS_MIRROR_DIR),
+        "workspace_count": workspaces_count,
+        "artifacts_items_count": artifacts_count,
+        "sync_script": str(VPS_PULL_SCRIPT),
+        "sync_script_exists": VPS_PULL_SCRIPT.exists(),
+    }
 
-    content = target_resolved.read_bytes()
-    mime, _ = mimetypes.guess_type(str(target_resolved))
-    content_type = mime or "application/octet-stream"
 
-    filename = target_resolved.name
-    if filename.endswith(".html"):
-        return Response(content=content, media_type="text/html")
-    if filename.endswith(".json"):
-        try:
-            data = json.loads(content.decode("utf-8"))
-            return Response(content=json.dumps(data, indent=2), media_type="application/json")
-        except Exception:
-            pass
-    if filename.endswith((".txt", ".md", ".log", ".py", ".js", ".ts", ".tsx", ".css")):
-        return Response(content=content, media_type="text/plain")
+@app.post("/api/vps/sync/now")
+async def vps_sync_now(payload: VpsSyncRequest):
+    """
+    Pull latest VPS workspaces/artifacts into local mirror directories.
 
-    return Response(content=content, media_type=content_type)
+    This uses the existing SSH/Tailscale sync script.
+    """
+    result = await _run_vps_pull_sync(payload.session_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=result)
+    return result
+
+
+@app.get("/api/vps/files")
+async def list_vps_files(scope: str = "workspaces", path: str = ""):
+    """
+    List mirrored VPS files.
+
+    scope=workspaces -> tmp/remote_vps_workspaces
+    scope=artifacts  -> tmp/remote_vps_artifacts
+    """
+    scope_clean = (scope or "").strip().lower()
+    if scope_clean not in {"workspaces", "artifacts"}:
+        raise HTTPException(status_code=400, detail="scope must be 'workspaces' or 'artifacts'")
+    root = VPS_WORKSPACES_MIRROR_DIR if scope_clean == "workspaces" else VPS_ARTIFACTS_MIRROR_DIR
+    payload = _list_directory(root, path)
+    payload["scope"] = scope_clean
+    return payload
+
+
+@app.get("/api/vps/file")
+async def read_vps_file(scope: str = "workspaces", path: str = ""):
+    """Read a file from mirrored VPS files."""
+    scope_clean = (scope or "").strip().lower()
+    if scope_clean not in {"workspaces", "artifacts"}:
+        raise HTTPException(status_code=400, detail="scope must be 'workspaces' or 'artifacts'")
+    path_clean = (path or "").strip()
+    if not path_clean:
+        raise HTTPException(status_code=400, detail="path is required")
+    root = VPS_WORKSPACES_MIRROR_DIR if scope_clean == "workspaces" else VPS_ARTIFACTS_MIRROR_DIR
+    return _read_file_from_root(root, path_clean)
 
 
 @app.post("/api/approvals")
