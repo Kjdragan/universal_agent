@@ -255,15 +255,6 @@ description: Automates browser interactions for web testing, form filling, scree
 allowed-tools: Bash(agent-browser:*)
 ```
 
-#### browser-debugging
-Dynamic guide for debugging Web UI issues using the Browser Subagent.
-Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/browser-debugging/SKILL.md`
-```yaml
-name: browser-debugging
-description: Dynamic guide for debugging Web UI issues using the Browser Subagent.
-version: 1.0.0
-```
-
 #### clawhub
 Use the ClawHub CLI to search, install, update, and publish agent skills from clawhub.com. Use when you need to fetch new skills on the fly, sync installed skills to latest or a specific version, or publish new/updated skill folders with the npm-installed clawhub CLI.
 Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/clawhub/SKILL.md`
