@@ -61,8 +61,13 @@ The Universal Agent can run as a persistent assistant on Telegram.
 ### Launching
 
 ```bash
-uv run python -m universal_agent.bot.telegram_bot
+uv run python -m universal_agent.bot.main
 ```
+
+Current runtime mode:
+- Telegram bot runs via long polling from `src/universal_agent/bot/main.py`.
+- Configure with `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ALLOWED_USER_IDS`.
+- Optional timeout override: `UA_TELEGRAM_TASK_TIMEOUT_SECONDS`.
 
 ### Features
 
