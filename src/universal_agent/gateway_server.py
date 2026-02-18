@@ -90,9 +90,12 @@ from universal_agent.session_policy import (
 )
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.youtube_ingest import ingest_youtube_transcript, normalize_video_target
+from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
+from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+ensure_runtime_path()
 
 # Feature flags (placeholders, no runtime behavior changes yet)
 HEARTBEAT_ENABLED = heartbeat_enabled()
@@ -519,6 +522,7 @@ TURN_STATUS_FAILED = "failed"
 TURN_STATUS_CANCELLED = "cancelled"
 TURN_HISTORY_LIMIT = int(os.getenv("UA_TURN_HISTORY_LIMIT", "200"))
 TURN_FINGERPRINT_DEDUPE_WINDOW_SECONDS = int(os.getenv("UA_TURN_FINGERPRINT_DEDUPE_WINDOW_SECONDS", "120"))
+TURN_LINEAGE_DIRNAME = "turns"
 CONTINUITY_RESUME_SUCCESS_MIN = float(os.getenv("UA_CONTINUITY_RESUME_SUCCESS_MIN", "0.90") or 0.90)
 CONTINUITY_ATTACH_SUCCESS_MIN = float(os.getenv("UA_CONTINUITY_ATTACH_SUCCESS_MIN", "0.90") or 0.90)
 CONTINUITY_FAILURE_WARN_THRESHOLD = int(os.getenv("UA_CONTINUITY_FAILURE_WARN_THRESHOLD", "3") or 3)
@@ -1295,11 +1299,68 @@ def _session_runtime_snapshot(session_id: str) -> dict[str, Any]:
             "last_activity_at": _now_iso(),
             "active_connections": 0,
             "active_runs": 0,
+            "active_foreground_runs": 0,
             "last_event_type": None,
             "terminal_reason": None,
+            "last_run_source": None,
+            "last_run_started_at": None,
+            "last_run_finished_at": None,
+            "last_foreground_run_started_at": None,
+            "last_foreground_run_finished_at": None,
         }
         _session_runtime[session_id] = state
     return state
+
+
+def _normalize_run_source(value: Any) -> str:
+    source = str(value or "user").strip().lower()
+    return source or "user"
+
+
+def _workspace_dir_for_session(session_id: str) -> Optional[Path]:
+    session = _sessions.get(session_id)
+    if not session:
+        return None
+    workspace = Path(str(session.workspace_dir or "")).expanduser()
+    if not str(workspace):
+        return None
+    return workspace
+
+
+def _run_log_size(workspace_dir: Optional[Path]) -> int:
+    if workspace_dir is None:
+        return 0
+    log_path = workspace_dir / "run.log"
+    try:
+        if not log_path.exists():
+            return 0
+        return int(log_path.stat().st_size)
+    except Exception:
+        return 0
+
+
+def _turn_lineage_path(session_id: str, turn_id: str) -> Optional[Path]:
+    workspace = _workspace_dir_for_session(session_id)
+    if workspace is None:
+        return None
+    return workspace / TURN_LINEAGE_DIRNAME / f"{turn_id}.jsonl"
+
+
+def _append_turn_lineage_event(session_id: str, turn_id: str, payload: dict[str, Any]) -> None:
+    lineage_path = _turn_lineage_path(session_id, turn_id)
+    if lineage_path is None:
+        return
+    try:
+        lineage_path.parent.mkdir(parents=True, exist_ok=True)
+        with lineage_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=True, sort_keys=True) + "\n")
+    except Exception as exc:
+        logger.warning(
+            "Failed to append turn lineage event (session=%s, turn=%s): %s",
+            session_id,
+            turn_id,
+            exc,
+        )
 
 
 def _runtime_status_from_counters(state: dict[str, Any]) -> str:
@@ -1319,8 +1380,14 @@ def _sync_runtime_metadata(session_id: str) -> None:
         "last_activity_at": runtime.get("last_activity_at"),
         "active_connections": int(runtime.get("active_connections", 0)),
         "active_runs": int(runtime.get("active_runs", 0)),
+        "active_foreground_runs": int(runtime.get("active_foreground_runs", 0)),
         "last_event_type": runtime.get("last_event_type"),
         "terminal_reason": runtime.get("terminal_reason"),
+        "last_run_source": runtime.get("last_run_source"),
+        "last_run_started_at": runtime.get("last_run_started_at"),
+        "last_run_finished_at": runtime.get("last_run_finished_at"),
+        "last_foreground_run_started_at": runtime.get("last_foreground_run_started_at"),
+        "last_foreground_run_finished_at": runtime.get("last_foreground_run_finished_at"),
     }
 
 
@@ -1449,6 +1516,9 @@ def _admit_turn(
     turns = state["turns"]
     assert isinstance(turns, dict)
     fingerprint = _compute_turn_fingerprint(user_input, force_complex, metadata)
+    run_source = _normalize_run_source(metadata.get("source") if isinstance(metadata, dict) else None)
+    workspace = _workspace_dir_for_session(session_id)
+    run_log_offset_start = _run_log_size(workspace)
 
     active_turn_id = state.get("active_turn_id")
     if active_turn_id:
@@ -1497,15 +1567,40 @@ def _admit_turn(
         "started_at": _now_iso(),
         "origin_connection_id": connection_id,
         "fingerprint": fingerprint,
+        "run_source": run_source,
+        "run_log_offset_start": run_log_offset_start,
+        "run_log_offset_end": None,
+        "completion": None,
     }
     turns[turn_id] = record
     state["active_turn_id"] = turn_id
     state["last_turn_id"] = turn_id
     _trim_turn_history(state)
+    _append_turn_lineage_event(
+        session_id,
+        turn_id,
+        {
+            "event": "turn_started",
+            "timestamp": _now_iso(),
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "client_turn_id": client_turn_id,
+            "run_source": run_source,
+            "run_log_offset_start": run_log_offset_start,
+            "fingerprint": fingerprint,
+            "request_preview": str(user_input or "")[:400],
+        },
+    )
     return {"decision": "accepted", "turn_id": turn_id, "record": record}
 
 
-def _finalize_turn(session_id: str, turn_id: str, status: str, error_message: Optional[str] = None) -> None:
+def _finalize_turn(
+    session_id: str,
+    turn_id: str,
+    status: str,
+    error_message: Optional[str] = None,
+    completion: Optional[dict[str, Any]] = None,
+) -> None:
     state = _session_turn_snapshot(session_id)
     turns = state.get("turns", {})
     if not isinstance(turns, dict):
@@ -1513,12 +1608,32 @@ def _finalize_turn(session_id: str, turn_id: str, status: str, error_message: Op
     record = turns.get(turn_id)
     if not isinstance(record, dict):
         return
+    workspace = _workspace_dir_for_session(session_id)
     record["status"] = status
     record["finished_at"] = _now_iso()
+    record["run_log_offset_end"] = _run_log_size(workspace)
+    if completion is not None:
+        record["completion"] = completion
     if error_message:
         record["error_message"] = error_message
     if state.get("active_turn_id") == turn_id:
         state["active_turn_id"] = None
+    _append_turn_lineage_event(
+        session_id,
+        turn_id,
+        {
+            "event": "turn_finalized",
+            "timestamp": _now_iso(),
+            "session_id": session_id,
+            "turn_id": turn_id,
+            "status": status,
+            "error_message": error_message,
+            "run_log_offset_start": int(record.get("run_log_offset_start") or 0),
+            "run_log_offset_end": int(record.get("run_log_offset_end") or 0),
+            "run_source": record.get("run_source"),
+            "completion": completion,
+        },
+    )
 
 
 def _set_session_connections(session_id: str, count: int) -> None:
@@ -1529,26 +1644,41 @@ def _set_session_connections(session_id: str, count: int) -> None:
     _sync_runtime_metadata(session_id)
 
 
-def _increment_session_active_runs(session_id: str) -> None:
+def _increment_session_active_runs(session_id: str, run_source: str = "user") -> None:
     runtime = _session_runtime_snapshot(session_id)
+    source = _normalize_run_source(run_source)
+    now_iso = _now_iso()
     runtime["active_runs"] = int(runtime.get("active_runs", 0)) + 1
+    if source != "heartbeat":
+        runtime["active_foreground_runs"] = int(runtime.get("active_foreground_runs", 0)) + 1
+        runtime["last_foreground_run_started_at"] = now_iso
     runtime["lifecycle_state"] = SESSION_STATE_RUNNING
     runtime["terminal_reason"] = None
-    runtime["last_activity_at"] = _now_iso()
+    runtime["last_activity_at"] = now_iso
+    runtime["last_run_source"] = source
+    runtime["last_run_started_at"] = now_iso
     _sync_runtime_metadata(session_id)
 
 
-def _decrement_session_active_runs(session_id: str) -> None:
+def _decrement_session_active_runs(session_id: str, run_source: str = "user") -> None:
     runtime = _session_runtime_snapshot(session_id)
+    source = _normalize_run_source(run_source)
+    now_iso = _now_iso()
     runtime["active_runs"] = max(0, int(runtime.get("active_runs", 0)) - 1)
+    if source != "heartbeat":
+        runtime["active_foreground_runs"] = max(0, int(runtime.get("active_foreground_runs", 0)) - 1)
+        runtime["last_foreground_run_finished_at"] = now_iso
     runtime["lifecycle_state"] = _runtime_status_from_counters(runtime)
-    runtime["last_activity_at"] = _now_iso()
+    runtime["last_activity_at"] = now_iso
+    runtime["last_run_source"] = source
+    runtime["last_run_finished_at"] = now_iso
     _sync_runtime_metadata(session_id)
 
 
 def _mark_session_terminal(session_id: str, reason: str) -> None:
     runtime = _session_runtime_snapshot(session_id)
     runtime["active_runs"] = 0
+    runtime["active_foreground_runs"] = 0
     runtime["active_connections"] = 0
     runtime["lifecycle_state"] = SESSION_STATE_TERMINAL
     runtime["terminal_reason"] = reason
@@ -3093,9 +3223,13 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
         state = _session_turn_snapshot(session_id)
         active_turn_id = str(state.get("active_turn_id") or "")
         if active_turn_id:
+            active_record = state.get("turns", {}).get(active_turn_id) if isinstance(state.get("turns"), dict) else {}
+            run_source = _normalize_run_source(
+                active_record.get("run_source") if isinstance(active_record, dict) else None
+            )
             async with _session_turn_lock(session_id):
                 _finalize_turn(session_id, active_turn_id, TURN_STATUS_CANCELLED, error_message=reason)
-            _decrement_session_active_runs(session_id)
+            _decrement_session_active_runs(session_id, run_source=run_source)
 
     marked_run_id = _mark_run_cancel_requested(run_id, reason)
 
@@ -3489,6 +3623,8 @@ async def health(response: Response):
         "version": "1.0.0",
         "db_status": db_status,
         "db_error": db_error,
+        "runtime_path": os.getenv("PATH", ""),
+        "runtime_tools": runtime_tool_status(),
         "deployment_profile": _deployment_profile_defaults(),
     }
 
@@ -5637,6 +5773,8 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     }
                     if client_turn_id:
                         request_metadata["client_turn_id"] = client_turn_id
+                    request_source = _normalize_run_source(request_metadata.get("source"))
+                    request_metadata["source"] = request_source
 
                     request = GatewayRequest(
                         user_input=user_input,
@@ -5649,7 +5787,8 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         session.user_id,
                         len(user_input),
                     )
-                    _increment_session_active_runs(session_id)
+                    mission_tracker = MissionGuardrailTracker(build_mission_contract(user_input))
+                    _increment_session_active_runs(session_id, run_source=request_source)
 
                     async def run_execution(turn_id: str):
                         saw_streaming_text = False
@@ -5663,6 +5802,8 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             async for event in gateway.execute(session, request):
                                 if event.type == EventType.TOOL_CALL:
                                     tool_call_count += 1
+                                    if isinstance(event.data, dict):
+                                        mission_tracker.record_tool_call(str(event.data.get("name") or ""))
                                 elif event.type == EventType.ITERATION_END and isinstance(event.data, dict):
                                     execution_duration_seconds = float(
                                         event.data.get("duration_seconds") or execution_duration_seconds
@@ -5700,13 +5841,20 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     )
                                 await manager.broadcast(session_id, agent_event_to_wire(event))
 
+                            if execution_duration_seconds <= 0:
+                                execution_duration_seconds = round(time.time() - execution_start_ts, 3)
+                            goal_satisfaction = mission_tracker.evaluate()
+                            completion_summary = {
+                                "tool_calls": tool_call_count,
+                                "duration_seconds": execution_duration_seconds,
+                                "goal_satisfaction": goal_satisfaction,
+                            }
+
                             # Generate checkpoint for next session/follow-up
                             try:
                                 from universal_agent.session_checkpoint import SessionCheckpointGenerator
                                 workspace_path = Path(session.workspace_dir)
                                 generator = SessionCheckpointGenerator(workspace_path)
-                                if execution_duration_seconds <= 0:
-                                    execution_duration_seconds = round(time.time() - execution_start_ts, 3)
                                 checkpoint_result = SimpleNamespace(
                                     tool_calls=tool_call_count,
                                     execution_time_seconds=execution_duration_seconds,
@@ -5721,6 +5869,62 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             except Exception as ckpt_err:
                                 logger.warning(f"⚠️ Failed to save checkpoint: {ckpt_err}")
 
+                            if not bool(goal_satisfaction.get("passed")):
+                                goal_message = "Mission requirements were not satisfied; required tool checkpoints are missing."
+                                _add_notification(
+                                    kind="assistance_needed",
+                                    title="Mission Guardrail Blocked Completion",
+                                    message=goal_message,
+                                    session_id=session.session_id,
+                                    severity="error",
+                                    requires_action=True,
+                                    metadata={"goal_satisfaction": goal_satisfaction},
+                                )
+                                await manager.broadcast(
+                                    session_id,
+                                    {
+                                        "type": "status",
+                                        "data": {
+                                            "status": "goal_satisfaction_failed",
+                                            "turn_id": turn_id,
+                                            "goal_satisfaction": goal_satisfaction,
+                                        },
+                                        "timestamp": datetime.now().isoformat(),
+                                    },
+                                )
+                                await manager.broadcast(
+                                    session_id,
+                                    {
+                                        "type": "error",
+                                        "data": {
+                                            "message": goal_message,
+                                            "goal_satisfaction": goal_satisfaction,
+                                        },
+                                        "timestamp": datetime.now().isoformat(),
+                                    },
+                                )
+                                await manager.broadcast(
+                                    session_id,
+                                    {
+                                        "type": "query_complete",
+                                        "data": {
+                                            "turn_id": turn_id,
+                                            "goal_satisfaction": goal_satisfaction,
+                                            "completed": False,
+                                        },
+                                        "timestamp": datetime.now().isoformat(),
+                                    },
+                                )
+                                async with _session_turn_lock(session_id):
+                                    _finalize_turn(
+                                        session_id,
+                                        turn_id,
+                                        TURN_STATUS_FAILED,
+                                        error_message=goal_message,
+                                        completion=completion_summary,
+                                    )
+                                return
+
                             _add_notification(
                                 kind="mission_complete",
                                 title="Mission Completed",
@@ -5730,6 +5934,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 metadata={
                                     "tool_calls": tool_call_count,
                                     "duration_seconds": execution_duration_seconds,
+                                    "goal_satisfaction": goal_satisfaction,
                                 },
                             )
 
@@ -5737,7 +5942,11 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 session_id,
                                 {
                                     "type": "query_complete",
-                                    "data": {"turn_id": turn_id},
+                                    "data": {
+                                        "turn_id": turn_id,
+                                        "goal_satisfaction": goal_satisfaction,
+                                        "completed": True,
+                                    },
                                     "timestamp": datetime.now().isoformat(),
                                 },
                             )
@@ -5750,7 +5959,12 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             if clear_pending_gate_on_success:
                                 _pending_gated_requests.pop(session_id, None)
                             async with _session_turn_lock(session_id):
-                                _finalize_turn(session_id, turn_id, TURN_STATUS_COMPLETED)
+                                _finalize_turn(
+                                    session_id,
+                                    turn_id,
+                                    TURN_STATUS_COMPLETED,
+                                    completion=completion_summary,
+                                )
                         except asyncio.CancelledError:
                             logger.warning("Execution cancelled for session %s turn %s", session_id, turn_id)
                             await manager.broadcast(
@@ -5774,7 +5988,16 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 },
                             )
                             async with _session_turn_lock(session_id):
-                                _finalize_turn(session_id, turn_id, TURN_STATUS_CANCELLED, error_message="cancelled")
+                                _finalize_turn(
+                                    session_id,
+                                    turn_id,
+                                    TURN_STATUS_CANCELLED,
+                                    error_message="cancelled",
+                                    completion={
+                                        "tool_calls": tool_call_count,
+                                        "duration_seconds": round(time.time() - execution_start_ts, 3),
+                                    },
+                                )
                             raise
                         except Exception as e:
                             logger.error("Execution error for session %s: %s", session_id, e, exc_info=True)
@@ -5795,9 +6018,18 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 },
                             )
                             async with _session_turn_lock(session_id):
-                                _finalize_turn(session_id, turn_id, TURN_STATUS_FAILED, error_message=str(e))
+                                _finalize_turn(
+                                    session_id,
+                                    turn_id,
+                                    TURN_STATUS_FAILED,
+                                    error_message=str(e),
+                                    completion={
+                                        "tool_calls": tool_call_count,
+                                        "duration_seconds": round(time.time() - execution_start_ts, 3),
+                                    },
+                                )
                         finally:
-                            _decrement_session_active_runs(session_id)
+                            _decrement_session_active_runs(session_id, run_source=request_source)
                             if _heartbeat_service:
                                 _heartbeat_service.busy_sessions.discard(session.session_id)
 

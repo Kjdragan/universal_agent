@@ -64,14 +64,21 @@ ssh -i "$SSH_KEY" "$VPS_HOST" "
     chmod 640 .env
   fi
 
-  echo '== Python deps =='
-  if [ -x /home/ua/.local/bin/uv ]; then
-    runuser -u ua -- bash -lc 'cd $REMOTE_DIR && /home/ua/.local/bin/uv sync'
-  elif command -v uv >/dev/null 2>&1; then
-    runuser -u ua -- bash -lc 'cd $REMOTE_DIR && uv sync'
-  else
-    echo 'WARN: uv not found, skipping python dependency sync'
+  echo '== Runtime prerequisites =='
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y >/dev/null
+  apt-get install -y sqlite3 >/dev/null
+  if [ ! -x /home/ua/.local/bin/uv ]; then
+    runuser -u ua -- bash -lc 'curl -LsSf https://astral.sh/uv/install.sh | sh'
   fi
+  if [ -x /home/ua/.local/bin/uv ]; then
+    ln -sf /home/ua/.local/bin/uv /usr/local/bin/uv
+  fi
+  command -v uv >/dev/null 2>&1
+  command -v sqlite3 >/dev/null 2>&1
+
+  echo '== Python deps =='
+  runuser -u ua -- bash -lc 'export PATH=\"/home/ua/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"; cd $REMOTE_DIR && uv sync'
 
   echo '== Web UI build =='
   if [ -d web-ui ] && command -v npm >/dev/null 2>&1; then

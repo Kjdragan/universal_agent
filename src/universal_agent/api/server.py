@@ -79,6 +79,8 @@ from universal_agent.api.events import (
     create_error_event,
     ApprovalResponse,
 )
+from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
+ensure_runtime_path()
 
 
 _USE_BRAINSTORM_TONIGHT_PATTERNS = [
@@ -709,6 +711,7 @@ async def root():
         "status": "running",
         "endpoints": {
             "websocket": "/ws/agent",
+            "session_stream": "/api/v1/sessions/{session_id}/stream",
             "sessions": "/api/sessions",
             "files": "/api/files",
             "health": "/api/health",
@@ -723,6 +726,8 @@ async def health():
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "2.0.0",
+        "runtime_path": os.getenv("PATH", ""),
+        "runtime_tools": runtime_tool_status(),
     }
 
 
@@ -985,6 +990,85 @@ async def submit_approval(approval: ApprovalRequest):
 # =============================================================================
 # WebSocket Endpoint
 # =============================================================================
+
+
+@app.websocket("/api/v1/sessions/{session_id}/stream")
+async def websocket_session_stream_proxy(websocket: WebSocket, session_id: str):
+    """
+    Pass-through endpoint for public routing compatibility.
+
+    Proxies raw gateway stream protocol so deployments can route
+    `/api/v1/sessions/{id}/stream` to either API or Gateway service.
+    """
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        await websocket.close(code=4400, reason="Invalid session id")
+        return
+
+    auth = _authenticate_dashboard_ws(websocket)
+    internal_token = _internal_service_token()
+    header_token = _extract_auth_token(websocket.headers)
+    internal_auth = bool(
+        internal_token and header_token and hmac.compare_digest(header_token, internal_token)
+    )
+    if not internal_auth and auth.auth_required and not auth.authenticated:
+        await websocket.close(code=4401, reason="Dashboard login required")
+        return
+
+    if not internal_auth:
+        try:
+            await _enforce_session_owner(session_id, auth.owner_id, auth.auth_required)
+        except HTTPException as exc:
+            await websocket.close(code=4403, reason=str(exc.detail))
+            return
+
+    gateway_url = _gateway_url()
+    if not gateway_url:
+        await websocket.close(code=1011, reason="Gateway URL not configured")
+        return
+
+    from universal_agent.api.gateway_bridge import GatewayBridge
+
+    bridge = GatewayBridge(gateway_url)
+    ws_endpoint = f"{bridge.ws_url}/api/v1/sessions/{session_id}/stream"
+
+    await websocket.accept()
+    try:
+        async with websockets.connect(ws_endpoint, **bridge.websocket_connect_kwargs()) as upstream:
+            async def _client_to_gateway() -> None:
+                while True:
+                    message = await websocket.receive_text()
+                    await upstream.send(message)
+
+            async def _gateway_to_client() -> None:
+                async for message in upstream:
+                    await websocket.send_text(message)
+
+            client_to_gateway = asyncio.create_task(_client_to_gateway())
+            gateway_to_client = asyncio.create_task(_gateway_to_client())
+            done, pending = await asyncio.wait(
+                {client_to_gateway, gateway_to_client},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for task in pending:
+                task.cancel()
+            for task in done:
+                exc = task.exception()
+                if exc and not isinstance(exc, (WebSocketDisconnect, websockets.exceptions.ConnectionClosed)):
+                    raise exc
+    except WebSocketDisconnect:
+        pass
+    except websockets.exceptions.ConnectionClosed:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.warning("Gateway session stream proxy failed for %s: %s", session_id, exc)
+        try:
+            await websocket.close(code=1011, reason="Gateway stream unavailable")
+        except Exception:
+            pass
 
 
 @app.websocket("/ws/agent")
