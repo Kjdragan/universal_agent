@@ -30,6 +30,7 @@ from typing import Any, AsyncIterator, Callable, Optional
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id
 from universal_agent.api.input_bridge import set_input_handler
+from universal_agent.runtime_env import ensure_runtime_path
 
 try:
     import logfire
@@ -354,6 +355,7 @@ class ProcessTurnAdapter:
         """
         if not self._initialized:
             await self.initialize()
+        ensure_runtime_path()
 
         # Propagate the gateway-provided run source (e.g., "heartbeat") into
         # status events so the Web UI can treat background runs differently.

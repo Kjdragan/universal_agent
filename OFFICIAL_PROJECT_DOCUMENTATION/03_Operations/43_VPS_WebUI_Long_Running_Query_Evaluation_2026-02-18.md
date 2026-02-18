@@ -165,3 +165,34 @@ P3:
 ## 10. Conclusion
 
 The system can execute a complex long-running multi-tool workflow and generate substantial intermediate artifacts on VPS. However, this run exposed a control-plane issue: heartbeat/system investigation can displace the user mission in-session, and required deliverables (Gmail sends) are not currently enforced as hard completion criteria. Addressing mission gating and heartbeat isolation is required before treating this path as fully production-ready.
+
+## 11. Implementation Plan and Status (Executed 2026-02-18)
+
+This section tracks the concrete implementation sequence used to close Section 8 gaps and push the system toward the happy path.
+
+1. Mission completion guardrails (P1): Implemented.
+- Added prompt-to-contract inference for required delivery channels (email/Gmail) and minimum tool-call checkpoints.
+- Added structured post-run goal-satisfaction evaluation before terminal completion.
+- If requirements are not met, the turn is marked failed with `goal_satisfaction_failed`, and `query_complete` includes structured failure details instead of declaring a successful mission completion.
+
+2. Heartbeat isolation from active foreground runs (P1): Implemented.
+- Added strict no-overlap lock in heartbeat scheduling using runtime metadata (`active_foreground_runs`, active UI connections).
+- Added foreground cooldown gating (`UA_HEARTBEAT_FOREGROUND_COOLDOWN_SECONDS`, default 1800s) so heartbeat does not immediately re-enter user mission sessions.
+- Scheduled windows consumed during lock states remain non-backfilling to preserve deterministic behavior.
+
+3. Deterministic runtime shell prerequisites (P2): Implemented.
+- Added runtime PATH normalization at API/gateway/engine boundaries to include stable binary locations.
+- Added health endpoint visibility for runtime tool availability (`uv`, `sqlite3`).
+- Deployment script now enforces prerequisites on VPS (`sqlite3` install, `uv` install/symlink) before dependency sync.
+
+4. Run lineage indexing (P2): Implemented.
+- Added append-only per-turn lineage files at `AGENT_RUN_WORKSPACES/<session>/turns/<turn_id>.jsonl`.
+- Captures start/finalize events, run source, request preview, status, completion summary, and `run.log` byte offsets for deterministic per-turn traceability.
+
+5. Public websocket route compatibility (P3): Implemented.
+- Added API pass-through websocket endpoint at `/api/v1/sessions/{session_id}/stream`.
+- Endpoint proxies the canonical gateway stream protocol, so deployments can route this path to API service without breaking external clients.
+
+6. Verification: Implemented.
+- Added focused tests for mission guardrails, heartbeat foreground lock, and turn-lineage/runtime counters.
+- Ran targeted pytest subsets successfully during implementation.

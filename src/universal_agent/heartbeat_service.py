@@ -5,7 +5,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Callable
 
@@ -54,6 +54,10 @@ DEFAULT_HEARTBEAT_EXEC_TIMEOUT = 300
 MIN_HEARTBEAT_EXEC_TIMEOUT = 300
 DEFAULT_ACK_MAX_CHARS = 300
 DEFAULT_OK_TOKENS = ["HEARTBEAT_OK", "UA_HEARTBEAT_OK"]
+DEFAULT_FOREGROUND_COOLDOWN_SECONDS = max(
+    0,
+    int(os.getenv("UA_HEARTBEAT_FOREGROUND_COOLDOWN_SECONDS", "1800") or 1800),
+)
 
 # Specialized prompt for exec completion events (Clawdbot parity)
 EXEC_EVENT_PROMPT = (
@@ -183,6 +187,23 @@ def _minutes_in_timezone(now_ts: float, tz_name: str) -> Optional[int]:
         return now.hour * 60 + now.minute
     except Exception:
         return None
+
+
+def _parse_iso_to_unix(value: object) -> Optional[float]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
 
 
 def _within_active_hours(cfg: HeartbeatScheduleConfig, now_ts: float) -> bool:
@@ -388,6 +409,7 @@ class HeartbeatService:
         self.wake_sessions: set[str] = set()
         self.wake_next_sessions: set[str] = set()
         self.last_wake_reason: Dict[str, str] = {}
+        self.foreground_cooldown_seconds = DEFAULT_FOREGROUND_COOLDOWN_SECONDS
         
         # MOCK CONFIG (In future, load from session config)
         self.default_delivery = HeartbeatDeliveryConfig(
@@ -751,11 +773,11 @@ class HeartbeatService:
              except Exception:
                  pass
 
-
         # Required scheduling behavior: missed windows are not backfilled.
-        # If the session is busy and this would have been a scheduled run, consume
-        # the window by advancing last_run. Do not consume explicit wake requests.
-        if session.session_id in self.busy_sessions:
+        # If heartbeat is locked (busy or foreground lock), consume scheduled windows.
+        # Do not consume explicit wake requests.
+        lock_reason = self._session_heartbeat_lock_reason(session, now)
+        if lock_reason:
             if session.session_id in self.wake_sessions or session.session_id in self.wake_next_sessions:
                 return
             elapsed = now - state.last_run
@@ -774,7 +796,7 @@ class HeartbeatService:
                         "connected_targets": [],
                         "indicator_only": False,
                     },
-                    "suppressed_reason": "busy_skip_no_backfill",
+                    "suppressed_reason": f"{lock_reason}_skip_no_backfill",
                 }
                 try:
                     with open(state_path, "w") as f:
@@ -894,6 +916,40 @@ class HeartbeatService:
             delivery,
             visibility,
         )
+
+    def _session_heartbeat_lock_reason(self, session: GatewaySession, now_ts: float) -> Optional[str]:
+        if session.session_id in self.busy_sessions:
+            return "heartbeat_busy"
+
+        runtime = session.metadata.get("runtime", {})
+        if not isinstance(runtime, dict):
+            runtime = {}
+        active_foreground_runs = int(_coerce_int(runtime.get("active_foreground_runs"), 0) or 0)
+        if active_foreground_runs > 0:
+            return "foreground_run_active"
+
+        # Backstop check in case runtime metadata is stale.
+        if self.connection_manager and hasattr(self.connection_manager, "session_connections"):
+            active_connections = len(self.connection_manager.session_connections.get(session.session_id, set()))
+            if active_connections > 0:
+                return "foreground_connection_active"
+
+        cooldown_seconds = max(0, int(self.foreground_cooldown_seconds))
+        if cooldown_seconds <= 0:
+            return None
+
+        ts_candidates = [
+            runtime.get("last_foreground_run_finished_at"),
+            runtime.get("last_foreground_run_started_at"),
+        ]
+        for candidate in ts_candidates:
+            parsed = _parse_iso_to_unix(candidate)
+            if parsed is None:
+                continue
+            if (now_ts - parsed) < cooldown_seconds:
+                return "foreground_cooldown_active"
+            break
+        return None
 
     async def _run_heartbeat(
         self,
