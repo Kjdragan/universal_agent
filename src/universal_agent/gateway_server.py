@@ -1320,6 +1320,16 @@ def _normalize_run_source(value: Any) -> str:
 def _workspace_dir_for_session(session_id: str) -> Optional[Path]:
     session = _sessions.get(session_id)
     if not session:
+        try:
+            gateway = get_gateway()
+            gateway_sessions = getattr(gateway, "_sessions", {})
+            if isinstance(gateway_sessions, dict):
+                candidate = gateway_sessions.get(session_id)
+                if candidate is not None:
+                    session = candidate
+        except Exception:
+            session = None
+    if not session:
         return None
     workspace = Path(str(session.workspace_dir or "")).expanduser()
     if not str(workspace):
@@ -1637,6 +1647,18 @@ def _finalize_turn(
 
 
 async def _admit_hook_turn(session_id: str, request: GatewayRequest) -> dict[str, Any]:
+    if session_id not in _sessions:
+        try:
+            gateway = get_gateway()
+            gateway_sessions = getattr(gateway, "_sessions", {})
+            if isinstance(gateway_sessions, dict):
+                candidate = gateway_sessions.get(session_id)
+                if candidate is not None:
+                    store_session(candidate)
+                    if _heartbeat_service:
+                        _heartbeat_service.register_session(candidate)
+        except Exception as exc:
+            logger.warning("Failed to sync hook session into gateway state (session=%s): %s", session_id, exc)
     metadata = request.metadata if isinstance(request.metadata, dict) else {}
     client_turn_id = _normalize_client_turn_id(
         metadata.get("hook_request_id") or metadata.get("hook_event_id")
