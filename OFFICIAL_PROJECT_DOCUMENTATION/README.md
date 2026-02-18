@@ -35,6 +35,7 @@ Welcome to the official technical documentation for the **Universal Agent**. Thi
 - **[VPS Host Security Hardening Runbook (2026-02-12)](03_Operations/26_VPS_Host_Security_Hardening_Runbook_2026-02-12.md)**: Solo-dev-safe VPS hardening steps with validation and rollback.
 - **[Bowser Integration: Strategic Capability Expansion (2026-02-16)](03_Operations/40_Bowser_Integration_Strategic_Capability_Expansion_2026-02-16.md)**: How Bowser's layered browser automation stack expands UA from report-centric flows into browser-native execution, validation, and orchestration.
 - **[Todoist Heartbeat and Triage Operational Runbook (2026-02-16)](03_Operations/41_Todoist_Heartbeat_And_Triage_Operational_Runbook_2026-02-16.md)**: Daily operating cadence for Todoist-backed heartbeat inputs, manual brainstorming triage, and guarded verification checks.
+- **[Hybrid Local+VPS YouTube Webhook Operations Source of Truth (2026-02-18)](03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md)**: Canonical runbook for hybrid ingress architecture, readiness checks, failure signatures, and recovery procedures.
 
 ### 5. [API Reference](04_API_Reference)
 

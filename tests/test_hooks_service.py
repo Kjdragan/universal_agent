@@ -5,6 +5,7 @@ import hmac
 import json
 import asyncio
 import time
+from pathlib import Path
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -92,7 +93,7 @@ async def test_authorized_success(hooks_service, mock_gateway):
 
     response = await hooks_service.handle_request(request, "test")
     
-    assert response.status_code == 202
+    assert response.status_code == 200
     assert json.loads(response.body)["ok"] is True
     
     # Wait a bit for the background task
@@ -127,7 +128,7 @@ async def test_authorized_create_new(hooks_service, mock_gateway):
 
     response = await hooks_service.handle_request(request, "test")
     
-    assert response.status_code == 202
+    assert response.status_code == 200
     
     await asyncio.sleep(0.1)
     
@@ -138,6 +139,47 @@ async def test_authorized_create_new(hooks_service, mock_gateway):
     )
     mock_gateway.execute.assert_called()
     assert mock_gateway.execute.call_args[0][0] == mock_session
+
+
+@pytest.mark.asyncio
+async def test_action_timeout_logs_and_stops_dispatch(hooks_service, mock_gateway, caplog):
+    hooks_service.config.mappings = [
+        HookMappingConfig(
+            id="timeout-hook",
+            match=HookMatchConfig(path="test"),
+            action="agent",
+            message_template="slow run",
+            name="TimeoutHook",
+            session_key="timeout-session",
+            timeout_seconds=1,
+        )
+    ]
+
+    request = MagicMock(spec=Request)
+    request.headers = {"Authorization": "Bearer secret-token"}
+    request.body = AsyncMock(return_value=b"{}")
+    request.query_params = {}
+
+    mock_session = GatewaySession(
+        session_id="session_hook_timeout-session",
+        user_id="webhook",
+        workspace_dir="/tmp",
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=mock_session)
+
+    async def slow_gen(*_args, **_kwargs):
+        await asyncio.sleep(5)
+        if False:
+            yield "never"
+
+    mock_gateway.execute.side_effect = slow_gen
+
+    with caplog.at_level("ERROR"):
+        response = await hooks_service.handle_request(request, "test")
+        assert response.status_code == 200
+        await asyncio.sleep(1.4)
+
+    assert "Hook action timed out" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -162,7 +204,7 @@ async def test_action_to_injects_routing_prompt_and_metadata(hooks_service, mock
     mock_gateway.resume_session = AsyncMock(return_value=mock_session)
 
     response = await hooks_service.handle_request(request, "test")
-    assert response.status_code == 202
+    assert response.status_code == 200
 
     await asyncio.sleep(0.1)
     gateway_request = mock_gateway.execute.call_args[0][1]
@@ -170,6 +212,8 @@ async def test_action_to_injects_routing_prompt_and_metadata(hooks_service, mock
     assert "Resolved artifacts root (absolute):" in gateway_request.user_input
     assert "never use a literal UA_ARTIFACTS_DIR folder name" in gateway_request.user_input
     assert "degraded_transcript_only or failed" in gateway_request.user_input
+    assert "Webhook payload values below are authoritative for this run." in gateway_request.user_input
+    assert "authoritative_video_url: https://www.youtube.com/watch?v=abc" in gateway_request.user_input
     assert gateway_request.metadata["hook_route_to"] == "youtube-explainer-expert"
 
 @pytest.mark.asyncio
@@ -201,7 +245,7 @@ async def test_header_match_success(hooks_service):
     request.query_params = {}
 
     response = await hooks_service.handle_request(request, "test")
-    assert response.status_code == 202
+    assert response.status_code == 200
 
 @pytest.mark.asyncio
 async def test_header_match_failure(hooks_service):
@@ -306,7 +350,7 @@ async def test_composio_hmac_valid(mock_gateway):
     with patch.dict("os.environ", {"COMPOSIO_WEBHOOK_SECRET": secret}, clear=False):
         response = await service.handle_request(request, "composio")
 
-    assert response.status_code == 202
+    assert response.status_code == 200
 
 @pytest.mark.asyncio
 async def test_composio_hmac_invalid_signature(mock_gateway):
@@ -385,8 +429,8 @@ async def test_composio_hmac_replay_rejected(mock_gateway):
         first = await service.handle_request(request1, "composio")
         second = await service.handle_request(request2, "composio")
 
-    assert first.status_code == 202
-    assert second.status_code == 202
+    assert first.status_code == 200
+    assert second.status_code == 200
     assert json.loads(second.body)["deduped"] is True
 
 @pytest.mark.asyncio
@@ -453,4 +497,181 @@ async def test_token_strategy_allows_open_mapping_when_token_not_configured(mock
     request.query_params = {}
 
     response = await service.handle_request(request, "open")
-    assert response.status_code == 202
+    assert response.status_code == 200
+
+
+def test_auto_bootstrap_enables_youtube_mappings_when_config_missing(mock_gateway, tmp_path):
+    config_dir = tmp_path / "runtime"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    ops_path = config_dir / "ops_config.json"
+    transforms_dir = tmp_path / "webhook_transforms"
+    transforms_dir.mkdir(parents=True, exist_ok=True)
+    (transforms_dir / "composio_youtube_transform.py").write_text("def transform(_):\n    return {}\n", encoding="utf-8")
+    (transforms_dir / "manual_youtube_transform.py").write_text("def transform(_):\n    return {}\n", encoding="utf-8")
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch("universal_agent.hooks_service.resolve_ops_config_path", return_value=ops_path),
+        patch.dict(
+            "os.environ",
+            {"UA_HOOKS_TOKEN": "token-123", "COMPOSIO_WEBHOOK_SECRET": "secret-123"},
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+
+    mapping_ids = {mapping.id for mapping in service.config.mappings}
+    assert service.config.enabled is True
+    assert "youtube-manual-url" in mapping_ids
+    assert "composio-youtube-trigger" in mapping_ids
+
+
+def test_auto_bootstrap_does_not_add_manual_mapping_without_token(mock_gateway, tmp_path):
+    config_dir = tmp_path / "runtime"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    ops_path = config_dir / "ops_config.json"
+    transforms_dir = tmp_path / "webhook_transforms"
+    transforms_dir.mkdir(parents=True, exist_ok=True)
+    (transforms_dir / "composio_youtube_transform.py").write_text("def transform(_):\n    return {}\n", encoding="utf-8")
+    (transforms_dir / "manual_youtube_transform.py").write_text("def transform(_):\n    return {}\n", encoding="utf-8")
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch("universal_agent.hooks_service.resolve_ops_config_path", return_value=ops_path),
+        patch.dict("os.environ", {"COMPOSIO_WEBHOOK_SECRET": "secret-123"}, clear=True),
+    ):
+        service = HooksService(mock_gateway)
+
+    mapping_ids = {mapping.id for mapping in service.config.mappings}
+    assert service.config.enabled is True
+    assert "composio-youtube-trigger" in mapping_ids
+    assert "youtube-manual-url" not in mapping_ids
+
+
+@pytest.mark.asyncio
+async def test_local_ingest_success_injects_transcript_metadata(mock_gateway, tmp_path):
+    config = HooksConfig(
+        enabled=True,
+        token="secret-token",
+        mappings=[
+            HookMappingConfig(
+                id="route-hook",
+                match=HookMatchConfig(path="test"),
+                action="agent",
+                message_template="video_url: https://www.youtube.com/watch?v=dxlyCPGCvy8\nvideo_id: dxlyCPGCvy8",
+                name="RouteHook",
+                session_key="yt_route_dxlyCPGCvy8",
+                to="youtube-explainer-expert",
+            )
+        ],
+    )
+
+    workspace_dir = tmp_path / "session_hook_yt_route_dxlyCPGCvy8"
+    session = GatewaySession(
+        session_id="session_hook_yt_route_dxlyCPGCvy8",
+        user_id="webhook",
+        workspace_dir=str(workspace_dir),
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=session)
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+                "UA_HOOKS_YOUTUBE_INGEST_URL": "http://127.0.0.1:18002/api/v1/youtube/ingest",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS": "1",
+                "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN": "0",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+        service.config = config
+        service._call_local_youtube_ingest_worker = AsyncMock(
+            return_value={
+                "ok": True,
+                "status": "succeeded",
+                "source": "youtube_transcript_api",
+                "transcript_text": "hello world transcript",
+                "transcript_chars": 22,
+            }
+        )
+
+        request = MagicMock(spec=Request)
+        request.headers = {"Authorization": "Bearer secret-token"}
+        request.body = AsyncMock(return_value=b"{}")
+        request.query_params = {}
+
+        response = await service.handle_request(request, "test")
+        assert response.status_code == 200
+        await asyncio.sleep(0.1)
+
+    gateway_request = mock_gateway.execute.call_args[0][1]
+    assert "local_youtube_ingest_status: succeeded" in gateway_request.user_input
+    assert gateway_request.metadata["hook_youtube_ingest_status"] == "succeeded"
+    transcript_file = Path(gateway_request.metadata["hook_youtube_ingest_transcript_file"])
+    assert transcript_file.exists()
+    assert transcript_file.read_text(encoding="utf-8") == "hello world transcript"
+
+
+@pytest.mark.asyncio
+async def test_local_ingest_fail_closed_defers_dispatch(mock_gateway, tmp_path):
+    config = HooksConfig(
+        enabled=True,
+        token="secret-token",
+        mappings=[
+            HookMappingConfig(
+                id="route-hook",
+                match=HookMatchConfig(path="test"),
+                action="agent",
+                message_template="video_url: https://www.youtube.com/watch?v=dxlyCPGCvy8\nvideo_id: dxlyCPGCvy8",
+                name="RouteHook",
+                session_key="yt_route_dxlyCPGCvy8_fail",
+                to="youtube-explainer-expert",
+            )
+        ],
+    )
+
+    workspace_dir = tmp_path / "session_hook_yt_route_dxlyCPGCvy8_fail"
+    session = GatewaySession(
+        session_id="session_hook_yt_route_dxlyCPGCvy8_fail",
+        user_id="webhook",
+        workspace_dir=str(workspace_dir),
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=session)
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+                "UA_HOOKS_YOUTUBE_INGEST_URL": "http://127.0.0.1:18002/api/v1/youtube/ingest",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS": "1",
+                "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN": "0",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+        service.config = config
+        service._call_local_youtube_ingest_worker = AsyncMock(
+            return_value={"ok": False, "status": "failed", "error": "worker_unavailable"}
+        )
+
+        request = MagicMock(spec=Request)
+        request.headers = {"Authorization": "Bearer secret-token"}
+        request.body = AsyncMock(return_value=b"{}")
+        request.query_params = {}
+
+        response = await service.handle_request(request, "test")
+        assert response.status_code == 200
+        await asyncio.sleep(0.1)
+
+    mock_gateway.execute.assert_not_called()
+    pending_file = workspace_dir / "pending_local_ingest.json"
+    assert pending_file.exists()
+    payload = json.loads(pending_file.read_text(encoding="utf-8"))
+    assert payload["status"] == "pending_local_ingest"

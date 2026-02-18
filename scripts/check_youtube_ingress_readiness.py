@@ -67,6 +67,10 @@ def main() -> int:
         "COMPOSIO_WEBHOOK_URL",
         "COMPOSIO_WEBHOOK_SUBSCRIPTION_ID",
         "UA_GATEWAY_PUBLIC_URL",
+        "UA_HOOKS_YOUTUBE_INGEST_MODE",
+        "UA_HOOKS_YOUTUBE_INGEST_URL",
+        "UA_HOOKS_YOUTUBE_INGEST_TOKEN",
+        "UA_YOUTUBE_INGEST_TOKEN",
     ]
 
     present_required = [k for k in required_env if os.getenv(k)]
@@ -102,6 +106,12 @@ def main() -> int:
             and bool(composio_mapping)
             and bool(manual_mapping)
         ),
+        "local_worker_ingest": {
+            "mode": str(os.getenv("UA_HOOKS_YOUTUBE_INGEST_MODE") or "").strip().lower() or "disabled",
+            "url": bool(os.getenv("UA_HOOKS_YOUTUBE_INGEST_URL")),
+            "vps_token_present": bool(os.getenv("UA_HOOKS_YOUTUBE_INGEST_TOKEN")),
+            "local_token_present": bool(os.getenv("UA_YOUTUBE_INGEST_TOKEN")),
+        },
     }
 
     print(json.dumps(report, indent=2))

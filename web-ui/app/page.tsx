@@ -81,6 +81,7 @@ function extractChatHistoryFromRunLog(raw: string): HydratedChatMessage[] {
 function FileViewer() {
   const viewingFile = useAgentStore((s) => s.viewingFile);
   const setViewingFile = useAgentStore((s) => s.setViewingFile);
+  const currentSession = useAgentStore((s) => s.currentSession);
   const [isMaximized, setIsMaximized] = useState(false);
 
   const isHtml = viewingFile?.name.endsWith(".html") ?? false;
@@ -89,14 +90,16 @@ function FileViewer() {
 
   const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
 
-  // For PDF/HTML, we use the server's get_file endpoint.
-  const currentSession = useAgentStore.getState().currentSession;
   const fileUrl = viewingFile
-    ? (viewingFile.type === "artifact"
+    ? viewingFile.type === "artifact"
       ? `${API_BASE}/api/artifacts/files/${encodePath(viewingFile.path)}`
-      : (currentSession?.session_id
-        ? `${API_BASE}/api/files/${currentSession.session_id}/${encodePath(viewingFile.path)}`
-        : ""))
+      : viewingFile.type === "vps_workspace"
+        ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(viewingFile.path)}`
+        : viewingFile.type === "vps_artifact"
+          ? `${API_BASE}/api/vps/file?scope=artifacts&path=${encodeURIComponent(viewingFile.path)}`
+          : currentSession?.session_id
+            ? `${API_BASE}/api/files/${currentSession.session_id}/${encodePath(viewingFile.path)}`
+            : ""
     : "";
 
   useEffect(() => {
@@ -253,11 +256,12 @@ const API_BASE = "";
 function FileExplorer() {
   const currentSession = useAgentStore((s) => s.currentSession);
   const setViewingFile = useAgentStore((s) => s.setViewingFile);
-  const [mode, setMode] = useState<"session" | "artifacts">("session");
+  const [mode, setMode] = useState<"session" | "artifacts" | "vps_workspaces" | "vps_artifacts">("session");
   const [path, setPath] = useState("");
   const [files, setFiles] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [syncingVps, setSyncingVps] = useState(false);
 
   useEffect(() => {
     const sessionId = currentSession?.session_id;
@@ -267,7 +271,11 @@ function FileExplorer() {
     setLoading(true);
     const url = mode === "artifacts"
       ? `${API_BASE}/api/artifacts?path=${encodeURIComponent(path)}`
-      : `${API_BASE}/api/files?session_id=${sessionId}&path=${encodeURIComponent(path)}`;
+      : mode === "vps_workspaces"
+        ? `${API_BASE}/api/vps/files?scope=workspaces&path=${encodeURIComponent(path)}`
+        : mode === "vps_artifacts"
+          ? `${API_BASE}/api/vps/files?scope=artifacts&path=${encodeURIComponent(path)}`
+          : `${API_BASE}/api/files?session_id=${sessionId}&path=${encodeURIComponent(path)}`;
     fetch(url)
       .then(res => res.json())
       .then(data => {
@@ -283,11 +291,49 @@ function FileExplorer() {
       .finally(() => setLoading(false));
   }, [currentSession?.session_id, path, mode]);
 
+  const handleSyncVps = () => {
+    if (syncingVps) return;
+    setSyncingVps(true);
+    fetch(`${API_BASE}/api/vps/sync/now`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data?.detail || `Sync failed (${res.status})`);
+        }
+      })
+      .then(() => {
+        const scope = mode === "vps_artifacts" ? "artifacts" : "workspaces";
+        return fetch(`${API_BASE}/api/vps/files?scope=${scope}&path=${encodeURIComponent(path)}`);
+      })
+      .then((res) => res.json())
+      .then((data) => {
+        const sortedFiles = (data.files || []).sort((a: any, b: any) => {
+          if (a.is_dir === b.is_dir) return a.name.localeCompare(b.name);
+          return a.is_dir ? -1 : 1;
+        });
+        setFiles(sortedFiles);
+      })
+      .catch((err) => console.error("Failed to sync VPS mirror:", err))
+      .finally(() => setSyncingVps(false));
+  };
+
   const handleNavigate = (itemName: string, isDir: boolean) => {
     if (!isDir) {
       // Open file preview
       const fullPath = path ? `${path}/${itemName}` : itemName;
-      setViewingFile({ name: itemName, path: fullPath, type: mode === "artifacts" ? "artifact" : "file" });
+      const fileType =
+        mode === "artifacts"
+          ? "artifact"
+          : mode === "vps_workspaces"
+            ? "vps_workspace"
+            : mode === "vps_artifacts"
+              ? "vps_artifact"
+              : "file";
+      setViewingFile({ name: itemName, path: fullPath, type: fileType });
       return;
     }
     setPath(prev => prev ? `${prev}/${itemName}` : itemName);
@@ -314,7 +360,13 @@ function FileExplorer() {
           <span className={`text-[9px] text-cyan-500/60 transition-transform duration-200 ${isCollapsed ? '-rotate-90' : ''}`}>▼</span>
           <h2 className="text-[10px] font-bold text-slate-400/80 uppercase tracking-widest truncate" title={currentSession?.session_id}>
             <span className="text-cyan-500/60 mr-1">{ICONS.folder}</span>
-            {mode === "artifacts" ? (path ? `Artifacts/.../${path.split("/").pop()}` : "Artifacts") : (path ? `.../${path.split("/").pop()}` : "Files")}
+            {mode === "artifacts"
+              ? (path ? `Artifacts/.../${path.split("/").pop()}` : "Artifacts")
+              : mode === "vps_workspaces"
+                ? (path ? `VPS WS/.../${path.split("/").pop()}` : "VPS Workspaces")
+                : mode === "vps_artifacts"
+                  ? (path ? `VPS Artifacts/.../${path.split("/").pop()}` : "VPS Artifacts")
+                  : (path ? `.../${path.split("/").pop()}` : "Files")}
           </h2>
         </div>
         {!isCollapsed && (
@@ -335,6 +387,33 @@ function FileExplorer() {
             >
               ARTIFACTS
             </button>
+            <button
+              type="button"
+              onClick={() => { setMode("vps_workspaces"); setPath(""); }}
+              className={`text-[9px] px-2 py-1 rounded border font-medium transition-all ${mode === "vps_workspaces" ? "bg-primary/20 text-primary border-primary/40" : "bg-card/40 text-muted-foreground/70 border-border/40 hover:bg-card/60"}`}
+              title="Browse mirrored VPS workspaces"
+            >
+              VPS WS
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode("vps_artifacts"); setPath(""); }}
+              className={`text-[9px] px-2 py-1 rounded border font-medium transition-all ${mode === "vps_artifacts" ? "bg-primary/20 text-primary border-primary/40" : "bg-card/40 text-muted-foreground/70 border-border/40 hover:bg-card/60"}`}
+              title="Browse mirrored VPS artifacts"
+            >
+              VPS ART
+            </button>
+            {(mode === "vps_workspaces" || mode === "vps_artifacts") && (
+              <button
+                type="button"
+                onClick={handleSyncVps}
+                disabled={syncingVps}
+                className="text-[9px] px-2 py-1 rounded border font-medium transition-all bg-emerald-600/15 text-emerald-300 border-emerald-700/40 hover:bg-emerald-600/25 disabled:opacity-50"
+                title="Sync VPS mirror now"
+              >
+                {syncingVps ? "SYNC..." : "SYNC VPS"}
+              </button>
+            )}
             {path && (
               <button onClick={handleUp} className="text-xs hover:bg-primary/10 p-1 rounded text-primary" title="Go Up">
                 ⬆️

@@ -336,12 +336,40 @@ def fix_path_typos(path: str) -> str:
     Fix common model typos in workspace paths.
     Models sometimes truncate 'AGENT_RUN_WORKSPACES' to 'AGENT_RUNSPACES'.
     """
+    if not isinstance(path, str):
+        return path
+
     # Fix: AGENT_RUNSPACES -> AGENT_RUN_WORKSPACES
     if "AGENT_RUNSPACES" in path and "AGENT_RUN_WORKSPACES" not in path:
         path = path.replace("AGENT_RUNSPACES", "AGENT_RUN_WORKSPACES")
         sys.stderr.write(
             f"[Local Toolkit] Path auto-corrected: AGENT_RUNSPACES → AGENT_RUN_WORKSPACES\n"
         )
+
+    # Fix common literal artifacts-root mistakes:
+    # - /opt/universal_agent/UA_ARTIFACTS_DIR/...
+    # - UA_ARTIFACTS_DIR/...
+    # - $UA_ARTIFACTS_DIR/... or ${UA_ARTIFACTS_DIR}/...
+    try:
+        artifacts_root = _resolve_artifacts_root().rstrip("/")
+        updated = path
+        updated = updated.replace("/opt/universal_agent/UA_ARTIFACTS_DIR", artifacts_root)
+        updated = re.sub(
+            r"^\$\{?UA_ARTIFACTS_DIR\}?/",
+            f"{artifacts_root}/",
+            updated,
+        )
+        updated = re.sub(
+            r"^UA_ARTIFACTS_DIR/",
+            f"{artifacts_root}/",
+            updated,
+        )
+        if updated == "UA_ARTIFACTS_DIR":
+            updated = artifacts_root
+        path = updated
+    except Exception:
+        pass
+
     return path
 
 

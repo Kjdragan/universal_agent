@@ -128,6 +128,30 @@ def test_composio_transform_prefers_resource_video_id_over_playlist_item_id():
     assert "UExqTDNsaVFTaXh0c19ORDlXbEUwcjVmLXEwakdBREZJRy5DQUNERDQ2NkIzRUQxNTY1" not in out["message"]
 
 
+def test_composio_transform_includes_request_token_in_session_key():
+    ctx = {
+        "payload": {
+            "headers": {
+                "x-request-id": "58060c06-cb14-4ff0-b3dd-43b385fbea33",
+            },
+            "event_type": "new_playlist_item",
+            "item": {
+                "snippet": {
+                    "resourceId": {
+                        "videoId": "dxlyCPGCvy8",
+                    },
+                    "channelId": "UCeM9aUhYQxR26OucWZuGggA",
+                }
+            },
+        }
+    }
+
+    out = composio_transform(ctx)
+    assert out is not None
+    assert out["session_key"].startswith("yt_UCeM9aUhYQxR26OucWZuGggA_dxlyCPGCvy8_")
+    assert "58060c06-cb14-4ff0-b3dd-43b385fbea33"[:24] in out["session_key"]
+
+
 def test_manual_transform_from_video_url():
     ctx = {"payload": {"video_url": "https://youtu.be/xyz987abc12"}}
     out = manual_transform(ctx)

@@ -89,6 +89,7 @@ from universal_agent.session_policy import (
     update_session_policy,
 )
 from universal_agent.utils.json_utils import extract_json_payload
+from universal_agent.youtube_ingest import ingest_youtube_transcript, normalize_video_target
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -406,6 +407,15 @@ class SessionPolicyPatchRequest(BaseModel):
 class ResumeRequest(BaseModel):
     approval_id: Optional[str] = None
     reason: Optional[str] = None
+
+
+class YouTubeIngestRequest(BaseModel):
+    video_url: Optional[str] = None
+    video_id: Optional[str] = None
+    language: str = "en"
+    timeout_seconds: int = 120
+    max_chars: int = 180_000
+    request_id: Optional[str] = None
 
 
 # =============================================================================
@@ -3174,6 +3184,16 @@ def _require_session_api_auth(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _require_youtube_ingest_auth(request: Request) -> None:
+    explicit_token = (os.getenv("UA_YOUTUBE_INGEST_TOKEN") or "").strip()
+    if explicit_token:
+        token = _extract_auth_token_from_headers(request.headers)
+        if token != explicit_token:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        return
+    _require_session_api_auth(request)
+
+
 async def _require_session_ws_auth(websocket: WebSocket) -> bool:
     if not _session_api_auth_required():
         return True
@@ -3379,11 +3399,60 @@ async def root():
     }
 
 
+@app.get("/api/v1/hooks/readyz")
+async def hooks_readyz():
+    """
+    No-auth hooks readiness endpoint.
+
+    This is intended for health probes and operational checks so they do not
+    require hook auth tokens and do not trigger 401 noise.
+    """
+    if not _hooks_service:
+        return {
+            "ready": False,
+            "service_initialized": False,
+            "hooks_enabled": False,
+            "reason": "hooks_service_not_initialized",
+        }
+
+    status = _hooks_service.readiness_status()
+    status["service_initialized"] = True
+    return status
+
+
 @app.post("/api/v1/hooks/{subpath:path}")
 async def hooks_endpoint(request: Request, subpath: str):
     if not _hooks_service:
         raise HTTPException(status_code=503, detail="Hooks service not initialized")
     return await _hooks_service.handle_request(request, subpath)
+
+
+@app.post("/api/v1/youtube/ingest")
+async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestRequest):
+    """
+    Local worker endpoint for transcript ingestion.
+
+    Intended usage:
+    - VPS control-plane forwards ingestion requests over Tailscale/reverse tunnel.
+    - Local worker performs YouTube transcript extraction from a residential IP.
+    """
+    _require_youtube_ingest_auth(request)
+
+    video_url, video_id = normalize_video_target(payload.video_url, payload.video_id)
+    if not video_url:
+        raise HTTPException(status_code=400, detail="video_url or valid video_id is required")
+
+    result = await asyncio.to_thread(
+        ingest_youtube_transcript,
+        video_url=video_url,
+        video_id=video_id,
+        language=(payload.language or "en").strip() or "en",
+        timeout_seconds=max(5, min(int(payload.timeout_seconds or 120), 600)),
+        max_chars=max(5_000, min(int(payload.max_chars or 180_000), 800_000)),
+    )
+    result["request_id"] = (payload.request_id or "").strip() or None
+    result["worker_profile"] = _DEPLOYMENT_PROFILE
+    return result
 
 
 @app.get("/api/v1/health")
