@@ -37,6 +37,10 @@ function isMarkdownFilePath(path: string): boolean {
   return /\.md(?:own)?$/i.test(path.trim());
 }
 
+function isImageFilePath(path: string): boolean {
+  return /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico)$/i.test(path.trim());
+}
+
 export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }: ExplorerPanelProps) {
   const [scope, setScope] = useState<VpsScope>(initialScope);
   const [path, setPath] = useState(initialPath);
@@ -47,6 +51,7 @@ export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }:
   const [previewText, setPreviewText] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewIsMarkdown, setPreviewIsMarkdown] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState("");
 
   useEffect(() => {
     setScope(initialScope);
@@ -97,10 +102,19 @@ export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }:
       setPath(entry.path);
       return;
     }
+    const isImage = isImageFilePath(entry.name) || isImageFilePath(entry.path);
     setPreviewTitle(entry.path);
     setPreviewText("");
     setPreviewIsMarkdown(isMarkdownFilePath(entry.name) || isMarkdownFilePath(entry.path));
+    setPreviewImageUrl("");
     setPreviewLoading(true);
+
+    if (isImage) {
+      setPreviewImageUrl(`/api/vps/file?scope=${scope}&path=${encodeURIComponent(entry.path)}`);
+      setPreviewLoading(false);
+      return;
+    }
+
     try {
       const res = await fetch(`/api/vps/file?scope=${scope}&path=${encodeURIComponent(entry.path)}`);
       const text = await res.text();
@@ -140,9 +154,11 @@ export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }:
               type="button"
               onClick={() => setPath(parentPath(path))}
               disabled={!path}
-              className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs uppercase tracking-wider text-slate-300 disabled:opacity-40"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-sm text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-40"
+              title="Go up one level"
+              aria-label="Go up one level"
             >
-              Up
+              ↑
             </button>
           </div>
         </div>
@@ -182,6 +198,15 @@ export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }:
         <div className="min-h-0 flex-1">
           {previewLoading ? (
             <div className="text-sm text-slate-400">Loading file...</div>
+          ) : previewImageUrl ? (
+            <div className="h-full overflow-auto rounded border border-slate-800 bg-slate-950/80 p-3">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={previewImageUrl}
+                alt={previewTitle || "preview image"}
+                className="max-h-full max-w-full object-contain"
+              />
+            </div>
           ) : previewText && previewIsMarkdown ? (
             <div className="h-full overflow-auto rounded border border-slate-800 bg-slate-950/80 p-3 text-[12px] leading-6 text-slate-200">
               <ReactMarkdown

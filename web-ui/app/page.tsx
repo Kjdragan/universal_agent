@@ -1634,6 +1634,16 @@ export default function HomePage() {
                 priority
               />
             </div>
+            <a
+              href="/storage?tab=explorer"
+              className="inline-flex items-center justify-center rounded-xl border border-cyan-700/70 bg-cyan-600/15 p-2 text-cyan-100 transition-colors hover:bg-cyan-600/25"
+              title="Open File Browser"
+              aria-label="Open File Browser"
+            >
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cyan-600/60 bg-slate-950/70 text-2xl leading-none">
+                🗂️
+              </span>
+            </a>
           </div>
 
           {/* Center: Ops dropdown buttons - Hidden on Mobile */}
@@ -1688,14 +1698,6 @@ export default function HomePage() {
             >
               New Session
             </button>
-            <a
-              href="/storage"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hidden md:block rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
-            >
-              Storage
-            </a>
             {/* Mobile/Tablet Menu Button could go here */}
 
             <HeaderMetrics />
