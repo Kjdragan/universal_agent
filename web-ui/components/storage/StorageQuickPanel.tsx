@@ -214,13 +214,6 @@ export function StorageQuickPanel() {
               <div className="text-slate-500">No mirrored artifact yet.</div>
             )}
           </div>
-
-          <Link
-            href="/storage"
-            className="inline-flex rounded border border-emerald-700/60 bg-emerald-600/15 px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-emerald-100 hover:bg-emerald-600/25"
-          >
-            Open Storage Workspace
-          </Link>
         </div>
       )}
     </div>
