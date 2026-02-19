@@ -47,6 +47,7 @@ from universal_agent.durable.tool_gateway import (
 )
 from universal_agent.guardrails.tool_schema import validate_tool_input
 from universal_agent.prompt_assets import (
+    build_live_capabilities_snapshot,
     get_tool_knowledge_block,
     discover_skills,
     generate_skills_xml,
@@ -73,6 +74,8 @@ DISALLOWED_TOOLS = [
     "WebSearch",
     "web_search",
     "mcp__composio__WebSearch",
+    "mcp__internal__run_research_pipeline",
+    "mcp__internal__run_research_phase",
 ]
 
 
@@ -149,6 +152,142 @@ def _agent_definition_supports_hooks() -> bool:
         return "hooks" in inspect.signature(AgentDefinition).parameters
     except Exception:
         return False
+
+
+# -----------------------------------------------------------------------------
+# SDK telemetry helpers
+# -----------------------------------------------------------------------------
+
+_SDK_COMPACT_BOUNDARY_CLASS_NAMES = {
+    "SDKCompactBoundaryMessage",
+    "CompactBoundaryMessage",
+    "CompactBoundary",
+}
+
+
+def _to_json_compatible(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _to_json_compatible(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_to_json_compatible(item) for item in value]
+    obj_dict = getattr(value, "__dict__", None)
+    if isinstance(obj_dict, dict) and obj_dict:
+        return {
+            str(key): _to_json_compatible(val)
+            for key, val in obj_dict.items()
+            if not str(key).startswith("_")
+        }
+    return str(value)
+
+
+def _is_sdk_compact_boundary_message(msg: Any) -> bool:
+    try:
+        if msg.__class__.__name__ in _SDK_COMPACT_BOUNDARY_CLASS_NAMES:
+            return True
+        subtype = getattr(msg, "subtype", None)
+        if isinstance(subtype, str) and subtype.lower() == "compact_boundary":
+            return True
+        data = getattr(msg, "data", None)
+        if isinstance(data, dict):
+            raw_subtype = data.get("subtype")
+            if isinstance(raw_subtype, str) and raw_subtype.lower() == "compact_boundary":
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _extract_sdk_compact_boundary_payload(msg: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"message_type": msg.__class__.__name__}
+    for key in (
+        "subtype",
+        "trigger",
+        "reason",
+        "details",
+        "summary",
+        "tokens_before",
+        "tokens_after",
+        "num_turns",
+        "session_id",
+    ):
+        value = getattr(msg, key, None)
+        if value is not None:
+            payload[key] = _to_json_compatible(value)
+    msg_dict = getattr(msg, "__dict__", None)
+    if isinstance(msg_dict, dict):
+        raw_data = msg_dict.get("data")
+        if isinstance(raw_data, dict):
+            for key, value in raw_data.items():
+                if key.startswith("_") or key in payload:
+                    continue
+                payload[key] = _to_json_compatible(value)
+        for key, value in msg_dict.items():
+            if key.startswith("_") or key in payload or key == "data":
+                continue
+            payload[key] = _to_json_compatible(value)
+    return payload
+
+
+def _format_compact_boundary_notice(payload: dict[str, Any]) -> str:
+    reason = str(payload.get("subtype") or payload.get("reason") or "auto_compaction")
+    before = payload.get("tokens_before")
+    after = payload.get("tokens_after")
+    token_note = ""
+    if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+        token_note = f" Tokens {int(before)} -> {int(after)}."
+    return f"SDK compact boundary received ({reason}).{token_note}"
+
+
+def _default_context_pressure_state() -> dict[str, Any]:
+    return {
+        "high_turns_without_compaction": 0,
+        "last_compaction_iteration": None,
+        "compaction_seen_iteration": None,
+        "last_turn_input_tokens": 0,
+    }
+
+
+def _get_context_pressure_state(state: dict[str, Any]) -> dict[str, Any]:
+    pressure = state.setdefault("context_pressure", _default_context_pressure_state())
+    defaults = _default_context_pressure_state()
+    for key, value in defaults.items():
+        pressure.setdefault(key, value)
+    return pressure
+
+
+def _read_env_int(name: str, default: int, minimum: int = 0) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(parsed, minimum)
+
+
+def _extract_result_message_telemetry(msg: Any) -> dict[str, Any]:
+    telemetry: dict[str, Any] = {}
+    for key in (
+        "subtype",
+        "duration_ms",
+        "total_cost_usd",
+        "num_turns",
+        "session_id",
+        "is_error",
+    ):
+        value = getattr(msg, key, None)
+        if value is not None:
+            telemetry[key] = _to_json_compatible(value)
+    usage = getattr(msg, "usage", None)
+    if usage is not None:
+        telemetry["usage"] = _to_json_compatible(usage)
+    model_usage = getattr(msg, "modelUsage", None)
+    if model_usage is None:
+        model_usage = getattr(msg, "model_usage", None)
+    if model_usage is not None:
+        telemetry["model_usage"] = _to_json_compatible(model_usage)
+    return telemetry
 
 
 # =============================================================================
@@ -1123,6 +1262,9 @@ class UniversalAgent:
             "tool_results": [],
             "iterations": [],
             "token_usage": {"input": 0, "output": 0, "total": 0},
+            "compact_boundary_events": [],
+            "sdk_result_messages": [],
+            "context_pressure": _default_context_pressure_state(),
             "logfire_enabled": bool(LOGFIRE_TOKEN),
         }
 
@@ -1312,6 +1454,9 @@ class UniversalAgent:
             "tool_results": [],
             "iterations": [],
             "token_usage": {"input": 0, "output": 0, "total": 0},
+            "compact_boundary_events": [],
+            "sdk_result_messages": [],
+            "context_pressure": _default_context_pressure_state(),
             "logfire_enabled": bool(LOGFIRE_TOKEN),
         }
         agent._initialized = True
@@ -1336,17 +1481,22 @@ class UniversalAgent:
             "Your primary job is to **Route Work** to the best specialist for the task.\n\n"
         )
 
-        # Load the dynamic capabilities registry
+        # Load live capabilities snapshot (fallback to static file on failure)
         capabilities_content = ""
         try:
-            capabilities_path = os.path.join(self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md")
-            if os.path.exists(capabilities_path):
-                with open(capabilities_path, "r", encoding="utf-8") as f:
-                    capabilities_content = f.read()
-            else:
-                capabilities_content = "Capabilities registry not found."
+            capabilities_content = build_live_capabilities_snapshot(self.src_dir)
         except Exception:
-            capabilities_content = "Capabilities registry error."
+            capabilities_content = ""
+        if not capabilities_content:
+            try:
+                capabilities_path = os.path.join(
+                    self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md"
+                )
+                if os.path.exists(capabilities_path):
+                    with open(capabilities_path, "r", encoding="utf-8") as f:
+                        capabilities_content = f.read()
+            except Exception:
+                capabilities_content = "Capabilities registry error."
 
         # Append capabilities content
         prompt += f"{capabilities_content}\n\n"
@@ -1366,6 +1516,7 @@ class UniversalAgent:
             "   - Need a video? -> Delegate to `video-creation-expert`.\n"
             "   - Need complex coding? -> Delegate to `task-decomposer` or `codeinterpreter`.\n"
             "   - Need to check Slack/Email? -> Delegate to `slack-expert` or use tools directly.\n"
+            "   - Need browser operations? -> Bowser lanes first (`claude-bowser-agent` / `playwright-bowser-agent` / `bowser-qa-agent`); Browserbase as fallback.\n"
             "   - Need schedule/runtime/system changes (Chron/Cron, heartbeat, ops config)? -> IMMEDIATELY delegate to `system-configuration-agent`.\n"
             "3. **Delegate**: Use `Task(subagent_type='[name]', ...)` to hand off the workflow.\n"
             "4. **Fallback**: If NO specialist exists, use your own tools (`read_file`, `write_file`, `bash`, etc.) to solve it.\n\n"
@@ -1822,9 +1973,34 @@ class UniversalAgent:
                     
                 # End of Turn or Error or Restart Trigger
                 # Check metrics
-                token_usage = self.trace.get("token_usage", {}).get("total", 0)
-                if token_usage > 150000: # Threshold
-                     print("DEBUG CORE: Token threshold reached. Triggering compaction...")
+                pressure_state = _get_context_pressure_state(self.trace)
+                context_tokens_for_reset = int(
+                    pressure_state.get("last_turn_input_tokens", 0) or 0
+                )
+                if context_tokens_for_reset <= 0:
+                    context_tokens_for_reset = int(
+                        self.trace.get("token_usage", {}).get("total", 0) or 0
+                    )
+                high_turns_without_compaction = int(
+                    pressure_state.get("high_turns_without_compaction", 0) or 0
+                )
+                compaction_grace_turns = _read_env_int(
+                    "UA_COMPACTION_GRACE_TURNS", default=2, minimum=1
+                )
+                if (
+                    context_tokens_for_reset > TRUNCATION_THRESHOLD
+                    and high_turns_without_compaction <= compaction_grace_turns
+                ):
+                    print(
+                        "DEBUG CORE: Context pressure high "
+                        f"({context_tokens_for_reset} > {TRUNCATION_THRESHOLD}), "
+                        f"waiting for SDK auto-compaction ({high_turns_without_compaction}/{compaction_grace_turns})."
+                    )
+                if (
+                    context_tokens_for_reset > TRUNCATION_THRESHOLD
+                    and high_turns_without_compaction > compaction_grace_turns
+                ):
+                     print("DEBUG CORE: Context pressure persisted without compaction. Triggering compaction...")
                      # 1. Get current history from client (client doesn't expose it easily, we track in self.history)
                      # 2. Prune self.history
                      # 3. Convert to dicts
@@ -1838,6 +2014,7 @@ class UniversalAgent:
                      
                      # Prepare for next iteration
                      initial_history_prompt = context_manager.convert_to_dicts(pruned_history)
+                     self.trace["context_pressure"] = _default_context_pressure_state()
                      iteration += 1
                      continue # Loop back to start new client
                 
@@ -1862,6 +2039,37 @@ class UniversalAgent:
 
         with logfire.span("llm_response_stream"):
             async for msg in self.client.receive_response():  # type: ignore
+                if _is_sdk_compact_boundary_message(msg):
+                    compact_payload = _extract_sdk_compact_boundary_payload(msg)
+                    self.trace.setdefault("compact_boundary_events", []).append(compact_payload)
+                    notice = _format_compact_boundary_notice(compact_payload)
+                    pressure_state = _get_context_pressure_state(self.trace)
+                    pressure_state["compaction_seen_iteration"] = iteration
+                    pressure_state["last_compaction_iteration"] = iteration
+                    pressure_state["high_turns_without_compaction"] = 0
+
+                    logfire.warning(
+                        "sdk_compact_boundary_message",
+                        run_id=self.run_id,
+                        step_id=step_id,
+                        iteration=iteration,
+                        payload=compact_payload,
+                    )
+
+                    yield AgentEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "status": notice,
+                            "level": "WARNING",
+                            "prefix": "Context",
+                            "is_log": True,
+                            "event_kind": "sdk_compact_boundary",
+                            "compact_boundary": compact_payload,
+                            "source": "claude_sdk",
+                        },
+                    )
+                    continue
+
                 if isinstance(msg, AssistantMessage):
                     # TRACK SUB-AGENT CONTEXT
                     parent_tool_use_id = getattr(msg, "parent_tool_use_id", None)
@@ -1969,9 +2177,12 @@ class UniversalAgent:
                              pass
 
                 elif isinstance(msg, ResultMessage):
+                    result_telemetry = _extract_result_message_telemetry(msg)
+                    self.trace.setdefault("sdk_result_messages", []).append(result_telemetry)
                     if msg.session_id:
                         self.trace["provider_session_id"] = msg.session_id
                     
+                    turn_input_tokens = 0
                     usage_source = getattr(msg, "usage", None)
                     if usage_source:
                         def get_val(obj, key):
@@ -1979,6 +2190,7 @@ class UniversalAgent:
                              return getattr(obj, key, 0)
                         inp = get_val(usage_source, "input_tokens") or 0
                         out = get_val(usage_source, "output_tokens") or 0
+                        turn_input_tokens = int(inp)
                         
                         msg_id = getattr(msg, "id", None)
                         if (msg_id and msg_id not in self._processed_msg_ids) or not msg_id:
@@ -1986,6 +2198,46 @@ class UniversalAgent:
                              self.trace["token_usage"]["input"] += inp
                              self.trace["token_usage"]["output"] += out
                              self.trace["token_usage"]["total"] += inp + out
+
+                    pressure_state = _get_context_pressure_state(self.trace)
+                    if turn_input_tokens > 0:
+                        pressure_state["last_turn_input_tokens"] = turn_input_tokens
+                    context_tokens_for_reset = turn_input_tokens
+                    if context_tokens_for_reset <= 0:
+                        context_tokens_for_reset = int(
+                            pressure_state.get("last_turn_input_tokens", 0) or 0
+                        )
+                    if context_tokens_for_reset <= 0:
+                        context_tokens_for_reset = int(
+                            self.trace.get("token_usage", {}).get("total", 0) or 0
+                        )
+                    if pressure_state.get("compaction_seen_iteration") == iteration:
+                        pressure_state["high_turns_without_compaction"] = 0
+                        pressure_state["last_compaction_iteration"] = iteration
+                    elif context_tokens_for_reset > TRUNCATION_THRESHOLD:
+                        pressure_state["high_turns_without_compaction"] = int(
+                            pressure_state.get("high_turns_without_compaction", 0) or 0
+                        ) + 1
+                    else:
+                        pressure_state["high_turns_without_compaction"] = 0
+
+                    logfire.info(
+                        "result_message",
+                        run_id=self.run_id,
+                        step_id=step_id,
+                        iteration=iteration,
+                        subtype=result_telemetry.get("subtype"),
+                        duration_ms=result_telemetry.get("duration_ms"),
+                        total_cost_usd=result_telemetry.get("total_cost_usd"),
+                        num_turns=result_telemetry.get("num_turns"),
+                        is_error=result_telemetry.get("is_error"),
+                        usage=result_telemetry.get("usage"),
+                        model_usage=result_telemetry.get("model_usage"),
+                        context_tokens=context_tokens_for_reset,
+                        high_turns_without_compaction=pressure_state.get(
+                            "high_turns_without_compaction"
+                        ),
+                    )
                     
                     # Update History
                     self.history.add_message("assistant", "response", usage_source) 

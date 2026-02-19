@@ -753,6 +753,7 @@ function getAgentStyle(author: string) {
 
 function ChatMessage({ message }: { message: any }) {
   const isUser = message.role === "user";
+  const isSystem = message.role === "system";
   const formattedDelta = React.useMemo(() => {
     const delta = message.time_offset;
     if (delta !== undefined) {
@@ -781,6 +782,26 @@ function ChatMessage({ message }: { message: any }) {
               {message.content}
             </ReactMarkdown>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isSystem) {
+    return (
+      <div className="mb-5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+        <div className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-wider">
+          <span className="font-semibold text-amber-300">System Notice</span>
+          <span className="text-amber-200/70">{formattedDelta}</span>
+        </div>
+        <div className="mt-1 text-sm text-amber-100 leading-relaxed">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={markdownComponents}
+            className="prose prose-sm dark:prose-invert max-w-none"
+          >
+            {message.content}
+          </ReactMarkdown>
         </div>
       </div>
     );

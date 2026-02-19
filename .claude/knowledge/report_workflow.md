@@ -1,13 +1,13 @@
 # Report Creation Workflow
 
-## Critical: Immediate Delegation for Research
+## Critical: Immediate Delegation for Explicit Research Reports
 
-When the user requests research or a report:
+When the user explicitly requests a research report or written research deliverable:
 
 ⚠️ **DO NOT** perform web searches yourself as the primary agent.
 ⚠️ **DO NOT** summarize search snippets and write a report yourself.
 
-### Required Workflow (2 Delegations)
+### Required Workflow (2 Delegations for report tasks)
 
 1. **Research Phase**: Delegate to `research-specialist` IMMEDIATELY
    - Call `Task` tool with `subagent_type='research-specialist'`

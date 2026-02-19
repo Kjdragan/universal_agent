@@ -530,15 +530,23 @@ Create `macro_tasks.json` with phases and tasks for this request.
 - For Todoist intents, prefer internal `mcp__internal__todoist_*` tools before Composio Todoist connector flow.
 - Do NOT rewrite multi-step implementation tasks into Todoist bookkeeping phases.
 
-**Available Sub-Agents:** research-specialist, report-writer, image-expert, video-creation-expert, video-remotion-expert, mermaid-expert, browserbase, slack-expert, youtube-explainer-expert, system-configuration-agent, data-analyst, action-coordinator, code-writer.
+**Available Sub-Agents:** research-specialist, report-writer, image-expert, video-creation-expert, video-remotion-expert, mermaid-expert, claude-bowser-agent, playwright-bowser-agent, bowser-qa-agent, browserbase, slack-expert, youtube-explainer-expert, system-configuration-agent, data-analyst, action-coordinator, code-writer.
 
 **Available Composio Toolkits:** composio_search, gmail, googlecalendar, slack, codeinterpreter, googledrive, googlesheets, googledocs, github, notion, discord, youtube, airtable, hubspot, linear, browserbase, filetool, sqltool.
+
+**Browser lane policy (mandatory):**
+- Use Bowser lanes first for browser execution:
+  - `claude-bowser-agent` for authenticated/real-session Chrome work
+  - `playwright-bowser-agent` for isolated/repeatable/parallel runs
+  - `bowser-qa-agent` for structured UI validation with screenshot evidence
+- Use `browserbase` only when Bowser is unavailable or cloud-browser behavior is explicitly required.
 
 **X (Twitter) trends:** Prefer the internal tool `mcp__internal__x_trends_posts` (xAI `x_search` evidence fetch). Fallback: `grok-x-trends` skill. Do NOT use a Composio toolkit. Preferred pattern: fetch evidence posts only, then infer themes/summarize using the primary model.
 
 **Weather:** Use the `openweather` skill for current + forecast for any location.
 
-**Think beyond research-and-report.** Consider: Does this need computation? Media creation? Real-world actions? Monitoring? Code/engineering? Knowledge capture?
+**Think beyond research-and-report.** Consider: Does this need computation? Media creation? Real-world actions? Browser operations? Monitoring? Code/engineering? Knowledge capture?
+For non-trivial requests, evaluate at least 4 capability domains before selecting a plan.
 
 **CRITICAL: Phase Dependencies & Consolidation**
 1. **Parallel Execution:** Tasks in the same phase run in parallel. Put independent work (research, asset creation) in early phases.

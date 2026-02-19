@@ -197,6 +197,7 @@ async def test_schema_guardrail_normalizes_internal_task_name(monkeypatch):
     result = await pre_tool_use_schema_guardrail(
         {
             "tool_name": "mcp__internal__run_research_phase",
+            "parent_tool_use_id": "parent-1",
             "tool_input": {"query": "latest news", "task_name": "Russia-Ukraine War Jan 2026"},
         },
         run_id="run-test",
@@ -205,6 +206,42 @@ async def test_schema_guardrail_normalizes_internal_task_name(monkeypatch):
     updated = result.get("hookSpecificOutput", {}).get("updatedInput")
     assert isinstance(updated, dict)
     assert updated.get("task_name") == "russia_ukraine_war_jan_2026"
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_blocks_primary_run_research_phase_without_inputs(monkeypatch, tmp_path):
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(tmp_path))
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__run_research_phase",
+            "tool_input": {"query": "latest news", "task_name": "ai_news"},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    assert result.get("decision") == "block"
+    assert "Happy path" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_blocks_composio_search_tools_for_reddit():
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__composio__COMPOSIO_SEARCH_TOOLS",
+            "tool_input": {
+                "queries": [
+                    {
+                        "use_case": "get trending posts on reddit about AI agents",
+                        "known_fields": "subreddit: LocalLLaMA",
+                    }
+                ]
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    assert result.get("decision") == "block"
+    assert "unnecessary for Reddit" in result.get("systemMessage", "")
 
 
 @pytest.mark.anyio

@@ -13,6 +13,10 @@ DISALLOWED_TOOLS = [
     "WebSearch",
     "web_search",
     "mcp__composio__WebSearch",
+    # Research pipeline internals should be delegated to specialists from Primary.
+    # Sub-agents are allowed through the existing context-aware guardrail.
+    "mcp__internal__run_research_pipeline",
+    "mcp__internal__run_research_phase",
     "mcp__local_toolkit__run_research_pipeline",  # REPLACED by in-process mcp__internal__run_research_pipeline
     "mcp__local_toolkit__crawl_parallel",  # REPLACED by in-process mcp__internal__crawl_parallel
     "mcp__local_toolkit__finalize_research",

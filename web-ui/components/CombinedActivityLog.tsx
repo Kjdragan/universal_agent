@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import { useAgentStore } from '@/lib/store';
 import { cn } from '@/lib/utils';
-import { ChevronRight, ChevronDown, Terminal, Play, CheckCircle2, XCircle, AlertCircle, Info } from 'lucide-react';
+import { ChevronRight, ChevronDown, Terminal, Play, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { LinkifiedText } from "@/components/LinkifiedText";
 
@@ -11,6 +11,8 @@ interface LogEntry {
     level: string;
     prefix: string;
     timestamp: number;
+    event_kind?: string;
+    metadata?: Record<string, unknown>;
     type: 'log';
 }
 
@@ -219,6 +221,10 @@ function ToolRow({ tool, expandMode }: { tool: ToolEntry; expandMode: ExpandMode
 
 function LogRow({ log, expandMode }: { log: LogEntry; expandMode: ExpandMode }) {
     const [isOpen, setIsOpen] = React.useState(false);
+
+    if (log.event_kind === "sdk_compact_boundary") {
+        return <CompactBoundaryRow log={log} expandMode={expandMode} />;
+    }
     const isError = log.level === 'ERROR' || log.level === 'CRITICAL';
 
     // Truncate long log messages for the header
@@ -260,6 +266,61 @@ function LogRow({ log, expandMode }: { log: LogEntry; expandMode: ExpandMode }) 
             {effectiveOpen && hasMore && (
                 <div className="mt-1 pl-[110px] text-muted-foreground whitespace-pre-wrap break-words">
                     <LinkifiedText text={log.message} />
+                </div>
+            )}
+        </div>
+    );
+}
+
+function CompactBoundaryRow({ log, expandMode }: { log: LogEntry; expandMode: ExpandMode }) {
+    const [isOpen, setIsOpen] = React.useState(false);
+    const metadata = (log.metadata ?? {}) as Record<string, unknown>;
+    const payload = (metadata.compact_boundary as Record<string, unknown>) ?? {};
+    const reason = String(payload.subtype ?? payload.reason ?? "auto_compaction");
+    const before = Number(payload.tokens_before ?? NaN);
+    const after = Number(payload.tokens_after ?? NaN);
+    const showTokenDelta = Number.isFinite(before) && Number.isFinite(after);
+    const hasPayload = Object.keys(payload).length > 0;
+    const effectiveOpen = expandMode === 'collapsed' ? false : expandMode === 'expanded' ? true : isOpen;
+
+    return (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/8 overflow-hidden">
+            <div
+                className="flex items-start gap-2 p-2 text-xs cursor-pointer hover:bg-amber-500/10 transition-colors"
+                onClick={() => {
+                    if (!hasPayload || expandMode === 'expanded') return;
+                    setIsOpen(!effectiveOpen);
+                }}
+            >
+                <AlertCircle className="w-4 h-4 text-amber-400 mt-[1px] shrink-0" />
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                        <span className="font-semibold uppercase tracking-[0.12em] text-[10px] text-amber-300">
+                            Context Compaction
+                        </span>
+                        <span className="text-[10px] text-amber-200/70 font-mono">{format(log.timestamp, 'HH:mm:ss.SSS')}</span>
+                    </div>
+                    <div className="mt-0.5 text-amber-100">
+                        <LinkifiedText text={log.message || `SDK compact boundary received (${reason}).`} />
+                    </div>
+                    <div className="mt-1 text-[10px] text-amber-200/80 flex flex-wrap gap-3">
+                        <span>reason: <span className="font-mono">{reason}</span></span>
+                        {showTokenDelta && (
+                            <span>tokens: <span className="font-mono">{Math.trunc(before)} -&gt; {Math.trunc(after)}</span></span>
+                        )}
+                    </div>
+                </div>
+                {hasPayload && (
+                    <span className="text-amber-300/80">
+                        {effectiveOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                    </span>
+                )}
+            </div>
+            {effectiveOpen && hasPayload && (
+                <div className="border-t border-amber-500/20 bg-slate-950/60 p-2">
+                    <pre className="text-xs font-mono whitespace-pre-wrap break-words text-amber-100">
+                        <LinkifiedText text={JSON.stringify(payload, null, 2)} />
+                    </pre>
                 </div>
             )}
         </div>

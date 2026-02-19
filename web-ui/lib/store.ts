@@ -92,8 +92,22 @@ interface AgentStore {
   setViewingFile: (file: { name: string; path: string; content?: string; type: string } | null) => void;
 
   // Logs (real-time tool output)
-  logs: Array<{ id: string; message: string; level: string; prefix: string; timestamp: number }>;
-  addLog: (log: { message: string; level: string; prefix: string }) => void;
+  logs: Array<{
+    id: string;
+    message: string;
+    level: string;
+    prefix: string;
+    timestamp: number;
+    event_kind?: string;
+    metadata?: Record<string, unknown>;
+  }>;
+  addLog: (log: {
+    message: string;
+    level: string;
+    prefix: string;
+    event_kind?: string;
+    metadata?: Record<string, unknown>;
+  }) => void;
   clearLogs: () => void;
 
   // System events + presence
@@ -455,6 +469,7 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
       const data = event.data as Record<string, unknown>;
       const source = String(data.source ?? "").trim().toLowerCase();
       const isHeartbeatBackground = source === "heartbeat";
+      const eventKind = String(data.event_kind ?? "").trim().toLowerCase();
       if (data.status === "processing" && !isHeartbeatBackground) {
         store.setConnectionStatus("processing");
       }
@@ -463,6 +478,31 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
           message: (data.status as string) ?? "",
           level: (data.level as string) ?? "INFO",
           prefix: (data.prefix as string) ?? "",
+          event_kind: eventKind || undefined,
+          metadata: {
+            source: source || undefined,
+            compact_boundary:
+              eventKind === "sdk_compact_boundary"
+                ? (data.compact_boundary as Record<string, unknown> | undefined)
+                : undefined,
+          },
+        });
+      }
+      if (eventKind === "sdk_compact_boundary") {
+        const payload = (data.compact_boundary as Record<string, unknown>) ?? {};
+        const reason = String(payload.subtype ?? payload.reason ?? "auto_compaction");
+        const before = Number(payload.tokens_before ?? NaN);
+        const after = Number(payload.tokens_after ?? NaN);
+        const hasTokenDelta = Number.isFinite(before) && Number.isFinite(after);
+        const content = hasTokenDelta
+          ? `Context compacted by Claude SDK (${reason}). Tokens ${Math.trunc(before)} -> ${Math.trunc(after)}.`
+          : `Context compacted by Claude SDK (${reason}).`;
+        store.addMessage({
+          role: "system",
+          content,
+          time_offset: ((data.time_offset as number) ?? (event.time_offset as number) ?? 0),
+          is_complete: true,
+          author: "System",
         });
       }
       if (data.token_usage) {

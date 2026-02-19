@@ -20,6 +20,9 @@ Feature flags (defined in `src/universal_agent/feature_flags.py`) allow you to t
 - **`ANTHROPIC_API_KEY`**: (Required) Your Anthropic API key.
 - **`GEMINI_API_KEY`**: (Optional) For skills that use Gemini (like `nano-banana-pro`).
 - **`USER_TIMEZONE`**: Set your local timezone (e.g., `America/Chicago`) for heartbeat scheduling.
+- **`UA_SYSTEM_PROMPT_MODE`**: Controls how `ClaudeAgentOptions.system_prompt` is built.
+  - `claude_code_append` (default): use Claude Code preset prompt and append UA prompt builder output.
+  - `custom_only`: use only UA prompt builder output as the full system prompt.
 
 ### Memory & Search
 
