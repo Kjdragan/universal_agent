@@ -1660,14 +1660,30 @@ export default function HomePage() {
             ] as const).map((item) => (
               <Popover key={item.key}>
                 <PopoverTrigger asChild>
+                  {(() => {
+                    const isCalendarIconOnly = item.key === "calendar";
+                    const buttonClass = isCalendarIconOnly
+                      ? "inline-flex h-10 w-12 items-center justify-center rounded-xl border border-border/50 bg-card/40 text-2xl text-muted-foreground transition hover:border-primary/40 hover:bg-card/60 data-[state=open]:border-primary/50 data-[state=open]:bg-primary/10 data-[state=open]:text-primary"
+                      : "flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60 data-[state=open]:border-primary/50 data-[state=open]:bg-primary/10 data-[state=open]:text-primary";
+                    return (
                   <button
                     type="button"
-                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60 data-[state=open]:border-primary/50 data-[state=open]:bg-primary/10 data-[state=open]:text-primary"
+                    className={buttonClass}
+                    title={isCalendarIconOnly ? "Calendar" : undefined}
+                    aria-label={isCalendarIconOnly ? "Calendar" : undefined}
                   >
-                    <span className="text-xs">{item.icon}</span>
-                    <span>{item.label}</span>
-                    <span className="text-[8px] transition-transform group-data-[state=open]:rotate-180">▾</span>
+                    {isCalendarIconOnly ? (
+                      <span className="leading-none">{item.icon}</span>
+                    ) : (
+                      <>
+                        <span className="text-xs">{item.icon}</span>
+                        <span>{item.label}</span>
+                        <span className="text-[8px] transition-transform group-data-[state=open]:rotate-180">▾</span>
+                      </>
+                    )}
                   </button>
+                    );
+                  })()}
                 </PopoverTrigger>
                 <PopoverContent
                   className={`p-0 overflow-hidden bg-background/95 backdrop-blur-xl border-border/60 shadow-2xl ${item.width}`}
