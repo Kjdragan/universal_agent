@@ -19,10 +19,8 @@ import { formatDuration, formatFileSize } from "@/lib/utils";
 import { ApprovalModal, useApprovalModal } from "@/components/approvals/ApprovalModal";
 import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
-import { OpsProvider, SessionsSection, CalendarSection, SkillsSection, ChannelsSection, ApprovalsSection, SystemEventsSection, OpsConfigSection, SessionContinuityWidget, HeartbeatWidget } from "@/components/OpsDropdowns";
+import { OpsProvider, HeartbeatWidget } from "@/components/OpsDropdowns";
 import { StorageQuickPanel } from "@/components/storage/StorageQuickPanel";
-// UI Primitives
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { LinkifiedText, PathLink, linkify } from "@/components/LinkifiedText";
@@ -1422,8 +1420,6 @@ export default function HomePage() {
   // Responsive State
   const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'files' | 'dashboard'>('chat');
   const [showTabletFiles, setShowTabletFiles] = useState(false);
-  const [dashboardView, setDashboardView] = useState<string | null>(null);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [isDesktop, setIsDesktop] = useState(true);
 
@@ -1648,64 +1644,37 @@ export default function HomePage() {
 
           {/* Center: Ops dropdown buttons - Hidden on Mobile */}
           <div className="hidden md:flex items-center gap-2 shrink-0">
-            <a
-              href="/dashboard/sessions"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60"
-              title="Open Sessions in a new tab"
-              aria-label="Open Sessions in a new tab"
-            >
-              <span className="text-xs">📋</span>
-              <span>Sessions</span>
-              <span className="text-[10px] text-slate-500">↗</span>
-            </a>
             {([
-              { key: "calendar", label: "Calendar", icon: "🗓️", content: <CalendarSection />, width: "w-[1100px]" },
-              { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: "w-[800px]" },
-              { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: "w-[600px]" },
-              { key: "approvals", label: "Approvals", icon: "✅", content: <ApprovalsSection />, width: "w-[600px]" },
-              { key: "events", label: "Events", icon: "⚡", content: <SystemEventsSection />, width: "w-[800px]" },
-              { key: "config", label: "Config", icon: "⚙️", content: <OpsConfigSection />, width: "w-[800px]" },
-              { key: "continuity", label: "Continuity", icon: "📈", content: <SessionContinuityWidget />, width: "w-[520px]" },
+              { key: "sessions", label: "Sessions", icon: "📋", href: "/dashboard/sessions", iconOnly: false },
+              { key: "calendar", label: "Calendar", icon: "🗓️", href: "/dashboard/calendar", iconOnly: true },
+              { key: "skills", label: "Skills", icon: "🧩", href: "/dashboard/skills", iconOnly: false },
+              { key: "channels", label: "Channels", icon: "📡", href: "/dashboard/channels", iconOnly: false },
+              { key: "approvals", label: "Approvals", icon: "✅", href: "/dashboard/approvals", iconOnly: false },
+              { key: "events", label: "Events", icon: "⚡", href: "/dashboard/events", iconOnly: false },
+              { key: "config", label: "Config", icon: "⚙️", href: "/dashboard/config", iconOnly: false },
+              { key: "continuity", label: "Continuity", icon: "📈", href: "/dashboard/continuity", iconOnly: false },
             ] as const).map((item) => (
-              <Popover key={item.key}>
-                <PopoverTrigger asChild>
-                  {(() => {
-                    const isCalendarIconOnly = item.key === "calendar";
-                    const buttonClass = isCalendarIconOnly
-                      ? "inline-flex h-10 w-12 items-center justify-center rounded-xl border border-border/50 bg-card/40 text-2xl text-muted-foreground transition hover:border-primary/40 hover:bg-card/60 data-[state=open]:border-primary/50 data-[state=open]:bg-primary/10 data-[state=open]:text-primary"
-                      : "flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60 data-[state=open]:border-primary/50 data-[state=open]:bg-primary/10 data-[state=open]:text-primary";
-                    return (
-                  <button
-                    type="button"
-                    className={buttonClass}
-                    title={isCalendarIconOnly ? "Calendar" : undefined}
-                    aria-label={isCalendarIconOnly ? "Calendar" : undefined}
-                  >
-                    {isCalendarIconOnly ? (
-                      <span className="leading-none">{item.icon}</span>
-                    ) : (
-                      <>
-                        <span className="text-xs">{item.icon}</span>
-                        <span>{item.label}</span>
-                        <span className="text-[8px] transition-transform group-data-[state=open]:rotate-180">▾</span>
-                      </>
-                    )}
-                  </button>
-                    );
-                  })()}
-                </PopoverTrigger>
-                <PopoverContent
-                  className={`p-0 overflow-hidden bg-background/95 backdrop-blur-xl border-border/60 shadow-2xl ${item.width}`}
-                  align="start"
-                  collisionPadding={10}
-                >
-                  <div className="max-h-[85vh] overflow-y-auto scrollbar-thin">
-                    {item.content}
-                  </div>
-                </PopoverContent>
-              </Popover>
+              <a
+                key={item.key}
+                href={item.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={item.iconOnly
+                  ? "inline-flex h-10 w-12 items-center justify-center rounded-xl border border-border/50 bg-card/40 text-2xl text-muted-foreground transition hover:border-primary/40 hover:bg-card/60 hover:text-primary"
+                  : "flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60 hover:text-primary"}
+                title={`Open ${item.label} in a new tab`}
+                aria-label={`Open ${item.label} in a new tab`}
+              >
+                {item.iconOnly ? (
+                  <span className="leading-none">{item.icon}</span>
+                ) : (
+                  <>
+                    <span className="text-xs">{item.icon}</span>
+                    <span>{item.label}</span>
+                    <span className="text-[10px] text-slate-500">↗</span>
+                  </>
+                )}
+              </a>
             ))}
           </div>
 
@@ -1886,79 +1855,40 @@ export default function HomePage() {
         </div>
 
         {/* MOBILE DASHBOARD MENU (Visible only on Mobile AND tab=='dashboard') */}
-        {/* Note: Desktop header items are hidden on mobile. We expose them here. */}
-        {/* Mobile Dashboard "Menu" Panel */}
         {activeMobileTab === 'dashboard' && (
           <div className="flex-1 flex flex-col overflow-hidden bg-slate-950/95 pb-20 md:hidden">
-            {/* If no specific dashboard view is selected, show the Menu */}
-            {!dashboardView ? (
-              <div className="p-4 space-y-2 overflow-y-auto">
-                <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground border-b border-border/40 pb-2 mb-2">Dashboard Menu</h2>
+            <div className="p-4 space-y-2 overflow-y-auto">
+              <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground border-b border-border/40 pb-2 mb-2">Dashboard Menu</h2>
 
-                {[
-                  { key: "sessions", label: "Sessions", icon: "📋" },
-                  { key: "skills", label: "Skills", icon: "🧩" },
-                  { key: "files_shortcut", label: "Storage", icon: "📁" },
-                  { key: "calendar", label: "Calendar", icon: "🗓️" },
-                  { key: "channels", label: "Channels", icon: "📡" },
-                  { key: "approvals", label: "Approvals", icon: "✅" },
-                  { key: "events", label: "Events", icon: "⚡" },
-                  { key: "config", label: "Config", icon: "⚙️" },
-                  { key: "continuity", label: "Continuity", icon: "📈" },
-                ].map((item) => (
-                  <button
-                    key={item.key}
-                    onClick={() => {
-                      if (item.key === 'files_shortcut') {
-                        setActiveMobileTab('files');
-                      } else {
-                        setDashboardView(item.key);
-                      }
-                    }}
-                    className="w-full text-left p-4 rounded-lg border border-border/40 bg-card/20 hover:bg-card/40 active:bg-card/60 transition-all flex items-center gap-3"
-                  >
-                    <span className="text-xl">{item.icon}</span>
-                    <span className="font-bold uppercase tracking-wider text-sm">{item.label}</span>
-                    <span className="ml-auto opacity-50">›</span>
-                  </button>
-                ))}
-
+              {[
+                { key: "sessions", label: "Sessions", icon: "📋", href: "/dashboard/sessions" },
+                { key: "skills", label: "Skills", icon: "🧩", href: "/dashboard/skills" },
+                { key: "storage", label: "Storage", icon: "📁", href: "/storage" },
+                { key: "calendar", label: "Calendar", icon: "🗓️", href: "/dashboard/calendar" },
+                { key: "channels", label: "Channels", icon: "📡", href: "/dashboard/channels" },
+                { key: "approvals", label: "Approvals", icon: "✅", href: "/dashboard/approvals" },
+                { key: "events", label: "Events", icon: "⚡", href: "/dashboard/events" },
+                { key: "config", label: "Config", icon: "⚙️", href: "/dashboard/config" },
+                { key: "continuity", label: "Continuity", icon: "📈", href: "/dashboard/continuity" },
+              ].map((item) => (
                 <a
-                  href="/dashboard"
-                  className="block rounded-lg border border-border/50 bg-card/40 px-4 py-3 text-center text-sm uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary mt-4"
+                  key={item.key}
+                  href={item.href}
+                  className="w-full text-left p-4 rounded-lg border border-border/40 bg-card/20 hover:bg-card/40 active:bg-card/60 transition-all flex items-center gap-3"
                 >
-                  Go to Dashboard Shell
+                  <span className="text-xl">{item.icon}</span>
+                  <span className="font-bold uppercase tracking-wider text-sm">{item.label}</span>
+                  <span className="ml-auto opacity-50">›</span>
                 </a>
-              </div>
-            ) : (
-              /* If a view is selected, show that specific component full-screen */
-              <div className="flex-1 flex flex-col h-full">
-                {/* Header with Back Button */}
-                <div className="p-3 border-b border-border/40 flex items-center gap-2 bg-background/50 backdrop-blur-sm shrink-0">
-                  <button
-                    onClick={() => setDashboardView(null)}
-                    className="p-2 -ml-2 rounded-full hover:bg-slate-800 transition-colors"
-                  >
-                    ←
-                  </button>
-                  <span className="font-bold uppercase tracking-wider text-sm">
-                    {dashboardView.charAt(0).toUpperCase() + dashboardView.slice(1)}
-                  </span>
-                </div>
+              ))}
 
-                {/* Scrollable Content Area */}
-                <div className="flex-1 overflow-y-auto overflow-x-hidden p-2">
-                  {dashboardView === 'sessions' && <SessionsSection />}
-                  {dashboardView === 'skills' && <SkillsSection />}
-                  {dashboardView === 'calendar' && <CalendarSection />}
-                  {dashboardView === 'channels' && <ChannelsSection />}
-                  {dashboardView === 'approvals' && <ApprovalsSection />}
-                  {dashboardView === 'events' && <SystemEventsSection />}
-                  {dashboardView === 'config' && <OpsConfigSection />}
-                  {dashboardView === 'continuity' && <SessionContinuityWidget />}
-                </div>
-              </div>
-            )}
+              <a
+                href="/dashboard"
+                className="block rounded-lg border border-border/50 bg-card/40 px-4 py-3 text-center text-sm uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary mt-4"
+              >
+                Go to Dashboard Shell
+              </a>
+            </div>
           </div>
         )}
 
