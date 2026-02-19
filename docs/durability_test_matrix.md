@@ -6,6 +6,7 @@ This matrix documents repeatable durability kill points and expected outcomes.
 - Base run: `tmp/relaunch_resume_job.json`
 - Resume command is written to: `Project_Documentation/Long_Running_Agent_Design/KevinRestartWithThis.md`
 - Runtime DB: `AGENT_RUN_WORKSPACES/runtime_state.db`
+- Runtime DB safety: this file stores operational queue/lease/checkpoint state (not long-term memory); only delete when no queued/running/resume-needed runs must be recovered.
 
 ## Common DB Checks
 ```

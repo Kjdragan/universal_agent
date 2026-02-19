@@ -30,6 +30,10 @@ from typing import Any, AsyncIterator, Callable, Optional
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id
 from universal_agent.api.input_bridge import set_input_handler
+from universal_agent.memory.paths import (
+    resolve_agent_core_db_path,
+    resolve_shared_memory_workspace,
+)
 from universal_agent.runtime_env import ensure_runtime_path
 from universal_agent.timeout_policy import process_turn_timeout_seconds
 
@@ -801,7 +805,7 @@ class ProcessTurnAdapter:
             transcript_path = os.path.join(workspace_dir, "transcript.md")
 
             # Use shared memory dir for cross-workspace accumulation
-            shared_memory_dir = os.getenv("UA_SHARED_MEMORY_DIR") or workspace_dir
+            shared_memory_dir = resolve_shared_memory_workspace(workspace_dir)
 
             # 1. Pre-compact flush: save transcript tail as long-term memory
             if memory_flush_on_exit(default=False):
@@ -834,13 +838,7 @@ class ProcessTurnAdapter:
             if trace_id:
                 try:
                     import sqlite3
-                    db_path = os.path.join(
-                        os.getenv("PERSIST_DIRECTORY", os.path.join(
-                            os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                            "Memory_System_Data",
-                        )),
-                        "agent_core.db",
-                    )
+                    db_path = resolve_agent_core_db_path(workspace_dir)
                     if os.path.exists(db_path):
                         conn = sqlite3.connect(db_path, timeout=5)
                         conn.execute(

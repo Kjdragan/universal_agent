@@ -66,6 +66,10 @@ from universal_agent.feature_flags import (
     memory_index_mode,
     memory_max_tokens,
 )
+from universal_agent.memory.paths import (
+    resolve_persist_directory,
+    resolve_shared_memory_workspace,
+)
 
 
 # Get project directories
@@ -315,26 +319,23 @@ class AgentSetup:
         
         Reads from TWO sources:
         1. Legacy MemoryManager (global agent_core.db — core blocks + archival)
-        2. UA File Memory (shared dir or per-workspace — recent entries index)
+        2. UA File Memory (shared workspace — recent entries index)
         
         The shared memory dir (UA_SHARED_MEMORY_DIR) enables cross-workspace
-        memory accumulation. Without it, each session's file memory is isolated.
+        memory accumulation. If unset, a persistent repo-level default is used.
         """
         try:
             from Memory_System.manager import MemoryManager
             from universal_agent.agent_college.integration import setup_agent_college
             from universal_agent.memory.memory_context import build_file_memory_context
 
-            storage_path = os.getenv(
-                "PERSIST_DIRECTORY", os.path.join(self.src_dir, "Memory_System_Data")
-            )
+            storage_path = resolve_persist_directory(self.workspace_dir)
             mem_mgr = MemoryManager(storage_dir=storage_path, workspace_dir=self.workspace_dir)
             setup_agent_college(mem_mgr)
             context = mem_mgr.get_system_prompt_addition()
 
             # Use shared memory directory for cross-workspace continuity.
-            # Falls back to per-workspace memory if UA_SHARED_MEMORY_DIR is not set.
-            shared_memory_dir = os.getenv("UA_SHARED_MEMORY_DIR") or self.workspace_dir
+            shared_memory_dir = resolve_shared_memory_workspace(self.workspace_dir)
             file_context = build_file_memory_context(
                 shared_memory_dir,
                 max_tokens=self.memory_max_tokens,

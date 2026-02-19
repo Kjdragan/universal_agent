@@ -15,6 +15,7 @@ from typing import Any, AsyncIterator, Optional
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.feature_flags import coder_vp_display_name
+from universal_agent.memory.paths import resolve_shared_memory_workspace
 from universal_agent.timeout_policy import (
     gateway_http_timeout_seconds,
     websocket_connect_kwargs,
@@ -815,7 +816,7 @@ class InProcessGateway(Gateway):
                 workspace_dir = str(Path(session.workspace_dir).resolve())
                 transcript_path = os.path.join(workspace_dir, "transcript.md")
                 if os.path.exists(transcript_path):
-                    shared_root = (os.getenv("UA_SHARED_MEMORY_DIR") or workspace_dir).strip() or workspace_dir
+                    shared_root = resolve_shared_memory_workspace(workspace_dir)
                     broker = get_memory_orchestrator(workspace_dir=shared_root)
                     # Force indexing so short runs still get captured.
                     broker.sync_session(

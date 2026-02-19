@@ -180,6 +180,10 @@ from universal_agent.feature_flags import (
     memory_session_enabled,
     memory_session_index_on_end,
 )
+from universal_agent.memory.paths import (
+    resolve_persist_directory,
+    resolve_shared_memory_workspace,
+)
 from universal_agent.logfire_payloads import (
     PayloadLoggingConfig,
     load_payload_logging_config,
@@ -7610,16 +7614,15 @@ async def setup_session(
             from universal_agent.memory.memory_context import build_file_memory_context
             from universal_agent.memory.memory_store import ensure_memory_scaffold
 
-            storage_path = os.getenv(
-                "PERSIST_DIRECTORY", os.path.join(src_dir, "Memory_System_Data")
-            )
+            storage_path = resolve_persist_directory(str(workspace_dir))
             ensure_memory_scaffold(str(workspace_dir))
             mem_mgr = MemoryManager(storage_dir=storage_path, workspace_dir=str(workspace_dir))
             setup_agent_college(mem_mgr)
 
             memory_context_str = mem_mgr.get_system_prompt_addition()
+            shared_memory_dir = resolve_shared_memory_workspace(str(workspace_dir))
             file_context = build_file_memory_context(
-                str(workspace_dir),
+                shared_memory_dir,
                 max_tokens=memory_max_tokens(),
                 index_mode=memory_index_mode(),
                 recent_limit=int(os.getenv("UA_MEMORY_RECENT_ENTRIES", "8")),
@@ -7891,7 +7894,8 @@ def _sync_session_memory_if_enabled(
 
     from universal_agent.memory.orchestrator import get_memory_orchestrator
 
-    broker = get_memory_orchestrator(workspace_dir=workspace_dir)
+    shared_memory_dir = resolve_shared_memory_workspace(workspace_dir)
+    broker = get_memory_orchestrator(workspace_dir=shared_memory_dir)
     return broker.sync_session(
         session_id=session_id,
         transcript_path=transcript_path,
@@ -8459,7 +8463,7 @@ async def process_turn(
                 from universal_agent.memory.memory_flush import flush_pre_compact_memory
 
                 flush_pre_compact_memory(
-                    workspace_dir=workspace_dir,
+                    workspace_dir=resolve_shared_memory_workspace(workspace_dir),
                     session_id=trace.get("session_id") or trace.get("run_id"),
                     transcript_path=os.path.join(workspace_dir, "transcript.md"),
                     trigger="exit",
