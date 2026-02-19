@@ -149,9 +149,9 @@ scripts/sync_remote_workspaces.sh --once \
   --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
-  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
-  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_vps_artifacts \
-  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt
+  --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_workspaces \
+  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/artifacts/remote_vps_artifacts \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_sync_state/synced_workspaces.txt
 ```
 
 ### Continuous sync in current terminal
@@ -161,9 +161,9 @@ scripts/sync_remote_workspaces.sh \
   --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
-  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
-  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_vps_artifacts \
-  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
+  --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_workspaces \
+  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/artifacts/remote_vps_artifacts \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_sync_state/synced_workspaces.txt \
   --interval 30
 ```
 
@@ -178,9 +178,9 @@ scripts/install_remote_workspace_sync_timer.sh \
   --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
-  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
-  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_vps_artifacts \
-  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
+  --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_workspaces \
+  --local-artifacts-dir /home/kjdragan/lrepos/universal_agent/artifacts/remote_vps_artifacts \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_sync_state/synced_workspaces.txt \
   --interval 30
 ```
 
@@ -190,8 +190,8 @@ Optional remote cleanup (explicitly destructive):
 scripts/install_remote_workspace_sync_timer.sh \
   --host root@100.106.113.93 \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
-  --local-dir /home/kjdragan/lrepos/universal_agent/tmp/remote_app_workspaces \
-  --manifest-file /home/kjdragan/lrepos/universal_agent/tmp/remote_sync_state/synced_workspaces.txt \
+  --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_workspaces \
+  --manifest-file /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_sync_state/synced_workspaces.txt \
   --interval 30 \
   --prune-remote-when-local-missing \
   --prune-min-age-seconds 300 \
