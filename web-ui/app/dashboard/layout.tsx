@@ -14,9 +14,12 @@ const NAV_ITEMS: { href: string; label: string; external?: boolean; primary?: bo
   { href: "/dashboard/sessions", label: "Sessions" },
   { href: "/dashboard/skills", label: "Skills" },
   { href: "/dashboard/calendar", label: "Calendar" },
+  { href: "/dashboard/events", label: "Events" },
   { href: "/dashboard/approvals", label: "Approvals" },
   { href: "/dashboard/cron-jobs", label: "Cron Jobs" },
   { href: "/dashboard/channels", label: "Channels" },
+  { href: "/dashboard/config", label: "Config" },
+  { href: "/dashboard/continuity", label: "Continuity" },
   { href: "/dashboard/settings", label: "Settings" },
   { href: "/files", label: "File Browser", external: true },
 ];
