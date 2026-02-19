@@ -186,7 +186,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           ].join(" ")}
         >
           <div className="mb-4 border-b border-slate-800 pb-3">
-            <div className="relative hidden h-12 w-48 mb-2 md:block">
+            <div className="relative hidden h-16 w-full mb-2 md:block">
               <Image
                 src="/simon_logo_v2.png"
                 alt="Simon"

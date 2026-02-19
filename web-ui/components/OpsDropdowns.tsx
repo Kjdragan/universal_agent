@@ -783,12 +783,10 @@ export function SessionsSection({ variant = "compact" }: { variant?: SectionVari
   );
 
   return (
-    <div className={`${isFull ? "p-4 text-sm space-y-3 lg:grid lg:grid-cols-[360px_1fr] lg:gap-3 lg:space-y-0" : "p-3 text-xs space-y-3"}`}>
+    <div className={`${isFull ? "px-4 pb-4 pt-1 text-sm space-y-3 lg:grid lg:grid-cols-[360px_1fr] lg:gap-3 lg:space-y-0" : "p-3 text-xs space-y-3"}`}>
       {isFull && (
         <div className="lg:col-span-2 sticky top-0 z-10 rounded border border-slate-800 bg-slate-900/80 px-3 py-2 backdrop-blur">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="font-semibold">Sessions</div>
-            <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
               <button onClick={cancelOutstandingRuns} className="text-[11px] px-2 py-1 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
               <button onClick={fetchSessions} className="text-[11px] px-2 py-1 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻ Refresh"}</button>
               {selected && (
@@ -796,14 +794,13 @@ export function SessionsSection({ variant = "compact" }: { variant?: SectionVari
                   {attaching ? "Attaching..." : "Open Chat"}
                 </button>
               )}
-            </div>
           </div>
         </div>
       )}
       <div className={`border rounded bg-background/40 p-2 ${isFull ? "lg:row-span-5 lg:max-h-[78vh] lg:overflow-y-auto" : ""}`}>
         <div className="font-semibold mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span>Sessions</span>
+            <span>{isFull ? "Session List" : "Sessions"}</span>
             {!isFull && (
               <>
                 <button onClick={() => setShowList(!showList)} className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" title={showList ? "Collapse List" : "Expand List"}>
