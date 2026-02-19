@@ -18,7 +18,7 @@ Write durable outputs under:
 
 1. `transcript.txt`
 2. `transcript.clean.txt`
-3. `visuals/*`
+3. `visuals/gemini_video_analysis.md`
 4. `research/*`
 
 ## Status Values

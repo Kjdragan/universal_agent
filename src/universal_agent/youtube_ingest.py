@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import re
-import subprocess
-import tempfile
-from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
-
-_SRT_TIME_RE = re.compile(r"^\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}")
 _YT_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_LOW_INFO_PHRASES = (
+    "please like and subscribe",
+    "thank you for watching",
+    "thanks for watching",
+    "see you in the next video",
+)
 
 
 def extract_video_id(video_url: str | None) -> Optional[str]:
@@ -57,70 +58,61 @@ def normalize_video_target(video_url: str | None, video_id: str | None) -> tuple
     return cleaned_url, cleaned_id
 
 
-def _srt_to_text(raw: str) -> str:
-    lines: list[str] = []
-    for line in raw.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if stripped.isdigit():
-            continue
-        if _SRT_TIME_RE.match(stripped):
-            continue
-        lines.append(stripped)
-    return "\n".join(lines).strip()
-
-
-def _run_yt_dlp_extract(video_url: str, language: str, timeout_seconds: int) -> dict[str, Any]:
-    with tempfile.TemporaryDirectory(prefix="ua_yt_ingest_") as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        output_tpl = str(tmp_path / "subs.%(ext)s")
-        cmd = [
-            "yt-dlp",
-            "--skip-download",
-            "--write-auto-subs",
-            "--sub-lang",
-            language,
-            "--convert-subs",
-            "srt",
-            "-o",
-            output_tpl,
-            video_url,
-        ]
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=max(5, int(timeout_seconds)),
-            check=False,
+def _classify_api_error(error: str, detail: str) -> str:
+    lowered = f"{error}\n{detail}".lower()
+    if any(
+        hint in lowered
+        for hint in (
+            "requestblocked",
+            "ipblocked",
+            "ip has been blocked",
+            "too many requests",
+            "cloud provider",
+            "sign in to confirm",
+            "captcha",
+            "429",
+            "403",
         )
-        srt_files = sorted(tmp_path.glob("*.srt"))
-        if not srt_files:
-            stderr_preview = (proc.stderr or proc.stdout or "").strip()
-            return {
-                "ok": False,
-                "error": "yt_dlp_no_srt_output",
-                "detail": stderr_preview[-2000:],
-                "returncode": proc.returncode,
-            }
+    ):
+        return "request_blocked"
+    return "api_unavailable"
 
-        raw = srt_files[0].read_text(encoding="utf-8", errors="replace")
-        cleaned = _srt_to_text(raw)
-        if not cleaned:
-            return {"ok": False, "error": "yt_dlp_empty_transcript", "returncode": proc.returncode}
-        return {
-            "ok": True,
-            "transcript_text": cleaned,
-            "source": "yt_dlp_srt",
-            "returncode": proc.returncode,
-        }
+
+def _evaluate_transcript_quality(transcript_text: str, min_chars: int) -> tuple[bool, float, str]:
+    lines = [line.strip() for line in transcript_text.splitlines() if line.strip()]
+    text = "\n".join(lines)
+    chars = len(text)
+    min_chars = max(20, min(int(min_chars or 0), 5000))
+    if chars < min_chars:
+        return False, 0.0, f"transcript shorter than minimum threshold ({chars} < {min_chars})"
+
+    unique_ratio = 1.0
+    if lines:
+        unique_ratio = len(set(lines)) / float(len(lines))
+
+    lowered = text.lower()
+    low_info_phrase = any(phrase in lowered for phrase in _LOW_INFO_PHRASES)
+    if low_info_phrase and chars < max(280, min_chars * 3):
+        return False, 0.1, "transcript appears to contain sign-off boilerplate only"
+
+    if unique_ratio < 0.15 and chars < max(500, min_chars * 4):
+        return False, 0.15, "transcript appears low-information due to repeated content"
+
+    score = min(1.0, 0.6 * min(chars / 6000.0, 1.0) + 0.4 * max(min(unique_ratio, 1.0), 0.0))
+    return True, round(score, 4), ""
 
 
 def _run_youtube_transcript_api_extract(video_id: str) -> dict[str, Any]:
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
     except Exception as exc:
-        return {"ok": False, "error": "youtube_transcript_api_import_failed", "detail": str(exc)}
+        detail = str(exc)
+        return {
+            "ok": False,
+            "error": "youtube_transcript_api_import_failed",
+            "detail": detail,
+            "failure_class": "api_unavailable",
+        }
 
     try:
         api = YouTubeTranscriptApi()
@@ -139,14 +131,24 @@ def _run_youtube_transcript_api_extract(video_id: str) -> dict[str, Any]:
                     lines.append(text)
         transcript_text = "\n".join(lines).strip()
         if not transcript_text:
-            return {"ok": False, "error": "youtube_transcript_api_empty_transcript"}
+            return {
+                "ok": False,
+                "error": "youtube_transcript_api_empty_transcript",
+                "failure_class": "empty_or_low_quality_transcript",
+            }
         return {
             "ok": True,
             "transcript_text": transcript_text,
             "source": "youtube_transcript_api",
         }
     except Exception as exc:
-        return {"ok": False, "error": "youtube_transcript_api_failed", "detail": str(exc)}
+        detail = str(exc)
+        return {
+            "ok": False,
+            "error": "youtube_transcript_api_failed",
+            "detail": detail,
+            "failure_class": _classify_api_error("youtube_transcript_api_failed", detail),
+        }
 
 
 def ingest_youtube_transcript(
@@ -156,6 +158,7 @@ def ingest_youtube_transcript(
     language: str = "en",
     timeout_seconds: int = 120,
     max_chars: int = 180_000,
+    min_chars: int = 160,
 ) -> dict[str, Any]:
     resolved_url, resolved_video_id = normalize_video_target(video_url, video_id)
     if not resolved_url:
@@ -163,37 +166,36 @@ def ingest_youtube_transcript(
             "ok": False,
             "status": "failed",
             "error": "missing_video_target",
+            "failure_class": "invalid_video_target",
+            "video_url": resolved_url,
+            "video_id": resolved_video_id,
+            "attempts": [],
+        }
+    if not resolved_video_id:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "invalid_video_target",
+            "failure_class": "invalid_video_target",
             "video_url": resolved_url,
             "video_id": resolved_video_id,
             "attempts": [],
         }
 
     attempts: list[dict[str, Any]] = []
-    transcript_text = ""
-    source = ""
-
-    yt_dlp_result = _run_yt_dlp_extract(resolved_url, language=language, timeout_seconds=timeout_seconds)
-    attempts.append({"method": "yt_dlp", **yt_dlp_result})
-    if yt_dlp_result.get("ok"):
-        transcript_text = str(yt_dlp_result.get("transcript_text") or "")
-        source = str(yt_dlp_result.get("source") or "yt_dlp_srt")
-    elif resolved_video_id:
-        fallback_result = _run_youtube_transcript_api_extract(resolved_video_id)
-        attempts.append({"method": "youtube_transcript_api", **fallback_result})
-        if fallback_result.get("ok"):
-            transcript_text = str(fallback_result.get("transcript_text") or "")
-            source = str(fallback_result.get("source") or "youtube_transcript_api")
+    transcript_result = _run_youtube_transcript_api_extract(resolved_video_id)
+    attempts.append({"method": "youtube_transcript_api", **transcript_result})
+    transcript_text = str(transcript_result.get("transcript_text") or "")
+    source = str(transcript_result.get("source") or "youtube_transcript_api")
 
     if not transcript_text:
-        failure_error = ""
-        for attempt in reversed(attempts):
-            failure_error = str(attempt.get("error") or "").strip()
-            if failure_error:
-                break
+        failure_error = str(transcript_result.get("error") or "transcript_unavailable").strip()
+        failure_class = str(transcript_result.get("failure_class") or "api_unavailable").strip()
         return {
             "ok": False,
             "status": "failed",
             "error": failure_error or "transcript_unavailable",
+            "failure_class": failure_class or "api_unavailable",
             "video_url": resolved_url,
             "video_id": resolved_video_id,
             "attempts": attempts,
@@ -205,6 +207,26 @@ def ingest_youtube_transcript(
         transcript_text = transcript_text[:max_chars]
         truncated = True
 
+    quality_pass, quality_score, quality_reason = _evaluate_transcript_quality(
+        transcript_text=transcript_text,
+        min_chars=min_chars,
+    )
+    if not quality_pass:
+        return {
+            "ok": False,
+            "status": "failed",
+            "error": "transcript_quality_failed",
+            "failure_class": "empty_or_low_quality_transcript",
+            "video_url": resolved_url,
+            "video_id": resolved_video_id,
+            "source": source,
+            "transcript_chars": len(transcript_text),
+            "transcript_truncated": truncated,
+            "transcript_quality_score": quality_score,
+            "transcript_quality_reason": quality_reason,
+            "attempts": attempts,
+        }
+
     return {
         "ok": True,
         "status": "succeeded",
@@ -214,5 +236,7 @@ def ingest_youtube_transcript(
         "transcript_chars": len(transcript_text),
         "transcript_truncated": truncated,
         "source": source or "unknown",
+        "transcript_quality_score": quality_score,
+        "transcript_quality_pass": True,
         "attempts": attempts,
     }

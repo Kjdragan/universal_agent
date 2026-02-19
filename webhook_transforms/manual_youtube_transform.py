@@ -168,6 +168,8 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         f"learning_mode: {learning_mode}",
         f"allow_degraded_transcript_only: {str(allow_degraded).lower()}",
         "If learning_mode is concept_plus_implementation, include runnable code in implementation/ and explain how to run it.",
+        "Transcript path: use youtube-transcript-api instance API as the single transcript source (no yt-dlp transcript fallback).",
+        "Video analysis path: use Gemini multimodal video understanding with the YouTube URL directly when available.",
         "Use visual analysis when possible. Continue with transcript-only mode when visual processing is unavailable.",
     ]
 

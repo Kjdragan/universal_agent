@@ -582,6 +582,7 @@ async def test_local_ingest_success_injects_transcript_metadata(mock_gateway, tm
                 "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
                 "UA_HOOKS_YOUTUBE_INGEST_URL": "http://127.0.0.1:18002/api/v1/youtube/ingest",
                 "UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS": "1",
+                "UA_HOOKS_YOUTUBE_INGEST_MIN_CHARS": "333",
                 "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN": "0",
             },
             clear=False,
@@ -614,6 +615,7 @@ async def test_local_ingest_success_injects_transcript_metadata(mock_gateway, tm
     transcript_file = Path(gateway_request.metadata["hook_youtube_ingest_transcript_file"])
     assert transcript_file.exists()
     assert transcript_file.read_text(encoding="utf-8") == "hello world transcript"
+    assert service._call_local_youtube_ingest_worker.await_args.kwargs["min_chars"] == 333
 
 
 @pytest.mark.asyncio
@@ -658,7 +660,12 @@ async def test_local_ingest_fail_closed_defers_dispatch(mock_gateway, tmp_path):
         service = HooksService(mock_gateway)
         service.config = config
         service._call_local_youtube_ingest_worker = AsyncMock(
-            return_value={"ok": False, "status": "failed", "error": "worker_unavailable"}
+            return_value={
+                "ok": False,
+                "status": "failed",
+                "error": "worker_unavailable",
+                "failure_class": "request_blocked",
+            }
         )
 
         request = MagicMock(spec=Request)
@@ -675,3 +682,68 @@ async def test_local_ingest_fail_closed_defers_dispatch(mock_gateway, tmp_path):
     assert pending_file.exists()
     payload = json.loads(pending_file.read_text(encoding="utf-8"))
     assert payload["status"] == "pending_local_ingest"
+    assert payload["last_result"]["failure_class"] == "request_blocked"
+
+
+@pytest.mark.asyncio
+async def test_local_ingest_cooldown_defers_dispatch(mock_gateway, tmp_path):
+    config = HooksConfig(
+        enabled=True,
+        token="secret-token",
+        mappings=[
+            HookMappingConfig(
+                id="route-hook",
+                match=HookMatchConfig(path="test"),
+                action="agent",
+                message_template="video_url: https://www.youtube.com/watch?v=dxlyCPGCvy8\nvideo_id: dxlyCPGCvy8",
+                name="RouteHook",
+                session_key="yt_route_dxlyCPGCvy8_cooldown",
+                to="youtube-explainer-expert",
+            )
+        ],
+    )
+
+    workspace_dir = tmp_path / "session_hook_yt_route_dxlyCPGCvy8_cooldown"
+    session = GatewaySession(
+        session_id="session_hook_yt_route_dxlyCPGCvy8_cooldown",
+        user_id="webhook",
+        workspace_dir=str(workspace_dir),
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=session)
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker",
+                "UA_HOOKS_YOUTUBE_INGEST_URL": "http://127.0.0.1:18002/api/v1/youtube/ingest",
+                "UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS": "1",
+                "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN": "0",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+        service.config = config
+        service._youtube_ingest_cooldowns["dxlyCPGCvy8"] = {
+            "until_epoch": time.time() + 300.0,
+            "failure_class": "request_blocked",
+            "error": "youtube_transcript_api_failed",
+        }
+
+        request = MagicMock(spec=Request)
+        request.headers = {"Authorization": "Bearer secret-token"}
+        request.body = AsyncMock(return_value=b"{}")
+        request.query_params = {}
+
+        response = await service.handle_request(request, "test")
+        assert response.status_code == 200
+        await asyncio.sleep(0.1)
+
+    mock_gateway.execute.assert_not_called()
+    pending_file = workspace_dir / "pending_local_ingest.json"
+    assert pending_file.exists()
+    payload = json.loads(pending_file.read_text(encoding="utf-8"))
+    assert payload["last_result"]["error"] == "ingest_cooldown_active"
+    assert payload["last_result"]["failure_class"] == "request_blocked"

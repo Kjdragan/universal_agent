@@ -7,6 +7,7 @@ import importlib.util
 import json
 import logging
 import os
+import random
 import re
 import sys
 import time
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field
 from universal_agent.artifacts import resolve_artifacts_dir
 from universal_agent.gateway import InProcessGateway, GatewayRequest
 from universal_agent.ops_config import load_ops_config, resolve_ops_config_path
+from universal_agent.youtube_ingest import normalize_video_target
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +137,24 @@ class HooksService:
         self._youtube_ingest_retry_delay_seconds = max(
             0.0, self._safe_float_env("UA_HOOKS_YOUTUBE_INGEST_RETRY_DELAY_SECONDS", 20.0)
         )
+        self._youtube_ingest_retry_max_delay_seconds = max(
+            self._youtube_ingest_retry_delay_seconds,
+            self._safe_float_env("UA_HOOKS_YOUTUBE_INGEST_RETRY_MAX_DELAY_SECONDS", 90.0),
+        )
+        self._youtube_ingest_retry_jitter_seconds = max(
+            0.0, self._safe_float_env("UA_HOOKS_YOUTUBE_INGEST_RETRY_JITTER_SECONDS", 3.0)
+        )
+        self._youtube_ingest_min_chars = max(
+            20, min(self._safe_int_env("UA_HOOKS_YOUTUBE_INGEST_MIN_CHARS", 160), 5000)
+        )
+        self._youtube_ingest_cooldown_seconds = max(
+            0, self._safe_int_env("UA_HOOKS_YOUTUBE_INGEST_COOLDOWN_SECONDS", 600)
+        )
+        self._youtube_ingest_inflight_ttl_seconds = max(
+            30, self._safe_int_env("UA_HOOKS_YOUTUBE_INGEST_INFLIGHT_TTL_SECONDS", 900)
+        )
+        self._youtube_ingest_inflight: Dict[str, float] = {}
+        self._youtube_ingest_cooldowns: Dict[str, dict[str, Any]] = {}
         self._youtube_ingest_fail_open = self._safe_bool_env(
             "UA_HOOKS_YOUTUBE_INGEST_FAIL_OPEN", False
         )
@@ -259,6 +279,11 @@ class HooksService:
             "youtube_ingest_mode": self._youtube_ingest_mode or "disabled",
             "youtube_ingest_url_configured": bool(self._youtube_ingest_url),
             "youtube_ingest_fail_open": bool(self._youtube_ingest_fail_open),
+            "youtube_ingest_min_chars": int(self._youtube_ingest_min_chars),
+            "youtube_ingest_retry_attempts": int(self._youtube_ingest_retries),
+            "youtube_ingest_retry_delay_seconds": float(self._youtube_ingest_retry_delay_seconds),
+            "youtube_ingest_retry_jitter_seconds": float(self._youtube_ingest_retry_jitter_seconds),
+            "youtube_ingest_cooldown_seconds": int(self._youtube_ingest_cooldown_seconds),
             "hook_default_timeout_seconds": int(self._default_hook_timeout_seconds or 0),
         }
 
@@ -480,12 +505,66 @@ class HooksService:
             return "\n".join(cleaned_lines)
         return base + "\n\n" + "\n".join(cleaned_lines)
 
+    def _youtube_ingest_video_key(self, video_url: str, video_id: str) -> str:
+        normalized_url, normalized_id = normalize_video_target(video_url, video_id)
+        if normalized_id:
+            return normalized_id
+        if normalized_url:
+            return f"url:{normalized_url.strip().lower()}"
+        seed = f"{video_url}|{video_id}".encode("utf-8", errors="replace")
+        return f"unknown:{hashlib.sha256(seed).hexdigest()[:16]}"
+
+    def _cleanup_youtube_ingest_state(self, now_epoch: float) -> None:
+        expired_inflight = [key for key, until_epoch in self._youtube_ingest_inflight.items() if until_epoch <= now_epoch]
+        for key in expired_inflight:
+            self._youtube_ingest_inflight.pop(key, None)
+
+        expired_cooldowns = []
+        for key, entry in self._youtube_ingest_cooldowns.items():
+            until_epoch = float(entry.get("until_epoch") or 0.0)
+            if until_epoch <= now_epoch:
+                expired_cooldowns.append(key)
+        for key in expired_cooldowns:
+            self._youtube_ingest_cooldowns.pop(key, None)
+
+    def _youtube_ingest_retry_delay(self, attempt_index: int) -> float:
+        base_delay = self._youtube_ingest_retry_delay_seconds
+        if base_delay <= 0:
+            return 0.0
+        factor = float(2 ** max(0, attempt_index))
+        delay = min(self._youtube_ingest_retry_max_delay_seconds, base_delay * factor)
+        if self._youtube_ingest_retry_jitter_seconds > 0:
+            delay += random.uniform(0.0, self._youtube_ingest_retry_jitter_seconds)
+        return max(0.0, delay)
+
+    def _set_youtube_ingest_cooldown(
+        self,
+        *,
+        video_key: str,
+        failure_class: str,
+        error: str,
+        now_epoch: float,
+    ) -> None:
+        if self._youtube_ingest_cooldown_seconds <= 0:
+            return
+        cooldown_seconds = float(self._youtube_ingest_cooldown_seconds)
+        if failure_class == "request_blocked":
+            cooldown_seconds = max(cooldown_seconds, cooldown_seconds * 2.0)
+        if cooldown_seconds <= 0:
+            return
+        self._youtube_ingest_cooldowns[video_key] = {
+            "until_epoch": now_epoch + cooldown_seconds,
+            "failure_class": failure_class,
+            "error": error,
+        }
+
     async def _call_local_youtube_ingest_worker(
         self,
         *,
         video_url: str,
         video_id: str,
         session_id: str,
+        min_chars: int,
     ) -> dict[str, Any]:
         if not self._youtube_ingest_url:
             return {"ok": False, "status": "failed", "error": "missing_ingest_url"}
@@ -500,6 +579,7 @@ class HooksService:
             "language": "en",
             "timeout_seconds": self._youtube_ingest_timeout_seconds,
             "request_id": session_id,
+            "min_chars": max(20, min(int(min_chars or 0), 5000)),
         }
 
         try:
@@ -544,25 +624,69 @@ class HooksService:
         if not video_url:
             return action, {"hook_youtube_ingest_status": "skipped_no_video_url"}, False
 
+        video_key = self._youtube_ingest_video_key(video_url, video_id)
+        now = time.time()
+        self._cleanup_youtube_ingest_state(now)
+
         errors: list[dict[str, Any]] = []
         ingest_result: dict[str, Any] = {}
-        for attempt_index in range(self._youtube_ingest_retries):
-            ingest_result = await self._call_local_youtube_ingest_worker(
-                video_url=video_url,
-                video_id=video_id,
-                session_id=session_id,
-            )
-            if ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded":
-                break
-            errors.append(
-                {
-                    "attempt": attempt_index + 1,
-                    "error": str(ingest_result.get("error") or "unknown"),
-                    "detail": str(ingest_result.get("detail") or "")[:2000],
-                }
-            )
-            if attempt_index < self._youtube_ingest_retries - 1 and self._youtube_ingest_retry_delay_seconds > 0:
-                await asyncio.sleep(self._youtube_ingest_retry_delay_seconds)
+        cooldown_entry = self._youtube_ingest_cooldowns.get(video_key)
+        cooldown_until = float(cooldown_entry.get("until_epoch") or 0.0) if isinstance(cooldown_entry, dict) else 0.0
+        if cooldown_entry and cooldown_until > now:
+            ingest_result = {
+                "ok": False,
+                "status": "failed",
+                "error": "ingest_cooldown_active",
+                "failure_class": str(cooldown_entry.get("failure_class") or "cooldown_active"),
+                "detail": f"cooldown_active_seconds={int(cooldown_until - now)}",
+                "video_key": video_key,
+            }
+        elif self._youtube_ingest_inflight.get(video_key, 0.0) > now:
+            ingest_result = {
+                "ok": False,
+                "status": "failed",
+                "error": "ingest_inflight_deduped",
+                "failure_class": "inflight_duplicate",
+                "detail": f"video_key={video_key}",
+                "video_key": video_key,
+            }
+        else:
+            self._youtube_ingest_inflight[video_key] = now + float(self._youtube_ingest_inflight_ttl_seconds)
+            try:
+                for attempt_index in range(self._youtube_ingest_retries):
+                    ingest_result = await self._call_local_youtube_ingest_worker(
+                        video_url=video_url,
+                        video_id=video_id,
+                        session_id=session_id,
+                        min_chars=self._youtube_ingest_min_chars,
+                    )
+                    if ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded":
+                        self._youtube_ingest_cooldowns.pop(video_key, None)
+                        break
+                    errors.append(
+                        {
+                            "attempt": attempt_index + 1,
+                            "error": str(ingest_result.get("error") or "unknown"),
+                            "failure_class": str(ingest_result.get("failure_class") or ""),
+                            "detail": str(ingest_result.get("detail") or "")[:2000],
+                        }
+                    )
+                    if attempt_index < self._youtube_ingest_retries - 1:
+                        delay_seconds = self._youtube_ingest_retry_delay(attempt_index)
+                        if delay_seconds > 0:
+                            await asyncio.sleep(delay_seconds)
+            finally:
+                self._youtube_ingest_inflight.pop(video_key, None)
+
+        if not (ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded"):
+            failure_class = str(ingest_result.get("failure_class") or "").strip().lower()
+            if failure_class in {"request_blocked", "api_unavailable"}:
+                self._set_youtube_ingest_cooldown(
+                    video_key=video_key,
+                    failure_class=failure_class,
+                    error=str(ingest_result.get("error") or "local_ingest_failed"),
+                    now_epoch=time.time(),
+                )
 
         workspace_root = Path(session_workspace).resolve()
         ingestion_dir = workspace_root / "ingestion"
@@ -594,6 +718,7 @@ class HooksService:
                 "hook_youtube_ingest_status": "succeeded",
                 "hook_youtube_ingest_source": str(ingest_result.get("source") or "unknown"),
                 "hook_youtube_ingest_transcript_file": str(transcript_path),
+                "hook_youtube_ingest_video_key": video_key,
             }
             return action, metadata, False
 
@@ -602,7 +727,9 @@ class HooksService:
             "session_id": session_id,
             "video_url": video_url,
             "video_id": video_id,
+            "video_key": video_key,
             "ingest_url": self._youtube_ingest_url,
+            "min_chars": int(self._youtube_ingest_min_chars),
             "attempts": errors,
             "last_result": ingest_result,
             "created_at_epoch": time.time(),
@@ -618,6 +745,8 @@ class HooksService:
             "hook_youtube_ingest_status": "pending_local_ingest",
             "hook_youtube_ingest_pending_file": str(pending_path),
             "hook_youtube_ingest_error": str(ingest_result.get("error") or "local_ingest_failed"),
+            "hook_youtube_ingest_failure_class": str(ingest_result.get("failure_class") or ""),
+            "hook_youtube_ingest_video_key": video_key,
         }
 
         if self._youtube_ingest_fail_open:
@@ -625,6 +754,8 @@ class HooksService:
                 "local_youtube_ingest_mode: local_worker",
                 "local_youtube_ingest_status: failed_fail_open",
                 f"local_youtube_ingest_pending_file: {pending_path}",
+                f"local_youtube_ingest_error: {str(ingest_result.get('error') or 'local_ingest_failed')}",
+                f"local_youtube_ingest_failure_class: {str(ingest_result.get('failure_class') or '')}",
                 "Local transcript ingestion failed; proceed in degraded mode and record this in manifest.",
             ]
             action = action.model_copy(

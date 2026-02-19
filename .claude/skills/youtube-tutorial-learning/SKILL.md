@@ -74,12 +74,9 @@ HARD RULE: Never treat `UA_ARTIFACTS_DIR` as a literal directory name in paths.
 - GOOD: `<resolved_artifacts_root>/youtube-tutorial-learning/...`
 
 3. Transcript extraction (best effort)
-Preferred: use YouTube captions via `yt-dlp` into session scratch, then copy the final transcript into artifacts:
+Use `youtube-transcript-api` instance API as the transcript source of truth:
 - Scratch: `CURRENT_SESSION_WORKSPACE/downloads/`
 - Artifact: `<run_dir>/transcript.txt` (typically `retention: temp`)
-
-Fallback when `yt-dlp` is blocked/rate-limited:
-- Use `youtube-transcript-api` v1 style call (instance API), not the old class method.
 
 ```bash
 python3 - <<'PY'
@@ -88,56 +85,19 @@ from youtube_transcript_api import YouTubeTranscriptApi
 video_id = "<VIDEO_ID>"
 api = YouTubeTranscriptApi()
 fetched = api.fetch(video_id)
-print("\n".join(snippet.text for snippet in fetched))
+lines = [snippet.text.strip() for snippet in fetched if str(getattr(snippet, "text", "")).strip()]
+print("\n".join(lines))
 PY
 ```
 
-Do NOT use `YouTubeTranscriptApi.get_transcript(...)` in this project; that API shape is outdated for current pinned versions.
+Do NOT use `YouTubeTranscriptApi.get_transcript(...)` in this project.
+Do NOT use `yt-dlp` for transcript extraction in this workflow.
 
-Example (scratch):
-`yt-dlp --skip-download --write-auto-subs --sub-lang en --convert-subs srt -o "<scratch>/subs.%(ext)s" "<URL>"`
-
-Conversion helper (scratch → scratch):
-
-```bash
-python3 - <<'PY'
-import os
-import re
-from pathlib import Path
-
-ws = Path(os.environ["CURRENT_SESSION_WORKSPACE"])
-downloads = ws / "downloads"
-
-srt_files = sorted(downloads.glob("*.srt"))
-if not srt_files:
-  raise SystemExit(f"No .srt files found in {downloads}")
-
-srt_path = srt_files[0]
-out_path = downloads / "transcript.txt"
-
-content = srt_path.read_text(encoding="utf-8", errors="replace")
-lines = content.splitlines()
-
-cleaned = []
-for line in lines:
-  s = line.strip()
-  if not s:
-    continue
-  if s.isdigit():
-    continue
-  if re.match(r"^\\d{2}:\\d{2}:\\d{2},\\d{3}\\s*-->\\s*\\d{2}:\\d{2}:\\d{2},\\d{3}", s):
-    continue
-  cleaned.append(s)
-
-out_path.write_text(\"\\n\".join(cleaned), encoding=\"utf-8\")
-print(f\"Wrote {out_path} from {srt_path} ({len(cleaned)} lines)\")
-PY
-```
-
-When converting SRT/VTT to plain text, use `python3` (not `python`), because some environments do not provide a `python` shim.
-When reading environment variables in Python, use `os.environ[...]` (NOT `sys.environ[...]`).
-Note: `yt-dlp` typically writes language-suffixed files like `subs.en.srt` (NOT `subs.srt`). Do not hardcode `transcript.srt` paths.
-Instead, locate the downloaded `.srt` file (e.g. via `glob`) and convert that.
+Anti-blocking hygiene (mandatory):
+- Retries must use exponential backoff + jitter.
+- Keep transcript requests idempotent and dedupe by video id.
+- Classify failures (`request_blocked`, `api_unavailable`, `empty_or_low_quality_transcript`) and persist those classes in run metadata.
+- Enforce a minimum transcript character threshold before treating extraction as success.
 
 3b. Transcript cleanup (HIGHLY RECOMMENDED)
 Caption transcripts often include heavy duplication. After creating `downloads/transcript.txt`, dedupe consecutive identical lines and write:
@@ -200,45 +160,34 @@ PY
 ```
 
 4. Minimal metadata (avoid huge tool outputs)
-**Do NOT call `mcp__youtube__get_metadata`**. It often includes a huge formats list and can exceed tool/UI limits.
-Instead, use `yt-dlp` with `--print` to capture only the fields we need (small output). Save this output into the artifact run dir.
+Avoid giant metadata payloads. Use URL parsing plus YouTube oEmbed for title/author when available.
 
 ```bash
-yt-dlp --skip-download \
-  --print "%(title)s" \
-  --print "%(id)s" \
-  --print "%(duration)s" \
-  --print "%(channel)s" \
-  --print "%(view_count)s" \
-  "<URL>"
+curl -fsSL "https://www.youtube.com/oembed?url=<URL>&format=json"
 ```
 
 5. Visual analysis (best effort)
-If `zai_vision` MCP tools are available, attempt to analyze video/segments and extract:
-- key frames
-- OCR of code/terminal output
-- technical diagram interpretations
-
-Notes:
-- Tools are typically named like `mcp__zai_vision__...`.
-- The service may have an 8MB limit; if needed, download low-res or split into segments in scratch.
+Use Gemini multimodal understanding against the YouTube URL (preferred model: `gemini-3-pro-preview`):
+- Script path: `.claude/skills/youtube-tutorial-learning/scripts/gemini_video_analysis.py`
+- Output target: `<run_dir>/visuals/gemini_video_analysis.md`
+- Include timestamped findings when possible and separate visual-only observations from transcript-derived claims.
 
 If vision tooling is unavailable OR fails, proceed transcript-only and record the limitation in the manifest + docs.
 Do NOT skip vision analysis just because you *assume* the transcript is sufficient.
 
-5. Synthesis
+6. Synthesis
 Merge “what they said” (transcript) and “what they showed” (visual findings):
 - Identify gaps/ambiguities
 - Do supplementary research as needed (prefer official docs, then reputable sources)
 - Record all gap-filling sources in `research/sources.md`
 
-6. Write durable artifacts
+7. Write durable artifacts
 - `CONCEPT.md`: standalone tutorial, includes diagrams/images (or references in `visuals/`) and carefully sourced code snippets.
 - `IMPLEMENTATION.md`: prerequisites, steps, expected outputs.
 - `implementation/`: runnable, cleaned code. Add comments with provenance + references to `visuals/code-extractions/` when relevant.
 - `visuals/code-extractions/`: store raw OCR extractions with confidence headers (high/medium/low) and "COMPLETE/VALIDATED" flags.
 
-7. Finish and finalize manifest
+8. Finish and finalize manifest
 Update `manifest.json` with:
 - inputs, extraction status, outputs map, tags
 - retention map (mark safe-to-delete items as `temp`)
@@ -247,7 +196,7 @@ For each extraction step (transcript, visual), set an explicit status:
 - `attempted_succeeded`
 - `attempted_failed` (include the error and fallback)
 
-8. Implementation validation (MANDATORY)
+9. Implementation validation (MANDATORY)
 When you generate a Python sample script in `implementation/`, it MUST be runnable without a separate venv/pyproject.
 Use uv inline scripting (PEP 723) and validate the script executes.
 
@@ -278,31 +227,24 @@ Secrets policy (MANDATORY):
   - Call `load_dotenv(find_dotenv(usecwd=True))` near the top of the script.
   - Read secrets only from environment variables (e.g., `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `Z_AI_API_KEY`, `ANTHROPIC_API_KEY`).
 
-Suggested implementation pattern (google.genai + url_context tool):
+Suggested implementation pattern (google.genai + YouTube URL multimodal):
 
 ```python
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["google-genai>=1.0.0", "requests>=2.31.0", "python-dotenv>=1.0.1"]
+# dependencies = ["google-genai>=1.0.0", "python-dotenv>=1.0.1"]
 # ///
 
 from __future__ import annotations
 
-import argparse
 import os
-import sys
 from google import genai
-from google.genai import types
 from dotenv import find_dotenv, load_dotenv
 
-# Load env vars from the nearest .env (repo root, cwd, etc.). This avoids requiring
-# the user to manually `export ...` before running the script.
 load_dotenv(find_dotenv(usecwd=True))
-
 
 def _api_key() -> str | None:
     return os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
-
 
 def build_client() -> genai.Client:
     key = _api_key()
@@ -310,41 +252,27 @@ def build_client() -> genai.Client:
         raise RuntimeError("Missing GOOGLE_API_KEY (or GEMINI_API_KEY)")
     return genai.Client(api_key=key)
 
-
-def self_test() -> int:
-    # No-secrets self-test: imports + tool construction only.
-    _ = types.GenerateContentConfig(
-        tools=[types.Tool(url_context=types.UrlContext())]
-    )
-    print("SELF_TEST_OK")
-    return 0
-
-
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--self-test", action="store_true")
-    ap.add_argument("--url", action="append", dest="urls", default=[])
-    ap.add_argument("--query", default="Summarize the key points.")
-    args = ap.parse_args()
-
-    if args.self_test:
-        return self_test()
-
-    if not args.urls:
-        print("Provide at least one --url", file=sys.stderr)
-        return 2
-
+def analyze_video(url: str, prompt: str) -> str:
     client = build_client()
-    cfg = types.GenerateContentConfig(tools=[types.Tool(url_context=types.UrlContext())])
-    prompt = f"Using these URLs: {args.urls}\\n\\n{args.query}"
-    resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt, config=cfg)
-    print(resp.text)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    contents = [
+        {
+            "role": "user",
+            "parts": [
+                {"file_data": {"file_uri": url}},
+                {"text": prompt},
+            ],
+        }
+    ]
+    resp = client.models.generate_content(
+        model="gemini-3-pro-preview",
+        contents=contents,
+    )
+    return resp.text or ""
 ```
+
+Reference implementation to run directly:
+- `uv run .claude/skills/youtube-tutorial-learning/scripts/gemini_video_analysis.py --self-test`
+- `uv run .claude/skills/youtube-tutorial-learning/scripts/gemini_video_analysis.py --url "<youtube_url>" --out "<run_dir>/visuals/gemini_video_analysis.md"`
 
 ## Retention (Recommended Defaults)
 
