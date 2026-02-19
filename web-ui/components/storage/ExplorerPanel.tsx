@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 type VpsScope = "workspaces" | "artifacts";
 
@@ -31,6 +33,10 @@ function formatBytes(bytes?: number | null): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+function isMarkdownFilePath(path: string): boolean {
+  return /\.md(?:own)?$/i.test(path.trim());
+}
+
 export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }: ExplorerPanelProps) {
   const [scope, setScope] = useState<VpsScope>(initialScope);
   const [path, setPath] = useState(initialPath);
@@ -40,6 +46,7 @@ export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }:
   const [previewTitle, setPreviewTitle] = useState("");
   const [previewText, setPreviewText] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewIsMarkdown, setPreviewIsMarkdown] = useState(false);
 
   useEffect(() => {
     setScope(initialScope);
@@ -92,6 +99,7 @@ export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }:
     }
     setPreviewTitle(entry.path);
     setPreviewText("");
+    setPreviewIsMarkdown(isMarkdownFilePath(entry.name) || isMarkdownFilePath(entry.path));
     setPreviewLoading(true);
     try {
       const res = await fetch(`/api/vps/file?scope=${scope}&path=${encodeURIComponent(entry.path)}`);
@@ -109,8 +117,8 @@ export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }:
   };
 
   return (
-    <div className="grid gap-4 xl:grid-cols-2">
-      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+    <div className="grid h-full min-h-0 gap-4 xl:grid-cols-2">
+      <section className="flex min-h-0 flex-col rounded-xl border border-slate-800 bg-slate-900/60 p-3">
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold">Explorer</h3>
           <div className="ml-auto flex items-center gap-2">
@@ -145,39 +153,52 @@ export function ExplorerPanel({ initialScope = "workspaces", initialPath = "" }:
 
         {error && <div className="mb-2 text-sm text-red-300">{error}</div>}
 
-        {loading ? (
-          <div className="text-sm text-slate-400">Loading...</div>
-        ) : !entries.length ? (
-          <div className="text-sm text-slate-400">No files in this directory.</div>
-        ) : (
-          <div className="max-h-[60vh] overflow-auto rounded border border-slate-800">
-            {entries.map((entry) => (
-              <button
-                key={`${scope}:${entry.path}`}
-                type="button"
-                onClick={() => void openEntry(entry)}
-                className="flex w-full items-center gap-2 border-b border-slate-800 px-3 py-2 text-left text-sm hover:bg-slate-800/60"
-              >
-                <span className="w-5">{entry.is_dir ? "📁" : "📄"}</span>
-                <span className="flex-1 truncate font-mono">{entry.name}</span>
-                <span className="text-[11px] text-slate-500">{entry.is_dir ? "" : formatBytes(entry.size)}</span>
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="min-h-0 flex-1">
+          {loading ? (
+            <div className="text-sm text-slate-400">Loading...</div>
+          ) : !entries.length ? (
+            <div className="text-sm text-slate-400">No files in this directory.</div>
+          ) : (
+            <div className="h-full overflow-auto rounded border border-slate-800">
+              {entries.map((entry) => (
+                <button
+                  key={`${scope}:${entry.path}`}
+                  type="button"
+                  onClick={() => void openEntry(entry)}
+                  className="flex w-full items-center gap-2 border-b border-slate-800 px-3 py-2 text-left text-sm hover:bg-slate-800/60"
+                >
+                  <span className="w-5">{entry.is_dir ? "📁" : "📄"}</span>
+                  <span className="flex-1 truncate font-mono">{entry.name}</span>
+                  <span className="text-[11px] text-slate-500">{entry.is_dir ? "" : formatBytes(entry.size)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </section>
 
-      <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+      <section className="flex min-h-0 flex-col rounded-xl border border-slate-800 bg-slate-900/60 p-3">
         <h3 className="mb-2 text-sm font-semibold">Preview {previewTitle ? `- ${previewTitle}` : ""}</h3>
-        {previewLoading ? (
-          <div className="text-sm text-slate-400">Loading file...</div>
-        ) : previewText ? (
-          <pre className="max-h-[60vh] overflow-auto rounded border border-slate-800 bg-slate-950/80 p-3 text-[12px] leading-5 text-slate-200">
-            {previewText}
-          </pre>
-        ) : (
-          <div className="text-sm text-slate-400">Select a file to preview.</div>
-        )}
+        <div className="min-h-0 flex-1">
+          {previewLoading ? (
+            <div className="text-sm text-slate-400">Loading file...</div>
+          ) : previewText && previewIsMarkdown ? (
+            <div className="h-full overflow-auto rounded border border-slate-800 bg-slate-950/80 p-3 text-[12px] leading-6 text-slate-200">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                className="prose prose-sm max-w-none prose-invert"
+              >
+                {previewText}
+              </ReactMarkdown>
+            </div>
+          ) : previewText ? (
+            <pre className="h-full overflow-auto rounded border border-slate-800 bg-slate-950/80 p-3 text-[12px] leading-5 text-slate-200">
+              {previewText}
+            </pre>
+          ) : (
+            <div className="text-sm text-slate-400">Select a file to preview.</div>
+          )}
+        </div>
       </section>
     </div>
   );
