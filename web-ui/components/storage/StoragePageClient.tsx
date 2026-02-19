@@ -202,9 +202,9 @@ export function StoragePageClient() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-100 p-4 md:p-6">
-      <div className="mx-auto w-full max-w-7xl space-y-4">
-        <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <main className="h-screen overflow-hidden bg-slate-950 text-slate-100 p-4 md:p-6">
+      <div className="mx-auto flex h-full w-full max-w-7xl flex-col gap-4">
+        <section className="shrink-0 rounded-xl border border-slate-800 bg-slate-900/70 p-4">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-lg font-semibold tracking-tight">Storage</h1>
             <StorageSyncBadge state={syncState} pendingReadyCount={overview?.pending_ready_count || 0} />
@@ -219,6 +219,34 @@ export function StoragePageClient() {
             >
               {syncing ? "Syncing..." : "Sync now"}
             </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => updateQuery({ tab: "sessions" })}
+                className={`rounded border px-3 py-2 text-xs uppercase tracking-widest ${activeTab === "sessions" ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-950 text-slate-300"}`}
+              >
+                Sessions
+              </button>
+              <button
+                type="button"
+                onClick={() => updateQuery({ tab: "artifacts" })}
+                className={`rounded border px-3 py-2 text-xs uppercase tracking-widest ${activeTab === "artifacts" ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-950 text-slate-300"}`}
+              >
+                Artifacts
+              </button>
+              <button
+                type="button"
+                onClick={() => updateQuery({ tab: "explorer" })}
+                className={`rounded border px-3 py-2 text-xs uppercase tracking-widest ${activeTab === "explorer" ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-950 text-slate-300"}`}
+              >
+                Explorer
+              </button>
+            </div>
+            <span className="text-xs text-slate-400">
+              {loadingOverview
+                ? "Loading sync overview..."
+                : `Pending ready runs: ${overview?.pending_ready_count || 0}${typeof overview?.lag_seconds === "number" ? ` • Lag: ${Math.round(overview.lag_seconds)}s` : ""}${overview?.probe_error ? ` • Probe: ${overview.probe_error}` : ""}`}
+            </span>
             <div className="ml-auto flex items-center gap-2">
               <Link
                 href="/"
@@ -228,46 +256,11 @@ export function StoragePageClient() {
               </Link>
             </div>
           </div>
-
-          <div className="mt-3 text-xs text-slate-400">
-            {loadingOverview ? "Loading sync overview..." : (
-              <span>
-                Pending ready runs: {overview?.pending_ready_count || 0}
-                {typeof overview?.lag_seconds === "number" ? ` • Lag: ${Math.round(overview.lag_seconds)}s` : ""}
-                {overview?.probe_error ? ` • Probe: ${overview.probe_error}` : ""}
-              </span>
-            )}
-          </div>
-
           {error && <div className="mt-3 rounded border border-red-700/60 bg-red-600/10 p-2 text-sm text-red-200">{error}</div>}
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => updateQuery({ tab: "sessions" })}
-              className={`rounded border px-3 py-2 text-xs uppercase tracking-widest ${activeTab === "sessions" ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-950 text-slate-300"}`}
-            >
-              Sessions
-            </button>
-            <button
-              type="button"
-              onClick={() => updateQuery({ tab: "artifacts" })}
-              className={`rounded border px-3 py-2 text-xs uppercase tracking-widest ${activeTab === "artifacts" ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-950 text-slate-300"}`}
-            >
-              Artifacts
-            </button>
-            <button
-              type="button"
-              onClick={() => updateQuery({ tab: "explorer" })}
-              className={`rounded border px-3 py-2 text-xs uppercase tracking-widest ${activeTab === "explorer" ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-950 text-slate-300"}`}
-            >
-              Explorer
-            </button>
-          </div>
         </section>
 
         {activeTab === "sessions" && (
-          <section className="space-y-3">
+          <section className="min-h-0 flex-1 space-y-3 overflow-auto">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-400">Source filter</span>
               {(["all", "web", "hook", "telegram"] as const).map((option) => (
@@ -291,16 +284,20 @@ export function StoragePageClient() {
         )}
 
         {activeTab === "artifacts" && (
-          <ArtifactsTable
-            artifacts={artifacts}
-            loading={loadingArtifacts}
-            onOpenPath={(path) => openExplorer("artifacts", path)}
-            onOpenFile={(path) => openVpsFile("artifacts", path)}
-          />
+          <section className="min-h-0 flex-1 overflow-auto">
+            <ArtifactsTable
+              artifacts={artifacts}
+              loading={loadingArtifacts}
+              onOpenPath={(path) => openExplorer("artifacts", path)}
+              onOpenFile={(path) => openVpsFile("artifacts", path)}
+            />
+          </section>
         )}
 
         {activeTab === "explorer" && (
-          <ExplorerPanel initialScope={explorerScope} initialPath={explorerPath} />
+          <section className="min-h-0 flex-1">
+            <ExplorerPanel initialScope={explorerScope} initialPath={explorerPath} />
+          </section>
         )}
       </div>
     </main>
