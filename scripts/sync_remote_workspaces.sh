@@ -16,6 +16,10 @@ DEFAULT_SSH_PORT="${UA_REMOTE_SSH_PORT:-22}"
 DEFAULT_PRUNE_MIN_AGE_SEC="${UA_REMOTE_PRUNE_MIN_AGE_SEC:-300}"
 DEFAULT_GATEWAY_URL="${UA_REMOTE_GATEWAY_URL:-https://api.clearspringcg.com}"
 DEFAULT_REMOTE_TOGGLE_PATH="${UA_REMOTE_SYNC_TOGGLE_PATH:-/api/v1/ops/remote-sync}"
+DEFAULT_REQUIRE_READY_MARKER="${UA_REMOTE_SYNC_REQUIRE_READY_MARKER:-true}"
+DEFAULT_READY_MARKER_FILENAME="${UA_REMOTE_SYNC_READY_MARKER_FILENAME:-sync_ready.json}"
+DEFAULT_READY_MIN_AGE_SEC="${UA_REMOTE_SYNC_READY_MIN_AGE_SECONDS:-45}"
+DEFAULT_READY_SESSION_PREFIX="${UA_REMOTE_SYNC_READY_SESSION_PREFIX:-session_,tg_}"
 
 print_usage() {
   cat <<'USAGE'
@@ -54,6 +58,14 @@ Options:
   --gateway-url <url>        Gateway base URL for remote toggle check.
   --ops-token <token>        Ops token for remote toggle check (falls back to env/.env).
   --remote-toggle-path <path>Remote toggle endpoint path.
+  --require-ready-marker     Only sync workspaces after remote ready marker says terminal.
+  --ignore-ready-marker      Disable ready-marker gating.
+  --ready-marker-name <name> Ready marker file name (default: sync_ready.json).
+  --ready-min-age-seconds <seconds>
+                             Minimum marker age before sync (default: 45).
+  --ready-session-prefix <prefixes>
+                             Comma-separated workspace prefixes for ready-marker gating
+                             (default: session_,tg_).
   --no-delete                Do not delete files removed on remote side.
   --once                     Run one sync then exit.
   --help                     Print help.
@@ -127,6 +139,11 @@ GATEWAY_URL="${DEFAULT_GATEWAY_URL}"
 OPS_TOKEN="${UA_OPS_TOKEN:-}"
 REMOTE_TOGGLE_PATH="${DEFAULT_REMOTE_TOGGLE_PATH}"
 INCLUDE_ARTIFACTS_SYNC="${UA_REMOTE_SYNC_INCLUDE_ARTIFACTS:-true}"
+REQUIRE_READY_MARKER="${DEFAULT_REQUIRE_READY_MARKER}"
+READY_MARKER_FILENAME="${DEFAULT_READY_MARKER_FILENAME}"
+READY_MIN_AGE_SEC="${DEFAULT_READY_MIN_AGE_SEC}"
+READY_SESSION_PREFIX="${DEFAULT_READY_SESSION_PREFIX}"
+SYNCED_WORKSPACE_LAST="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -210,6 +227,26 @@ while [[ $# -gt 0 ]]; do
       REMOTE_TOGGLE_PATH="${2:-}"
       shift 2
       ;;
+    --require-ready-marker)
+      REQUIRE_READY_MARKER="true"
+      shift
+      ;;
+    --ignore-ready-marker)
+      REQUIRE_READY_MARKER="false"
+      shift
+      ;;
+    --ready-marker-name)
+      READY_MARKER_FILENAME="${2:-}"
+      shift 2
+      ;;
+    --ready-min-age-seconds)
+      READY_MIN_AGE_SEC="${2:-}"
+      shift 2
+      ;;
+    --ready-session-prefix)
+      READY_SESSION_PREFIX="${2:-}"
+      shift 2
+      ;;
     --prune-min-age-seconds)
       PRUNE_MIN_AGE_SEC="${2:-}"
       shift 2
@@ -237,8 +274,22 @@ done
 assert_positive_integer "${INTERVAL_SEC}" "--interval"
 assert_positive_integer "${SSH_PORT}" "--ssh-port"
 assert_nonnegative_integer "${PRUNE_MIN_AGE_SEC}" "--prune-min-age-seconds"
+assert_nonnegative_integer "${READY_MIN_AGE_SEC}" "--ready-min-age-seconds"
 require_command rsync
 require_command ssh
+
+case "$(printf '%s' "${REQUIRE_READY_MARKER}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    REQUIRE_READY_MARKER="true"
+    ;;
+  *)
+    REQUIRE_READY_MARKER="false"
+    ;;
+esac
+
+if [[ -z "${READY_MARKER_FILENAME}" ]]; then
+  READY_MARKER_FILENAME="${DEFAULT_READY_MARKER_FILENAME}"
+fi
 
 if [[ -n "${SSH_KEY}" && ! -f "${SSH_KEY}" ]]; then
   echo "SSH key does not exist: ${SSH_KEY}" >&2
@@ -303,16 +354,21 @@ if [[ "${INCLUDE_RUNTIME_DB}" != "true" ]]; then
   )
 fi
 
-manifest_contains() {
-  local workspace_id="$1"
-  grep -Fqx -- "${workspace_id}" "${MANIFEST_FILE}"
+manifest_contains_record() {
+  local record="$1"
+  grep -Fqx -- "${record}" "${MANIFEST_FILE}"
 }
 
-mark_synced() {
-  local workspace_id="$1"
-  if ! manifest_contains "${workspace_id}"; then
-    printf '%s\n' "${workspace_id}" >> "${MANIFEST_FILE}"
+mark_synced_record() {
+  local record="$1"
+  if ! manifest_contains_record "${record}"; then
+    printf '%s\n' "${record}" >> "${MANIFEST_FILE}"
   fi
+}
+
+manifest_workspace_id_from_record() {
+  local record="$1"
+  printf '%s' "${record%%|*}"
 }
 
 resolve_ops_token() {
@@ -407,6 +463,92 @@ remote_workspace_old_enough_for_prune() {
   remote_exec "${age_check_command}" >/dev/null 2>&1
 }
 
+workspace_requires_ready_marker() {
+  local workspace_id="$1"
+  if [[ "${REQUIRE_READY_MARKER}" != "true" ]]; then
+    return 1
+  fi
+  if [[ -z "${READY_SESSION_PREFIX}" ]]; then
+    return 0
+  fi
+  local raw_prefix
+  IFS=',' read -r -a _ready_prefixes <<< "${READY_SESSION_PREFIX}"
+  for raw_prefix in "${_ready_prefixes[@]}"; do
+    local prefix="${raw_prefix#"${raw_prefix%%[![:space:]]*}"}"
+    prefix="${prefix%"${prefix##*[![:space:]]}"}"
+    [[ -z "${prefix}" ]] && continue
+    if [[ "${workspace_id}" == "${prefix}"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+remote_workspace_ready_record() {
+  local workspace_id="$1"
+  local workspace_id_q
+  workspace_id_q="$(printf '%q' "${workspace_id}")"
+  local marker_name_q
+  marker_name_q="$(printf '%q' "${READY_MARKER_FILENAME}")"
+  local ready_min_age_q
+  ready_min_age_q="$(printf '%q' "${READY_MIN_AGE_SEC}")"
+  local command
+  command="
+marker_path=${remote_dir_q}/${workspace_id_q}/${marker_name_q}
+if ! test -f \"\${marker_path}\"; then
+  legacy_run_log=${remote_dir_q}/${workspace_id_q}/run.log
+  if test -s \"\${legacy_run_log}\"; then
+    legacy_mtime=\$(stat -c %Y \"\${legacy_run_log}\" 2>/dev/null || echo 0)
+    now_epoch=\$(date +%s)
+    legacy_age=\$(awk -v now=\"\${now_epoch}\" -v completed=\"\${legacy_mtime}\" 'BEGIN{diff=now-completed; if (diff<0) diff=0; printf \"%.3f\", diff}')
+    legacy_signature=\"legacy_\${legacy_mtime}_runlog\"
+    if awk -v age=\"\${legacy_age}\" -v min_age=${ready_min_age_q} 'BEGIN{exit !(age < min_age)}'; then
+      echo \"TOO_FRESH|\${legacy_signature}|\${legacy_age}\"
+      exit 6
+    fi
+    echo \"READY|\${legacy_signature}|\${legacy_age}\"
+    exit 0
+  fi
+  echo 'MISSING'
+  exit 2
+fi
+ready_value=\$(sed -n 's/^[[:space:]]*\"ready\":[[:space:]]*\\(true\\|false\\).*/\\1/p' \"\${marker_path}\" | head -n 1)
+state_value=\$(sed -n 's/^[[:space:]]*\"state\":[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' \"\${marker_path}\" | head -n 1)
+completed_epoch=\$(sed -n 's/^[[:space:]]*\"completed_at_epoch\":[[:space:]]*\\([0-9.]*\\).*/\\1/p' \"\${marker_path}\" | head -n 1)
+if [[ -z \"\${completed_epoch}\" ]]; then
+  completed_epoch=\$(sed -n 's/^[[:space:]]*\"updated_at_epoch\":[[:space:]]*\\([0-9.]*\\).*/\\1/p' \"\${marker_path}\" | head -n 1)
+fi
+if [[ -z \"\${state_value}\" ]]; then
+  state_value='unknown'
+fi
+signature=\"\${completed_epoch:-0}_\${state_value}\"
+if [[ \"\${ready_value}\" != 'true' ]]; then
+  echo \"NOT_READY|\${signature}\"
+  exit 3
+fi
+case \"\${state_value}\" in
+  completed|failed|timed_out|dispatch_failed|failed_pre_dispatch)
+    ;;
+  *)
+    echo \"NOT_TERMINAL|\${signature}\"
+    exit 4
+    ;;
+esac
+if [[ -z \"\${completed_epoch}\" ]]; then
+  echo \"MISSING_COMPLETED|\${signature}\"
+  exit 5
+fi
+now_epoch=\$(date +%s)
+age_seconds=\$(awk -v now=\"\${now_epoch}\" -v completed=\"\${completed_epoch}\" 'BEGIN{diff=now-completed; if (diff<0) diff=0; printf \"%.3f\", diff}')
+if awk -v age=\"\${age_seconds}\" -v min_age=${ready_min_age_q} 'BEGIN{exit !(age < min_age)}'; then
+  echo \"TOO_FRESH|\${signature}|\${age_seconds}\"
+  exit 6
+fi
+echo \"READY|\${signature}|\${age_seconds}\"
+"
+  remote_exec "${command}"
+}
+
 delete_remote_workspace() {
   local workspace_id="$1"
   if [[ "${ALLOW_REMOTE_DELETE}" != "true" ]]; then
@@ -429,12 +571,41 @@ delete_remote_workspace() {
 
 sync_workspace() {
   local workspace_id="$1"
+  SYNCED_WORKSPACE_LAST="false"
   if ! validate_workspace_id "${workspace_id}"; then
     warn "Skipping invalid workspace ID from remote listing: ${workspace_id}"
     return 0
   fi
 
-  if [[ "${SKIP_SYNCED}" == "true" ]] && manifest_contains "${workspace_id}"; then
+  local sync_record="${workspace_id}"
+  if workspace_requires_ready_marker "${workspace_id}"; then
+    local ready_output=""
+    if ! ready_output="$(remote_workspace_ready_record "${workspace_id}" 2>/dev/null)"; then
+      local reason
+      reason="${ready_output%%|*}"
+      case "${reason}" in
+        MISSING|NOT_READY|NOT_TERMINAL|MISSING_COMPLETED)
+          log "Skipping workspace until remote run is terminal: ${workspace_id} (${reason})"
+          ;;
+        TOO_FRESH)
+          log "Skipping workspace until ready marker ages past ${READY_MIN_AGE_SEC}s: ${workspace_id}"
+          ;;
+        *)
+          warn "Unable to evaluate ready marker for workspace: ${workspace_id} (${reason:-unknown})"
+          ;;
+      esac
+      return 0
+    fi
+    local ready_signature
+    ready_signature="$(printf '%s' "${ready_output}" | cut -d'|' -f2)"
+    if [[ -z "${ready_signature}" ]]; then
+      warn "Ready marker missing signature for workspace: ${workspace_id}"
+      return 0
+    fi
+    sync_record="${workspace_id}|${ready_signature}"
+  fi
+
+  if [[ "${SKIP_SYNCED}" == "true" ]] && manifest_contains_record "${sync_record}"; then
     log "Skipping already-synced workspace: ${workspace_id}"
     return 0
   fi
@@ -445,7 +616,8 @@ sync_workspace() {
 
   if rsync "${workspace_rsync_args[@]}" "${remote_source}" "${local_target}"; then
     log "Synced workspace: ${workspace_id}"
-    mark_synced "${workspace_id}"
+    mark_synced_record "${sync_record}"
+    SYNCED_WORKSPACE_LAST="true"
     if [[ "${DELETE_REMOTE_AFTER_SYNC}" == "true" ]]; then
       delete_remote_workspace "${workspace_id}"
     fi
@@ -479,7 +651,10 @@ prune_remote_workspaces_missing_locally() {
     return 0
   fi
 
-  while IFS= read -r workspace_id; do
+  while IFS= read -r manifest_record; do
+    [[ -z "${manifest_record}" ]] && continue
+    local workspace_id
+    workspace_id="$(manifest_workspace_id_from_record "${manifest_record}")"
     [[ -z "${workspace_id}" ]] && continue
     if [[ ! -d "${LOCAL_DIR%/}/${workspace_id}" ]]; then
       if remote_workspace_exists "${workspace_id}"; then
@@ -499,15 +674,23 @@ sync_once() {
   fi
 
   local failed="0"
-  if ! sync_artifacts; then
-    failed="1"
-  fi
+  local synced_workspace_count=0
   while IFS= read -r workspace_id; do
     [[ -z "${workspace_id}" ]] && continue
     if ! sync_workspace "${workspace_id}"; then
       failed="1"
+    elif [[ "${SYNCED_WORKSPACE_LAST}" == "true" ]]; then
+      synced_workspace_count=$((synced_workspace_count + 1))
     fi
   done < <(list_remote_workspaces)
+
+  if [[ "${INCLUDE_ARTIFACTS_SYNC}" == "true" ]]; then
+    if [[ "${REQUIRE_READY_MARKER}" == "true" ]] && [[ "${synced_workspace_count}" == "0" ]]; then
+      log "Skipping artifact sync (no newly-completed ready workspaces in this cycle)."
+    elif ! sync_artifacts; then
+      failed="1"
+    fi
+  fi
 
   prune_remote_workspaces_missing_locally
 
@@ -536,6 +719,15 @@ if [[ "${SKIP_SYNCED}" == "true" ]]; then
   log "Skip mode:   enabled (already-synced workspaces are skipped)"
 else
   log "Skip mode:   disabled (workspaces may re-sync)"
+fi
+if [[ "${REQUIRE_READY_MARKER}" == "true" ]]; then
+  if [[ -n "${READY_SESSION_PREFIX}" ]]; then
+    log "Ready mode:  enabled for prefixes '${READY_SESSION_PREFIX}' (${READY_MARKER_FILENAME}, min age ${READY_MIN_AGE_SEC}s)"
+  else
+    log "Ready mode:  enabled for all workspaces (${READY_MARKER_FILENAME}, min age ${READY_MIN_AGE_SEC}s)"
+  fi
+else
+  log "Ready mode:  disabled"
 fi
 if [[ "${DELETE_REMOTE_AFTER_SYNC}" == "true" ]]; then
   warn "Remote delete-after-sync is ENABLED"

@@ -17,6 +17,10 @@ DEFAULT_INTERVAL_SEC="${UA_REMOTE_SYNC_INTERVAL_SEC:-30}"
 DEFAULT_SSH_PORT="${UA_REMOTE_SSH_PORT:-22}"
 DEFAULT_PRUNE_MIN_AGE_SEC="${UA_REMOTE_PRUNE_MIN_AGE_SEC:-300}"
 DEFAULT_GATEWAY_URL="${UA_REMOTE_GATEWAY_URL:-https://api.clearspringcg.com}"
+DEFAULT_REQUIRE_READY_MARKER="${UA_REMOTE_SYNC_REQUIRE_READY_MARKER:-true}"
+DEFAULT_READY_MARKER_FILENAME="${UA_REMOTE_SYNC_READY_MARKER_FILENAME:-sync_ready.json}"
+DEFAULT_READY_MIN_AGE_SEC="${UA_REMOTE_SYNC_READY_MIN_AGE_SECONDS:-45}"
+DEFAULT_READY_SESSION_PREFIX="${UA_REMOTE_SYNC_READY_SESSION_PREFIX:-session_,tg_}"
 
 print_usage() {
   cat <<'USAGE'
@@ -54,6 +58,13 @@ Options:
   --respect-remote-toggle    Gate sync cycles behind remote Ops toggle state.
   --gateway-url <url>        Gateway base URL for remote toggle checks.
   --ops-token <token>        Optional ops token override for remote toggle checks.
+  --require-ready-marker     Only sync workspaces after remote ready marker is terminal.
+  --ignore-ready-marker      Disable ready-marker gating.
+  --ready-marker-name <name> Ready marker filename (default: sync_ready.json).
+  --ready-min-age-seconds <seconds>
+                             Minimum marker age before sync (default: 45).
+  --ready-session-prefix <prefixes>
+                             Comma-separated workspace prefixes for marker gating.
   --no-delete                Do not delete files removed on remote side.
   --uninstall                Remove timer/service and exit.
   --help                     Print help.
@@ -111,6 +122,10 @@ GATEWAY_URL="${DEFAULT_GATEWAY_URL}"
 OPS_TOKEN=""
 UNINSTALL="false"
 INCLUDE_ARTIFACTS_SYNC="${UA_REMOTE_SYNC_INCLUDE_ARTIFACTS:-true}"
+REQUIRE_READY_MARKER="${DEFAULT_REQUIRE_READY_MARKER}"
+READY_MARKER_FILENAME="${DEFAULT_READY_MARKER_FILENAME}"
+READY_MIN_AGE_SEC="${DEFAULT_READY_MIN_AGE_SEC}"
+READY_SESSION_PREFIX="${DEFAULT_READY_SESSION_PREFIX}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -194,6 +209,26 @@ while [[ $# -gt 0 ]]; do
       OPS_TOKEN="${2:-}"
       shift 2
       ;;
+    --require-ready-marker)
+      REQUIRE_READY_MARKER="true"
+      shift
+      ;;
+    --ignore-ready-marker)
+      REQUIRE_READY_MARKER="false"
+      shift
+      ;;
+    --ready-marker-name)
+      READY_MARKER_FILENAME="${2:-}"
+      shift 2
+      ;;
+    --ready-min-age-seconds)
+      READY_MIN_AGE_SEC="${2:-}"
+      shift 2
+      ;;
+    --ready-session-prefix)
+      READY_SESSION_PREFIX="${2:-}"
+      shift 2
+      ;;
     --prune-min-age-seconds)
       PRUNE_MIN_AGE_SEC="${2:-}"
       shift 2
@@ -221,6 +256,16 @@ done
 assert_positive_integer "${INTERVAL_SEC}" "--interval"
 assert_positive_integer "${SSH_PORT}" "--ssh-port"
 assert_nonnegative_integer "${PRUNE_MIN_AGE_SEC}" "--prune-min-age-seconds"
+assert_nonnegative_integer "${READY_MIN_AGE_SEC}" "--ready-min-age-seconds"
+
+case "$(printf '%s' "${REQUIRE_READY_MARKER}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    REQUIRE_READY_MARKER="true"
+    ;;
+  *)
+    REQUIRE_READY_MARKER="false"
+    ;;
+esac
 
 if [[ -n "${SSH_KEY}" && ! -f "${SSH_KEY}" ]]; then
   echo "SSH key does not exist: ${SSH_KEY}" >&2
@@ -287,6 +332,16 @@ if [[ "${RESPECT_REMOTE_TOGGLE}" == "true" ]]; then
   if [[ -n "${OPS_TOKEN}" ]]; then
     exec_start+=(--ops-token "${OPS_TOKEN}")
   fi
+fi
+if [[ "${REQUIRE_READY_MARKER}" == "true" ]]; then
+  exec_start+=(--require-ready-marker)
+else
+  exec_start+=(--ignore-ready-marker)
+fi
+exec_start+=(--ready-marker-name "${READY_MARKER_FILENAME}")
+exec_start+=(--ready-min-age-seconds "${READY_MIN_AGE_SEC}")
+if [[ -n "${READY_SESSION_PREFIX}" ]]; then
+  exec_start+=(--ready-session-prefix "${READY_SESSION_PREFIX}")
 fi
 if [[ "${DELETE_MODE}" != "true" ]]; then
   exec_start+=(--no-delete)
