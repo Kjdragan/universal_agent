@@ -41,10 +41,16 @@ WORKSPACES_DIR = BASE_DIR / "AGENT_RUN_WORKSPACES"
 ARTIFACTS_DIR = Path(os.getenv("UA_ARTIFACTS_DIR", str(BASE_DIR / "artifacts"))).expanduser()
 ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
 VPS_WORKSPACES_MIRROR_DIR = Path(
-    os.getenv("UA_VPS_WORKSPACES_MIRROR_DIR", str(BASE_DIR / "tmp" / "remote_vps_workspaces"))
+    os.getenv(
+        "UA_VPS_WORKSPACES_MIRROR_DIR",
+        str(WORKSPACES_DIR / "remote_vps_workspaces"),
+    )
 ).expanduser()
 VPS_ARTIFACTS_MIRROR_DIR = Path(
-    os.getenv("UA_VPS_ARTIFACTS_MIRROR_DIR", str(BASE_DIR / "tmp" / "remote_vps_artifacts"))
+    os.getenv(
+        "UA_VPS_ARTIFACTS_MIRROR_DIR",
+        str(ARTIFACTS_DIR / "remote_vps_artifacts"),
+    )
 ).expanduser()
 VPS_PULL_SCRIPT = BASE_DIR / "scripts" / "pull_remote_workspaces_now.sh"
 
@@ -964,6 +970,14 @@ async def vps_sync_status():
     if VPS_ARTIFACTS_MIRROR_DIR.exists():
         artifacts_count = len(list(VPS_ARTIFACTS_MIRROR_DIR.iterdir()))
     return {
+        "canonical_workspace_root": str(WORKSPACES_DIR),
+        "canonical_artifacts_root": str(ARTIFACTS_DIR),
+        "remote_workspace_root": str(
+            Path(os.getenv("UA_REMOTE_WORKSPACES_DIR", "/opt/universal_agent/AGENT_RUN_WORKSPACES")).expanduser()
+        ),
+        "remote_artifacts_root": str(
+            Path(os.getenv("UA_REMOTE_ARTIFACTS_DIR", "/opt/universal_agent/artifacts")).expanduser()
+        ),
         "workspace_root": str(VPS_WORKSPACES_MIRROR_DIR),
         "artifacts_root": str(VPS_ARTIFACTS_MIRROR_DIR),
         "workspace_count": workspaces_count,
@@ -991,8 +1005,8 @@ async def list_vps_files(scope: str = "workspaces", path: str = ""):
     """
     List mirrored VPS files.
 
-    scope=workspaces -> tmp/remote_vps_workspaces
-    scope=artifacts  -> tmp/remote_vps_artifacts
+    scope=workspaces -> configured UA_VPS_WORKSPACES_MIRROR_DIR
+    scope=artifacts  -> configured UA_VPS_ARTIFACTS_MIRROR_DIR
     """
     scope_clean = (scope or "").strip().lower()
     if scope_clean not in {"workspaces", "artifacts"}:
