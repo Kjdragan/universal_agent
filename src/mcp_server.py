@@ -68,6 +68,9 @@ sys.path.append(
 )  # Repo Root
 from universal_agent.search_config import SEARCH_TOOL_CONFIG
 from universal_agent.tools.corpus_refiner import refine_corpus_programmatic
+from universal_agent.utils.email_attachment_prep import (
+    prepare_attachment_for_composio_upload,
+)
 from universal_agent.feature_flags import (
     heartbeat_enabled,
     memory_index_enabled,
@@ -1710,6 +1713,25 @@ def upload_to_composio(
                 "suggestion": "Verify the file was created at the expected path. Check Chrome PDF output location."
             })
     
+    prepared_path = abs_path
+    preparation_meta: dict[str, str] = {}
+    try:
+        prepared_path, preparation_meta = prepare_attachment_for_composio_upload(
+            abs_path,
+            tool_slug=tool_slug,
+            toolkit_slug=toolkit_slug,
+        )
+        if prepared_path != abs_path:
+            sys.stderr.write(
+                f"[upload_to_composio] Prepared attachment for delivery: {prepared_path} (from {abs_path})\n"
+            )
+    except Exception as prep_exc:
+        # Non-fatal: fall back to original file if preprocessing fails.
+        sys.stderr.write(
+            f"[upload_to_composio] WARNING: attachment preparation failed, using original file: {prep_exc}\n"
+        )
+        prepared_path = abs_path
+
     try:
         # Import native Composio file helper
         from composio.core.models._files import FileUploadable
@@ -1719,11 +1741,11 @@ def upload_to_composio(
 
         # Use native SDK method - this is the correct approach per Composio docs
         sys.stderr.write(
-            f"[upload_to_composio] Uploading {abs_path} via native FileUploadable.from_path()\n"
+            f"[upload_to_composio] Uploading {prepared_path} via native FileUploadable.from_path()\n"
         )
 
         result = FileUploadable.from_path(
-            client=client.client, file=abs_path, tool=tool_slug, toolkit=toolkit_slug
+            client=client.client, file=prepared_path, tool=tool_slug, toolkit=toolkit_slug
         )
 
         # Return the attachment-ready format with NEXT_STEP guidance
@@ -1731,7 +1753,7 @@ def upload_to_composio(
             "s3key": result.s3key,
             "mimetype": result.mimetype,
             "name": result.name,
-            "local_path": abs_path,
+            "local_path": prepared_path,
             # Inline guidance to prevent agent from hallucinating Python code
             "NEXT_STEP": {
                 "instruction": "Use mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL to send the email with this attachment",
@@ -1760,6 +1782,8 @@ def upload_to_composio(
                 ],
             },
         }
+        if preparation_meta:
+            response["attachment_preparation"] = preparation_meta
 
         sys.stderr.write(f"[upload_to_composio] SUCCESS: s3key={result.s3key}\n")
         return json.dumps(response, indent=2)
