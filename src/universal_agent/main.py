@@ -3913,7 +3913,13 @@ trace: dict = {
     "token_usage": {"input": 0, "output": 0, "total": 0},
     "compact_boundary_events": [],
     "sdk_result_messages": [],
-    "context_pressure": _default_context_pressure_state(),
+    # Keep import-time globals self-contained; helper is defined later in file.
+    "context_pressure": {
+        "high_turns_without_compaction": 0,
+        "last_compaction_iteration": None,
+        "compaction_seen_iteration": None,
+        "last_turn_input_tokens": 0,
+    },
 }
 start_ts: float = time.time()
 runtime_db_conn: Optional[sqlite3.Connection] = None
