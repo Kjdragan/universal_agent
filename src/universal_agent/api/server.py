@@ -53,6 +53,7 @@ VPS_ARTIFACTS_MIRROR_DIR = Path(
     )
 ).expanduser()
 VPS_PULL_SCRIPT = BASE_DIR / "scripts" / "pull_remote_workspaces_now.sh"
+VPS_SYNC_SCRIPT = BASE_DIR / "scripts" / "sync_remote_workspaces.sh"
 
 TEXT_EXTENSIONS = (
     ".txt",
@@ -621,6 +622,305 @@ async def _run_vps_pull_sync(session_id: Optional[str] = None) -> dict[str, Any]
     }
 
 
+async def _run_vps_sync_status_probe() -> dict[str, Any]:
+    if not VPS_SYNC_SCRIPT.exists():
+        return {
+            "ok": False,
+            "sync_state": "error",
+            "error": f"Sync script missing: {VPS_SYNC_SCRIPT}",
+        }
+
+    remote_host = os.getenv("UA_REMOTE_SSH_HOST", "root@100.106.113.93")
+    remote_dir = os.getenv("UA_REMOTE_WORKSPACES_DIR", "/opt/universal_agent/AGENT_RUN_WORKSPACES")
+    local_dir = str(VPS_WORKSPACES_MIRROR_DIR)
+    remote_artifacts_dir = os.getenv("UA_REMOTE_ARTIFACTS_DIR", "/opt/universal_agent/artifacts")
+    local_artifacts_dir = str(VPS_ARTIFACTS_MIRROR_DIR)
+    manifest_file = os.getenv(
+        "UA_REMOTE_SYNC_MANIFEST_FILE",
+        str(BASE_DIR / "AGENT_RUN_WORKSPACES" / "remote_vps_sync_state" / "synced_workspaces.txt"),
+    )
+    ssh_port = os.getenv("UA_REMOTE_SSH_PORT", "22")
+    ssh_key = os.getenv("UA_REMOTE_SSH_KEY", str(Path.home() / ".ssh" / "id_ed25519"))
+    include_artifacts = (os.getenv("UA_REMOTE_SYNC_INCLUDE_ARTIFACTS", "true").strip().lower() in {"1", "true", "yes", "on"})
+    require_ready_marker = (
+        os.getenv("UA_REMOTE_SYNC_REQUIRE_READY_MARKER", "true").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    ready_marker_name = os.getenv("UA_REMOTE_SYNC_READY_MARKER_FILENAME", "sync_ready.json")
+    ready_min_age = os.getenv("UA_REMOTE_SYNC_READY_MIN_AGE_SECONDS", "45")
+    ready_session_prefix = os.getenv("UA_REMOTE_SYNC_READY_SESSION_PREFIX", "session_,tg_")
+
+    cmd = [
+        str(VPS_SYNC_SCRIPT),
+        "--status-json",
+        "--once",
+        "--host",
+        remote_host,
+        "--remote-dir",
+        remote_dir,
+        "--local-dir",
+        local_dir,
+        "--remote-artifacts-dir",
+        remote_artifacts_dir,
+        "--local-artifacts-dir",
+        local_artifacts_dir,
+        "--manifest-file",
+        manifest_file,
+        "--ssh-port",
+        ssh_port,
+        "--ready-marker-name",
+        ready_marker_name,
+        "--ready-min-age-seconds",
+        ready_min_age,
+    ]
+    if not include_artifacts:
+        cmd.append("--no-artifacts")
+    if require_ready_marker:
+        cmd.append("--require-ready-marker")
+    else:
+        cmd.append("--ignore-ready-marker")
+    if ready_session_prefix.strip():
+        cmd.extend(["--ready-session-prefix", ready_session_prefix.strip()])
+    if ssh_key and Path(ssh_key).expanduser().exists():
+        cmd.extend(["--ssh-key", ssh_key])
+
+    env = os.environ.copy()
+    env["UA_LOCAL_MIRROR_DIR"] = str(VPS_WORKSPACES_MIRROR_DIR)
+    env["UA_LOCAL_ARTIFACTS_MIRROR_DIR"] = str(VPS_ARTIFACTS_MIRROR_DIR)
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=str(BASE_DIR),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=90)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {
+            "ok": False,
+            "sync_state": "unknown",
+            "error": "VPS sync status probe timed out after 90 seconds",
+        }
+
+    stdout_text = (stdout or b"").decode("utf-8", errors="replace")
+    stderr_text = (stderr or b"").decode("utf-8", errors="replace")
+    lines = [line.strip() for line in stdout_text.splitlines() if line.strip()]
+    payload_raw = lines[-1] if lines else "{}"
+    try:
+        payload = json.loads(payload_raw)
+        if not isinstance(payload, dict):
+            raise ValueError("status probe did not return a JSON object")
+    except Exception as exc:
+        return {
+            "ok": False,
+            "sync_state": "unknown",
+            "error": f"Failed to parse status probe output: {exc}",
+            "stdout": stdout_text[-12000:],
+            "stderr": stderr_text[-12000:],
+            "returncode": proc.returncode,
+        }
+
+    payload["ok"] = bool(payload.get("ok")) and proc.returncode == 0
+    payload["returncode"] = proc.returncode
+    payload["stdout"] = stdout_text[-12000:]
+    payload["stderr"] = stderr_text[-12000:]
+    return payload
+
+
+def _as_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _workspace_source_type(workspace_id: str) -> str:
+    sid = workspace_id.lower()
+    if sid.startswith("session_hook_"):
+        return "hook"
+    if sid.startswith("tg_"):
+        return "telegram"
+    if sid.startswith("session_") or sid.startswith("api_"):
+        return "web"
+    return "other"
+
+
+def _load_json_file(path: Path) -> Optional[dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        return payload
+    return None
+
+
+def _workspace_size_bytes(root: Path) -> int:
+    total = 0
+    try:
+        for node in root.rglob("*"):
+            if node.is_file():
+                total += node.stat().st_size
+    except Exception:
+        return total
+    return total
+
+
+def _read_workspace_sync_marker(workspace_dir: Path) -> dict[str, Any]:
+    marker_path = workspace_dir / "sync_ready.json"
+    if not marker_path.exists() or not marker_path.is_file():
+        return {
+            "marker_exists": False,
+            "marker_path": str(marker_path),
+            "ready": False,
+            "state": "unknown",
+            "completed_at_epoch": None,
+            "updated_at_epoch": None,
+        }
+
+    marker_payload = _load_json_file(marker_path) or {}
+    return {
+        "marker_exists": True,
+        "marker_path": str(marker_path),
+        "ready": bool(marker_payload.get("ready") is True),
+        "state": str(marker_payload.get("state") or "unknown"),
+        "completed_at_epoch": _as_float(marker_payload.get("completed_at_epoch")),
+        "updated_at_epoch": _as_float(marker_payload.get("updated_at_epoch")),
+    }
+
+
+def _storage_session_items(source: str = "all", limit: int = 100, include_size: bool = True) -> list[dict[str, Any]]:
+    root = VPS_WORKSPACES_MIRROR_DIR
+    if not root.exists() or not root.is_dir():
+        return []
+
+    source_filter = (source or "all").strip().lower()
+    items: list[dict[str, Any]] = []
+    for workspace_dir in root.iterdir():
+        if not workspace_dir.is_dir():
+            continue
+        workspace_id = workspace_dir.name
+        source_type = _workspace_source_type(workspace_id)
+        if source_filter != "all" and source_type != source_filter:
+            continue
+
+        marker = _read_workspace_sync_marker(workspace_dir)
+        completed_epoch = marker.get("completed_at_epoch") or marker.get("updated_at_epoch")
+        modified_epoch = None
+        try:
+            modified_epoch = workspace_dir.stat().st_mtime
+        except Exception:
+            modified_epoch = None
+        run_log_path = workspace_dir / "run.log"
+        items.append(
+            {
+                "session_id": workspace_id,
+                "source_type": source_type,
+                "status": marker.get("state") or "unknown",
+                "ready": bool(marker.get("ready")),
+                "completed_at_epoch": completed_epoch,
+                "updated_at_epoch": marker.get("updated_at_epoch"),
+                "modified_epoch": modified_epoch,
+                "size_bytes": None,
+                "root_path": workspace_id,
+                "run_log_path": f"{workspace_id}/run.log" if run_log_path.exists() else None,
+                "marker_path": marker.get("marker_path"),
+                "marker_exists": marker.get("marker_exists"),
+                "_workspace_dir": workspace_dir,
+            }
+        )
+
+    items.sort(
+        key=lambda row: (
+            _as_float(row.get("completed_at_epoch"))
+            or _as_float(row.get("updated_at_epoch"))
+            or _as_float(row.get("modified_epoch"))
+            or 0.0
+        ),
+        reverse=True,
+    )
+    selected_items = items[: max(1, limit)]
+    if include_size:
+        for row in selected_items:
+            workspace_dir = row.get("_workspace_dir")
+            if isinstance(workspace_dir, Path):
+                row["size_bytes"] = _workspace_size_bytes(workspace_dir)
+    for row in selected_items:
+        row.pop("_workspace_dir", None)
+    return selected_items
+
+
+def _extract_artifact_field(payload: Optional[dict[str, Any]], keys: tuple[str, ...]) -> Optional[str]:
+    if not payload:
+        return None
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def _storage_artifact_items(limit: int = 100) -> list[dict[str, Any]]:
+    root = VPS_ARTIFACTS_MIRROR_DIR
+    if not root.exists() or not root.is_dir():
+        return []
+
+    run_dirs: dict[Path, Optional[Path]] = {}
+    for manifest in root.rglob("manifest.json"):
+        if manifest.is_file():
+            run_dirs[manifest.parent] = manifest
+
+    if not run_dirs:
+        for entry in root.iterdir():
+            if entry.is_dir():
+                run_dirs[entry] = (entry / "manifest.json") if (entry / "manifest.json").exists() else None
+
+    items: list[dict[str, Any]] = []
+    for run_dir, manifest_path in run_dirs.items():
+        payload = _load_json_file(manifest_path) if manifest_path else None
+        rel_path = str(run_dir.relative_to(root))
+        readme_path = run_dir / "README.md"
+        implementation_path = run_dir / "IMPLEMENTATION.md"
+
+        modified_epoch = None
+        try:
+            modified_epoch = run_dir.stat().st_mtime
+        except Exception:
+            modified_epoch = None
+        if manifest_path and manifest_path.exists():
+            try:
+                modified_epoch = max(modified_epoch or 0, manifest_path.stat().st_mtime)
+            except Exception:
+                pass
+
+        item = {
+            "path": rel_path,
+            "slug": _extract_artifact_field(payload, ("slug", "run_slug")) or run_dir.name,
+            "title": _extract_artifact_field(payload, ("title", "name", "run_title")) or run_dir.name,
+            "status": _extract_artifact_field(payload, ("status", "run_status")) or "unknown",
+            "video_id": _extract_artifact_field(payload, ("video_id", "youtube_video_id")),
+            "video_url": _extract_artifact_field(payload, ("video_url", "youtube_url", "url")),
+            "updated_at_epoch": _as_float(payload.get("updated_at_epoch")) if payload else modified_epoch,
+            "manifest_path": f"{rel_path}/manifest.json" if manifest_path and manifest_path.exists() else None,
+            "readme_path": f"{rel_path}/README.md" if readme_path.exists() else None,
+            "implementation_path": (
+                f"{rel_path}/IMPLEMENTATION.md" if implementation_path.exists() else None
+            ),
+        }
+        items.append(item)
+
+    items.sort(key=lambda row: _as_float(row.get("updated_at_epoch")) or 0.0, reverse=True)
+    return items[: max(1, limit)]
+
+
 # =============================================================================
 # Connection Manager for WebSocket
 # =============================================================================
@@ -969,6 +1269,13 @@ async def vps_sync_status():
         workspaces_count = len([item for item in VPS_WORKSPACES_MIRROR_DIR.iterdir() if item.is_dir()])
     if VPS_ARTIFACTS_MIRROR_DIR.exists():
         artifacts_count = len(list(VPS_ARTIFACTS_MIRROR_DIR.iterdir()))
+    probe = await _run_vps_sync_status_probe()
+    pending_ready_count = int(probe.get("pending_ready_count") or 0) if probe.get("ok") else 0
+    sync_state = str(probe.get("sync_state") or "unknown")
+    if probe.get("ok") and sync_state not in {"in_sync", "behind"}:
+        sync_state = "behind" if pending_ready_count > 0 else "in_sync"
+    if not probe.get("ok"):
+        sync_state = "unknown"
     return {
         "canonical_workspace_root": str(WORKSPACES_DIR),
         "canonical_artifacts_root": str(ARTIFACTS_DIR),
@@ -982,8 +1289,18 @@ async def vps_sync_status():
         "artifacts_root": str(VPS_ARTIFACTS_MIRROR_DIR),
         "workspace_count": workspaces_count,
         "artifacts_items_count": artifacts_count,
+        "sync_state": sync_state,
+        "probe_ok": bool(probe.get("ok")),
+        "probe_error": probe.get("error"),
+        "pending_ready_count": pending_ready_count,
+        "latest_ready_remote_epoch": _as_float(probe.get("latest_ready_remote_epoch")),
+        "latest_ready_local_epoch": _as_float(probe.get("latest_ready_local_epoch")),
+        "lag_seconds": _as_float(probe.get("lag_seconds")),
+        "ready_total_count": int(probe.get("ready_total_count") or 0) if probe.get("ok") else 0,
         "sync_script": str(VPS_PULL_SCRIPT),
         "sync_script_exists": VPS_PULL_SCRIPT.exists(),
+        "sync_status_script": str(VPS_SYNC_SCRIPT),
+        "sync_status_script_exists": VPS_SYNC_SCRIPT.exists(),
     }
 
 
@@ -998,6 +1315,69 @@ async def vps_sync_now(payload: VpsSyncRequest):
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result)
     return result
+
+
+@app.get("/api/vps/storage/sessions")
+async def vps_storage_sessions(source: str = "all", limit: int = 100):
+    source_clean = (source or "all").strip().lower()
+    if source_clean not in {"all", "web", "hook", "telegram"}:
+        raise HTTPException(status_code=400, detail="source must be one of: all, web, hook, telegram")
+    limit_clamped = max(1, min(limit, 500))
+    sessions = _storage_session_items(source_clean, limit_clamped, include_size=True)
+    return {
+        "workspace_root": str(VPS_WORKSPACES_MIRROR_DIR),
+        "source": source_clean,
+        "limit": limit_clamped,
+        "sessions": sessions,
+    }
+
+
+@app.get("/api/vps/storage/artifacts")
+async def vps_storage_artifacts(limit: int = 100):
+    limit_clamped = max(1, min(limit, 500))
+    artifacts = _storage_artifact_items(limit_clamped)
+    return {
+        "artifacts_root": str(VPS_ARTIFACTS_MIRROR_DIR),
+        "limit": limit_clamped,
+        "artifacts": artifacts,
+    }
+
+
+@app.get("/api/vps/storage/overview")
+async def vps_storage_overview():
+    probe = await _run_vps_sync_status_probe()
+    pending_ready_count = int(probe.get("pending_ready_count") or 0) if probe.get("ok") else 0
+    sync_state = str(probe.get("sync_state") or "unknown")
+    if probe.get("ok") and sync_state not in {"in_sync", "behind"}:
+        sync_state = "behind" if pending_ready_count > 0 else "in_sync"
+    if not probe.get("ok"):
+        sync_state = "unknown"
+
+    sessions = _storage_session_items("all", 500, include_size=False)
+    latest_sessions: dict[str, Optional[dict[str, Any]]] = {"web": None, "hook": None, "telegram": None}
+    for session in sessions:
+        source_type = str(session.get("source_type") or "")
+        if source_type in latest_sessions and latest_sessions[source_type] is None:
+            latest_sessions[source_type] = session
+        if all(latest_sessions.values()):
+            break
+
+    artifacts = _storage_artifact_items(1)
+    latest_artifact = artifacts[0] if artifacts else None
+
+    return {
+        "sync_state": sync_state,
+        "pending_ready_count": pending_ready_count,
+        "latest_ready_remote_epoch": _as_float(probe.get("latest_ready_remote_epoch")),
+        "latest_ready_local_epoch": _as_float(probe.get("latest_ready_local_epoch")),
+        "lag_seconds": _as_float(probe.get("lag_seconds")),
+        "latest_sessions": latest_sessions,
+        "latest_artifact": latest_artifact,
+        "workspace_root": str(VPS_WORKSPACES_MIRROR_DIR),
+        "artifacts_root": str(VPS_ARTIFACTS_MIRROR_DIR),
+        "probe_ok": bool(probe.get("ok")),
+        "probe_error": probe.get("error"),
+    }
 
 
 @app.get("/api/vps/files")

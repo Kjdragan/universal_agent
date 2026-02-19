@@ -28,7 +28,7 @@ Welcome to the official technical documentation for the **Universal Agent**. Thi
 ### 4. [Operations](03_Operations)
 
 - **[Configuration Guide](03_Operations/Configuration_Guide.md)**: Env vars & flags.
-- **[Running the Agent](03_Operations/Running_The_Agent.md)**: CLI, Web, Telegram.
+- **[Running the Agent](03_Operations/46_Running_The_Agent.md)**: CLI, Web, Telegram.
 - **[Skill Development](03_Operations/Skill_Development.md)**: Developing tools.
 - **[Testing Strategy](03_Operations/Testing_Strategy.md)**: QA and CI.
 - **[OpenCLAW Release Parity Assessment (2026-02-06)](03_Operations/03_OpenCLAW_Release_Parity_Assessment_2026-02-06.md)**: Security and feature gap triage against recent OpenCLAW releases.
@@ -54,5 +54,5 @@ Welcome to the official technical documentation for the **Universal Agent**. Thi
 1. Start with the **[System Overview](01_Architecture/System_Overview.md)** to understand the big picture.
 2. Read the **[Core Classes](01_Architecture/Core_Classes.md)** to see how the main objects interact.
 3. Check the **[Glossary](Glossary.md)** whenever you encounter a project-specific term.
-4. Try running the agent in CLI mode using the **[Running the Agent](03_Operations/Running_The_Agent.md)** guide.
+4. Try running the agent in CLI mode using the **[Running the Agent](03_Operations/46_Running_The_Agent.md)** guide.
 5. Explore **[Skill Development](03_Operations/Skill_Development.md)** to see how tools are integrated.

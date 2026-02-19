@@ -68,6 +68,7 @@ Options:
                              (default: session_,tg_).
   --no-delete                Do not delete files removed on remote side.
   --once                     Run one sync then exit.
+  --status-json              Probe remote/local sync freshness and print JSON (no rsync).
   --help                     Print help.
 
 Examples:
@@ -127,6 +128,7 @@ SSH_PORT="${DEFAULT_SSH_PORT}"
 SSH_KEY=""
 SESSION_ID=""
 RUN_ONCE="false"
+STATUS_JSON="false"
 INCLUDE_RUNTIME_DB="false"
 DELETE_MODE="true"
 SKIP_SYNCED="true"
@@ -259,6 +261,10 @@ while [[ $# -gt 0 ]]; do
       RUN_ONCE="true"
       shift
       ;;
+    --status-json)
+      STATUS_JSON="true"
+      shift
+      ;;
     --help|-h)
       print_usage
       exit 0
@@ -275,7 +281,9 @@ assert_positive_integer "${INTERVAL_SEC}" "--interval"
 assert_positive_integer "${SSH_PORT}" "--ssh-port"
 assert_nonnegative_integer "${PRUNE_MIN_AGE_SEC}" "--prune-min-age-seconds"
 assert_nonnegative_integer "${READY_MIN_AGE_SEC}" "--ready-min-age-seconds"
-require_command rsync
+if [[ "${STATUS_JSON}" != "true" ]]; then
+  require_command rsync
+fi
 require_command ssh
 
 case "$(printf '%s' "${REQUIRE_READY_MARKER}" | tr '[:upper:]' '[:lower:]')" in
@@ -307,12 +315,14 @@ if [[ "${RESPECT_REMOTE_TOGGLE}" == "true" ]] && [[ -z "${GATEWAY_URL}" ]]; then
   exit 1
 fi
 
-mkdir -p "${LOCAL_DIR}"
-if [[ "${INCLUDE_ARTIFACTS_SYNC}" == "true" ]]; then
-  mkdir -p "${LOCAL_ARTIFACTS_DIR}"
+if [[ "${STATUS_JSON}" != "true" ]]; then
+  mkdir -p "${LOCAL_DIR}"
+  if [[ "${INCLUDE_ARTIFACTS_SYNC}" == "true" ]]; then
+    mkdir -p "${LOCAL_ARTIFACTS_DIR}"
+  fi
+  mkdir -p "$(dirname "${MANIFEST_FILE}")"
+  touch "${MANIFEST_FILE}"
 fi
-mkdir -p "$(dirname "${MANIFEST_FILE}")"
-touch "${MANIFEST_FILE}"
 
 ssh_parts=(
   ssh
@@ -356,6 +366,9 @@ fi
 
 manifest_contains_record() {
   local record="$1"
+  if [[ ! -f "${MANIFEST_FILE}" ]]; then
+    return 1
+  fi
   grep -Fqx -- "${record}" "${MANIFEST_FILE}"
 }
 
@@ -369,6 +382,45 @@ mark_synced_record() {
 manifest_workspace_id_from_record() {
   local record="$1"
   printf '%s' "${record%%|*}"
+}
+
+is_number() {
+  local value="$1"
+  [[ "${value}" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
+max_number() {
+  local left="$1"
+  local right="$2"
+  if [[ -z "${left}" ]]; then
+    printf '%s' "${right}"
+    return 0
+  fi
+  if awk -v l="${left}" -v r="${right}" 'BEGIN{exit !(r > l)}'; then
+    printf '%s' "${right}"
+  else
+    printf '%s' "${left}"
+  fi
+}
+
+epoch_from_signature() {
+  local signature="$1"
+  local maybe_epoch="${signature%%_*}"
+  if is_number "${maybe_epoch}"; then
+    printf '%s' "${maybe_epoch}"
+    return 0
+  fi
+  printf ''
+}
+
+json_escape() {
+  local input="$1"
+  input="${input//\\/\\\\}"
+  input="${input//\"/\\\"}"
+  input="${input//$'\n'/\\n}"
+  input="${input//$'\r'/\\r}"
+  input="${input//$'\t'/\\t}"
+  printf '%s' "${input}"
 }
 
 resolve_ops_token() {
@@ -699,6 +751,148 @@ sync_once() {
   fi
   return 0
 }
+
+sync_status_json() {
+  local pending_ready_count=0
+  local ready_total_count=0
+  local synced_ready_count=0
+  local latest_ready_remote_epoch=""
+  local latest_ready_local_epoch=""
+  local latest_ready_signature=""
+  local latest_ready_workspace_id=""
+  local workspace_output=""
+
+  if ! workspace_output="$(list_remote_workspaces 2>&1)"; then
+    printf '{"ok":false,"sync_state":"unknown","pending_ready_count":0,"error":"%s"}\n' \
+      "$(json_escape "${workspace_output}")"
+    return 1
+  fi
+
+  while IFS= read -r workspace_id; do
+    [[ -z "${workspace_id}" ]] && continue
+    if ! validate_workspace_id "${workspace_id}"; then
+      continue
+    fi
+
+    if workspace_requires_ready_marker "${workspace_id}"; then
+      local ready_output=""
+      ready_output="$(remote_workspace_ready_record "${workspace_id}" 2>/dev/null || true)"
+      local reason="${ready_output%%|*}"
+      if [[ "${reason}" != "READY" ]]; then
+        continue
+      fi
+
+      local ready_signature
+      ready_signature="$(printf '%s' "${ready_output}" | cut -d'|' -f2)"
+      [[ -z "${ready_signature}" ]] && continue
+
+      local sync_record="${workspace_id}|${ready_signature}"
+      ready_total_count=$((ready_total_count + 1))
+      if manifest_contains_record "${sync_record}"; then
+        synced_ready_count=$((synced_ready_count + 1))
+      else
+        pending_ready_count=$((pending_ready_count + 1))
+      fi
+
+      local ready_epoch
+      ready_epoch="$(epoch_from_signature "${ready_signature}")"
+      if [[ -n "${ready_epoch}" ]]; then
+        if [[ -z "${latest_ready_remote_epoch}" ]]; then
+          latest_ready_remote_epoch="${ready_epoch}"
+          latest_ready_signature="${ready_signature}"
+          latest_ready_workspace_id="${workspace_id}"
+        else
+          local next_max
+          next_max="$(max_number "${latest_ready_remote_epoch}" "${ready_epoch}")"
+          if [[ "${next_max}" == "${ready_epoch}" ]]; then
+            latest_ready_remote_epoch="${ready_epoch}"
+            latest_ready_signature="${ready_signature}"
+            latest_ready_workspace_id="${workspace_id}"
+          fi
+        fi
+      fi
+    else
+      local sync_record="${workspace_id}"
+      ready_total_count=$((ready_total_count + 1))
+      if manifest_contains_record "${sync_record}"; then
+        synced_ready_count=$((synced_ready_count + 1))
+      else
+        pending_ready_count=$((pending_ready_count + 1))
+      fi
+    fi
+  done <<< "${workspace_output}"
+
+  if [[ -f "${MANIFEST_FILE}" ]]; then
+    while IFS= read -r manifest_record; do
+      [[ -z "${manifest_record}" ]] && continue
+      case "${manifest_record}" in
+        *\|*)
+          local signature="${manifest_record#*|}"
+          local manifest_epoch
+          manifest_epoch="$(epoch_from_signature "${signature}")"
+          if [[ -n "${manifest_epoch}" ]]; then
+            latest_ready_local_epoch="$(max_number "${latest_ready_local_epoch}" "${manifest_epoch}")"
+          fi
+          ;;
+      esac
+    done < "${MANIFEST_FILE}"
+  fi
+
+  local sync_state="in_sync"
+  if [[ "${pending_ready_count}" -gt 0 ]]; then
+    sync_state="behind"
+  fi
+
+  local lag_seconds_json="null"
+  if [[ -n "${latest_ready_remote_epoch}" && -n "${latest_ready_local_epoch}" ]]; then
+    local lag_value
+    lag_value="$(awk -v r="${latest_ready_remote_epoch}" -v l="${latest_ready_local_epoch}" 'BEGIN{d=r-l; if (d < 0) d = 0; printf "%.3f", d}')"
+    lag_seconds_json="${lag_value}"
+  fi
+
+  local latest_ready_remote_epoch_json="null"
+  local latest_ready_local_epoch_json="null"
+  local latest_ready_signature_json="null"
+  local latest_ready_workspace_id_json="null"
+  if [[ -n "${latest_ready_remote_epoch}" ]]; then
+    latest_ready_remote_epoch_json="${latest_ready_remote_epoch}"
+  fi
+  if [[ -n "${latest_ready_local_epoch}" ]]; then
+    latest_ready_local_epoch_json="${latest_ready_local_epoch}"
+  fi
+  if [[ -n "${latest_ready_signature}" ]]; then
+    latest_ready_signature_json="\"$(json_escape "${latest_ready_signature}")\""
+  fi
+  if [[ -n "${latest_ready_workspace_id}" ]]; then
+    latest_ready_workspace_id_json="\"$(json_escape "${latest_ready_workspace_id}")\""
+  fi
+
+  printf '{"ok":true,"sync_state":"%s","pending_ready_count":%d,"ready_total_count":%d,"synced_ready_count":%d,"latest_ready_remote_epoch":%s,"latest_ready_local_epoch":%s,"latest_ready_signature":%s,"latest_ready_workspace_id":%s,"lag_seconds":%s,"require_ready_marker":%s,"ready_marker_filename":"%s","ready_session_prefix":"%s","manifest_file":"%s","remote_host":"%s","remote_dir":"%s","local_dir":"%s","generated_at_epoch":%s}\n' \
+    "$(json_escape "${sync_state}")" \
+    "${pending_ready_count}" \
+    "${ready_total_count}" \
+    "${synced_ready_count}" \
+    "${latest_ready_remote_epoch_json}" \
+    "${latest_ready_local_epoch_json}" \
+    "${latest_ready_signature_json}" \
+    "${latest_ready_workspace_id_json}" \
+    "${lag_seconds_json}" \
+    "${REQUIRE_READY_MARKER}" \
+    "$(json_escape "${READY_MARKER_FILENAME}")" \
+    "$(json_escape "${READY_SESSION_PREFIX}")" \
+    "$(json_escape "${MANIFEST_FILE}")" \
+    "$(json_escape "${REMOTE_HOST}")" \
+    "$(json_escape "${REMOTE_DIR}")" \
+    "$(json_escape "${LOCAL_DIR}")" \
+    "$(date +%s)"
+
+  return 0
+}
+
+if [[ "${STATUS_JSON}" == "true" ]]; then
+  sync_status_json
+  exit $?
+fi
 
 if [[ "${RUN_ONCE}" == "true" ]]; then
   sync_once

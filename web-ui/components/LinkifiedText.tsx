@@ -3,7 +3,6 @@
 import React from "react";
 import { useAgentStore } from "@/lib/store";
 
-// eslint-disable-next-line no-useless-escape
 const LINKIFIABLE_TOKEN_REGEX =
   /(https?:\/\/[^\s<>"'`]+|www\.[^\s<>"'`]+|(?:\/|\.\.?\/)[A-Za-z0-9._~\-\/]+|[A-Za-z]:\\[^\s<>"'`]+|(?:[A-Za-z0-9._~\-]+\/)+[A-Za-z0-9._~\-]+\.[A-Za-z0-9]+)/g;
 

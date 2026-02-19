@@ -18,7 +18,7 @@ This plan supersedes stale assumptions in older Telegram notes and aligns work t
 6. Telegram gateway tests are now aligned and integrated into the default pytest suite:
    - `uv run pytest -q tests/bot/test_telegram_gateway.py -q` passes without environment gating.
 7. Documentation drift on launch command was corrected:
-   - `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Running_The_Agent.md` now references `uv run python -m universal_agent.bot.main`.
+   - `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/46_Running_The_Agent.md` now references `uv run python -m universal_agent.bot.main`.
 
 ## 3. Problem Statement
 
@@ -85,7 +85,7 @@ Goal: eliminate launch/runbook drift.
 
 Implementation target:
 
-1. Fix Telegram launch command in `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/Running_The_Agent.md`.
+1. Fix Telegram launch command in `OFFICIAL_PROJECT_DOCUMENTATION/03_Operations/46_Running_The_Agent.md`.
 2. Add explicit Telegram runtime mode note (polling currently).
 3. Add troubleshooting snippet for timeout and allowed-user configuration:
    - `UA_TELEGRAM_TASK_TIMEOUT_SECONDS`
