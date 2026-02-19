@@ -21,6 +21,15 @@ from universal_agent.session_checkpoint import SessionCheckpointGenerator
 # Set up logging
 logger = logging.getLogger(__name__)
 
+
+def _telegram_workspace_base() -> Path:
+    configured = (os.getenv("UA_WORKSPACES_DIR") or "").strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    # src/universal_agent/bot/agent_adapter.py -> repo root
+    return (Path(__file__).resolve().parents[3] / "AGENT_RUN_WORKSPACES").resolve()
+
+
 @dataclass
 class AgentRequest:
     prompt: str
@@ -106,9 +115,9 @@ class AgentAdapter:
         - Preserves continuity via structured checkpoint (~2-4k tokens)
         """
         session_id = f"tg_{user_id}"
-        workspace_dir = os.path.join("AGENT_RUN_WORKSPACES", session_id)
-        workspace_path = Path(workspace_dir)
-        
+        workspace_path = _telegram_workspace_base() / session_id
+        workspace_dir = str(workspace_path.resolve())
+
         # Continuation mode: attempt to resume pinned session first.
         if continue_session:
             try:

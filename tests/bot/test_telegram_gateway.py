@@ -13,6 +13,7 @@ from universal_agent.session_checkpoint import SessionCheckpoint
 
 @pytest.mark.asyncio
 async def test_get_or_create_session_uses_telegram_prefix_and_workspace():
+    expected_workspace = str((Path(__file__).resolve().parents[2] / "AGENT_RUN_WORKSPACES" / "tg_12345").resolve())
     adapter = AgentAdapter()
     adapter.initialized = True
     adapter.gateway = AsyncMock()
@@ -26,7 +27,7 @@ async def test_get_or_create_session_uses_telegram_prefix_and_workspace():
 
     adapter.gateway.create_session.assert_awaited_once_with(
         user_id="telegram_12345",
-        workspace_dir=os.path.join("AGENT_RUN_WORKSPACES", "tg_12345"),
+        workspace_dir=expected_workspace,
     )
     assert session.session_id == "session_abc123"
 
@@ -51,10 +52,10 @@ async def test_get_or_create_session_continuation_prefers_resume():
 
 @pytest.mark.asyncio
 async def test_get_or_create_session_injects_checkpoint_when_present(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("UA_WORKSPACES_DIR", str((tmp_path / "AGENT_RUN_WORKSPACES").resolve()))
 
     user_id = "u_checkpoint"
-    workspace_dir = Path("AGENT_RUN_WORKSPACES") / f"tg_{user_id}"
+    workspace_dir = (tmp_path / "AGENT_RUN_WORKSPACES" / f"tg_{user_id}").resolve()
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
     adapter = AgentAdapter()

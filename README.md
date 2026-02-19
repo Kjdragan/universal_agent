@@ -52,6 +52,29 @@ uv run python src/universal_agent/main.py --task "Research quantum computing tre
 
 For detailed usage, see **[Getting Started](Project_Documentation/02_Getting_Started.md)**.
 
+## 🧠 Memory Persistence Runbook
+
+Use persistent/shared memory paths so memory survives session workspace cleanup:
+
+```bash
+# .env recommended values (examples)
+PERSIST_DIRECTORY=/opt/universal_agent/Memory_System/data
+UA_SHARED_MEMORY_DIR=/opt/universal_agent/Memory_System/ua_shared_workspace
+UA_MEMORY_ADAPTER_MEMORY_SYSTEM_STATE=active
+```
+
+Backfill legacy per-session memory DBs into the persistent store:
+
+```bash
+# Dry run (no writes)
+uv run python scripts/migrate_session_memory_dbs.py --dry-run
+
+# Apply migration
+uv run python scripts/migrate_session_memory_dbs.py
+```
+
+Operational note: `runtime_state.db` under `AGENT_RUN_WORKSPACES` is runtime queue/checkpoint state, not long-term memory. Only delete it when no queued/running/resume-needed runs are required.
+
 ## 📂 Project Structure
 
 -   `src/universal_agent/`: Core agent logic (Brain & Harness).

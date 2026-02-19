@@ -5,6 +5,7 @@ from typing import Any
 
 from universal_agent.memory.adapters.base import MemoryAdapter
 from universal_agent.memory.memory_models import MemoryEntry
+from universal_agent.memory.paths import resolve_persist_directory
 
 
 class MemorySystemAdapter(MemoryAdapter):
@@ -21,7 +22,7 @@ class MemorySystemAdapter(MemoryAdapter):
         try:
             from Memory_System.manager import MemoryManager
 
-            storage_path = os.getenv("PERSIST_DIRECTORY", os.path.join(workspace_dir, "Memory_System_Data"))
+            storage_path = resolve_persist_directory(workspace_dir)
             self._manager = MemoryManager(storage_dir=storage_path, workspace_dir=workspace_dir)
         except Exception as exc:  # pragma: no cover - optional dependency path
             self._init_error = str(exc)
@@ -96,4 +97,3 @@ class MemorySystemAdapter(MemoryAdapter):
             return {"indexed": True, "reason": "indexed"}
         except Exception:
             return {"indexed": False, "reason": "sync_failed"}
-

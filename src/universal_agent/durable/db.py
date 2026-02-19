@@ -10,6 +10,14 @@ def get_runtime_db_path() -> str:
     if env_path:
         return env_path
 
+    # NOTE:
+    # runtime_state.db stores operational execution state (run queue, leases,
+    # checkpoints, replay metadata). It is intentionally separate from long-term
+    # memory and remains under AGENT_RUN_WORKSPACES by default.
+    #
+    # Deleting this DB is only safe when there are no queued/running/resume-needed
+    # runs you care about. Keep this behavior unchanged unless UA_RUNTIME_DB_PATH
+    # is explicitly set by the operator.
     repo_root = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     )
