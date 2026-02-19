@@ -1686,9 +1686,11 @@ export default function HomePage() {
           <div className="ml-auto flex items-center gap-2 md:gap-4">
             <a
               href="/dashboard"
-              className="hidden md:block rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
+              className="hidden md:inline-flex h-10 w-12 items-center justify-center rounded-xl border border-border/50 bg-card/40 text-2xl text-muted-foreground hover:border-primary/40 hover:text-primary"
+              title="Dashboard Home"
+              aria-label="Dashboard Home"
             >
-              Dashboard
+              🏠
             </a>
             <button
               type="button"
