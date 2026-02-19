@@ -117,6 +117,7 @@ type WorkThreadRecord = {
   updated_at?: number;
   history?: Array<{ decided_at?: number }>;
 };
+type SectionVariant = "compact" | "full";
 
 function buildHeaders(): Record<string, string> {
   return {};
@@ -644,14 +645,15 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
 
 // ---- Section Components ----
 
-export function SessionsSection() {
+export function SessionsSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
+  const isFull = variant === "full";
   const { sessions, sessionsError, selected, setSelected, loading, logTail, fetchSessions, fetchLogs, deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession } = useOps();
   const [attaching, setAttaching] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "running" | "idle" | "terminal">("all");
   const [sourceFilter, setSourceFilter] = useState<"all" | "chat" | "telegram" | "api" | "local">("all");
   const [memoryModeFilter, setMemoryModeFilter] = useState<"all" | "off" | "session_only" | "selective" | "full">("all");
   const [ownerFilter, setOwnerFilter] = useState("");
-  const [showList, setShowList] = useState(true);
+  const [showList, setShowList] = useState(isFull);
   const [expandLogTail, setExpandLogTail] = useState(true);
   const [selectedThread, setSelectedThread] = useState<WorkThreadRecord | null>(null);
   const [deliveryLoading, setDeliveryLoading] = useState(false);
@@ -692,6 +694,10 @@ export function SessionsSection() {
   useEffect(() => {
     setDeliveryNoteDraft(selectedThread?.decision_note || "");
   }, [selectedThread]);
+
+  useEffect(() => {
+    if (isFull) setShowList(true);
+  }, [isFull]);
 
   const recordDeliveryDecision = useCallback(async (sessionId: string, decision: DeliveryDecision) => {
     setDeliveryDecisionBusy(true);
@@ -777,25 +783,46 @@ export function SessionsSection() {
   );
 
   return (
-    <div className="p-3 text-xs space-y-3">
-      <div className="border rounded bg-background/40 p-2">
+    <div className={`${isFull ? "p-4 text-sm space-y-3 lg:grid lg:grid-cols-[360px_1fr] lg:gap-3 lg:space-y-0" : "p-3 text-xs space-y-3"}`}>
+      {isFull && (
+        <div className="lg:col-span-2 sticky top-0 z-10 rounded border border-slate-800 bg-slate-900/80 px-3 py-2 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-semibold">Sessions</div>
+            <div className="flex items-center gap-2">
+              <button onClick={cancelOutstandingRuns} className="text-[11px] px-2 py-1 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
+              <button onClick={fetchSessions} className="text-[11px] px-2 py-1 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻ Refresh"}</button>
+              {selected && (
+                <button onClick={() => attachToChat(selected)} className="text-[11px] px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" disabled={attaching}>
+                  {attaching ? "Attaching..." : "Open Chat"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      <div className={`border rounded bg-background/40 p-2 ${isFull ? "lg:row-span-5 lg:max-h-[78vh] lg:overflow-y-auto" : ""}`}>
         <div className="font-semibold mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span>Sessions</span>
-            <button onClick={() => setShowList(!showList)} className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" title={showList ? "Collapse List" : "Expand List"}>
-              {showList ? "▼" : "▶"}
-            </button>
-            {/* Mobile-friendly Back button when list is collapsed */}
-            {!showList && (
-              <button onClick={() => setShowList(true)} className="ml-2 text-[10px] px-2 py-0.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20">
-                ← Back to List
-              </button>
+            {!isFull && (
+              <>
+                <button onClick={() => setShowList(!showList)} className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" title={showList ? "Collapse List" : "Expand List"}>
+                  {showList ? "▼" : "▶"}
+                </button>
+                {!showList && (
+                  <button onClick={() => setShowList(true)} className="ml-2 text-[10px] px-2 py-0.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20">
+                    ← Back to List
+                  </button>
+                )}
+              </>
             )}
           </div>
-          <div className="flex items-center gap-1">
-            <button onClick={cancelOutstandingRuns} className="text-[10px] px-2 py-0.5 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
-            <button onClick={fetchSessions} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻"}</button>
-          </div>
+          {!isFull && (
+            <div className="flex items-center gap-1">
+              <button onClick={cancelOutstandingRuns} className="text-[10px] px-2 py-0.5 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
+              <button onClick={fetchSessions} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻"}</button>
+            </div>
+          )}
         </div>
         {showList && (
           <>
@@ -827,7 +854,7 @@ export function SessionsSection() {
                 <option value="full">full</option>
               </select>
             </div>
-            <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
+            <div className={`space-y-1 overflow-y-auto scrollbar-thin ${isFull ? "max-h-[62vh]" : "max-h-40"}`}>
               {sessionsError && (
                 <div className="text-[10px] text-amber-400 whitespace-pre-wrap">
                   {sessionsError}
@@ -835,7 +862,7 @@ export function SessionsSection() {
               )}
               {filteredSessions.length === 0 && <div className="text-muted-foreground">No sessions found</div>}
               {filteredSessions.map((s) => (
-                <button key={s.session_id} onClick={() => { setSelected(s.session_id); setShowList(false); }} className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === s.session_id ? "border-primary text-primary" : "border-border/50 text-muted-foreground"}`}>
+                <button key={s.session_id} onClick={() => { setSelected(s.session_id); if (!isFull) setShowList(false); }} className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === s.session_id ? "border-primary text-primary" : "border-border/50 text-muted-foreground"}`}>
                   <div className="font-mono truncate">{s.session_id}</div>
                   <div className="flex justify-between"><span>{s.status}</span><span className="opacity-60">{s.last_activity?.slice(11, 19) ?? "--:--:--"}</span></div>
                   <div className="flex justify-between opacity-70">
@@ -851,7 +878,7 @@ export function SessionsSection() {
       </div>
 
       {/* If list is hidden and we have a selection, show a mini header to re-expand */}
-      {!showList && selected && (
+      {!showList && selected && !isFull && (
         <div className="flex items-center justify-between px-2 py-1 bg-background/40 border rounded text-[10px]">
           <span className="font-mono">{selected}</span>
           <button onClick={() => setShowList(true)} className="text-primary hover:underline">Show List</button>
@@ -896,7 +923,7 @@ export function SessionsSection() {
                 {expandLogTail ? "Compact" : "Expand"}
               </button>
             </div>
-            <pre className={`text-[10px] font-mono whitespace-pre-wrap overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border ${expandLogTail ? "max-h-80" : "max-h-40"}`}>{logTail || "(empty)"}</pre>
+            <pre className={`text-[10px] font-mono whitespace-pre-wrap overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border ${expandLogTail ? (isFull ? "max-h-[46vh]" : "max-h-80") : "max-h-40"}`}>{logTail || "(empty)"}</pre>
           </div>
           <div className="border rounded bg-background/40 p-2 space-y-2">
             <div className="font-semibold">Delivery Workflow</div>
@@ -961,7 +988,8 @@ export function SessionsSection() {
   );
 }
 
-export function CalendarSection() {
+export function CalendarSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
+  const isFull = variant === "full";
   const { schedulingPushState } = useOps();
   const [view, setView] = useState<"week" | "day">("week");
   const [sourceFilter, setSourceFilter] = useState<"all" | "cron" | "heartbeat">("all");
@@ -1176,8 +1204,8 @@ export function CalendarSection() {
   };
 
   return (
-    <div className="p-3 text-xs space-y-3">
-      <div className="border rounded bg-background/40 p-2 space-y-2">
+    <div className={`${isFull ? "h-full p-4 text-sm space-y-4" : "p-3 text-xs space-y-3"}`}>
+      <div className={`border rounded bg-background/40 space-y-2 ${isFull ? "p-3" : "p-2"}`}>
         <div className="font-semibold flex items-center justify-between gap-2">
           <span>Calendar</span>
           <div className="flex items-center gap-1">
@@ -1212,7 +1240,7 @@ export function CalendarSection() {
         {error && <div className="text-[10px] text-rose-400">{error}</div>}
       </div>
 
-      <div className="border rounded bg-background/40 p-2">
+      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
         <div className="font-semibold mb-1">Always Running</div>
         {alwaysRunning.length === 0 && <div className="text-muted-foreground text-[10px]">No always-running entries</div>}
         <div className="flex flex-wrap gap-1">
@@ -1229,7 +1257,7 @@ export function CalendarSection() {
         </div>
       </div>
 
-      <div className="border rounded bg-background/40 p-2">
+      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
         <div className="font-semibold mb-1">Missed Event Stasis Queue</div>
         {stasisQueue.length === 0 && <div className="text-muted-foreground text-[10px]">No pending missed events</div>}
         <div className="space-y-1">
@@ -1254,7 +1282,7 @@ export function CalendarSection() {
       </div>
 
       {/* Row 1: Scheduled / Upcoming */}
-      <div className="hidden md:block space-y-1">
+      <div className={`${isFull ? "block" : "hidden md:block"} space-y-1`}>
         <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">Scheduled</div>
         <div className="grid grid-cols-7 gap-2">
           {weekDays.map((day) => {
@@ -1300,7 +1328,7 @@ export function CalendarSection() {
 
       {/* Row 2: Results (completed / failed / missed) */}
       {hasAnyResults && (
-        <div className="hidden md:block space-y-1">
+        <div className={`${isFull ? "block" : "hidden md:block"} space-y-1`}>
           <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">Results</div>
           <div className="grid grid-cols-7 gap-2">
             {weekDays.map((day) => {
@@ -1326,7 +1354,7 @@ export function CalendarSection() {
         </div>
       )}
 
-      <div className="md:hidden border rounded bg-background/40 p-2">
+      <div className={`${isFull ? "hidden" : "md:hidden"} border rounded bg-background/40 p-2`}>
         <div className="font-semibold mb-2">{view === "day" ? "Day" : "Events"}</div>
         <div className="space-y-2 max-h-72 overflow-y-auto scrollbar-thin">
           {events.length === 0 && <div className="text-[10px] text-muted-foreground">No events</div>}
@@ -1364,12 +1392,14 @@ export function CalendarSection() {
   );
 }
 
-export function SkillsSection() {
+export function SkillsSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
   const { skills, fetchSkills } = useOps();
   const [selectedSkill, setSelectedSkill] = useState<SkillStatus | null>(null);
   const [docContent, setDocContent] = useState<string | null>(null);
   const [loadingDoc, setLoadingDoc] = useState(false);
-  const [showList, setShowList] = useState(true);
+  const isFull = variant === "full";
+  const [showList, setShowList] = useState(isFull);
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
     if (skills.length > 0 && !selectedSkill) {
@@ -1398,8 +1428,14 @@ export function SkillsSection() {
     loadDoc();
   }, [selectedSkill]);
 
+  const filteredSkills = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return skills;
+    return skills.filter((skill) => skill.name.toLowerCase().includes(q));
+  }, [searchTerm, skills]);
+
   return (
-    <div className="flex flex-col h-full min-h-[500px]">
+    <div className={`flex flex-col h-full ${isFull ? "min-h-0" : "min-h-[500px]"}`}>
       <div className="p-3 border-b border-border/40 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <h2 className="font-semibold text-sm">Skills Management</h2>
@@ -1413,14 +1449,22 @@ export function SkillsSection() {
             </button>
           )}
         </div>
-        <button onClick={fetchSkills} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all">↻ Refresh catalog</button>
+        <div className="flex items-center gap-2">
+          <input
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search skills"
+            className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[11px]"
+          />
+          <button onClick={fetchSkills} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all">↻ Refresh catalog</button>
+        </div>
       </div>
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
         {/* Left: Skill List */}
         {showList && (
-          <div className="w-full md:w-1/3 h-1/3 md:h-auto border-b md:border-b-0 md:border-r border-border/40 overflow-y-auto scrollbar-thin p-2 space-y-1 bg-background/20 shrink-0">
-            {skills.length === 0 && <div className="text-muted-foreground p-2">No skills found</div>}
-            {skills.map((s) => (
+          <div className={`${isFull ? "w-full md:w-[360px] h-[40%] md:h-auto" : "w-full md:w-1/3 h-1/3 md:h-auto"} border-b md:border-b-0 md:border-r border-border/40 overflow-y-auto scrollbar-thin p-2 space-y-1 bg-background/20 shrink-0`}>
+            {filteredSkills.length === 0 && <div className="text-muted-foreground p-2">No skills found</div>}
+            {filteredSkills.map((s) => (
               <button
                 key={s.name}
                 onClick={() => { setSelectedSkill(s); setShowList(false); }}
@@ -1507,16 +1551,17 @@ export function SkillsSection() {
   );
 }
 
-export function ChannelsSection() {
+export function ChannelsSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
+  const isFull = variant === "full";
   const { channels, fetchChannels, probeChannel } = useOps();
   return (
-    <div className="p-3 text-xs">
-      <div className="border rounded bg-background/40 p-2">
+    <div className={`${isFull ? "p-4 text-sm" : "p-3 text-xs"}`}>
+      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
         <div className="font-semibold mb-2 flex items-center justify-between">
           <span>Channels</span>
           <button onClick={fetchChannels} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all">↻</button>
         </div>
-        <div className="space-y-2 max-h-48 overflow-y-auto scrollbar-thin">
+        <div className={`space-y-2 overflow-y-auto scrollbar-thin ${isFull ? "max-h-[65vh]" : "max-h-48"}`}>
           {channels.length === 0 && <div className="text-muted-foreground">No channels found</div>}
           {channels.map((ch) => (
             <div key={ch.id} className="border rounded px-2 py-1 bg-background/50">
@@ -1538,16 +1583,17 @@ export function ChannelsSection() {
   );
 }
 
-export function ApprovalsSection() {
+export function ApprovalsSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
+  const isFull = variant === "full";
   const { approvals, fetchApprovals, updateApproval } = useOps();
   return (
-    <div className="p-3 text-xs">
-      <div className="border rounded bg-background/40 p-2">
+    <div className={`${isFull ? "p-4 text-sm" : "p-3 text-xs"}`}>
+      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
         <div className="font-semibold mb-2 flex items-center justify-between">
           <span>Approvals</span>
           <button onClick={fetchApprovals} className="text-[10px] px-2 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all">↻</button>
         </div>
-        <div className="space-y-2 max-h-48 overflow-y-auto scrollbar-thin">
+        <div className={`space-y-2 overflow-y-auto scrollbar-thin ${isFull ? "max-h-[65vh]" : "max-h-48"}`}>
           {approvals.length === 0 && <div className="text-muted-foreground">No approvals</div>}
           {approvals.map((a) => (
             <div key={a.approval_id} className="border rounded px-2 py-1 bg-background/50">
@@ -1570,27 +1616,69 @@ export function ApprovalsSection() {
   );
 }
 
-export function SystemEventsSection() {
+export function SystemEventsSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
+  const isFull = variant === "full";
   const { mergedEvents } = useOps();
+  const [eventFilter, setEventFilter] = useState("");
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+
+  const filteredEvents = useMemo(() => {
+    const q = eventFilter.trim().toLowerCase();
+    const rows = [...mergedEvents].sort((a, b) => b.timestamp - a.timestamp);
+    if (!q) return rows;
+    return rows.filter((ev) => ev.event_type.toLowerCase().includes(q));
+  }, [eventFilter, mergedEvents]);
+
+  const selectedEvent = useMemo(
+    () => filteredEvents.find((ev) => ev.id === selectedEventId) ?? null,
+    [filteredEvents, selectedEventId],
+  );
+
   return (
-    <div className="p-3 text-xs">
-      <div className="border rounded bg-background/40 p-2">
-        <div className="font-semibold mb-2">System Events</div>
-        <div className="space-y-1 max-h-48 overflow-y-auto scrollbar-thin">
-          {mergedEvents.length === 0 && <div className="text-muted-foreground">No system events</div>}
-          {mergedEvents.map((ev) => (
-            <div key={ev.id} className="border rounded px-2 py-1 bg-background/50">
-              <div className="flex justify-between text-[10px] text-muted-foreground"><span>{ev.event_type}</span><span>{ev.created_at?.slice(11, 19) ?? "--:--:--"}</span></div>
-              <div className="font-mono text-[11px] truncate">{Object.keys(ev.payload || {}).join(", ") || "(no payload)"}</div>
+    <div className={`${isFull ? "p-4 text-sm" : "p-3 text-xs"}`}>
+      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="font-semibold">System Events</div>
+          <input
+            value={eventFilter}
+            onChange={(e) => setEventFilter(e.target.value)}
+            placeholder="Filter event type"
+            className="rounded border border-border/60 bg-card/40 px-2 py-1 text-[11px]"
+          />
+        </div>
+        <div className={`${isFull ? "grid gap-3 lg:grid-cols-[1.1fr_0.9fr]" : ""}`}>
+          <div className={`space-y-1 overflow-y-auto scrollbar-thin ${isFull ? "max-h-[60vh]" : "max-h-48"}`}>
+            {filteredEvents.length === 0 && <div className="text-muted-foreground">No system events</div>}
+            {filteredEvents.map((ev) => (
+              <button
+                key={ev.id}
+                type="button"
+                onClick={() => setSelectedEventId(ev.id)}
+                className={`w-full border rounded px-2 py-1 bg-background/50 text-left ${selectedEventId === ev.id ? "border-cyan-500/60" : "border-border/50"}`}
+              >
+                <div className="flex justify-between text-[10px] text-muted-foreground"><span>{ev.event_type}</span><span>{ev.created_at?.slice(11, 19) ?? "--:--:--"}</span></div>
+                <div className="font-mono text-[11px] truncate">{Object.keys(ev.payload || {}).join(", ") || "(no payload)"}</div>
+              </button>
+            ))}
+          </div>
+          {isFull && (
+            <div className="rounded border border-border/60 bg-background/50 p-2 min-h-[180px]">
+              <div className="mb-2 text-[11px] uppercase tracking-wider text-slate-400">Payload</div>
+              {selectedEvent ? (
+                <pre className="text-[11px] whitespace-pre-wrap font-mono max-h-[55vh] overflow-auto">{JSON.stringify(selectedEvent.payload || {}, null, 2)}</pre>
+              ) : (
+                <div className="text-slate-500 text-[11px]">Select an event to inspect payload.</div>
+              )}
             </div>
-          ))}
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-export function OpsConfigSection() {
+export function OpsConfigSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
+  const isFull = variant === "full";
   const {
     opsConfigText,
     setOpsConfigText,
@@ -1634,8 +1722,9 @@ export function OpsConfigSection() {
   }, []);
 
   return (
-    <div className="p-3 text-xs space-y-3">
-      <div className="border rounded bg-background/40 p-2">
+    <div className={`${isFull ? "p-4 text-sm space-y-4" : "p-3 text-xs space-y-3"}`}>
+      <div className={`${isFull ? "grid gap-4 xl:grid-cols-2" : "space-y-3"}`}>
+      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
         <div className="flex items-center justify-between mb-2">
           <div className="font-semibold">Remote To Local Debug Sync</div>
           <div className="text-[10px] text-muted-foreground">{remoteSyncStatus}</div>
@@ -1680,7 +1769,7 @@ export function OpsConfigSection() {
           </button>
         </div>
       </div>
-      <div className="border rounded bg-background/40 p-2">
+      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
         <div className="flex items-center justify-between mb-2">
           <div className="font-semibold">Ops config (ops_config.json)</div>
           <div className="text-[10px] text-muted-foreground">{opsConfigStatus}</div>
@@ -1692,18 +1781,20 @@ export function OpsConfigSection() {
           <button type="button" className="text-xs px-2 py-1 rounded border bg-primary/20 text-primary hover:bg-primary/30 transition-colors disabled:opacity-50" onClick={saveOpsConfig} disabled={opsConfigSaving}>{opsConfigSaving ? "Saving..." : "Save"}</button>
         </div>
       </div>
-      <div className="border rounded bg-background/40 p-2">
+      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
         <div className="flex items-center justify-between mb-2">
           <div className="font-semibold">Ops config schema</div>
           <div className="text-[10px] text-muted-foreground">{opsSchemaStatus}</div>
         </div>
         <textarea className="w-full min-h-[100px] text-[11px] font-mono p-2 rounded border bg-background/60" value={opsSchemaText} readOnly />
       </div>
+      </div>
     </div>
   );
 }
 
-export function SessionContinuityWidget() {
+export function SessionContinuityWidget({ variant = "compact" }: { variant?: SectionVariant } = {}) {
+  const isFull = variant === "full";
   const { continuityState, fetchSessionContinuityMetrics } = useOps();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const metrics = continuityState.metrics || {};
@@ -1727,15 +1818,15 @@ export function SessionContinuityWidget() {
   const runtimeStatus = metrics.runtime_status || "--";
 
   return (
-    <div className={`flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
-      <div className="p-3 bg-card/30 border-b border-border/40 cursor-pointer hover:bg-card/40 flex items-center justify-between" onClick={() => setIsCollapsed(!isCollapsed)}>
+    <div className={isFull ? "rounded-xl border border-slate-800 bg-slate-900/70" : `flex flex-col border-t border-border/40 transition-all duration-300 ${isCollapsed ? "h-10 shrink-0 overflow-hidden" : ""}`}>
+      <div className="p-3 bg-card/30 border-b border-border/40 cursor-pointer hover:bg-card/40 flex items-center justify-between" onClick={() => !isFull && setIsCollapsed(!isCollapsed)}>
         <h2 className="text-[10px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
           <span className="text-primary/60">📈</span> Continuity
           <span className="text-[9px] text-muted-foreground/60 font-normal font-mono">({continuityState.status})</span>
         </h2>
-        <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? "rotate-180" : ""}`}>▼</span>
+        {!isFull && <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? "rotate-180" : ""}`}>▼</span>}
       </div>
-      {!isCollapsed && (
+      {(isFull || !isCollapsed) && (
         <div className="p-3 text-xs space-y-1">
           <div className="flex items-center justify-between mb-2">
             <span className="text-muted-foreground">Session continuity metrics (rolling {windowLabel})</span>

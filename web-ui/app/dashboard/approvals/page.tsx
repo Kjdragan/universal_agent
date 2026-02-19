@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 const API_BASE = "/api/dashboard/gateway";
@@ -97,6 +98,12 @@ export default function ApprovalsPage() {
                     </p>
                 </div>
                 <div className="flex items-center gap-2">
+                    <Link
+                        href="/"
+                        className="rounded-lg border border-cyan-700/60 bg-cyan-600/15 px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25"
+                    >
+                        Back to Home
+                    </Link>
                     <div className="flex rounded-lg border border-slate-700 bg-slate-800/60 text-xs">
                         {FILTER_OPTIONS.map((opt) => (
                             <button
