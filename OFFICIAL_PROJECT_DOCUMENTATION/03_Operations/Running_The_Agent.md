@@ -170,6 +170,8 @@ scripts/sync_remote_workspaces.sh \
 Behavior note:
 - By default, the script skips any workspace ID already recorded in the manifest.
 - This means if you clear local mirrored folders later, old remote workspaces will not re-download unless you run with `--no-skip-synced`.
+- By default, all session activities (`session_*`, including web UI/API and hooks, plus Telegram `tg_*`) are completion-gated: sync waits for a remote `sync_ready.json` terminal marker and a short age buffer (`UA_REMOTE_SYNC_READY_MIN_AGE_SECONDS`, default `45`).
+- In completion-gated mode, durable artifacts sync only runs in cycles where at least one newly terminal workspace was mirrored. This avoids pulling in-progress outputs.
 
 ### Auto-sync when computer is running (user systemd timer)
 

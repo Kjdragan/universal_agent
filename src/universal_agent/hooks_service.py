@@ -32,6 +32,8 @@ DEFAULT_BOOTSTRAP_TRANSFORMS_DIR = "../webhook_transforms"
 HOOK_SESSION_ID_PREFIX = "session_hook_"
 MAX_SESSION_ID_LEN = 128
 SESSION_ID_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+DEFAULT_SYNC_READY_MARKER_FILENAME = "sync_ready.json"
+SYNC_READY_MARKER_VERSION = 1
 
 class HookMatchConfig(BaseModel):
     path: Optional[str] = None
@@ -161,6 +163,13 @@ class HooksService:
         self._default_hook_timeout_seconds = max(
             0, self._safe_int_env("UA_HOOKS_DEFAULT_TIMEOUT_SECONDS", 0)
         )
+        self._sync_ready_marker_enabled = self._safe_bool_env(
+            "UA_HOOKS_SYNC_READY_MARKER_ENABLED", True
+        )
+        self._sync_ready_marker_filename = (
+            (os.getenv("UA_HOOKS_SYNC_READY_MARKER_FILENAME") or "").strip()
+            or DEFAULT_SYNC_READY_MARKER_FILENAME
+        )
 
     def _load_config(self) -> HooksConfig:
         ops_config = load_ops_config()
@@ -285,6 +294,8 @@ class HooksService:
             "youtube_ingest_retry_jitter_seconds": float(self._youtube_ingest_retry_jitter_seconds),
             "youtube_ingest_cooldown_seconds": int(self._youtube_ingest_cooldown_seconds),
             "hook_default_timeout_seconds": int(self._default_hook_timeout_seconds or 0),
+            "sync_ready_marker_enabled": bool(self._sync_ready_marker_enabled),
+            "sync_ready_marker_filename": str(self._sync_ready_marker_filename),
         }
 
     async def handle_request(self, request: Request, subpath: str) -> Response:
@@ -608,6 +619,57 @@ class HooksService:
     def _write_text_file(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+
+    def _sync_ready_marker_path(self, workspace_root: Path) -> Path:
+        marker_name = self._sync_ready_marker_filename.strip() or DEFAULT_SYNC_READY_MARKER_FILENAME
+        return workspace_root / marker_name
+
+    def _write_sync_ready_marker(
+        self,
+        *,
+        session_id: str,
+        workspace_root: Path,
+        state: str,
+        ready: bool,
+        hook_name: str,
+        run_source: str,
+        started_at_epoch: Optional[float] = None,
+        completed_at_epoch: Optional[float] = None,
+        error: Optional[str] = None,
+        execution_summary: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if not self._sync_ready_marker_enabled:
+            return
+
+        now_epoch = time.time()
+        payload: dict[str, Any] = {
+            "version": SYNC_READY_MARKER_VERSION,
+            "session_id": session_id,
+            "state": str(state or "").strip().lower(),
+            "ready": bool(ready),
+            "hook_name": str(hook_name or "Hook"),
+            "run_source": str(run_source or "webhook"),
+            "updated_at_epoch": now_epoch,
+        }
+        if started_at_epoch is not None:
+            payload["started_at_epoch"] = float(started_at_epoch)
+        if completed_at_epoch is not None:
+            payload["completed_at_epoch"] = float(completed_at_epoch)
+        if error:
+            payload["error"] = str(error)
+        if execution_summary:
+            payload["execution_summary"] = execution_summary
+
+        marker_path = self._sync_ready_marker_path(workspace_root)
+        try:
+            self._write_text_file(marker_path, json.dumps(payload, indent=2))
+        except Exception as exc:
+            logger.warning(
+                "Failed writing sync ready marker session_id=%s path=%s err=%s",
+                session_id,
+                marker_path,
+                exc,
+            )
 
     async def _prepare_local_youtube_ingest(
         self,
@@ -1011,9 +1073,14 @@ class HooksService:
         if timeout_seconds is not None:
             metadata["hook_timeout_seconds"] = timeout_seconds
         run_source = str(metadata.get("source") or "webhook").strip().lower() or "webhook"
+        hook_name = action.name or "Hook"
+        session_workspace: Optional[Path] = None
+        admitted_turn_id: Optional[str] = None
+        start_ts: Optional[float] = None
 
         try:
             session = await self._resolve_or_create_webhook_session(session_id)
+            session_workspace = Path(str(session.workspace_dir)).resolve()
             action, ingest_metadata, should_skip_dispatch = await self._prepare_local_youtube_ingest(
                 action=action,
                 session_id=session_id,
@@ -1021,20 +1088,39 @@ class HooksService:
             )
             metadata.update(ingest_metadata)
             if should_skip_dispatch:
+                if session_workspace is not None:
+                    self._write_sync_ready_marker(
+                        session_id=session_id,
+                        workspace_root=session_workspace,
+                        state="pending_local_ingest",
+                        ready=False,
+                        hook_name=hook_name,
+                        run_source=run_source,
+                    )
                 logger.info(
                     "Hook action deferred session_id=%s hook=%s reason=pending_local_ingest",
                     session_id,
-                    action.name or "Hook",
+                    hook_name,
                 )
                 return
 
             user_input = self._build_agent_user_input(action)
             if not user_input:
+                if session_workspace is not None:
+                    self._write_sync_ready_marker(
+                        session_id=session_id,
+                        workspace_root=session_workspace,
+                        state="failed_pre_dispatch",
+                        ready=True,
+                        hook_name=hook_name,
+                        run_source=run_source,
+                        completed_at_epoch=time.time(),
+                        error="missing_message",
+                    )
                 logger.warning("Hook agent action missing message session_key=%s", session_key)
                 return
 
             request = GatewayRequest(user_input=user_input, metadata=metadata)
-            admitted_turn_id: Optional[str] = None
             if self._turn_admitter:
                 admission = await self._turn_admitter(session_id, request)
                 decision = str(admission.get("decision", "accepted"))
@@ -1052,6 +1138,16 @@ class HooksService:
                 self._run_counter_start(session_id, run_source)
 
             start_ts = time.time()
+            if session_workspace is not None:
+                self._write_sync_ready_marker(
+                    session_id=session_id,
+                    workspace_root=session_workspace,
+                    state="in_progress",
+                    ready=False,
+                    hook_name=hook_name,
+                    run_source=run_source,
+                    started_at_epoch=start_ts,
+                )
             execution_summary: dict[str, Any] = {}
             if timeout_seconds is None:
                 execution_summary = await self._consume_gateway_execute(session, request)
@@ -1068,7 +1164,19 @@ class HooksService:
                     None,
                     execution_summary,
                 )
-            logger.info("Hook action dispatched session_id=%s hook=%s", session_id, action.name or "Hook")
+            if session_workspace is not None:
+                self._write_sync_ready_marker(
+                    session_id=session_id,
+                    workspace_root=session_workspace,
+                    state="completed",
+                    ready=True,
+                    hook_name=hook_name,
+                    run_source=run_source,
+                    started_at_epoch=start_ts,
+                    completed_at_epoch=time.time(),
+                    execution_summary=execution_summary,
+                )
+            logger.info("Hook action dispatched session_id=%s hook=%s", session_id, hook_name)
         except asyncio.TimeoutError:
             logger.error(
                 "Hook action timed out session_key=%s session_id=%s timeout_seconds=%s",
@@ -1076,13 +1184,30 @@ class HooksService:
                 session_id,
                 timeout_seconds,
             )
+            if session_workspace is not None:
+                state = {
+                    "tool_calls": 0,
+                    "duration_seconds": round(max(0.0, time.time() - (start_ts or time.time())), 3),
+                }
+                self._write_sync_ready_marker(
+                    session_id=session_id,
+                    workspace_root=session_workspace,
+                    state="timed_out",
+                    ready=True,
+                    hook_name=hook_name,
+                    run_source=run_source,
+                    started_at_epoch=start_ts,
+                    completed_at_epoch=time.time(),
+                    error=f"hook_timeout_{timeout_seconds}s",
+                    execution_summary=state,
+                )
             if self._turn_finalizer:
                 try:
                     state = {
                         "tool_calls": 0,
-                        "duration_seconds": round(max(0.0, time.time() - start_ts), 3),
+                        "duration_seconds": round(max(0.0, time.time() - (start_ts or time.time())), 3),
                     }
-                    if "admitted_turn_id" in locals() and admitted_turn_id:
+                    if admitted_turn_id:
                         await self._turn_finalizer(
                             session_id,
                             admitted_turn_id,
@@ -1098,15 +1223,30 @@ class HooksService:
                 session_key,
                 session_id,
             )
+            if session_workspace is not None:
+                state = {
+                    "tool_calls": 0,
+                    "duration_seconds": round(max(0.0, time.time() - (start_ts or time.time())), 3),
+                }
+                self._write_sync_ready_marker(
+                    session_id=session_id,
+                    workspace_root=session_workspace,
+                    state="dispatch_failed",
+                    ready=True,
+                    hook_name=hook_name,
+                    run_source=run_source,
+                    started_at_epoch=start_ts,
+                    completed_at_epoch=time.time(),
+                    error="hook_dispatch_failed",
+                    execution_summary=state,
+                )
             if self._turn_finalizer:
                 try:
                     state = {
                         "tool_calls": 0,
-                        "duration_seconds": round(max(0.0, time.time() - start_ts), 3)
-                        if "start_ts" in locals()
-                        else 0.0,
+                        "duration_seconds": round(max(0.0, time.time() - (start_ts or time.time())), 3),
                     }
-                    if "admitted_turn_id" in locals() and admitted_turn_id:
+                    if admitted_turn_id:
                         await self._turn_finalizer(
                             session_id,
                             admitted_turn_id,

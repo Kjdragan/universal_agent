@@ -770,7 +770,59 @@ class InProcessGateway(Gateway):
     async def run_query(
         self, session: GatewaySession, request: GatewayRequest
     ) -> GatewayResult:
+        def _env_true(name: str, default: bool) -> bool:
+            raw = (os.getenv(name) or "").strip().lower()
+            if not raw:
+                return bool(default)
+            return raw in {"1", "true", "yes", "on"}
+
+        sync_marker_enabled = _env_true("UA_RUNTIME_SYNC_READY_MARKER_ENABLED", True)
+        sync_marker_filename = (
+            (os.getenv("UA_RUNTIME_SYNC_READY_MARKER_FILENAME") or "").strip() or "sync_ready.json"
+        )
+        workspace_root = Path(session.workspace_dir).resolve()
+
+        def _write_sync_ready_marker(
+            *,
+            state: str,
+            ready: bool,
+            started_at_epoch: Optional[float] = None,
+            completed_at_epoch: Optional[float] = None,
+            error: Optional[str] = None,
+            execution_summary: Optional[dict[str, Any]] = None,
+        ) -> None:
+            if not sync_marker_enabled:
+                return
+            payload: dict[str, Any] = {
+                "version": 1,
+                "session_id": session.session_id,
+                "state": str(state or "").strip().lower(),
+                "ready": bool(ready),
+                "run_source": str((request.metadata or {}).get("source") or "unknown"),
+                "updated_at_epoch": time.time(),
+            }
+            if started_at_epoch is not None:
+                payload["started_at_epoch"] = float(started_at_epoch)
+            if completed_at_epoch is not None:
+                payload["completed_at_epoch"] = float(completed_at_epoch)
+            if error:
+                payload["error"] = str(error)
+            if execution_summary:
+                payload["execution_summary"] = execution_summary
+            try:
+                marker_path = workspace_root / sync_marker_filename
+                marker_path.parent.mkdir(parents=True, exist_ok=True)
+                marker_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            except Exception:
+                # Sync marker is best-effort and must not fail the run.
+                pass
+
         start_time = time.time()
+        _write_sync_ready_marker(
+            state="in_progress",
+            ready=False,
+            started_at_epoch=start_time,
+        )
         response_text = ""
         tool_calls = 0
         trace_id = None
@@ -778,31 +830,42 @@ class InProcessGateway(Gateway):
         auth_required = False
         auth_link: Optional[str] = None
         errors: list[str] = []
-        
-        async for event in self.execute(session, request):
-            if event.type == EventType.TEXT:
-                if isinstance(event.data, dict) and event.data.get("final") is True:
-                    response_text = event.data.get("text", "")
-                else:
-                    response_text += event.data.get("text", "")
-            if event.type == EventType.TOOL_CALL:
-                tool_calls += 1
-                tool_name = (event.data.get("name") or "").upper()
-                if any(x in tool_name for x in ["CODE", "EXECUTE", "BASH", "PYTHON"]):
-                    code_execution_used = True
-            if event.type == EventType.AUTH_REQUIRED:
-                auth_required = True
-                if isinstance(event.data, dict):
-                    link = event.data.get("auth_link")
-                    if isinstance(link, str) and link.strip():
-                        auth_link = link.strip()
-            if event.type == EventType.ERROR:
-                if isinstance(event.data, dict):
-                    msg = event.data.get("message") or event.data.get("error") or "Unknown error"
-                    if isinstance(msg, str) and msg.strip():
-                        errors.append(msg.strip())
-            if event.type == EventType.ITERATION_END:
-                trace_id = event.data.get("trace_id")
+        try:
+            async for event in self.execute(session, request):
+                if event.type == EventType.TEXT:
+                    if isinstance(event.data, dict) and event.data.get("final") is True:
+                        response_text = event.data.get("text", "")
+                    else:
+                        response_text += event.data.get("text", "")
+                if event.type == EventType.TOOL_CALL:
+                    tool_calls += 1
+                    tool_name = (event.data.get("name") or "").upper()
+                    if any(x in tool_name for x in ["CODE", "EXECUTE", "BASH", "PYTHON"]):
+                        code_execution_used = True
+                if event.type == EventType.AUTH_REQUIRED:
+                    auth_required = True
+                    if isinstance(event.data, dict):
+                        link = event.data.get("auth_link")
+                        if isinstance(link, str) and link.strip():
+                            auth_link = link.strip()
+                if event.type == EventType.ERROR:
+                    if isinstance(event.data, dict):
+                        msg = event.data.get("message") or event.data.get("error") or "Unknown error"
+                        if isinstance(msg, str) and msg.strip():
+                            errors.append(msg.strip())
+                if event.type == EventType.ITERATION_END:
+                    trace_id = event.data.get("trace_id")
+        except Exception as exc:
+            duration = round(max(0.0, time.time() - start_time), 3)
+            _write_sync_ready_marker(
+                state="failed",
+                ready=True,
+                started_at_epoch=start_time,
+                completed_at_epoch=time.time(),
+                error=str(exc),
+                execution_summary={"tool_calls": tool_calls, "duration_seconds": duration},
+            )
+            raise
 
         # Best-effort: sync session transcript into session memory after each query.
         # This reduces the chance of losing session memories when a session is abandoned
@@ -834,6 +897,13 @@ class InProcessGateway(Gateway):
                 trace_id = self._bridge.current_agent.trace.get("trace_id")
         
         duration = time.time() - start_time
+        _write_sync_ready_marker(
+            state="completed",
+            ready=True,
+            started_at_epoch=start_time,
+            completed_at_epoch=time.time(),
+            execution_summary={"tool_calls": tool_calls, "duration_seconds": round(duration, 3)},
+        )
         
         return GatewayResult(
             response_text=response_text,

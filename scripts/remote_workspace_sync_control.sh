@@ -18,6 +18,10 @@ DEFAULT_INTERVAL_SEC="${UA_REMOTE_SYNC_INTERVAL_SEC:-600}"
 DEFAULT_SSH_PORT="${UA_REMOTE_SSH_PORT:-22}"
 DEFAULT_SSH_KEY="${UA_REMOTE_SSH_KEY:-${HOME}/.ssh/id_ed25519}"
 DEFAULT_GATEWAY_URL="${UA_REMOTE_GATEWAY_URL:-https://api.clearspringcg.com}"
+DEFAULT_REQUIRE_READY_MARKER="${UA_REMOTE_SYNC_REQUIRE_READY_MARKER:-true}"
+DEFAULT_READY_MARKER_FILENAME="${UA_REMOTE_SYNC_READY_MARKER_FILENAME:-sync_ready.json}"
+DEFAULT_READY_MIN_AGE_SEC="${UA_REMOTE_SYNC_READY_MIN_AGE_SECONDS:-45}"
+DEFAULT_READY_SESSION_PREFIX="${UA_REMOTE_SYNC_READY_SESSION_PREFIX:-session_,tg_}"
 
 print_usage() {
   cat <<'USAGE'
@@ -51,6 +55,14 @@ Options (for on/sync-now, optional):
   --no-artifacts           Disable durable artifacts sync.
   --respect-remote-toggle  Force remote toggle gating for this command.
   --ignore-remote-toggle   Disable remote toggle gating for this command.
+  --require-ready-marker   Require terminal ready marker before sync.
+  --ignore-ready-marker    Disable ready-marker gating.
+  --ready-marker-name <name>
+                           Ready marker filename (default: sync_ready.json).
+  --ready-min-age-seconds <seconds>
+                           Minimum marker age before sync (default: 45).
+  --ready-session-prefix <prefixes>
+                           Comma-separated workspace prefixes for marker gating.
   --no-delete              Keep local files even if removed remotely.
   --no-skip-synced         Re-sync even if workspace ID is in manifest.
   --help                   Show help.
@@ -80,6 +92,15 @@ assert_positive_integer() {
   local label="$2"
   if [[ ! "${value}" =~ ^[0-9]+$ ]] || [[ "${value}" == "0" ]]; then
     echo "${label} must be a positive integer. Got: ${value}" >&2
+    exit 1
+  fi
+}
+
+assert_nonnegative_integer() {
+  local value="$1"
+  local label="$2"
+  if [[ ! "${value}" =~ ^[0-9]+$ ]]; then
+    echo "${label} must be a non-negative integer. Got: ${value}" >&2
     exit 1
   fi
 }
@@ -115,6 +136,10 @@ DELETE_MODE="true"
 SKIP_SYNCED="true"
 RESPECT_REMOTE_TOGGLE="auto"
 INCLUDE_ARTIFACTS_SYNC="${UA_REMOTE_SYNC_INCLUDE_ARTIFACTS:-true}"
+REQUIRE_READY_MARKER="${DEFAULT_REQUIRE_READY_MARKER}"
+READY_MARKER_FILENAME="${DEFAULT_READY_MARKER_FILENAME}"
+READY_MIN_AGE_SEC="${DEFAULT_READY_MIN_AGE_SEC}"
+READY_SESSION_PREFIX="${DEFAULT_READY_SESSION_PREFIX}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -186,6 +211,26 @@ while [[ $# -gt 0 ]]; do
       RESPECT_REMOTE_TOGGLE="false"
       shift
       ;;
+    --require-ready-marker)
+      REQUIRE_READY_MARKER="true"
+      shift
+      ;;
+    --ignore-ready-marker)
+      REQUIRE_READY_MARKER="false"
+      shift
+      ;;
+    --ready-marker-name)
+      READY_MARKER_FILENAME="${2:-}"
+      shift 2
+      ;;
+    --ready-min-age-seconds)
+      READY_MIN_AGE_SEC="${2:-}"
+      shift 2
+      ;;
+    --ready-session-prefix)
+      READY_SESSION_PREFIX="${2:-}"
+      shift 2
+      ;;
     --no-delete)
       DELETE_MODE="false"
       shift
@@ -208,7 +253,17 @@ done
 
 assert_positive_integer "${INTERVAL_SEC}" "--interval"
 assert_positive_integer "${SSH_PORT}" "--ssh-port"
+assert_nonnegative_integer "${READY_MIN_AGE_SEC}" "--ready-min-age-seconds"
 require_command systemctl
+
+case "$(printf '%s' "${REQUIRE_READY_MARKER}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    REQUIRE_READY_MARKER="true"
+    ;;
+  *)
+    REQUIRE_READY_MARKER="false"
+    ;;
+esac
 
 if [[ "${COMMAND}" != "off" && "${COMMAND}" != "status" && -n "${SSH_KEY}" && ! -f "${SSH_KEY}" ]]; then
   echo "SSH key does not exist: ${SSH_KEY}" >&2
@@ -271,6 +326,16 @@ build_install_args() {
   if [[ "${INCLUDE_ARTIFACTS_SYNC}" != "true" ]]; then
     args+=(--no-artifacts)
   fi
+  if [[ "${REQUIRE_READY_MARKER}" == "true" ]]; then
+    args+=(--require-ready-marker)
+  else
+    args+=(--ignore-ready-marker)
+  fi
+  args+=(--ready-marker-name "${READY_MARKER_FILENAME}")
+  args+=(--ready-min-age-seconds "${READY_MIN_AGE_SEC}")
+  if [[ -n "${READY_SESSION_PREFIX}" ]]; then
+    args+=(--ready-session-prefix "${READY_SESSION_PREFIX}")
+  fi
   if [[ "${RESPECT_REMOTE_TOGGLE}" != "false" ]]; then
     args+=(--respect-remote-toggle)
     args+=(--gateway-url "${GATEWAY_URL}")
@@ -316,6 +381,16 @@ cmd_sync_now() {
   fi
   if [[ "${INCLUDE_ARTIFACTS_SYNC}" != "true" ]]; then
     args+=(--no-artifacts)
+  fi
+  if [[ "${REQUIRE_READY_MARKER}" == "true" ]]; then
+    args+=(--require-ready-marker)
+  else
+    args+=(--ignore-ready-marker)
+  fi
+  args+=(--ready-marker-name "${READY_MARKER_FILENAME}")
+  args+=(--ready-min-age-seconds "${READY_MIN_AGE_SEC}")
+  if [[ -n "${READY_SESSION_PREFIX}" ]]; then
+    args+=(--ready-session-prefix "${READY_SESSION_PREFIX}")
   fi
   if [[ "${RESPECT_REMOTE_TOGGLE}" == "true" ]]; then
     args+=(--respect-remote-toggle)
