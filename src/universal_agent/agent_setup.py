@@ -28,7 +28,7 @@ from universal_agent.prompt_assets import (
     generate_skills_xml,
     get_tool_knowledge_block,
 )
-from universal_agent.prompt_builder import build_system_prompt
+from universal_agent.prompt_builder import build_system_prompt, build_sdk_system_prompt
 from claude_agent_sdk import create_sdk_mcp_server
 from universal_agent.tools.research_bridge import (
     run_research_pipeline_wrapper,
@@ -412,6 +412,8 @@ class AgentSetup:
         """Build ClaudeAgentOptions with full configuration."""
         # Build system prompt
         system_prompt = self._build_system_prompt(self.workspace_dir)
+        system_prompt_option, prompt_mode = build_sdk_system_prompt(system_prompt)
+        self._log(f"🧾 System prompt mode: {prompt_mode}")
         
         # Build MCP servers config
         mcp_servers = self._build_mcp_servers()
@@ -446,7 +448,7 @@ class AgentSetup:
                     )
                 ),
             },
-            system_prompt=system_prompt,
+            system_prompt=system_prompt_option,
             mcp_servers=mcp_servers,
             hooks=self._hooks if self._hooks else self._default_hooks(),
             permission_mode="bypassPermissions",
@@ -550,6 +552,14 @@ class AgentSetup:
             
             # --- DOMAIN DEFINITIONS ---
             domains = {
+                "🌐 Browser Operations": [
+                    "bowser",
+                    "playwright-bowser",
+                    "claude-bowser",
+                    "browserbase",
+                    "playwright",
+                    "chrome",
+                ],
                 "🔬 Research & Analysis": ["research-specialist", "trend-specialist", "professor", "scribe"],
                 "🎨 Creative & Media": ["image-expert", "video-creation-expert", "video-remotion-expert"],
                 "⚙️ Engineering & Code": ["task-decomposer", "code-writer", "codeinterpreter", "github"],
@@ -578,6 +588,9 @@ class AgentSetup:
             # 1. SPECIALIST AGENTS (Categorized)
             lines.append("### 🤖 Specialist Agents (Micro-Agents)")
             lines.append("Delegate full workflows to these specialists based on value-add.")
+            lines.append("")
+            lines.append("Browser lane policy: Bowser-first (`claude-bowser-agent`, `playwright-bowser-agent`, `bowser-qa-agent`).")
+            lines.append("Use Browserbase when Bowser is unavailable or cloud-browser behavior is explicitly required.")
             
             agent_dirs = [
                 os.path.join(self.src_dir, ".claude", "agents"),
@@ -695,7 +708,7 @@ class AgentSetup:
             
             # Combine Core + Connected for sorting
             all_apps = []
-            core_slugs = {"composio_search", "browserbase", "codeinterpreter", "filetool", "sqltool"}
+            core_slugs = {"composio_search", "browserbase", "browserbase_tool", "codeinterpreter", "filetool", "sqltool"}
             
             if self._discovered_apps:
                 all_apps.extend(self._discovered_apps)

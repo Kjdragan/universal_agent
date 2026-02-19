@@ -128,6 +128,9 @@ export interface StatusEventData {
   iteration?: number;
   tokens?: number;
   threshold?: number;
+  event_kind?: string;
+  compact_boundary?: Record<string, unknown>;
+  source?: string;
   [key: string]: unknown;
 }
 

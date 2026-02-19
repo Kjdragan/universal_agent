@@ -747,7 +747,7 @@ class AgentHookSet:
                  return {
                     "systemMessage": (
                         f"⚠️ Tool '{tool_name}' is not available for the Primary Agent. "
-                        "You must DELEGATE this task to a specialist (e.g., use the 'Task' tool with 'research-specialist')."
+                        "You must DELEGATE this task to the appropriate specialist using the 'Task' tool."
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {
@@ -1206,7 +1206,13 @@ def emit_thinking_event(thinking: str, signature: Optional[str] = None, author: 
         )
     )
 
-def emit_status_event(message: str, level: str = "INFO", prefix: Optional[str] = None, is_log: bool = True) -> None:
+def emit_status_event(
+    message: str,
+    level: str = "INFO",
+    prefix: Optional[str] = None,
+    is_log: bool = True,
+    **extra_data: Any,
+) -> None:
     """
     Emit a status event.
     By default is_log=True so it shows in the UI Activity Log panel.
@@ -1220,6 +1226,7 @@ def emit_status_event(message: str, level: str = "INFO", prefix: Optional[str] =
                 "prefix": prefix,
                 "is_log": is_log,
                 "time_offset": _tool_time_offset(),
+                **extra_data,
             },
         )
     )

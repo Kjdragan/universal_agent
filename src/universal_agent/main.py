@@ -131,6 +131,7 @@ import argparse
 
 # prompt_toolkit for better terminal input (arrow keys, history, multiline)
 from universal_agent.prompt_assets import (
+    build_live_capabilities_snapshot,
     discover_skills,
     generate_skills_xml,
     get_tool_knowledge_block,
@@ -1403,7 +1404,7 @@ async def on_pre_tool_use_ledger(
             return {
                 "systemMessage": (
                     f"⚠️ Tool '{tool_name}' is not available for the Primary Agent. "
-                    "You must DELEGATE this task to a specialist (e.g., use the 'Task' tool with 'research-specialist')."
+                    "You must DELEGATE this task to the appropriate specialist using the 'Task' tool."
                 ),
                 "decision": "block",
                 "hookSpecificOutput": {
@@ -2807,6 +2808,31 @@ async def on_pre_bash_block_composio_sdk(
         "slack_send_message",  # Other common Composio tools
     ]
 
+    # Detect attempts to call internal MCP tool wrappers directly from Python.
+    # These wrappers are SDK tool objects, not callable functions.
+    internal_wrapper_patterns = [
+        "from universal_agent.tools.",
+        "_wrapper(",
+        "asyncio.run(",
+    ]
+    if (
+        "bash" in str(input_data.get("tool_name", "")).lower()
+        and all(pattern in command_lower for pattern in internal_wrapper_patterns)
+    ):
+        return {
+            "systemMessage": (
+                "🚫 BLOCKED: Do not execute internal MCP tool wrappers from Bash/Python.\n\n"
+                "Call the MCP tools directly instead (for example `mcp__internal__x_trends_posts`, "
+                "`mcp__internal__reddit_top_posts`, `mcp__internal__run_research_pipeline`).\n"
+                "Wrapper symbols like `x_trends_posts_wrapper` are SDK tool objects and are not callable."
+            ),
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Attempted direct invocation of internal MCP tool wrappers via Bash.",
+            },
+        }
+
     if any(pattern in command_lower for pattern in composio_sdk_patterns):
         logfire.warning(
             "bash_composio_sdk_blocked",
@@ -2820,11 +2846,12 @@ async def on_pre_bash_block_composio_sdk(
                 "**USE MCP TOOLS INSTEAD:**\n"
                 "- For email: Use `GMAIL_SEND_EMAIL` tool directly.\n"
                 "- For file upload: `mcp__internal__upload_to_composio`\n"
-                "- For search: Use `COMPOSIO_SEARCH_TOOLS` to find the correct tool (EXCEPT X/Twitter).\n"
+                "- For web/news search: Use `COMPOSIO_SEARCH_WEB` / `COMPOSIO_SEARCH_NEWS`.\n"
+                "- Use `COMPOSIO_SEARCH_TOOLS` only when the service/tool is unknown.\n"
                 "  For X/Twitter evidence, use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n\n"
                 "The Composio SDK is not available in the Bash environment. "
                 "All actions must go through specific MCP tools which handle auth automatically.\n\n"
-                "If you cannot find a tool, use `COMPOSIO_SEARCH_TOOLS` to look for it."
+                "For Reddit trends, use `mcp__internal__reddit_top_posts` or direct `REDDIT_*` tools."
             ),
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -3070,6 +3097,9 @@ SUBAGENT_EXPECTED_SKILLS = {
     "image-expert": ["image-generation"],
     "video-creation-expert": [],  # Uses MCP tools, not skills
     "browserbase": [],  # Uses Composio MCP tools, not skills
+    "claude-bowser-agent": ["claude-bowser", "bowser-orchestration"],
+    "playwright-bowser-agent": ["playwright-bowser", "bowser-orchestration"],
+    "bowser-qa-agent": ["playwright-bowser", "bowser-orchestration"],
     "video-remotion-expert": ["video-remotion"],
     "system-configuration-agent": [],
     "data-analyst": [],  # Uses Composio CodeInterpreter + local Python
@@ -3229,6 +3259,14 @@ async def on_post_task_guidance(
             "Image generation complete. Images are in work_products/media/. Next steps:\n"
             "- Embed in report? → Delegate to `report-writer` (it reads the image manifest)\n"
             "- Deliver directly? → Use Composio email/Slack tools."
+        )
+    elif subagent_type in {"claude-bowser-agent", "playwright-bowser-agent", "bowser-qa-agent"}:
+        next_step_hint = (
+            "Browser execution complete. Next steps:\n"
+            "- Need structured findings? → Delegate to `data-analyst` for evidence synthesis\n"
+            "- Need stakeholder delivery? → Use `action-coordinator` or Composio Gmail/Slack tools\n"
+            "- Need follow-up validation? → Launch additional Bowser lane tasks in parallel as needed\n"
+            "- Do NOT default to report-writer unless a report was explicitly requested."
         )
 
     return {
@@ -3870,7 +3908,13 @@ options = None
 # Global session state
 run_id: str = "unknown"
 current_step_id: Optional[str] = None
-trace: dict = {"tool_calls": [], "token_usage": {"input": 0, "output": 0, "total": 0}}
+trace: dict = {
+    "tool_calls": [],
+    "token_usage": {"input": 0, "output": 0, "total": 0},
+    "compact_boundary_events": [],
+    "sdk_result_messages": [],
+    "context_pressure": _default_context_pressure_state(),
+}
 start_ts: float = time.time()
 runtime_db_conn: Optional[sqlite3.Connection] = None
 current_execution_session: Optional[ExecutionSession] = None
@@ -4041,6 +4085,138 @@ def _maybe_full_payload_fields(prefix: str, payload: Any) -> dict[str, Any]:
         f"{prefix}_full_truncated": truncated,
         f"{prefix}_full_redacted": redacted,
     }
+
+
+_SDK_COMPACT_BOUNDARY_CLASS_NAMES = {
+    "SDKCompactBoundaryMessage",
+    "CompactBoundaryMessage",
+    "CompactBoundary",
+}
+
+
+def _to_json_compatible(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _to_json_compatible(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_to_json_compatible(item) for item in value]
+    obj_dict = getattr(value, "__dict__", None)
+    if isinstance(obj_dict, dict) and obj_dict:
+        return {
+            str(key): _to_json_compatible(val)
+            for key, val in obj_dict.items()
+            if not str(key).startswith("_")
+        }
+    return str(value)
+
+
+def _is_sdk_compact_boundary_message(msg: Any) -> bool:
+    try:
+        if msg.__class__.__name__ in _SDK_COMPACT_BOUNDARY_CLASS_NAMES:
+            return True
+        subtype = getattr(msg, "subtype", None)
+        if isinstance(subtype, str) and subtype.lower() == "compact_boundary":
+            return True
+        data = getattr(msg, "data", None)
+        if isinstance(data, dict):
+            raw_subtype = data.get("subtype")
+            if isinstance(raw_subtype, str) and raw_subtype.lower() == "compact_boundary":
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def _extract_sdk_compact_boundary_payload(msg: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {"message_type": msg.__class__.__name__}
+    for key in (
+        "subtype",
+        "trigger",
+        "reason",
+        "details",
+        "summary",
+        "tokens_before",
+        "tokens_after",
+        "num_turns",
+        "session_id",
+    ):
+        value = getattr(msg, key, None)
+        if value is not None:
+            payload[key] = _to_json_compatible(value)
+    msg_dict = getattr(msg, "__dict__", None)
+    if isinstance(msg_dict, dict):
+        raw_data = msg_dict.get("data")
+        if isinstance(raw_data, dict):
+            for key, value in raw_data.items():
+                if key.startswith("_") or key in payload:
+                    continue
+                payload[key] = _to_json_compatible(value)
+        for key, value in msg_dict.items():
+            if key.startswith("_") or key in payload or key == "data":
+                continue
+            payload[key] = _to_json_compatible(value)
+    return payload
+
+
+def _format_compact_boundary_notice(payload: dict[str, Any]) -> str:
+    reason = str(payload.get("subtype") or payload.get("reason") or "auto_compaction")
+    before = payload.get("tokens_before")
+    after = payload.get("tokens_after")
+    token_note = ""
+    if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+        token_note = f" Tokens {int(before)} -> {int(after)}."
+    return f"SDK compact boundary received ({reason}).{token_note}"
+
+
+def _default_context_pressure_state() -> dict[str, Any]:
+    return {
+        "high_turns_without_compaction": 0,
+        "last_compaction_iteration": None,
+        "compaction_seen_iteration": None,
+        "last_turn_input_tokens": 0,
+    }
+
+
+def _get_context_pressure_state(state: dict[str, Any]) -> dict[str, Any]:
+    pressure = state.setdefault("context_pressure", _default_context_pressure_state())
+    defaults = _default_context_pressure_state()
+    for key, value in defaults.items():
+        pressure.setdefault(key, value)
+    return pressure
+
+
+def _read_env_int(name: str, default: int, minimum: int = 0) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(parsed, minimum)
+
+
+def _extract_result_message_telemetry(msg: Any) -> dict[str, Any]:
+    telemetry: dict[str, Any] = {}
+    for key in (
+        "subtype",
+        "duration_ms",
+        "total_cost_usd",
+        "num_turns",
+        "session_id",
+        "is_error",
+    ):
+        value = getattr(msg, key, None)
+        if value is not None:
+            telemetry[key] = _to_json_compatible(value)
+    usage = getattr(msg, "usage", None)
+    if usage is not None:
+        telemetry["usage"] = _to_json_compatible(usage)
+    model_usage = getattr(msg, "modelUsage", None)
+    if model_usage is None:
+        model_usage = getattr(msg, "model_usage", None)
+    if model_usage is not None:
+        telemetry["model_usage"] = _to_json_compatible(model_usage)
+    return telemetry
 
 
 def _inject_provider_idempotency(
@@ -5805,6 +5981,10 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         # Agent author tracking for sub-agent attribution
         _tool_name_map: dict[str, str] = {}  # tool_use_id -> resolved agent name
         _current_author = "Primary Agent"
+        compaction_observed_this_turn = False
+        compaction_grace_turns = _read_env_int(
+            "UA_COMPACTION_GRACE_TURNS", default=2, minimum=1
+        )
 
         with logfire.span(
             "llm_response_stream",
@@ -5813,13 +5993,44 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
             iteration=iteration,
         ):
             async for msg in client.receive_response():
+                if _is_sdk_compact_boundary_message(msg):
+                    compact_payload = _extract_sdk_compact_boundary_payload(msg)
+                    trace.setdefault("compact_boundary_events", []).append(compact_payload)
+                    notice = _format_compact_boundary_notice(compact_payload)
+                    compaction_observed_this_turn = True
+                    pressure_state = _get_context_pressure_state(trace)
+                    pressure_state["compaction_seen_iteration"] = iteration
+                    pressure_state["last_compaction_iteration"] = iteration
+                    pressure_state["high_turns_without_compaction"] = 0
+
+                    logfire.warning(
+                        "sdk_compact_boundary_message",
+                        run_id=run_id,
+                        step_id=step_id,
+                        iteration=iteration,
+                        payload=compact_payload,
+                    )
+
+                    hook_events.emit_status_event(
+                        notice,
+                        level="WARNING",
+                        prefix="Context",
+                        is_log=True,
+                        event_kind="sdk_compact_boundary",
+                        compact_boundary=compact_payload,
+                        source="claude_sdk",
+                    )
+                    continue
+
                 if isinstance(msg, ResultMessage):
+                    turn_input_tokens = 0
                     # Track token usage from the final ResultMessage of the turn
                     # This explicitly contains the usage statistics for the turn
                     if hasattr(msg, "usage") and msg.usage:
                         u = msg.usage
                         inp = u.get("input_tokens", 0) or 0
                         out = u.get("output_tokens", 0) or 0
+                        turn_input_tokens = int(inp)
 
                         # Update local trace counters
                         if trace and "token_usage" in trace:
@@ -5860,105 +6071,170 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                             except Exception:
                                 pass
 
-                        # Proactive context warning (CLI/harness visibility)
-                        if trace and "token_usage" in trace:
-                            usage_total = trace["token_usage"]["total"]
-                            flags = trace.setdefault("token_usage_flags", {})
-                            if CONTEXT_WINDOW_TOKENS:
-                                utilization = usage_total / CONTEXT_WINDOW_TOKENS
-                                if utilization >= 0.7 and not flags.get("warned_70"):
-                                    print(
-                                        f"\n⚠️ CONTEXT USAGE HIGH ({int(utilization*100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
-                                        "Consider wrapping the phase soon."
-                                    )
-                                    flags["warned_70"] = True
-                                if utilization >= 0.9 and not flags.get("warned_90"):
-                                    print(
-                                        f"\n⚠️ CONTEXT USAGE VERY HIGH ({int(utilization*100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
-                                        "Expect compaction or reset soon."
-                                    )
-                                    flags["warned_90"] = True
+                    pressure_state = _get_context_pressure_state(trace)
+                    if turn_input_tokens > 0:
+                        pressure_state["last_turn_input_tokens"] = turn_input_tokens
+                    context_tokens_for_reset = turn_input_tokens
+                    if context_tokens_for_reset <= 0:
+                        context_tokens_for_reset = int(
+                            pressure_state.get("last_turn_input_tokens", 0) or 0
+                        )
+                    if context_tokens_for_reset <= 0:
+                        context_tokens_for_reset = int(
+                            trace.get("token_usage", {}).get("total", 0) or 0
+                        )
+                    compaction_seen_this_turn = (
+                        compaction_observed_this_turn
+                        or pressure_state.get("compaction_seen_iteration") == iteration
+                    )
+                    if compaction_seen_this_turn:
+                        pressure_state["high_turns_without_compaction"] = 0
+                        pressure_state["last_compaction_iteration"] = iteration
+                    elif context_tokens_for_reset > TRUNCATION_THRESHOLD:
+                        pressure_state["high_turns_without_compaction"] = int(
+                            pressure_state.get("high_turns_without_compaction", 0) or 0
+                        ) + 1
+                    else:
+                        pressure_state["high_turns_without_compaction"] = 0
 
-                        # [FIX 7] Token-Based Harness Trigger
-                        # Connect the Brain (Token Count) to the Body (Harness Action)
-                        total_tokens = trace["token_usage"]["total"]
-                        if total_tokens > TRUNCATION_THRESHOLD:
-                            print(
-                                f"\n⚠️ CONTEXT THRESHOLD REACHED ({total_tokens} > {TRUNCATION_THRESHOLD})"
+                    # Proactive context warning (CLI/harness visibility)
+                    if trace and "token_usage" in trace:
+                        flags = trace.setdefault("token_usage_flags", {})
+                        if CONTEXT_WINDOW_TOKENS:
+                            utilization = context_tokens_for_reset / CONTEXT_WINDOW_TOKENS
+                            if utilization >= 0.7 and not flags.get("warned_70"):
+                                print(
+                                    f"\n⚠️ CONTEXT USAGE HIGH ({int(utilization*100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
+                                    "Allowing SDK auto-compaction before hard reset."
+                                )
+                                flags["warned_70"] = True
+                            if utilization >= 0.9 and not flags.get("warned_90"):
+                                print(
+                                    f"\n⚠️ CONTEXT USAGE VERY HIGH ({int(utilization*100)}% of {CONTEXT_WINDOW_TOKENS} tokens). "
+                                    "Expect compaction soon."
+                                )
+                                flags["warned_90"] = True
+
+                    # [FIX 7] Token-Based Harness Trigger
+                    # Prefer SDK auto-compaction first; hard reset only after sustained pressure.
+                    high_turns_without_compaction = int(
+                        pressure_state.get("high_turns_without_compaction", 0) or 0
+                    )
+                    total_tokens = trace.get("token_usage", {}).get("total", 0)
+                    if (
+                        context_tokens_for_reset > TRUNCATION_THRESHOLD
+                        and high_turns_without_compaction <= compaction_grace_turns
+                    ):
+                        print(
+                            f"\n⚠️ CONTEXT PRESSURE HIGH ({context_tokens_for_reset} > {TRUNCATION_THRESHOLD}). "
+                            f"Waiting for SDK auto-compaction ({high_turns_without_compaction}/{compaction_grace_turns})."
+                        )
+                        logfire.info(
+                            "context_pressure_grace_period",
+                            run_id=run_id,
+                            step_id=step_id,
+                            iteration=iteration,
+                            context_tokens=context_tokens_for_reset,
+                            threshold=TRUNCATION_THRESHOLD,
+                            high_turns_without_compaction=high_turns_without_compaction,
+                            grace_turns=compaction_grace_turns,
+                        )
+                    if (
+                        context_tokens_for_reset > TRUNCATION_THRESHOLD
+                        and high_turns_without_compaction > compaction_grace_turns
+                    ):
+                        print(
+                            f"\n⚠️ CONTEXT THRESHOLD PERSISTED ({context_tokens_for_reset} > {TRUNCATION_THRESHOLD})"
+                        )
+                        print("🔄 Triggering Harness Iteration (Context Reset)...")
+
+                        # Synthesize a "context_exhausted" event for the hook/logic
+                        # Instead of calling the hook, we trigger the restart specific logic directly here
+                        # to align with the "Autonomous Execution Protocol"
+
+                        # 1. Increment Iteration
+                        if run_id and runtime_db_conn:
+                            current_iter = get_iteration_info(
+                                runtime_db_conn, run_id
+                            ).get("iteration_count", 0)
+                            max_iter = get_iteration_info(runtime_db_conn, run_id).get(
+                                "max_iterations", 10
                             )
-                            print("🔄 Triggering Harness Iteration (Context Reset)...")
 
-                            # Synthesize a "context_exhausted" event for the hook/logic
-                            # Instead of calling the hook, we trigger the restart specific logic directly here
-                            # to align with the "Autonomous Execution Protocol"
+                            if current_iter >= max_iter:
+                                print(
+                                    f"⛔ Max iterations ({max_iter}) reached despite context exhaustion. Stopping."
+                                )
+                                break
 
-                            # 1. Increment Iteration
-                            if run_id and runtime_db_conn:
-                                current_iter = get_iteration_info(
-                                    runtime_db_conn, run_id
-                                ).get("iteration_count", 0)
-                                max_iter = get_iteration_info(runtime_db_conn, run_id).get(
-                                    "max_iterations", 10
+                            new_iter = increment_iteration_count(runtime_db_conn, run_id)
+
+                            # 2. Construct Handoff Prompt (Ledger-Aware)
+                            # Check for handoff.json written by build_evidence_ledger
+                            handoff_path = (
+                                os.path.join(workspace_dir, "handoff.json")
+                                if workspace_dir
+                                else None
+                            )
+                            handoff_state = None
+
+                            if handoff_path and os.path.exists(handoff_path):
+                                try:
+                                    with open(handoff_path, "r") as hf:
+                                        handoff_state = json.load(hf)
+                                except Exception as e:
+                                    logfire.warning(
+                                        "handoff_json_read_error", error=str(e)
+                                    )
+
+                            if handoff_state and handoff_state.get("phase") == "ledger_complete":
+                                # Ledger-aware restart: guide agent to read only the ledger
+                                ledger_path = handoff_state.get("ledger_path", "")
+                                topic = handoff_state.get("topic", "the research topic")
+                                next_prompt = (
+                                    f"RESUMING (Phase: SYNTHESIS):\n"
+                                    f"Context was reset after {context_tokens_for_reset} tokens.\n"
+                                    f"Evidence ledger is ready at: {ledger_path}\n\n"
+                                    f"INSTRUCTIONS:\n"
+                                    f"1. READ ONLY the evidence ledger file (do NOT re-read raw corpus)\n"
+                                    f"2. Use EVID-XXX references when citing evidence\n"
+                                    f"3. Write the report based on ledger evidence for: {topic}\n\n"
+                                    f"Status: Iteration {current_iter + 1}/{max_iter}"
+                                )
+                                logfire.info(
+                                    "harness_handoff_ledger_aware",
+                                    ledger_path=ledger_path,
+                                    topic=topic,
+                                )
+                            else:
+                                # Generic restart: no ledger available
+                                next_prompt = (
+                                    "RESUMING (Context Limit Reached): You exceeded the context limit "
+                                    f"(~{context_tokens_for_reset} context tokens, cumulative usage {total_tokens}). "
+                                    "I have reset your memory. Continue the mission.json tasks from where you left off. "
+                                    f"Status: {current_iter + 1}/{max_iter}."
                                 )
 
-                                if current_iter >= max_iter:
-                                    print(
-                                        f"⛔ Max iterations ({max_iter}) reached despite context exhaustion. Stopping."
-                                    )
-                                    break
+                            pending_prompt = next_prompt
 
-                                new_iter = increment_iteration_count(
-                                    runtime_db_conn, run_id
-                                )
+                            # 3. Clear Context
+                            # [Auto-Flush] Trigger memory sub-agent before clearing
+                            await _run_memory_flush_subagent(
+                                client, workspace_dir, context_tokens_for_reset
+                            )
 
-                                # 2. Construct Handoff Prompt (Ledger-Aware)
-                                # Check for handoff.json written by build_evidence_ledger
-                                handoff_path = os.path.join(workspace_dir, "handoff.json") if workspace_dir else None
-                                handoff_state = None
-                            
-                                if handoff_path and os.path.exists(handoff_path):
-                                    try:
-                                        with open(handoff_path, "r") as hf:
-                                            handoff_state = json.load(hf)
-                                    except Exception as e:
-                                        logfire.warning("handoff_json_read_error", error=str(e))
-                            
-                                if handoff_state and handoff_state.get("phase") == "ledger_complete":
-                                    # Ledger-aware restart: guide agent to read only the ledger
-                                    ledger_path = handoff_state.get("ledger_path", "")
-                                    topic = handoff_state.get("topic", "the research topic")
-                                    next_prompt = (
-                                        f"RESUMING (Phase: SYNTHESIS):\n"
-                                        f"Context was reset after {total_tokens} tokens.\n"
-                                        f"Evidence ledger is ready at: {ledger_path}\n\n"
-                                        f"INSTRUCTIONS:\n"
-                                        f"1. READ ONLY the evidence ledger file (do NOT re-read raw corpus)\n"
-                                        f"2. Use EVID-XXX references when citing evidence\n"
-                                        f"3. Write the report based on ledger evidence for: {topic}\n\n"
-                                        f"Status: Iteration {current_iter + 1}/{max_iter}"
-                                    )
-                                    logfire.info("harness_handoff_ledger_aware", ledger_path=ledger_path, topic=topic)
-                                else:
-                                    # Generic restart: no ledger available
-                                    next_prompt = f"RESUMING (Context Limit Reached): You exceeded the context limit ({total_tokens} tokens). I have reset your memory. Continue the mission.json tasks from where you left off. Status: {current_iter + 1}/{max_iter}."
+                            if safe_clear_history(client):
+                                print("🧹 Client history cleared (Context Reset).")
+                            else:
+                                print("⚠️ Could not clear history: client.history not available")
 
-                                pending_prompt = next_prompt
+                            # 4. Reset token counters and pressure state for new session
+                            trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
+                            trace["token_usage_flags"] = {}
+                            trace["context_pressure"] = _default_context_pressure_state()
+                            compaction_observed_this_turn = False
 
-
-                                # 3. Clear Context
-                                # [Auto-Flush] Trigger memory sub-agent before clearing
-                                await _run_memory_flush_subagent(client, workspace_dir, total_tokens)
-
-                                if safe_clear_history(client):
-                                    print("🧹 Client history cleared (Context Reset).")
-                                else:
-                                    print("⚠️ Could not clear history: client.history not available")
-
-                                # 4. Reset Token Counter for new session
-                                trace["token_usage"] = {"input": 0, "output": 0, "total": 0}
-                                trace["token_usage_flags"] = {}
-
-                                continue  # Restart inner loop with new prompt
+                            continue  # Restart inner loop with new prompt
 
                 if isinstance(msg, AssistantMessage):
                     # Resolve author from sub-agent context
@@ -6508,12 +6784,17 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
                                         )
 
                 elif isinstance(msg, ResultMessage):
+                    result_telemetry = _extract_result_message_telemetry(msg)
+                    trace.setdefault("sdk_result_messages", []).append(result_telemetry)
                     logfire.info(
                         "result_message",
                         duration_ms=msg.duration_ms,
                         total_cost_usd=msg.total_cost_usd,
                         num_turns=msg.num_turns,
                         is_error=msg.is_error,
+                        subtype=result_telemetry.get("subtype"),
+                        model_usage=result_telemetry.get("model_usage"),
+                        usage=result_telemetry.get("usage"),
                         run_id=run_id,
                         step_id=step_id,
                         iteration=iteration,
@@ -7127,8 +7408,30 @@ async def setup_session(
                 print(f"⚠️ Failed to read SOUL.md: {e}")
         return ""
 
-    def get_capabilities_content(source_dir: str) -> str:
-        """Load the dynamic capabilities registry from capabilities.md."""
+    def get_capabilities_content(source_dir: str, ws_dir: str) -> str:
+        """Load a capabilities registry with live-first fallback ordering."""
+        # Priority 1: workspace-local generated registry (session-specific, freshest)
+        workspace_caps = os.path.join(ws_dir, "capabilities.md")
+        if os.path.exists(workspace_caps):
+            try:
+                with open(workspace_caps, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                if content:
+                    print(f"✅ Injected Workspace Capabilities Registry ({len(content)} chars)")
+                    return f"\n\n## 🧠 YOUR CAPABILITIES & SPECIALISTS\n{content}"
+            except Exception as e:
+                print(f"⚠️ Failed to read workspace capabilities.md: {e}")
+
+        # Priority 2: live runtime snapshot from discovered agents/skills
+        try:
+            live = build_live_capabilities_snapshot(source_dir).strip()
+            if live:
+                print(f"✅ Injected Live Capabilities Snapshot ({len(live)} chars)")
+                return f"\n\n## 🧠 YOUR CAPABILITIES & SPECIALISTS\n{live}"
+        except Exception as e:
+            print(f"⚠️ Failed to build live capabilities snapshot: {e}")
+
+        # Priority 3: static fallback
         capabilities_path = os.path.join(
             source_dir, "src", "universal_agent", "prompt_assets", "capabilities.md"
         )
@@ -7136,11 +7439,11 @@ async def setup_session(
             try:
                 with open(capabilities_path, "r", encoding="utf-8") as f:
                     content = f.read().strip()
-                    if content:
-                        print(f"✅ Injected Capabilities Registry ({len(content)} chars)")
-                        return f"\n\n## 🧠 YOUR CAPABILITIES & SPECIALISTS\n{content}"
+                if content:
+                    print(f"✅ Injected Static Capabilities Registry ({len(content)} chars)")
+                    return f"\n\n## 🧠 YOUR CAPABILITIES & SPECIALISTS\n{content}"
             except Exception as e:
-                print(f"⚠️ Failed to read capabilities.md: {e}")
+                print(f"⚠️ Failed to read static capabilities.md: {e}")
         return ""
 
     # Initialize Composio with automatic file downloads to this workspace
@@ -7261,7 +7564,10 @@ async def setup_session(
     )
 
     # --- SHARED PROMPT BUILDER (eliminates prompt divergence) ---
-    from universal_agent.prompt_builder import build_system_prompt as _shared_build_prompt
+    from universal_agent.prompt_builder import (
+        build_system_prompt as _shared_build_prompt,
+        build_sdk_system_prompt as _build_sdk_system_prompt,
+    )
 
     def _build_legacy_system_prompt(
         workspace_dir: str,
@@ -7362,7 +7668,7 @@ async def setup_session(
     # Override with local hook implementation that includes skill candidate detection
     hooks_manager.on_user_prompt_skill_awareness = on_user_prompt_skill_awareness
 
-    capabilities_registry = get_capabilities_content(src_dir)
+    capabilities_registry = get_capabilities_content(src_dir, abs_workspace_path)
 
     agent = UniversalAgent(
         workspace_dir=workspace_dir,
@@ -7371,6 +7677,16 @@ async def setup_session(
     if attach_stdio:
         setup_log_bridge(agent)
     from universal_agent.utils.model_resolution import resolve_claude_code_model
+
+    base_system_prompt = _build_legacy_system_prompt(
+        workspace_dir=abs_workspace_path,
+        soul_context=load_soul_context(workspace_dir, src_dir),
+        memory_context=memory_context_str,
+        capabilities_content=capabilities_registry,
+        skills_xml=skills_xml,
+    )
+    system_prompt_option, prompt_mode = _build_sdk_system_prompt(base_system_prompt)
+    print(f"🧾 System prompt mode: {prompt_mode}")
 
     options = ClaudeAgentOptions(
         model=resolve_claude_code_model(default="sonnet"),
@@ -7389,13 +7705,7 @@ async def setup_session(
                 )
             ),
         },
-        system_prompt=_build_legacy_system_prompt(
-            workspace_dir=abs_workspace_path,
-            soul_context=load_soul_context(workspace_dir, src_dir),
-            memory_context=memory_context_str,
-            capabilities_content=capabilities_registry,
-            skills_xml=skills_xml,
-        ),
+        system_prompt=system_prompt_option,
         mcp_servers={
             "composio": {
                 "type": "http",
@@ -7501,6 +7811,9 @@ async def setup_session(
         "tool_results": [],
         "iterations": [],
         "token_usage": {"input": 0, "output": 0, "total": 0},
+        "compact_boundary_events": [],
+        "sdk_result_messages": [],
+        "context_pressure": _default_context_pressure_state(),
         "logfire_enabled": bool(LOGFIRE_TOKEN),
     }
 
@@ -7519,25 +7832,35 @@ async def setup_session(
     except Exception as e:
         print(f"⚠️ Failed to list in-process MCP tools: {e}")
 
+    def _append_system_prompt_text(extra_text: str) -> None:
+        if not extra_text:
+            return
+        if isinstance(options.system_prompt, str):
+            options.system_prompt = (
+                f"{options.system_prompt}\n\n{extra_text}" if options.system_prompt else extra_text
+            )
+            return
+        if (
+            isinstance(options.system_prompt, dict)
+            and options.system_prompt.get("type") == "preset"
+            and options.system_prompt.get("preset") == "claude_code"
+        ):
+            existing_append = str(options.system_prompt.get("append") or "")
+            options.system_prompt["append"] = (
+                f"{existing_append}\n\n{extra_text}" if existing_append else extra_text
+            )
+            return
+        options.system_prompt = extra_text
+
     # Inject Workspace Path into System Prompt for Sub-Agents
-    # Safely append to system_prompt (ensure it's a string)
-    if options.system_prompt and isinstance(options.system_prompt, str):
-        options.system_prompt += (
-            f"\n\nContext:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
-        )
-    else:
-        # Create new context if no system prompt set
-        options.system_prompt = (
-            f"Context:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
-        )
+    _append_system_prompt_text(
+        f"Context:\nCURRENT_SESSION_WORKSPACE: {abs_workspace_path}\n"
+    )
     print(f"✅ Injected Session Workspace: {abs_workspace_path}")
 
     # Inject Knowledge Base (Static Tool Guidance)
     if tool_knowledge_block:
-        if options.system_prompt and isinstance(options.system_prompt, str):
-            options.system_prompt += f"\n\n{tool_knowledge_block}"
-        else:
-            options.system_prompt = tool_knowledge_block
+        _append_system_prompt_text(tool_knowledge_block)
         print(f"✅ Injected Knowledge Base ({len(tool_knowledge_content)} chars)")
 
 

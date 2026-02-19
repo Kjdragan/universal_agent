@@ -651,9 +651,7 @@ async def pre_tool_use_schema_guardrail(
 
     normalized_name = identity.tool_name.lower()
 
-    # 1.5. Research-phase guardrail: warn if search_results don't exist yet (race condition possible)
-    # NOTE: We no longer block here because observers save files asynchronously and may not have
-    # finished writing before this tool is called. The tool itself handles missing data gracefully.
+    # 1.5. Research-phase guardrail for primary-agent misuse.
     if normalized_name.endswith("run_research_phase"):
         workspace = os.getenv("CURRENT_SESSION_WORKSPACE", "")
         if not workspace:
@@ -670,8 +668,35 @@ async def pre_tool_use_schema_guardrail(
                     "permissionDecisionReason": "Missing CURRENT_SESSION_WORKSPACE.",
                 },
             }
-        # Allow the tool to proceed - it will handle missing data gracefully
-        # The observer may still be writing files due to async save
+        # Primary should not call this tool directly; it belongs in delegated research workflows.
+        parent_tool_use_id = input_data.get("parent_tool_use_id")
+        transcript_path = str(input_data.get("transcript_path", "") or "")
+        primary_transcript = str(globals().get("_primary_transcript_path") or "")
+        is_subagent_context = bool(parent_tool_use_id) or (
+            bool(primary_transcript)
+            and bool(transcript_path)
+            and transcript_path != primary_transcript
+        )
+        if not is_subagent_context:
+            search_dir = Path(workspace) / "search_results"
+            has_search_inputs = search_dir.exists() and any(search_dir.glob("*.json"))
+            if not has_search_inputs:
+                return {
+                    "systemMessage": (
+                        "⚠️ `run_research_phase` was called from the Primary Agent without collected search inputs.\n\n"
+                        "Happy path:\n"
+                        "1) Delegate via `Task(subagent_type='research-specialist', ...)` for web/news research, OR\n"
+                        "2) Use domain tools directly for trend tasks (`mcp__internal__x_trends_posts`, "
+                        "`mcp__internal__reddit_top_posts`, `REDDIT_*`).\n\n"
+                        "Then continue with downstream analysis/delivery."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Primary called run_research_phase without search_results inputs.",
+                    },
+                }
     if isinstance(tool_input, dict):
         if normalized_name == "task":
             subagent_type = str(tool_input.get("subagent_type", "") or "").strip().lower()
@@ -879,6 +904,21 @@ async def pre_tool_use_schema_guardrail(
                                     "hookEventName": "PreToolUse",
                                     "permissionDecision": "deny",
                                     "permissionDecisionReason": "Blocked Composio X/Twitter tool discovery by policy.",
+                                },
+                            }
+                        if "reddit" in combined:
+                            return {
+                                "systemMessage": (
+                                    "⚠️ `COMPOSIO_SEARCH_TOOLS` is unnecessary for Reddit in this project.\n\n"
+                                    "Use direct tools instead:\n"
+                                    "- Preferred compact path: `mcp__internal__reddit_top_posts`\n"
+                                    "- Or direct Composio Reddit tools (`REDDIT_GET_R_TOP`, `REDDIT_SEARCH_ACROSS_SUBREDDITS`, etc.)."
+                                ),
+                                "decision": "block",
+                                "hookSpecificOutput": {
+                                    "hookEventName": "PreToolUse",
+                                    "permissionDecision": "deny",
+                                    "permissionDecisionReason": "Blocked unnecessary COMPOSIO_SEARCH_TOOLS discovery for Reddit intent.",
                                 },
                             }
                 if invalid_indices:

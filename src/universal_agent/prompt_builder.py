@@ -9,6 +9,51 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+DEFAULT_SYSTEM_PROMPT_MODE = "claude_code_append"
+_CLAUDE_CODE_APPEND_ALIASES = {
+    "claude_code_append",
+    "claude_code",
+    "preset_append",
+    "preset",
+}
+_CUSTOM_ONLY_ALIASES = {
+    "custom_only",
+    "custom",
+    "raw",
+    "legacy",
+    "full_custom",
+}
+
+
+def resolve_system_prompt_mode(raw_mode: Optional[str] = None) -> str:
+    """Resolve prompt mode from a raw mode string into a canonical mode."""
+    value = (raw_mode or DEFAULT_SYSTEM_PROMPT_MODE).strip().lower()
+    if value in _CUSTOM_ONLY_ALIASES:
+        return "custom_only"
+    if value in _CLAUDE_CODE_APPEND_ALIASES:
+        return "claude_code_append"
+    return "claude_code_append"
+
+
+def build_sdk_system_prompt(custom_prompt: str, raw_mode: Optional[str] = None) -> tuple[str | dict[str, str], str]:
+    """
+    Build ClaudeAgentOptions.system_prompt from custom prompt text.
+
+    Modes (set via `UA_SYSTEM_PROMPT_MODE`):
+    - `claude_code_append` (default): Claude Code preset + append custom prompt
+    - `custom_only`: pass custom prompt directly (no preset)
+    """
+    mode = resolve_system_prompt_mode(
+        raw_mode if raw_mode is not None else os.getenv("UA_SYSTEM_PROMPT_MODE")
+    )
+    if mode == "custom_only":
+        return custom_prompt, mode
+    return {
+        "type": "preset",
+        "preset": "claude_code",
+        "append": custom_prompt,
+    }, mode
+
 
 def _load_file(path: str) -> str:
     """Read a text file, returning empty string on failure."""
@@ -194,12 +239,14 @@ def build_system_prompt(
     # ── 6. CAPABILITY DOMAINS ─────────────────────────────────────────
     sections.append(
         "## 🌐 CAPABILITY DOMAINS (THINK BEYOND RESEARCH & REPORTS)\n"
-        "You have 8 capability domains. When given a task, consider ALL of them — not just research:\n"
-        "- **Intelligence**: Composio search, browserbase web scraping, URL/PDF extraction, X trends via `mcp__internal__x_trends_posts` (Grok/xAI `x_search` evidence fetch), Reddit trending (`mcp__composio__REDDIT_*`), weather via the `openweather` skill\n"
+        "You have multiple capability domains. For non-trivial tasks, evaluate at least 4 candidate domains before selecting a plan.\n"
+        "Selection goal: maximize direct task completion, verifiable evidence, and user outcome speed (not just report generation).\n"
+        "- **Intelligence**: Composio search, URL/PDF extraction, X trends via `mcp__internal__x_trends_posts` (Grok/xAI `x_search` evidence fetch), Reddit trending (`mcp__composio__REDDIT_*`), weather via the `openweather` skill\n"
         "- **Computation**: Prefer local `Bash` + `uv run python ...` for stats/charts. Use CodeInterpreter (`mcp__composio__CODEINTERPRETER_*`) when you need isolation or a persistent sandbox.\n"
         "- **Media Creation**: `image-expert`, `video-creation-expert`, `mermaid-expert`, Manim animations\n"
         "- **Communication**: Gmail (`mcp__composio__GMAIL_*`), Slack (`mcp__composio__SLACK_*`), Discord (`mcp__composio__DISCORD_*`), Calendar (`mcp__composio__GOOGLECALENDAR_*`)\n"
-        "- **Real-World Actions**: GoPlaces, Google Maps directions (`mcp__composio__GOOGLEMAPS_*`), browser automation (`browserbase`), form filling\n"
+        "- **Browser Operations**: Bowser stack (`claude-bowser`, `playwright-bowser`, `bowser-qa-agent`) for interactive execution and validation; Browserbase for cloud-browser fallback cases\n"
+        "- **Real-World Actions**: GoPlaces, Google Maps directions (`mcp__composio__GOOGLEMAPS_*`), authenticated website actions, form filling\n"
         "- **Engineering**: GitHub (`mcp__composio__GITHUB_*`), code analysis, test execution\n"
         "- **Knowledge Capture**: Notion (`mcp__composio__NOTION_*`), memory tools, Google Docs/Sheets/Drive\n"
         "- **Reminders & Brainstorm Progression**: Internal Todoist tools for quick capture, dedupe, and heartbeat-visible backlog movement\n"
@@ -213,6 +260,8 @@ def build_system_prompt(
     sections.append(
         "## 🚀 EXECUTION STRATEGY\n"
         "1. **Analyze Request**: What capability domains does this need? Think CREATIVELY.\n"
+        "   - For non-trivial tasks, quickly score candidate domains/lanes before committing.\n"
+        "   - Do not default to research/report if direct execution, automation, analysis, or delivery lanes are a better fit.\n"
         "2. **Choose the right atomic-action lane**:\n"
         "   - Todoist reminders/brainstorm capture -> use INTERNAL Todoist tools first (`mcp__internal__todoist_*`).\n"
         "   - Other external SaaS actions (search, email, calendar, code exec, Slack, YouTube, etc.) -> use Composio tools directly.\n"
@@ -226,13 +275,23 @@ def build_system_prompt(
         "   - Video production? -> `video-creation-expert` or `video-remotion-expert`\n"
         "   - Image generation? -> `image-expert`\n"
         "   - Diagrams? -> `mermaid-expert`\n"
-        "   - Browser automation? -> `browserbase`\n"
+        "   - Browser automation/validation? -> Bowser lanes first (`claude-bowser-agent`, `playwright-bowser-agent`, `bowser-qa-agent`); `browserbase` only when Bowser is unavailable or cloud-browser behavior is explicitly required\n"
         "   - YouTube tutorials? -> `youtube-explainer-expert`\n"
         "   - Slack interactions? -> `slack-expert`\n"
         "   - System/cron config? -> `system-configuration-agent`\n"
         "   - IMPORTANT: Do NOT substitute Todoist capture flows for these specialist execution workflows.\n"
         "4. **Chain phases**: Output from one phase feeds the next. Local phases (image gen, video render, PDF) "
         "need handoff to Composio backbone for delivery (upload_to_composio -> GMAIL_SEND_EMAIL)."
+    )
+
+    # ── 7b. BROWSER LANE SELECTION ───────────────────────────────────
+    sections.append(
+        "## 🌐 BROWSER LANE SELECTION (BOWSER-FIRST)\n"
+        "- Use `claude-bowser` / `claude-bowser-agent` when the task requires the user's real Chrome identity/session (cookies, extensions, existing logins).\n"
+        "- Use `playwright-bowser` / `playwright-bowser-agent` for isolated, repeatable, parallel browser runs and CI-style validation.\n"
+        "- Use `bowser-qa-agent` for structured user-story validation with screenshot evidence and pass/fail outputs.\n"
+        "- Use `browserbase` as fallback for cloud-browser workflows when Bowser is unavailable, not installed, or explicitly not suitable.\n"
+        "- Never reduce browser-executable tasks to text-only summaries when direct execution would produce stronger evidence."
     )
 
     # ── 8. SHOWCASE / OPEN-ENDED GUIDANCE ─────────────────────────────
@@ -250,6 +309,7 @@ def build_system_prompt(
         "- Search Google Drive for related docs (`mcp__composio__GOOGLEDRIVE_*`)\n"
         "- Create a Notion knowledge base page (`mcp__composio__NOTION_*`)\n"
         "- Fetch Google Sheets data and analyze it (`mcp__composio__GOOGLESHEETS_*`)\n"
+        "- Execute and validate real browser workflows via Bowser (not just scrape snippets)\n"
         "- Generate video content, not just images\n"
         "- Discover NEW integrations on-the-fly with `mcp__composio__COMPOSIO_SEARCH_TOOLS`\n"
         "- Set up a recurring monitoring cron job via `system-configuration-agent`\n"
@@ -339,7 +399,7 @@ def build_system_prompt(
     # ── 15. REPORT DELEGATION ─────────────────────────────────────────
     sections.append(
         "## 🔗 REPORT DELEGATION (WHEN REPORTS ARE NEEDED)\n"
-        "WHEN the task specifically calls for a research report, follow this proven pipeline:\n"
+        "ONLY when the task explicitly calls for a research report or written research deliverable, follow this pipeline:\n"
         "- Delegate to `research-specialist` for deep search + crawl + corpus.\n"
         "- Then delegate to `report-writer` for HTML/PDF generation from refined_corpus.md.\n"
         "- After a Composio search, the Observer AUTO-SAVES results to `search_results/` directory.\n"

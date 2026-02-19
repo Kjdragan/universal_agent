@@ -162,7 +162,7 @@ You MUST create `macro_tasks.json` in the workspace with this structure:
 | `airtable` / `AIRTABLE_*` | Structured records and workflows |
 | `hubspot` / `HUBSPOT_*` | CRM contacts, deals, pipelines |
 | `linear` / `LINEAR_*` | Issue tracking, project planning |
-| `browserbase` / `BROWSERBASE_*` | Headless browser, web scraping |
+| `browserbase` / `BROWSERBASE_*` | Cloud browser fallback for web scraping/automation when Bowser lanes are unavailable or explicitly unsuitable |
 | `filetool` | File read/write in workspace |
 | `sqltool` | SQL queries against databases |
 
@@ -184,7 +184,10 @@ Notes:
 | `video-creation-expert` | Video/audio download, processing, effects | Local FFmpeg + yt-dlp |
 | `video-remotion-expert` | Programmatic React-based video generation | Local Remotion |
 | `mermaid-expert` | Flowcharts, sequence diagrams, ERDs | Local Mermaid rendering |
-| `browserbase` | Browser automation, scraping, form filling | Composio Browserbase |
+| `claude-bowser-agent` | Real Chrome/browser-session automation for authenticated user-state workflows | Claude Chrome MCP |
+| `playwright-bowser-agent` | Isolated, repeatable, parallel browser automation and UI testing | Playwright CLI |
+| `bowser-qa-agent` | Structured user-story UI validation with step screenshots and pass/fail reporting | Playwright CLI + QA workflow |
+| `browserbase` | Cloud browser fallback for automation/scraping when Bowser is unavailable or explicitly not suitable | Composio Browserbase |
 | `slack-expert` | Slack workspace interactions | Composio Slack tools |
 | `youtube-explainer-expert` | YouTube tutorial learning artifacts | Composio YouTube + local processing |
 | `system-configuration-agent` | Cron jobs, heartbeat, runtime config | Internal APIs |
@@ -266,12 +269,19 @@ Think broadly about what the request ACTUALLY needs:
 - Does it need **computation**? → local Bash+Python first, then CodeInterpreter if isolation is needed
 - Does it need **repo code changes**? → code-writer
 - Does it need **media creation**? → image-expert, video-creation-expert, mermaid-expert
-- Does it need **real-world actions**? → Gmail, Calendar, Slack, browser automation
+- Does it need **real-world actions**? → Gmail, Calendar, Slack, browser execution
+- Does it need **browser operations/validation**? → Bowser lanes first (`claude-bowser-agent`, `playwright-bowser-agent`, `bowser-qa-agent`), Browserbase only as fallback
 - Does it need **monitoring**? → Cron job setup via system-configuration-agent
 - Does it need **code/engineering**? → GitHub operations, coding-agent
 - Does it need **knowledge capture**? → Notion, memory tools
 
-### 4. Success Criteria
+### 4. Capability Balance (Anti-Default Rule)
+
+- For non-trivial requests, evaluate at least 4 capability domains before selecting a plan.
+- Do not default to research/report unless the user explicitly asks for research output or there is no direct-action path.
+- Prefer execution lanes that produce verifiable evidence (screenshots, logs, artifacts, receipts) over narrative-only outputs.
+
+### 5. Success Criteria
 
 Every task MUST have:
 
@@ -328,6 +338,14 @@ Every task MUST have:
 - **Evaluation Gate**: Are gaps filled? If NO → back to Phase 1 with refined queries
 - Phase 3 (Processing): report-writer → comprehensive report
 - Phase 4 (Delivery): `GMAIL_SEND_EMAIL` + `SLACK_*`
+
+### Example E: UI Validation + Operational Delivery (Bowser-First)
+
+**Request:** "Validate checkout flow on staging and send me proof"
+
+- Phase 1 (Input): `playwright-bowser-agent` fan-out for critical user stories
+- Phase 2 (Processing): `bowser-qa-agent` aggregates step-level pass/fail + screenshots
+- Phase 3 (Delivery): `upload_to_composio` + `GMAIL_SEND_EMAIL` (single-attachment emails) + optional `SLACK_*` summary
 
 ---
 

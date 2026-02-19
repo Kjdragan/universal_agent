@@ -240,3 +240,136 @@ def generate_skills_xml(skills: list[dict]) -> str:
             f"- **{skill['name']}**: {skill['description']} (Path: `{skill['path']}`)"
         )
     return "\n".join(lines)
+
+
+def _parse_agent_frontmatter(path: str) -> tuple[str, str]:
+    """Return (name, description) parsed from an agent markdown file."""
+    import yaml
+
+    default_name = os.path.splitext(os.path.basename(path))[0]
+    content = _load_file(path)
+    if not content:
+        return default_name, "Internal specialized agent."
+
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            try:
+                meta = yaml.safe_load(parts[1]) or {}
+                if isinstance(meta, dict):
+                    name = str(meta.get("name") or default_name)
+                    desc = str(meta.get("description") or "Internal specialized agent.")
+                    return name, " ".join(desc.split())
+            except Exception:
+                pass
+
+    return default_name, "Internal specialized agent."
+
+
+def _discover_agent_profiles(project_root: str) -> list[dict]:
+    """Discover specialist agents from project directories."""
+    agents: list[dict] = []
+    seen: set[str] = set()
+    agent_dirs = [
+        os.path.join(project_root, ".claude", "agents"),
+        os.path.join(project_root, "src", "universal_agent", "agent_college"),
+    ]
+
+    for directory in agent_dirs:
+        if not os.path.isdir(directory):
+            continue
+        for filename in sorted(os.listdir(directory)):
+            if filename.startswith("_") or filename in {"common.py"}:
+                continue
+
+            full_path = os.path.join(directory, filename)
+            if filename.endswith(".md"):
+                name, description = _parse_agent_frontmatter(full_path)
+            elif filename.endswith(".py"):
+                name = os.path.splitext(filename)[0]
+                description = "Internal specialized agent."
+            else:
+                continue
+
+            key = _normalize_skill_key(name)
+            if key in seen:
+                continue
+            seen.add(key)
+            agents.append(
+                {
+                    "name": name,
+                    "description": description,
+                }
+            )
+    return agents
+
+
+def _agent_domain(name: str) -> str:
+    lowered = name.lower()
+    if any(token in lowered for token in ("bowser", "playwright", "browserbase", "chrome")):
+        return "🌐 Browser Operations"
+    if any(token in lowered for token in ("research", "trend", "report", "data-analyst", "evaluation")):
+        return "🔬 Research & Analysis"
+    if any(token in lowered for token in ("image", "video", "mermaid", "youtube", "banana")):
+        return "🎨 Creative & Media"
+    if any(token in lowered for token in ("slack", "gmail", "calendar", "action", "ops", "system-configuration")):
+        return "📣 Communication & Operations"
+    if any(token in lowered for token in ("code", "task-decomposer", "integration", "runner", "critic", "config")):
+        return "⚙️ Engineering & Automation"
+    return "🛠 General"
+
+
+def build_live_capabilities_snapshot(project_root: Optional[str] = None) -> str:
+    """
+    Build a runtime capabilities snapshot from discovered agents + skills.
+    This prevents prompt drift when static capabilities.md gets stale.
+    """
+    from datetime import datetime
+
+    root = project_root or _PROJECT_ROOT
+    lines: list[str] = [
+        "<!-- Runtime Capabilities Snapshot (Auto) -->",
+        "",
+        f"<!-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} -->",
+        "",
+        "### Capability Routing Doctrine",
+        "- Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.",
+        "- Do not default to research/report unless explicitly requested or clearly required.",
+        "- Browser tasks are Bowser-first: `claude-bowser-agent` (identity/session), `playwright-bowser-agent` (parallel/repeatable), `bowser-qa-agent` (UI validation).",
+        "- Use `browserbase` when Bowser lanes are unavailable or cloud-browser behavior is explicitly needed.",
+        "",
+        "### 🤖 Specialist Agents (Live)",
+    ]
+
+    agents = _discover_agent_profiles(root)
+    if agents:
+        grouped: dict[str, list[dict]] = {}
+        for agent in agents:
+            grouped.setdefault(_agent_domain(agent["name"]), []).append(agent)
+
+        for domain in sorted(grouped.keys()):
+            lines.append(f"\n#### {domain}")
+            for agent in sorted(grouped[domain], key=lambda item: item["name"].lower()):
+                lines.append(f"- **{agent['name']}**: {agent['description']}")
+                lines.append(f"  -> Delegate: `Task(subagent_type='{agent['name']}', ...)`")
+    else:
+        lines.append("- No specialist agents discovered.")
+
+    lines.extend(
+        [
+            "",
+            "### 📚 Skills (Live)",
+        ]
+    )
+
+    skills = discover_skills(os.path.join(root, ".claude", "skills"))
+    if skills:
+        for skill in sorted(skills, key=lambda item: item.get("name", "").lower()):
+            name = skill.get("name", "unknown")
+            desc = " ".join(str(skill.get("description", "No description")).split())
+            path = skill.get("path", "")
+            lines.append(f"- **{name}**: {desc} (Source: `{path}`)")
+    else:
+        lines.append("- No skills discovered.")
+
+    return "\n".join(lines)
