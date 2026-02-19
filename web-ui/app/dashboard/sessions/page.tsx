@@ -6,12 +6,8 @@ import { OpsProvider, SessionsSection } from "@/components/OpsDropdowns";
 export default function DashboardSessionsPage() {
   return (
     <OpsProvider>
-      <div className="flex h-full flex-col space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-xl font-semibold tracking-tight">Sessions</h1>
-            <p className="text-sm text-slate-400">Session list, actions, and run controls.</p>
-          </div>
+      <div className="flex h-full flex-col space-y-2">
+        <div className="flex items-center justify-end">
           <Link
             href="/"
             className="rounded-lg border border-cyan-700/60 bg-cyan-600/15 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25"
