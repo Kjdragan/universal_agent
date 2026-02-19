@@ -422,6 +422,7 @@ class YouTubeIngestRequest(BaseModel):
     language: str = "en"
     timeout_seconds: int = 120
     max_chars: int = 180_000
+    min_chars: int = 160
     request_id: Optional[str] = None
 
 
@@ -3734,6 +3735,7 @@ async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestReques
         language=(payload.language or "en").strip() or "en",
         timeout_seconds=max(5, min(int(payload.timeout_seconds or 120), 600)),
         max_chars=max(5_000, min(int(payload.max_chars or 180_000), 800_000)),
+        min_chars=max(20, min(int(payload.min_chars or 160), 5000)),
     )
     result["request_id"] = (payload.request_id or "").strip() or None
     result["worker_profile"] = _DEPLOYMENT_PROFILE
