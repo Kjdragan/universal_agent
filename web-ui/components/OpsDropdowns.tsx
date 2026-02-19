@@ -9,6 +9,7 @@ import { openOrFocusChatWindow } from "@/lib/chatWindow";
 
 const API_BASE = "/api/dashboard/gateway";
 const SCHED_PUSH_ENABLED = (process.env.NEXT_PUBLIC_UA_SCHED_PUSH_ENABLED ?? "1").trim().toLowerCase() !== "0";
+const RESULT_STATUSES = new Set(["success", "failed", "missed"]);
 
 type SessionSummary = {
   session_id: string;
@@ -1130,8 +1131,6 @@ export function CalendarSection() {
     if (view === "day") return [new Date(range.start)];
     return Array.from({ length: 7 }, (_, i) => addDays(range.start, i));
   }, [range.start, view]);
-
-  const RESULT_STATUSES = new Set(["success", "failed", "missed"]);
 
   const { scheduledByDay, resultsByDay } = useMemo(() => {
     const sMap = new Map<string, CalendarEventItem[]>();

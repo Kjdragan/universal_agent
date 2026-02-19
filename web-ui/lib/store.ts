@@ -14,6 +14,7 @@ import {
   ViewMode,
   SessionInfo,
   WebSocketEvent,
+  StorageSyncState,
 } from "@/types/agent";
 import { generateId } from "./utils";
 
@@ -90,6 +91,12 @@ interface AgentStore {
   // UI Viewing State
   viewingFile: { name: string; path: string; content?: string; type: string } | null;
   setViewingFile: (file: { name: string; path: string; content?: string; type: string } | null) => void;
+
+  // Storage sync status
+  storageSyncStatus: StorageSyncState;
+  storagePendingCount: number;
+  lastStorageRefreshAt: number | null;
+  setStorageSyncState: (status: StorageSyncState, pending: number, refreshedAt?: number) => void;
 
   // Logs (real-time tool output)
   logs: Array<{
@@ -317,6 +324,17 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   viewingFile: null,
   setViewingFile: (file) => set({ viewingFile: file }),
 
+  // Storage sync status
+  storageSyncStatus: "unknown",
+  storagePendingCount: 0,
+  lastStorageRefreshAt: null,
+  setStorageSyncState: (status, pending, refreshedAt) =>
+    set({
+      storageSyncStatus: status,
+      storagePendingCount: pending,
+      lastStorageRefreshAt: refreshedAt ?? Date.now(),
+    }),
+
   // Logs
   logs: [],
   addLog: (log) => set((state) => ({
@@ -382,6 +400,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     iterationCount: 0,
     lastError: null,
     viewingFile: null,
+    storageSyncStatus: "unknown",
+    storagePendingCount: 0,
+    lastStorageRefreshAt: null,
     sessionAttachMode: "default",
   }),
 }));

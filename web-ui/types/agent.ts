@@ -355,3 +355,55 @@ export interface SystemPresenceData {
   metadata?: Record<string, unknown>;
   updated_at?: string;
 }
+
+// =============================================================================
+// Storage UX Types
+// =============================================================================
+
+export type StorageSyncState = "in_sync" | "behind" | "syncing" | "unknown" | "error";
+
+export interface StorageSessionItem {
+  session_id: string;
+  source_type: "web" | "hook" | "telegram" | "other";
+  status: string;
+  ready: boolean;
+  completed_at_epoch?: number | null;
+  updated_at_epoch?: number | null;
+  modified_epoch?: number | null;
+  size_bytes?: number | null;
+  root_path: string;
+  run_log_path?: string | null;
+  marker_path?: string | null;
+  marker_exists?: boolean;
+}
+
+export interface StorageArtifactItem {
+  path: string;
+  slug: string;
+  title: string;
+  status: string;
+  video_id?: string | null;
+  video_url?: string | null;
+  updated_at_epoch?: number | null;
+  manifest_path?: string | null;
+  readme_path?: string | null;
+  implementation_path?: string | null;
+}
+
+export interface StorageOverview {
+  sync_state: StorageSyncState;
+  pending_ready_count: number;
+  latest_ready_remote_epoch?: number | null;
+  latest_ready_local_epoch?: number | null;
+  lag_seconds?: number | null;
+  latest_sessions: {
+    web: StorageSessionItem | null;
+    hook: StorageSessionItem | null;
+    telegram: StorageSessionItem | null;
+  };
+  latest_artifact: StorageArtifactItem | null;
+  workspace_root: string;
+  artifacts_root: string;
+  probe_ok: boolean;
+  probe_error?: string | null;
+}

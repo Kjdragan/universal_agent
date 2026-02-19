@@ -20,6 +20,7 @@ import { ApprovalModal, useApprovalModal } from "@/components/approvals/Approval
 import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
 import { OpsProvider, SessionsSection, CalendarSection, SkillsSection, ChannelsSection, ApprovalsSection, SystemEventsSection, OpsConfigSection, SessionContinuityWidget, HeartbeatWidget } from "@/components/OpsDropdowns";
+import { StorageQuickPanel } from "@/components/storage/StorageQuickPanel";
 // UI Primitives
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import ReactMarkdown from "react-markdown";
@@ -865,6 +866,7 @@ function ChatInterface() {
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const handleSendRef = React.useRef<(textOverride?: string) => Promise<void>>(async () => {});
   const hydratedSessionIdsRef = React.useRef<Set<string>>(new Set());
   const isVpObserverSession = /^vp_/i.test((currentSession?.session_id || "").trim());
 
@@ -954,6 +956,7 @@ function ChatInterface() {
       setIsSending(false);
     }
   };
+  handleSendRef.current = handleSend;
 
   const handleUseBrainstormTonight = async () => {
     if (chatRole === "viewer" || isVpObserverSession) return;
@@ -973,7 +976,7 @@ function ChatInterface() {
     if (connectionStatus === "connected" && pendingQuery) {
       const query = pendingQuery;
       setPendingQuery(null);
-      handleSend(query);
+      void handleSendRef.current(query);
     }
   }, [connectionStatus, pendingQuery]);
 
@@ -1364,6 +1367,9 @@ type DashboardAuthSession = {
   expires_at?: number | null;
 };
 
+void FileExplorer;
+void WorkProductViewer;
+
 export default function HomePage() {
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const viewingFile = useAgentStore((s) => s.viewingFile); // Sub to viewing state
@@ -1683,12 +1689,12 @@ export default function HomePage() {
               New Session
             </button>
             <a
-              href="/files"
+              href="/storage"
               target="_blank"
               rel="noopener noreferrer"
               className="hidden md:block rounded-lg border border-border/50 bg-card/40 px-3 py-2 text-[15px] uppercase tracking-widest text-muted-foreground hover:border-primary/40 hover:text-primary"
             >
-              File Browser
+              Storage
             </a>
             {/* Mobile/Tablet Menu Button could go here */}
 
@@ -1790,7 +1796,7 @@ export default function HomePage() {
               <div className="p-3 border-b border-slate-800 bg-slate-900/80 flex items-center justify-between shrink-0 md:hidden">
                 <div className="flex items-center gap-2">
                   <span className="text-xl">{ICONS.folder}</span>
-                  <span className="font-bold uppercase tracking-wider text-sm">File Browser</span>
+                  <span className="font-bold uppercase tracking-wider text-sm">Storage</span>
                 </div>
                 <button
                   onClick={() => setActiveMobileTab('chat')}
@@ -1809,10 +1815,7 @@ export default function HomePage() {
             </div>
 
             <div className="flex-1 flex flex-col min-h-0 pl-1">
-              <FileExplorer />
-              <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
-                <WorkProductViewer />
-              </div>
+              <StorageQuickPanel />
               <HeartbeatWidget />
               <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
                 <TaskPanel />
@@ -1826,7 +1829,7 @@ export default function HomePage() {
             <button
               onClick={() => setShowTabletFiles(!showTabletFiles)}
               className="bg-slate-800/80 border border-slate-700 text-slate-300 p-2 rounded-l-lg shadow-xl hover:bg-slate-700"
-              title="Toggle Files"
+              title="Toggle Storage"
             >
               {ICONS.folder}
             </button>
@@ -1836,14 +1839,11 @@ export default function HomePage() {
           {showTabletFiles && (
             <div className="absolute right-0 top-0 h-full w-[320px] bg-slate-950/95 border-l border-slate-700 z-40 flex flex-col shadow-2xl animate-in slide-in-from-right-10 duration-200">
               <div className="p-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
-                <span className="text-xs font-bold uppercase tracking-wider pl-2">Files & Tasks</span>
+                <span className="text-xs font-bold uppercase tracking-wider pl-2">Storage & Tasks</span>
                 <button onClick={() => setShowTabletFiles(false)} className="p-1 hover:text-white text-slate-400">✕</button>
               </div>
               <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                <FileExplorer />
-                <div className="border-t border-border/40 pt-2 flex-1 flex flex-col min-h-0">
-                  <WorkProductViewer />
-                </div>
+                <StorageQuickPanel />
                 <HeartbeatWidget />
                 <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
                   <TaskPanel />
@@ -1867,7 +1867,7 @@ export default function HomePage() {
                 {[
                   { key: "sessions", label: "Sessions", icon: "📋" },
                   { key: "skills", label: "Skills", icon: "🧩" },
-                  { key: "files_shortcut", label: "Files", icon: "📁" },
+                  { key: "files_shortcut", label: "Storage", icon: "📁" },
                   { key: "calendar", label: "Calendar", icon: "🗓️" },
                   { key: "channels", label: "Channels", icon: "📡" },
                   { key: "approvals", label: "Approvals", icon: "✅" },
@@ -1952,7 +1952,7 @@ export default function HomePage() {
             className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-purple-400' : 'text-slate-500'}`}
           >
             <span className="text-xl">{ICONS.folder}</span>
-            <span className="text-[9px] uppercase tracking-widest font-bold">Files</span>
+            <span className="text-[9px] uppercase tracking-widest font-bold">Storage</span>
           </button>
           <button
             onClick={() => setActiveMobileTab('dashboard')}
