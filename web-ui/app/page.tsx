@@ -1648,8 +1648,19 @@ export default function HomePage() {
 
           {/* Center: Ops dropdown buttons - Hidden on Mobile */}
           <div className="hidden md:flex items-center gap-2 shrink-0">
+            <a
+              href="/dashboard/sessions"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60"
+              title="Open Sessions in a new tab"
+              aria-label="Open Sessions in a new tab"
+            >
+              <span className="text-xs">📋</span>
+              <span>Sessions</span>
+              <span className="text-[10px] text-slate-500">↗</span>
+            </a>
             {([
-              { key: "sessions", label: "Sessions", icon: "📋", content: <SessionsSection />, width: "w-[800px]" },
               { key: "calendar", label: "Calendar", icon: "🗓️", content: <CalendarSection />, width: "w-[1100px]" },
               { key: "skills", label: "Skills", icon: "🧩", content: <SkillsSection />, width: "w-[800px]" },
               { key: "channels", label: "Channels", icon: "📡", content: <ChannelsSection />, width: "w-[600px]" },
