@@ -1640,6 +1640,14 @@ export default function HomePage() {
                 🗂️
               </span>
             </a>
+            <a
+              href="/dashboard"
+              className="hidden md:inline-flex h-10 w-12 items-center justify-center rounded-xl border border-border/50 bg-card/40 text-2xl text-muted-foreground transition hover:border-primary/40 hover:text-primary"
+              title="Dashboard Home"
+              aria-label="Dashboard Home"
+            >
+              🏠
+            </a>
           </div>
 
           {/* Center: Ops dropdown buttons - Hidden on Mobile */}
@@ -1680,14 +1688,6 @@ export default function HomePage() {
 
           {/* Right: Metrics, Status */}
           <div className="ml-auto flex items-center gap-2 md:gap-4">
-            <a
-              href="/dashboard"
-              className="hidden md:inline-flex h-10 w-12 items-center justify-center rounded-xl border border-border/50 bg-card/40 text-2xl text-muted-foreground hover:border-primary/40 hover:text-primary"
-              title="Dashboard Home"
-              aria-label="Dashboard Home"
-            >
-              🏠
-            </a>
             <button
               type="button"
               onClick={handleStartNewSession}
@@ -1814,11 +1814,13 @@ export default function HomePage() {
               />
             </div>
 
-            <div className="flex-1 flex flex-col min-h-0 pl-1">
-              <StorageQuickPanel />
-              <HeartbeatWidget />
-              <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
-                <TaskPanel />
+            <div className="flex-1 min-h-0 pl-1 pr-1 overflow-y-auto scrollbar-thin">
+              <div className="flex min-h-full flex-col gap-2 pb-2">
+                <StorageQuickPanel />
+                <HeartbeatWidget />
+                <div className="border-t border-border/40 pt-2 min-h-[180px] flex flex-col">
+                  <TaskPanel />
+                </div>
               </div>
             </div>
           </aside>
@@ -1843,10 +1845,14 @@ export default function HomePage() {
                 <button onClick={() => setShowTabletFiles(false)} className="p-1 hover:text-white text-slate-400">✕</button>
               </div>
               <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                <StorageQuickPanel />
-                <HeartbeatWidget />
-                <div className="border-t border-border/40 pt-2 h-1/4 flex flex-col min-h-0">
-                  <TaskPanel />
+                <div className="flex-1 min-h-0 pl-1 pr-1 overflow-y-auto scrollbar-thin">
+                  <div className="flex min-h-full flex-col gap-2 pb-2">
+                    <StorageQuickPanel />
+                    <HeartbeatWidget />
+                    <div className="border-t border-border/40 pt-2 min-h-[180px] flex flex-col">
+                      <TaskPanel />
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
