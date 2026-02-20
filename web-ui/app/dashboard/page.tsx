@@ -46,6 +46,7 @@ type VpMissionSnapshot = {
   priority?: number;
   cancel_requested?: number;
   result_ref?: string | null;
+  claim_expires_at?: string | null;
   created_at?: string;
   updated_at?: string;
   started_at?: string;
@@ -82,6 +83,7 @@ const EMPTY_SUMMARY: SummaryResponse = {
 };
 
 const VP_IDS = ["vp.coder.primary", "vp.general.primary"] as const;
+const VP_STALE_WINDOW_MS = 15 * 60 * 1000;
 
 function formatLocalDateTime(value?: string | number | null): string {
   if (!value) return "--";
@@ -359,9 +361,26 @@ export default function DashboardPage() {
   );
 
   const missionCountByStatus = useMemo(() => {
-    const counts = { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 };
+    const counts = {
+      queued: 0,
+      running: 0,
+      stalled: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 0,
+    };
     for (const mission of filteredVpMissions) {
       const status = String(mission.status || "unknown").toLowerCase();
+      if (status === "running") {
+        const claimTs = mission.claim_expires_at ? new Date(mission.claim_expires_at).getTime() : Number.NaN;
+        const updatedTs = mission.updated_at ? new Date(mission.updated_at).getTime() : Number.NaN;
+        const staleByClaim = Number.isFinite(claimTs) && claimTs < Date.now();
+        const staleByNoClaim = !Number.isFinite(claimTs) && Number.isFinite(updatedTs) && Date.now() - updatedTs > VP_STALE_WINDOW_MS;
+        if (staleByClaim || staleByNoClaim) {
+          counts.stalled += 1;
+          continue;
+        }
+      }
       if (status in counts) {
         counts[status as keyof typeof counts] += 1;
       }
@@ -376,9 +395,16 @@ export default function DashboardPage() {
 
   const activeWorkerCount = useMemo(
     () =>
-      filteredVpSessions.filter((session) =>
-        ["active", "running", "healthy"].includes(String(session.status || "").toLowerCase()),
-      ).length,
+      filteredVpSessions.filter((session) => {
+        if (!["active", "running", "healthy"].includes(String(session.status || "").toLowerCase())) {
+          return false;
+        }
+        const heartbeatTs = session.last_heartbeat_at ? new Date(session.last_heartbeat_at).getTime() : Number.NaN;
+        const updatedTs = session.updated_at ? new Date(session.updated_at).getTime() : Number.NaN;
+        if (Number.isFinite(heartbeatTs) && Date.now() - heartbeatTs <= VP_STALE_WINDOW_MS) return true;
+        if (Number.isFinite(updatedTs) && Date.now() - updatedTs <= VP_STALE_WINDOW_MS) return true;
+        return false;
+      }).length,
     [filteredVpSessions],
   );
 
@@ -649,7 +675,7 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
             <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Active Workers</p>
             <p className="mt-1 text-xl font-semibold text-cyan-200">{activeWorkerCount}</p>
@@ -669,6 +695,10 @@ export default function DashboardPage() {
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
             <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Failed</p>
             <p className="mt-1 text-xl font-semibold text-rose-200">{missionCountByStatus.failed}</p>
+          </div>
+          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Stalled</p>
+            <p className="mt-1 text-xl font-semibold text-amber-200">{missionCountByStatus.stalled}</p>
           </div>
         </div>
 
@@ -742,12 +772,21 @@ export default function DashboardPage() {
           <div className="mt-2 space-y-2">
             {filteredVpMissions.slice(0, 10).map((mission) => {
               const missionStatus = String(mission.status || "unknown").toLowerCase();
-              const cancellable = missionStatus === "queued" || missionStatus === "running";
+              const claimTs = mission.claim_expires_at ? new Date(mission.claim_expires_at).getTime() : Number.NaN;
+              const updatedTs = mission.updated_at ? new Date(mission.updated_at).getTime() : Number.NaN;
+              const staleByClaim = missionStatus === "running" && Number.isFinite(claimTs) && claimTs < Date.now();
+              const staleByNoClaim =
+                missionStatus === "running" &&
+                !Number.isFinite(claimTs) &&
+                Number.isFinite(updatedTs) &&
+                Date.now() - updatedTs > VP_STALE_WINDOW_MS;
+              const effectiveStatus = staleByClaim || staleByNoClaim ? "stalled" : missionStatus;
+              const cancellable = missionStatus === "queued" || (missionStatus === "running" && effectiveStatus !== "stalled");
               return (
                 <div key={mission.mission_id} className="rounded border border-slate-800 bg-slate-900/40 px-2 py-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="font-mono text-[11px] text-slate-300">
-                      {mission.mission_id} · {mission.vp_id} · {mission.status || "unknown"}
+                      {mission.mission_id} · {mission.vp_id} · {effectiveStatus}
                     </p>
                     {cancellable && (
                       <button
