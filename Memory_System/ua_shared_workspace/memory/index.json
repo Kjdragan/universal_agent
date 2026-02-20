@@ -1,0 +1,16 @@
+[
+  {
+    "entry_id": "a2e7b1b3-9305-4a85-bc16-9128f5460fea",
+    "timestamp": "2026-02-20T02:03:44.634652+00:00",
+    "source": "hard_cut_migration",
+    "session_id": "session_alpha",
+    "tags": [
+      "migration",
+      "long_term"
+    ],
+    "summary": "# Agent Memory Alpha strategic context.",
+    "preview": "# Agent Memory Alpha strategic context.",
+    "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-20.md",
+    "content_hash": "272cea469cac3551df5f60a615a7977668d6924b5ce7962ed7377d3db7f65bc1"
+  }
+]
