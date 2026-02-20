@@ -66,7 +66,10 @@ class TestHeartbeatIdle(unittest.IsolatedAsyncioTestCase):
         self.service.register_session(session)
         
         # Set timeout to 5 mins
-        with patch.dict(os.environ, {"UA_HEARTBEAT_IDLE_TIMEOUT": "300"}):
+        with patch.dict(
+            os.environ,
+            {"UA_HEARTBEAT_IDLE_TIMEOUT": "300", "UA_HEARTBEAT_UNREGISTER_IDLE": "1"},
+        ):
             result = self.service._check_session_idle(session)
             
         # Should be removed
@@ -89,7 +92,10 @@ class TestHeartbeatIdle(unittest.IsolatedAsyncioTestCase):
         self.service.register_session(session)
         
         # Set timeout to 5 mins
-        with patch.dict(os.environ, {"UA_HEARTBEAT_IDLE_TIMEOUT": "300"}):
+        with patch.dict(
+            os.environ,
+            {"UA_HEARTBEAT_IDLE_TIMEOUT": "300", "UA_HEARTBEAT_UNREGISTER_IDLE": "1"},
+        ):
             result = self.service._check_session_idle(session)
             
         self.assertFalse(result)
@@ -114,3 +120,23 @@ class TestHeartbeatIdle(unittest.IsolatedAsyncioTestCase):
         
         self.assertFalse(result)
         self.assertIn("s5", self.service.active_sessions)
+
+    async def test_idle_unregistration_disabled_by_default(self):
+        """Should keep idle sessions registered unless explicit unregister flag is enabled."""
+        last_activity = datetime.now() - timedelta(hours=2)
+        session = GatewaySession(
+            session_id="s6", user_id="u1", workspace_dir="/tmp/ws6",
+            metadata={"runtime": {
+                "active_connections": 0,
+                "active_runs": 0,
+                "last_activity_at": last_activity.isoformat()
+            }}
+        )
+        self.service.register_session(session)
+
+        with patch.dict(os.environ, {"UA_HEARTBEAT_IDLE_TIMEOUT": "300"}, clear=False):
+            os.environ.pop("UA_HEARTBEAT_UNREGISTER_IDLE", None)
+            result = self.service._check_session_idle(session)
+
+        self.assertFalse(result)
+        self.assertIn("s6", self.service.active_sessions)

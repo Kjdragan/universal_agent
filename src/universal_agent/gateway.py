@@ -20,6 +20,7 @@ from universal_agent.timeout_policy import (
     gateway_http_timeout_seconds,
     websocket_connect_kwargs,
 )
+from universal_agent.workspace import seed_workspace_bootstrap
 from universal_agent.vp import CoderVPRuntime
 
 try:
@@ -270,6 +271,7 @@ class InProcessGateway(Gateway):
             
             workspace_path.mkdir(parents=True, exist_ok=True)
             (workspace_path / "work_products").mkdir(exist_ok=True)
+            bootstrap_result = seed_workspace_bootstrap(str(workspace_path))
             
             # Update session_id to match workspace name if custom workspace provided
             if workspace_dir:
@@ -297,6 +299,7 @@ class InProcessGateway(Gateway):
                 metadata={
                     "engine": "process_turn",
                     "logfire_enabled": bool(os.getenv("LOGFIRE_TOKEN")),
+                    "workspace_bootstrap": bootstrap_result,
                 },
             )
             self._sessions[session_id] = session
@@ -313,10 +316,12 @@ class InProcessGateway(Gateway):
         session_info = await self._bridge.create_session(
             user_id=user_id, workspace_dir=workspace_dir
         )
+        bootstrap_result = seed_workspace_bootstrap(session_info.workspace)
         metadata = {
             "session_url": session_info.session_url,
             "logfire_enabled": session_info.logfire_enabled,
             "engine": "agent_bridge_legacy",
+            "workspace_bootstrap": bootstrap_result,
         }
         if workspace_dir and workspace_dir != session_info.workspace:
             metadata["requested_workspace_dir"] = workspace_dir

@@ -7,7 +7,6 @@ Traces are sent to Logfire for observability.
 import sys
 import os
 import logging
-import shutil
 
 # Add 'src' to sys.path to allow imports from universal_agent package
 # This ensures functional imports regardless of invocation directory
@@ -425,121 +424,6 @@ def _maybe_trip_tool_loop_circuit_breaker(
                 "debug": dbg,
             },
         )
-
-
-def _resolve_global_memory_dir() -> str:
-    """
-    Resolve the global memory directory.
-    Checks <REPO_ROOT>/memory (dev mode) first, then <PKG_DIR>/memory (installed mode).
-    """
-    # src_dir is '.../src/universal_agent'
-    # Repo root is '.../src/universal_agent/../../'
-    repo_memory = os.path.abspath(os.path.join(src_dir, "..", "..", "memory"))
-    if os.path.isdir(repo_memory):
-        return repo_memory
-    
-    # Fallback to package directory
-    return os.path.join(src_dir, "memory")
-
-
-def _inject_global_memory(workspace_dir: str) -> None:
-    """
-    Copy global memory files into the session workspace at startup.
-    This creates the 'Brain Transplant' effect.
-    """
-    if not workspace_dir or not os.path.exists(workspace_dir):
-        return
-
-    global_mem_dir = _resolve_global_memory_dir()
-    if not os.path.exists(global_mem_dir):
-        return
-
-    try:
-        # 1. Copy MEMORY.md (Core Memory)
-        global_core_mem = os.path.join(global_mem_dir, "MEMORY.md")
-        if os.path.exists(global_core_mem):
-            session_core_mem = os.path.join(workspace_dir, "MEMORY.md")
-            shutil.copy2(global_core_mem, session_core_mem)
-            print(f"🧠 Global Memory injected: {global_core_mem} -> {session_core_mem}")
-
-        # 1b. Copy HEARTBEAT.md (Proactive Instructions) -> Workspace Root
-        # HeartbeatService looks for it in the workspace root.
-        global_heartbeat = os.path.join(global_mem_dir, "HEARTBEAT.md")
-        if os.path.exists(global_heartbeat):
-            session_heartbeat = os.path.join(workspace_dir, "HEARTBEAT.md")
-            shutil.copy2(global_heartbeat, session_heartbeat)
-            print(f"💓 Heartbeat Instructions injected: {global_heartbeat} -> {session_heartbeat}")
-
-        # 2. Copy daily memory logs (memory/*.md)
-        # Note: In repo root, MEMORY.md is in memory/, but daily logs might be there too?
-        # Actually structure is often:
-        # REPO/
-        #   memory/
-        #     MEMORY.md
-        #     2024-01-01.md
-        # OR
-        # REPO/MEMORY.md
-        # 
-        # Based on file listing earlier: /home/kjdragan/lrepos/universal_agent/memory/MEMORY.md exists.
-        # So REPO/memory/ is the container.
-        
-        session_mem_subdir = os.path.join(workspace_dir, "memory")
-        os.makedirs(session_mem_subdir, exist_ok=True)
-
-        for item in os.listdir(global_mem_dir):
-            if item == "MEMORY.md":
-                # Already handled above (copied to workspace root or memory/? 
-                # Clawbot puts MEMORY.md in workspace root usually, checks docs...
-                # Docs say: "memory/YYYY-MM-DD.md" and "MEMORY.md" (in workspace root).
-                # But our global store is REPO/memory/MEMORY.md.
-                # So we copy REPO/memory/MEMORY.md -> WORKSPACE/MEMORY.md
-                continue
-                
-            src_path = os.path.join(global_mem_dir, item)
-            dst_path = os.path.join(session_mem_subdir, item)
-            
-            if os.path.isfile(src_path) and item.endswith(".md"):
-                shutil.copy2(src_path, dst_path)
-                
-        print(f"🧠 Global Memory logs injected into {session_mem_subdir}")
-
-    except Exception as e:
-        print(f"⚠️ Failed to inject global memory: {e}")
-
-
-def _persist_global_memory(workspace_dir: str) -> None:
-    """
-    Copy session memory files back to global storage at shutdown.
-    This ensures learning is preserved.
-    """
-    if not workspace_dir or not os.path.exists(workspace_dir):
-        return
-
-    global_mem_dir = _resolve_global_memory_dir()
-    os.makedirs(global_mem_dir, exist_ok=True)
-
-    try:
-        # 1. Persist MEMORY.md
-        session_core_mem = os.path.join(workspace_dir, "MEMORY.md")
-        if os.path.exists(session_core_mem):
-            global_core_mem = os.path.join(global_mem_dir, "MEMORY.md")
-            # Only copy if changed? For now, blind overwrite is per manual plan.
-            shutil.copy2(session_core_mem, global_core_mem)
-            print(f"💾 Core Memory persisted: {global_core_mem}")
-
-        # 2. Persist daily logs
-        session_mem_subdir = os.path.join(workspace_dir, "memory")
-        if os.path.exists(session_mem_subdir):
-            for item in os.listdir(session_mem_subdir):
-                src_path = os.path.join(session_mem_subdir, item)
-                dst_path = os.path.join(global_mem_dir, item)
-                
-                if os.path.isfile(src_path) and item.endswith(".md"):
-                    shutil.copy2(src_path, dst_path)
-            print(f"💾 Daily Memory logs persisted to {global_mem_dir}")
-
-    except Exception as e:
-        print(f"⚠️ Failed to persist global memory: {e}")
 
 
 def build_cli_hooks() -> dict:
@@ -7035,6 +6919,8 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
     if not memory_enabled(default=True):
         ignored_tool_names.update(
             [
+                "memory_search",
+                "memory_get",
                 "mcp__internal__memory_search",
                 "mcp__internal__memory_get",
             ]
@@ -7616,6 +7502,8 @@ async def setup_session(
     if not MEMORY_ENABLED:
         disallowed_tools.extend(
             [
+                "memory_search",
+                "memory_get",
                 "mcp__internal__memory_search",
                 "mcp__internal__memory_get",
             ]
@@ -8618,9 +8506,6 @@ async def main(args: argparse.Namespace):
         workspace_dir_override=workspace_override,
         session_prefix=session_prefix,
     )
-
-    # [Global Memory Sync] Inject persistent memory (Brain Transplant)
-    _inject_global_memory(workspace_dir)
 
     # Extract harness_id if applicable so Orchestrator reuses this directory
     harness_id_override = None
@@ -10196,13 +10081,6 @@ async def main(args: argparse.Namespace):
                     print("🧠 Final session memory sync completed.")
             except Exception as sync_err:
                 print(f"⚠️ Final session memory sync failed: {sync_err}")
-
-        # [Global Memory Sync] Persist memory back to global store
-        if 'workspace_dir' in locals() and workspace_dir:
-            try:
-                _persist_global_memory(workspace_dir)
-            except Exception as e:
-                print(f"⚠️ Memory persistence failed: {e}")
 
         # Ensure the client is closed since we manually called __aenter__
         if 'client' in locals() and client:

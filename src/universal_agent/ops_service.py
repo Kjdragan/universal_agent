@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from universal_agent.gateway import InProcessGateway
+from universal_agent.memory.orchestrator import get_memory_orchestrator
+from universal_agent.memory.paths import resolve_shared_memory_workspace
 from universal_agent.security_paths import validate_session_id
 
 logger = logging.getLogger(__name__)
@@ -292,12 +294,45 @@ class OpsService:
             return None
         return {"session": self._build_session_summary(workspace)}
 
+    def _capture_session_transition_memory(
+        self,
+        *,
+        session_id: str,
+        workspace: Path,
+        trigger: str,
+    ) -> dict[str, Any]:
+        try:
+            if not workspace.exists():
+                return {"captured": False, "reason": "workspace_missing"}
+            shared_root = resolve_shared_memory_workspace(str(workspace))
+            broker = get_memory_orchestrator(workspace_dir=shared_root)
+            summary = self._derive_session_description(workspace) or ""
+            return broker.capture_session_rollover(
+                session_id=session_id,
+                trigger=trigger,
+                transcript_path=str(workspace / "transcript.md"),
+                run_log_path=str(workspace / "run.log"),
+                summary=summary,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Session transition memory capture failed (session=%s, trigger=%s): %s",
+                session_id,
+                trigger,
+                exc,
+            )
+            return {"captured": False, "reason": "capture_error", "error": str(exc)}
+
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session's workspace directory and close its adapter."""
         safe_session_id = validate_session_id(session_id)
-        await self.gateway.close_session(safe_session_id)
-
         workspace = self._session_workspace(safe_session_id)
+        self._capture_session_transition_memory(
+            session_id=safe_session_id,
+            workspace=workspace,
+            trigger="ops_delete",
+        )
+        await self.gateway.close_session(safe_session_id)
         if workspace.exists() and workspace.is_dir():
             shutil.rmtree(workspace)
             return True
@@ -396,6 +431,11 @@ class OpsService:
         session_path = self._session_workspace(session_id)
         if not session_path.exists():
             return {"error": "Session not found"}
+        memory_capture = self._capture_session_transition_memory(
+            session_id=session_id,
+            workspace=session_path,
+            trigger="ops_reset",
+        )
             
         archive_dir = session_path / "archive" / datetime.now().strftime("%Y%m%d_%H%M%S")
         archive_dir.mkdir(parents=True, exist_ok=True)
@@ -416,7 +456,12 @@ class OpsService:
         if clear_work_products:
             _move_if_exists(session_path / "work_products")
 
-        return {"status": "reset", "archived": moved, "archive_dir": str(archive_dir)}
+        return {
+            "status": "reset",
+            "archived": moved,
+            "archive_dir": str(archive_dir),
+            "memory_capture": memory_capture,
+        }
 
     def archive_session(
         self,

@@ -97,8 +97,8 @@ Behavior:
 ## Verification Runbook
 
 1. Confirm canonical tools only:
-   - `mcp__internal__memory_search`
-   - `mcp__internal__memory_get`
+   - `memory_search`
+   - `memory_get`
 2. Start session A, create memory, end session.
 3. Delete session A workspace.
 4. Start session B, query prior memory with `memory_search`.

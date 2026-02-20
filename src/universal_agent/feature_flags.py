@@ -103,20 +103,6 @@ def _read_int(name: str, default: int, minimum: int | None = None) -> int:
     return value
 
 
-def _read_float(name: str, default: float, minimum: float | None = None) -> float:
-    raw = os.getenv(name)
-    if raw is None:
-        value = default
-    else:
-        try:
-            value = float(raw)
-        except ValueError:
-            value = default
-    if minimum is not None:
-        value = max(minimum, value)
-    return value
-
-
 def _read_choice(name: str, allowed: Iterable[str], default: str) -> str:
     choices = {item.lower() for item in allowed}
     value = (os.getenv(name) or "").strip().lower()
@@ -186,79 +172,6 @@ def memory_backend(default: str = "chromadb") -> str:
     if provider == "local":
         return "lancedb"
     return "chromadb"
-
-
-def memory_orchestrator_enabled(default: bool = True) -> bool:
-    """Compatibility helper: canonical orchestrator is always active when memory is on."""
-    return memory_enabled(default=default)
-
-
-def memory_adapter_state(adapter_name: str, default: str = "off") -> str:
-    """Compatibility helper after hard-cut adapter removal."""
-    normalized = adapter_name.strip().lower()
-    if normalized in {"ua_file_memory", "canonical"}:
-        return "active"
-    return "off"
-
-
-def memory_profile_mode(default: str = "prod") -> str:
-    """Compatibility helper retained for import stability."""
-    return default
-
-
-def memory_tag_dev_writes(default: bool = False) -> bool:
-    """Compatibility helper retained for import stability."""
-    return default
-
-
-def memory_runtime_tags(default: tuple[str, ...] = ()) -> list[str]:
-    """Compatibility helper retained for import stability."""
-    return list(default)
-
-
-def memory_long_term_tag_allowlist(default: tuple[str, ...] = ()) -> list[str]:
-    """Compatibility helper retained for import stability."""
-    return list(default)
-
-
-def memory_write_policy_min_importance(default: float = 0.0) -> float:
-    """Compatibility helper retained for import stability."""
-    return _read_float("UA_MEMORY_WRITE_MIN_IMPORTANCE", default, minimum=0.0)
-
-
-def memory_rerank_enabled(default: bool = False) -> bool:
-    """Compatibility helper retained for import stability."""
-    return default
-
-
-def memory_embedding_provider(default: str = "auto") -> str:
-    """Compatibility helper retained for import stability."""
-    return memory_provider(default=default)
-
-
-def memory_embedding_query_intent(default: bool = True) -> bool:
-    """Compatibility helper retained for import stability."""
-    return default
-
-
-def memory_embedding_document_intent(default: bool = True) -> bool:
-    """Compatibility helper retained for import stability."""
-    return default
-
-
-def memory_embedding_batch_enabled(default: bool = True) -> bool:
-    """Compatibility helper retained for import stability."""
-    return default
-
-
-def memory_embedding_batch_failure_threshold(default: int = 3) -> int:
-    """Compatibility helper retained for import stability."""
-    return _read_int("UA_MEMORY_EMBEDDING_BATCH_FAILURE_THRESHOLD", default, minimum=1)
-
-
-def memory_embedding_fallback_to_non_batch(default: bool = True) -> bool:
-    """Compatibility helper retained for import stability."""
-    return default
 
 
 def memory_flush_on_exit(default: bool = True) -> bool:
