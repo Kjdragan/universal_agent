@@ -51,11 +51,14 @@ from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
+    get_vp_mission,
     get_vp_session,
     list_vp_events,
     list_vp_missions,
+    list_vp_sessions,
     list_vp_session_events,
 )
+from universal_agent.vp import MissionDispatchRequest, cancel_mission, dispatch_mission
 from universal_agent.heartbeat_service import HeartbeatService
 from universal_agent.cron_service import CronService, parse_run_at
 from universal_agent.ops_service import OpsService
@@ -230,6 +233,24 @@ class GatewayEventWire(BaseModel):
     type: str
     data: dict
     timestamp: str
+
+
+class VpMissionDispatchRequest(BaseModel):
+    vp_id: str
+    mission_type: str = "task"
+    objective: str
+    constraints: dict = {}
+    budget: dict = {}
+    idempotency_key: Optional[str] = None
+    source_session_id: Optional[str] = None
+    source_turn_id: Optional[str] = None
+    reply_mode: str = "async"
+    priority: int = 100
+    run_id: Optional[str] = None
+
+
+class VpMissionCancelRequest(BaseModel):
+    reason: Optional[str] = None
 
 
 class HeartbeatWakeRequest(BaseModel):
@@ -1159,6 +1180,22 @@ def _vp_session_to_dict(row: Any) -> Optional[dict[str, Any]]:
     return payload
 
 
+def _vp_mission_to_dict(row: Any) -> Optional[dict[str, Any]]:
+    if row is None:
+        return None
+    payload = {k: row[k] for k in row.keys()} if hasattr(row, "keys") else dict(row)
+    budget = _parse_json_text(payload.get("budget_json"))
+    if isinstance(budget, dict):
+        payload["budget"] = budget
+    mission_payload = _parse_json_text(payload.get("payload_json"))
+    if isinstance(mission_payload, dict):
+        payload["payload"] = mission_payload
+    payload["duration_seconds"] = _vp_mission_duration_seconds(
+        payload.get("started_at"), payload.get("completed_at")
+    )
+    return payload
+
+
 def _vp_recovery_snapshot(
     session_row: Any,
     parsed_session_events: list[dict[str, Any]],
@@ -1209,7 +1246,14 @@ def _vp_metrics_snapshot(
     event_limit: int,
 ) -> dict[str, Any]:
     gateway = get_gateway()
-    conn = getattr(gateway, "_runtime_db_conn", None)
+    vp_conn = None
+    if hasattr(gateway, "get_coder_vp_db_conn"):
+        try:
+            vp_conn = gateway.get_coder_vp_db_conn()
+        except Exception:
+            vp_conn = None
+    runtime_conn = getattr(gateway, "_runtime_db_conn", None)
+    conn = vp_conn or runtime_conn
     if conn is None:
         raise HTTPException(status_code=503, detail="Runtime DB not initialized")
 
@@ -1217,6 +1261,22 @@ def _vp_metrics_snapshot(
     missions = list_vp_missions(conn, vp_id=vp_id, limit=mission_limit)
     events = list_vp_events(conn, vp_id=vp_id, limit=event_limit)
     session_events = list_vp_session_events(conn, vp_id=vp_id, limit=event_limit)
+
+    # Backward compatibility: if VP data was written to runtime_state.db on older
+    # builds, keep dashboard metrics visible during transition.
+    if (
+        conn is vp_conn
+        and runtime_conn is not None
+        and not session_row
+        and not missions
+        and not events
+        and not session_events
+    ):
+        conn = runtime_conn
+        session_row = get_vp_session(conn, vp_id)
+        missions = list_vp_missions(conn, vp_id=vp_id, limit=mission_limit)
+        events = list_vp_events(conn, vp_id=vp_id, limit=event_limit)
+        session_events = list_vp_session_events(conn, vp_id=vp_id, limit=event_limit)
 
     mission_counts: dict[str, int] = {}
     mission_ids: set[str] = set()
@@ -4161,8 +4221,15 @@ async def post_system_event(request: SystemEventRequest):
 @app.get("/api/v1/system/events")
 async def list_system_events(session_id: str):
     session_id = _sanitize_session_id_or_400(session_id)
+    # Ops/dashboard can request events for historical or external VP session ids.
+    # Those are not always present in the in-memory live session registry.
+    # Return a stable empty payload instead of 404 to avoid noisy polling errors.
     if session_id not in _sessions:
-        raise HTTPException(status_code=404, detail="Session not found.")
+        return {
+            "session_id": session_id,
+            "events": [],
+            "status": "session_not_loaded",
+        }
     return {"session_id": session_id, "events": _system_events.get(session_id, [])}
 
 
@@ -5093,6 +5160,127 @@ async def ops_session_continuity_metrics(request: Request):
 async def ops_scheduling_runtime_metrics(request: Request):
     _require_ops_auth(request)
     return {"metrics": _scheduling_runtime_metrics_snapshot()}
+
+
+@app.get("/api/v1/ops/metrics/vp")
+async def ops_vp_metrics(
+    request: Request,
+    vp_id: str,
+    mission_limit: int = 50,
+    event_limit: int = 200,
+):
+    _require_ops_auth(request)
+    vp_identifier = (vp_id or "").strip()
+    if not vp_identifier:
+        raise HTTPException(status_code=400, detail="vp_id is required")
+    return _vp_metrics_snapshot(
+        vp_id=vp_identifier,
+        mission_limit=max(1, min(int(mission_limit), 500)),
+        event_limit=max(1, min(int(event_limit), 1000)),
+    )
+
+
+@app.get("/api/v1/ops/vp/sessions")
+async def ops_vp_sessions(
+    request: Request,
+    status: str = "all",
+    limit: int = 100,
+):
+    _require_ops_auth(request)
+    gateway = get_gateway()
+    conn = getattr(gateway, "_runtime_db_conn", None)
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Runtime DB not initialized")
+    statuses = None
+    if status.strip().lower() != "all":
+        statuses = [part.strip().lower() for part in status.split(",") if part.strip()]
+    rows = list_vp_sessions(conn, statuses=statuses, limit=max(1, min(int(limit), 500)))
+    return {"sessions": [_vp_session_to_dict(row) for row in rows]}
+
+
+@app.get("/api/v1/ops/vp/missions")
+async def ops_vp_missions(
+    request: Request,
+    vp_id: str = "",
+    status: str = "all",
+    limit: int = 100,
+):
+    _require_ops_auth(request)
+    gateway = get_gateway()
+    conn = getattr(gateway, "_runtime_db_conn", None)
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Runtime DB not initialized")
+    statuses = None
+    if status.strip().lower() != "all":
+        statuses = [part.strip().lower() for part in status.split(",") if part.strip()]
+    vp_identifier = vp_id.strip() or None
+    rows = list_vp_missions(
+        conn,
+        vp_id=vp_identifier,
+        statuses=statuses,
+        limit=max(1, min(int(limit), 500)),
+    )
+    return {"missions": [_vp_mission_to_dict(row) for row in rows]}
+
+
+@app.post("/api/v1/ops/vp/missions/dispatch")
+async def ops_vp_dispatch_mission(
+    request: Request,
+    body: VpMissionDispatchRequest,
+):
+    _require_ops_auth(request)
+    gateway = get_gateway()
+    conn = getattr(gateway, "_runtime_db_conn", None)
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Runtime DB not initialized")
+    vp_identifier = body.vp_id.strip()
+    if not vp_identifier:
+        raise HTTPException(status_code=400, detail="vp_id is required")
+    objective = body.objective.strip()
+    if not objective:
+        raise HTTPException(status_code=400, detail="objective is required")
+
+    try:
+        mission = dispatch_mission(
+            conn=conn,
+            request=MissionDispatchRequest(
+                vp_id=vp_identifier,
+                mission_type=body.mission_type.strip() or "task",
+                objective=objective,
+                constraints=dict(body.constraints or {}),
+                budget=dict(body.budget or {}),
+                idempotency_key=(body.idempotency_key or "").strip(),
+                source_session_id=(body.source_session_id or "ops.dispatch").strip(),
+                source_turn_id=(body.source_turn_id or "").strip(),
+                reply_mode=(body.reply_mode or "async").strip() or "async",
+                priority=int(body.priority or 100),
+                run_id=(body.run_id or "").strip() or None,
+            ),
+            workspace_base=WORKSPACES_DIR,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"mission": _vp_mission_to_dict(mission)}
+
+
+@app.post("/api/v1/ops/vp/missions/{mission_id}/cancel")
+async def ops_vp_cancel_mission(
+    request: Request,
+    mission_id: str,
+    body: VpMissionCancelRequest,
+):
+    _require_ops_auth(request)
+    gateway = get_gateway()
+    conn = getattr(gateway, "_runtime_db_conn", None)
+    if conn is None:
+        raise HTTPException(status_code=503, detail="Runtime DB not initialized")
+    if not mission_id.strip():
+        raise HTTPException(status_code=400, detail="mission_id is required")
+    cancelled = cancel_mission(conn, mission_id.strip(), reason=(body.reason or "cancel_requested"))
+    if not cancelled:
+        raise HTTPException(status_code=404, detail="Mission not found or not cancellable")
+    mission = get_vp_mission(conn, mission_id.strip())
+    return {"status": "cancel_requested", "mission": _vp_mission_to_dict(mission)}
 
 
 @app.get("/api/v1/ops/metrics/coder-vp")

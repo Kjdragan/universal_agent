@@ -618,7 +618,13 @@ def upsert_vp_mission(
     vp_id: str,
     status: str,
     objective: str,
+    mission_type: Optional[str] = None,
     budget: Optional[dict[str, Any]] = None,
+    payload: Optional[dict[str, Any]] = None,
+    priority: Optional[int] = None,
+    worker_id: Optional[str] = None,
+    claim_expires_at: Optional[str] = None,
+    cancel_requested: Optional[bool] = None,
     result_ref: Optional[str] = None,
     run_id: Optional[str] = None,
     started_at: Optional[str] = None,
@@ -626,6 +632,8 @@ def upsert_vp_mission(
 ) -> None:
     now = _now()
     budget_json = _json_or_none(budget)
+    payload_json = _json_or_none(payload)
+    cancel_requested_value = 1 if cancel_requested else 0 if cancel_requested is not None else 0
     conn.execute(
         """
         INSERT OR IGNORE INTO vp_missions (
@@ -633,23 +641,35 @@ def upsert_vp_mission(
             vp_id,
             run_id,
             status,
+            mission_type,
             objective,
             budget_json,
+            payload_json,
             result_ref,
+            priority,
+            worker_id,
+            claim_expires_at,
+            cancel_requested,
             created_at,
             started_at,
             completed_at,
             updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mission_id,
             vp_id,
             run_id,
             status,
+            mission_type,
             objective,
             budget_json,
+            payload_json,
             result_ref,
+            priority,
+            worker_id,
+            claim_expires_at,
+            cancel_requested_value,
             now,
             started_at,
             completed_at,
@@ -662,8 +682,14 @@ def upsert_vp_mission(
         SET vp_id = ?,
             run_id = COALESCE(?, run_id),
             status = ?,
+            mission_type = COALESCE(?, mission_type),
             objective = ?,
             budget_json = COALESCE(?, budget_json),
+            payload_json = COALESCE(?, payload_json),
+            priority = COALESCE(?, priority),
+            worker_id = COALESCE(?, worker_id),
+            claim_expires_at = COALESCE(?, claim_expires_at),
+            cancel_requested = COALESCE(?, cancel_requested),
             result_ref = COALESCE(?, result_ref),
             started_at = COALESCE(?, started_at),
             completed_at = COALESCE(?, completed_at),
@@ -674,8 +700,14 @@ def upsert_vp_mission(
             vp_id,
             run_id,
             status,
+            mission_type,
             objective,
             budget_json,
+            payload_json,
+            priority,
+            worker_id,
+            claim_expires_at,
+            1 if cancel_requested else 0 if cancel_requested is not None else None,
             result_ref,
             started_at,
             completed_at,
@@ -695,39 +727,220 @@ def get_vp_mission(conn: sqlite3.Connection, mission_id: str) -> Optional[sqlite
 
 def list_vp_missions(
     conn: sqlite3.Connection,
-    vp_id: str,
+    vp_id: Optional[str] = None,
     statuses: Optional[Iterable[str]] = None,
     limit: int = 100,
 ) -> list[sqlite3.Row]:
+    params: list[Any] = []
+    where_clauses: list[str] = []
+
+    if vp_id:
+        where_clauses.append("vp_id = ?")
+        params.append(vp_id)
+
     if statuses:
-        status_list = [s for s in statuses if s]
-        if not status_list:
-            return []
-        placeholders = ", ".join("?" for _ in status_list)
-        rows = conn.execute(
-            f"""
-            SELECT *
-            FROM vp_missions
-            WHERE vp_id = ?
-              AND status IN ({placeholders})
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            (vp_id, *status_list, limit),
-        ).fetchall()
-        return list(rows)
+        status_values = [status for status in statuses if status]
+        if status_values:
+            placeholders = ", ".join("?" for _ in status_values)
+            where_clauses.append(f"status IN ({placeholders})")
+            params.extend(status_values)
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    params.append(limit)
 
     rows = conn.execute(
-        """
+        f"""
         SELECT *
         FROM vp_missions
-        WHERE vp_id = ?
+        {where_sql}
         ORDER BY created_at DESC
         LIMIT ?
         """,
-        (vp_id, limit),
+        tuple(params),
     ).fetchall()
     return list(rows)
+
+
+def queue_vp_mission(
+    conn: sqlite3.Connection,
+    mission_id: str,
+    vp_id: str,
+    mission_type: str,
+    objective: str,
+    payload: dict[str, Any],
+    *,
+    budget: Optional[dict[str, Any]] = None,
+    run_id: Optional[str] = None,
+    priority: int = 100,
+) -> None:
+    # Ensure referenced VP session row exists for FK integrity.
+    if get_vp_session(conn, vp_id) is None:
+        upsert_vp_session(
+            conn,
+            vp_id=vp_id,
+            runtime_id="runtime.external.unknown",
+            status="idle",
+            session_id=f"{vp_id}.external",
+        )
+    upsert_vp_mission(
+        conn=conn,
+        mission_id=mission_id,
+        vp_id=vp_id,
+        status="queued",
+        mission_type=mission_type,
+        objective=objective,
+        payload=payload,
+        budget=budget,
+        run_id=run_id,
+        priority=priority,
+        cancel_requested=False,
+    )
+
+
+def claim_next_vp_mission(
+    conn: sqlite3.Connection,
+    vp_id: str,
+    worker_id: str,
+    lease_ttl_seconds: int,
+) -> Optional[sqlite3.Row]:
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    lease_expires_iso = (now + timedelta(seconds=max(1, lease_ttl_seconds))).isoformat()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT mission_id
+            FROM vp_missions
+            WHERE vp_id = ?
+              AND cancel_requested = 0
+              AND (
+                status = 'queued'
+                OR (
+                    status = 'running'
+                    AND claim_expires_at IS NOT NULL
+                    AND claim_expires_at < ?
+                )
+              )
+            ORDER BY priority ASC, created_at ASC
+            LIMIT 1
+            """,
+            (vp_id, now_iso),
+        ).fetchone()
+        if row is None:
+            conn.commit()
+            return None
+
+        mission_id = str(row["mission_id"])
+        updated = conn.execute(
+            """
+            UPDATE vp_missions
+            SET status = 'running',
+                worker_id = ?,
+                claim_expires_at = ?,
+                started_at = COALESCE(started_at, ?),
+                updated_at = ?
+            WHERE mission_id = ?
+              AND (
+                status = 'queued'
+                OR (
+                    status = 'running'
+                    AND claim_expires_at IS NOT NULL
+                    AND claim_expires_at < ?
+                )
+              )
+            """,
+            (
+                worker_id,
+                lease_expires_iso,
+                now_iso,
+                now_iso,
+                mission_id,
+                now_iso,
+            ),
+        )
+        if updated.rowcount != 1:
+            conn.commit()
+            return None
+
+        claimed = conn.execute(
+            "SELECT * FROM vp_missions WHERE mission_id = ?",
+            (mission_id,),
+        ).fetchone()
+        conn.commit()
+        return claimed
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def heartbeat_vp_mission_claim(
+    conn: sqlite3.Connection,
+    mission_id: str,
+    vp_id: str,
+    worker_id: str,
+    lease_ttl_seconds: int,
+) -> bool:
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    lease_expires_iso = (now + timedelta(seconds=max(1, lease_ttl_seconds))).isoformat()
+    result = conn.execute(
+        """
+        UPDATE vp_missions
+        SET claim_expires_at = ?,
+            updated_at = ?
+        WHERE mission_id = ?
+          AND vp_id = ?
+          AND status = 'running'
+          AND worker_id = ?
+        """,
+        (lease_expires_iso, now_iso, mission_id, vp_id, worker_id),
+    )
+    conn.commit()
+    return result.rowcount == 1
+
+
+def request_vp_mission_cancel(conn: sqlite3.Connection, mission_id: str) -> bool:
+    result = conn.execute(
+        """
+        UPDATE vp_missions
+        SET cancel_requested = 1,
+            updated_at = ?
+        WHERE mission_id = ?
+          AND status IN ('queued', 'running')
+        """,
+        (_now(), mission_id),
+    )
+    conn.commit()
+    return result.rowcount == 1
+
+
+def finalize_vp_mission(
+    conn: sqlite3.Connection,
+    mission_id: str,
+    final_status: str,
+    *,
+    result_ref: Optional[str] = None,
+    clear_claim: bool = True,
+) -> bool:
+    status = str(final_status or "").strip().lower()
+    if status not in {"completed", "failed", "cancelled"}:
+        raise ValueError(f"Unsupported final_status: {final_status}")
+    now = _now()
+    result = conn.execute(
+        """
+        UPDATE vp_missions
+        SET status = ?,
+            result_ref = COALESCE(?, result_ref),
+            completed_at = ?,
+            claim_expires_at = CASE WHEN ? THEN NULL ELSE claim_expires_at END,
+            updated_at = ?
+        WHERE mission_id = ?
+        """,
+        (status, result_ref, now, 1 if clear_claim else 0, now, mission_id),
+    )
+    conn.commit()
+    return result.rowcount == 1
 
 
 def append_vp_event(

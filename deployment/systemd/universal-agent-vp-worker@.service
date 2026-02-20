@@ -1,0 +1,17 @@
+[Unit]
+Description=Universal Agent VP Worker (%i)
+After=network.target
+
+[Service]
+Type=simple
+User=kjdragan
+WorkingDirectory=/opt/universal_agent
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/universal_agent/scripts/start_vp_worker.sh %i
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/universal_agent/logs/vp-worker-%i.log
+StandardError=append:/opt/universal_agent/logs/vp-worker-%i.log
+
+[Install]
+WantedBy=multi-user.target

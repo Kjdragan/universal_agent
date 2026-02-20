@@ -80,6 +80,27 @@ _UTILITY_REQUEST_MARKERS = (
     "quick snippet",
 )
 
+_INTERNAL_SYSTEM_MARKERS = (
+    "simone",
+    "universal agent",
+    "our system",
+    "this system",
+    "mission control",
+    "system configuration",
+    "ops config",
+    "session policy",
+    "heartbeat",
+    "calendar",
+    "continuity",
+    "webhook",
+    "telegram",
+    "gateway",
+    "src/universal_agent",
+    "web-ui/",
+    "agent_run_workspaces",
+    "/home/kjdragan/lrepos/universal_agent",
+)
+
 _RECOVERY_STATUSES = {"degraded", "recovering"}
 
 
@@ -134,6 +155,18 @@ class CoderVPRuntime:
                 force_fallback=False,
             )
 
+        # CODIE is intended for significant greenfield/external coding work.
+        # Internal UA configuration and repository maintenance stays on Simone
+        # (or explicit dedicated subagents).
+        if self.is_internal_system_request(user_input):
+            return CoderVPRoutingDecision(
+                use_coder_vp=False,
+                intent_matched=True,
+                reason="internal_system_request",
+                shadow_mode=shadow_mode,
+                force_fallback=False,
+            )
+
         if not meets_threshold:
             return CoderVPRoutingDecision(
                 use_coder_vp=False,
@@ -173,6 +206,10 @@ class CoderVPRuntime:
         if any(marker in text for marker in _CODIE_SCOPE_MARKERS):
             return True
         return not any(marker in text for marker in _UTILITY_REQUEST_MARKERS)
+
+    def is_internal_system_request(self, user_input: str) -> bool:
+        text = (user_input or "").lower()
+        return any(marker in text for marker in _INTERNAL_SYSTEM_MARKERS)
 
     def ensure_session(self, lease_owner: str, owner_user_id: Optional[str] = None) -> Optional[sqlite3.Row]:
         vp_identifier = coder_vp_id()

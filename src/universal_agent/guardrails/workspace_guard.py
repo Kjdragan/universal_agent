@@ -11,7 +11,7 @@ This guardrail is critical for the unified gateway architecture:
 """
 
 from pathlib import Path
-from typing import Optional, Union
+from typing import Iterable, Optional, Union
 
 
 class WorkspaceGuardError(Exception):
@@ -227,3 +227,33 @@ def get_workspace_relative_path(
         return resolved.relative_to(root)
     except ValueError:
         return None
+
+
+def enforce_external_target_path(
+    target_path: Union[str, Path],
+    *,
+    blocked_roots: Iterable[Union[str, Path]],
+    allowlisted_roots: Optional[Iterable[Union[str, Path]]] = None,
+    operation: str = "external mission path",
+) -> Path:
+    """Validate an external mission path against blocked and allowlisted roots."""
+    target = Path(target_path).expanduser().resolve()
+    allowlisted = [Path(path).expanduser().resolve() for path in (allowlisted_roots or [])]
+    blocked = [Path(path).expanduser().resolve() for path in blocked_roots]
+
+    for parent in allowlisted:
+        try:
+            target.relative_to(parent)
+            return target
+        except ValueError:
+            continue
+
+    for parent in blocked:
+        try:
+            target.relative_to(parent)
+            raise WorkspaceGuardError(
+                f"{operation} '{target}' is blocked under managed root '{parent}'."
+            )
+        except ValueError:
+            continue
+    return target
