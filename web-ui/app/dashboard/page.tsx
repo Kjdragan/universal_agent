@@ -27,40 +27,50 @@ type DashboardNotification = {
   metadata?: Record<string, unknown>;
 };
 
-type CoderVpSessionSnapshot = {
+type VpSessionSnapshot = {
+  vp_id: string;
   status?: string;
   session_id?: string;
+  worker_id?: string;
+  lease_expires_at?: string;
+  last_heartbeat_at?: string;
+  updated_at?: string;
 };
 
-type CoderVpEvent = {
+type VpMissionSnapshot = {
+  mission_id: string;
+  vp_id: string;
+  mission_type?: string;
+  objective?: string;
+  status?: string;
+  priority?: number;
+  cancel_requested?: number;
+  result_ref?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  started_at?: string;
+  completed_at?: string;
+  duration_seconds?: number | null;
+};
+
+type VpEventSnapshot = {
   event_type?: string;
   payload?: Record<string, unknown> | null;
   created_at?: string;
 };
 
-type CoderVpMetricsSnapshot = {
+type VpMetricsSnapshot = {
   generated_at?: string;
   vp_id?: string;
-  session?: CoderVpSessionSnapshot | null;
+  session?: VpSessionSnapshot | null;
   mission_counts?: Record<string, number>;
-  fallback?: {
-    missions_with_fallback?: number;
-    missions_considered?: number;
-    rate?: number;
-  };
   latency_seconds?: {
     count?: number;
     avg_seconds?: number | null;
     p95_seconds?: number | null;
     max_seconds?: number | null;
   };
-  recent_events?: CoderVpEvent[];
-};
-
-type CoderVpDashboardResponse = {
-  status?: string;
-  detail?: string;
-  metrics?: CoderVpMetricsSnapshot | null;
+  recent_events?: VpEventSnapshot[];
 };
 
 const EMPTY_SUMMARY: SummaryResponse = {
@@ -70,6 +80,8 @@ const EMPTY_SUMMARY: SummaryResponse = {
   notifications: { unread: 0, total: 0 },
   deployment_profile: { profile: "local_workstation" },
 };
+
+const VP_IDS = ["vp.coder.primary", "vp.general.primary"] as const;
 
 function formatLocalDateTime(value?: string | number | null): string {
   if (!value) return "--";
@@ -98,18 +110,34 @@ export default function DashboardPage() {
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const [commandText, setCommandText] = useState("");
   const [commandSending, setCommandSending] = useState(false);
-  const [coderVpSnapshot, setCoderVpSnapshot] = useState<CoderVpDashboardResponse>({
-    status: "loading",
-    metrics: null,
-  });
+  const [vpSessions, setVpSessions] = useState<VpSessionSnapshot[]>([]);
+  const [vpMissions, setVpMissions] = useState<VpMissionSnapshot[]>([]);
+  const [vpMetrics, setVpMetrics] = useState<Record<string, VpMetricsSnapshot>>({});
+  const [vpError, setVpError] = useState<string>("");
+  const [selectedVpId, setSelectedVpId] = useState<string>("all");
+  const [dispatchVpId, setDispatchVpId] = useState<string>("vp.general.primary");
+  const [dispatchObjective, setDispatchObjective] = useState("");
+  const [dispatchPending, setDispatchPending] = useState(false);
+  const [dispatchStatus, setDispatchStatus] = useState<string>("");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [summaryRes, notificationsRes, coderVpRes] = await Promise.all([
+      const [summaryRes, notificationsRes, vpSessionsRes, vpMissionsRes, vpMetricResponses] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/summary`),
         fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=30`),
-        fetch(`${API_BASE}/api/v1/dashboard/metrics/coder-vp?vp_id=vp.coder.primary&mission_limit=50&event_limit=200`),
+        fetch(`${API_BASE}/api/v1/ops/vp/sessions?status=all&limit=50`),
+        fetch(`${API_BASE}/api/v1/ops/vp/missions?status=all&limit=100`),
+        Promise.all(
+          VP_IDS.map(async (vpId) => {
+            const res = await fetch(
+              `${API_BASE}/api/v1/ops/metrics/vp?vp_id=${encodeURIComponent(vpId)}&mission_limit=50&event_limit=100`,
+            );
+            if (!res.ok) return [vpId, null] as const;
+            const data = (await res.json()) as VpMetricsSnapshot;
+            return [vpId, data] as const;
+          }),
+        ),
       ]);
       const summaryData = summaryRes.ok
         ? await summaryRes.json()
@@ -117,13 +145,8 @@ export default function DashboardPage() {
       const notificationsData = notificationsRes.ok
         ? await notificationsRes.json()
         : { notifications: [] };
-      const coderVpData = coderVpRes.ok
-        ? (await coderVpRes.json()) as CoderVpDashboardResponse
-        : {
-            status: "unavailable",
-            detail: `CODER VP metrics unavailable (${coderVpRes.status})`,
-            metrics: null,
-          };
+      const vpSessionsData = vpSessionsRes.ok ? await vpSessionsRes.json() : { sessions: [] };
+      const vpMissionsData = vpMissionsRes.ok ? await vpMissionsRes.json() : { missions: [] };
       const sessions = await fetchSessionDirectory(120);
       setSummary({
         ...EMPTY_SUMMARY,
@@ -152,11 +175,20 @@ export default function DashboardPage() {
             )
           : [],
       );
-      setCoderVpSnapshot({
-        status: coderVpData.status || "unavailable",
-        detail: coderVpData.detail,
-        metrics: coderVpData.metrics || null,
-      });
+      setVpSessions(Array.isArray(vpSessionsData.sessions) ? vpSessionsData.sessions : []);
+      setVpMissions(Array.isArray(vpMissionsData.missions) ? vpMissionsData.missions : []);
+      const nextVpMetrics: Record<string, VpMetricsSnapshot> = {};
+      for (const [vpId, snapshot] of vpMetricResponses) {
+        if (snapshot) {
+          nextVpMetrics[vpId] = snapshot;
+        }
+      }
+      setVpMetrics(nextVpMetrics);
+      if (!vpSessionsRes.ok || !vpMissionsRes.ok) {
+        setVpError("VP mission status is currently unavailable.");
+      } else {
+        setVpError("");
+      }
       setSessionDirectory(sessions);
     } finally {
       setLoading(false);
@@ -299,33 +331,123 @@ export default function DashboardPage() {
       setBulkUpdating(false);
     }
   }, [load, notificationFilter, visibleNotifications.length]);
-  const coderVpMetrics = coderVpSnapshot.metrics || null;
-  const coderFallback = coderVpMetrics?.fallback;
-  const coderLatency = coderVpMetrics?.latency_seconds;
-  const fallbackRateText =
-    typeof coderFallback?.rate === "number"
-      ? `${(coderFallback.rate * 100).toFixed(1)}%`
-      : "--";
-  const p95LatencyText =
-    typeof coderLatency?.p95_seconds === "number"
-      ? `${coderLatency.p95_seconds.toFixed(1)}s`
-      : "--";
-  const recentFallbackEvents = useMemo(
+  const vpIds = useMemo(() => {
+    const ids = new Set<string>(VP_IDS);
+    for (const row of vpSessions) {
+      if (row?.vp_id) ids.add(row.vp_id);
+    }
+    for (const row of vpMissions) {
+      if (row?.vp_id) ids.add(row.vp_id);
+    }
+    return Array.from(ids);
+  }, [vpMissions, vpSessions]);
+
+  const filteredVpMissions = useMemo(
     () =>
-      (coderVpMetrics?.recent_events || [])
-        .filter((event) => event.event_type === "vp.mission.fallback")
-        .slice(-3)
-        .reverse(),
-    [coderVpMetrics],
+      vpMissions.filter((mission) =>
+        selectedVpId === "all" ? true : mission.vp_id === selectedVpId,
+      ),
+    [selectedVpId, vpMissions],
   );
 
-  const formatFallbackEvent = useCallback((event: CoderVpEvent): string => {
-    const payload = event.payload;
-    if (!payload || typeof payload !== "object") return "fallback recorded";
-    const error = typeof payload.error === "string" ? payload.error : "";
-    const reason = typeof payload.reason === "string" ? payload.reason : "";
-    return error || reason || "fallback recorded";
-  }, []);
+  const filteredVpSessions = useMemo(
+    () =>
+      vpSessions.filter((session) =>
+        selectedVpId === "all" ? true : session.vp_id === selectedVpId,
+      ),
+    [selectedVpId, vpSessions],
+  );
+
+  const missionCountByStatus = useMemo(() => {
+    const counts = { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 };
+    for (const mission of filteredVpMissions) {
+      const status = String(mission.status || "unknown").toLowerCase();
+      if (status in counts) {
+        counts[status as keyof typeof counts] += 1;
+      }
+    }
+    return counts;
+  }, [filteredVpMissions]);
+
+  const visibleVpIds = useMemo(
+    () => (selectedVpId === "all" ? vpIds : vpIds.filter((vpId) => vpId === selectedVpId)),
+    [selectedVpId, vpIds],
+  );
+
+  const activeWorkerCount = useMemo(
+    () =>
+      filteredVpSessions.filter((session) =>
+        ["active", "running", "healthy"].includes(String(session.status || "").toLowerCase()),
+      ).length,
+    [filteredVpSessions],
+  );
+
+  const recentVpEvents = useMemo(() => {
+    const events: VpEventSnapshot[] = [];
+    for (const vpId of vpIds) {
+      if (selectedVpId !== "all" && selectedVpId !== vpId) continue;
+      const metrics = vpMetrics[vpId];
+      if (metrics?.recent_events?.length) {
+        events.push(...metrics.recent_events);
+      }
+    }
+    return events
+      .slice()
+      .sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")))
+      .slice(0, 6);
+  }, [selectedVpId, vpIds, vpMetrics]);
+
+  const dispatchMission = useCallback(async () => {
+    const objective = dispatchObjective.trim();
+    if (!objective) return;
+    setDispatchPending(true);
+    setDispatchStatus("");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/vp/missions/dispatch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vp_id: dispatchVpId,
+          mission_type: "task",
+          objective,
+          source_session_id: "ops.dashboard",
+          reply_mode: "async",
+        }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        setDispatchStatus(String(payload?.detail || `Dispatch failed (${res.status})`));
+        return;
+      }
+      const data = await res.json();
+      setDispatchStatus(`Queued mission ${data?.mission?.mission_id || ""}`.trim());
+      setDispatchObjective("");
+      await load();
+    } finally {
+      setDispatchPending(false);
+    }
+  }, [dispatchObjective, dispatchVpId, load]);
+
+  const cancelMission = useCallback(
+    async (missionId: string) => {
+      if (!missionId) return;
+      const confirmed = window.confirm(`Cancel mission ${missionId}?`);
+      if (!confirmed) return;
+      const res = await fetch(`${API_BASE}/api/v1/ops/vp/missions/${encodeURIComponent(missionId)}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: "cancelled from dashboard" }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        setDispatchStatus(String(payload?.detail || `Cancel failed (${res.status})`));
+        return;
+      }
+      setDispatchStatus(`Cancel requested for ${missionId}`);
+      await load();
+    },
+    [load],
+  );
 
   const SOURCE_FILTERS = ["all", "chat", "cron", "telegram", "hook", "local", "api"] as const;
 
@@ -495,73 +617,172 @@ export default function DashboardPage() {
       </section>
 
       <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-        <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">CODER VP Rollout</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">
+              External Primary Agent Operations
+            </h2>
             <p className="text-[11px] text-slate-500">
-              VP: {coderVpMetrics?.vp_id || "vp.coder.primary"} · status: {coderVpSnapshot.status || "unknown"}
+              Simone dispatches missions. External workers execute autonomously and report mission events.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={load}
-            className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60"
-          >
-            Refresh VP
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedVpId}
+              onChange={(event) => setSelectedVpId(event.target.value)}
+              className="rounded border border-slate-700 bg-slate-900/70 px-2 py-1 text-xs text-slate-200"
+            >
+              <option value="all">all agents</option>
+              {vpIds.map((vpId) => (
+                <option key={vpId} value={vpId}>
+                  {vpId}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={load}
+              className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60"
+            >
+              Refresh VP
+            </button>
+          </div>
         </div>
 
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Fallback Rate</p>
-            <p className="mt-1 text-xl font-semibold text-amber-200">{fallbackRateText}</p>
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Active Workers</p>
+            <p className="mt-1 text-xl font-semibold text-cyan-200">{activeWorkerCount}</p>
           </div>
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">p95 Latency</p>
-            <p className="mt-1 text-xl font-semibold text-cyan-200">{p95LatencyText}</p>
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Queued</p>
+            <p className="mt-1 text-xl font-semibold text-slate-100">{missionCountByStatus.queued}</p>
           </div>
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Missions Considered</p>
-            <p className="mt-1 text-xl font-semibold text-slate-100">{coderFallback?.missions_considered ?? 0}</p>
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Running</p>
+            <p className="mt-1 text-xl font-semibold text-emerald-200">{missionCountByStatus.running}</p>
           </div>
           <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Fallback Missions</p>
-            <p className="mt-1 text-xl font-semibold text-rose-200">{coderFallback?.missions_with_fallback ?? 0}</p>
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Completed</p>
+            <p className="mt-1 text-xl font-semibold text-cyan-200">{missionCountByStatus.completed}</p>
           </div>
+          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Failed</p>
+            <p className="mt-1 text-xl font-semibold text-rose-200">{missionCountByStatus.failed}</p>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/50 p-3">
+          <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Dispatch Mission</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <select
+              value={dispatchVpId}
+              onChange={(event) => setDispatchVpId(event.target.value)}
+              className="rounded border border-slate-700 bg-slate-900/70 px-2 py-1 text-xs text-slate-200"
+            >
+              {vpIds.map((vpId) => (
+                <option key={vpId} value={vpId}>
+                  {vpId}
+                </option>
+              ))}
+            </select>
+            <input
+              value={dispatchObjective}
+              onChange={(event) => setDispatchObjective(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  dispatchMission();
+                }
+              }}
+              placeholder="Objective for external primary agent..."
+              className="min-w-[240px] flex-1 rounded border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-700/60"
+            />
+            <button
+              type="button"
+              onClick={dispatchMission}
+              disabled={dispatchPending || !dispatchObjective.trim()}
+              className="rounded border border-cyan-700 bg-cyan-900/25 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/40 disabled:opacity-40"
+            >
+              {dispatchPending ? "Dispatching..." : "Dispatch"}
+            </button>
+          </div>
+          {(dispatchStatus || vpError) && (
+            <p className="mt-2 text-xs text-amber-300">{dispatchStatus || vpError}</p>
+          )}
         </div>
 
         <div className="mt-3 grid gap-2 md:grid-cols-2">
-          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs text-slate-300">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Session</p>
-            <p className="mt-1">Runtime status: {coderVpMetrics?.session?.status || "unknown"}</p>
-            <p className="mt-1">Session ID: {coderVpMetrics?.session?.session_id || "--"}</p>
-            <p className="mt-1 text-slate-500">Generated: {formatLocalDateTime(coderVpMetrics?.generated_at)}</p>
-          </div>
-          <div className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs text-slate-300">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Mission mix</p>
-            <div className="mt-1 space-y-1">
-              <p>completed: {coderVpMetrics?.mission_counts?.completed ?? 0}</p>
-              <p>running: {coderVpMetrics?.mission_counts?.running ?? 0}</p>
-              <p>failed: {coderVpMetrics?.mission_counts?.failed ?? 0}</p>
-            </div>
+          {visibleVpIds.map((vpId) => {
+            const metrics = vpMetrics[vpId];
+            const vpSession = vpSessions.find((row) => row.vp_id === vpId);
+            const p95Latency = metrics?.latency_seconds?.p95_seconds;
+            return (
+              <div key={vpId} className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs text-slate-300">
+                <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">{vpId}</p>
+                <p className="mt-1">worker status: {vpSession?.status || metrics?.session?.status || "unknown"}</p>
+                <p className="mt-1">session: {vpSession?.session_id || metrics?.session?.session_id || "--"}</p>
+                <p className="mt-1">
+                  queue/running: {metrics?.mission_counts?.queued ?? 0}/{metrics?.mission_counts?.running ?? 0}
+                </p>
+                <p className="mt-1">
+                  p95 latency:{" "}
+                  {typeof p95Latency === "number" ? `${p95Latency.toFixed(1)}s` : "--"}
+                </p>
+                <p className="mt-1 text-slate-500">
+                  heartbeat: {formatLocalDateTime(vpSession?.last_heartbeat_at || vpSession?.updated_at)}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-3 rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs">
+          <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">Recent Missions</p>
+          <div className="mt-2 space-y-2">
+            {filteredVpMissions.slice(0, 10).map((mission) => {
+              const missionStatus = String(mission.status || "unknown").toLowerCase();
+              const cancellable = missionStatus === "queued" || missionStatus === "running";
+              return (
+                <div key={mission.mission_id} className="rounded border border-slate-800 bg-slate-900/40 px-2 py-1.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-mono text-[11px] text-slate-300">
+                      {mission.mission_id} · {mission.vp_id} · {mission.status || "unknown"}
+                    </p>
+                    {cancellable && (
+                      <button
+                        type="button"
+                        onClick={() => cancelMission(mission.mission_id)}
+                        className="rounded border border-rose-700 bg-rose-900/20 px-2 py-0.5 text-[10px] text-rose-200 hover:bg-rose-900/35"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                  <p className="mt-1 text-slate-200">{mission.objective || "(no objective)"}</p>
+                  <p className="mt-1 text-[10px] text-slate-500">
+                    updated: {formatLocalDateTime(mission.updated_at)} · result: {mission.result_ref || "--"}
+                  </p>
+                </div>
+              );
+            })}
+            {filteredVpMissions.length === 0 && (
+              <p className="text-slate-500">No VP missions recorded for the current filter.</p>
+            )}
           </div>
         </div>
 
-        {recentFallbackEvents.length > 0 && (
-          <div className="mt-3 rounded-lg border border-amber-800/60 bg-amber-950/20 p-3 text-xs">
-            <p className="text-[10px] uppercase tracking-[0.12em] text-amber-300">Recent fallback signals</p>
-            <div className="mt-2 space-y-1 text-amber-100">
-              {recentFallbackEvents.map((event, idx) => (
-                <p key={`${event.created_at || "fallback"}-${idx}`}>
-                  {formatLocalDateTime(event.created_at) || "event"}: {formatFallbackEvent(event)}
+        {recentVpEvents.length > 0 && (
+          <div className="mt-3 rounded-lg border border-cyan-900/60 bg-cyan-950/10 p-3 text-xs">
+            <p className="text-[10px] uppercase tracking-[0.12em] text-cyan-300">Recent VP Events</p>
+            <div className="mt-2 space-y-1 text-cyan-100">
+              {recentVpEvents.map((event, idx) => (
+                <p key={`${event.created_at || "event"}-${idx}`}>
+                  {formatLocalDateTime(event.created_at)} · {event.event_type || "event"}
                 </p>
               ))}
             </div>
           </div>
-        )}
-
-        {coderVpSnapshot.detail && (
-          <p className="mt-2 text-xs text-amber-400">{coderVpSnapshot.detail}</p>
         )}
       </section>
 
