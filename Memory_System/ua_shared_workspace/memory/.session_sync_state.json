@@ -2,5 +2,17 @@
   "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260218_232750_48e8e119/transcript.md": {
     "size": 101450,
     "lines": 1631
+  },
+  "/tmp/pytest-of-kjdragan/pytest-1/test_hard_cut_migration_dry_ru0/AGENT_RUN_WORKSPACES/session_alpha/transcript.md": {
+    "size": 46,
+    "lines": 2
+  },
+  "/tmp/pytest-of-kjdragan/pytest-2/test_hard_cut_migration_dry_ru0/AGENT_RUN_WORKSPACES/session_alpha/transcript.md": {
+    "size": 46,
+    "lines": 2
+  },
+  "/tmp/pytest-of-kjdragan/pytest-3/test_hard_cut_migration_dry_ru0/AGENT_RUN_WORKSPACES/session_alpha/transcript.md": {
+    "size": 46,
+    "lines": 2
   }
 }
