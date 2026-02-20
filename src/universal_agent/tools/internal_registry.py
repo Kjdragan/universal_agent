@@ -32,11 +32,6 @@ from universal_agent.tools.local_toolkit_bridge import (
     generate_image_with_review_wrapper,
     describe_image_wrapper,
     preview_image_wrapper,
-    core_memory_replace_wrapper,
-    core_memory_append_wrapper,
-    archival_memory_insert_wrapper,
-    archival_memory_search_wrapper,
-    get_core_memory_blocks_wrapper,
     ask_user_questions_wrapper,
     batch_tool_execute_wrapper,
 )
@@ -47,7 +42,7 @@ from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
 from universal_agent.tools.mermaid_bridge import mermaid_to_image
 
 # Memory Tools
-from universal_agent.tools.memory import ua_memory_get_wrapper, ua_memory_search_wrapper
+from universal_agent.tools.memory import memory_get_wrapper, memory_search_wrapper
 
 # X Trends (xAI/Grok x_search) evidence fetch
 from universal_agent.tools.x_trends_bridge import x_trends_posts_wrapper
@@ -90,11 +85,6 @@ def get_core_internal_tools() -> List[Callable]:
         preview_image_wrapper,
         html_to_pdf_wrapper,
         mermaid_to_image,
-        core_memory_replace_wrapper,
-        core_memory_append_wrapper,
-        archival_memory_insert_wrapper,
-        archival_memory_search_wrapper,
-        get_core_memory_blocks_wrapper,
         ask_user_questions_wrapper,
         batch_tool_execute_wrapper,
         x_trends_posts_wrapper,
@@ -110,7 +100,7 @@ def get_memory_tools() -> List[Callable]:
     """
     Return the list of memory-specific tool wrappers.
     """
-    return [ua_memory_get_wrapper, ua_memory_search_wrapper]
+    return [memory_get_wrapper, memory_search_wrapper]
 
 def get_all_internal_tools(enable_memory: bool = False) -> List[Callable]:
     """

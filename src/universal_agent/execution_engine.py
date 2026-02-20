@@ -31,7 +31,6 @@ from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.identity import resolve_user_id
 from universal_agent.api.input_bridge import set_input_handler
 from universal_agent.memory.paths import (
-    resolve_agent_core_db_path,
     resolve_shared_memory_workspace,
 )
 from universal_agent.runtime_env import ensure_runtime_path
@@ -135,51 +134,38 @@ def _temporary_env(overrides: dict[str, Optional[str]]) -> Any:
                 os.environ[key] = previous
 
 
-def _normalize_tag_list(value: Any) -> list[str]:
-    if isinstance(value, str):
-        items = [item.strip() for item in value.split(",") if item.strip()]
-    elif isinstance(value, list):
-        items = [str(item).strip() for item in value if str(item).strip()]
-    else:
-        items = []
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        key = item.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(item)
-    return deduped
-
-
 def _build_memory_env_overrides(memory_policy: dict[str, Any] | None) -> dict[str, Optional[str]]:
     policy = memory_policy if isinstance(memory_policy, dict) else {}
-    mode = str(policy.get("mode", "session_only")).strip().lower()
-    if mode not in {"off", "session_only", "selective", "full"}:
-        mode = "session_only"
-    session_enabled = policy.get("session_memory_enabled", True)
+    enabled = policy.get("enabled", True)
+    if not isinstance(enabled, bool):
+        enabled = bool(enabled)
+    session_enabled = policy.get("sessionMemory", True)
     if not isinstance(session_enabled, bool):
         session_enabled = bool(session_enabled)
-    tags = _normalize_tag_list(policy.get("tags"))
-    allowlist = _normalize_tag_list(policy.get("long_term_tag_allowlist"))
-    if mode == "selective" and not allowlist:
-        allowlist = ["retain"]
+    sources = policy.get("sources", ["memory", "sessions"])
+    if isinstance(sources, str):
+        source_items = [item.strip().lower() for item in sources.split(",") if item.strip()]
+    elif isinstance(sources, list):
+        source_items = [str(item).strip().lower() for item in sources if str(item).strip()]
+    else:
+        source_items = ["memory", "sessions"]
+    source_items = [item for item in source_items if item in {"memory", "sessions"}] or ["memory", "sessions"]
+    scope = str(policy.get("scope", "direct_only")).strip().lower()
+    if scope not in {"direct_only", "all"}:
+        scope = "direct_only"
 
     overrides: dict[str, Optional[str]] = {
-        "UA_MEMORY_RUN_TAGS": ",".join(tags) if tags else None,
-        "UA_MEMORY_LONG_TERM_TAG_ALLOWLIST": None,
-        "UA_MEMORY_PROFILE_MODE": None,
+        "UA_MEMORY_PROVIDER": None,
+        "UA_MEMORY_SCOPE": scope,
+        "UA_MEMORY_SOURCES": ",".join(source_items),
     }
-    if mode == "off":
+    if not enabled:
         overrides.update(
             {
                 "UA_DISABLE_MEMORY": "1",
-                "UA_DISABLE_LOCAL_MEMORY": "1",
                 "UA_MEMORY_ENABLED": "0",
                 "UA_MEMORY_SESSION_ENABLED": None,
                 "UA_MEMORY_SESSION_DISABLED": "1",
-                "UA_MEMORY_ORCHESTRATOR_MODE": None,
             }
         )
         return overrides
@@ -187,9 +173,7 @@ def _build_memory_env_overrides(memory_policy: dict[str, Any] | None) -> dict[st
     overrides.update(
         {
             "UA_DISABLE_MEMORY": None,
-            "UA_DISABLE_LOCAL_MEMORY": None,
             "UA_MEMORY_ENABLED": "1",
-            "UA_MEMORY_ORCHESTRATOR_MODE": "unified",
         }
     )
     if session_enabled:
@@ -199,13 +183,6 @@ def _build_memory_env_overrides(memory_policy: dict[str, Any] | None) -> dict[st
         overrides["UA_MEMORY_SESSION_ENABLED"] = None
         overrides["UA_MEMORY_SESSION_DISABLED"] = "1"
 
-    if mode == "session_only":
-        overrides["UA_MEMORY_PROFILE_MODE"] = "dev_no_persist"
-    elif mode == "selective":
-        overrides["UA_MEMORY_PROFILE_MODE"] = "dev_memory_test"
-        overrides["UA_MEMORY_LONG_TERM_TAG_ALLOWLIST"] = ",".join(allowlist)
-    else:  # full
-        overrides["UA_MEMORY_PROFILE_MODE"] = "prod"
     return overrides
 
 
@@ -793,11 +770,11 @@ class ProcessTurnAdapter:
         try:
             from universal_agent.feature_flags import (
                 memory_enabled,
-                memory_flush_on_exit,
+                memory_flush_enabled,
                 memory_flush_max_chars,
                 memory_session_index_on_end,
             )
-            if not memory_enabled(default=False):
+            if not memory_enabled():
                 return
 
             workspace_dir = self.config.workspace_dir
@@ -808,7 +785,7 @@ class ProcessTurnAdapter:
             shared_memory_dir = resolve_shared_memory_workspace(workspace_dir)
 
             # 1. Pre-compact flush: save transcript tail as long-term memory
-            if memory_flush_on_exit(default=False):
+            if memory_flush_enabled(default=True):
                 from universal_agent.memory.memory_flush import flush_pre_compact_memory
                 flush_pre_compact_memory(
                     workspace_dir=shared_memory_dir,
@@ -832,24 +809,6 @@ class ProcessTurnAdapter:
                     logger.info("Session sync on close: %s", result)
                 except Exception as exc:
                     logger.warning("Session sync failed on close: %s", exc)
-
-            # 3. Record in processed_traces (legacy MemoryManager table)
-            trace_id = self._trace.get("trace_id")
-            if trace_id:
-                try:
-                    import sqlite3
-                    db_path = resolve_agent_core_db_path(workspace_dir)
-                    if os.path.exists(db_path):
-                        conn = sqlite3.connect(db_path, timeout=5)
-                        conn.execute(
-                            "INSERT OR IGNORE INTO processed_traces (trace_id, timestamp) VALUES (?, ?)",
-                            (trace_id, datetime.now().isoformat()),
-                        )
-                        conn.commit()
-                        conn.close()
-                        logger.info("Recorded processed trace: %s", trace_id)
-                except Exception as exc:
-                    logger.warning("Failed to record processed trace: %s", exc)
 
         except Exception as exc:
             logger.warning("Memory flush failed during close: %s", exc)

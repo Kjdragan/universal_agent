@@ -4,68 +4,73 @@ from pathlib import Path
 
 from universal_agent.execution_engine import _build_memory_env_overrides
 from universal_agent.memory.orchestrator import MemoryOrchestrator
+from universal_agent.session_policy import default_memory_policy, normalize_memory_policy
 
 
-def test_build_memory_env_overrides_modes():
-    off = _build_memory_env_overrides({"mode": "off"})
-    assert off["UA_DISABLE_MEMORY"] == "1"
-    assert off["UA_MEMORY_SESSION_DISABLED"] == "1"
-
-    session_only = _build_memory_env_overrides({"mode": "session_only", "tags": ["dev_test"]})
-    assert session_only["UA_MEMORY_ENABLED"] == "1"
-    assert session_only["UA_MEMORY_PROFILE_MODE"] == "dev_no_persist"
-    assert session_only["UA_MEMORY_RUN_TAGS"] == "dev_test"
-
-    selective = _build_memory_env_overrides({"mode": "selective", "long_term_tag_allowlist": ["retain"]})
-    assert selective["UA_MEMORY_PROFILE_MODE"] == "dev_memory_test"
-    assert selective["UA_MEMORY_LONG_TERM_TAG_ALLOWLIST"] == "retain"
-
-    full = _build_memory_env_overrides({"mode": "full"})
-    assert full["UA_MEMORY_PROFILE_MODE"] == "prod"
-    assert full["UA_DISABLE_MEMORY"] is None
+def test_build_memory_env_overrides_disabled_mode() -> None:
+    overrides = _build_memory_env_overrides({"enabled": False, "sessionMemory": False})
+    assert overrides["UA_DISABLE_MEMORY"] == "1"
+    assert overrides["UA_MEMORY_ENABLED"] == "0"
+    assert overrides["UA_MEMORY_SESSION_DISABLED"] == "1"
+    assert overrides["UA_MEMORY_SESSION_ENABLED"] is None
 
 
-def test_selective_mode_blocks_long_term_without_allow_tag(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("UA_MEMORY_PROFILE_MODE", "dev_memory_test")
-    monkeypatch.setenv("UA_MEMORY_LONG_TERM_TAG_ALLOWLIST", "retain")
-    monkeypatch.setenv("UA_MEMORY_RUN_TAGS", "dev_test")
+def test_build_memory_env_overrides_enabled_with_scope_and_sources() -> None:
+    overrides = _build_memory_env_overrides(
+        {
+            "enabled": True,
+            "sessionMemory": True,
+            "scope": "all",
+            "sources": ["sessions", "memory", "invalid"],
+        }
+    )
+    assert overrides["UA_DISABLE_MEMORY"] is None
+    assert overrides["UA_MEMORY_ENABLED"] == "1"
+    assert overrides["UA_MEMORY_SESSION_ENABLED"] == "1"
+    assert overrides["UA_MEMORY_SESSION_DISABLED"] is None
+    assert overrides["UA_MEMORY_SCOPE"] == "all"
+    assert overrides["UA_MEMORY_SOURCES"] == "sessions,memory"
 
+
+def test_memory_policy_normalization_uses_canonical_schema() -> None:
+    defaults = default_memory_policy()
+    assert defaults == {
+        "enabled": True,
+        "sessionMemory": True,
+        "sources": ["memory", "sessions"],
+        "scope": "direct_only",
+    }
+
+    normalized = normalize_memory_policy(
+        {
+            "enabled": "yes",
+            "session_memory_enabled": 0,
+            "sources": "memory,invalid,sessions",
+            "scope": "invalid_scope",
+        }
+    )
+    assert normalized["enabled"] is True
+    assert normalized["sessionMemory"] is False
+    assert normalized["sources"] == ["memory", "sessions"]
+    assert normalized["scope"] == "direct_only"
+
+
+def test_direct_only_scope_blocks_indirect_context(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("UA_MEMORY_SCOPE", "direct_only")
     broker = MemoryOrchestrator(str(tmp_path))
 
-    blocked = broker.write(
-        content="do not persist",
+    written = broker.write(
+        content="Sensitive direct-session memory.",
         source="test",
-        session_id="session-test",
-        tags=["pre_compact"],
+        session_id="s1",
+        tags=["sensitive"],
         memory_class="long_term",
         importance=1.0,
     )
-    assert blocked is None
+    assert written is not None
 
-    allowed = broker.write(
-        content="persist me",
-        source="test",
-        session_id="session-test",
-        tags=["retain"],
-        memory_class="long_term",
-        importance=1.0,
-    )
-    assert allowed is not None
-    assert "retain" in allowed.tags
-    assert "dev_test" in allowed.tags
+    blocked = broker.search(query="sensitive", limit=5, sources=["memory"], direct_context=False)
+    assert blocked == []
 
-
-def test_session_sync_still_indexes_when_long_term_persist_disabled(monkeypatch, tmp_path: Path):
-    monkeypatch.setenv("UA_MEMORY_PROFILE_MODE", "dev_no_persist")
-
-    broker = MemoryOrchestrator(str(tmp_path))
-    transcript = tmp_path / "transcript.md"
-    transcript.write_text("line 1\nline 2\nline 3\n", encoding="utf-8")
-
-    result = broker.sync_session(
-        session_id="session-sync",
-        transcript_path=str(transcript),
-        force=True,
-    )
-    assert result["indexed"] is True
-    assert result["reason"] == "indexed"
+    allowed = broker.search(query="sensitive", limit=5, sources=["memory"], direct_context=True)
+    assert allowed

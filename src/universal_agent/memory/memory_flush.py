@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from universal_agent.feature_flags import memory_orchestrator_enabled
+from universal_agent.feature_flags import memory_enabled
 
 from .memory_models import MemoryEntry
 from .memory_store import append_memory_entry
@@ -36,30 +36,28 @@ def flush_pre_compact_memory(
     trigger: str,
     max_chars: int = 4000,
 ) -> Optional[MemoryEntry]:
-    if memory_orchestrator_enabled(default=False):
-        try:
-            from universal_agent.memory.orchestrator import get_memory_orchestrator
-
-            broker = get_memory_orchestrator(workspace_dir=workspace_dir)
-            return broker.flush_pre_compact(
-                session_id=session_id,
-                transcript_path=transcript_path,
-                trigger=trigger,
-                max_chars=max_chars,
-            )
-        except Exception:
-            # Fall through to legacy direct append path.
-            pass
-
-    content = _extract_transcript_tail(transcript_path or "", max_chars=max_chars)
-    if not content:
+    if not memory_enabled(default=True):
         return None
+    try:
+        from universal_agent.memory.orchestrator import get_memory_orchestrator
 
-    entry = MemoryEntry(
-        content=content,
-        source="pre_compact",
-        session_id=session_id,
-        tags=["pre_compact", f"trigger:{trigger}"],
-    )
-    append_memory_entry(workspace_dir, entry, max_chars=max_chars)
-    return entry
+        broker = get_memory_orchestrator(workspace_dir=workspace_dir)
+        return broker.flush_pre_compact(
+            session_id=session_id,
+            transcript_path=transcript_path,
+            trigger=trigger,
+            max_chars=max_chars,
+        )
+    except Exception:
+        # Keep best-effort fallback for operational resilience.
+        content = _extract_transcript_tail(transcript_path or "", max_chars=max_chars)
+        if not content:
+            return None
+        entry = MemoryEntry(
+            content=content,
+            source="pre_compact",
+            session_id=session_id,
+            tags=["pre_compact", f"trigger:{trigger}"],
+        )
+        append_memory_entry(workspace_dir, entry, max_chars=max_chars)
+        return entry

@@ -25,13 +25,9 @@ def heartbeat_enabled(default: bool = False) -> bool:
     return default
 
 
-def memory_index_enabled(default: bool = False) -> bool:
-    """Return True only when memory indexing is explicitly enabled."""
-    if _is_truthy(os.getenv("UA_DISABLE_MEMORY_INDEX")):
-        return False
-    if _is_truthy(os.getenv("UA_ENABLE_MEMORY_INDEX")):
-        return True
-    return default
+def memory_index_enabled(default: bool = True) -> bool:
+    """Compatibility helper: canonical memory always controls indexing."""
+    return memory_enabled(default=default)
 
 
 def cron_enabled(default: bool = False) -> bool:
@@ -43,40 +39,29 @@ def cron_enabled(default: bool = False) -> bool:
     return default
 
 
-def memory_enabled(default: bool = False) -> bool:
-    """Return True only when memory is explicitly enabled (or index enabled)."""
-    if _is_truthy(os.getenv("UA_DISABLE_MEMORY")) or _is_truthy(os.getenv("UA_DISABLE_LOCAL_MEMORY")):
+def memory_enabled(default: bool = True) -> bool:
+    """Return canonical memory enablement."""
+    if _is_truthy(os.getenv("UA_DISABLE_MEMORY")):
         return False
     if _is_truthy(os.getenv("UA_MEMORY_ENABLED")):
-        return True
-    if memory_index_enabled(default=False):
         return True
     return default
 
 
 def memory_index_mode(default: str = "json") -> str:
-    """Return the configured memory index mode (json|vector|fts|off)."""
-    mode = (os.getenv("UA_MEMORY_INDEX") or "").strip().lower()
-    if mode in {"off", "false", "0"}:
+    """Return canonical index mode used by memory subsystem."""
+    if not memory_enabled(default=True):
         return "off"
-    if mode in {"json", "vector", "fts"}:
-        return mode
-    if memory_index_enabled(default=False):
-        return default
-    return "off"
+    return "vector"
 
 
-def memory_backend(default: str = "chromadb") -> str:
-    """Return the configured memory backend (chromadb|lancedb|sqlite).
-    
-    chromadb: Uses ChromaDB with real embeddings for semantic search (default, CPU-compatible)
-    lancedb: Uses LanceDB with real embeddings (requires AVX2 CPU instructions)
-    sqlite: Uses SQLite with hash-based embeddings (legacy)
-    """
-    backend = (os.getenv("UA_MEMORY_BACKEND") or "").strip().lower()
-    if backend in {"chromadb", "lancedb", "sqlite"}:
-        return backend
-    return default
+def memory_provider(default: str = "auto") -> str:
+    """Return configured provider preference for canonical memory."""
+    return _read_choice(
+        "UA_MEMORY_PROVIDER",
+        ("auto", "local", "openai", "gemini", "voyage"),
+        default,
+    )
 
 
 def memory_max_tokens(default: int = 800) -> int:
@@ -90,24 +75,18 @@ def memory_max_tokens(default: int = 800) -> int:
         return default
 
 
-def memory_flush_on_exit(default: bool = False) -> bool:
-    """Return True when post-run memory flush is enabled."""
-    if _is_truthy(os.getenv("UA_DISABLE_MEMORY_FLUSH_ON_EXIT")):
+def memory_flush_enabled(default: bool = True) -> bool:
+    """Return True when canonical pre-compaction memory flush is enabled."""
+    if _is_truthy(os.getenv("UA_DISABLE_MEMORY_FLUSH_ENABLED")):
         return False
-    if _is_truthy(os.getenv("UA_MEMORY_FLUSH_ON_EXIT")):
+    if _is_truthy(os.getenv("UA_MEMORY_FLUSH_ENABLED")):
         return True
     return default
 
 
-def memory_flush_max_chars(default: int = 4000) -> int:
-    """Return max chars for memory flush content."""
-    raw = os.getenv("UA_MEMORY_FLUSH_MAX_CHARS")
-    if not raw:
-        return default
-    try:
-        return max(0, int(raw))
-    except ValueError:
-        return default
+def memory_flush_soft_threshold_tokens(default: int = 4000) -> int:
+    """Token distance from compaction threshold that triggers memory flush."""
+    return _read_int("UA_MEMORY_FLUSH_SOFT_THRESHOLD_TOKENS", default, minimum=0)
 
 
 def _read_int(name: str, default: int, minimum: int | None = None) -> int:
@@ -157,71 +136,8 @@ def _read_csv_list(name: str, *, allowed: Iterable[str] | None = None) -> list[s
     return [item for item in parts if item.lower() in allowed_set]
 
 
-def memory_orchestrator_mode(default: str = "legacy") -> str:
-    """Return memory control mode: legacy|unified."""
-    return _read_choice("UA_MEMORY_ORCHESTRATOR_MODE", ("legacy", "unified"), default)
-
-
-def memory_orchestrator_enabled(default: bool = True) -> bool:
-    """Return True when orchestrator is active."""
-    mode = memory_orchestrator_mode(default="legacy")
-    if mode == "unified":
-        return True
-    if _is_truthy(os.getenv("UA_MEMORY_ORCHESTRATOR_ENABLED")):
-        return True
-    if _is_truthy(os.getenv("UA_MEMORY_ORCHESTRATOR_DISABLED")):
-        return False
-    return default and mode != "legacy"
-
-
-def memory_adapter_state(adapter_name: str, default: str = "off") -> str:
-    """Return adapter state: active|shadow|off|deprecated."""
-    normalized = adapter_name.strip().upper().replace("-", "_")
-    key = f"UA_MEMORY_ADAPTER_{normalized}_STATE"
-    return _read_choice(key, ("active", "shadow", "off", "deprecated"), default)
-
-
-def memory_profile_mode(default: str = "dev_standard") -> str:
-    """Return memory profile mode."""
-    return _read_choice(
-        "UA_MEMORY_PROFILE_MODE",
-        ("prod", "dev_standard", "dev_memory_test", "dev_no_persist"),
-        default,
-    )
-
-
-def memory_tag_dev_writes(default: bool = True) -> bool:
-    """Tag writes with profile/env metadata for dev modes."""
-    if _is_truthy(os.getenv("UA_MEMORY_TAG_DEV_WRITES")):
-        return True
-    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_TAG_DEV_WRITES")):
-        return False
-    return default
-
-
-def memory_runtime_tags(default: tuple[str, ...] = ()) -> list[str]:
-    """Return optional runtime tags applied to all orchestrator writes."""
-    values = _read_csv_list("UA_MEMORY_RUN_TAGS")
-    if values:
-        return values
-    return list(default)
-
-
-def memory_long_term_tag_allowlist(default: tuple[str, ...] = ()) -> list[str]:
-    """Return tags that are allowed to persist long-term entries when set."""
-    values = _read_csv_list("UA_MEMORY_LONG_TERM_TAG_ALLOWLIST")
-    if values:
-        return values
-    return list(default)
-
-
-def memory_write_policy_min_importance(default: float = 0.6) -> float:
-    """Minimum importance threshold for long-term writes in development profiles."""
-    return _read_float("UA_MEMORY_WRITE_MIN_IMPORTANCE", default, minimum=0.0)
-
-
 def memory_session_enabled(default: bool = True) -> bool:
-    """Enable session memory indexing/search."""
+    """Enable transcript/session memory indexing/search."""
     if _is_truthy(os.getenv("UA_MEMORY_SESSION_DISABLED")):
         return False
     if _is_truthy(os.getenv("UA_MEMORY_SESSION_ENABLED")):
@@ -230,8 +146,8 @@ def memory_session_enabled(default: bool = True) -> bool:
 
 
 def memory_session_sources(default: tuple[str, ...] = ("memory", "sessions")) -> list[str]:
-    """Return requested memory sources for broker search."""
-    raw = (os.getenv("UA_MEMORY_SESSION_SOURCES") or "").strip()
+    """Return requested search sources for canonical memory."""
+    raw = (os.getenv("UA_MEMORY_SOURCES") or "").strip()
     if not raw:
         return list(default)
     parts = [item.strip().lower() for item in raw.split(",") if item.strip()]
@@ -240,12 +156,8 @@ def memory_session_sources(default: tuple[str, ...] = ("memory", "sessions")) ->
 
 
 def memory_session_index_on_end(default: bool = True) -> bool:
-    """Run forced session indexing pass on session end."""
-    if _is_truthy(os.getenv("UA_MEMORY_SESSION_INDEX_ON_END")):
-        return True
-    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_SESSION_INDEX_ON_END")):
-        return False
-    return default
+    """Run forced transcript indexing pass at session end."""
+    return memory_session_enabled(default=default)
 
 
 def memory_session_delta_bytes(default: int = 100_000) -> int:
@@ -258,68 +170,105 @@ def memory_session_delta_messages(default: int = 50) -> int:
     return _read_int("UA_MEMORY_SESSION_DELTA_MESSAGES", default, minimum=0)
 
 
+def memory_scope(default: str = "direct_only") -> str:
+    """Return memory retrieval scope."""
+    return _read_choice("UA_MEMORY_SCOPE", ("direct_only", "all"), default)
+
+
 def memory_retrieval_strategy(default: str = "semantic_first") -> str:
-    """Return retrieval strategy: semantic_first|lexical_only|hybrid."""
-    return _read_choice(
-        "UA_MEMORY_RETRIEVAL_STRATEGY",
-        ("semantic_first", "lexical_only", "hybrid"),
-        default,
-    )
+    """Compatibility helper for canonical retrieval."""
+    return "semantic_first"
 
 
-def memory_rerank_enabled(default: bool = False) -> bool:
-    """Feature gate for explicit rerank stage."""
-    if _is_truthy(os.getenv("UA_MEMORY_RERANK_ENABLED")):
-        return True
-    if _is_truthy(os.getenv("UA_MEMORY_RERANK_DISABLED")):
-        return False
+def memory_backend(default: str = "chromadb") -> str:
+    """Compatibility helper used by existing vector index codepaths."""
+    provider = memory_provider(default="auto")
+    if provider == "local":
+        return "lancedb"
+    return "chromadb"
+
+
+def memory_orchestrator_enabled(default: bool = True) -> bool:
+    """Compatibility helper: canonical orchestrator is always active when memory is on."""
+    return memory_enabled(default=default)
+
+
+def memory_adapter_state(adapter_name: str, default: str = "off") -> str:
+    """Compatibility helper after hard-cut adapter removal."""
+    normalized = adapter_name.strip().lower()
+    if normalized in {"ua_file_memory", "canonical"}:
+        return "active"
+    return "off"
+
+
+def memory_profile_mode(default: str = "prod") -> str:
+    """Compatibility helper retained for import stability."""
     return default
 
 
-def memory_embedding_provider(default: str = "local") -> str:
-    """Preferred embedding provider hint for orchestrator."""
-    return _read_choice("UA_MEMORY_EMBEDDING_PROVIDER", ("local", "openai", "gemini", "voyage"), default)
+def memory_tag_dev_writes(default: bool = False) -> bool:
+    """Compatibility helper retained for import stability."""
+    return default
+
+
+def memory_runtime_tags(default: tuple[str, ...] = ()) -> list[str]:
+    """Compatibility helper retained for import stability."""
+    return list(default)
+
+
+def memory_long_term_tag_allowlist(default: tuple[str, ...] = ()) -> list[str]:
+    """Compatibility helper retained for import stability."""
+    return list(default)
+
+
+def memory_write_policy_min_importance(default: float = 0.0) -> float:
+    """Compatibility helper retained for import stability."""
+    return _read_float("UA_MEMORY_WRITE_MIN_IMPORTANCE", default, minimum=0.0)
+
+
+def memory_rerank_enabled(default: bool = False) -> bool:
+    """Compatibility helper retained for import stability."""
+    return default
+
+
+def memory_embedding_provider(default: str = "auto") -> str:
+    """Compatibility helper retained for import stability."""
+    return memory_provider(default=default)
 
 
 def memory_embedding_query_intent(default: bool = True) -> bool:
-    """Enable explicit query-embedding intent when supported."""
-    if _is_truthy(os.getenv("UA_MEMORY_EMBEDDING_QUERY_INTENT")):
-        return True
-    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_EMBEDDING_QUERY_INTENT")):
-        return False
+    """Compatibility helper retained for import stability."""
     return default
 
 
 def memory_embedding_document_intent(default: bool = True) -> bool:
-    """Enable explicit document-embedding intent when supported."""
-    if _is_truthy(os.getenv("UA_MEMORY_EMBEDDING_DOCUMENT_INTENT")):
-        return True
-    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_EMBEDDING_DOCUMENT_INTENT")):
-        return False
+    """Compatibility helper retained for import stability."""
     return default
 
 
 def memory_embedding_batch_enabled(default: bool = True) -> bool:
-    """Enable embedding batch mode where provider supports it."""
-    if _is_truthy(os.getenv("UA_MEMORY_EMBEDDING_BATCH_ENABLED")):
-        return True
-    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_EMBEDDING_BATCH")):
-        return False
+    """Compatibility helper retained for import stability."""
     return default
 
 
 def memory_embedding_batch_failure_threshold(default: int = 3) -> int:
-    """Failure threshold before disabling batch mode."""
+    """Compatibility helper retained for import stability."""
     return _read_int("UA_MEMORY_EMBEDDING_BATCH_FAILURE_THRESHOLD", default, minimum=1)
 
 
 def memory_embedding_fallback_to_non_batch(default: bool = True) -> bool:
-    """Fallback to non-batch embedding mode after batch failures."""
-    if _is_truthy(os.getenv("UA_MEMORY_EMBEDDING_FALLBACK_NON_BATCH")):
-        return True
-    if _is_truthy(os.getenv("UA_MEMORY_DISABLE_EMBEDDING_FALLBACK_NON_BATCH")):
-        return False
+    """Compatibility helper retained for import stability."""
     return default
+
+
+def memory_flush_on_exit(default: bool = True) -> bool:
+    """Compatibility helper retained while callsites are updated."""
+    return memory_flush_enabled(default=default)
+
+
+def memory_flush_max_chars(default: int = 4000) -> int:
+    """Compatibility helper retained while callsites are updated."""
+    return _read_int("UA_MEMORY_FLUSH_MAX_CHARS", default, minimum=0)
 
 
 def coder_vp_enabled(default: bool = False) -> bool:

@@ -3284,10 +3284,10 @@ def _policy_metadata_snapshot(policy: dict[str, Any]) -> dict[str, Any]:
         "autonomy_mode": policy.get("autonomy_mode"),
         "identity_mode": policy.get("identity_mode"),
         "tool_profile": policy.get("tool_profile"),
-        "memory_mode": memory.get("mode"),
-        "session_memory_enabled": memory.get("session_memory_enabled"),
-        "memory_tags": memory.get("tags", []),
-        "long_term_tag_allowlist": memory.get("long_term_tag_allowlist", []),
+        "memory_enabled": memory.get("enabled"),
+        "memory_session_enabled": memory.get("sessionMemory"),
+        "memory_sources": memory.get("sources", []),
+        "memory_scope": memory.get("scope"),
     }
 
 
@@ -5747,8 +5747,10 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             "identity_mode": pending_gate.get("identity_mode") or saved_metadata.get("identity_mode", "persona"),
                             "autonomy_mode": policy.get("autonomy_mode", "yolo"),
                             "memory_policy": memory_policy,
-                            "memory_mode": memory_policy.get("mode"),
-                            "memory_tags": memory_policy.get("tags", []),
+                            "memory_enabled": memory_policy.get("enabled"),
+                            "memory_session_enabled": memory_policy.get("sessionMemory"),
+                            "memory_sources": memory_policy.get("sources", []),
+                            "memory_scope": memory_policy.get("scope"),
                         }
                         clear_pending_gate_on_success = True
                     else:
@@ -5757,8 +5759,10 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             "identity_mode": policy.get("identity_mode", "persona"),
                             "autonomy_mode": policy.get("autonomy_mode", "yolo"),
                             "memory_policy": memory_policy,
-                            "memory_mode": memory_policy.get("mode"),
-                            "memory_tags": memory_policy.get("tags", []),
+                            "memory_enabled": memory_policy.get("enabled"),
+                            "memory_session_enabled": memory_policy.get("sessionMemory"),
+                            "memory_sources": memory_policy.get("sources", []),
+                            "memory_scope": memory_policy.get("scope"),
                         }
                         evaluation = evaluate_request_against_policy(
                             policy,

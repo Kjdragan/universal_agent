@@ -43,7 +43,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
           source,
           channel,
           owner: String(row.owner || "unknown"),
-          memory_mode: String(row.memory_mode || "session_only"),
+          memory_mode: String(row.memory_mode || "direct_only"),
           description: row.description ? String(row.description) : undefined,
           workspace_dir: row.workspace_dir ? String(row.workspace_dir) : undefined,
           last_activity: row.last_activity ? String(row.last_activity) : undefined,
@@ -70,7 +70,7 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
       source,
       channel: source,
       owner: "unknown",
-      memory_mode: "session_only",
+      memory_mode: "direct_only",
       description: row.description ? String(row.description) : undefined,
       workspace_dir: row.workspace_dir
         ? String(row.workspace_dir)

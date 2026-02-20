@@ -42,11 +42,8 @@ except ImportError:
         "preview_image",
         "html_to_pdf",
         "batch_tool_execute",
-        "core_memory_replace",
-        "core_memory_append",
-        "archival_memory_insert",
-        "archival_memory_search",
-        "get_core_memory_blocks",
+        "memory_search",
+        "memory_get",
         "ask_user_questions",
     ]
 

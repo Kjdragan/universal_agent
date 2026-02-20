@@ -1,24 +1,30 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
 
 from universal_agent.feature_flags import (
-    memory_adapter_state,
-    memory_long_term_tag_allowlist,
-    memory_profile_mode,
+    memory_backend,
+    memory_enabled,
+    memory_index_mode,
     memory_retrieval_strategy,
-    memory_runtime_tags,
+    memory_scope,
+    memory_session_delta_bytes,
+    memory_session_delta_messages,
     memory_session_enabled,
     memory_session_sources,
-    memory_tag_dev_writes,
-    memory_write_policy_min_importance,
 )
-from universal_agent.memory.adapters.letta import LettaAdapter
-from universal_agent.memory.adapters.memory_system import MemorySystemAdapter
-from universal_agent.memory.adapters.ua_file import UAFileMemoryAdapter
+from universal_agent.memory.memory_index import (
+    _content_hash,
+    append_index_entry,
+    load_index,
+    search_entries,
+)
 from universal_agent.memory.memory_models import MemoryEntry
+from universal_agent.memory.memory_store import append_memory_entry, ensure_memory_scaffold
+from universal_agent.memory.memory_vector_index import schedule_vector_upsert, search_vectors
 
 _BROKERS: dict[str, "MemoryOrchestrator"] = {}
 
@@ -55,75 +61,35 @@ def _extract_transcript_tail(
         return ""
 
 
+def _safe_read_json(path: str) -> dict[str, Any]:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _safe_write_json(path: str, payload: dict[str, Any]) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=True)
+    os.replace(tmp, path)
+
+
 class MemoryOrchestrator:
-    """Unified broker for memory writes/search/sync across adapters."""
+    """Canonical memory service (single pipeline, no adapter multiplex)."""
 
     def __init__(self, workspace_dir: str):
         self.workspace_dir = _resolve_workspace_dir(workspace_dir)
-        self._adapters: dict[str, Any] = {}
-        self._register_adapters()
-
-    def _register_adapters(self) -> None:
-        ua_state = memory_adapter_state("ua_file_memory", default="active")
-        self._adapters["ua_file_memory"] = UAFileMemoryAdapter(self.workspace_dir, state=ua_state)
-
-        memory_system_state = memory_adapter_state("memory_system", default="shadow")
-        if memory_system_state != "off":
-            try:
-                self._adapters["memory_system"] = MemorySystemAdapter(
-                    self.workspace_dir,
-                    state=memory_system_state,
-                )
-            except Exception:
-                pass
-
-        letta_state = memory_adapter_state("letta", default="off")
-        if letta_state != "off":
-            try:
-                self._adapters["letta"] = LettaAdapter(self.workspace_dir, state=letta_state)
-            except Exception:
-                pass
-
-    def _iter_adapters(self, *, include_shadow: bool) -> list[Any]:
-        allowed = {"active"}
-        if include_shadow:
-            allowed.add("shadow")
-        return [adapter for adapter in self._adapters.values() if getattr(adapter, "state", "off") in allowed]
-
-    def _decorate_tags(self, tags: list[str]) -> list[str]:
-        profile = memory_profile_mode(default="dev_standard")
-        output = list(tags)
-        output.extend(memory_runtime_tags(default=()))
-        if memory_tag_dev_writes(default=True) and profile != "prod":
-            output.append(f"profile:{profile}")
-        deduped: list[str] = []
-        seen: set[str] = set()
-        for tag in output:
-            normalized = str(tag).strip()
-            if not normalized:
-                continue
-            key = normalized.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(normalized)
-        return deduped
-
-    def _allow_write(self, *, memory_class: str, importance: float, tags: list[str]) -> bool:
-        profile = memory_profile_mode(default="dev_standard")
-        if profile == "dev_no_persist":
-            return False
-        if memory_class == "long_term":
-            allowlist = memory_long_term_tag_allowlist(default=())
-            if allowlist:
-                tags_norm = {str(tag).strip().lower() for tag in tags if str(tag).strip()}
-                allow_norm = {str(tag).strip().lower() for tag in allowlist if str(tag).strip()}
-                if not tags_norm.intersection(allow_norm):
-                    return False
-        if memory_class == "long_term" and profile in {"dev_standard", "dev_memory_test"}:
-            threshold = memory_write_policy_min_importance(default=0.6)
-            return importance >= threshold
-        return True
+        self.paths = ensure_memory_scaffold(self.workspace_dir)
+        self.session_index_path = os.path.join(self.paths.memory_dir, "session_index.json")
+        self.session_vector_db = os.path.join(self.paths.memory_dir, "session_vector_index.sqlite")
+        self.session_state_path = os.path.join(self.paths.memory_dir, ".session_sync_state.json")
 
     def write(
         self,
@@ -136,34 +102,25 @@ class MemoryOrchestrator:
         memory_class: str = "long_term",
         importance: float = 0.7,
     ) -> MemoryEntry | None:
+        if not memory_enabled(default=True):
+            return None
         body = (content or "").strip()
         if not body:
-            return None
-        entry_tags = self._decorate_tags(tags or [])
-        if not self._allow_write(memory_class=memory_class, importance=importance, tags=entry_tags):
             return None
 
         entry = MemoryEntry(
             content=body,
             source=source,
             session_id=session_id,
-            tags=entry_tags,
+            tags=list(tags or []),
             summary=summary,
         )
 
-        active_success = False
-        for adapter in self._iter_adapters(include_shadow=True):
-            try:
-                wrote = adapter.write_entry(
-                    entry,
-                    memory_class=memory_class,
-                    importance=importance,
-                )
-                if wrote and getattr(adapter, "state", "off") == "active":
-                    active_success = True
-            except Exception:
-                continue
-        return entry if active_success else None
+        if memory_class == "session":
+            wrote = self._write_session_entry(entry)
+        else:
+            wrote = self._write_long_term_entry(entry)
+        return entry if wrote else None
 
     def flush_pre_compact(
         self,
@@ -185,52 +142,60 @@ class MemoryOrchestrator:
             importance=0.75,
         )
 
+    def read_file(self, *, rel_path: str, from_line: int = 1, lines: int = 120) -> dict[str, Any]:
+        path_value = (rel_path or "").strip()
+        if not path_value:
+            return {"path": "", "text": "", "error": "path is required"}
+
+        root = Path(self.workspace_dir).resolve()
+        target = (root / path_value).resolve()
+        if not str(target).startswith(str(root)):
+            return {"path": path_value, "text": "", "error": "path escapes memory root"}
+
+        rel = str(target.relative_to(root))
+        if rel != "MEMORY.md" and not rel.startswith("memory" + os.sep):
+            return {"path": path_value, "text": "", "error": "path must be MEMORY.md or memory/*"}
+        if not target.exists() or not target.is_file():
+            return {"path": path_value, "text": "", "error": "file not found"}
+
+        start = max(1, int(from_line or 1))
+        count = max(1, int(lines or 120))
+        try:
+            with open(target, "r", encoding="utf-8", errors="replace") as handle:
+                all_lines = handle.readlines()
+            chunk = "".join(all_lines[start - 1 : start - 1 + count])
+        except Exception as exc:
+            return {"path": rel, "text": "", "error": str(exc)}
+        return {"path": rel, "text": chunk, "from": start, "lines": count}
+
     def search(
         self,
         *,
         query: str,
         limit: int = 5,
         sources: list[str] | None = None,
+        direct_context: bool = True,
     ) -> list[dict[str, Any]]:
+        if not memory_enabled(default=True):
+            return []
         text = (query or "").strip()
         if not text:
             return []
+        if memory_scope(default="direct_only") == "direct_only" and not direct_context:
+            return []
+
         max_results = max(1, int(limit))
         strategy = memory_retrieval_strategy(default="semantic_first")
         source_list = sources or memory_session_sources(default=("memory", "sessions"))
+        source_list = [item for item in source_list if item in {"memory", "sessions"}]
         if not memory_session_enabled(default=True):
             source_list = [item for item in source_list if item != "sessions"]
 
-        adapters = self._iter_adapters(include_shadow=False)
-        if not adapters:
-            adapters = self._iter_adapters(include_shadow=True)
-
         hits: list[dict[str, Any]] = []
-        for adapter in adapters:
-            if "memory" in source_list:
-                try:
-                    hits.extend(
-                        adapter.search(
-                            text,
-                            memory_class="long_term",
-                            limit=max_results,
-                            strategy=strategy,
-                        )
-                    )
-                except Exception:
-                    pass
-            if "sessions" in source_list and memory_session_enabled(default=True):
-                try:
-                    hits.extend(
-                        adapter.search(
-                            text,
-                            memory_class="session",
-                            limit=max_results,
-                            strategy=strategy,
-                        )
-                    )
-                except Exception:
-                    pass
+        if "memory" in source_list:
+            hits.extend(self._search_long_term(query=text, limit=max_results, strategy=strategy))
+        if "sessions" in source_list:
+            hits.extend(self._search_session(query=text, limit=max_results, strategy=strategy))
         return self._merge_hits(hits, limit=max_results)
 
     def sync_session(
@@ -240,31 +205,281 @@ class MemoryOrchestrator:
         transcript_path: str,
         force: bool = False,
     ) -> dict[str, Any]:
+        if not memory_enabled(default=True):
+            return {"indexed": False, "reason": "memory_disabled"}
         if not memory_session_enabled(default=True):
-            return {"indexed": False, "reason": "session_memory_disabled", "details": []}
+            return {"indexed": False, "reason": "session_memory_disabled"}
 
-        details: list[dict[str, Any]] = []
-        active_indexed = False
-        for adapter in self._iter_adapters(include_shadow=True):
-            try:
-                result = adapter.sync_session(
-                    session_id=session_id,
-                    transcript_path=transcript_path,
-                    force=force,
-                )
-            except Exception:
-                result = {"indexed": False, "reason": "sync_failed"}
-            state = getattr(adapter, "state", "off")
-            details.append({"adapter": adapter.name, "state": state, **result})
-            if state == "active" and bool(result.get("indexed")):
-                active_indexed = True
+        transcript = Path(transcript_path)
+        if not transcript.exists() or not transcript.is_file():
+            return {"indexed": False, "reason": "transcript_missing"}
 
+        content = transcript.read_text(encoding="utf-8", errors="replace")
+        lines = content.splitlines()
+        stat = transcript.stat()
+        current_size = int(stat.st_size)
+        current_lines = len(lines)
+
+        state = _safe_read_json(self.session_state_path)
+        key = str(transcript.resolve())
+        previous = state.get(key, {"size": 0, "lines": 0})
+        prev_size = int(previous.get("size") or 0)
+        prev_lines = int(previous.get("lines") or 0)
+        delta_bytes = max(0, current_size - prev_size)
+        delta_messages = max(0, current_lines - prev_lines)
+
+        bytes_threshold = memory_session_delta_bytes(default=100_000)
+        msg_threshold = memory_session_delta_messages(default=50)
+        should_index = bool(force)
+        if not should_index:
+            bytes_hit = (bytes_threshold <= 0 and delta_bytes > 0) or delta_bytes >= bytes_threshold
+            msg_hit = (msg_threshold <= 0 and delta_messages > 0) or delta_messages >= msg_threshold
+            should_index = bytes_hit or msg_hit
+        if not should_index:
+            state[key] = {"size": current_size, "lines": current_lines}
+            _safe_write_json(self.session_state_path, state)
+            return {
+                "indexed": False,
+                "reason": "threshold_not_reached",
+                "delta_bytes": delta_bytes,
+                "delta_messages": delta_messages,
+            }
+
+        if force:
+            selected = "\n".join(lines[-300:])
+        else:
+            selected = "\n".join(lines[prev_lines:])
+            if len(selected) > 20_000:
+                selected = selected[-20_000:]
+        selected = selected.strip()
+        if not selected:
+            state[key] = {"size": current_size, "lines": current_lines}
+            _safe_write_json(self.session_state_path, state)
+            return {"indexed": False, "reason": "empty_delta"}
+
+        session_key = session_id or transcript.stem
+        entry = MemoryEntry(
+            content=selected,
+            source="session_index",
+            session_id=session_key,
+            tags=["memory_class:session", "session_index", f"session:{session_key}"],
+        )
+        written = self._write_session_entry(entry)
+        state[key] = {"size": current_size, "lines": current_lines}
+        _safe_write_json(self.session_state_path, state)
         return {
-            "indexed": active_indexed,
-            "reason": "indexed" if active_indexed else "no_active_write",
-            "details": details,
+            "indexed": written,
+            "reason": "indexed" if written else "duplicate",
+            "delta_bytes": delta_bytes,
+            "delta_messages": delta_messages,
             "force": force,
         }
+
+    def _write_long_term_entry(self, entry: MemoryEntry) -> bool:
+        content_hash = _content_hash(entry.content)
+        records = load_index(self.paths.index_path)
+        if any(record.get("content_hash") == content_hash for record in records):
+            return False
+        append_memory_entry(self.workspace_dir, entry)
+        return True
+
+    def _write_session_entry(self, entry: MemoryEntry) -> bool:
+        os.makedirs(os.path.join(self.paths.memory_dir, "sessions"), exist_ok=True)
+        content = entry.content.strip()
+        if not content:
+            return False
+
+        date_stamp = entry.timestamp[:10]
+        session_label = (entry.session_id or "unknown").replace("/", "_")
+        session_path = os.path.join(self.paths.memory_dir, "sessions", f"{session_label}_{date_stamp}.md")
+        rel_path = os.path.relpath(session_path, self.workspace_dir)
+        content_hash = _content_hash(content)
+        existing = load_index(self.session_index_path)
+        if any(
+            record.get("content_hash") == content_hash and record.get("file_path") == rel_path
+            for record in existing
+        ):
+            return False
+
+        with open(session_path, "a", encoding="utf-8") as handle:
+            handle.write(f"## {entry.timestamp} — session\n")
+            handle.write(f"- session: {entry.session_id or 'unknown'}\n")
+            handle.write(f"- tags: {', '.join(entry.tags) if entry.tags else '(none)'}\n\n")
+            handle.write(content)
+            handle.write("\n\n")
+
+        preview = (entry.summary or content)[:280]
+        append_index_entry(self.session_index_path, entry, rel_path, preview)
+        if memory_index_mode(default="vector") == "vector":
+            schedule_vector_upsert(
+                self.session_vector_db,
+                entry.entry_id,
+                content_hash,
+                entry.timestamp,
+                entry.summary or "",
+                preview,
+                content,
+            )
+        return True
+
+    def _search_long_term(self, *, query: str, limit: int, strategy: str) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        if strategy != "lexical_only":
+            results = self._semantic_search(
+                query=query,
+                limit=limit,
+                vector_db=os.path.join(self.paths.memory_dir, "vector_index.sqlite"),
+                source="memory",
+                memory_class="long_term",
+            )
+        if strategy == "semantic_first" and results:
+            return results[:limit]
+        lexical = search_entries(self.paths.index_path, query, limit=limit)
+        lexical_rows = [self._entry_to_hit(item, source="memory", memory_class="long_term", query=query) for item in lexical]
+        if strategy == "lexical_only":
+            return lexical_rows[:limit]
+        return self._merge_hits(results + lexical_rows, limit=limit)
+
+    def _search_session(self, *, query: str, limit: int, strategy: str) -> list[dict[str, Any]]:
+        semantic: list[dict[str, Any]] = []
+        if strategy != "lexical_only":
+            semantic = self._semantic_search(
+                query=query,
+                limit=limit,
+                vector_db=self.session_vector_db,
+                source="sessions",
+                memory_class="session",
+            )
+        if strategy == "semantic_first" and semantic:
+            return semantic[:limit]
+        lexical = search_entries(self.session_index_path, query, limit=limit)
+        lexical_rows = [self._entry_to_hit(item, source="sessions", memory_class="session", query=query) for item in lexical]
+        if strategy == "lexical_only":
+            return lexical_rows[:limit]
+        return self._merge_hits(semantic + lexical_rows, limit=limit)
+
+    def _semantic_search(
+        self,
+        *,
+        query: str,
+        limit: int,
+        vector_db: str,
+        source: str,
+        memory_class: str,
+    ) -> list[dict[str, Any]]:
+        if memory_index_mode(default="vector") != "vector":
+            return []
+        rows = search_vectors(vector_db, query, limit=limit)
+        hits: list[dict[str, Any]] = []
+        for row in rows:
+            hits.append(
+                self._entry_to_hit(row, source=source, memory_class=memory_class, query=query, semantic=True)
+            )
+        if hits:
+            return hits
+
+        # Optional higher-fidelity semantic store path.
+        backend = memory_backend(default="chromadb")
+        try:
+            if backend == "lancedb":
+                from universal_agent.memory.lancedb_backend import LanceDBMemory
+
+                db = LanceDBMemory(os.path.join(self.paths.memory_dir, "lancedb"))
+            else:
+                from universal_agent.memory.chromadb_backend import ChromaDBMemory
+
+                db = ChromaDBMemory(os.path.join(self.paths.memory_dir, "chromadb"))
+            rows = db.search(query, limit=limit, min_score=0.0)
+        except Exception:
+            return []
+
+        for row in rows:
+            hits.append(
+                {
+                    "source": source,
+                    "memory_class": memory_class,
+                    "timestamp": row.timestamp,
+                    "summary": row.text[:280],
+                    "preview": row.text[:280],
+                    "snippet": row.text[:700],
+                    "score": row.score,
+                    "path": "",
+                    "start_line": 1,
+                    "end_line": 1,
+                    "provider": backend,
+                    "model": "",
+                    "fallback": False,
+                    "session_id": row.session_id,
+                }
+            )
+        return hits
+
+    def _entry_to_hit(
+        self,
+        item: dict[str, Any],
+        *,
+        source: str,
+        memory_class: str,
+        query: str,
+        semantic: bool = False,
+    ) -> dict[str, Any]:
+        rel_path = str(item.get("file_path", "") or "")
+        start_line, end_line, snippet = self._resolve_snippet(rel_path=rel_path, query=query)
+        fallback = not semantic
+        provider = "lexical"
+        model = "fts"
+        if semantic:
+            provider = memory_backend(default="chromadb")
+            model = "vector"
+        return {
+            "source": source,
+            "memory_class": memory_class,
+            "timestamp": item.get("timestamp", ""),
+            "summary": item.get("summary") or item.get("preview") or "",
+            "preview": item.get("preview") or item.get("summary") or "",
+            "snippet": snippet or (item.get("preview") or item.get("summary") or ""),
+            "score": float(item.get("score", 0.0)),
+            "path": rel_path,
+            "start_line": start_line,
+            "end_line": end_line,
+            "provider": provider,
+            "model": model,
+            "fallback": fallback,
+            "session_id": item.get("session_id"),
+            "tags": item.get("tags") or [],
+        }
+
+    def _resolve_snippet(self, *, rel_path: str, query: str) -> tuple[int, int, str]:
+        if not rel_path:
+            return 1, 1, ""
+        file_path = os.path.join(self.workspace_dir, rel_path)
+        if not os.path.exists(file_path):
+            return 1, 1, ""
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as handle:
+                lines = handle.readlines()
+        except Exception:
+            return 1, 1, ""
+
+        terms = [term for term in (query or "").lower().split() if term]
+        best_idx = 0
+        best_score = -1
+        for idx, line in enumerate(lines):
+            score = 0
+            lower = line.lower()
+            for term in terms:
+                if term in lower:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        start = max(0, best_idx - 2)
+        end = min(len(lines), best_idx + 3)
+        snippet = "".join(lines[start:end]).strip()
+        if len(snippet) > 700:
+            snippet = snippet[:700]
+        return start + 1, max(start + 1, end), snippet
 
     @staticmethod
     def format_search_results(hits: list[dict[str, Any]]) -> str:
@@ -273,26 +488,36 @@ class MemoryOrchestrator:
         lines = ["# Memory Search Results", ""]
         for item in hits:
             source = item.get("source") or "memory"
-            ts = item.get("timestamp", "")
-            summary = item.get("summary") or item.get("preview") or ""
             score = item.get("score")
-            label = f"[{source}] "
+            path = item.get("path") or "(index)"
+            start_line = int(item.get("start_line") or 1)
+            end_line = int(item.get("end_line") or start_line)
+            snippet = (item.get("snippet") or item.get("summary") or "").strip()
+            if len(snippet) > 280:
+                snippet = snippet[:280] + "..."
+            score_text = ""
             if isinstance(score, (float, int)):
-                lines.append(f"- {label}{ts}: {summary} (score: {float(score):.3f})")
-            else:
-                lines.append(f"- {label}{ts}: {summary}")
+                score_text = f" score={float(score):.3f}"
+            lines.append(
+                f"- [{source}] {path}#L{start_line}-L{end_line}{score_text}"
+                f" provider={item.get('provider','')} model={item.get('model','')} fallback={bool(item.get('fallback', False))}"
+            )
+            if snippet:
+                lines.append(f"  {snippet}")
         return "\n".join(lines)
 
     @staticmethod
     def _merge_hits(hits: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
         merged: list[dict[str, Any]] = []
-        seen: set[tuple[str, str, str, str]] = set()
+        seen: set[tuple[str, str, str, str, int, int]] = set()
         for row in hits:
             key = (
                 str(row.get("source", "")),
-                str(row.get("timestamp", "")),
-                str(row.get("summary") or row.get("preview") or ""),
                 str(row.get("path", "")),
+                str(row.get("timestamp", "")),
+                str(row.get("snippet") or row.get("summary") or ""),
+                int(row.get("start_line") or 1),
+                int(row.get("end_line") or 1),
             )
             if key in seen:
                 continue

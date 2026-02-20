@@ -1,114 +1,80 @@
-import os
-import shutil
-import tempfile
-import unittest
+from __future__ import annotations
+
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
-# Import the tool directly
-from universal_agent.tools.memory import ua_memory_get
-# Import AgentSetup for scaffolding test
-from universal_agent.agent_setup import AgentSetup
+import pytest
 
-class TestMemoryTool(unittest.TestCase):
-    def setUp(self):
-        self.test_dir = tempfile.mkdtemp()
-        self.workspace_dir = os.path.join(self.test_dir, "workspace")
-        os.makedirs(self.workspace_dir)
-        
-        # Set env var for tool to find workspace
-        self.env_patcher = patch.dict(os.environ, {"AGENT_WORKSPACE_DIR": self.workspace_dir})
-        self.env_patcher.start()
+from universal_agent.memory.orchestrator import get_memory_orchestrator
+from universal_agent.tools.memory import memory_get, memory_get_wrapper, memory_search, memory_search_wrapper
 
-    def tearDown(self):
-        self.env_patcher.stop()
-        shutil.rmtree(self.test_dir)
 
-    def test_scaffolding(self):
-        """Verify AgentSetup creates memory files when enabled."""
-        # Mock dependencies to avoid full agent startup
-        with patch.dict(os.environ, {"UA_DISABLE_LOCAL_MEMORY": "false"}):
-            
-            setup = AgentSetup(
-                workspace_dir=self.workspace_dir,
-                enable_memory=True,
-                verbose=False
-            )
-            # Trigger directory setup manually since we aren't calling initialize() full chain
-            setup._setup_workspace_dirs()
-            
-            memory_file = Path(self.workspace_dir) / "MEMORY.md"
-            memory_dir = Path(self.workspace_dir) / "memory"
-            
-            self.assertTrue(memory_dir.exists(), "memory/ directory should exist")
-            self.assertTrue(memory_dir.is_dir(), "memory/ should be a directory")
-            self.assertTrue(memory_file.exists(), "MEMORY.md should exist")
-            
-            with open(memory_file, "r") as f:
-                content = f.read()
-                self.assertIn("# Agent Memory", content)
+@pytest.fixture
+def workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    monkeypatch.setenv("AGENT_WORKSPACE_DIR", str(tmp_path))
+    return tmp_path
 
-    def test_tool_valid_access(self):
-        """Verify reading valid files."""
-        # Setup files
-        memory_file = Path(self.workspace_dir) / "MEMORY.md"
-        with open(memory_file, "w") as f:
-            f.write("Start\nLine 2\nLine 3\n")
-            
-        memory_subdir = Path(self.workspace_dir) / "memory"
-        os.makedirs(memory_subdir, exist_ok=True)
-        sub_file = memory_subdir / "notes.txt"
-        with open(sub_file, "w") as f:
-            f.write("Note content")
 
-        # Test reading MEMORY.md
-        content = ua_memory_get("MEMORY.md")
-        self.assertIn("Start", content)
-        self.assertIn("Line 3", content)
+def test_memory_get_reads_allowed_paths(workspace: Path) -> None:
+    (workspace / "MEMORY.md").write_text("Line 1\nLine 2\nLine 3\n", encoding="utf-8")
+    (workspace / "memory").mkdir(parents=True, exist_ok=True)
+    (workspace / "memory" / "notes.md").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
 
-        # Test reading subdirectory file
-        content = ua_memory_get("memory/notes.txt")
-        self.assertEqual(content, "Note content")
-        
-    def test_tool_security_guardrails(self):
-        """Verify access controls."""
-        root = Path(self.workspace_dir)
-        
-        # 1. File outside workspace
-        outside_file = Path(self.test_dir) / "secret.env"
-        with open(outside_file, "w") as f:
-            f.write("SECRET_KEY=123")
-            
-        result = ua_memory_get("../secret.env")
-        self.assertIn("Access Denied", result)
-        self.assertIn("outside the active workspace", result)
-        
-        # 2. File inside workspace but not allowed
-        random_file = root / "random.txt"
-        with open(random_file, "w") as f:
-            f.write("should not read")
-            
-        result = ua_memory_get("random.txt")
-        self.assertIn("Access Denied", result)
-        self.assertIn("only read 'MEMORY.md' or files in the 'memory/'", result)
-        
-        # 3. Directory traversal attempt
-        result = ua_memory_get("memory/../../secret.env")
-        self.assertIn("Access Denied", result)
-        
-    def test_line_limits(self):
-        """Verify line reading limits."""
-        memory_file = Path(self.workspace_dir) / "MEMORY.md"
-        with open(memory_file, "w") as f:
-            f.write("\n".join([f"Line {i}" for i in range(1, 11)]))
-            
-        # Read lines 2-4 (3 lines)
-        content = ua_memory_get("MEMORY.md", line_start=2, num_lines=3)
-        self.assertNotIn("Line 1", content)
-        self.assertIn("Line 2", content)
-        self.assertIn("Line 3", content)
-        self.assertIn("Line 4", content)
-        self.assertNotIn("Line 5", content)
+    full = memory_get("MEMORY.md")
+    assert "Line 1" in full
+    assert "Line 3" in full
 
-if __name__ == "__main__":
-    unittest.main()
+    sliced = memory_get("memory/notes.md", from_line=2, lines=1)
+    assert sliced.strip() == "beta"
+
+
+def test_memory_get_blocks_unsafe_paths(workspace: Path) -> None:
+    (workspace / "random.txt").write_text("blocked", encoding="utf-8")
+
+    escaped = memory_get("../secret.txt")
+    assert "Memory read error" in escaped
+    assert "escapes memory root" in escaped
+
+    disallowed = memory_get("random.txt")
+    assert "Memory read error" in disallowed
+    assert "path must be MEMORY.md or memory/*" in disallowed
+
+
+def test_memory_search_returns_canonical_result_shape(workspace: Path) -> None:
+    broker = get_memory_orchestrator(str(workspace))
+    entry = broker.write(
+        content="User prefers teal themes for dashboard work.",
+        source="test",
+        session_id="session_123",
+        tags=["preference"],
+        memory_class="long_term",
+        importance=1.0,
+    )
+    assert entry is not None
+
+    output = memory_search("teal themes", limit=3)
+    assert "# Memory Search Results" in output
+    assert "provider=" in output
+    assert "model=" in output
+    assert "fallback=" in output
+
+
+@pytest.mark.asyncio
+async def test_memory_wrappers_return_tool_payload(workspace: Path) -> None:
+    (workspace / "MEMORY.md").write_text("line a\nline b\n", encoding="utf-8")
+
+    get_result = await memory_get_wrapper.handler({"path": "MEMORY.md", "from": 1, "lines": 1})
+    text = get_result["content"][0]["text"]
+    assert text.strip() == "line a"
+
+    broker = get_memory_orchestrator(str(workspace))
+    broker.write(
+        content="Transcript memory about roadmap milestones.",
+        source="test",
+        session_id="session_456",
+        tags=["roadmap"],
+        memory_class="long_term",
+        importance=1.0,
+    )
+    search_result = await memory_search_wrapper.handler({"query": "roadmap", "limit": 2})
+    search_text = search_result["content"][0]["text"]
+    assert "# Memory Search Results" in search_text

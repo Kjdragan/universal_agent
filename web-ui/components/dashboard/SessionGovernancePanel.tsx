@@ -11,10 +11,10 @@ type SessionPolicy = {
   identity_mode?: string;
   tool_profile?: string;
   memory?: {
-    mode?: "off" | "session_only" | "selective" | "full";
-    session_memory_enabled?: boolean;
-    tags?: string[];
-    long_term_tag_allowlist?: string[];
+    enabled?: boolean;
+    sessionMemory?: boolean;
+    sources?: string[];
+    scope?: "direct_only" | "all";
   };
   approvals?: { enabled?: boolean; timeout_hours?: number };
   limits?: { max_runtime_seconds?: number; max_tool_calls?: number };
@@ -185,33 +185,47 @@ export function SessionGovernancePanel() {
           </label>
 
           <label className="text-xs text-slate-400">
-            Memory Mode
+            Memory Scope
             <select
               className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
-              value={policy.memory?.mode || "session_only"}
-              onChange={(e) => savePatch({ memory: { ...(policy.memory || {}), mode: e.target.value } })}
+              value={policy.memory?.scope || "direct_only"}
+              onChange={(e) => savePatch({ memory: { ...(policy.memory || {}), scope: e.target.value } })}
             >
-              <option value="off">off</option>
-              <option value="session_only">session_only</option>
-              <option value="selective">selective</option>
-              <option value="full">full</option>
+              <option value="direct_only">direct_only</option>
+              <option value="all">all</option>
             </select>
           </label>
 
           <label className="flex items-center gap-2 text-sm text-slate-300">
             <input
               type="checkbox"
-              checked={policy.memory?.session_memory_enabled !== false}
+              checked={policy.memory?.sessionMemory !== false}
               onChange={(e) =>
                 savePatch({
                   memory: {
                     ...(policy.memory || {}),
-                    session_memory_enabled: e.target.checked,
+                    sessionMemory: e.target.checked,
                   },
                 })
               }
             />
             Session Memory Enabled
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={policy.memory?.enabled !== false}
+              onChange={(e) =>
+                savePatch({
+                  memory: {
+                    ...(policy.memory || {}),
+                    enabled: e.target.checked,
+                  },
+                })
+              }
+            />
+            Memory Enabled
           </label>
 
           <label className="flex items-center gap-2 text-sm text-slate-300">
@@ -224,44 +238,21 @@ export function SessionGovernancePanel() {
           </label>
 
           <label className="text-xs text-slate-400 md:col-span-2">
-            Memory Tags (comma-separated)
+            Memory Sources (comma-separated: memory,sessions)
             <div className="mt-1">
               <input
-                key={`memory-tags-${selectedSession}-${(policy.memory?.tags || []).join(",")}`}
+                key={`memory-sources-${selectedSession}-${(policy.memory?.sources || []).join(",")}`}
                 className="w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
-                defaultValue={(policy.memory?.tags || []).join(", ")}
+                defaultValue={(policy.memory?.sources || []).join(", ")}
                 onBlur={(e) =>
                   savePatch({
                     memory: {
                       ...(policy.memory || {}),
-                      tags: e.target.value.split(",").map((item) => item.trim()).filter(Boolean),
+                      sources: e.target.value.split(",").map((item) => item.trim()).filter(Boolean),
                     },
                   })
                 }
-                placeholder="dev_test,retain"
-              />
-            </div>
-          </label>
-
-          <label className="text-xs text-slate-400 md:col-span-2">
-            Long-term Allowlist (selective mode)
-            <div className="mt-1">
-              <input
-                key={`memory-allow-${selectedSession}-${(policy.memory?.long_term_tag_allowlist || []).join(",")}`}
-                className="w-full rounded-md border border-slate-700 bg-slate-950/70 px-2 py-2 text-sm"
-                defaultValue={(policy.memory?.long_term_tag_allowlist || []).join(", ")}
-                onBlur={(e) =>
-                  savePatch({
-                    memory: {
-                      ...(policy.memory || {}),
-                      long_term_tag_allowlist: e.target.value
-                        .split(",")
-                        .map((item) => item.trim())
-                        .filter(Boolean),
-                    },
-                  })
-                }
-                placeholder="retain"
+                placeholder="memory,sessions"
               />
             </div>
           </label>

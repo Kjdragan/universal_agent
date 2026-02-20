@@ -4,11 +4,10 @@ from pathlib import Path
 
 from universal_agent.memory.memory_flush import flush_pre_compact_memory
 from universal_agent.memory.memory_models import MemoryEntry
-from universal_agent.tools.memory import ua_memory_search
+from universal_agent.tools.memory import memory_search
 
 
-def test_ua_memory_search_uses_orchestrator_when_unified(monkeypatch, tmp_path):
-    monkeypatch.setenv("UA_MEMORY_ORCHESTRATOR_MODE", "unified")
+def test_memory_search_uses_orchestrator(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("AGENT_WORKSPACE_DIR", str(tmp_path))
 
     captured: dict[str, object] = {}
@@ -18,26 +17,37 @@ def test_ua_memory_search_uses_orchestrator_when_unified(monkeypatch, tmp_path):
             captured["query"] = query
             captured["limit"] = limit
             captured["sources"] = list(sources)
-            return [{"source": "memory", "timestamp": "2026-02-07", "summary": "hit", "score": 0.9}]
+            return [
+                {
+                    "source": "memory",
+                    "timestamp": "2026-02-20T00:00:00Z",
+                    "summary": "hit",
+                    "score": 0.9,
+                    "path": "memory/2026-02-20.md",
+                    "start_line": 1,
+                    "end_line": 2,
+                    "provider": "lexical",
+                    "model": "fts",
+                    "fallback": True,
+                }
+            ]
 
         def format_search_results(self, hits):
             assert hits
             return "BROKER_RESULT"
 
-    import universal_agent.memory.orchestrator as orchestrator
+    import universal_agent.tools.memory as memory_tools
 
-    monkeypatch.setattr(orchestrator, "get_memory_orchestrator", lambda workspace_dir=None: DummyBroker())
+    monkeypatch.setattr(memory_tools, "get_memory_orchestrator", lambda workspace_dir=None: DummyBroker())
 
-    result = ua_memory_search("test query", limit=3)
+    result = memory_search("test query", limit=3)
     assert result == "BROKER_RESULT"
     assert captured["query"] == "test query"
     assert captured["limit"] == 3
     assert captured["sources"] == ["memory", "sessions"]
 
 
-def test_flush_pre_compact_uses_orchestrator_when_unified(monkeypatch, tmp_path):
-    monkeypatch.setenv("UA_MEMORY_ORCHESTRATOR_MODE", "unified")
-
+def test_flush_pre_compact_uses_orchestrator(monkeypatch, tmp_path: Path) -> None:
     expected = MemoryEntry(content="captured", source="pre_compact")
 
     class DummyBroker:
@@ -59,7 +69,7 @@ def test_flush_pre_compact_uses_orchestrator_when_unified(monkeypatch, tmp_path)
 
     monkeypatch.setattr(orchestrator, "get_memory_orchestrator", lambda workspace_dir=None: DummyBroker())
 
-    transcript = Path(tmp_path) / "transcript.md"
+    transcript = tmp_path / "transcript.md"
     transcript.write_text("hello", encoding="utf-8")
 
     result = flush_pre_compact_memory(

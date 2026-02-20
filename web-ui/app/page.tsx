@@ -19,8 +19,7 @@ import { formatDuration, formatFileSize } from "@/lib/utils";
 import { ApprovalModal, useApprovalModal } from "@/components/approvals/ApprovalModal";
 import { InputModal, useInputModal } from "@/components/inputs/InputModal";
 import { CombinedActivityLog } from "@/components/CombinedActivityLog";
-import { OpsProvider, HeartbeatWidget } from "@/components/OpsDropdowns";
-import { StorageQuickPanel } from "@/components/storage/StorageQuickPanel";
+import { OpsProvider } from "@/components/OpsDropdowns";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { LinkifiedText, PathLink, linkify } from "@/components/LinkifiedText";
@@ -186,66 +185,6 @@ function FileViewer() {
           </div>
         )}
       </div>
-    </div>
-  );
-}
-
-function TaskPanel() {
-  const toolCalls = useAgentStore((s) => s.toolCalls);
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  // Filter for 'Task' tool calls
-  const tasks = toolCalls.filter(tc => tc.name === "Task" || tc.name === "task").reverse();
-
-  return (
-    <div className={`flex flex-col border-t border-slate-800 bg-slate-900/20 transition-all duration-300 ${isCollapsed ? 'h-10 shrink-0 overflow-hidden' : 'flex-1 min-h-0'}`}>
-      <div
-        className="p-3 bg-slate-900/40 border-b border-slate-800 cursor-pointer hover:bg-slate-800/60 flex items-center justify-between"
-        onClick={() => setIsCollapsed(!isCollapsed)}
-      >
-        <h2 className="text-[10px] font-bold text-slate-400/80 uppercase tracking-widest flex items-center gap-2">
-          <span className="text-cyan-500/60">{ICONS.activity}</span>
-          Tasks
-          {tasks.length > 0 && !isCollapsed && (
-            <span className="bg-primary/20 text-primary px-1.5 py-0.5 rounded text-[9px] font-mono">{tasks.length}</span>
-          )}
-        </h2>
-        <span className={`text-[9px] text-primary/60 transition-transform duration-200 ${isCollapsed ? 'rotate-180' : ''}`}>
-          ▼
-        </span>
-      </div>
-      {!isCollapsed && (
-        <div className="flex-1 overflow-y-auto scrollbar-thin p-2 space-y-2">
-          {tasks.length === 0 ? (
-            <div className="text-xs text-muted-foreground/50 text-center py-8 font-mono">No active tasks</div>
-          ) : (
-            tasks.map((task) => {
-              const input = task.input as any;
-              const subagent = input.subagent_type || "unknown";
-              const description = input.description || "No description";
-              const statusConfig = {
-                pending: { color: "bg-amber-500/10 text-amber-400 border-amber-500/30", icon: "⏳", label: "PENDING" },
-                running: { color: "bg-cyan-500/10 text-cyan-400 border-cyan-500/30", icon: "🔄", label: "RUNNING" },
-                complete: { color: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30", icon: "✅", label: "COMPLETE" },
-                error: { color: "bg-red-500/10 text-red-400 border-red-500/30", icon: "❌", label: "ERROR" },
-              };
-              const config = statusConfig[task.status as keyof typeof statusConfig] || statusConfig.running;
-
-              return (
-                <div key={task.id} className={`rounded border p-2.5 text-xs ${config.color} bg-card/20`}>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="font-mono text-[9px] uppercase tracking-wider flex items-center gap-1.5">
-                      {config.icon} {subagent.replace("-", " ")}
-                    </span>
-                    <span className="text-[8px] uppercase tracking-wider opacity-70">{config.label}</span>
-                  </div>
-                  <div className="line-clamp-3 opacity-70 leading-relaxed font-light">{description}</div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -496,12 +435,12 @@ function ConnectionIndicator() {
 
   return (
     <div className="flex items-center gap-3">
-      <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/40 border border-slate-800">
+      <div className="flex h-10 items-center gap-2 px-3 rounded-lg bg-slate-900/60 border border-slate-700/80">
         <div
           className={`w-2 h-2 rounded-full ${config.color} ${config.pulse ? "status-pulse" : ""
             }`}
         />
-        <span className={`text-[10px] font-bold uppercase tracking-widest ${config.textColor}`}>
+        <span className={`text-[11px] font-semibold uppercase tracking-[0.12em] ${config.textColor}`}>
           {config.label}
         </span>
       </div>
@@ -531,29 +470,29 @@ function HeaderMetrics() {
   const sessionId = currentSession?.workspace ? currentSession.workspace.split('/').pop() : 'NO SESSION';
 
   return (
-    <div className="hidden md:flex items-center gap-6 mr-6 px-5 py-2.5 rounded-lg bg-slate-900/40 border border-slate-800 tactical-panel min-w-fit">
-      <div className="flex items-center gap-2 text-[0.7rem] tracking-wider">
-        <span className="font-mono text-primary whitespace-nowrap" title={sessionId}>{sessionId}</span>
+    <div className="hidden md:flex h-10 items-center gap-3 mr-2 px-3 rounded-lg bg-slate-900/60 border border-slate-700/80 tactical-panel min-w-fit">
+      <div className="flex items-center gap-2 text-[11px] tracking-[0.1em]">
+        <span className="font-mono text-cyan-300 whitespace-nowrap" title={sessionId}>{sessionId}</span>
       </div>
-      <div className="w-px h-4 bg-border/40" />
-      <div className="flex items-center gap-2 text-xs tracking-wider">
-        <span className="text-muted-foreground/70 font-semibold text-[0.7rem]">TOKENS</span>
-        <span className="font-mono text-[0.7rem]">{tokenUsage.total.toLocaleString()}</span>
+      <div className="w-px h-4 bg-slate-700/70" />
+      <div className="flex items-center gap-1.5 text-[11px] tracking-[0.1em]">
+        <span className="text-slate-400 font-semibold">TOKENS</span>
+        <span className="font-mono text-slate-200">{tokenUsage.total.toLocaleString()}</span>
       </div>
-      <div className="w-px h-4 bg-border/40" />
-      <div className="flex items-center gap-2 text-xs tracking-wider">
-        <span className="text-muted-foreground/70 font-semibold text-[0.7rem]">TOOLS</span>
-        <span className="font-mono text-[0.7rem]">{toolCallCount}</span>
+      <div className="w-px h-4 bg-slate-700/70" />
+      <div className="flex items-center gap-1.5 text-[11px] tracking-[0.1em]">
+        <span className="text-slate-400 font-semibold">TOOLS</span>
+        <span className="font-mono text-slate-200">{toolCallCount}</span>
       </div>
-      <div className="w-px h-4 bg-border/40" />
-      <div className="flex items-center gap-2 text-xs tracking-wider">
-        <span className="text-muted-foreground/70 font-semibold text-[0.7rem]">TIME</span>
-        <span className="font-mono text-[0.7rem]">{formatDuration(startTime ? duration : 0)}</span>
+      <div className="w-px h-4 bg-slate-700/70" />
+      <div className="flex items-center gap-1.5 text-[11px] tracking-[0.1em]">
+        <span className="text-slate-400 font-semibold">TIME</span>
+        <span className="font-mono text-slate-200">{formatDuration(startTime ? duration : 0)}</span>
       </div>
-      <div className="w-px h-4 bg-border/40" />
-      <div className="flex items-center gap-2 text-xs tracking-wider">
-        <span className="text-muted-foreground/70 font-semibold text-[0.7rem]">ITERS</span>
-        <span className="font-mono text-[0.7rem]">{iterationCount}</span>
+      <div className="w-px h-4 bg-slate-700/70" />
+      <div className="flex items-center gap-1.5 text-[11px] tracking-[0.1em]">
+        <span className="text-slate-400 font-semibold">ITERS</span>
+        <span className="font-mono text-slate-200">{iterationCount}</span>
       </div>
     </div>
   );
@@ -1377,51 +1316,11 @@ export default function HomePage() {
   const [authError, setAuthError] = useState<string | null>(null);
 
   // Layout State
-  // We now have: [Chat (flex)] - [Activity (px)] - [Files (px)]
-  // We track widths for the two right-side panels.
-  const [activityWidth, setActivityWidth] = useState(560);
-  const [filesWidth, setFilesWidth] = useState(320);
-
-
   const [activityCollapsed, setActivityCollapsed] = useState(false);
-
-  // Resizing Logic
-  // Both resizers are on the LEFT edge of their respective panels, dragging expanding to the LEFT (increasing width).
-  const startResizing = (panel: 'activity' | 'files') => (mouseDownEvent: React.MouseEvent) => {
-    mouseDownEvent.preventDefault();
-    const startX = mouseDownEvent.clientX;
-    const startWidth = panel === 'activity' ? activityWidth : filesWidth;
-
-    const onMouseMove = (mouseMoveEvent: MouseEvent) => {
-      // Dragging LEFT (negative delta) should INCREASE width.
-      // delta = current - start. If current < start (moved left), delta is negative.
-      // newWidth = startWidth - delta.
-      const delta = mouseMoveEvent.clientX - startX;
-      const newWidth = Math.max(200, Math.min(800, startWidth - delta));
-
-      if (panel === 'activity') {
-        setActivityWidth(newWidth);
-      } else {
-        setFilesWidth(newWidth);
-      }
-    };
-
-    const onMouseUp = () => {
-      document.body.style.cursor = 'default';
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-    };
-
-    document.body.style.cursor = 'col-resize';
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-  };
+  const [chatCollapsed, setChatCollapsed] = useState(false);
 
   // Responsive State
-  const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'files' | 'dashboard'>('chat');
-  const [showTabletFiles, setShowTabletFiles] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
-  const [isDesktop, setIsDesktop] = useState(true);
+  const [activeMobileTab, setActiveMobileTab] = useState<'chat' | 'activity' | 'dashboard'>('chat');
 
   const handleStartNewSession = () => {
     const store = useAgentStore.getState();
@@ -1439,21 +1338,6 @@ export default function HomePage() {
       window.dispatchEvent(new Event("ua:focus-input"));
     }
   };
-
-  // Track screen size to conditionally apply inline styles (avoiding hydration mismatch)
-  useEffect(() => {
-    const handleResize = () => {
-      const w = window.innerWidth;
-      setIsMobile(w < 768);
-      setIsDesktop(w >= 1280);
-    };
-
-    // Initial check
-    handleResize();
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
 
   // Approval modal hook
   const { pendingApproval, handleApprove, handleReject } = useApprovalModal();
@@ -1616,12 +1500,12 @@ export default function HomePage() {
     <OpsProvider>
       <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100 relative z-10">
         {/* Header */}
-        <header className="h-14 border-b border-slate-800/80 bg-slate-900/80 backdrop-blur-md flex items-center px-4 shrink-0 z-20 relative gap-4">
+        <header className="h-14 border-b border-slate-800/80 bg-slate-900/85 backdrop-blur-md flex items-center px-3 shrink-0 z-20 relative gap-2">
 
           {/* Left: Logo & Brand */}
-          <div className="flex items-center gap-4 shrink-0 h-full">
+          <div className="flex items-center gap-2 shrink-0 h-full">
             {/* Logo Image */}
-            <div className="relative h-full w-32 md:w-48 py-2">
+            <div className="relative h-full w-24 md:w-32 py-2">
               <Image
                 src="/simon_logo_v2.png"
                 alt="Simon"
@@ -1632,17 +1516,17 @@ export default function HomePage() {
             </div>
             <a
               href="/storage?tab=explorer"
-              className="inline-flex items-center justify-center rounded-xl border border-cyan-700/70 bg-cyan-600/15 p-2 text-cyan-100 transition-colors hover:bg-cyan-600/25"
+              className="inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-slate-300 transition-colors hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
               title="Open File Browser"
               aria-label="Open File Browser"
             >
-              <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-cyan-600/60 bg-slate-950/70 text-2xl leading-none">
+              <span className="inline-flex items-center justify-center text-xl leading-none">
                 🗂️
               </span>
             </a>
             <a
               href="/dashboard"
-              className="hidden md:inline-flex h-10 w-12 items-center justify-center rounded-xl border border-border/50 bg-card/40 text-2xl text-muted-foreground transition hover:border-primary/40 hover:text-primary"
+              className="hidden md:inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-xl text-slate-300 transition hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
               title="Dashboard Home"
               aria-label="Dashboard Home"
             >
@@ -1651,7 +1535,7 @@ export default function HomePage() {
           </div>
 
           {/* Center: Ops dropdown buttons - Hidden on Mobile */}
-          <div className="hidden md:flex items-center gap-2 shrink-0">
+          <div className="hidden md:flex items-center gap-1.5 shrink-0">
             {([
               { key: "sessions", label: "Sessions", icon: "📋", href: "/dashboard/sessions", iconOnly: false },
               { key: "calendar", label: "Calendar", icon: "🗓️", href: "/dashboard/calendar", iconOnly: true },
@@ -1668,8 +1552,8 @@ export default function HomePage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 className={item.iconOnly
-                  ? "inline-flex h-10 w-12 items-center justify-center rounded-xl border border-border/50 bg-card/40 text-2xl text-muted-foreground transition hover:border-primary/40 hover:bg-card/60 hover:text-primary"
-                  : "flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-[15px] uppercase tracking-widest font-semibold transition border-border/50 bg-card/40 text-muted-foreground hover:border-primary/40 hover:bg-card/60 hover:text-primary"}
+                  ? "inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-xl text-slate-300 transition hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
+                  : "flex h-10 items-center gap-1.5 px-2.5 rounded-lg border border-slate-700/80 bg-slate-900/60 text-[12px] font-semibold uppercase tracking-[0.12em] text-slate-300 transition hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"}
                 title={`Open ${item.label} in a new tab`}
                 aria-label={`Open ${item.label} in a new tab`}
               >
@@ -1677,9 +1561,9 @@ export default function HomePage() {
                   <span className="leading-none">{item.icon}</span>
                 ) : (
                   <>
-                    <span className="text-xs">{item.icon}</span>
+                    <span className="text-[12px]">{item.icon}</span>
                     <span>{item.label}</span>
-                    <span className="text-[10px] text-slate-500">↗</span>
+                    <span className="text-[9px] text-slate-500">↗</span>
                   </>
                 )}
               </a>
@@ -1687,11 +1571,11 @@ export default function HomePage() {
           </div>
 
           {/* Right: Metrics, Status */}
-          <div className="ml-auto flex items-center gap-2 md:gap-4">
+          <div className="ml-auto flex items-center gap-2 md:gap-2">
             <button
               type="button"
               onClick={handleStartNewSession}
-              className="hidden md:block rounded-lg border border-emerald-700/50 bg-emerald-600/15 px-3 py-2 text-[15px] uppercase tracking-widest text-emerald-200 hover:border-emerald-400/60 hover:bg-emerald-600/25"
+              className="hidden md:inline-flex h-10 items-center rounded-lg border border-emerald-700/60 bg-emerald-600/15 px-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-emerald-200 hover:border-emerald-400/60 hover:bg-emerald-600/25"
               title="Start a fresh chat session"
             >
               New Session
@@ -1703,65 +1587,56 @@ export default function HomePage() {
           </div>
         </header>
 
-        {/* Main Content Area */}
-        {/* Responsive Layout:
-            - Mobile (<768px): Vertical Stack via activeTab 
-            - Tablet (768px-1280px): Flex Row (Chat | Activity). Files hidden/toggleable.
-            - Desktop (>1280px): Flex Row (Chat | Activity | Files).
-        */}
+        {/* Main Content Area: Chat + Activity only */}
         <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative pb-14 md:pb-0">
-
           {/* PANEL 1: CHAT / VIEWER */}
-          {/* Visible if: Desktop/Tablet OR (Mobile AND tab=='chat') */}
           <main
             className={`
-              flex-1 min-w-0 bg-background/30 flex relative flex-col border-r border-border/40
+              min-w-0 bg-background/30 relative flex-col border-r border-border/40
               ${activeMobileTab === 'chat' ? 'flex' : 'hidden md:flex'}
+              ${chatCollapsed ? 'md:w-10 md:shrink-0 md:flex-none' : 'md:basis-1/2 md:flex-1'}
             `}
           >
-            {viewingFile ? (
-              <div className="flex-1 flex overflow-hidden">
-                <div className="flex-1 min-w-0 bg-background/30 flex relative">
-                  <FileViewer />
-                </div>
-              </div>
+            {chatCollapsed ? (
+              <button
+                type="button"
+                onClick={() => setChatCollapsed(false)}
+                className="hidden md:flex h-full w-10 items-center justify-center hover:bg-card/30 transition-colors border-r border-slate-700/50 bg-slate-900/40"
+                title="Expand Chat Panel"
+              >
+                <span className="text-primary/60 text-xs [writing-mode:vertical-lr] rotate-180 tracking-widest uppercase font-bold whitespace-nowrap">{ICONS.chat} Chat ▶</span>
+              </button>
             ) : (
-              <ChatInterface />
+              <>
+                <button
+                  type="button"
+                  onClick={() => setChatCollapsed(true)}
+                  className="hidden md:inline-flex absolute top-2 right-2 z-20 h-7 w-7 items-center justify-center rounded border border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-200"
+                  title="Collapse Chat Panel"
+                >
+                  ◀
+                </button>
+                {viewingFile ? (
+                  <div className="flex-1 flex overflow-hidden">
+                    <div className="flex-1 min-w-0 bg-background/30 flex relative">
+                      <FileViewer />
+                    </div>
+                  </div>
+                ) : (
+                  <ChatInterface />
+                )}
+              </>
             )}
           </main>
 
           {/* PANEL 2: ACTIVITY LOG */}
-          {/* Visible if: Desktop OR Tablet OR (Mobile AND tab=='activity') */}
           <div
             className={`
-              border-r border-slate-800 bg-slate-900/20 relative transition-all duration-300 flex-col
+              bg-slate-900/20 relative transition-all duration-300 flex-col
               ${activeMobileTab === 'activity' ? 'flex w-full' : 'hidden md:flex'}
-              ${activityCollapsed ? 'w-10 shrink-0' : ''}
+              ${activityCollapsed ? 'w-10 shrink-0' : chatCollapsed ? 'md:flex-1 md:basis-full' : 'md:basis-1/2 md:flex-1'}
             `}
-            style={
-              // On Desktop/Tablet: Use dynamic width. 
-              // On Mobile: width is auto/full (handled by flex class above).
-              // We only apply inline width style for md+ (which we track via !isMobile to match server assumption of desktop)
-              // Note: We use !isMobile here which is updated after mount. On server it's false (isMobile=false),
-              // so it renders the width style. Logic:
-              // Server: isMobile=false -> renders width style.
-              // Client Mount: isMobile=false -> renders width style.
-              // Client Effect: Detects isMobile=true -> removes width style.
-              !isMobile
-                ? (activityCollapsed ? { width: 40, minHeight: '100%' } : { width: activityWidth })
-                : {}
-            }
           >
-            {/* Desktop/Tablet Resizer */}
-            <div className="hidden md:block">
-              {!activityCollapsed && (
-                <div
-                  className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
-                  onMouseDown={startResizing('activity')}
-                />
-              )}
-            </div>
-
             {activityCollapsed ? (
               <button
                 type="button"
@@ -1777,87 +1652,6 @@ export default function HomePage() {
               </div>
             )}
           </div>
-
-          {/* PANEL 3: FILES & TASKS */}
-          {/* Visible if: Desktop OR (Mobile AND tab=='files') OR Tablet Overlay */}
-          <aside
-            className={`
-              shrink-0 flex-col overflow-hidden bg-slate-900/30 backdrop-blur-sm relative
-              ${activeMobileTab === 'files' ? 'flex w-full' : 'hidden xl:flex'}
-            `}
-            style={
-              isDesktop
-                ? { width: filesWidth }
-                : {}
-            }
-          >
-            {/* Mobile Header for Files View */}
-            {activeMobileTab === 'files' && (
-              <div className="p-3 border-b border-slate-800 bg-slate-900/80 flex items-center justify-between shrink-0 md:hidden">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">{ICONS.folder}</span>
-                  <span className="font-bold uppercase tracking-wider text-sm">Storage</span>
-                </div>
-                <button
-                  onClick={() => setActiveMobileTab('chat')}
-                  className="p-2 -mr-2 rounded-full hover:bg-slate-800 transition-colors text-slate-400"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
-            {/* Desktop Resizer */}
-            <div className="hidden xl:block">
-              <div
-                className="absolute top-0 left-0 w-1 h-full cursor-col-resize hover:bg-cyan-500/40 transition-colors z-20"
-                onMouseDown={startResizing('files')}
-              />
-            </div>
-
-            <div className="flex-1 min-h-0 pl-1 pr-1 overflow-y-auto scrollbar-thin">
-              <div className="flex min-h-full flex-col gap-2 pb-2">
-                <StorageQuickPanel />
-                <HeartbeatWidget />
-                <div className="border-t border-border/40 pt-2 min-h-[180px] flex flex-col">
-                  <TaskPanel />
-                </div>
-              </div>
-            </div>
-          </aside>
-
-          {/* Tablet "Files" Overlay Button */}
-          {/* Only shown on Tablet (md) but not Desktop (xl), if files hidden */}
-          <div className="hidden md:flex xl:hidden absolute right-0 top-1/2 -translate-y-1/2 z-30">
-            <button
-              onClick={() => setShowTabletFiles(!showTabletFiles)}
-              className="bg-slate-800/80 border border-slate-700 text-slate-300 p-2 rounded-l-lg shadow-xl hover:bg-slate-700"
-              title="Toggle Storage"
-            >
-              {ICONS.folder}
-            </button>
-          </div>
-
-          {/* Tablet Files Overlay Drawer */}
-          {showTabletFiles && (
-            <div className="absolute right-0 top-0 h-full w-[320px] bg-slate-950/95 border-l border-slate-700 z-40 flex flex-col shadow-2xl animate-in slide-in-from-right-10 duration-200">
-              <div className="p-2 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
-                <span className="text-xs font-bold uppercase tracking-wider pl-2">Storage & Tasks</span>
-                <button onClick={() => setShowTabletFiles(false)} className="p-1 hover:text-white text-slate-400">✕</button>
-              </div>
-              <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                <div className="flex-1 min-h-0 pl-1 pr-1 overflow-y-auto scrollbar-thin">
-                  <div className="flex min-h-full flex-col gap-2 pb-2">
-                    <StorageQuickPanel />
-                    <HeartbeatWidget />
-                    <div className="border-t border-border/40 pt-2 min-h-[180px] flex flex-col">
-                      <TaskPanel />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
         </div>
 
         {/* MOBILE DASHBOARD MENU (Visible only on Mobile AND tab=='dashboard') */}
@@ -1913,13 +1707,6 @@ export default function HomePage() {
           >
             <span className="text-xl">{ICONS.activity}</span>
             <span className="text-[9px] uppercase tracking-widest font-bold">Activity</span>
-          </button>
-          <button
-            onClick={() => setActiveMobileTab('files')}
-            className={`flex flex-col items-center gap-1 p-2 w-full ${activeMobileTab === 'files' ? 'text-purple-400' : 'text-slate-500'}`}
-          >
-            <span className="text-xl">{ICONS.folder}</span>
-            <span className="text-[9px] uppercase tracking-widest font-bold">Storage</span>
           </button>
           <button
             onClick={() => setActiveMobileTab('dashboard')}

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -645,13 +646,19 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
 
 // ---- Section Components ----
 
-export function SessionsSection({ variant = "compact" }: { variant?: SectionVariant } = {}) {
+export function SessionsSection({
+  variant = "compact",
+  showBackToHome = false,
+}: {
+  variant?: SectionVariant;
+  showBackToHome?: boolean;
+} = {}) {
   const isFull = variant === "full";
   const { sessions, sessionsError, selected, setSelected, loading, logTail, fetchSessions, fetchLogs, deleteSession, resetSession, compactLogs, cancelSession, cancelOutstandingRuns, archiveSession } = useOps();
   const [attaching, setAttaching] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "running" | "idle" | "terminal">("all");
   const [sourceFilter, setSourceFilter] = useState<"all" | "chat" | "telegram" | "api" | "local">("all");
-  const [memoryModeFilter, setMemoryModeFilter] = useState<"all" | "off" | "session_only" | "selective" | "full">("all");
+  const [memoryModeFilter, setMemoryModeFilter] = useState<"all" | "off" | "direct_only" | "all_scope" | "memory_only">("all");
   const [ownerFilter, setOwnerFilter] = useState("");
   const [showList, setShowList] = useState(isFull);
   const [expandLogTail, setExpandLogTail] = useState(true);
@@ -766,8 +773,9 @@ export function SessionsSection({ variant = "compact" }: { variant?: SectionVari
     const statusMatch = statusFilter === "all" || (s.status || "").toLowerCase() === statusFilter;
     const source = (s.source || s.channel || "local").toLowerCase();
     const sourceMatch = sourceFilter === "all" || source === sourceFilter;
-    const memoryMode = (s.memory_mode || "session_only").toLowerCase();
-    const memoryModeMatch = memoryModeFilter === "all" || memoryMode === memoryModeFilter;
+    const memoryMode = (s.memory_mode || "direct_only").toLowerCase();
+    const filterValue = memoryModeFilter === "all_scope" ? "all" : memoryModeFilter;
+    const memoryModeMatch = memoryModeFilter === "all" || memoryMode === filterValue;
     const owner = (s.owner || "").toLowerCase();
     const ownerMatch = !ownerFilter.trim() || owner === ownerFilter.trim().toLowerCase();
     return statusMatch && sourceMatch && memoryModeMatch && ownerMatch;
@@ -781,23 +789,50 @@ export function SessionsSection({ variant = "compact" }: { variant?: SectionVari
       }).length,
     [sessions],
   );
+  const hasSelectedSession = Boolean(selected);
 
   return (
-    <div className={`${isFull ? "px-4 pb-4 pt-1 text-sm space-y-3 lg:grid lg:grid-cols-[360px_1fr] lg:gap-3 lg:space-y-0" : "p-3 text-xs space-y-3"}`}>
+    <div
+      className={
+        isFull
+          ? hasSelectedSession
+            ? "px-4 pb-4 pt-0 text-sm space-y-3 lg:grid lg:grid-cols-[minmax(420px,560px)_1fr] lg:gap-3 lg:space-y-0"
+            : "px-4 pb-4 pt-0 text-sm space-y-3"
+          : "p-3 text-xs space-y-3"
+      }
+    >
       {isFull && (
-        <div className="lg:col-span-2 sticky top-0 z-10 rounded border border-slate-800 bg-slate-900/80 px-3 py-2 backdrop-blur">
+        <div className={`${hasSelectedSession ? "lg:col-span-2" : ""} flex flex-wrap items-center justify-between gap-2`}>
+          <div>
+            {showBackToHome && (
+              <Link
+                href="/"
+                className="rounded-lg border border-cyan-700/60 bg-cyan-600/15 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25"
+              >
+                Back to Home
+              </Link>
+            )}
+          </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
-              <button onClick={cancelOutstandingRuns} className="text-[11px] px-2 py-1 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
-              <button onClick={fetchSessions} className="text-[11px] px-2 py-1 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻ Refresh"}</button>
-              {selected && (
-                <button onClick={() => attachToChat(selected)} className="text-[11px] px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" disabled={attaching}>
-                  {attaching ? "Attaching..." : "Open Chat"}
-                </button>
-              )}
+            <button onClick={cancelOutstandingRuns} className="text-[11px] px-2 py-1 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
+            <button onClick={fetchSessions} className="text-[11px] px-2 py-1 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻ Refresh"}</button>
+            {selected && (
+              <button onClick={() => attachToChat(selected)} className="text-[11px] px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" disabled={attaching}>
+                {attaching ? "Attaching..." : "Open Chat"}
+              </button>
+            )}
           </div>
         </div>
       )}
-      <div className={`border rounded bg-background/40 p-2 ${isFull ? "lg:row-span-5 lg:max-h-[78vh] lg:overflow-y-auto" : ""}`}>
+      <div
+        className={`border rounded bg-background/40 p-2 ${
+          isFull
+            ? hasSelectedSession
+              ? "lg:row-span-5 lg:max-h-[78vh] lg:overflow-y-auto"
+              : "lg:max-w-[860px]"
+            : ""
+        }`}
+      >
         <div className="font-semibold mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span>{isFull ? "Session List" : "Sessions"}</span>
@@ -846,9 +881,9 @@ export function SessionsSection({ variant = "compact" }: { variant?: SectionVari
               <select value={memoryModeFilter} onChange={(e) => setMemoryModeFilter(e.target.value as typeof memoryModeFilter)} className="rounded border border-border/60 bg-card/40 px-1 py-1 text-[10px]">
                 <option value="all">memory: all</option>
                 <option value="off">off</option>
-                <option value="session_only">session_only</option>
-                <option value="selective">selective</option>
-                <option value="full">full</option>
+                <option value="memory_only">memory_only</option>
+                <option value="direct_only">direct_only</option>
+                <option value="all_scope">all</option>
               </select>
             </div>
             <div className={`space-y-1 overflow-y-auto scrollbar-thin ${isFull ? "max-h-[62vh]" : "max-h-40"}`}>
@@ -866,7 +901,7 @@ export function SessionsSection({ variant = "compact" }: { variant?: SectionVari
                     <span>{s.source || s.channel || "local"}</span>
                     <span>{s.owner || "unknown"}</span>
                   </div>
-                  <div className="opacity-60 text-[10px]">memory: {s.memory_mode || "session_only"}</div>
+                  <div className="opacity-60 text-[10px]">memory: {s.memory_mode || "direct_only"}</div>
                 </button>
               ))}
             </div>

@@ -49,25 +49,17 @@ from universal_agent.tools.local_toolkit_bridge import (
     generate_image_wrapper,
     describe_image_wrapper,
     preview_image_wrapper,
-    core_memory_replace_wrapper,
-    core_memory_append_wrapper,
-    archival_memory_insert_wrapper,
-    archival_memory_search_wrapper,
-    get_core_memory_blocks_wrapper,
     ask_user_questions_wrapper,
     batch_tool_execute_wrapper,
 )
 from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
-from universal_agent.tools.memory import ua_memory_get_wrapper, ua_memory_search_wrapper
 from universal_agent.tools.internal_registry import get_all_internal_tools
 from universal_agent.execution_context import bind_workspace_env
 from universal_agent.feature_flags import (
     memory_enabled,
-    memory_index_mode,
     memory_max_tokens,
 )
 from universal_agent.memory.paths import (
-    resolve_persist_directory,
     resolve_shared_memory_workspace,
 )
 
@@ -106,10 +98,8 @@ class AgentSetup:
         self.workspace_dir = workspace_dir
         self.user_id = resolve_user_id(user_id)
         self.enable_skills = enable_skills
-        disable_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {"1", "true", "yes"}
         resolved_enable_memory = memory_enabled() if enable_memory is None else enable_memory
-        self.enable_memory = resolved_enable_memory and not disable_memory
-        self.memory_index_mode = memory_index_mode()
+        self.enable_memory = resolved_enable_memory
         self.memory_max_tokens = memory_max_tokens()
         self.verbose = verbose
         
@@ -316,34 +306,20 @@ class AgentSetup:
 
     def _load_memory_context(self) -> str:
         """Load memory context for system prompt.
-        
-        Reads from TWO sources:
-        1. Legacy MemoryManager (global agent_core.db — core blocks + archival)
-        2. UA File Memory (shared workspace — recent entries index)
-        
-        The shared memory dir (UA_SHARED_MEMORY_DIR) enables cross-workspace
-        memory accumulation. If unset, a persistent repo-level default is used.
+
+        Canonical source: shared workspace memory files/index for cross-session
+        continuity.
         """
         try:
-            from Memory_System.manager import MemoryManager
-            from universal_agent.agent_college.integration import setup_agent_college
             from universal_agent.memory.memory_context import build_file_memory_context
 
-            storage_path = resolve_persist_directory(self.workspace_dir)
-            mem_mgr = MemoryManager(storage_dir=storage_path, workspace_dir=self.workspace_dir)
-            setup_agent_college(mem_mgr)
-            context = mem_mgr.get_system_prompt_addition()
-
-            # Use shared memory directory for cross-workspace continuity.
             shared_memory_dir = resolve_shared_memory_workspace(self.workspace_dir)
-            file_context = build_file_memory_context(
+            context = build_file_memory_context(
                 shared_memory_dir,
                 max_tokens=self.memory_max_tokens,
-                index_mode=self.memory_index_mode,
+                index_mode="vector",
                 recent_limit=int(os.getenv("UA_MEMORY_RECENT_ENTRIES", "8")),
             )
-            if file_context:
-                context = f"{context}\n{file_context}\n"
             self._log(f"🧠 Injected Core Memory Context ({len(context)} chars)")
             return context
         except Exception as e:
@@ -423,11 +399,8 @@ class AgentSetup:
         disallowed_tools = list(DISALLOWED_TOOLS)
         if not self.enable_memory:
             disallowed_tools.extend([
-                "mcp__internal__core_memory_replace",
-                "mcp__internal__core_memory_append",
-                "mcp__internal__archival_memory_insert",
-                "mcp__internal__archival_memory_search",
-                "mcp__internal__get_core_memory_blocks",
+                "mcp__internal__memory_get",
+                "mcp__internal__memory_search",
             ])
 
         from universal_agent.utils.model_resolution import resolve_claude_code_model
