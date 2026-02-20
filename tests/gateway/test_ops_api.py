@@ -1382,6 +1382,73 @@ def test_ops_calendar_change_request_confirm_for_cron_interval(client, tmp_path)
     assert updated.every_seconds == 45 * 60
 
 
+def test_calendar_heartbeat_summary_filters_stale_active_connections(monkeypatch):
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", None)
+    now_ts = time.time()
+    stale_activity = datetime.fromtimestamp(now_ts - 7200, timezone.utc).isoformat()
+    summary = {
+        "session_id": "session_20260220_082954_0e5713db",
+        "source": "chat",
+        "active_connections": 1,
+        "active_runs": 0,
+        "last_activity": stale_activity,
+    }
+    assert gateway_server._calendar_should_include_heartbeat_summary(summary, now_ts) is False
+
+
+def test_calendar_heartbeat_projection_uses_distinct_titles_and_skips_stale(monkeypatch, tmp_path):
+    now_ts = time.time()
+    fresh_session = "session_20260220_082954_0e5713db"
+    stale_session = "session_20260220_081952_38d5bac6"
+    fresh_workspace = tmp_path / fresh_session
+    stale_workspace = tmp_path / stale_session
+    fresh_workspace.mkdir(parents=True, exist_ok=True)
+    stale_workspace.mkdir(parents=True, exist_ok=True)
+
+    class _StubOps:
+        def list_sessions(self, status_filter: str = "all"):
+            return [
+                {
+                    "session_id": fresh_session,
+                    "owner": "owner_primary",
+                    "source": "chat",
+                    "channel": "chat",
+                    "workspace_dir": str(fresh_workspace),
+                    "active_connections": 1,
+                    "active_runs": 0,
+                    "last_activity": datetime.fromtimestamp(now_ts - 60, timezone.utc).isoformat(),
+                },
+                {
+                    "session_id": stale_session,
+                    "owner": "owner_primary",
+                    "source": "chat",
+                    "channel": "chat",
+                    "workspace_dir": str(stale_workspace),
+                    "active_connections": 1,
+                    "active_runs": 0,
+                    "last_activity": datetime.fromtimestamp(now_ts - 7200, timezone.utc).isoformat(),
+                },
+            ]
+
+    monkeypatch.setattr(gateway_server, "_ops_service", _StubOps())
+    monkeypatch.setattr(gateway_server, "_heartbeat_service", None)
+
+    events, always_running = gateway_server._calendar_project_heartbeat_events(
+        start_ts=now_ts - 60,
+        end_ts=now_ts + (4 * 3600),
+        timezone_name="America/Chicago",
+        owner=None,
+    )
+
+    # Fresh session is included in both timeline/always-running; stale session is excluded.
+    refs = {str(item.get("source_ref")) for item in always_running}
+    assert fresh_session in refs
+    assert stale_session not in refs
+
+    titles = [str(item.get("title") or "") for item in events]
+    assert any("0e5713db" in title for title in titles)
+
+
 def test_ops_work_thread_decision_roundtrip(client):
     session_id = "session_delivery_workflow"
 

@@ -116,6 +116,10 @@ CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS = max(
     3600,
     int(os.getenv("UA_CALENDAR_HEARTBEAT_SESSION_MAX_IDLE_SECONDS", str(72 * 3600)) or (72 * 3600)),
 )
+CALENDAR_HEARTBEAT_STALE_CONNECTION_SECONDS = max(
+    300,
+    int(os.getenv("UA_CALENDAR_HEARTBEAT_STALE_CONNECTION_SECONDS", "1800") or 1800),
+)
 
 # 1. Configurable Workspaces Directory
 # Default to AGENT_RUN_WORKSPACES in project root, but allow override via env var
@@ -2647,14 +2651,54 @@ def _calendar_should_include_heartbeat_summary(summary: dict[str, Any], now_ts: 
 
     active_connections = int(summary.get("active_connections") or 0)
     active_runs = int(summary.get("active_runs") or 0)
-    if active_connections > 0 or active_runs > 0:
+    busy = bool(_heartbeat_service and session_id in _heartbeat_service.busy_sessions)
+    if active_runs > 0 or busy:
         return True
-    if _heartbeat_service and session_id in _heartbeat_service.busy_sessions:
+
+    if active_connections > 0:
+        # Stale websocket/runtime counts can survive disconnect races and make
+        # old sessions look "always running". Guard with recent activity.
+        last_activity_raw = summary.get("last_activity") or summary.get("last_modified")
+        last_activity_ts: Optional[float] = None
+        parsed_last_activity = _parse_iso_timestamp(last_activity_raw)
+        if parsed_last_activity is not None:
+            if parsed_last_activity.tzinfo is None:
+                parsed_last_activity = parsed_last_activity.replace(tzinfo=timezone.utc)
+            else:
+                parsed_last_activity = parsed_last_activity.astimezone(timezone.utc)
+            last_activity_ts = parsed_last_activity.timestamp()
+        heartbeat_last_raw = summary.get("heartbeat_last")
+        if heartbeat_last_raw is not None:
+            try:
+                heartbeat_last_ts = float(heartbeat_last_raw)
+                if heartbeat_last_ts > 0:
+                    last_activity_ts = max(last_activity_ts or 0.0, heartbeat_last_ts)
+            except Exception:
+                pass
+        if last_activity_ts is not None and (now_ts - last_activity_ts) > CALENDAR_HEARTBEAT_STALE_CONNECTION_SECONDS:
+            return False
         return True
 
     # Only show "always running" heartbeat monitors for active sessions;
     # historical workspaces should not be treated as live monitors.
     return False
+
+
+def _calendar_heartbeat_session_label(session_id: str) -> str:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return "unknown"
+
+    # Preserve full short hash suffix so similarly-timed sessions stay distinct.
+    parts = sid.split("_")
+    if sid.startswith("session_") and len(parts) >= 4:
+        hash_suffix = parts[-1][-8:]
+        base = "_".join(parts[:3])
+        return f"{base}[{hash_suffix}]"
+
+    if len(sid) <= 30:
+        return sid
+    return f"{sid[:20]}…{sid[-8:]}"
 
 
 def _calendar_project_heartbeat_events(
@@ -2712,6 +2756,7 @@ def _calendar_project_heartbeat_events(
             status_value = "scheduled"
 
         # Main timeline event (next due) within active window.
+        session_label = _calendar_heartbeat_session_label(session_id)
         if start_ts <= next_run <= end_ts:
             event_id = _calendar_event_id("heartbeat", session_id, next_run)
             event = {
@@ -2721,7 +2766,7 @@ def _calendar_project_heartbeat_events(
                 "owner_id": owner_id,
                 "session_id": session_id,
                 "channel": str(summary.get("channel") or "heartbeat"),
-                "title": f"Heartbeat: {session_id[:14]}",
+                "title": f"Heartbeat: {session_label}",
                 "description": f"Heartbeat check every {every_seconds // 60} min",
                 "category": "normal",
                 "color_key": "heartbeat",
@@ -2746,7 +2791,7 @@ def _calendar_project_heartbeat_events(
             "owner_id": owner_id,
             "session_id": session_id,
             "channel": str(summary.get("channel") or "heartbeat"),
-            "title": f"Heartbeat monitor ({session_id[:10]})",
+            "title": f"Heartbeat monitor ({session_label})",
             "description": f"Always running • every {max(1, every_seconds // 60)} min",
             "category": "normal",
             "color_key": "heartbeat",

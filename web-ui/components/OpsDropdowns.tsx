@@ -28,7 +28,15 @@ type SkillStatus = { name: string; enabled: boolean; available: boolean; unavail
 type SystemEventItem = { id: string; event_type: string; payload: Record<string, unknown>; created_at?: string; session_id?: string; timestamp: number };
 type ChannelStatus = { id: string; label: string; enabled: boolean; configured: boolean; note?: string; probe?: { status?: string; checked_at?: string; http_status?: number; detail?: string } };
 type ApprovalRecord = { approval_id: string; status?: string; summary?: string; requested_by?: string; created_at?: number; updated_at?: number; metadata?: Record<string, unknown> };
-type HeartbeatState = { status: string; busy?: boolean; last_run?: number | string; last_summary_raw?: unknown; last_summary_text?: string; error?: string };
+type HeartbeatState = {
+  status: string;
+  busy?: boolean;
+  last_run?: number | string;
+  last_summary_raw?: unknown;
+  last_summary_text?: string;
+  skip_marker?: string;
+  error?: string;
+};
 type SessionContinuityMetrics = {
   started_at?: string;
   sessions_created?: number;
@@ -130,6 +138,24 @@ function safeJsonParse(v: string): { ok: true; data: Record<string, unknown> } |
     if (p && typeof p === "object" && !Array.isArray(p)) return { ok: true, data: p };
     return { ok: false, error: "Config must be a JSON object" };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+function parseHeartbeatSummary(raw: unknown): { text?: string; skipMarker?: string } {
+  if (typeof raw === "string" || raw == null) {
+    return { text: raw ?? undefined };
+  }
+  if (typeof raw !== "object") {
+    return { text: String(raw) };
+  }
+
+  const summary = raw as { text?: string; suppressed_reason?: string };
+  const suppressedReason = String(summary.suppressed_reason ?? "").trim().toLowerCase();
+  let skipMarker: string | undefined;
+  if (suppressedReason === "empty_content") {
+    skipMarker = "Heartbeat skipped: empty HEARTBEAT.md content.";
+  }
+  const text = summary.text ?? skipMarker ?? JSON.stringify(raw, null, 2);
+  return { text, skipMarker };
 }
 
 // ---- Context ----
@@ -281,11 +307,15 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
       const r = await fetch(`${API_BASE}/api/v1/heartbeat/last?session_id=${encodeURIComponent(sid)}`);
       if (!r.ok) { const dt = await r.text(); setHeartbeatState({ status: r.status === 400 ? "Disabled" : `Unavailable (${r.status})`, error: dt || `Heartbeat not available (${r.status})` }); return; }
       const d = await r.json(); const raw = d.last_summary;
-      let txt: string | undefined;
-      if (typeof raw === "string" || raw == null) txt = raw ?? undefined;
-      else if (typeof raw === "object") txt = (raw as { text?: string }).text ?? JSON.stringify(raw, null, 2);
-      else txt = String(raw);
-      setHeartbeatState({ status: "OK", busy: Boolean(d.busy), last_run: d.last_run, last_summary_raw: raw, last_summary_text: txt });
+      const summary = parseHeartbeatSummary(raw);
+      setHeartbeatState({
+        status: "OK",
+        busy: Boolean(d.busy),
+        last_run: d.last_run,
+        last_summary_raw: raw,
+        last_summary_text: summary.text,
+        skip_marker: summary.skipMarker,
+      });
     } catch (e) { setHeartbeatState({ status: "Error", error: (e as Error).message }); }
   }, []);
 
@@ -1950,6 +1980,9 @@ export function HeartbeatWidget() {
                 </>);
               })()}
               <div className="text-muted-foreground">Last summary</div>
+              {heartbeatState.skip_marker && (
+                <div className="text-[10px] text-amber-400">{heartbeatState.skip_marker}</div>
+              )}
               <div className="text-[11px] font-mono whitespace-pre-wrap max-h-24 overflow-y-auto scrollbar-thin">{heartbeatState.last_summary_text ?? "(none)"}</div>
               {(() => {
                 const raw = heartbeatState.last_summary_raw;

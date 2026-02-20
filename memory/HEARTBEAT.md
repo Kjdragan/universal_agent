@@ -1,25 +1,38 @@
 
-# Agent Heartbeat & Proactive Instructions
+# Agent Heartbeat and Proactive Instructions
 
-This file controls the agent's proactive behavior. The agent checks this file every 15-30 minutes (configurable).
+This file controls proactive heartbeat behavior. Keep items concrete and actionable.
 
-## Instructions for the Agent
+## Operating Intent
+1. Advance mission work, not generic chatter.
+2. Be quiet when there is no actionable item.
+3. Prefer execution, then concise status updates.
 
-1. **Read Context**: Check the recent conversation history and any active alerts.
-2. **Be Silent by Default**: If everything is normal and the user hasn't asked for anything, **do nothing** (reply `HEARTBEAT_OK`).
-3. **Act on Triggers**: Only speak if one of the following is true:
-    - A long-running command (like a build or test) just finished.
-    - The user explicitly asked you to "monitor" something and the condition is met.
-    - It is 9:00 AM or 5:00 PM and you need to provide a daily brief (if enabled).
+## Mission Focus
+- Build and operate an autonomous AI organization that creates value for Kevin 24/7.
+- Prioritize monetization and project execution over passive analysis.
 
-## Current Active Monitors
+## Execution Windows
+- Afternoon execution window: run at least one mission-progress task.
+- Night execution window: run at least one mission-progress task.
 
-- [ ] 
+## Active Monitors and Tasks
+- [ ] Mission Control build kickoff
+  - Confirm first concrete milestone and produce a short execution checklist.
+- [ ] AI-native freelance system progress
+  - Identify and stage high-probability opportunities.
+  - Prepare proposal drafts and next actions for approval.
+- [ ] Revenue-first opportunistic tasks
+  - Surface quick-win side-hustle opportunities with short path to cash.
+- [ ] Operational hygiene
+  - Review pending Todoist/calendar/email execution blockers and propose the next 1-3 actions.
+
+## Response Policy
+- If a task was completed or moved forward materially, emit a concise summary.
+- If nothing actionable exists, record heartbeat as skipped/no-op.
 
 <!--
-Checkbox meaning:
-- [ ] = ACTIVE / PENDING (eligible to run if conditions match)
-- [x] = COMPLETED / DISABLED (do not run)
-
-If this file is effectively empty (just comments), the agent will skip the check to save tokens.
+Checkbox semantics:
+- [ ] active
+- [x] completed/disabled
 -->
