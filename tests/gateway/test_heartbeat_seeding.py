@@ -1,4 +1,5 @@
 import sys
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
@@ -56,6 +57,8 @@ async def test_heartbeat_seeds_file(tmp_path, mock_gateway, mock_connection_mana
         # We assume _process_session is called. 
         # Since _process_session is async and might call _run_heartbeat, 
         # we'll mock _run_heartbeat to avoid complexity
+        service.wake_sessions.add(session_id)
+        service.last_wake_reason[session_id] = "test"
         with patch.object(service, "_run_heartbeat", new_callable=MagicMock) as mock_run:
              await service._process_session(session)
         
@@ -103,3 +106,33 @@ async def test_heartbeat_does_not_overwrite(tmp_path, mock_gateway, mock_connect
              
         # Verify NOT overwritten
         assert existing_hb.read_text() == "# Existing Instructions"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_empty_content_records_skip_marker(tmp_path, mock_gateway, mock_connection_manager):
+    """Empty HEARTBEAT.md should persist an explicit skip marker for UI visibility."""
+    session_id = "test_session_empty_hb"
+    workspace = tmp_path / session_id
+    workspace.mkdir()
+    (workspace / "HEARTBEAT.md").write_text("- [ ]", encoding="utf-8")
+
+    service = HeartbeatService(mock_gateway, mock_connection_manager)
+    session = GatewaySession(
+        session_id=session_id,
+        user_id="u1",
+        workspace_dir=str(workspace),
+        metadata={},
+    )
+
+    service.wake_sessions.add(session_id)
+    service.last_wake_reason[session_id] = "test"
+    with patch.object(service, "_run_heartbeat", new_callable=MagicMock) as mock_run:
+        await service._process_session(session)
+        mock_run.assert_not_called()
+
+    state_path = workspace / "heartbeat_state.json"
+    assert state_path.exists()
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    summary = payload.get("last_summary") or {}
+    assert summary.get("suppressed_reason") == "empty_content"
+    assert "Heartbeat skipped: empty HEARTBEAT.md content." in str(summary.get("text") or "")

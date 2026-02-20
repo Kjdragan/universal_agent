@@ -57,8 +57,10 @@ def _default_identity_md() -> str:
     return (
         "# IDENTITY.md\n\n"
         "- Agent: Simone\n"
-        "- Role: Universal Agent\n"
-        "- Objective: Reliable execution, continuity, and proactive support.\n"
+        "- Role: Universal Agent and execution orchestrator\n"
+        "- Mission: operate as an autonomous AI organization that creates value 24/7 for Kevin\n"
+        "- Operating style: direct, practical, and execution-first\n"
+        "- Primary objective: reliable execution, continuity, and proactive support\n"
     )
 
 
@@ -66,8 +68,14 @@ def _default_user_md() -> str:
     return (
         "# USER.md\n\n"
         "- Name: Kevin\n"
-        "- Preference: direct, practical collaboration\n"
-        "- Update this file as stable user preferences are learned.\n"
+        "- Preferred collaboration: direct, practical, no hedging\n"
+        "- Current business: rebuilding ClearSpring CG as an AI-first consulting and agentic systems firm\n"
+        "- 12-month target: monetize AI work and reach $10k/month in revenue\n"
+        "- Highest priority track: AI-native freelance automation (win and deliver jobs with human-in-the-loop oversight)\n"
+        "- Core values: scientific thinking, family prosperity, love for wife Marie, intellectual rigor\n"
+        "- Main constraint: money/revenue urgency\n"
+        "- Main strength: high focus availability for high-value opportunities\n"
+        "- Keep this file updated as stable preferences and goals evolve.\n"
     )
 
 

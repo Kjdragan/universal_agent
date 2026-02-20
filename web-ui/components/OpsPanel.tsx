@@ -77,6 +77,24 @@ function safeJsonParse(value: string): { ok: true; data: Record<string, unknown>
   }
 }
 
+function parseHeartbeatSummary(raw: unknown): { text?: string; skipMarker?: string } {
+  if (typeof raw === "string" || raw == null) {
+    return { text: raw ?? undefined };
+  }
+  if (typeof raw !== "object") {
+    return { text: String(raw) };
+  }
+
+  const summary = raw as { text?: string; suppressed_reason?: string };
+  const suppressedReason = String(summary.suppressed_reason ?? "").trim().toLowerCase();
+  let skipMarker: string | undefined;
+  if (suppressedReason === "empty_content") {
+    skipMarker = "Heartbeat skipped: empty HEARTBEAT.md content.";
+  }
+  const text = summary.text ?? skipMarker ?? JSON.stringify(raw, null, 2);
+  return { text, skipMarker };
+}
+
 type PanelKey = "core" | "system" | "session";
 
 type OpsPanelProps = {
@@ -113,6 +131,7 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
     last_run?: number | string;
     last_summary_raw?: unknown;
     last_summary_text?: string;
+    skip_marker?: string;
     error?: string;
   }>({ status: "Not loaded" });
   const [panelOpenState, setPanelOpenState] = useState<Record<PanelKey, boolean>>({
@@ -329,20 +348,14 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
       }
       const data = await res.json();
       const summaryRaw = data.last_summary;
-      let summaryText: string | undefined;
-      if (typeof summaryRaw === "string" || summaryRaw == null) {
-        summaryText = summaryRaw ?? undefined;
-      } else if (typeof summaryRaw === "object") {
-        summaryText = (summaryRaw as { text?: string }).text ?? JSON.stringify(summaryRaw, null, 2);
-      } else {
-        summaryText = String(summaryRaw);
-      }
+      const summary = parseHeartbeatSummary(summaryRaw);
       setHeartbeatState({
         status: "OK",
         busy: Boolean(data.busy),
         last_run: data.last_run,
         last_summary_raw: summaryRaw,
-        last_summary_text: summaryText,
+        last_summary_text: summary.text,
+        skip_marker: summary.skipMarker,
       });
     } catch (err) {
       setHeartbeatState({
@@ -790,6 +803,11 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                     );
                   })()}
                   <div className="text-muted-foreground">Last summary</div>
+                  {heartbeatState.skip_marker && (
+                    <div className="text-[10px] text-amber-400">
+                      {heartbeatState.skip_marker}
+                    </div>
+                  )}
                   <div className="text-[11px] font-mono whitespace-pre-wrap">
                     {heartbeatState.last_summary_text ?? "(none)"}
                   </div>

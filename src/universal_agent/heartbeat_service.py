@@ -904,6 +904,21 @@ class HeartbeatService:
             heartbeat_content = hb_file.read_text()
             if _is_effectively_empty(heartbeat_content):
                 state.last_run = now
+                state.last_summary = {
+                    "timestamp": datetime.now().isoformat(),
+                    "ok_only": True,
+                    "text": "Heartbeat skipped: empty HEARTBEAT.md content.",
+                    "token": None,
+                    "sent": False,
+                    "artifacts": {"writes": [], "work_products": [], "bash_commands": []},
+                    "delivery": {
+                        "mode": delivery.mode,
+                        "targets": [],
+                        "connected_targets": [],
+                        "indicator_only": False,
+                    },
+                    "suppressed_reason": "empty_content",
+                }
                 with open(state_path, "w") as f:
                     json.dump(state.to_dict(), f)
                 return
@@ -913,6 +928,21 @@ class HeartbeatService:
                 heartbeat_content = mem_hb_file.read_text()
                 if _is_effectively_empty(heartbeat_content):
                     state.last_run = now
+                    state.last_summary = {
+                        "timestamp": datetime.now().isoformat(),
+                        "ok_only": True,
+                        "text": "Heartbeat skipped: empty HEARTBEAT.md content.",
+                        "token": None,
+                        "sent": False,
+                        "artifacts": {"writes": [], "work_products": [], "bash_commands": []},
+                        "delivery": {
+                            "mode": delivery.mode,
+                            "targets": [],
+                            "connected_targets": [],
+                            "indicator_only": False,
+                        },
+                        "suppressed_reason": "empty_content",
+                    }
                     with open(state_path, "w") as f:
                         json.dump(state.to_dict(), f)
                     return
