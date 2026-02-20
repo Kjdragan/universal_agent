@@ -49,6 +49,12 @@ def test_coder_vp_route_decision_respects_flags(monkeypatch, tmp_path):
     assert scoped_work.use_coder_vp is True
     assert scoped_work.reason == "eligible"
 
+    internal_system_task = runtime.route_decision(
+        "Implement a Python refactor in src/universal_agent/gateway_server.py and adjust Simone heartbeat calendar behavior"
+    )
+    assert internal_system_task.use_coder_vp is False
+    assert internal_system_task.reason == "internal_system_request"
+
     monkeypatch.setenv("UA_DISABLE_CODER_VP", "1")
     disabled = runtime.route_decision("Please fix this Python bug in the parser")
     assert disabled.use_coder_vp is False

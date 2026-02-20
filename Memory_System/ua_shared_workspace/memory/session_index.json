@@ -28,5 +28,53 @@
     "preview": "user: remember alpha strategy\nassistant: noted",
     "file_path": "memory/sessions/session_alpha_2026-02-20.md",
     "content_hash": "33425c4b583b394effb46e8352093951f757393dc042094365b83453f4375e9e"
+  },
+  {
+    "entry_id": "62ae9b36-ab4e-4a63-9fbc-dd92fd23ed66",
+    "timestamp": "2026-02-20T15:04:44.014767+00:00",
+    "source": "session_transition:ops_delete",
+    "session_id": "session_del",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_delete",
+      "session:session_del"
+    ],
+    "summary": "Session rollover capture (ops_delete)",
+    "preview": "Session rollover capture (ops_delete)",
+    "file_path": "memory/sessions/session_del_2026-02-20_foo.md",
+    "content_hash": "4e32c56f3b9c5b0918e24a43ff794f7782693e91a595a417300775cabf3c8782"
+  },
+  {
+    "entry_id": "d3f4db88-b8f2-4f64-9dc5-e968d88179dc",
+    "timestamp": "2026-02-20T15:04:44.367932+00:00",
+    "source": "session_transition:ops_reset",
+    "session_id": "session_complex",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_reset",
+      "session:session_complex"
+    ],
+    "summary": "Session rollover capture (ops_reset)",
+    "preview": "Session rollover capture (ops_reset)",
+    "file_path": "memory/sessions/session_complex_2026-02-20_line-5.md",
+    "content_hash": "80c7d110672b931a42a06d17943d8c5e518002a73bba0d26fa1fa75759164feb"
+  },
+  {
+    "entry_id": "b096a05e-ee96-44e3-b47d-e4c5fc3c890c",
+    "timestamp": "2026-02-20T15:04:44.913965+00:00",
+    "source": "session_transition:ops_reset",
+    "session_id": "session_actions",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_reset",
+      "session:session_actions"
+    ],
+    "summary": "Session rollover capture (ops_reset)",
+    "preview": "Session rollover capture (ops_reset)",
+    "file_path": "memory/sessions/session_actions_2026-02-20_line-1.md",
+    "content_hash": "345dafe271273aa473f6311603a9b10162cd17613e491aa99204d265b33e6632"
   }
 ]

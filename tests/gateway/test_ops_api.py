@@ -32,6 +32,7 @@ def client(tmp_path, monkeypatch):
     # Patch WORKSPACES_DIR to use tmp_path
     monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
+    monkeypatch.setenv("UA_CODER_VP_DB_PATH", str((tmp_path / "coder_vp_state.db").resolve()))
     
     # We must reset the global singletons to force re-init with new path
     monkeypatch.setattr(gateway_server, "_gateway", None)
@@ -370,7 +371,7 @@ def test_dashboard_summary_and_notifications(client, tmp_path):
 
 def test_dashboard_coder_vp_metrics_endpoint(client, tmp_path):
     gateway = gateway_server.get_gateway()
-    conn = gateway._runtime_db_conn
+    conn = gateway.get_coder_vp_db_conn()
     assert conn is not None
 
     vp_id = f"vp.coder.dashboard.{time.time_ns()}"
@@ -594,7 +595,7 @@ def test_ops_session_continuity_metrics_use_rolling_window(client):
 
 def test_ops_coder_vp_metrics_endpoint(client, tmp_path):
     gateway = gateway_server.get_gateway()
-    conn = gateway._runtime_db_conn
+    conn = gateway.get_coder_vp_db_conn()
     assert conn is not None
 
     vp_id = f"vp.coder.test.{time.time_ns()}"
@@ -729,10 +730,52 @@ def test_ops_coder_vp_metrics_endpoint(client, tmp_path):
 def test_ops_coder_vp_metrics_requires_runtime_db(client, monkeypatch):
     gateway = gateway_server.get_gateway()
     monkeypatch.setattr(gateway, "_runtime_db_conn", None)
+    monkeypatch.setattr(gateway, "_coder_vp_db_conn", None)
 
     resp = client.get("/api/v1/ops/metrics/coder-vp")
     assert resp.status_code == 503
     assert "Runtime DB not initialized" in str(resp.json().get("detail"))
+
+
+def test_ops_vp_dispatch_list_cancel_flow(client):
+    dispatch_resp = client.post(
+        "/api/v1/ops/vp/missions/dispatch",
+        json={
+            "vp_id": "vp.general.primary",
+            "mission_type": "general_task",
+            "objective": "Summarize current priorities and write next actions.",
+            "constraints": {"target_path": "/tmp/vp_general_test_workspace"},
+            "budget": {"max_minutes": 20},
+            "idempotency_key": "vp-general-test-1",
+        },
+    )
+    assert dispatch_resp.status_code == 200
+    mission = dispatch_resp.json()["mission"]
+    assert mission["vp_id"] == "vp.general.primary"
+    assert mission["status"] == "queued"
+
+    mission_id = mission["mission_id"]
+    list_resp = client.get("/api/v1/ops/vp/missions?vp_id=vp.general.primary&status=queued&limit=20")
+    assert list_resp.status_code == 200
+    mission_ids = {item["mission_id"] for item in list_resp.json()["missions"]}
+    assert mission_id in mission_ids
+
+    sessions_resp = client.get("/api/v1/ops/vp/sessions?status=all&limit=20")
+    assert sessions_resp.status_code == 200
+    assert any(item["vp_id"] == "vp.general.primary" for item in sessions_resp.json()["sessions"])
+
+    metrics_resp = client.get("/api/v1/ops/metrics/vp?vp_id=vp.general.primary&mission_limit=20&event_limit=20")
+    assert metrics_resp.status_code == 200
+    metrics_payload = metrics_resp.json()
+    assert metrics_payload["vp_id"] == "vp.general.primary"
+    assert metrics_payload["mission_counts"]["queued"] >= 1
+
+    cancel_resp = client.post(
+        f"/api/v1/ops/vp/missions/{mission_id}/cancel",
+        json={"reason": "test_cancel"},
+    )
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json()["status"] == "cancel_requested"
 
 
 def test_ops_scheduling_runtime_metrics_endpoint(client):

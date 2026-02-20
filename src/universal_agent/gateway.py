@@ -12,16 +12,25 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
-from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.db import (
+    connect_runtime_db,
+    get_coder_vp_db_path,
+    get_runtime_db_path,
+)
 from universal_agent.durable.migrations import ensure_schema
-from universal_agent.feature_flags import coder_vp_display_name
+from universal_agent.feature_flags import (
+    coder_vp_display_name,
+    coder_vp_id,
+    vp_dispatch_mode,
+    vp_external_dispatch_enabled,
+)
 from universal_agent.memory.paths import resolve_shared_memory_workspace
 from universal_agent.timeout_policy import (
     gateway_http_timeout_seconds,
     websocket_connect_kwargs,
 )
 from universal_agent.workspace import seed_workspace_bootstrap
-from universal_agent.vp import CoderVPRuntime
+from universal_agent.vp import CoderVPRuntime, MissionDispatchRequest, dispatch_mission
 
 try:
     from universal_agent.agent_core import AgentEvent, EventType
@@ -161,17 +170,33 @@ class InProcessGateway(Gateway):
         self._coder_vp_session: Optional[GatewaySession] = None
         self._coder_vp_lease_owner = "simone-control-plane"
         self._runtime_db_conn = None
+        self._coder_vp_db_conn = None
         self._coder_vp_runtime: Optional[CoderVPRuntime] = None
 
         try:
             self._runtime_db_conn = connect_runtime_db(get_runtime_db_path())
             ensure_schema(self._runtime_db_conn)
+            # Keep CODIE lane telemetry isolated from Simone runtime queue/checkpoint
+            # writes to prevent cross-lane sqlite lock contention.
+            self._coder_vp_db_conn = connect_runtime_db(get_coder_vp_db_path())
+            ensure_schema(self._coder_vp_db_conn)
             self._coder_vp_runtime = CoderVPRuntime(
-                conn=self._runtime_db_conn,
+                conn=self._coder_vp_db_conn,
                 workspace_base=self._workspace_base,
             )
         except Exception:
+            if self._runtime_db_conn is not None:
+                try:
+                    self._runtime_db_conn.close()
+                except Exception:
+                    pass
+            if self._coder_vp_db_conn is not None:
+                try:
+                    self._coder_vp_db_conn.close()
+                except Exception:
+                    pass
             self._runtime_db_conn = None
+            self._coder_vp_db_conn = None
             self._coder_vp_runtime = None
 
         if self._use_legacy:
@@ -250,6 +275,9 @@ class InProcessGateway(Gateway):
             snapshot["lock_hold_seconds_avg"] = 0.0
         snapshot["lock_locked"] = bool(self._execution_lock.locked())
         return snapshot
+
+    def get_coder_vp_db_conn(self) -> Any:
+        return self._coder_vp_db_conn
 
     async def create_session(
         self, user_id: str, workspace_dir: Optional[str] = None
@@ -443,6 +471,39 @@ class InProcessGateway(Gateway):
         else:
             adapter.config.__dict__["_system_events"] = []
 
+    def _dispatch_external_vp_mission(
+        self,
+        *,
+        session: GatewaySession,
+        request: GatewayRequest,
+        vp_id: str,
+        mission_type: str,
+    ) -> str:
+        conn = self._runtime_db_conn
+        if conn is None:
+            raise RuntimeError("Runtime DB not initialized for external VP dispatch")
+        metadata = request.metadata or {}
+        constraints = metadata.get("constraints") if isinstance(metadata.get("constraints"), dict) else {}
+        budget = metadata.get("budget") if isinstance(metadata.get("budget"), dict) else {}
+        mission_row = dispatch_mission(
+            conn=conn,
+            request=MissionDispatchRequest(
+                vp_id=vp_id,
+                mission_type=mission_type,
+                objective=request.user_input,
+                constraints=constraints,
+                budget=budget,
+                idempotency_key=str(metadata.get("idempotency_key") or "").strip(),
+                source_session_id=session.session_id,
+                source_turn_id=str(metadata.get("turn_id") or uuid.uuid4().hex),
+                reply_mode=str(metadata.get("reply_mode") or "async"),
+                priority=int(metadata.get("priority") or 100),
+                run_id=str(metadata.get("run_id") or "").strip() or None,
+            ),
+            workspace_base=self._workspace_base,
+        )
+        return str(mission_row["mission_id"])
+
     async def _ensure_coder_vp_adapter(self, owner_user_id: str) -> tuple[ProcessTurnAdapter, Any]:
         if not self._coder_vp_runtime:
             raise RuntimeError("CODER VP runtime is not initialized")
@@ -520,68 +581,192 @@ class InProcessGateway(Gateway):
             vp_cancelled = False
             vp_exception: Optional[BaseException] = None
             request_source = str((request.metadata or {}).get("source") or "user").strip().lower()
+            requested_vp_id = str((request.metadata or {}).get("delegate_vp_id") or "").strip()
+
+            if (
+                requested_vp_id
+                and request_source not in {"cron", "webhook"}
+                and vp_external_dispatch_enabled(default=False)
+                and vp_dispatch_mode(default="db_pull") == "db_pull"
+            ):
+                try:
+                    mission_type = str((request.metadata or {}).get("mission_type") or "task").strip() or "task"
+                    mission_id = self._dispatch_external_vp_mission(
+                        session=session,
+                        request=request,
+                        vp_id=requested_vp_id,
+                        mission_type=mission_type,
+                    )
+                    yield AgentEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "status": f"Delegated to external VP `{requested_vp_id}`.",
+                            "is_log": True,
+                            "vp_mission_id": mission_id,
+                            "vp_id": requested_vp_id,
+                            "routing": "delegated_to_external_vp",
+                        },
+                    )
+                    yield AgentEvent(
+                        type=EventType.TEXT,
+                        data={
+                            "text": (
+                                f"Mission queued to `{requested_vp_id}` as `{mission_id}`. "
+                                "Execution is asynchronous; progress and artifacts are available via VP ops endpoints."
+                            ),
+                            "final": True,
+                        },
+                    )
+                    yield AgentEvent(
+                        type=EventType.ITERATION_END,
+                        data={"trace_id": (request.metadata or {}).get("trace_id")},
+                    )
+                    return
+                except Exception as exc:
+                    vp_error_detail = str(exc)
+                    self._apply_request_config(
+                        adapter,
+                        request,
+                        extra_metadata={
+                            "routing": "external_vp_dispatch_fallback",
+                            "external_vp_dispatch_error": vp_error_detail,
+                        },
+                    )
+                    yield AgentEvent(
+                        type=EventType.STATUS,
+                        data={
+                            "status": (
+                                f"External VP dispatch failed for `{requested_vp_id}`; "
+                                "continuing on Simone primary path."
+                            ),
+                            "is_log": True,
+                            "routing": "external_vp_dispatch_fallback",
+                            "error": vp_error_detail,
+                        },
+                    )
 
             # Keep webhook/cron executions pinned to their explicit session workspace
             # for deterministic artifacts/log paths and easier ops visibility.
             if self._coder_vp_runtime and request_source not in {"cron", "webhook"}:
                 decision = self._coder_vp_runtime.route_decision(request.user_input)
                 if decision.use_coder_vp:
-                    try:
-                        vp_adapter, vp_session_row = await self._ensure_coder_vp_adapter(session.user_id)
-                        active_adapter = vp_adapter
-                        vp_run_id = getattr(vp_adapter.config, "run_id", None)
-                        vp_mission_id = self._coder_vp_runtime.start_mission(
-                            objective=request.user_input,
-                            run_id=vp_run_id,
-                            trace_id=(request.metadata or {}).get("trace_id"),
-                            budget=(request.metadata or {}).get("budget")
-                            if isinstance((request.metadata or {}).get("budget"), dict)
-                            else None,
-                        )
-                        self._apply_request_config(
-                            active_adapter,
-                            request,
-                            run_source_override="vp.coder",
-                            extra_metadata={
-                                "source": "vp.coder",
-                                "vp_context": {
-                                    "vp_id": str(vp_session_row["vp_id"]),
+                    external_dispatch = (
+                        vp_external_dispatch_enabled(default=False)
+                        and vp_dispatch_mode(default="db_pull") == "db_pull"
+                    )
+                    if external_dispatch:
+                        try:
+                            vp_mission_id = self._dispatch_external_vp_mission(
+                                session=session,
+                                request=request,
+                                vp_id=coder_vp_id(),
+                                mission_type="coding_task",
+                            )
+                            yield AgentEvent(
+                                type=EventType.STATUS,
+                                data={
+                                    "status": f"Delegated to {vp_display_name} external runtime.",
+                                    "is_log": True,
                                     "vp_mission_id": vp_mission_id,
-                                    "vp_session_id": str(vp_session_row["session_id"] or ""),
+                                    "vp_id": coder_vp_id(),
+                                    "routing": "delegated_to_coder_vp_external",
                                 },
-                            },
-                        )
-                        next_lease_heartbeat_at = time.monotonic() + 60.0
-                        yield AgentEvent(
-                            type=EventType.STATUS,
-                            data={
-                                "status": f"Delegated to {vp_display_name} lane.",
-                                "is_log": True,
-                                "vp_mission_id": vp_mission_id,
-                                "vp_id": str(vp_session_row["vp_id"]),
-                                "routing": "delegated_to_coder_vp",
-                            },
-                        )
-                    except Exception as exc:
-                        vp_error_detail = str(exc)
-                        active_adapter = adapter
-                        self._apply_request_config(
-                            active_adapter,
-                            request,
-                            extra_metadata={
-                                "routing": "fallback_primary",
-                                "coder_vp_bootstrap_error": vp_error_detail,
-                            },
-                        )
-                        yield AgentEvent(
-                            type=EventType.STATUS,
-                            data={
-                                "status": f"{vp_display_name} lane bootstrap failed; using primary code-writer path.",
-                                "is_log": True,
-                                "routing": "coder_vp_bootstrap_fallback",
-                                "error": vp_error_detail,
-                            },
-                        )
+                            )
+                            yield AgentEvent(
+                                type=EventType.TEXT,
+                                data={
+                                    "text": (
+                                        f"{vp_display_name} mission queued asynchronously as `{vp_mission_id}`. "
+                                        "I will continue coordinating while the external worker executes."
+                                    ),
+                                    "final": True,
+                                },
+                            )
+                            yield AgentEvent(
+                                type=EventType.ITERATION_END,
+                                data={"trace_id": (request.metadata or {}).get("trace_id")},
+                            )
+                            return
+                        except Exception as exc:
+                            vp_error_detail = str(exc)
+                            active_adapter = adapter
+                            self._apply_request_config(
+                                active_adapter,
+                                request,
+                                extra_metadata={
+                                    "routing": "fallback_primary",
+                                    "coder_vp_dispatch_error": vp_error_detail,
+                                },
+                            )
+                            yield AgentEvent(
+                                type=EventType.STATUS,
+                                data={
+                                    "status": (
+                                        f"{vp_display_name} external dispatch failed; "
+                                        "using primary code-writer path."
+                                    ),
+                                    "is_log": True,
+                                    "routing": "coder_vp_dispatch_fallback",
+                                    "error": vp_error_detail,
+                                },
+                            )
+                    else:
+                        try:
+                            vp_adapter, vp_session_row = await self._ensure_coder_vp_adapter(session.user_id)
+                            active_adapter = vp_adapter
+                            vp_run_id = getattr(vp_adapter.config, "run_id", None)
+                            vp_mission_id = self._coder_vp_runtime.start_mission(
+                                objective=request.user_input,
+                                run_id=vp_run_id,
+                                trace_id=(request.metadata or {}).get("trace_id"),
+                                budget=(request.metadata or {}).get("budget")
+                                if isinstance((request.metadata or {}).get("budget"), dict)
+                                else None,
+                            )
+                            self._apply_request_config(
+                                active_adapter,
+                                request,
+                                run_source_override="vp.coder",
+                                extra_metadata={
+                                    "source": "vp.coder",
+                                    "vp_context": {
+                                        "vp_id": str(vp_session_row["vp_id"]),
+                                        "vp_mission_id": vp_mission_id,
+                                        "vp_session_id": str(vp_session_row["session_id"] or ""),
+                                    },
+                                },
+                            )
+                            next_lease_heartbeat_at = time.monotonic() + 60.0
+                            yield AgentEvent(
+                                type=EventType.STATUS,
+                                data={
+                                    "status": f"Delegated to {vp_display_name} lane.",
+                                    "is_log": True,
+                                    "vp_mission_id": vp_mission_id,
+                                    "vp_id": str(vp_session_row["vp_id"]),
+                                    "routing": "delegated_to_coder_vp",
+                                },
+                            )
+                        except Exception as exc:
+                            vp_error_detail = str(exc)
+                            active_adapter = adapter
+                            self._apply_request_config(
+                                active_adapter,
+                                request,
+                                extra_metadata={
+                                    "routing": "fallback_primary",
+                                    "coder_vp_bootstrap_error": vp_error_detail,
+                                },
+                            )
+                            yield AgentEvent(
+                                type=EventType.STATUS,
+                                data={
+                                    "status": f"{vp_display_name} lane bootstrap failed; using primary code-writer path.",
+                                    "is_log": True,
+                                    "routing": "coder_vp_bootstrap_fallback",
+                                    "error": vp_error_detail,
+                                },
+                            )
                 else:
                     self._apply_request_config(active_adapter, request)
                     if decision.shadow_mode and decision.intent_matched:
@@ -1044,6 +1229,12 @@ class InProcessGateway(Gateway):
             except Exception:
                 pass
             self._runtime_db_conn = None
+        if self._coder_vp_db_conn is not None:
+            try:
+                self._coder_vp_db_conn.close()
+            except Exception:
+                pass
+            self._coder_vp_db_conn = None
 
 
 class ExternalGateway(Gateway):

@@ -240,3 +240,67 @@ def coder_vp_display_name(default: str = "CODIE") -> str:
 def coder_vp_lease_ttl_seconds(default: int = 300) -> int:
     """Lease TTL for CODER VP session ownership."""
     return _read_int("UA_CODER_VP_LEASE_TTL_SECONDS", default, minimum=30)
+
+
+def vp_dispatch_mode(default: str = "db_pull") -> str:
+    """Dispatch mode for external primary VP agents."""
+    return _read_choice("UA_VP_DISPATCH_MODE", ("db_pull",), default)
+
+
+def vp_external_dispatch_enabled(default: bool = False) -> bool:
+    """Route eligible VP missions to external worker queue."""
+    if _is_truthy(os.getenv("UA_DISABLE_VP_EXTERNAL_DISPATCH_ENABLED")):
+        return False
+    if _is_truthy(os.getenv("UA_VP_EXTERNAL_DISPATCH_ENABLED")):
+        return True
+    return default
+
+
+def vp_enabled_ids(default: tuple[str, ...] = ("vp.coder.primary", "vp.general.primary")) -> list[str]:
+    """Enabled VP IDs for dispatch and worker polling."""
+    requested = _read_csv_list("UA_VP_ENABLED_IDS")
+    if not requested:
+        return list(default)
+    return requested
+
+
+def vp_hard_block_ua_repo(default: bool = True) -> bool:
+    """Hard-block CODIE missions targeting the UA repository/runtime roots."""
+    if _is_truthy(os.getenv("UA_DISABLE_VP_HARD_BLOCK_UA_REPO")):
+        return False
+    if _is_truthy(os.getenv("UA_VP_HARD_BLOCK_UA_REPO")):
+        return True
+    return default
+
+
+def vp_poll_interval_seconds(default: int = 5) -> int:
+    """VP worker polling interval for queued missions."""
+    return _read_int("UA_VP_POLL_INTERVAL_SECONDS", default, minimum=1)
+
+
+def vp_lease_ttl_seconds(default: int = 120) -> int:
+    """VP mission claim lease TTL."""
+    return _read_int("UA_VP_LEASE_TTL_SECONDS", default, minimum=15)
+
+
+def vp_max_concurrent_missions(default: int = 1) -> int:
+    """Max concurrent mission claims per worker process."""
+    return _read_int("UA_VP_MAX_CONCURRENT_MISSIONS", default, minimum=1)
+
+
+def vp_handoff_root(default: str = "/opt/universal_agent/vp_handoff") -> str:
+    """Allowlisted shared handoff path for external CODIE work products."""
+    value = (os.getenv("UA_VP_HANDOFF_ROOT") or "").strip()
+    return value or default
+
+
+def vp_coder_workspace_root(default: str = "") -> str:
+    """Workspace root for external CODIE worker."""
+    value = (os.getenv("UA_VP_CODER_WORKSPACE_ROOT") or "").strip()
+    return value or default
+
+
+def vp_general_workspace_root(default: str = "") -> str:
+    """Workspace root for external generalist VP worker."""
+    value = (os.getenv("UA_VP_GENERAL_WORKSPACE_ROOT") or "").strip()
+    return value or default

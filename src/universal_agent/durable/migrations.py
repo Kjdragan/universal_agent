@@ -111,9 +111,15 @@ CREATE TABLE IF NOT EXISTS vp_missions (
   vp_id TEXT NOT NULL,
   run_id TEXT,
   status TEXT NOT NULL,
+  mission_type TEXT,
   objective TEXT NOT NULL,
   budget_json TEXT,
+  payload_json TEXT,
   result_ref TEXT,
+  priority INTEGER DEFAULT 100,
+  worker_id TEXT,
+  claim_expires_at TEXT,
+  cancel_requested INTEGER DEFAULT 0,
   created_at TEXT NOT NULL,
   started_at TEXT,
   completed_at TEXT,
@@ -193,4 +199,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "runs", "total_tokens", "INTEGER DEFAULT 0")
     # Corpus cache for sub-agent context restoration
     _add_column_if_missing(conn, "checkpoints", "corpus_data", "TEXT")
+    _add_column_if_missing(conn, "vp_missions", "mission_type", "TEXT")
+    _add_column_if_missing(conn, "vp_missions", "payload_json", "TEXT")
+    _add_column_if_missing(conn, "vp_missions", "priority", "INTEGER DEFAULT 100")
+    _add_column_if_missing(conn, "vp_missions", "worker_id", "TEXT")
+    _add_column_if_missing(conn, "vp_missions", "claim_expires_at", "TEXT")
+    _add_column_if_missing(conn, "vp_missions", "cancel_requested", "INTEGER DEFAULT 0")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_vp_missions_vp_claim ON vp_missions(vp_id, claim_expires_at)"
+    )
     conn.commit()
