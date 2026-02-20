@@ -873,7 +873,7 @@ class InProcessGateway(Gateway):
         try:
             from universal_agent.feature_flags import memory_enabled
 
-            if memory_enabled(default=False):
+            if memory_enabled():
                 from universal_agent.memory.orchestrator import get_memory_orchestrator
 
                 workspace_dir = str(Path(session.workspace_dir).resolve())

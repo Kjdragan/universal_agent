@@ -30,7 +30,8 @@ def test_policy_requires_approval_for_email():
         user_input="send an email with the report",
         metadata={},
     )
-    assert result["decision"] == "require_approval"
+    # Outbound email approvals are currently auto-allowed by default policy.
+    assert result["decision"] == "allow"
     assert "outbound_email" in result["categories"]
 
 

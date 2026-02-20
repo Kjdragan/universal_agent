@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useState } from "react";
@@ -159,9 +158,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     <div className="h-screen flex flex-col bg-gradient-to-br from-slate-950 via-zinc-950 to-slate-900 text-slate-100">
       {/* Mobile Header */}
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-800 bg-slate-900/80 px-4 backdrop-blur md:hidden">
-        <div className="relative h-8 w-32">
-          <Image src="/simon_logo_v2.png" alt="Simon" fill className="object-contain object-left" />
-        </div>
+        <div className="text-sm font-semibold tracking-wide text-slate-200">Operations</div>
         <button
           onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
           className="rounded-md border border-slate-700 bg-slate-800/60 p-2 text-slate-300"
@@ -181,21 +178,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
         <aside
           className={[
-            "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-slate-800 bg-slate-900/95 p-4 transition-transform duration-300 md:relative md:inset-0 md:flex md:w-64 md:translate-x-0 md:rounded-xl md:border md:bg-slate-900/60 md:backdrop-blur",
+            "fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-slate-800 bg-slate-900/95 p-3 transition-transform duration-300 md:relative md:inset-0 md:flex md:w-64 md:translate-x-0 md:rounded-xl md:border md:bg-slate-900/60 md:backdrop-blur",
             isMobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
           ].join(" ")}
         >
-          <div className="mb-4 border-b border-slate-800 pb-3">
-            <div className="relative hidden h-16 w-full mb-2 md:block">
-              <Image
-                src="/simon_logo_v2.png"
-                alt="Simon"
-                fill
-                className="object-contain object-left"
-              />
-            </div>
-            <p className="text-sm font-semibold pl-1">Operations Dashboard</p>
-          </div>
           <nav className="flex-1 space-y-1 overflow-y-auto">
             {NAV_ITEMS.map((item) => {
               const active = !item.external && pathname === item.href;

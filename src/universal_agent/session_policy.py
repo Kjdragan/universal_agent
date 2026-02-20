@@ -17,7 +17,7 @@ _DESTRUCTIVE_RE = re.compile(
     r"(rm\s+-rf|shutdown|reboot|format\s+disk|delete\s+all|wipe|sudo\s+rm)",
     re.IGNORECASE,
 )
-_MEMORY_MODES = {"off", "session_only", "selective", "full"}
+_MEMORY_SCOPES = {"direct_only", "all"}
 
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -37,11 +37,11 @@ def _notification_email_default() -> str:
     ).strip()
 
 
-def _default_memory_mode() -> str:
-    raw = (os.getenv("UA_SESSION_MEMORY_DEFAULT_MODE") or "session_only").strip().lower()
-    if raw in _MEMORY_MODES:
+def _default_memory_scope() -> str:
+    raw = (os.getenv("UA_MEMORY_SCOPE") or "direct_only").strip().lower()
+    if raw in _MEMORY_SCOPES:
         return raw
-    return "session_only"
+    return "direct_only"
 
 
 def _normalize_tags(value: Any) -> list[str]:
@@ -63,36 +63,41 @@ def _normalize_tags(value: Any) -> list[str]:
 
 
 def default_memory_policy() -> dict[str, Any]:
-    mode = _default_memory_mode()
-    allowlist = ["retain"] if mode == "selective" else []
     return {
-        "mode": mode,
-        "session_memory_enabled": True,
-        "tags": [],
-        "long_term_tag_allowlist": allowlist,
+        "enabled": True,
+        "sessionMemory": True,
+        "sources": ["memory", "sessions"],
+        "scope": _default_memory_scope(),
     }
 
 
 def normalize_memory_policy(policy: dict[str, Any] | None) -> dict[str, Any]:
     base = default_memory_policy()
     incoming = policy if isinstance(policy, dict) else {}
-    mode = str(incoming.get("mode", base["mode"])).strip().lower()
-    if mode not in _MEMORY_MODES:
-        mode = str(base["mode"])
-    session_memory_enabled = incoming.get("session_memory_enabled", base["session_memory_enabled"])
-    if not isinstance(session_memory_enabled, bool):
-        session_memory_enabled = bool(session_memory_enabled)
-    tags = _normalize_tags(incoming.get("tags", base["tags"]))
-    allowlist = _normalize_tags(incoming.get("long_term_tag_allowlist", base["long_term_tag_allowlist"]))
-    if mode == "selective" and not allowlist:
-        allowlist = ["retain"]
-    if mode in {"off", "session_only", "full"}:
-        allowlist = []
+    enabled = incoming.get("enabled", base["enabled"])
+    if not isinstance(enabled, bool):
+        enabled = bool(enabled)
+    session_memory = incoming.get("sessionMemory", incoming.get("session_memory_enabled", base["sessionMemory"]))
+    if not isinstance(session_memory, bool):
+        session_memory = bool(session_memory)
+    raw_sources = incoming.get("sources", base["sources"])
+    if isinstance(raw_sources, str):
+        requested = [item.strip().lower() for item in raw_sources.split(",") if item.strip()]
+    elif isinstance(raw_sources, list):
+        requested = [str(item).strip().lower() for item in raw_sources if str(item).strip()]
+    else:
+        requested = list(base["sources"])
+    allowed_sources = [item for item in requested if item in {"memory", "sessions"}]
+    if not allowed_sources:
+        allowed_sources = list(base["sources"])
+    scope = str(incoming.get("scope", base["scope"])).strip().lower()
+    if scope not in _MEMORY_SCOPES:
+        scope = str(base["scope"])
     return {
-        "mode": mode,
-        "session_memory_enabled": session_memory_enabled,
-        "tags": tags,
-        "long_term_tag_allowlist": allowlist,
+        "enabled": enabled,
+        "sessionMemory": session_memory,
+        "sources": allowed_sources,
+        "scope": scope,
     }
 
 

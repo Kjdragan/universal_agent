@@ -74,17 +74,12 @@ from universal_agent.utils.email_attachment_prep import (
 from universal_agent.feature_flags import (
     heartbeat_enabled,
     memory_index_enabled,
-    memory_orchestrator_enabled,
+    memory_enabled,
 )
 from tools.workbench_bridge import WorkbenchBridge
 from composio import Composio
 
 # Memory System Integration
-disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {
-    "1",
-    "true",
-    "yes",
-}
 
 # Feature flags (placeholders for future gating; no behavior change yet)
 # Feature flags (placeholders for future gating; no behavior change yet)
@@ -95,13 +90,8 @@ MEMORY_INDEX_ENABLED = memory_index_enabled()
 # We use the universal_agent.memory package which implements Hindsight-like memory
 # (Markdown source-of-truth + JSON/Vector index)
 try:
-    from universal_agent.memory.memory_store import (
-        append_memory_entry, 
-        ensure_memory_scaffold,
-        _upsert_section  # Internal helper, reusing for core memory emulation
-    )
-    from universal_agent.memory.memory_models import MemoryEntry
-    from universal_agent.tools.memory import ua_memory_search
+    from universal_agent.tools.memory import memory_get as memory_get_text
+    from universal_agent.tools.memory import memory_search as memory_search_text
     
     MEMORY_SYSTEM_AVAILABLE = True
     sys.stderr.write("[Local Toolkit] Memory System active (universal_agent.memory).\n")
@@ -113,7 +103,7 @@ except ImportError as e:
 # attribute on this module. The unified file memory path does not expose a
 # single manager instance, so we retain a non-None sentinel when local memory
 # is available.
-MEMORY_MANAGER = None if (disable_local_memory or not MEMORY_SYSTEM_AVAILABLE) else object()
+MEMORY_MANAGER = None if (not memory_enabled(default=True) or not MEMORY_SYSTEM_AVAILABLE) else object()
 
 # Initialize Configuration
 load_dotenv()
@@ -1834,170 +1824,27 @@ def ask_user_questions(questions: list) -> str:
 # =============================================================================
 
 
-# =============================================================================
-# MEMORY SYSTEM TOOLS
-# =============================================================================
-
-
 @mcp.tool()
 @trace_tool_output
-def core_memory_replace(label: str, new_value: str) -> str:
-    """
-    Overwrite a Core Memory block (e.g. 'human', 'persona').
-    Use this to update persistent facts about the user or yourself.
-    """
+def memory_search(query: str, limit: int = 5) -> str:
+    """Canonical memory search tool."""
     if not MEMORY_SYSTEM_AVAILABLE:
         return "Error: Memory System not available."
-    
-    workspace = _resolve_workspace()
-    if not workspace:
-        return "Error: No active workspace for memory."
-        
+
     try:
-        paths = ensure_memory_scaffold(workspace)
-        with open(paths.memory_md, "r", encoding="utf-8") as f:
-            current_md = f.read()
-            
-        # Update the section using the store's helper
-        updated_md = _upsert_section(current_md, label, new_value)
-        
-        with open(paths.memory_md, "w", encoding="utf-8") as f:
-            f.write(updated_md)
-            
-        return f"Successfully updated Core Memory block [{label}]"
-    except Exception as e:
-        return f"Error updating core memory: {e}"
-
-
-@mcp.tool()
-@trace_tool_output
-def core_memory_append(label: str, text_to_append: str) -> str:
-    """
-    Append text to a Core Memory block.
-    Useful for adding a new preference without deleting old ones.
-    """
-    if not MEMORY_SYSTEM_AVAILABLE:
-        return "Error: Memory System not available."
-        
-    workspace = _resolve_workspace()
-    if not workspace:
-        return "Error: No active workspace for memory."
-        
-    try:
-        paths = ensure_memory_scaffold(workspace)
-        with open(paths.memory_md, "r", encoding="utf-8") as f:
-            current_md = f.read()
-            
-        # Very basic append strategy: read existing, append, replace
-        # Limitation: This is a bit brute-force compared to true section parsing
-        # but fits the text-file-as-db philosophy.
-        
-        # We need to find if the section exists to append properly
-        section_header = f"## [{label}]"
-        if section_header in current_md:
-            # Append requires read-modify-write
-            # This is complex to do robustly with just _upsert_section replacement
-            # without parsing the *existing* content of that section first.
-            # Simplified approach: Just tell the user to use replace for now if they need precision.
-            # OR, we implement a quick read capability.
-            pass # Implementation below
-            
-        # Fallback: Just append a new generic note if too complex? 
-        # Better: Since we don't have a specific `get_section` helper exposed easily without parsing,
-        # we will recommend `core_memory_replace` for now or implement a "read-modify-write" simply.
-        
-        # ACTUALLY, for parity, let's implement a simple read-modify-write
-        # But for now, returning a message that encourages replace is safer than breaking data.
-        return "Use 'core_memory_replace' to update blocks. Append is not fully supported in this version."
-        
-    except Exception as e:
-        return f"Error accessing memory: {e}"
-
-
-@mcp.tool()
-@trace_tool_output
-def archival_memory_insert(content: str, tags: str = "") -> str:
-    """
-    Save a fact, document, or event to long-term archival memory.
-    Use for things that don't need to be in active context.
-    """
-    if not MEMORY_SYSTEM_AVAILABLE:
-        return "Error: Memory System not available."
-    
-    workspace = _resolve_workspace()
-    if not workspace:
-        return "Error: No active workspace for memory."
-        
-    try:
-        tag_list = [t.strip() for t in tags.split(",")] if tags else []
-        if memory_orchestrator_enabled(default=False):
-            from universal_agent.memory.orchestrator import get_memory_orchestrator
-
-            broker = get_memory_orchestrator(workspace_dir=workspace)
-            entry = broker.write(
-                content=content,
-                source="agent_tool",
-                session_id=None,
-                tags=tag_list,
-                memory_class="long_term",
-                importance=0.7,
-            )
-            if entry is None:
-                return "Memory write skipped by policy or dedupe."
-            return "Successfully saved to archival memory."
-
-        entry = MemoryEntry(
-            source="agent_tool",
-            content=content,
-            tags=tag_list,
-            timestamp=datetime.now(timezone.utc).isoformat(),
-        )
-
-        append_memory_entry(workspace, entry)
-        return "Successfully saved to archival memory."
-    except Exception as e:
-        return f"Error saving memory: {e}"
-
-
-@mcp.tool()
-@trace_tool_output
-def archival_memory_search(query: str, limit: int = 5) -> str:
-    """
-    Search long-term archival memory using semantic search.
-    """
-    if not MEMORY_SYSTEM_AVAILABLE:
-        return "Error: Memory System not available."
-        
-    workspace = _resolve_workspace()
-    if not workspace:
-        return "Error: No active workspace for memory."
-        
-    try:
-        return ua_memory_search(query=query, limit=limit)
+        return memory_search_text(query=query, limit=limit)
     except Exception as e:
         return f"Error searching memory: {e}"
 
 
 @mcp.tool()
 @trace_tool_output
-def get_core_memory_blocks() -> str:
-    """
-    Read all current Core Memory blocks.
-    Useful to verify what you currently 'know' in your core memory.
-    """
+def memory_get(path: str, from_line: int = 1, lines: int = 120) -> str:
+    """Canonical memory read tool."""
     if not MEMORY_SYSTEM_AVAILABLE:
         return "Error: Memory System not available."
-        
-    workspace = _resolve_workspace()
-    if not workspace:
-        return "Error: No active workspace for memory."
-        
     try:
-        paths = ensure_memory_scaffold(workspace)
-        if os.path.exists(paths.memory_md):
-             with open(paths.memory_md, "r", encoding="utf-8") as f:
-                 return f.read()
-        return "Memory file empty."
+        return memory_get_text(path=path, from_line=from_line, lines=lines)
     except Exception as e:
         return f"Error reading memory: {e}"
 

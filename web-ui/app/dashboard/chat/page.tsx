@@ -180,7 +180,7 @@ export default function DashboardChatPage() {
                   </button>
                 </div>
                 <div className="mt-1 text-[11px] text-slate-500 truncate">
-                  owner: {session.owner || "unknown"} · memory: {session.memory_mode || "session_only"}
+                  owner: {session.owner || "unknown"} · memory: {session.memory_mode || "direct_only"}
                 </div>
                 <div className="mt-1 text-[11px] text-slate-600 truncate">
                   {session.workspace_dir || "workspace: n/a"}

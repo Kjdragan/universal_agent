@@ -20,11 +20,6 @@ try:
         finalize_research as finalize_research_core,
         describe_image as describe_image_core,
         preview_image as preview_image_core,
-        core_memory_replace as core_memory_replace_core,
-        core_memory_append as core_memory_append_core,
-        archival_memory_insert as archival_memory_insert_core,
-        archival_memory_search as archival_memory_search_core,
-        get_core_memory_blocks as get_core_memory_blocks_core,
         ask_user_questions as ask_user_questions_core,
         batch_tool_execute as batch_tool_execute_core,
     )
@@ -42,11 +37,6 @@ except ImportError:
         finalize_research as finalize_research_core,
         describe_image as describe_image_core,
         preview_image as preview_image_core,
-        core_memory_replace as core_memory_replace_core,
-        core_memory_append as core_memory_append_core,
-        archival_memory_insert as archival_memory_insert_core,
-        archival_memory_search as archival_memory_search_core,
-        get_core_memory_blocks as get_core_memory_blocks_core,
         ask_user_questions as ask_user_questions_core,
         batch_tool_execute as batch_tool_execute_core,
     )
@@ -300,69 +290,6 @@ async def preview_image_wrapper(args: dict[str, Any]) -> dict[str, Any]:
         result_str = preview_image_core(
             image_path=args.get("image_path"), port=args.get("port", 7860)
         )
-    return {"content": [{"type": "text", "text": result_str}]}
-
-
-@tool(
-    name="core_memory_replace",
-    description="Replace a core memory block (in-process).",
-    input_schema={"label": str, "new_value": str},
-)
-async def core_memory_replace_wrapper(args: dict[str, Any]) -> dict[str, Any]:
-    with StdoutToEventStream(prefix="[Local Toolkit]"):
-        result_str = core_memory_replace_core(
-            label=args.get("label"), new_value=args.get("new_value", "")
-        )
-    return {"content": [{"type": "text", "text": result_str}]}
-
-
-@tool(
-    name="core_memory_append",
-    description="Append to a core memory block (in-process).",
-    input_schema={"label": str, "text_to_append": str},
-)
-async def core_memory_append_wrapper(args: dict[str, Any]) -> dict[str, Any]:
-    with StdoutToEventStream(prefix="[Local Toolkit]"):
-        result_str = core_memory_append_core(
-            label=args.get("label"), text_to_append=args.get("text_to_append", "")
-        )
-    return {"content": [{"type": "text", "text": result_str}]}
-
-
-@tool(
-    name="archival_memory_insert",
-    description="Insert content into archival memory (in-process).",
-    input_schema={"content": str, "tags": str},
-)
-async def archival_memory_insert_wrapper(args: dict[str, Any]) -> dict[str, Any]:
-    with StdoutToEventStream(prefix="[Local Toolkit]"):
-        result_str = archival_memory_insert_core(
-            content=args.get("content", ""), tags=args.get("tags", "")
-        )
-    return {"content": [{"type": "text", "text": result_str}]}
-
-
-@tool(
-    name="archival_memory_search",
-    description="Search archival memory (in-process).",
-    input_schema={"query": str, "limit": int},
-)
-async def archival_memory_search_wrapper(args: dict[str, Any]) -> dict[str, Any]:
-    with StdoutToEventStream(prefix="[Local Toolkit]"):
-        result_str = archival_memory_search_core(
-            query=args.get("query", ""), limit=args.get("limit", 5)
-        )
-    return {"content": [{"type": "text", "text": result_str}]}
-
-
-@tool(
-    name="get_core_memory_blocks",
-    description="Get all core memory blocks (in-process).",
-    input_schema={},
-)
-async def get_core_memory_blocks_wrapper(args: dict[str, Any]) -> dict[str, Any]:
-    with StdoutToEventStream(prefix="[Local Toolkit]"):
-        result_str = get_core_memory_blocks_core()
     return {"content": [{"type": "text", "text": result_str}]}
 
 

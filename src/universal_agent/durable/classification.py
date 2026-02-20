@@ -209,9 +209,6 @@ def validate_tool_policies() -> None:
 KNOWN_MCP_SIDE_EFFECTS = {
     "workbench_upload": "external",
     "upload_to_composio": "external",
-    "core_memory_replace": "memory",
-    "core_memory_append": "memory",
-    "archival_memory_insert": "memory",
     "append_to_file": "local",  # Replaced write_local_file
     "compress_files": "local",
     "finalize_research": "local",
@@ -223,8 +220,8 @@ KNOWN_MCP_READ_ONLY = {
     "read_local_file",
     "list_directory",
     "inspect_session_workspace",
-    "archival_memory_search",
-    "get_core_memory_blocks",
+    "memory_search",
+    "memory_get",
     "describe_image",
     "crawl_parallel",
 }

@@ -27,11 +27,8 @@ DISALLOWED_TOOLS = [
     "mcp__local_toolkit__describe_image",
     "mcp__local_toolkit__preview_image",
     "mcp__local_toolkit__ask_user_questions",
-    "mcp__local_toolkit__core_memory_replace",
-    "mcp__local_toolkit__core_memory_append",
-    "mcp__local_toolkit__archival_memory_insert",
-    "mcp__local_toolkit__archival_memory_search",
-    "mcp__local_toolkit__get_core_memory_blocks",
+    "mcp__local_toolkit__memory_search",
+    "mcp__local_toolkit__memory_get",
     "mcp__local_toolkit__batch_tool_execute",
     # Force delegation to research-specialist for search/research tasks
     # mcp__composio__COMPOSIO_SEARCH_TOOLS is ALLOWED for tool discovery

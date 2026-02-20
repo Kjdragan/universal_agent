@@ -68,15 +68,11 @@ from universal_agent.tools.local_toolkit_bridge import (
     generate_image_wrapper,
     describe_image_wrapper,
     preview_image_wrapper,
-    core_memory_replace_wrapper,
-    core_memory_append_wrapper,
-    archival_memory_insert_wrapper,
-    archival_memory_search_wrapper,
-    get_core_memory_blocks_wrapper,
     ask_user_questions_wrapper,
     batch_tool_execute_wrapper,
 )
 from universal_agent.tools.pdf_bridge import html_to_pdf_wrapper
+from universal_agent.tools.memory import memory_get_wrapper, memory_search_wrapper
 from universal_agent.gateway import InProcessGateway, ExternalGateway, GatewayRequest
 from universal_agent import hooks as hook_events
 from universal_agent.hooks import AgentHookSet
@@ -172,16 +168,13 @@ from universal_agent.feature_flags import (
     heartbeat_enabled,
     memory_index_enabled,
     memory_enabled,
-    memory_index_mode,
     memory_max_tokens,
-    memory_flush_on_exit,
+    memory_flush_enabled,
     memory_flush_max_chars,
-    memory_orchestrator_enabled,
     memory_session_enabled,
     memory_session_index_on_end,
 )
 from universal_agent.memory.paths import (
-    resolve_persist_directory,
     resolve_shared_memory_workspace,
 )
 from universal_agent.logfire_payloads import (
@@ -879,11 +872,6 @@ from universal_agent.durable.checkpointing import save_checkpoint, load_last_che
 # Composio client - will be initialized in main() with file_download_dir
 composio = None
 
-# =============================================================================
-# MEMORY SYSTEM INTEGRATION
-# =============================================================================
-from Memory_System.manager import MemoryManager
-from Memory_System.tools import get_memory_tool_map
 from universal_agent.guardrails.tool_schema import (
     ToolSchema,
     build_tool_schema_from_raw_composio,
@@ -5846,8 +5834,8 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
             "Your GOAL is to save critical facts from the transcript below to Long-Term Memory.\n\n"
             "INSTRUCTIONS:\n"
             "1. Analyze the transcript for user preferences, project decisions, and key facts.\n"
-            "2. Use 'archival_memory_insert' to save these facts.\n"
-            "3. Use 'core_memory_replace' ONLY for permanent instructions (personas, global constraints).\n"
+            "2. Append durable facts to memory/YYYY-MM-DD.md using file tools.\n"
+            "3. Keep entries concise and deduplicated.\n"
             "4. Ignore trivial conversation.\n"
             "5. If nothing needs saving, just respond 'NO_MEMORY_NEEDED'.\n"
             "6. DO NOT chat or summarize in text. JUST CALL TOOLS.\n\n"
@@ -7043,20 +7031,12 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
 
     full_response = ""
     tool_use_detected = False
-    disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
     ignored_tool_names = set()
-    if disable_local_memory:
+    if not memory_enabled(default=True):
         ignored_tool_names.update(
             [
-                "mcp__internal__core_memory_replace",
-                "mcp__internal__core_memory_append",
-                "mcp__internal__archival_memory_insert",
-                "mcp__internal__archival_memory_search",
-                "mcp__internal__get_core_memory_blocks",
+                "mcp__internal__memory_search",
+                "mcp__internal__memory_get",
             ]
         )
 
@@ -7600,38 +7580,21 @@ async def setup_session(
 
     # --- MEMORY SYSTEM CONTEXT INJECTION ---
     memory_context_str = ""
-    disable_local_memory = os.getenv("UA_DISABLE_LOCAL_MEMORY", "").lower() in {
-        "1",
-        "true",
-        "yes",
-    }
-    if disable_local_memory or not MEMORY_ENABLED:
-        print("⚠️ Local memory system disabled.")
+    if not MEMORY_ENABLED:
+        print("⚠️ Memory system disabled.")
     else:
         try:
-            from Memory_System.manager import MemoryManager
-            from universal_agent.agent_college.integration import setup_agent_college
             from universal_agent.memory.memory_context import build_file_memory_context
-            from universal_agent.memory.memory_store import ensure_memory_scaffold
-
-            storage_path = resolve_persist_directory(str(workspace_dir))
-            ensure_memory_scaffold(str(workspace_dir))
-            mem_mgr = MemoryManager(storage_dir=storage_path, workspace_dir=str(workspace_dir))
-            setup_agent_college(mem_mgr)
-
-            memory_context_str = mem_mgr.get_system_prompt_addition()
             shared_memory_dir = resolve_shared_memory_workspace(str(workspace_dir))
-            file_context = build_file_memory_context(
+            memory_context_str = build_file_memory_context(
                 shared_memory_dir,
                 max_tokens=memory_max_tokens(),
-                index_mode=memory_index_mode(),
+                index_mode="vector",
                 recent_limit=int(os.getenv("UA_MEMORY_RECENT_ENTRIES", "8")),
             )
-            if file_context:
-                memory_context_str = f"{memory_context_str}\n{file_context}\n"
             print(f"🧠 Injected Core Memory Context ({len(memory_context_str)} chars)")
         except Exception as e:
-            print(f"⚠️ Failed to load Memory Context/Agent College: {e}")
+            print(f"⚠️ Failed to load memory context: {e}")
 
     try:
         registry = load_identity_registry()
@@ -7650,14 +7613,11 @@ async def setup_session(
     tomorrow_str = (user_now + timedelta(days=1)).strftime("%A, %B %d, %Y")
 
     disallowed_tools = list(DISALLOWED_TOOLS)
-    if disable_local_memory or not MEMORY_ENABLED:
+    if not MEMORY_ENABLED:
         disallowed_tools.extend(
             [
-                "mcp__internal__core_memory_replace",
-                "mcp__internal__core_memory_append",
-                "mcp__internal__archival_memory_insert",
-                "mcp__internal__archival_memory_search",
-                "mcp__internal__get_core_memory_blocks",
+                "mcp__internal__memory_search",
+                "mcp__internal__memory_get",
             ]
         )
 
@@ -7783,11 +7743,8 @@ async def setup_session(
                     describe_image_wrapper,
                     preview_image_wrapper,
                     html_to_pdf_wrapper,
-                    core_memory_replace_wrapper,
-                    core_memory_append_wrapper,
-                    archival_memory_insert_wrapper,
-                    archival_memory_search_wrapper,
-                    get_core_memory_blocks_wrapper,
+                    memory_search_wrapper,
+                    memory_get_wrapper,
                     ask_user_questions_wrapper,
                     batch_tool_execute_wrapper,
                 ]
@@ -7883,10 +7840,8 @@ def _sync_session_memory_if_enabled(
     transcript_path: str,
     force: bool,
 ) -> dict[str, Any]:
-    if not memory_enabled(default=False):
+    if not memory_enabled():
         return {"indexed": False, "reason": "memory_disabled"}
-    if not memory_orchestrator_enabled(default=False):
-        return {"indexed": False, "reason": "orchestrator_disabled"}
     if not memory_session_enabled(default=True):
         return {"indexed": False, "reason": "session_memory_disabled"}
     if not transcript_path or not os.path.exists(transcript_path):
@@ -8458,7 +8413,7 @@ async def process_turn(
             print(f"⚠️ Failed to save intermediate transcript: {e}")
 
         # NEW: Optional post-run memory flush for short sessions
-        if memory_enabled(default=False) and memory_flush_on_exit(default=False):
+        if memory_enabled() and memory_flush_enabled(default=True):
             try:
                 from universal_agent.memory.memory_flush import flush_pre_compact_memory
 

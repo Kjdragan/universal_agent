@@ -1,157 +1,86 @@
 from __future__ import annotations
 
 import importlib.util
-import sqlite3
 import sys
+from argparse import Namespace
 from pathlib import Path
-
-import pytest
 
 
 def _load_migration_module():
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / "migrate_session_memory_dbs.py"
-    spec = importlib.util.spec_from_file_location("migrate_session_memory_dbs", script_path)
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "memory_hard_cut_migrate.py"
+    spec = importlib.util.spec_from_file_location("memory_hard_cut_migrate", script_path)
     if spec is None or spec.loader is None:
-        raise RuntimeError("Could not load migration script module")
+        raise RuntimeError("Could not load memory_hard_cut_migrate module")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
-def _seed_sqlite(path: Path, *, core_blocks: list[tuple], traces: list[tuple]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS core_blocks (
-                label TEXT PRIMARY KEY,
-                value TEXT,
-                description TEXT,
-                is_editable BOOLEAN,
-                last_updated TEXT
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS processed_traces (
-                trace_id TEXT PRIMARY KEY,
-                timestamp TEXT
-            )
-            """
-        )
-        for row in core_blocks:
-            conn.execute(
-                "INSERT OR REPLACE INTO core_blocks (label, value, description, is_editable, last_updated) VALUES (?, ?, ?, ?, ?)",
-                row,
-            )
-        for row in traces:
-            conn.execute(
-                "INSERT OR REPLACE INTO processed_traces (trace_id, timestamp) VALUES (?, ?)",
-                row,
-            )
-        conn.commit()
-    finally:
-        conn.close()
+def _seed_session(session_root: Path, *, transcript: str, memory_note: str) -> None:
+    session_root.mkdir(parents=True, exist_ok=True)
+    (session_root / "transcript.md").write_text(transcript, encoding="utf-8")
+    (session_root / "MEMORY.md").write_text(memory_note, encoding="utf-8")
+    mem_dir = session_root / "memory"
+    mem_dir.mkdir(parents=True, exist_ok=True)
+    (mem_dir / "notes.md").write_text(memory_note, encoding="utf-8")
 
 
-def test_migration_merges_sqlite_and_is_idempotent(tmp_path: Path):
+def test_hard_cut_migration_dry_run_and_idempotent_real_run(tmp_path: Path, monkeypatch):
     module = _load_migration_module()
-    source_root = tmp_path / "AGENT_RUN_WORKSPACES"
-    target_dir = tmp_path / "Memory_System" / "data"
+    monkeypatch.setenv("UA_MEMORY_ENABLED", "1")
+    monkeypatch.delenv("UA_DISABLE_MEMORY", raising=False)
 
-    source_a = source_root / "session_a" / "Memory_System_Data" / "agent_core.db"
-    source_b = source_root / "session_b" / "Memory_System_Data" / "agent_core.db"
+    workspaces_root = tmp_path / "AGENT_RUN_WORKSPACES"
+    shared_root = tmp_path / "Memory_System" / "ua_shared_workspace"
+    archive_dir = tmp_path / "archives"
+    report_dry = tmp_path / "tmp" / "report_dry.json"
+    report_real = tmp_path / "tmp" / "report_real.json"
+    report_real_2 = tmp_path / "tmp" / "report_real_2.json"
 
-    _seed_sqlite(
-        source_a,
-        core_blocks=[
-            ("persona", "old persona", "desc", 1, "2026-01-01T00:00:00+00:00"),
-        ],
-        traces=[("trace_a", "2026-01-01T00:00:00+00:00")],
-    )
-    _seed_sqlite(
-        source_b,
-        core_blocks=[
-            ("persona", "new persona", "desc", 1, "2026-02-01T00:00:00+00:00"),
-        ],
-        traces=[("trace_a", "2026-01-01T00:00:00+00:00"), ("trace_b", "2026-02-01T00:00:00+00:00")],
+    _seed_session(
+        workspaces_root / "session_alpha",
+        transcript="user: remember alpha strategy\nassistant: noted",
+        memory_note="# Agent Memory\n\nAlpha strategic context.",
     )
 
-    report_first = module.run_migration(
-        source_root=source_root,
-        target_persist_dir=target_dir,
+    dry_args = Namespace(
+        workspaces_root=str(workspaces_root),
+        shared_root=str(shared_root),
+        archive_dir=str(archive_dir),
+        report_json=str(report_dry),
+        dry_run=True,
+        delete_legacy=False,
+    )
+    dry_report = module.run(dry_args)
+    assert dry_report["dry_run"] is True
+    assert dry_report["stats"]["scanned_session_roots"] == 1
+    assert dry_report["stats"]["scanned_memory_files"] >= 2
+    assert dry_report["stats"]["inserted_long_term"] >= 1
+    assert dry_report["stats"]["indexed_sessions"] == 1
+    assert report_dry.exists()
+
+    real_args = Namespace(
+        workspaces_root=str(workspaces_root),
+        shared_root=str(shared_root),
+        archive_dir=str(archive_dir),
+        report_json=str(report_real),
         dry_run=False,
+        delete_legacy=False,
     )
-    assert report_first["sources_scanned"] == 2
-    assert report_first["sqlite_totals"]["core_blocks"]["inserted"] >= 1
-    assert report_first["sqlite_totals"]["core_blocks"]["updated"] >= 1
-    assert report_first["sqlite_totals"]["processed_traces"]["inserted"] == 2
+    first_real = module.run(real_args)
+    assert first_real["dry_run"] is False
+    assert first_real["stats"]["inserted_long_term"] >= 1
+    assert first_real["stats"]["indexed_sessions"] >= 1
+    assert report_real.exists()
 
-    target_conn = sqlite3.connect(target_dir / "agent_core.db")
-    try:
-        row = target_conn.execute(
-            "SELECT value FROM core_blocks WHERE label = 'persona'"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "new persona"
-    finally:
-        target_conn.close()
-
-    report_second = module.run_migration(
-        source_root=source_root,
-        target_persist_dir=target_dir,
+    second_args = Namespace(
+        workspaces_root=str(workspaces_root),
+        shared_root=str(shared_root),
+        archive_dir=str(archive_dir),
+        report_json=str(report_real_2),
         dry_run=False,
+        delete_legacy=False,
     )
-    assert report_second["sqlite_totals"]["core_blocks"]["inserted"] == 0
-    assert report_second["sqlite_totals"]["core_blocks"]["updated"] == 0
-    assert report_second["sqlite_totals"]["processed_traces"]["inserted"] == 0
-
-
-def test_migration_chroma_content_dedupe(tmp_path: Path):
-    module = _load_migration_module()
-    if module.chromadb is None:
-        pytest.skip("chromadb not available")
-
-    source_root = tmp_path / "AGENT_RUN_WORKSPACES"
-    target_dir = tmp_path / "Memory_System" / "data"
-    source_a = source_root / "session_a" / "Memory_System_Data" / "chroma_db"
-    source_b = source_root / "session_b" / "Memory_System_Data" / "chroma_db"
-    source_a.mkdir(parents=True, exist_ok=True)
-    source_b.mkdir(parents=True, exist_ok=True)
-
-    client_a = module.chromadb.PersistentClient(path=str(source_a))
-    coll_a = client_a.get_or_create_collection(module.COLLECTION_NAME)
-    coll_a.upsert(
-        ids=["a1"],
-        documents=["shared content one"],
-        metadatas=[{"timestamp": "2026-01-01T00:00:00+00:00"}],
-    )
-
-    client_b = module.chromadb.PersistentClient(path=str(source_b))
-    coll_b = client_b.get_or_create_collection(module.COLLECTION_NAME)
-    coll_b.upsert(
-        ids=["b1", "b2"],
-        documents=["shared content one", "unique content two"],
-        metadatas=[
-            {"timestamp": "2026-01-02T00:00:00+00:00"},
-            {"timestamp": "2026-01-03T00:00:00+00:00"},
-        ],
-    )
-
-    report_first = module.run_migration(
-        source_root=source_root,
-        target_persist_dir=target_dir,
-        dry_run=False,
-    )
-    assert report_first["chroma_totals"]["inserted"] == 2
-    assert report_first["chroma_totals"]["skipped"] >= 1
-
-    report_second = module.run_migration(
-        source_root=source_root,
-        target_persist_dir=target_dir,
-        dry_run=False,
-    )
-    assert report_second["chroma_totals"]["inserted"] == 0
+    second_real = module.run(second_args)
+    assert second_real["stats"]["inserted_long_term"] == 0

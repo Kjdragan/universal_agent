@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
-from universal_agent.memory.adapters.memory_system import MemorySystemAdapter
+from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import (
     resolve_agent_core_db_path,
     resolve_persist_directory,
@@ -46,21 +44,24 @@ def test_memory_path_resolvers_honor_explicit_env(monkeypatch, tmp_path: Path):
     assert Path(resolve_agent_core_db_path(None)).resolve() == custom_persist / "agent_core.db"
 
 
-def test_memory_system_adapter_uses_persistent_fallback_not_session_local(
-    monkeypatch,
-    tmp_path: Path,
-):
-    monkeypatch.delenv("PERSIST_DIRECTORY", raising=False)
+def test_orchestrator_uses_shared_memory_workspace_for_persistence(monkeypatch, tmp_path: Path):
+    shared_root = (tmp_path / "Memory_System" / "ua_shared_workspace").resolve()
+    monkeypatch.setenv("UA_SHARED_MEMORY_DIR", str(shared_root))
 
-    workspace = (tmp_path / "AGENT_RUN_WORKSPACES" / "session_local").resolve()
-    workspace.mkdir(parents=True, exist_ok=True)
+    session_workspace = (tmp_path / "AGENT_RUN_WORKSPACES" / "session_xyz").resolve()
+    session_workspace.mkdir(parents=True, exist_ok=True)
 
-    adapter = MemorySystemAdapter(str(workspace), state="shadow")
-    if adapter._manager is None:
-        pytest.skip("MemoryManager unavailable in this environment")
+    broker = get_memory_orchestrator(workspace_dir=resolve_shared_memory_workspace(str(session_workspace)))
+    assert Path(broker.workspace_dir).resolve() == shared_root
 
-    resolved_persist = Path(resolve_persist_directory(str(workspace))).resolve()
-    actual_storage = Path(adapter._manager.storage.storage_dir).resolve()
-
-    assert actual_storage == resolved_persist
-    assert not str(actual_storage).startswith(str(workspace))
+    written = broker.write(
+        content="Persistent shared memory marker.",
+        source="test",
+        session_id="session_xyz",
+        tags=["persist"],
+        memory_class="long_term",
+        importance=1.0,
+    )
+    assert written is not None
+    assert (shared_root / "MEMORY.md").exists()
+    assert not (session_workspace / "MEMORY.md").exists()

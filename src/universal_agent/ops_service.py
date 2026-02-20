@@ -62,9 +62,15 @@ class OpsService:
         memory = payload.get("memory")
         if not isinstance(memory, dict):
             return None
-        mode = memory.get("mode")
-        if isinstance(mode, str) and mode.strip():
-            return mode.strip().lower()
+        enabled = memory.get("enabled", True)
+        session_enabled = memory.get("sessionMemory", True)
+        scope = str(memory.get("scope", "direct_only")).strip().lower()
+        if not bool(enabled):
+            return "off"
+        if not bool(session_enabled):
+            return "memory_only"
+        if scope in {"direct_only", "all"}:
+            return scope
         return None
 
     def _infer_source(self, session_id: str, owner: Optional[str]) -> str:
@@ -225,7 +231,7 @@ class OpsService:
             owner = self._read_policy_owner(session_path)
         if not owner and session_id.startswith("tg_"):
             owner = f"telegram_{session_id[3:]}"
-        memory_mode = self._read_policy_memory_mode(session_path) or "session_only"
+        memory_mode = self._read_policy_memory_mode(session_path) or "direct_only"
 
         source = self._infer_source(session_id, owner)
         status = str(runtime.get("lifecycle_state") or ("active" if active_session else "idle"))
