@@ -937,7 +937,8 @@ def test_session_policy_endpoints_and_resume(client, tmp_path):
     assert get_resp.status_code == 200
     policy = get_resp.json()["policy"]
     assert policy["identity_mode"] == "persona"
-    assert policy["memory"]["mode"] == "session_only"
+    assert policy["memory"]["scope"] == "direct_only"
+    assert policy["memory"]["sessionMemory"] is True
 
     patch_resp = client.patch(
         "/api/v1/sessions/session_policy/policy",
@@ -946,18 +947,19 @@ def test_session_policy_endpoints_and_resume(client, tmp_path):
                 "identity_mode": "operator_proxy",
                 "autonomy_mode": "guarded",
                 "memory": {
-                    "mode": "selective",
-                    "tags": ["dev_test", "retain"],
-                    "long_term_tag_allowlist": ["retain"],
-                    "session_memory_enabled": True,
+                    "enabled": True,
+                    "sessionMemory": False,
+                    "sources": ["memory"],
+                    "scope": "all",
                 },
             }
         },
     )
     assert patch_resp.status_code == 200
     assert patch_resp.json()["policy"]["identity_mode"] == "operator_proxy"
-    assert patch_resp.json()["policy"]["memory"]["mode"] == "selective"
-    assert patch_resp.json()["policy"]["memory"]["long_term_tag_allowlist"] == ["retain"]
+    assert patch_resp.json()["policy"]["memory"]["scope"] == "all"
+    assert patch_resp.json()["policy"]["memory"]["sessionMemory"] is False
+    assert patch_resp.json()["policy"]["memory"]["sources"] == ["memory"]
 
     pending_resp = client.get("/api/v1/sessions/session_policy/pending")
     assert pending_resp.status_code == 200
@@ -1044,15 +1046,15 @@ def test_ops_session_filters_memory_mode(client, tmp_path):
     full_dir = _create_dummy_session(tmp_path, "session_full_mem", ["m1"])
     default_dir = _create_dummy_session(tmp_path, "session_default_mem", ["m2"])
     (full_dir / "session_policy.json").write_text(
-        '{"memory":{"mode":"full"},"user_id":"tester_full"}',
+        '{"memory":{"enabled":true,"sessionMemory":false,"sources":["memory"],"scope":"all"},"user_id":"tester_full"}',
         encoding="utf-8",
     )
     (default_dir / "session_policy.json").write_text(
-        '{"memory":{"mode":"session_only"},"user_id":"tester_default"}',
+        '{"memory":{"enabled":true,"sessionMemory":true,"sources":["memory","sessions"],"scope":"direct_only"},"user_id":"tester_default"}',
         encoding="utf-8",
     )
 
-    full_resp = client.get("/api/v1/ops/sessions?memory_mode=full")
+    full_resp = client.get("/api/v1/ops/sessions?memory_mode=memory_only")
     assert full_resp.status_code == 200
     full_ids = {item["session_id"] for item in full_resp.json()["sessions"]}
     assert "session_full_mem" in full_ids
@@ -1060,7 +1062,7 @@ def test_ops_session_filters_memory_mode(client, tmp_path):
 
     for item in full_resp.json()["sessions"]:
         if item["session_id"] == "session_full_mem":
-            assert item["memory_mode"] == "full"
+            assert item["memory_mode"] == "memory_only"
             break
     else:
         raise AssertionError("session_full_mem should be present in filtered response")

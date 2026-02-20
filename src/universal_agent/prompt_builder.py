@@ -65,6 +65,33 @@ def _load_file(path: str) -> str:
         pass
     return ""
 
+
+def _load_workspace_key_file_block(workspace_path: str, *, max_chars_per_file: int = 2500) -> str:
+    """Load key workspace files (excluding SOUL.md) for continuity-aware prompts."""
+    key_files = (
+        "AGENTS.md",
+        "IDENTITY.md",
+        "USER.md",
+        "TOOLS.md",
+        "HEARTBEAT.md",
+    )
+    parts: list[str] = []
+    for name in key_files:
+        path = os.path.join(workspace_path, name)
+        content = _load_file(path)
+        if not content:
+            continue
+        if len(content) > max_chars_per_file:
+            content = content[: max_chars_per_file - 3] + "..."
+        parts.append(f"### {name}\n```md\n{content}\n```")
+    if not parts:
+        return ""
+    return (
+        "## 📁 WORKSPACE KEY FILES\n"
+        "Use these files for continuity, identity, and proactive behavior decisions.\n\n"
+        + "\n\n".join(parts)
+    )
+
 def _load_user_profile(max_chars: int = 4000) -> str:
     """Load optional user profile context from local config (may contain PII)."""
     try:
@@ -174,6 +201,11 @@ def build_system_prompt(
     if soul_context:
         sections.append(soul_context)
 
+    # ── 0b. WORKSPACE KEY FILES ───────────────────────────────────────
+    key_file_block = _load_workspace_key_file_block(workspace_path)
+    if key_file_block:
+        sections.append(key_file_block)
+
     # ── 1. TEMPORAL CONTEXT ───────────────────────────────────────────
     sections.append(
         f"Current Date: {today_str}\n"
@@ -224,7 +256,8 @@ def build_system_prompt(
         "You interact with external tools via MCP tool calls. You do NOT write Python/Bash code to call SDKs directly.\n"
         "**Tool Namespaces:**\n"
         "- `mcp__composio__*` - Remote tools (Gmail, Slack, Calendar, YouTube, GitHub, Sheets, Drive, CodeInterpreter, etc.) -> Call directly\n"
-        "- `mcp__internal__*` - Local tools (File I/O, Memory, image gen, PDF, upload_to_composio) -> Call directly\n"
+        "- `mcp__internal__*` - Local tools (File I/O, image gen, PDF, upload_to_composio, etc.) -> Call directly\n"
+        "- `memory_search` / `memory_get` - Canonical memory retrieval tools -> Call directly\n"
         "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
         "**Reliability note (important):** If you issue multiple tool calls in the same assistant message, they are treated as siblings.\n"
         "If one sibling fails (non-zero exit, blocked by a hook, network error), other siblings may be auto-failed with\n"
@@ -426,8 +459,8 @@ def build_system_prompt(
         "## 🧠 MEMORY MANAGEMENT — BUILD CONTINUITY\n"
         "You have a persistent memory system. USE IT ACTIVELY. Memory is what makes you more than a stateless tool.\n\n"
         "### When to READ memory:\n"
-        "- At the start of complex tasks, call `mcp__internal__memory_search` to recall user context, preferences, and prior decisions.\n"
-        "- When a result is relevant, call `mcp__internal__memory_get` for exact line reads before citing.\n\n"
+        "- At the start of complex tasks, call `memory_search` to recall user context, preferences, and prior decisions.\n"
+        "- When a result is relevant, call `memory_get` for exact line reads before citing.\n\n"
         "### When to WRITE memory:\n"
         "- Write durable memory as Markdown into `MEMORY.md` and `memory/YYYY-MM-DD.md` using file tools.\n"
         "- Keep entries concise, factual, and deduplicated.\n"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from universal_agent.memory.memory_store import append_memory_entry, ensure_memo
 from universal_agent.memory.memory_vector_index import schedule_vector_upsert, search_vectors
 
 _BROKERS: dict[str, "MemoryOrchestrator"] = {}
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _resolve_workspace_dir(workspace_dir: str | None) -> str:
@@ -275,6 +277,114 @@ class MemoryOrchestrator:
             "force": force,
         }
 
+    def capture_session_rollover(
+        self,
+        *,
+        session_id: str,
+        trigger: str,
+        transcript_path: str | None = None,
+        run_log_path: str | None = None,
+        summary: str | None = None,
+        max_lines: int = 200,
+        max_chars: int = 12_000,
+    ) -> dict[str, Any]:
+        """
+        Capture a durable memory slice at session transition boundaries.
+
+        This emulates OpenClaw's session-memory continuity behavior by creating
+        a session-specific markdown slice in `memory/sessions/` and indexing it.
+        """
+        sid = (session_id or "").strip()
+        if not sid:
+            return {"captured": False, "reason": "missing_session_id"}
+
+        transcript_tail = _extract_transcript_tail(
+            transcript_path or "",
+            max_chars=max_chars,
+            max_lines=max_lines,
+        )
+        if transcript_tail:
+            source = "transcript"
+            excerpt = transcript_tail
+        else:
+            source = "run_log"
+            excerpt = _extract_transcript_tail(
+                run_log_path or "",
+                max_chars=max_chars,
+                max_lines=max_lines,
+            )
+        if not excerpt:
+            return {"captured": False, "reason": "no_content"}
+
+        note_summary = (summary or "").strip() or f"Session rollover capture ({trigger})"
+        slug_source = summary or (excerpt.splitlines()[0] if excerpt.splitlines() else sid)
+        slug = self._slugify(slug_source)
+        date_part = (self._now_date() or "unknown-date")
+        session_key = sid.replace("/", "_")
+        sessions_dir = os.path.join(self.paths.memory_dir, "sessions")
+        os.makedirs(sessions_dir, exist_ok=True)
+        base_path = Path(sessions_dir) / f"{session_key}_{date_part}_{slug}.md"
+        session_path = str(base_path)
+        if base_path.exists():
+            suffix = 2
+            while True:
+                candidate = base_path.with_name(f"{base_path.stem}_{suffix}.md")
+                if not candidate.exists():
+                    session_path = str(candidate)
+                    break
+                suffix += 1
+        rel_path = os.path.relpath(session_path, self.workspace_dir)
+
+        content = (
+            f"# Session Capture\n\n"
+            f"- Session: `{sid}`\n"
+            f"- Trigger: `{trigger}`\n"
+            f"- Source: `{source}`\n\n"
+            f"## Summary\n\n"
+            f"{note_summary}\n\n"
+            f"## Recent Context\n\n"
+            f"{excerpt.strip()}\n"
+        ).strip()
+        content_hash = _content_hash(content)
+        existing = load_index(self.session_index_path)
+        if any(record.get("content_hash") == content_hash for record in existing):
+            return {"captured": False, "reason": "duplicate", "path": rel_path}
+
+        with open(session_path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.write("\n")
+
+        entry = MemoryEntry(
+            content=content,
+            source=f"session_transition:{trigger}",
+            session_id=sid,
+            tags=[
+                "memory_class:session",
+                "session_transition",
+                f"trigger:{trigger}",
+                f"session:{sid}",
+            ],
+            summary=note_summary,
+        )
+        preview = note_summary[:280] if note_summary else content[:280]
+        append_index_entry(self.session_index_path, entry, rel_path, preview)
+        if memory_index_mode(default="vector") == "vector":
+            schedule_vector_upsert(
+                self.session_vector_db,
+                entry.entry_id,
+                content_hash,
+                entry.timestamp,
+                entry.summary or "",
+                preview,
+                content,
+            )
+        return {
+            "captured": True,
+            "path": rel_path,
+            "source": source,
+            "trigger": trigger,
+        }
+
     def _write_long_term_entry(self, entry: MemoryEntry) -> bool:
         content_hash = _content_hash(entry.content)
         records = load_index(self.paths.index_path)
@@ -282,6 +392,25 @@ class MemoryOrchestrator:
             return False
         append_memory_entry(self.workspace_dir, entry)
         return True
+
+    @staticmethod
+    def _slugify(value: str, fallback: str = "session-capture") -> str:
+        text = (value or "").strip().lower()
+        if not text:
+            return fallback
+        slug = _NON_ALNUM_RE.sub("-", text).strip("-")
+        if not slug:
+            return fallback
+        return slug[:64]
+
+    @staticmethod
+    def _now_date() -> str:
+        try:
+            from datetime import datetime, timezone
+
+            return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        except Exception:
+            return "unknown-date"
 
     def _write_session_entry(self, entry: MemoryEntry) -> bool:
         os.makedirs(os.path.join(self.paths.memory_dir, "sessions"), exist_ok=True)

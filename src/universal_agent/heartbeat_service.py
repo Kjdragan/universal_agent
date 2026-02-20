@@ -685,6 +685,10 @@ class HeartbeatService:
         Check if session is idle (no connections, no active runs, and past timeout).
         Returns True if session was unregistered (and thus processing should stop).
         """
+        unregister_idle = _parse_bool(os.getenv("UA_HEARTBEAT_UNREGISTER_IDLE"), default=False)
+        if not unregister_idle:
+            return False
+
         # Get runtime metadata
         runtime = session.metadata.get("runtime", {})
         active_connections = int(runtime.get("active_connections", 0))
@@ -703,6 +707,10 @@ class HeartbeatService:
             
         # If any runs are active, it's not idle
         if active_runs > 0:
+            return False
+
+        # Keep session registered if it has an explicit wake request queued.
+        if session.session_id in self.wake_sessions or session.session_id in self.wake_next_sessions:
             return False
 
         # Check idle duration
@@ -899,7 +907,16 @@ class HeartbeatService:
                 with open(state_path, "w") as f:
                     json.dump(state.to_dict(), f)
                 return
-        elif schedule.require_file:
+        else:
+            mem_hb_file = workspace / "memory" / HEARTBEAT_FILE
+            if mem_hb_file.exists():
+                heartbeat_content = mem_hb_file.read_text()
+                if _is_effectively_empty(heartbeat_content):
+                    state.last_run = now
+                    with open(state_path, "w") as f:
+                        json.dump(state.to_dict(), f)
+                    return
+        if not heartbeat_content and schedule.require_file:
             return
 
         logger.info(

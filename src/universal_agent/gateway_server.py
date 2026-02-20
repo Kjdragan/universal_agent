@@ -91,6 +91,8 @@ from universal_agent.session_policy import (
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.youtube_ingest import ingest_youtube_transcript, normalize_video_target
 from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
+from universal_agent.memory.orchestrator import get_memory_orchestrator
+from universal_agent.memory.paths import resolve_shared_memory_workspace
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
 from universal_agent.timeout_policy import (
     gateway_ws_send_timeout_seconds,
@@ -4725,6 +4727,20 @@ async def resume_gated_request(session_id: str, payload: ResumeRequest, request:
 async def delete_session(session_id: str, request: Request):
     _require_session_api_auth(request)
     session_id = _sanitize_session_id_or_400(session_id)
+    session = _sessions.get(session_id)
+    if session:
+        try:
+            workspace = Path(session.workspace_dir)
+            shared_root = resolve_shared_memory_workspace(str(workspace))
+            broker = get_memory_orchestrator(workspace_dir=shared_root)
+            broker.capture_session_rollover(
+                session_id=session_id,
+                trigger="api_delete",
+                transcript_path=str(workspace / "transcript.md"),
+                run_log_path=str(workspace / "run.log"),
+            )
+        except Exception as exc:
+            logger.warning("Session delete memory capture failed (%s): %s", session_id, exc)
     _mark_session_terminal(session_id, "deleted")
     _sessions.pop(session_id, None)
     _pending_gated_requests.pop(session_id, None)

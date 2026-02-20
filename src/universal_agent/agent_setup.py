@@ -399,6 +399,8 @@ class AgentSetup:
         disallowed_tools = list(DISALLOWED_TOOLS)
         if not self.enable_memory:
             disallowed_tools.extend([
+                "memory_get",
+                "memory_search",
                 "mcp__internal__memory_get",
                 "mcp__internal__memory_search",
             ])
