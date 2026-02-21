@@ -23,3 +23,27 @@ def resolve_claude_code_model(default: str = "sonnet") -> str:
         or "sonnet"
     )
 
+
+def _is_truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def resolve_agent_teams_enabled(default: bool = True) -> bool:
+    """
+    Resolve whether Claude Code Agent Teams should be enabled for the runtime.
+
+    Precedence:
+    1) UA_AGENT_TEAMS_ENABLED (UA-level override)
+    2) CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS (native flag passthrough)
+    3) default (True)
+    """
+
+    ua_override = (os.getenv("UA_AGENT_TEAMS_ENABLED") or "").strip()
+    if ua_override:
+        return _is_truthy(ua_override)
+
+    native_flag = (os.getenv("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS") or "").strip()
+    if native_flag:
+        return _is_truthy(native_flag)
+
+    return bool(default)
