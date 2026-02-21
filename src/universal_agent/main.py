@@ -7522,9 +7522,6 @@ async def setup_session(
         active_workspace=str(workspace_dir)
     )
 
-    # Override with local hook implementation that includes skill candidate detection
-    hooks_manager.on_user_prompt_skill_awareness = on_user_prompt_skill_awareness
-
     capabilities_registry = get_capabilities_content(src_dir, abs_workspace_path)
 
     agent = UniversalAgent(

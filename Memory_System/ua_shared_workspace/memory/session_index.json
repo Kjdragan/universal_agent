@@ -185,5 +185,20 @@
     "preview": "vp/bdf.py\n/home/kjdragan/lrepos/universal_agent/.venv/lib/python3.13/site-packages/scipy/integrate/_ivp/common.py\n/home/kjdragan/lrepos/universal_agent/.venv/lib/python3.13/site-packages/scipy/integrate/_ivp/dop853_coefficients.py\n/home/kjdragan/lrepos/universal_agent/.venv/lib/p",
     "file_path": "memory/sessions/5d3e73e0-c7eb-4189-b635-734e76eb1253_2026-02-21.md",
     "content_hash": "040aa3417c3804a659c902e89ae68ee66eb1b2ce2912560e980f9779944b37e8"
+  },
+  {
+    "entry_id": "f0a70a76-bd0c-4328-9807-dcfc71c6a0b8",
+    "timestamp": "2026-02-21T15:27:51.185247+00:00",
+    "source": "session_index",
+    "session_id": "cf928b56-097a-434a-9a3a-4086e9cbde95",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:cf928b56-097a-434a-9a3a-4086e9cbde95"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 09:27:51**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c80cf63a74b418d449f9972747a31` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/cf928b56-097a-434a-9a3a-4086e9cbde95_2026-02-21.md",
+    "content_hash": "d4434e4f0e8b481de93578c91d8b772aab21236b5715f7561bc911c0aa0e3d93"
   }
 ]
