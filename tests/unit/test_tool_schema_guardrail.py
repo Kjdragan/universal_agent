@@ -192,6 +192,30 @@ async def test_schema_guardrail_blocks_multi_execute_missing_tool_slug():
 
 
 @pytest.mark.anyio
+async def test_schema_guardrail_blocks_multi_execute_with_internal_vp_tool_slug():
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+            "tool_input": {
+                "tools": [
+                    {
+                        "tool_slug": "vp_dispatch_mission",
+                        "arguments": {
+                            "vp_id": "vp.general.primary",
+                            "objective": "Write a poem.",
+                        },
+                    }
+                ]
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+    assert result.get("decision") == "block"
+    assert "Do not wrap `vp_*` tools" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
 async def test_schema_guardrail_normalizes_internal_task_name(monkeypatch):
     monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", "/tmp")
     result = await pre_tool_use_schema_guardrail(

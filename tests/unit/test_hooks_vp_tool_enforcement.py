@@ -34,6 +34,33 @@ def test_blocks_task_when_user_prompt_explicitly_requests_general_vp():
     assert "vp_dispatch_mission" in str(result.get("systemMessage", ""))
 
 
+def test_blocks_task_when_user_prompt_uses_general_dp_alias():
+    hooks = AgentHookSet(run_id="unit-vp-enforcement-general-dp")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {"prompt": "Simone, use the general DP to create a poem and email it."}
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "subagent_type": "general-purpose",
+                    "description": "Create poem",
+                    "prompt": "You are the General VP. Write a poem.",
+                },
+            },
+            "tool-general-dp",
+            {},
+        )
+    )
+
+    assert result.get("decision") == "block"
+    assert "vp_dispatch_mission" in str(result.get("systemMessage", ""))
+
+
 def test_blocks_task_when_payload_tries_general_vp_without_explicit_turn_state():
     hooks = AgentHookSet(run_id="unit-vp-enforcement-payload")
     _run(hooks.on_user_prompt_skill_awareness({"prompt": "Write a poem and email it to me."}))
@@ -93,6 +120,29 @@ def test_allows_task_after_vp_dispatch_in_same_turn():
     assert task_result == {}
 
 
+def test_blocks_non_vp_tool_before_dispatch_when_prompt_has_explicit_vp_intent():
+    hooks = AgentHookSet(run_id="unit-vp-enforcement-pre-dispatch")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {"prompt": "Use the General VP to create a poem and email it."}
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "src/universal_agent/vp/profiles.py"},
+            },
+            "tool-read-before-dispatch",
+            {},
+        )
+    )
+
+    assert result.get("decision") == "block"
+    assert "First tool call" in str(result.get("systemMessage", ""))
+
+
 def test_allows_task_when_no_explicit_vp_intent():
     hooks = AgentHookSet(run_id="unit-vp-enforcement-normal")
     _run(
@@ -116,4 +166,3 @@ def test_allows_task_when_no_explicit_vp_intent():
         )
     )
     assert result == {}
-
