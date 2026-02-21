@@ -78,6 +78,7 @@ TEXT_EXTENSIONS = (
 _STORAGE_ROOT_SOURCES = {"local", "mirror"}
 _STORAGE_SCOPES = {"workspaces", "artifacts"}
 _SESSION_PREFIXES = ("session_", "session-hook_", "session_hook_", "tg_", "api_", "vp_")
+_PROTECTED_STORAGE_DELETE_SUFFIXES = (".db", ".db-shm", ".db-wal")
 
 # Import agent bridge
 from universal_agent.api.agent_bridge import get_agent_bridge
@@ -472,6 +473,7 @@ class VpsStorageDeleteRequest(BaseModel):
     scope: str = "workspaces"
     root_source: str = "local"
     paths: list[str] = []
+    allow_protected: bool = False
 
 
 def _normalize_storage_scope(raw_scope: str) -> str:
@@ -558,7 +560,24 @@ def _read_file_from_root(root: Path, file_path: str) -> Response:
     return Response(content=content, media_type=content_type)
 
 
-def _delete_paths_from_root(root: Path, paths: list[str]) -> dict[str, Any]:
+def _is_protected_storage_delete_target(path: Path) -> bool:
+    name = path.name.lower()
+    return any(name.endswith(suffix) for suffix in _PROTECTED_STORAGE_DELETE_SUFFIXES)
+
+
+def _find_protected_file_under_directory(directory: Path) -> Optional[Path]:
+    try:
+        for candidate in directory.rglob("*"):
+            if not candidate.is_file():
+                continue
+            if _is_protected_storage_delete_target(candidate):
+                return candidate
+    except Exception:
+        return None
+    return None
+
+
+def _delete_paths_from_root(root: Path, paths: list[str], *, allow_protected: bool = False) -> dict[str, Any]:
     deleted: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -585,6 +604,28 @@ def _delete_paths_from_root(root: Path, paths: list[str]) -> dict[str, Any]:
             skipped.append({"path": path_clean, "reason": "not_found"})
             continue
 
+        if not allow_protected:
+            protected_match: Optional[Path] = None
+            if target.is_file() and _is_protected_storage_delete_target(target):
+                protected_match = target
+            elif target.is_dir():
+                protected_match = _find_protected_file_under_directory(target)
+
+            if protected_match is not None:
+                try:
+                    protected_relpath = str(protected_match.relative_to(root))
+                except Exception:
+                    protected_relpath = protected_match.name
+                errors.append(
+                    {
+                        "path": path_clean,
+                        "error": "Protected runtime DB content detected; retry with allow_protected=true.",
+                        "code": "protected_requires_override",
+                        "protected_path": protected_relpath,
+                    }
+                )
+                continue
+
         try:
             if target.is_dir():
                 shutil.rmtree(target)
@@ -602,6 +643,10 @@ def _delete_paths_from_root(root: Path, paths: list[str]) -> dict[str, Any]:
         "deleted_count": len(deleted),
         "skipped_count": len(skipped),
         "error_count": len(errors),
+        "protected_blocked_count": sum(
+            1 for item in errors if str(item.get("code") or "") == "protected_requires_override"
+        ),
+        "allow_protected": bool(allow_protected),
     }
 
 
@@ -1537,7 +1582,7 @@ async def delete_vps_files(payload: VpsStorageDeleteRequest):
         raise HTTPException(status_code=400, detail="paths must include at least one entry")
 
     root = _storage_root(scope_clean, root_source_clean)
-    result = _delete_paths_from_root(root, payload.paths)
+    result = _delete_paths_from_root(root, payload.paths, allow_protected=bool(payload.allow_protected))
     result["scope"] = scope_clean
     result["root_source"] = root_source_clean
     result["root"] = str(root)

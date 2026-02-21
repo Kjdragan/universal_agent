@@ -57,10 +57,12 @@ _EMITTED_TOOL_RESULT_IDS_VAR: ContextVar[set] = ContextVar("_EMITTED_TOOL_RESULT
 _EMITTED_ITERATION_END_VAR: ContextVar[bool] = ContextVar("_EMITTED_ITERATION_END", default=False)
 _VP_EXPLICIT_INTENT_PATTERNS = (
     re.compile(r"\bgeneral(?:ist)?\s+vp\b", re.IGNORECASE),
+    re.compile(r"\bgeneral(?:ist)?\s+dp\b", re.IGNORECASE),
     re.compile(r"\bcoder\s+vp\b", re.IGNORECASE),
+    re.compile(r"\bcoder\s+dp\b", re.IGNORECASE),
     re.compile(r"\bvp\.(?:general|coder)\.primary\b", re.IGNORECASE),
-    re.compile(r"\buse\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+vp\b", re.IGNORECASE),
-    re.compile(r"\bdelegate\s+to\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+vp\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+(?:vp|dp)\b", re.IGNORECASE),
+    re.compile(r"\bdelegate\s+to\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+(?:vp|dp)\b", re.IGNORECASE),
 )
 
 
@@ -693,8 +695,33 @@ class AgentHookSet:
         if normalized_tool_name == "vp_dispatch_mission":
             self._vp_dispatch_seen_this_turn = True
 
+        is_subagent_context = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
+        if self._requires_vp_tool_path and not self._vp_dispatch_seen_this_turn and not is_subagent_context:
+            pre_dispatch_allowed = {
+                "vp_dispatch_mission",
+                "vp_wait_mission",
+                "vp_get_mission",
+                "vp_list_missions",
+                "vp_cancel_mission",
+            }
+            if normalized_tool_name not in pre_dispatch_allowed:
+                return {
+                    "systemMessage": (
+                        "⚠️ Explicit VP routing intent detected.\n\n"
+                        "First tool call in this turn must be `vp_dispatch_mission(...)`.\n"
+                        "Do not perform discovery/search/file reads or route through `Task(...)` before dispatch."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "Explicit VP intent requires direct vp_dispatch_mission as the first tool call."
+                        ),
+                    },
+                }
+
         if normalized_tool_name == "task":
-            is_subagent_context = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
             task_vp_intent = _looks_like_explicit_vp_intent(
                 " ".join(
                     [

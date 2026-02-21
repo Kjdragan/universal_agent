@@ -814,6 +814,27 @@ async def pre_tool_use_schema_guardrail(
                         
                     inner_slug = item.get("tool_slug")
                     inner_args = item.get("arguments") or {}
+                    normalized_inner_slug = str(inner_slug or "").strip().lower()
+
+                    if normalized_inner_slug.startswith("vp_"):
+                        return {
+                            "systemMessage": (
+                                "⚠️ Invalid VP routing path.\n\n"
+                                "Do not wrap `vp_*` tools inside `COMPOSIO_MULTI_EXECUTE_TOOL`.\n"
+                                "Call internal VP tools directly in this turn:\n"
+                                "1) `vp_dispatch_mission(...)`\n"
+                                "2) `vp_wait_mission(...)`\n"
+                                "3) Continue with follow-up tools (e.g., Gmail) after VP completion."
+                            ),
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": (
+                                    "vp_* tools are internal and cannot be executed through Composio multi execute."
+                                ),
+                            },
+                        }
 
                     # Policy: Composio Twitter/X toolkit is disabled in this project.
                     # Use Grok/xAI evidence fetch via internal tools instead.

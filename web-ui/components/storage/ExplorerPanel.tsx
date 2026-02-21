@@ -43,6 +43,10 @@ function isImageFilePath(path: string): boolean {
   return /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico)$/i.test(path.trim());
 }
 
+function isProtectedRuntimeDbPath(path: string): boolean {
+  return /\.(db|db-shm|db-wal)$/i.test(path.trim());
+}
+
 export function ExplorerPanel({
   initialScope = "workspaces",
   initialPath = "",
@@ -75,6 +79,10 @@ export function ExplorerPanel({
   }, [initialRootSource]);
 
   const locationLabel = useMemo(() => (path ? `/${path}` : "/"), [path]);
+  const selectedHasProtectedCandidates = useMemo(
+    () => Array.from(selectedPaths.values()).some((itemPath) => isProtectedRuntimeDbPath(itemPath)),
+    [selectedPaths],
+  );
 
   const loadEntries = useCallback(async () => {
     setLoading(true);
@@ -171,32 +179,54 @@ export function ExplorerPanel({
     setSelectedPaths(new Set());
   };
 
-  const deleteSelected = async () => {
+  const deleteSelected = async (forceProtected = false) => {
     if (!selectedPaths.size || deleting) return;
     const targets = Array.from(selectedPaths.values());
-    const confirmMessage = `Delete ${targets.length} selected item(s)? This cannot be undone.`;
+    const confirmMessage = forceProtected
+      ? `Force-delete ${targets.length} selected item(s), including protected DB files? This cannot be undone.`
+      : `Delete ${targets.length} selected item(s)? This cannot be undone.`;
     if (!window.confirm(confirmMessage)) return;
 
     setDeleting(true);
     setError("");
     try {
-      const res = await fetch("/api/vps/files/delete", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          scope,
-          root_source: rootSource,
-          paths: targets,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data?.detail || `Failed (${res.status})`);
+      const runDelete = async (allowProtected: boolean) => {
+        const res = await fetch("/api/vps/files/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope,
+            root_source: rootSource,
+            paths: targets,
+            allow_protected: allowProtected,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data?.detail || `Failed (${res.status})`);
+        }
+        return data;
+      };
+
+      let data = await runDelete(forceProtected);
+      if (!forceProtected) {
+        const protectedBlocked = Array.isArray(data?.errors)
+          ? data.errors.filter((item: any) => item?.code === "protected_requires_override")
+          : [];
+        if (protectedBlocked.length > 0) {
+          const shouldForce = window.confirm(
+            `${protectedBlocked.length} selected path(s) are protected runtime DB files. Retry with force delete?`,
+          );
+          if (shouldForce) {
+            data = await runDelete(true);
+          }
+        }
       }
+
       const deleted = Number(data?.deleted_count || 0);
       const failed = Number(data?.error_count || 0);
       if (failed > 0) {
-        setError(`Deleted ${deleted} item(s), ${failed} failed. Refresh and retry failed paths.`);
+        setError(`Deleted ${deleted} item(s), ${failed} failed. Retry with force for protected DB files if needed.`);
       }
       clearSelection();
       setPreviewImageUrl("");
@@ -282,11 +312,20 @@ export function ExplorerPanel({
           </button>
           <button
             type="button"
-            onClick={() => void deleteSelected()}
+            onClick={() => void deleteSelected(false)}
             disabled={!selectedPaths.size || deleting}
             className="rounded border border-red-700 bg-red-600/20 px-2 py-1 text-[10px] uppercase tracking-wider text-red-100 hover:bg-red-600/30 disabled:opacity-40"
           >
             {deleting ? "Deleting..." : "Delete Selected"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void deleteSelected(true)}
+            disabled={!selectedPaths.size || deleting || !selectedHasProtectedCandidates}
+            className="rounded border border-amber-700 bg-amber-600/20 px-2 py-1 text-[10px] uppercase tracking-wider text-amber-100 hover:bg-amber-600/30 disabled:opacity-40"
+            title="Required for runtime DB files (.db/.db-shm/.db-wal)"
+          >
+            Force Delete Protected
           </button>
         </div>
 

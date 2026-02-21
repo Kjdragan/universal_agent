@@ -42,6 +42,46 @@ def test_delete_paths_from_root_deletes_files_and_directories(tmp_path: Path):
     assert not (tmp_path / "notes.txt").exists()
 
 
+def test_delete_paths_from_root_blocks_protected_runtime_db_files_by_default(tmp_path: Path):
+    db_file = tmp_path / "runtime_state.db"
+    db_file.write_text("sqlite-bytes\n", encoding="utf-8")
+
+    result = api_server._delete_paths_from_root(tmp_path, ["runtime_state.db"])
+
+    assert result["deleted_count"] == 0
+    assert result["error_count"] == 1
+    assert result["protected_blocked_count"] == 1
+    assert db_file.exists()
+    assert result["errors"][0]["code"] == "protected_requires_override"
+
+
+def test_delete_paths_from_root_allows_protected_runtime_db_files_with_override(tmp_path: Path):
+    db_file = tmp_path / "vp_state.db"
+    db_file.write_text("sqlite-bytes\n", encoding="utf-8")
+
+    result = api_server._delete_paths_from_root(tmp_path, ["vp_state.db"], allow_protected=True)
+
+    assert result["deleted_count"] == 1
+    assert result["error_count"] == 0
+    assert result["protected_blocked_count"] == 0
+    assert not db_file.exists()
+
+
+def test_delete_paths_from_root_blocks_directories_containing_protected_db_files(tmp_path: Path):
+    session_dir = tmp_path / "session_x"
+    session_dir.mkdir()
+    (session_dir / "run.log").write_text("log\n", encoding="utf-8")
+    (session_dir / "runtime_state.db").write_text("sqlite-bytes\n", encoding="utf-8")
+
+    result = api_server._delete_paths_from_root(tmp_path, ["session_x"])
+
+    assert result["deleted_count"] == 0
+    assert result["error_count"] == 1
+    assert result["protected_blocked_count"] == 1
+    assert session_dir.exists()
+    assert result["errors"][0]["code"] == "protected_requires_override"
+
+
 def test_storage_root_resolves_local_and_mirror(monkeypatch, tmp_path: Path):
     local_ws = tmp_path / "local_ws"
     mirror_ws = tmp_path / "mirror_ws"

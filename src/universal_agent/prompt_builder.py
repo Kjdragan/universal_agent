@@ -261,6 +261,8 @@ def build_system_prompt(
         "- `Task` - **DELEGATION TOOL** -> Use this to hand off work to Specialist Agents.\n\n"
         "**External VP control-plane rule (mandatory):**\n"
         "- For external primary-agent execution, use internal `vp_*` tools only.\n"
+        "- Never wrap `vp_*` tools inside `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL`.\n"
+        "- Do not do discovery/search to find VP tools; call `vp_dispatch_mission` directly when user requests General/Coder VP delegation.\n"
         "- Do not call VP gateway HTTP endpoints via shell/curl.\n\n"
         "**Reliability note (important):** If you issue multiple tool calls in the same assistant message, they are treated as siblings.\n"
         "If one sibling fails (non-zero exit, blocked by a hook, network error), other siblings may be auto-failed with\n"
