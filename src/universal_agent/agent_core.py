@@ -47,7 +47,7 @@ from universal_agent.durable.tool_gateway import (
 )
 from universal_agent.guardrails.tool_schema import validate_tool_input
 from universal_agent.prompt_assets import (
-    build_live_capabilities_snapshot,
+    load_capabilities_registry,
     get_tool_knowledge_block,
     discover_skills,
     generate_skills_xml,
@@ -1481,22 +1481,12 @@ class UniversalAgent:
             "Your primary job is to **Route Work** to the best specialist for the task.\n\n"
         )
 
-        # Load live capabilities snapshot (fallback to static file on failure)
-        capabilities_content = ""
-        try:
-            capabilities_content = build_live_capabilities_snapshot(self.src_dir)
-        except Exception:
-            capabilities_content = ""
+        capabilities_content, _cap_source = load_capabilities_registry(
+            self.src_dir,
+            workspace_dir=workspace_path,
+        )
         if not capabilities_content:
-            try:
-                capabilities_path = os.path.join(
-                    self.src_dir, "src", "universal_agent", "prompt_assets", "capabilities.md"
-                )
-                if os.path.exists(capabilities_path):
-                    with open(capabilities_path, "r", encoding="utf-8") as f:
-                        capabilities_content = f.read()
-            except Exception:
-                capabilities_content = "Capabilities registry error."
+            capabilities_content = "Capabilities registry error."
 
         # Append capabilities content
         prompt += f"{capabilities_content}\n\n"

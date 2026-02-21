@@ -34,11 +34,11 @@ def test_blocks_task_when_user_prompt_explicitly_requests_general_vp():
     assert "vp_dispatch_mission" in str(result.get("systemMessage", ""))
 
 
-def test_blocks_task_when_user_prompt_uses_general_dp_alias():
-    hooks = AgentHookSet(run_id="unit-vp-enforcement-general-dp")
+def test_blocks_task_when_user_prompt_uses_general_vp_alias():
+    hooks = AgentHookSet(run_id="unit-vp-enforcement-general-vp")
     _run(
         hooks.on_user_prompt_skill_awareness(
-            {"prompt": "Simone, use the general DP to create a poem and email it."}
+            {"prompt": "Simone, use the general VP to create a poem and email it."}
         )
     )
 
@@ -52,7 +52,34 @@ def test_blocks_task_when_user_prompt_uses_general_dp_alias():
                     "prompt": "You are the General VP. Write a poem.",
                 },
             },
-            "tool-general-dp",
+            "tool-general-vp",
+            {},
+        )
+    )
+
+    assert result.get("decision") == "block"
+    assert "vp_dispatch_mission" in str(result.get("systemMessage", ""))
+
+
+def test_blocks_task_when_user_prompt_uses_vp_general_word_order():
+    hooks = AgentHookSet(run_id="unit-vp-enforcement-vp-general-order")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {"prompt": "Use the VP general agent to write a story and email it."}
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "subagent_type": "general-purpose",
+                    "description": "Create story",
+                    "prompt": "You are the General VP. Write a story.",
+                },
+            },
+            "tool-vp-general-order",
             {},
         )
     )
@@ -81,6 +108,21 @@ def test_blocks_task_when_payload_tries_general_vp_without_explicit_turn_state()
     )
 
     assert result.get("decision") == "block"
+
+    followup = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Bash",
+                "tool_input": {"command": "echo fallback"},
+            },
+            "tool-2b",
+            {},
+        )
+    )
+    assert followup.get("decision") == "block"
+    assert "First tool call in this turn must be `vp_dispatch_mission" in str(
+        followup.get("systemMessage", "")
+    )
 
 
 def test_allows_task_after_vp_dispatch_in_same_turn():

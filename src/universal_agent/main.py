@@ -126,11 +126,11 @@ import argparse
 
 # prompt_toolkit for better terminal input (arrow keys, history, multiline)
 from universal_agent.prompt_assets import (
-    build_live_capabilities_snapshot,
     discover_skills,
     generate_skills_xml,
     get_tool_knowledge_block,
     get_tool_knowledge_content,
+    load_capabilities_registry,
 )
 from universal_agent.search_config import SEARCH_TOOL_CONFIG
 from universal_agent.observers import (
@@ -7286,40 +7286,16 @@ async def setup_session(
 
     def get_capabilities_content(source_dir: str, ws_dir: str) -> str:
         """Load a capabilities registry with live-first fallback ordering."""
-        # Priority 1: workspace-local generated registry (session-specific, freshest)
-        workspace_caps = os.path.join(ws_dir, "capabilities.md")
-        if os.path.exists(workspace_caps):
-            try:
-                with open(workspace_caps, "r", encoding="utf-8") as f:
-                    content = f.read().strip()
-                if content:
-                    print(f"✅ Injected Workspace Capabilities Registry ({len(content)} chars)")
-                    return f"\n\n## 🧠 YOUR CAPABILITIES & SPECIALISTS\n{content}"
-            except Exception as e:
-                print(f"⚠️ Failed to read workspace capabilities.md: {e}")
-
-        # Priority 2: live runtime snapshot from discovered agents/skills
-        try:
-            live = build_live_capabilities_snapshot(source_dir).strip()
-            if live:
-                print(f"✅ Injected Live Capabilities Snapshot ({len(live)} chars)")
-                return f"\n\n## 🧠 YOUR CAPABILITIES & SPECIALISTS\n{live}"
-        except Exception as e:
-            print(f"⚠️ Failed to build live capabilities snapshot: {e}")
-
-        # Priority 3: static fallback
-        capabilities_path = os.path.join(
-            source_dir, "src", "universal_agent", "prompt_assets", "capabilities.md"
-        )
-        if os.path.exists(capabilities_path):
-            try:
-                with open(capabilities_path, "r", encoding="utf-8") as f:
-                    content = f.read().strip()
-                if content:
-                    print(f"✅ Injected Static Capabilities Registry ({len(content)} chars)")
-                    return f"\n\n## 🧠 YOUR CAPABILITIES & SPECIALISTS\n{content}"
-            except Exception as e:
-                print(f"⚠️ Failed to read static capabilities.md: {e}")
+        content, source = load_capabilities_registry(source_dir, workspace_dir=ws_dir)
+        if content:
+            source_label = {
+                "workspace": "Workspace Capabilities Registry",
+                "live": "Live Capabilities Snapshot",
+                "last_good": "Last-Good Capabilities Snapshot",
+                "static": "Static Capabilities Registry",
+            }.get(source, "Capabilities Registry")
+            print(f"✅ Injected {source_label} ({len(content)} chars)")
+            return f"\n\n## 🧠 YOUR CAPABILITIES & SPECIALISTS\n{content}"
         return ""
 
     # Initialize Composio with automatic file downloads to this workspace

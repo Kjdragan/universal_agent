@@ -74,15 +74,21 @@ except ImportError:
 
 
 _EXPLICIT_GENERAL_VP_PATTERNS = (
-    re.compile(r"\bgeneral(?:ist)?\s+(?:vp|dp)\b", re.IGNORECASE),
+    re.compile(r"\bgeneral(?:ist)?\s+vp\b", re.IGNORECASE),
+    re.compile(r"\bvp\s+general(?:ist)?\b", re.IGNORECASE),
+    re.compile(r"\bvp\s+general(?:ist)?\s+agent\b", re.IGNORECASE),
     re.compile(r"\bvp\.general\.primary\b", re.IGNORECASE),
-    re.compile(r"\buse\s+(?:the\s+)?general(?:ist)?\s+(?:vp|dp)\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?general(?:ist)?\s+vp\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?vp\s+general(?:ist)?\b", re.IGNORECASE),
 )
 _EXPLICIT_CODER_VP_PATTERNS = (
-    re.compile(r"\bcoder\s+(?:vp|dp)\b", re.IGNORECASE),
+    re.compile(r"\bcoder\s+vp\b", re.IGNORECASE),
+    re.compile(r"\bvp\s+coder\b", re.IGNORECASE),
+    re.compile(r"\bvp\s+coder\s+agent\b", re.IGNORECASE),
     re.compile(r"\bcodie\b", re.IGNORECASE),
     re.compile(r"\bvp\.coder\.primary\b", re.IGNORECASE),
-    re.compile(r"\buse\s+(?:the\s+)?coder\s+(?:vp|dp)\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?coder\s+vp\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?vp\s+coder\b", re.IGNORECASE),
 )
 
 

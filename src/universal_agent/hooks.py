@@ -57,12 +57,15 @@ _EMITTED_TOOL_RESULT_IDS_VAR: ContextVar[set] = ContextVar("_EMITTED_TOOL_RESULT
 _EMITTED_ITERATION_END_VAR: ContextVar[bool] = ContextVar("_EMITTED_ITERATION_END", default=False)
 _VP_EXPLICIT_INTENT_PATTERNS = (
     re.compile(r"\bgeneral(?:ist)?\s+vp\b", re.IGNORECASE),
-    re.compile(r"\bgeneral(?:ist)?\s+dp\b", re.IGNORECASE),
     re.compile(r"\bcoder\s+vp\b", re.IGNORECASE),
-    re.compile(r"\bcoder\s+dp\b", re.IGNORECASE),
+    re.compile(r"\bvp\s+(?:general(?:ist)?|coder)\b", re.IGNORECASE),
+    re.compile(r"\bvp\s+(?:general(?:ist)?|coder)\s+agent\b", re.IGNORECASE),
+    re.compile(r"\b(?:general(?:ist)?|coder)\s+vp\s+agent\b", re.IGNORECASE),
     re.compile(r"\bvp\.(?:general|coder)\.primary\b", re.IGNORECASE),
-    re.compile(r"\buse\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+(?:vp|dp)\b", re.IGNORECASE),
-    re.compile(r"\bdelegate\s+to\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+(?:vp|dp)\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+vp\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?vp\s+(?:general(?:ist)?|coder)\b", re.IGNORECASE),
+    re.compile(r"\bdelegate\s+to\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+vp\b", re.IGNORECASE),
+    re.compile(r"\bdelegate\s+to\s+(?:the\s+)?vp\s+(?:general(?:ist)?|coder)\b", re.IGNORECASE),
 )
 
 
@@ -734,6 +737,9 @@ class AgentHookSet:
             if not is_subagent_context and not self._vp_dispatch_seen_this_turn and (
                 self._requires_vp_tool_path or task_vp_intent
             ):
+                # Lock the remaining turn into the VP control-plane lane, even when
+                # initial user-prompt intent detection missed a phrasing variant.
+                self._requires_vp_tool_path = True
                 return {
                     "systemMessage": (
                         "⚠️ Explicit VP routing intent detected. Do not use `Task(...)` for this turn.\n\n"

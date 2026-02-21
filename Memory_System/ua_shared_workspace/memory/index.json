@@ -82,5 +82,19 @@
     "preview": "\\n- **Labels:** UNREAD, SENT, INBOX\\n\\nThe email has been delivered to your inbox and should be waiting for you to read! The poem is light-hearted, creative, and captures the whimsical spirit of our primate friends in a way that should b...",
     "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-21.md",
     "content_hash": "e4a19b56fd067e19f75cac63378fa79f31a84ea15058dc1e4d2ac31f3e9f91ed"
+  },
+  {
+    "entry_id": "d2cf9fa9-3016-4d40-aba5-96efd9184964",
+    "timestamp": "2026-02-21T16:54:33.264944+00:00",
+    "source": "pre_compact",
+    "session_id": "96e31181-bb2e-4e14-8fc4-18cceda390f7",
+    "tags": [
+      "pre_compact",
+      "trigger:exit"
+    ],
+    "summary": "nder intent, recipients, subject/body, and HTML vs text; get explicit send approval before using GMAIL_SEND_EMAIL.\",\"[Optional (if recipient address is unknown)] [Prerequisite]: Resolve/confirm recipient email(s) using GMAIL_SEARCH_PEOPL...",
+    "preview": "nder intent, recipients, subject/body, and HTML vs text; get explicit send approval before using GMAIL_SEND_EMAIL.\",\"[Optional (if recipient address is unknown)] [Prerequisite]: Resolve/confirm recipient email(s) using GMAIL_SEARCH_PEOPL...",
+    "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-21.md",
+    "content_hash": "f6dffca19051a3c699299fe9987413e32e632f0e16f92e0e6070fa4b56213877"
   }
 ]

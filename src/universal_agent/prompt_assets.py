@@ -19,6 +19,105 @@ _PROJECT_ROOT = os.path.dirname(
 
 _TOOL_KNOWLEDGE_CONTENT: Optional[str] = None
 _TOOL_KNOWLEDGE_BLOCK: Optional[str] = None
+_CAPABILITIES_STATIC_FILENAME = "capabilities.md"
+_CAPABILITIES_LAST_GOOD_FILENAME = "capabilities.last_good.md"
+
+
+def _load_file(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+def _prompt_assets_dir(project_root: Optional[str] = None) -> str:
+    root = project_root or _PROJECT_ROOT
+    return os.path.join(root, "src", "universal_agent", "prompt_assets")
+
+
+def get_capabilities_static_path(project_root: Optional[str] = None) -> str:
+    return os.path.join(_prompt_assets_dir(project_root), _CAPABILITIES_STATIC_FILENAME)
+
+
+def get_capabilities_last_good_path(project_root: Optional[str] = None) -> str:
+    return os.path.join(_prompt_assets_dir(project_root), _CAPABILITIES_LAST_GOOD_FILENAME)
+
+
+def _write_text_atomic(path: str, content: str) -> None:
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.replace(tmp_path, path)
+
+
+def load_last_good_capabilities_snapshot(project_root: Optional[str] = None) -> str:
+    return _load_file(get_capabilities_last_good_path(project_root)).strip()
+
+
+def persist_live_capabilities_snapshot(
+    snapshot: str,
+    *,
+    project_root: Optional[str] = None,
+    workspace_dir: Optional[str] = None,
+) -> None:
+    content = str(snapshot or "").strip()
+    if not content:
+        return
+
+    _write_text_atomic(get_capabilities_last_good_path(project_root), f"{content}\n")
+
+    if workspace_dir:
+        workspace_caps = os.path.join(workspace_dir, _CAPABILITIES_STATIC_FILENAME)
+        _write_text_atomic(workspace_caps, f"{content}\n")
+
+
+def load_capabilities_registry(
+    project_root: str,
+    workspace_dir: Optional[str] = None,
+) -> tuple[str, str]:
+    """
+    Resolve capabilities content with resilient fallback ordering.
+
+    Returns:
+        tuple[str, str]: (content, source) where source is one of:
+        workspace|live|last_good|static|none
+    """
+    workspace_caps = ""
+    if workspace_dir:
+        workspace_caps = _load_file(
+            os.path.join(workspace_dir, _CAPABILITIES_STATIC_FILENAME)
+        ).strip()
+    if workspace_caps:
+        return workspace_caps, "workspace"
+
+    try:
+        live = build_live_capabilities_snapshot(project_root).strip()
+    except Exception:
+        live = ""
+    if live:
+        try:
+            persist_live_capabilities_snapshot(
+                live,
+                project_root=project_root,
+                workspace_dir=workspace_dir,
+            )
+        except Exception:
+            pass
+        return live, "live"
+
+    last_good = load_last_good_capabilities_snapshot(project_root)
+    if last_good:
+        return last_good, "last_good"
+
+    static_content = _load_file(get_capabilities_static_path(project_root)).strip()
+    if static_content:
+        return static_content, "static"
+
+    return "", "none"
 
 
 def load_knowledge(project_root: Optional[str] = None) -> str:
@@ -158,7 +257,7 @@ def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
         if not os.path.exists(d):
             continue
 
-        for root, _, files in os.walk(d):
+        for root, _, files in os.walk(d, followlinks=True):
             # Find the first file that matches any of our markers
             skill_file = next((f for f in files if f.lower() in VALID_MARKERS), None)
             if not skill_file:
@@ -217,8 +316,6 @@ def discover_skills(skills_dir: Optional[str] = None) -> list[dict]:
                 except Exception:
                     pass
                 continue
-                    
-    return list(skills_map.values())
                     
     return list(skills_map.values())
 
@@ -337,6 +434,12 @@ def build_live_capabilities_snapshot(project_root: Optional[str] = None) -> str:
         "- Do not default to research/report unless explicitly requested or clearly required.",
         "- Browser tasks are Bowser-first: `claude-bowser-agent` (identity/session), `playwright-bowser-agent` (parallel/repeatable), `bowser-qa-agent` (UI validation).",
         "- Use `browserbase` when Bowser lanes are unavailable or cloud-browser behavior is explicitly needed.",
+        "",
+        "### 🧭 External VP Control Plane (Live)",
+        "- For user requests that explicitly mention General/Coder VP delegation, route directly through internal `vp_*` tools.",
+        "- Primary lifecycle: `vp_dispatch_mission` -> `vp_wait_mission` -> `vp_get_mission`.",
+        "- Use `vp_read_result_artifacts` to summarize VP outputs from workspace URIs.",
+        "- Never wrap `vp_*` tools inside Composio multi-execute.",
         "",
         "### 🤖 Specialist Agents (Live)",
     ]

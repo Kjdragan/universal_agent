@@ -5,6 +5,7 @@ Persistent context for the agent.
 ## [RECENT_CONTEXT]
 Recent context snapshots (most recent first):
 
+- 2026-02-21T16:54:33.264944+00:00: nder intent, recipients, subject/body, and HTML vs text; get explicit send approval before using GMAIL_SEND_EMAIL.","[Optional (if recipient address is unknown)] [Prerequisite]: Resolve/confirm recipient email(s) using GMAIL_SEARCH_PEOPL... (tags: pre_compact, trigger:exit)
 - 2026-02-21T15:27:51.197788+00:00: \n- **Labels:** UNREAD, SENT, INBOX\n\nThe email has been delivered to your inbox and should be waiting for you to read! The poem is light-hearted, creative, and captures the whimsical spirit of our primate friends in a way that should b... (tags: pre_compact, trigger:exit)
 - 2026-02-21T05:20:29.156172+00:00: burnt caramel, opened his eyes to the world of freedom. Unlike his distant cousins who lived near human settlements—conditioned to associate the scent of popcorn with survival, the crack of a branch with danger—Bramble knew only the lang... (tags: pre_compact, trigger:exit)
 - 2026-02-21T04:04:34.479718+00:00: test-8c18facc-7f25-4693-918c-7252c15d36b2` | | **Trace ID** | `019c7e5d8b34dc5edaf7d6e5258a24e7` | | **Logfire Trace** | [View Full Trace](https://logfire.pydantic.dev/Kjdragan/composio-claudemultiagent?q=trace_id%3D%27019c7e5d8b34dc5eda... (tags: pre_compact, trigger:exit)
