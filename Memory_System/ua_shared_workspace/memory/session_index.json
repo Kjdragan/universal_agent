@@ -215,5 +215,53 @@
     "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 10:54:33**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c811d3b93f92cb32916670cd5e16a` |\n| **Logfire Trace** | [View Full Trace](",
     "file_path": "memory/sessions/96e31181-bb2e-4e14-8fc4-18cceda390f7_2026-02-21.md",
     "content_hash": "dd511335cc19789262df5d2d5d3137ca5de0ad04eac09f7b622e69c08a1e22f7"
+  },
+  {
+    "entry_id": "a5e9cd09-53c5-40ce-ac33-022d527bf0cd",
+    "timestamp": "2026-02-21T18:53:02.434054+00:00",
+    "source": "session_transition:ops_delete",
+    "session_id": "session_20260221_105107_0d0c7dec",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_delete",
+      "session:session_20260221_105107_0d0c7dec"
+    ],
+    "summary": "Use the VP general agent to write a story about a chicken and then Gmail it to me.",
+    "preview": "Use the VP general agent to write a story about a chicken and then Gmail it to me.",
+    "file_path": "memory/sessions/session_20260221_105107_0d0c7dec_2026-02-21_use-the-vp-general-agent-to-write-a-story-about-a-chicken-and-th.md",
+    "content_hash": "3a403c8d37214f1605ad8cf8bbcbaa1418b71b62e907cbe1bd6651007da9d823"
+  },
+  {
+    "entry_id": "0c1cdb97-4240-4a30-b941-4beb2834cd5a",
+    "timestamp": "2026-02-21T18:53:18.407770+00:00",
+    "source": "session_transition:ops_delete",
+    "session_id": "session_20260221_092602_278092a6",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_delete",
+      "session:session_20260221_092602_278092a6"
+    ],
+    "summary": "Use the general VP to create a poem about monkeys and Gmail it to me.",
+    "preview": "Use the general VP to create a poem about monkeys and Gmail it to me.",
+    "file_path": "memory/sessions/session_20260221_092602_278092a6_2026-02-21_use-the-general-vp-to-create-a-poem-about-monkeys-and-gmail-it-t.md",
+    "content_hash": "321496cfd2696f37d2dcdf3da658bed3435fcdded1f3d37103bc6ca20da188ef"
+  },
+  {
+    "entry_id": "d50e9416-a3ee-4571-af3f-3645472d31dc",
+    "timestamp": "2026-02-21T18:53:23.331786+00:00",
+    "source": "session_transition:ops_delete",
+    "session_id": "session_20260220_231738_ff29045a",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_delete",
+      "session:session_20260220_231738_ff29045a"
+    ],
+    "summary": "Simone, I need you to use the general DP to create get it to create a thousand word story about free bears and then gmail that to me.",
+    "preview": "Simone, I need you to use the general DP to create get it to create a thousand word story about free bears and then gmail that to me.",
+    "file_path": "memory/sessions/session_20260220_231738_ff29045a_2026-02-21_simone-i-need-you-to-use-the-general-dp-to-create-get-it-to-crea.md",
+    "content_hash": "a4fd58d41467e4c7121e641fd73af8aae818d6f907583c2c8451c952852f7e58"
   }
 ]

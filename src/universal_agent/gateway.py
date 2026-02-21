@@ -9,7 +9,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Optional
 
@@ -19,13 +19,18 @@ from universal_agent.durable.db import (
     get_runtime_db_path,
     get_vp_db_path,
 )
+from universal_agent.durable.state import get_vp_session
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.feature_flags import (
     coder_vp_display_name,
     coder_vp_id,
     vp_dispatch_mode,
+    vp_require_live_worker_for_dispatch,
     vp_explicit_intent_require_external,
     vp_external_dispatch_enabled,
+    vp_worker_heartbeat_stale_seconds,
+    vp_worker_recovery_poll_seconds,
+    vp_worker_recovery_wait_seconds,
 )
 from universal_agent.memory.paths import resolve_shared_memory_workspace
 from universal_agent.timeout_policy import (
@@ -117,6 +122,22 @@ def _infer_explicit_vp_target(user_input: str) -> tuple[Optional[str], Optional[
     if any(pattern.search(text) for pattern in _EXPLICIT_CODER_VP_PATTERNS):
         return coder_vp_id(), "coding_task"
     return None, None
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = raw
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 @dataclass
@@ -570,6 +591,91 @@ class InProcessGateway(Gateway):
         )
         return str(mission_row["mission_id"])
 
+    def _external_vp_worker_health(self, vp_id: str) -> tuple[bool, str]:
+        conn = self._vp_db_conn
+        if conn is None:
+            return False, "VP DB not initialized"
+
+        session_row = get_vp_session(conn, vp_id)
+        if session_row is None:
+            return False, f"No VP session registered for `{vp_id}`"
+
+        status = str(session_row["status"] or "").strip().lower()
+        lease_owner = str(session_row["lease_owner"] or "").strip()
+        lease_expires_raw = session_row["lease_expires_at"] if "lease_expires_at" in session_row.keys() else None
+        heartbeat_raw = session_row["last_heartbeat_at"] if "last_heartbeat_at" in session_row.keys() else None
+
+        now_utc = datetime.now(timezone.utc)
+        stale_window_seconds = vp_worker_heartbeat_stale_seconds(default=180)
+        lease_expires_at = _parse_iso_datetime(lease_expires_raw)
+        heartbeat_at = _parse_iso_datetime(heartbeat_raw)
+
+        lease_live = lease_expires_at is not None and lease_expires_at > now_utc
+        heartbeat_fresh = (
+            heartbeat_at is not None
+            and (now_utc - heartbeat_at).total_seconds() <= stale_window_seconds
+        )
+        status_ok = status in {"idle", "active", "paused", "recovering"}
+        worker_live = status_ok and (lease_live or heartbeat_fresh)
+        if worker_live:
+            return True, ""
+
+        diagnostics = [
+            f"status={status or 'unknown'}",
+            f"lease_owner={lease_owner or 'none'}",
+            f"lease_expires_at={lease_expires_raw or 'none'}",
+            f"last_heartbeat_at={heartbeat_raw or 'none'}",
+            f"stale_window_seconds={stale_window_seconds}",
+        ]
+        if not status_ok:
+            diagnostics.append("reason=session_status_not_operational")
+        elif not lease_live and not heartbeat_fresh:
+            diagnostics.append("reason=no_live_lease_or_fresh_heartbeat")
+        elif not lease_live:
+            diagnostics.append("reason=lease_expired")
+        else:
+            diagnostics.append("reason=heartbeat_stale")
+        return False, "; ".join(diagnostics)
+
+    def _ensure_external_vp_worker_ready(self, vp_id: str) -> None:
+        if not vp_require_live_worker_for_dispatch(default=True):
+            return
+        healthy, detail = self._external_vp_worker_health(vp_id)
+        if healthy:
+            return
+        message = f"External VP worker `{vp_id}` is unavailable ({detail})."
+        raise RuntimeError(message)
+
+    async def _ensure_external_vp_worker_ready_with_retry(self, vp_id: str) -> tuple[bool, str]:
+        if not vp_require_live_worker_for_dispatch(default=True):
+            return False, ""
+
+        try:
+            self._ensure_external_vp_worker_ready(vp_id)
+            return False, ""
+        except RuntimeError as first_error:
+            first_error_detail = str(first_error)
+
+        wait_seconds = max(0, int(vp_worker_recovery_wait_seconds(default=20)))
+        if wait_seconds <= 0:
+            raise RuntimeError(first_error_detail)
+
+        poll_seconds = max(1, int(vp_worker_recovery_poll_seconds(default=2)))
+        deadline = time.monotonic() + wait_seconds
+        retried = True
+        last_detail = first_error_detail
+        while time.monotonic() < deadline:
+            healthy, detail = self._external_vp_worker_health(vp_id)
+            if healthy:
+                return retried, last_detail
+            last_detail = detail or last_detail
+            await asyncio.sleep(min(poll_seconds, max(0.1, deadline - time.monotonic())))
+
+        raise RuntimeError(
+            f"External VP worker `{vp_id}` is unavailable after waiting "
+            f"{wait_seconds}s ({last_detail})."
+        )
+
     async def _ensure_coder_vp_adapter(self, owner_user_id: str) -> tuple[ProcessTurnAdapter, Any]:
         if not self._coder_vp_runtime:
             raise RuntimeError("CODER VP runtime is not initialized")
@@ -670,13 +776,32 @@ class InProcessGateway(Gateway):
                         request_metadata["require_external_vp"] = strict_external_vp
 
             if requested_vp_id and request_source not in {"cron", "webhook"}:
+                # Explicit VP language should default to external dispatch unless
+                # operators explicitly disable it via UA_VP_EXTERNAL_DISPATCH_ENABLED=0.
+                dispatch_default = bool(inferred_explicit_vp and strict_external_vp)
                 external_dispatch_enabled = (
-                    vp_external_dispatch_enabled(default=False)
+                    vp_external_dispatch_enabled(default=dispatch_default)
                     and vp_dispatch_mode(default="db_pull") == "db_pull"
                 )
                 mission_type = str(request_metadata.get("mission_type") or "task").strip() or "task"
                 if external_dispatch_enabled:
                     try:
+                        retried_worker_wait, retry_detail = await self._ensure_external_vp_worker_ready_with_retry(
+                            requested_vp_id
+                        )
+                        if retried_worker_wait:
+                            yield AgentEvent(
+                                type=EventType.STATUS,
+                                data={
+                                    "status": (
+                                        f"External VP worker `{requested_vp_id}` recovered; retrying dispatch."
+                                    ),
+                                    "is_log": True,
+                                    "routing": "external_vp_dispatch_worker_recovered",
+                                    "vp_id": requested_vp_id,
+                                    "worker_retry_detail": retry_detail,
+                                },
+                            )
                         mission_id = self._dispatch_external_vp_mission(
                             session=session,
                             request=request,
@@ -799,6 +924,20 @@ class InProcessGateway(Gateway):
                     )
                     if external_dispatch:
                         try:
+                            retried_worker_wait, retry_detail = await self._ensure_external_vp_worker_ready_with_retry(
+                                coder_vp_id()
+                            )
+                            if retried_worker_wait:
+                                yield AgentEvent(
+                                    type=EventType.STATUS,
+                                    data={
+                                        "status": f"{vp_display_name} worker recovered; retrying external dispatch.",
+                                        "is_log": True,
+                                        "routing": "coder_vp_external_worker_recovered",
+                                        "vp_id": coder_vp_id(),
+                                        "worker_retry_detail": retry_detail,
+                                    },
+                                )
                             vp_mission_id = self._dispatch_external_vp_mission(
                                 session=session,
                                 request=request,

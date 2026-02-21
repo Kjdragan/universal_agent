@@ -10,10 +10,23 @@ import os
 from typing import Iterable
 
 _TRUTHY = {"1", "true", "yes", "on"}
+_FALSY = {"0", "false", "no", "off"}
 
 
 def _is_truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in _TRUTHY
+
+
+def _read_env_bool(name: str) -> bool | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    normalized = raw.strip().lower()
+    if normalized in _TRUTHY:
+        return True
+    if normalized in _FALSY:
+        return False
+    return None
 
 
 def heartbeat_enabled(default: bool = False) -> bool:
@@ -251,8 +264,9 @@ def vp_external_dispatch_enabled(default: bool = False) -> bool:
     """Route eligible VP missions to external worker queue."""
     if _is_truthy(os.getenv("UA_DISABLE_VP_EXTERNAL_DISPATCH_ENABLED")):
         return False
-    if _is_truthy(os.getenv("UA_VP_EXTERNAL_DISPATCH_ENABLED")):
-        return True
+    explicit = _read_env_bool("UA_VP_EXTERNAL_DISPATCH_ENABLED")
+    if explicit is not None:
+        return explicit
     return default
 
 
@@ -260,8 +274,9 @@ def vp_explicit_intent_require_external(default: bool = True) -> bool:
     """Hard-fail explicit VP user requests when external dispatch is unavailable."""
     if _is_truthy(os.getenv("UA_DISABLE_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL")):
         return False
-    if _is_truthy(os.getenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL")):
-        return True
+    explicit = _read_env_bool("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL")
+    if explicit is not None:
+        return explicit
     return default
 
 
@@ -295,6 +310,31 @@ def vp_lease_ttl_seconds(default: int = 120) -> int:
 def vp_max_concurrent_missions(default: int = 1) -> int:
     """Max concurrent mission claims per worker process."""
     return _read_int("UA_VP_MAX_CONCURRENT_MISSIONS", default, minimum=1)
+
+
+def vp_require_live_worker_for_dispatch(default: bool = True) -> bool:
+    """Require fresh VP worker heartbeat/lease before external dispatch."""
+    if _is_truthy(os.getenv("UA_DISABLE_VP_REQUIRE_LIVE_WORKER_FOR_DISPATCH")):
+        return False
+    explicit = _read_env_bool("UA_VP_REQUIRE_LIVE_WORKER_FOR_DISPATCH")
+    if explicit is not None:
+        return explicit
+    return default
+
+
+def vp_worker_heartbeat_stale_seconds(default: int = 180) -> int:
+    """Max heartbeat age before treating a VP worker as unavailable."""
+    return _read_int("UA_VP_WORKER_HEARTBEAT_STALE_SECONDS", default, minimum=30)
+
+
+def vp_worker_recovery_wait_seconds(default: int = 20) -> int:
+    """Time to wait for worker recovery before failing dispatch."""
+    return _read_int("UA_VP_WORKER_RECOVERY_WAIT_SECONDS", default, minimum=0)
+
+
+def vp_worker_recovery_poll_seconds(default: int = 2) -> int:
+    """Polling interval while waiting for VP worker recovery."""
+    return _read_int("UA_VP_WORKER_RECOVERY_POLL_SECONDS", default, minimum=1)
 
 
 def vp_handoff_root(default: str = "/opt/universal_agent/vp_handoff") -> str:
