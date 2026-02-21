@@ -76,5 +76,52 @@
     "preview": "Session rollover capture (ops_reset)",
     "file_path": "memory/sessions/session_actions_2026-02-20_line-1.md",
     "content_hash": "345dafe271273aa473f6311603a9b10162cd17613e491aa99204d265b33e6632"
+  },
+  {
+    "entry_id": "84eb0ca9-f715-458c-aaa3-d95f24923e89",
+    "timestamp": "2026-02-20T21:26:31.378910+00:00",
+    "source": "session_transition:ops_delete",
+    "session_id": "session_20260220_131928_50c73678",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_delete",
+      "session:session_20260220_131928_50c73678"
+    ],
+    "summary": "Hello",
+    "preview": "Hello",
+    "file_path": "memory/sessions/session_20260220_131928_50c73678_2026-02-20_hello.md",
+    "content_hash": "bb360f05d48034c4a685ca328a9d18c6be7fbd3e9f5031d291efde32e302c23f"
+  },
+  {
+    "entry_id": "8d208363-cf53-4519-8c81-d624fee59b4a",
+    "timestamp": "2026-02-20T21:26:31.546440+00:00",
+    "source": "session_transition:ops_delete",
+    "session_id": "vp_coder_primary",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_delete",
+      "session:vp_coder_primary"
+    ],
+    "summary": "Session rollover capture (ops_delete)",
+    "preview": "Session rollover capture (ops_delete)",
+    "file_path": "memory/sessions/vp_coder_primary_2026-02-20_drwxrwxr-x-2-kjdragan-kjdragan-4096-feb-20-10-20-downloads.md",
+    "content_hash": "f42735db92c156527f3f5eee8a954e42496b21b6826a88adc483423ed1ac0c87"
+  },
+  {
+    "entry_id": "c4177040-52af-443f-b335-eba66dea9935",
+    "timestamp": "2026-02-20T21:46:43.297809+00:00",
+    "source": "session_index",
+    "session_id": "f8a19f48-65de-4764-a024-950dc8c9cdfc",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:f8a19f48-65de-4764-a024-950dc8c9cdfc"
+    ],
+    "summary": null,
+    "preview": "VICE SIZE/OFF    NODE NAME\npython3 341048 kjdragan   14ur  REG    8,6   126976 5652324 /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/runtime_state.db\npython3 341048 kjdragan   17ur  REG    8,6   126976 5652324 /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACE",
+    "file_path": "memory/sessions/f8a19f48-65de-4764-a024-950dc8c9cdfc_2026-02-20.md",
+    "content_hash": "1b009e76f3f10cc13e0ff23059d45b87ba8cc908a0c23d40b249bcf0708975d6"
   }
 ]

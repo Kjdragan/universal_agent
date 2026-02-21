@@ -4,6 +4,7 @@ from typing import Optional
 
 DEFAULT_DB_FILENAME = "runtime_state.db"
 DEFAULT_CODER_VP_DB_FILENAME = "coder_vp_state.db"
+DEFAULT_VP_DB_FILENAME = "vp_state.db"
 
 
 def get_runtime_db_path() -> str:
@@ -38,6 +39,19 @@ def get_coder_vp_db_path() -> str:
     runtime_dir = os.path.join(repo_root, "AGENT_RUN_WORKSPACES")
     os.makedirs(runtime_dir, exist_ok=True)
     return os.path.join(runtime_dir, DEFAULT_CODER_VP_DB_FILENAME)
+
+
+def get_vp_db_path() -> str:
+    env_path = os.getenv("UA_VP_DB_PATH")
+    if env_path:
+        return env_path
+
+    repo_root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    )
+    runtime_dir = os.path.join(repo_root, "AGENT_RUN_WORKSPACES")
+    os.makedirs(runtime_dir, exist_ok=True)
+    return os.path.join(runtime_dir, DEFAULT_VP_DB_FILENAME)
 
 
 def connect_runtime_db(db_path: Optional[str] = None) -> sqlite3.Connection:

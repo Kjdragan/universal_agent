@@ -26,5 +26,19 @@
     "preview": "# \ud83c\udfac Session Transcript **generated at 2026-02-20 13:30:22** ## \ud83d\udccb Session Info | Metadata | Value | |----------|-------| | **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` | | **Trace ID** | `019c7c87f4976ad3e2039f3030a5e53f` ...",
     "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-20.md",
     "content_hash": "b08ccf382e8606e1faa4e6b7a7b3f96471aebb07d186ad10d26474b748ac1b3f"
+  },
+  {
+    "entry_id": "3815ff40-70b4-45ca-af98-431323adc564",
+    "timestamp": "2026-02-20T21:46:43.406148+00:00",
+    "source": "pre_compact",
+    "session_id": "f8a19f48-65de-4764-a024-950dc8c9cdfc",
+    "tags": [
+      "pre_compact",
+      "trigger:exit"
+    ],
+    "summary": "active sessions. To bypass this check, unset the CLAUDECODE environment variable. ERROR:claude_agent_sdk._internal.query:Fatal error in message reader: Command fa ``` #### \ud83d\udee0\ufe0f Tool Call: `Skill` (+946.289s) <details> <summary><b>Input Par...",
+    "preview": "active sessions. To bypass this check, unset the CLAUDECODE environment variable. ERROR:claude_agent_sdk._internal.query:Fatal error in message reader: Command fa ``` #### \ud83d\udee0\ufe0f Tool Call: `Skill` (+946.289s) <details> <summary><b>Input Par...",
+    "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-20.md",
+    "content_hash": "9d5eebf93852cd63603b70081c84f0776646ebefa41bd63c6a8a81675121edfa"
   }
 ]
