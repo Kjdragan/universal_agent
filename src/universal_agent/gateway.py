@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -23,6 +24,7 @@ from universal_agent.feature_flags import (
     coder_vp_display_name,
     coder_vp_id,
     vp_dispatch_mode,
+    vp_explicit_intent_require_external,
     vp_external_dispatch_enabled,
 )
 from universal_agent.memory.paths import resolve_shared_memory_workspace
@@ -69,6 +71,46 @@ except ImportError:
     EXTERNAL_DEPS_AVAILABLE = False
     httpx = None  # type: ignore
     websockets = None  # type: ignore
+
+
+_EXPLICIT_GENERAL_VP_PATTERNS = (
+    re.compile(r"\bgeneral(?:ist)?\s+(?:vp|dp)\b", re.IGNORECASE),
+    re.compile(r"\bvp\.general\.primary\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?general(?:ist)?\s+(?:vp|dp)\b", re.IGNORECASE),
+)
+_EXPLICIT_CODER_VP_PATTERNS = (
+    re.compile(r"\bcoder\s+(?:vp|dp)\b", re.IGNORECASE),
+    re.compile(r"\bcodie\b", re.IGNORECASE),
+    re.compile(r"\bvp\.coder\.primary\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?coder\s+(?:vp|dp)\b", re.IGNORECASE),
+)
+
+
+def _metadata_bool(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        raw = value.strip().lower()
+        if not raw:
+            return default
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _infer_explicit_vp_target(user_input: str) -> tuple[Optional[str], Optional[str]]:
+    text = str(user_input or "").strip()
+    if not text:
+        return None, None
+    if any(pattern.search(text) for pattern in _EXPLICIT_GENERAL_VP_PATTERNS):
+        return "vp.general.primary", "general_task"
+    if any(pattern.search(text) for pattern in _EXPLICIT_CODER_VP_PATTERNS):
+        return coder_vp_id(), "coding_task"
+    return None, None
 
 
 @dataclass
@@ -598,70 +640,147 @@ class InProcessGateway(Gateway):
             next_lease_heartbeat_at: Optional[float] = None
             vp_cancelled = False
             vp_exception: Optional[BaseException] = None
-            request_source = str((request.metadata or {}).get("source") or "user").strip().lower()
-            requested_vp_id = str((request.metadata or {}).get("delegate_vp_id") or "").strip()
+            request_metadata = dict(request.metadata or {})
+            request.metadata = request_metadata
+            request_source = str(request_metadata.get("source") or "user").strip().lower()
+            requested_vp_id = str(request_metadata.get("delegate_vp_id") or "").strip()
+            strict_external_vp = _metadata_bool(
+                request_metadata.get("require_external_vp"),
+                default=False,
+            )
+            inferred_explicit_vp = False
 
-            if (
-                requested_vp_id
-                and request_source not in {"cron", "webhook"}
-                and vp_external_dispatch_enabled(default=False)
-                and vp_dispatch_mode(default="db_pull") == "db_pull"
-            ):
-                try:
-                    mission_type = str((request.metadata or {}).get("mission_type") or "task").strip() or "task"
-                    mission_id = self._dispatch_external_vp_mission(
-                        session=session,
-                        request=request,
-                        vp_id=requested_vp_id,
-                        mission_type=mission_type,
+            if not requested_vp_id and request_source not in {"cron", "webhook"}:
+                inferred_vp_id, inferred_mission_type = _infer_explicit_vp_target(request.user_input)
+                if inferred_vp_id:
+                    inferred_explicit_vp = True
+                    requested_vp_id = inferred_vp_id
+                    request_metadata["delegate_vp_id"] = inferred_vp_id
+                    if inferred_mission_type:
+                        request_metadata.setdefault("mission_type", inferred_mission_type)
+                    request_metadata.setdefault("vp_intent_source", "explicit_user_prompt")
+                    if "require_external_vp" not in request_metadata:
+                        strict_external_vp = vp_explicit_intent_require_external(default=True)
+                        request_metadata["require_external_vp"] = strict_external_vp
+
+            if requested_vp_id and request_source not in {"cron", "webhook"}:
+                external_dispatch_enabled = (
+                    vp_external_dispatch_enabled(default=False)
+                    and vp_dispatch_mode(default="db_pull") == "db_pull"
+                )
+                mission_type = str(request_metadata.get("mission_type") or "task").strip() or "task"
+                if external_dispatch_enabled:
+                    try:
+                        mission_id = self._dispatch_external_vp_mission(
+                            session=session,
+                            request=request,
+                            vp_id=requested_vp_id,
+                            mission_type=mission_type,
+                        )
+                        yield AgentEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "status": f"Delegated to external VP `{requested_vp_id}`.",
+                                "is_log": True,
+                                "vp_mission_id": mission_id,
+                                "vp_id": requested_vp_id,
+                                "routing": "delegated_to_external_vp",
+                            },
+                        )
+                        yield AgentEvent(
+                            type=EventType.TEXT,
+                            data={
+                                "text": (
+                                    f"Mission queued to `{requested_vp_id}` as `{mission_id}`. "
+                                    "Execution is asynchronous; progress and artifacts are available via VP ops endpoints."
+                                ),
+                                "final": True,
+                            },
+                        )
+                        yield AgentEvent(
+                            type=EventType.ITERATION_END,
+                            data={"trace_id": request_metadata.get("trace_id")},
+                        )
+                        return
+                    except Exception as exc:
+                        vp_error_detail = str(exc)
+                        if strict_external_vp:
+                            error_message = (
+                                f"External VP dispatch failed for `{requested_vp_id}`. "
+                                "Strict policy is enabled, so fallback to Simone direct execution is blocked."
+                            )
+                            yield AgentEvent(
+                                type=EventType.STATUS,
+                                data={
+                                    "status": error_message,
+                                    "is_log": True,
+                                    "routing": "external_vp_dispatch_failed_strict",
+                                    "error": vp_error_detail,
+                                },
+                            )
+                            yield AgentEvent(
+                                type=EventType.ERROR,
+                                data={
+                                    "message": error_message,
+                                    "error": vp_error_detail,
+                                    "routing": "external_vp_dispatch_failed_strict",
+                                    "vp_id": requested_vp_id,
+                                },
+                            )
+                            yield AgentEvent(
+                                type=EventType.ITERATION_END,
+                                data={"trace_id": request_metadata.get("trace_id")},
+                            )
+                            return
+                        self._apply_request_config(
+                            adapter,
+                            request,
+                            extra_metadata={
+                                "routing": "external_vp_dispatch_fallback",
+                                "external_vp_dispatch_error": vp_error_detail,
+                            },
+                        )
+                        yield AgentEvent(
+                            type=EventType.STATUS,
+                            data={
+                                "status": (
+                                    f"External VP dispatch failed for `{requested_vp_id}`; "
+                                    "continuing on Simone primary path."
+                                ),
+                                "is_log": True,
+                                "routing": "external_vp_dispatch_fallback",
+                                "error": vp_error_detail,
+                            },
+                        )
+                elif strict_external_vp:
+                    strict_reason = (
+                        f"External VP dispatch is disabled, but this turn requires `{requested_vp_id}` "
+                        "via strict explicit VP policy."
                     )
+                    if inferred_explicit_vp:
+                        strict_reason += " Enable `UA_VP_EXTERNAL_DISPATCH_ENABLED=1` and running VP workers."
                     yield AgentEvent(
                         type=EventType.STATUS,
                         data={
-                            "status": f"Delegated to external VP `{requested_vp_id}`.",
+                            "status": strict_reason,
                             "is_log": True,
-                            "vp_mission_id": mission_id,
+                            "routing": "external_vp_dispatch_unavailable_strict",
                             "vp_id": requested_vp_id,
-                            "routing": "delegated_to_external_vp",
                         },
                     )
                     yield AgentEvent(
-                        type=EventType.TEXT,
+                        type=EventType.ERROR,
                         data={
-                            "text": (
-                                f"Mission queued to `{requested_vp_id}` as `{mission_id}`. "
-                                "Execution is asynchronous; progress and artifacts are available via VP ops endpoints."
-                            ),
-                            "final": True,
+                            "message": strict_reason,
+                            "routing": "external_vp_dispatch_unavailable_strict",
+                            "vp_id": requested_vp_id,
                         },
                     )
                     yield AgentEvent(
                         type=EventType.ITERATION_END,
-                        data={"trace_id": (request.metadata or {}).get("trace_id")},
+                        data={"trace_id": request_metadata.get("trace_id")},
                     )
                     return
-                except Exception as exc:
-                    vp_error_detail = str(exc)
-                    self._apply_request_config(
-                        adapter,
-                        request,
-                        extra_metadata={
-                            "routing": "external_vp_dispatch_fallback",
-                            "external_vp_dispatch_error": vp_error_detail,
-                        },
-                    )
-                    yield AgentEvent(
-                        type=EventType.STATUS,
-                        data={
-                            "status": (
-                                f"External VP dispatch failed for `{requested_vp_id}`; "
-                                "continuing on Simone primary path."
-                            ),
-                            "is_log": True,
-                            "routing": "external_vp_dispatch_fallback",
-                            "error": vp_error_detail,
-                        },
-                    )
 
             # Keep webhook/cron executions pinned to their explicit session workspace
             # for deterministic artifacts/log paths and easier ops visibility.

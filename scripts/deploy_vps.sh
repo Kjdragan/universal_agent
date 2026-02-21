@@ -54,18 +54,29 @@ ssh -i "$SSH_KEY" "$VPS_HOST" "
   set -euo pipefail
   cd '$REMOTE_DIR'
 
+  require_env_key() {
+    key=\"\$1\"
+    value=\$(grep -E \"^\${key}=\" .env | tail -n1 | cut -d= -f2- || true)
+    if [ -z \"\$value\" ]; then
+      echo \"ERROR: missing required env key \${key} in $REMOTE_DIR/.env\" >&2
+      exit 42
+    fi
+    printf '%s=%s\n' \"\$key\" \"\$value\"
+  }
+
   # Keep source/build files owned by service user for build/runtime writes.
   chown -R ua:ua .claude deployment docs OFFICIAL_PROJECT_DOCUMENTATION scripts src tests web-ui webhook_transforms 2>/dev/null || true
   chown ua:ua pyproject.toml uv.lock README.md AGENTS.md .gitignore 2>/dev/null || true
   # Runtime roots must be writable by service user for memory/session capture.
-  mkdir -p Memory_System AGENT_RUN_WORKSPACES artifacts
-  chown -R ua:ua Memory_System AGENT_RUN_WORKSPACES artifacts 2>/dev/null || true
+  mkdir -p Memory_System AGENT_RUN_WORKSPACES artifacts logs
+  chown -R ua:ua Memory_System AGENT_RUN_WORKSPACES artifacts logs 2>/dev/null || true
 
-  # Preserve secure env ownership/mode.
-  if [ -f .env ]; then
-    chown root:ua .env
-    chmod 640 .env
+  if [ ! -f .env ]; then
+    echo 'ERROR: .env is required on VPS for runtime + VP worker configuration.' >&2
+    exit 41
   fi
+  chown root:ua .env
+  chmod 640 .env
 
   echo '== Runtime prerequisites =='
   export DEBIAN_FRONTEND=noninteractive
@@ -90,14 +101,79 @@ ssh -i "$SSH_KEY" "$VPS_HOST" "
     echo 'WARN: web-ui or npm missing, skipping web build'
   fi
 
+  echo '== VP env validation (strict) =='
+  vp_dispatch_enabled=\$(require_env_key UA_VP_EXTERNAL_DISPATCH_ENABLED | cut -d= -f2- | tr '[:upper:]' '[:lower:]')
+  vp_dispatch_mode=\$(require_env_key UA_VP_DISPATCH_MODE | cut -d= -f2- | tr '[:upper:]' '[:lower:]')
+  vp_enabled_ids=\$(require_env_key UA_VP_ENABLED_IDS | cut -d= -f2-)
+  case \"\$vp_dispatch_enabled\" in
+    1|true|yes|on) ;;
+    *)
+      echo 'ERROR: UA_VP_EXTERNAL_DISPATCH_ENABLED must be enabled for production VP independence.' >&2
+      exit 43
+      ;;
+  esac
+  if [ \"\$vp_dispatch_mode\" != 'db_pull' ]; then
+    echo \"ERROR: UA_VP_DISPATCH_MODE must be 'db_pull' (got \$vp_dispatch_mode).\" >&2
+    exit 44
+  fi
+  case \",\$vp_enabled_ids,\" in
+    *,vp.general.primary,* ) ;;
+    *)
+      echo 'ERROR: UA_VP_ENABLED_IDS must include vp.general.primary.' >&2
+      exit 45
+      ;;
+  esac
+  case \",\$vp_enabled_ids,\" in
+    *,vp.coder.primary,* ) ;;
+    *)
+      echo 'ERROR: UA_VP_ENABLED_IDS must include vp.coder.primary.' >&2
+      exit 46
+      ;;
+  esac
+
+  echo '== Install/refresh VP worker services =='
+  chmod 0755 scripts/start_vp_worker.sh scripts/install_vp_worker_services.sh
+  APP_ROOT='$REMOTE_DIR' bash scripts/install_vp_worker_services.sh vp.general.primary vp.coder.primary
+
   echo '== Restart services =='
-  systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram
+  systemctl restart \
+    universal-agent-gateway \
+    universal-agent-api \
+    universal-agent-webui \
+    universal-agent-telegram \
+    universal-agent-vp-worker@vp.general.primary \
+    universal-agent-vp-worker@vp.coder.primary
   sleep 4
 
   echo '== Service status =='
-  for s in universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram; do
+  for s in \
+    universal-agent-gateway \
+    universal-agent-api \
+    universal-agent-webui \
+    universal-agent-telegram \
+    universal-agent-vp-worker@vp.general.primary \
+    universal-agent-vp-worker@vp.coder.primary; do
     printf '%s=' \"\$s\"
     systemctl is-active \"\$s\"
+  done
+
+  echo
+  echo '== VP session readiness =='
+  vp_db=\$(grep -E '^UA_VP_DB_PATH=' .env | tail -n1 | cut -d= -f2- || true)
+  if [ -z \"\$vp_db\" ]; then
+    vp_db='$REMOTE_DIR/AGENT_RUN_WORKSPACES/vp_state.db'
+  fi
+  if [ ! -f \"\$vp_db\" ]; then
+    echo \"ERROR: VP state DB not found at \$vp_db\" >&2
+    exit 47
+  fi
+  sqlite3 \"\$vp_db\" \"SELECT vp_id, status, worker_id FROM vp_sessions WHERE vp_id IN ('vp.general.primary','vp.coder.primary') ORDER BY vp_id;\" || true
+  for vp in vp.general.primary vp.coder.primary; do
+    ready=\$(sqlite3 \"\$vp_db\" \"SELECT COUNT(1) FROM vp_sessions WHERE vp_id='\$vp' AND status IN ('idle','active');\")
+    if [ \"\$ready\" = '0' ]; then
+      echo \"ERROR: VP worker session not ready for \$vp\" >&2
+      exit 48
+    fi
   done
 
   echo
@@ -119,19 +195,17 @@ ssh -i "$SSH_KEY" "$VPS_HOST" "
   done
   echo \"APP=\$app_code\"
 
-  if [ -f .env ]; then
-    token=\$(grep '^UA_OPS_TOKEN=' .env | tail -n1 | cut -d= -f2- || true)
-    if [ -n \"\$token\" ]; then
-      echo '== Ops auth check =='
-      printf 'OPS_UNAUTH='
-      curl -s -o /dev/null -w '%{http_code}' https://api.clearspringcg.com/api/v1/ops/deployment/profile
-      echo
-      printf 'OPS_AUTH='
-      curl -s -o /tmp/deploy_ops_profile.json -w '%{http_code}' -H \"x-ua-ops-token: \$token\" https://api.clearspringcg.com/api/v1/ops/deployment/profile
-      echo
-      head -c 220 /tmp/deploy_ops_profile.json || true
-      echo
-    fi
+  token=\$(grep '^UA_OPS_TOKEN=' .env | tail -n1 | cut -d= -f2- || true)
+  if [ -n \"\$token\" ]; then
+    echo '== Ops auth check =='
+    printf 'OPS_UNAUTH='
+    curl -s -o /dev/null -w '%{http_code}' https://api.clearspringcg.com/api/v1/ops/deployment/profile
+    echo
+    printf 'OPS_AUTH='
+    curl -s -o /tmp/deploy_ops_profile.json -w '%{http_code}' -H \"x-ua-ops-token: \$token\" https://api.clearspringcg.com/api/v1/ops/deployment/profile
+    echo
+    head -c 220 /tmp/deploy_ops_profile.json || true
+    echo
   fi
 "
 

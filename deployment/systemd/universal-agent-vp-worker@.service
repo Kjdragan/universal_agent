@@ -1,15 +1,21 @@
 [Unit]
 Description=Universal Agent VP Worker (%i)
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=kjdragan
+User=ua
+Group=ua
 WorkingDirectory=/opt/universal_agent
+EnvironmentFile=-/opt/universal_agent/.env
 Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/home/ua/.local/bin:/opt/universal_agent/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/opt/universal_agent/src
 ExecStart=/opt/universal_agent/scripts/start_vp_worker.sh %i
 Restart=always
 RestartSec=5
+NoNewPrivileges=true
 StandardOutput=append:/opt/universal_agent/logs/vp-worker-%i.log
 StandardError=append:/opt/universal_agent/logs/vp-worker-%i.log
 

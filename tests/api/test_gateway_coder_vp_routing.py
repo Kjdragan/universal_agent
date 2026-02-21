@@ -477,3 +477,99 @@ async def test_gateway_external_coder_dispatch_queues_async_mission(monkeypatch,
     assert queued[0]["status"] == "queued"
 
     await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_explicit_general_dp_intent_auto_dispatches_external_vp(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
+    monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
+    monkeypatch.setenv("UA_VP_DB_PATH", str(tmp_path / "vp_state.db"))
+    monkeypatch.setenv("UA_VP_EXTERNAL_DISPATCH_ENABLED", "1")
+    monkeypatch.setenv("UA_VP_DISPATCH_MODE", "db_pull")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "1")
+    monkeypatch.setenv("UA_VP_ENABLED_IDS", "vp.general.primary,vp.coder.primary")
+
+    import universal_agent.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "ProcessTurnAdapter", FakeProcessTurnAdapter)
+    monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
+
+    gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+    session = await gateway.create_session(user_id="owner_primary")
+    request = GatewayRequest(
+        user_input="Simone, use the general DP to create a short story and email it to me."
+    )
+
+    events = [event async for event in gateway.execute(session, request)]
+
+    assert any(
+        event.type == EventType.STATUS
+        and event.data.get("routing") == "delegated_to_external_vp"
+        and event.data.get("vp_id") == "vp.general.primary"
+        for event in events
+    )
+    assert any(
+        event.type == EventType.TEXT
+        and "mission queued to `vp.general.primary`" in str(event.data.get("text", "")).lower()
+        for event in events
+    )
+    assert not any(
+        event.type == EventType.TEXT and event.data.get("text") == "user:ok"
+        for event in events
+    )
+
+    vp_conn = gateway.get_vp_db_conn()
+    assert vp_conn is not None
+    queued = list_vp_missions(vp_conn, "vp.general.primary")
+    assert len(queued) == 1
+    assert queued[0]["status"] == "queued"
+
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_strict_explicit_general_vp_blocks_primary_fallback_when_external_disabled(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
+    monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
+    monkeypatch.setenv("UA_VP_DB_PATH", str(tmp_path / "vp_state.db"))
+    monkeypatch.setenv("UA_VP_EXTERNAL_DISPATCH_ENABLED", "0")
+    monkeypatch.setenv("UA_VP_DISPATCH_MODE", "db_pull")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "1")
+    monkeypatch.setenv("UA_VP_ENABLED_IDS", "vp.general.primary,vp.coder.primary")
+
+    import universal_agent.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "ProcessTurnAdapter", FakeProcessTurnAdapter)
+    monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
+
+    gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+    session = await gateway.create_session(user_id="owner_primary")
+    request = GatewayRequest(
+        user_input="Use the General VP to create a poem and then send it by email."
+    )
+
+    events = [event async for event in gateway.execute(session, request)]
+
+    assert any(
+        event.type == EventType.STATUS
+        and event.data.get("routing") == "external_vp_dispatch_unavailable_strict"
+        for event in events
+    )
+    assert any(
+        event.type == EventType.ERROR
+        and "requires `vp.general.primary`" in str(event.data.get("message", "")).lower()
+        for event in events
+    )
+    assert not any(
+        event.type == EventType.TEXT and event.data.get("text") == "user:ok"
+        for event in events
+    )
+
+    vp_conn = gateway.get_vp_db_conn()
+    assert vp_conn is not None
+    queued = list_vp_missions(vp_conn, "vp.general.primary")
+    assert queued == []
+
+    await gateway.close()

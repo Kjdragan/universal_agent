@@ -256,6 +256,15 @@ def vp_external_dispatch_enabled(default: bool = False) -> bool:
     return default
 
 
+def vp_explicit_intent_require_external(default: bool = True) -> bool:
+    """Hard-fail explicit VP user requests when external dispatch is unavailable."""
+    if _is_truthy(os.getenv("UA_DISABLE_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL")):
+        return False
+    if _is_truthy(os.getenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL")):
+        return True
+    return default
+
+
 def vp_enabled_ids(default: tuple[str, ...] = ("vp.coder.primary", "vp.general.primary")) -> list[str]:
     """Enabled VP IDs for dispatch and worker polling."""
     requested = _read_csv_list("UA_VP_ENABLED_IDS")
