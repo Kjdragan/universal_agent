@@ -200,5 +200,20 @@
     "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 09:27:51**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c80cf63a74b418d449f9972747a31` |\n| **Logfire Trace** | [View Full Trace](",
     "file_path": "memory/sessions/cf928b56-097a-434a-9a3a-4086e9cbde95_2026-02-21.md",
     "content_hash": "d4434e4f0e8b481de93578c91d8b772aab21236b5715f7561bc911c0aa0e3d93"
+  },
+  {
+    "entry_id": "93b82d46-eec5-4f67-b801-d8658c631808",
+    "timestamp": "2026-02-21T16:54:33.261510+00:00",
+    "source": "session_index",
+    "session_id": "96e31181-bb2e-4e14-8fc4-18cceda390f7",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:96e31181-bb2e-4e14-8fc4-18cceda390f7"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 10:54:33**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c811d3b93f92cb32916670cd5e16a` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/96e31181-bb2e-4e14-8fc4-18cceda390f7_2026-02-21.md",
+    "content_hash": "dd511335cc19789262df5d2d5d3137ca5de0ad04eac09f7b622e69c08a1e22f7"
   }
 ]
