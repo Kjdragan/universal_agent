@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from universal_agent.agent_core import AgentEvent, EventType
@@ -97,10 +100,20 @@ async def test_gateway_routes_to_coder_vp_and_persists_mission(monkeypatch, tmp_
     assert missions[0]["status"] == "completed"
 
     mission_id = missions[0]["mission_id"]
+    assert str(missions[0]["result_ref"] or "").endswith(f"/{mission_id}")
     db_events = list_vp_events(gateway.get_coder_vp_db_conn(), mission_id=mission_id)
     db_event_types = [row["event_type"] for row in db_events]
     assert "vp.mission.dispatched" in db_event_types
     assert "vp.mission.completed" in db_event_types
+    completed_event = next(row for row in db_events if row["event_type"] == "vp.mission.completed")
+    completed_payload = json.loads(str(completed_event["payload_json"] or "{}"))
+    assert completed_payload.get("mission_receipt_relpath") == "mission_receipt.json"
+    assert completed_payload.get("sync_ready_marker_relpath") == "sync_ready.json"
+    receipt_path = Path(str(completed_payload.get("mission_receipt_path") or "")).resolve()
+    marker_path = Path(str(completed_payload.get("sync_ready_marker_path") or "")).resolve()
+    assert receipt_path.exists()
+    assert marker_path.exists()
+    assert receipt_path.parent == marker_path.parent
 
     await gateway.close()
 
@@ -142,10 +155,20 @@ async def test_gateway_coder_vp_error_falls_back_to_primary_path(monkeypatch, tm
     assert missions[0]["status"] == "completed"
 
     mission_id = missions[0]["mission_id"]
+    assert str(missions[0]["result_ref"] or "").endswith(f"/{mission_id}")
     db_events = list_vp_events(gateway.get_coder_vp_db_conn(), mission_id=mission_id)
     db_event_types = [row["event_type"] for row in db_events]
     assert "vp.mission.fallback" in db_event_types
     assert "vp.mission.completed" in db_event_types
+    completed_event = next(row for row in db_events if row["event_type"] == "vp.mission.completed")
+    completed_payload = json.loads(str(completed_event["payload_json"] or "{}"))
+    assert completed_payload.get("mission_receipt_relpath") == "mission_receipt.json"
+    assert completed_payload.get("sync_ready_marker_relpath") == "sync_ready.json"
+    receipt_path = Path(str(completed_payload.get("mission_receipt_path") or "")).resolve()
+    marker_path = Path(str(completed_payload.get("sync_ready_marker_path") or "")).resolve()
+    assert receipt_path.exists()
+    assert marker_path.exists()
+    assert receipt_path.parent == marker_path.parent
 
     await gateway.close()
 
@@ -347,10 +370,20 @@ async def test_gateway_marks_vp_mission_failed_when_fallback_raises(monkeypatch,
     assert missions[0]["status"] == "failed"
 
     mission_id = missions[0]["mission_id"]
+    assert str(missions[0]["result_ref"] or "").endswith(f"/{mission_id}")
     db_events = list_vp_events(gateway.get_coder_vp_db_conn(), mission_id=mission_id)
     db_event_types = [row["event_type"] for row in db_events]
     assert "vp.mission.fallback" in db_event_types
     assert "vp.mission.failed" in db_event_types
+    failed_event = next(row for row in db_events if row["event_type"] == "vp.mission.failed")
+    failed_payload = json.loads(str(failed_event["payload_json"] or "{}"))
+    assert failed_payload.get("mission_receipt_relpath") == "mission_receipt.json"
+    assert failed_payload.get("sync_ready_marker_relpath") == "sync_ready.json"
+    receipt_path = Path(str(failed_payload.get("mission_receipt_path") or "")).resolve()
+    marker_path = Path(str(failed_payload.get("sync_ready_marker_path") or "")).resolve()
+    assert receipt_path.exists()
+    assert marker_path.exists()
+    assert receipt_path.parent == marker_path.parent
 
     FakeProcessTurnAdapter.primary_raise_exception = False
     await gateway.close()
@@ -407,6 +440,7 @@ async def test_gateway_coder_vp_restart_recovers_session_and_continues_missions(
 async def test_gateway_external_coder_dispatch_queues_async_mission(monkeypatch, tmp_path):
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
+    monkeypatch.setenv("UA_VP_DB_PATH", str(tmp_path / "vp_state.db"))
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
     monkeypatch.setenv("UA_VP_EXTERNAL_DISPATCH_ENABLED", "1")
     monkeypatch.setenv("UA_VP_DISPATCH_MODE", "db_pull")
@@ -436,9 +470,9 @@ async def test_gateway_external_coder_dispatch_queues_async_mission(monkeypatch,
         for event in events
     )
 
-    runtime_conn = gateway._runtime_db_conn
-    assert runtime_conn is not None
-    queued = list_vp_missions(runtime_conn, "vp.coder.primary")
+    vp_conn = gateway.get_vp_db_conn()
+    assert vp_conn is not None
+    queued = list_vp_missions(vp_conn, "vp.coder.primary")
     assert len(queued) == 1
     assert queued[0]["status"] == "queued"
 

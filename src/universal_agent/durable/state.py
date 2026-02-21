@@ -1022,3 +1022,35 @@ def list_vp_events(
         (limit,),
     ).fetchall()
     return list(rows)
+
+
+def get_vp_bridge_cursor(conn: sqlite3.Connection, cursor_key: str) -> Optional[int]:
+    row = conn.execute(
+        "SELECT last_rowid FROM vp_bridge_cursors WHERE cursor_key = ?",
+        (cursor_key,),
+    ).fetchone()
+    if row is None:
+        return None
+    return int(row["last_rowid"] or 0)
+
+
+def upsert_vp_bridge_cursor(conn: sqlite3.Connection, cursor_key: str, last_rowid: int) -> None:
+    now = _now()
+    clamped = max(0, int(last_rowid))
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO vp_bridge_cursors (cursor_key, last_rowid, updated_at)
+        VALUES (?, ?, ?)
+        """,
+        (cursor_key, clamped, now),
+    )
+    conn.execute(
+        """
+        UPDATE vp_bridge_cursors
+        SET last_rowid = ?,
+            updated_at = ?
+        WHERE cursor_key = ?
+        """,
+        (clamped, now, cursor_key),
+    )
+    conn.commit()

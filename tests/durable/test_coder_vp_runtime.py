@@ -1,4 +1,5 @@
 import sqlite3
+import json
 
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
@@ -109,21 +110,62 @@ def test_coder_vp_session_and_mission_lifecycle(monkeypatch, tmp_path):
     assert mission["status"] == "running"
 
     runtime.append_progress(mission_id, summary="Started coding")
+    mission_workspace = (tmp_path / "vp_coder_primary" / mission_id).resolve()
     runtime.mark_mission_completed(
         mission_id,
-        result_ref="workspace://vp.coder.primary",
+        result_ref=f"workspace://{mission_workspace}",
         trace_id="trace-final",
     )
 
     mission = get_vp_mission(conn, mission_id)
     assert mission is not None
     assert mission["status"] == "completed"
+    assert str(mission["result_ref"] or "") == f"workspace://{mission_workspace}"
 
     events = list_vp_events(conn, mission_id=mission_id)
     event_types = [row["event_type"] for row in events]
     assert "vp.mission.dispatched" in event_types
     assert "vp.mission.progress" in event_types
     assert "vp.mission.completed" in event_types
+    completed_event = next(row for row in events if row["event_type"] == "vp.mission.completed")
+    completed_payload = json.loads(str(completed_event["payload_json"] or "{}"))
+    assert completed_payload.get("mission_receipt_relpath") == "mission_receipt.json"
+    assert completed_payload.get("sync_ready_marker_relpath") == "sync_ready.json"
+    assert (mission_workspace / "mission_receipt.json").exists()
+    assert (mission_workspace / "sync_ready.json").exists()
+
+
+def test_coder_vp_failed_mission_writes_finalize_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+
+    conn = _conn()
+    runtime = CoderVPRuntime(conn, workspace_base=tmp_path)
+    runtime.ensure_session(lease_owner="simone-control", owner_user_id="owner_primary")
+    mission_id = runtime.start_mission(
+        objective="Implement parser and handle failure path",
+        run_id="run-failed-1",
+        trace_id="trace-start",
+    )
+    runtime.mark_mission_failed(
+        mission_id,
+        error_message="forced failure",
+        trace_id="trace-failed",
+    )
+
+    mission = get_vp_mission(conn, mission_id)
+    assert mission is not None
+    assert mission["status"] == "failed"
+    mission_workspace = (tmp_path / "vp_coder_primary" / mission_id).resolve()
+    assert str(mission["result_ref"] or "") == f"workspace://{mission_workspace}"
+
+    events = list_vp_events(conn, mission_id=mission_id)
+    failed_event = next(row for row in events if row["event_type"] == "vp.mission.failed")
+    failed_payload = json.loads(str(failed_event["payload_json"] or "{}"))
+    assert failed_payload.get("mission_receipt_relpath") == "mission_receipt.json"
+    assert failed_payload.get("sync_ready_marker_relpath") == "sync_ready.json"
+
+    assert (mission_workspace / "mission_receipt.json").exists()
+    assert (mission_workspace / "sync_ready.json").exists()
 
 
 def test_coder_vp_session_seeds_codie_soul(monkeypatch, tmp_path):

@@ -5,7 +5,7 @@ import asyncio
 import logging
 import os
 
-from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.db import connect_runtime_db, get_vp_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.feature_flags import vp_enabled_ids
 from universal_agent.vp.worker_loop import VpWorkerLoop
@@ -30,7 +30,7 @@ async def _run() -> None:
     if args.vp_id not in set(vp_enabled_ids(default=("vp.coder.primary", "vp.general.primary"))):
         raise SystemExit(f"vp_id '{args.vp_id}' is not enabled by UA_VP_ENABLED_IDS")
 
-    db_path = args.db_path.strip() or get_runtime_db_path()
+    db_path = args.db_path.strip() or get_vp_db_path()
     conn = connect_runtime_db(db_path)
     ensure_schema(conn)
 

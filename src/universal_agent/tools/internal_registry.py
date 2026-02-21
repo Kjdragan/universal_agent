@@ -58,6 +58,14 @@ from universal_agent.tools.todoist_bridge import (
     todoist_task_action_wrapper,
     todoist_idea_action_wrapper,
 )
+from universal_agent.tools.vp_orchestration import (
+    vp_cancel_mission_wrapper,
+    vp_dispatch_mission_wrapper,
+    vp_get_mission_wrapper,
+    vp_list_missions_wrapper,
+    vp_read_result_artifacts_wrapper,
+    vp_wait_mission_wrapper,
+)
 
 
 def get_core_internal_tools() -> List[Callable]:
@@ -94,6 +102,12 @@ def get_core_internal_tools() -> List[Callable]:
         todoist_get_task_wrapper,
         todoist_task_action_wrapper,
         todoist_idea_action_wrapper,
+        vp_dispatch_mission_wrapper,
+        vp_get_mission_wrapper,
+        vp_list_missions_wrapper,
+        vp_wait_mission_wrapper,
+        vp_cancel_mission_wrapper,
+        vp_read_result_artifacts_wrapper,
     ]
 
 def get_memory_tools() -> List[Callable]:

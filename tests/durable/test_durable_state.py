@@ -6,6 +6,7 @@ from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
     get_run,
     get_step_count,
+    get_vp_bridge_cursor,
     get_vp_mission,
     get_vp_session,
     list_vp_events,
@@ -17,6 +18,7 @@ from universal_agent.durable.state import (
     upsert_run,
     upsert_vp_mission,
     upsert_vp_session,
+    upsert_vp_bridge_cursor,
     update_run_status,
     update_run_provider_session,
     acquire_vp_session_lease,
@@ -211,3 +213,15 @@ def test_vp_mission_and_event_tracking():
     assert events[0]["event_type"] == "mission.progress"
     assert events[1]["event_type"] == "mission.completed"
     assert json.loads(events[0]["payload_json"]) == {"summary": "Started coding"}
+
+
+def test_vp_bridge_cursor_round_trip():
+    conn = _conn()
+    key = "gateway.session_feed"
+    assert get_vp_bridge_cursor(conn, key) is None
+
+    upsert_vp_bridge_cursor(conn, key, 12)
+    assert get_vp_bridge_cursor(conn, key) == 12
+
+    upsert_vp_bridge_cursor(conn, key, 42)
+    assert get_vp_bridge_cursor(conn, key) == 42

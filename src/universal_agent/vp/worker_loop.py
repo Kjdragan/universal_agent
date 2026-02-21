@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import sqlite3
 
@@ -120,6 +124,7 @@ class VpWorkerLoop:
             return
 
         mission_id = str(claimed["mission_id"])
+        started_context = _mission_source_context(claimed)
         self._upsert_session(status="active")
         append_vp_event(
             self.conn,
@@ -127,12 +132,13 @@ class VpWorkerLoop:
             mission_id=mission_id,
             vp_id=self.vp_id,
             event_type="vp.mission.started",
-            payload={"worker_id": self.worker_id},
+            payload={**started_context, "worker_id": self.worker_id},
         )
 
         mission = get_vp_mission(self.conn, mission_id)
         if mission is None:
             return
+        source_context = _mission_source_context(mission)
         if int(mission["cancel_requested"] or 0) == 1:
             finalize_vp_mission(self.conn, mission_id, "cancelled")
             append_vp_event(
@@ -141,7 +147,11 @@ class VpWorkerLoop:
                 mission_id=mission_id,
                 vp_id=self.vp_id,
                 event_type="vp.mission.cancelled",
-                payload={"worker_id": self.worker_id, "reason": "cancel_requested_before_start"},
+                payload={
+                    **source_context,
+                    "worker_id": self.worker_id,
+                    "reason": "cancel_requested_before_start",
+                },
             )
             self._upsert_session(status="idle")
             return
@@ -174,6 +184,18 @@ class VpWorkerLoop:
         if outcome.result_ref:
             payload["result_ref"] = outcome.result_ref
         payload["worker_id"] = self.worker_id
+        payload.update(
+            _write_vp_finalize_artifacts(
+                mission_id=mission_id,
+                mission_row=mission,
+                vp_id=self.vp_id,
+                worker_id=self.worker_id,
+                outcome=outcome,
+                terminal_status=event_type.replace("vp.mission.", "", 1),
+                source_context=source_context,
+                workspace_root=self.profile.workspace_root,
+            )
+        )
 
         append_vp_event(
             self.conn,
@@ -181,7 +203,7 @@ class VpWorkerLoop:
             mission_id=mission_id,
             vp_id=self.vp_id,
             event_type=event_type,
-            payload=payload,
+            payload={**source_context, **payload},
         )
         self._upsert_session(status="idle")
 
@@ -203,3 +225,145 @@ class VpWorkerLoop:
         if self.profile.client_kind == "claude_generalist":
             return ClaudeGeneralistClient()
         raise ValueError(f"Unsupported VP client_kind: {self.profile.client_kind}")
+
+
+def _mission_source_context(mission_row: Any) -> dict[str, Any]:
+    payload_json = mission_row["payload_json"] if "payload_json" in mission_row.keys() else None
+    if not isinstance(payload_json, str) or not payload_json.strip():
+        return {}
+    try:
+        payload = json.loads(payload_json)
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    source_session_id = str(payload.get("source_session_id") or "").strip()
+    source_turn_id = str(payload.get("source_turn_id") or "").strip()
+    reply_mode = str(payload.get("reply_mode") or "").strip()
+
+    context: dict[str, Any] = {}
+    if source_session_id:
+        context["source_session_id"] = source_session_id
+    if source_turn_id:
+        context["source_turn_id"] = source_turn_id
+    if reply_mode:
+        context["reply_mode"] = reply_mode
+    return context
+
+
+def _env_true(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _mission_workspace_dir(*, mission_id: str, result_ref: str, workspace_root: Path) -> Path:
+    root_resolved = workspace_root.resolve()
+    if result_ref.startswith("workspace://"):
+        candidate = Path(result_ref.replace("workspace://", "", 1)).expanduser()
+        try:
+            resolved = candidate.resolve()
+            if resolved == root_resolved or root_resolved in resolved.parents:
+                return resolved
+        except Exception:
+            pass
+    return (workspace_root / mission_id).resolve()
+
+
+def _write_json_file(path: Path, payload: dict[str, Any]) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return True
+    except Exception as exc:
+        logger.warning("VP worker failed writing file path=%s err=%s", path, exc)
+        return False
+
+
+def _write_vp_finalize_artifacts(
+    *,
+    mission_id: str,
+    mission_row: Any,
+    vp_id: str,
+    worker_id: str,
+    outcome: Any,
+    terminal_status: str,
+    source_context: dict[str, Any],
+    workspace_root: Path,
+) -> dict[str, Any]:
+    result_ref = str(getattr(outcome, "result_ref", "") or "").strip()
+    mission_workspace = _mission_workspace_dir(
+        mission_id=mission_id,
+        result_ref=result_ref,
+        workspace_root=workspace_root,
+    )
+    completed_epoch = time.time()
+    created_at = str(mission_row["created_at"] or "")
+    started_at = str(mission_row["started_at"] or "")
+    updated_at = str(mission_row["updated_at"] or "")
+    objective = str(mission_row["objective"] or "")
+    mission_type = str(mission_row["mission_type"] or "")
+    mission_payload_raw = mission_row["payload_json"] if "payload_json" in mission_row.keys() else None
+    mission_payload = {}
+    if isinstance(mission_payload_raw, str) and mission_payload_raw.strip():
+        try:
+            parsed = json.loads(mission_payload_raw)
+            if isinstance(parsed, dict):
+                mission_payload = parsed
+        except Exception:
+            mission_payload = {}
+
+    artifact_refs: dict[str, Any] = {}
+    if _env_true("UA_VP_MISSION_RECEIPT_ENABLED", True):
+        receipt_payload = {
+            "version": 1,
+            "mission_id": mission_id,
+            "vp_id": vp_id,
+            "status": terminal_status,
+            "worker_id": worker_id,
+            "objective": objective,
+            "mission_type": mission_type or None,
+            "result_ref": result_ref or None,
+            "source_session_id": source_context.get("source_session_id"),
+            "source_turn_id": source_context.get("source_turn_id"),
+            "reply_mode": source_context.get("reply_mode"),
+            "created_at": created_at or None,
+            "started_at": started_at or None,
+            "updated_at": updated_at or None,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "completed_at_epoch": completed_epoch,
+            "mission_payload": mission_payload,
+            "outcome": {
+                "status": str(getattr(outcome, "status", "") or "").strip() or terminal_status,
+                "message": str(getattr(outcome, "message", "") or "").strip() or None,
+                "payload": dict(getattr(outcome, "payload", {}) or {}),
+            },
+        }
+        receipt_path = mission_workspace / "mission_receipt.json"
+        if _write_json_file(receipt_path, receipt_payload):
+            artifact_refs["mission_receipt_relpath"] = "mission_receipt.json"
+            artifact_refs["mission_receipt_path"] = str(receipt_path)
+
+    if _env_true("UA_VP_SYNC_READY_MARKER_ENABLED", True):
+        marker_name = (os.getenv("UA_VP_SYNC_READY_MARKER_FILENAME") or "").strip() or "sync_ready.json"
+        marker_payload = {
+            "version": 1,
+            "mission_id": mission_id,
+            "vp_id": vp_id,
+            "state": terminal_status,
+            "ready": True,
+            "worker_id": worker_id,
+            "result_ref": result_ref or None,
+            "source_session_id": source_context.get("source_session_id"),
+            "source_turn_id": source_context.get("source_turn_id"),
+            "reply_mode": source_context.get("reply_mode"),
+            "updated_at_epoch": completed_epoch,
+            "completed_at_epoch": completed_epoch,
+        }
+        marker_path = mission_workspace / marker_name
+        if _write_json_file(marker_path, marker_payload):
+            artifact_refs["sync_ready_marker_relpath"] = marker_name
+            artifact_refs["sync_ready_marker_path"] = str(marker_path)
+
+    return artifact_refs

@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -51,14 +52,23 @@ from universal_agent.identity import resolve_user_id
 from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
+    append_vp_event,
+    finalize_vp_mission,
     get_vp_mission,
+    get_vp_bridge_cursor,
     get_vp_session,
     list_vp_events,
     list_vp_missions,
     list_vp_sessions,
     list_vp_session_events,
+    upsert_vp_bridge_cursor,
 )
-from universal_agent.vp import MissionDispatchRequest, cancel_mission, dispatch_mission
+from universal_agent.vp import (
+    MissionDispatchRequest,
+    cancel_mission,
+    dispatch_mission_with_retry,
+    is_sqlite_lock_error,
+)
 from universal_agent.heartbeat_service import HeartbeatService
 from universal_agent.cron_service import CronService, parse_run_at
 from universal_agent.ops_service import OpsService
@@ -326,6 +336,11 @@ class OpsSkillUpdateRequest(BaseModel):
     enabled: Optional[bool] = None
 
 
+class OpsVpBridgeCursorUpdateRequest(BaseModel):
+    action: str = "set"  # set | reset_to_latest | reset_to_zero
+    rowid: Optional[int] = None
+
+
 class OpsApprovalCreateRequest(BaseModel):
     approval_id: Optional[str] = None
     phase_id: Optional[str] = None
@@ -467,6 +482,32 @@ _hooks_service: Optional[HooksService] = None
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
+_vp_event_bridge_enabled = (os.getenv("UA_VP_EVENT_BRIDGE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"})
+_vp_event_bridge_interval_seconds = max(
+    0.2,
+    float(os.getenv("UA_VP_EVENT_BRIDGE_INTERVAL_SECONDS", "1.0") or "1.0"),
+)
+_vp_event_bridge_cursor_key = "gateway.session_feed"
+_vp_event_bridge_task: Optional[asyncio.Task[Any]] = None
+_vp_event_bridge_stop_event: Optional[asyncio.Event] = None
+_vp_event_bridge_last_rowid = 0
+_vp_event_bridge_metrics: dict[str, Any] = {
+    "cycles": 0,
+    "events_bridged_total": 0,
+    "events_bridged_last": 0,
+    "errors": 0,
+    "last_error": None,
+    "last_run_at": None,
+    "manual_updates": 0,
+    "last_manual_update_at": None,
+}
+_vp_stale_reconcile_enabled = (
+    os.getenv("UA_VP_STALE_RECONCILE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+)
+_vp_stale_reconcile_seconds = max(
+    60,
+    int(os.getenv("UA_VP_STALE_RECONCILE_SECONDS", "").strip() or 15 * 60),
+)
 _channel_probe_results: dict[str, dict] = {}
 _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
@@ -1145,7 +1186,10 @@ def _parse_iso_datetime(value: Any) -> Optional[datetime]:
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
     except Exception:
         return None
 
@@ -1155,7 +1199,10 @@ def _vp_mission_duration_seconds(started_at: Any, completed_at: Any) -> Optional
     completed = _parse_iso_datetime(completed_at)
     if not started or not completed:
         return None
-    return max(0.0, (completed - started).total_seconds())
+    try:
+        return max(0.0, (completed - started).total_seconds())
+    except Exception:
+        return None
 
 
 def _parse_json_text(raw: Any) -> Any:
@@ -1177,6 +1224,33 @@ def _vp_session_to_dict(row: Any) -> Optional[dict[str, Any]]:
     metadata = _parse_json_text(payload.get("metadata_json"))
     if isinstance(metadata, dict):
         payload["metadata"] = metadata
+    normalized_status = str(payload.get("status") or "unknown").strip().lower()
+    stale = False
+    stale_reason = ""
+    if normalized_status in {"active", "running", "healthy"}:
+        now_utc = datetime.now(timezone.utc)
+        heartbeat_dt = _parse_iso_datetime(payload.get("last_heartbeat_at"))
+        updated_dt = _parse_iso_datetime(payload.get("updated_at"))
+        stale_window_seconds = max(
+            60,
+            int(
+                os.getenv("UA_VP_STALE_SESSION_SECONDS", "").strip() or 15 * 60
+            ),
+        )
+        if heartbeat_dt is not None:
+            stale = (now_utc - heartbeat_dt).total_seconds() > stale_window_seconds
+            if stale:
+                stale_reason = "heartbeat_timeout"
+        elif updated_dt is not None:
+            stale = (now_utc - updated_dt).total_seconds() > stale_window_seconds
+            if stale:
+                stale_reason = "update_timeout"
+        else:
+            stale = True
+            stale_reason = "missing_timestamps"
+    payload["stale"] = stale
+    payload["stale_reason"] = stale_reason or None
+    payload["effective_status"] = "stale" if stale else normalized_status
     return payload
 
 
@@ -1194,6 +1268,196 @@ def _vp_mission_to_dict(row: Any) -> Optional[dict[str, Any]]:
         payload.get("started_at"), payload.get("completed_at")
     )
     return payload
+
+
+def _vp_mission_source_context_from_row(row: Any) -> dict[str, str]:
+    payload = _parse_json_text(row["payload_json"]) if "payload_json" in row.keys() else None
+    if not isinstance(payload, dict):
+        return {}
+    context: dict[str, str] = {}
+    for key in ("source_session_id", "source_turn_id", "reply_mode"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            context[key] = value
+    return context
+
+
+def _vp_is_running_mission_stale(
+    row: Any,
+    *,
+    now_utc: datetime,
+    stale_seconds: int,
+) -> tuple[bool, str]:
+    status = str(row["status"] or "").strip().lower()
+    if status != "running":
+        return False, ""
+
+    claim_expires_at = _parse_iso_datetime(row["claim_expires_at"])
+    if claim_expires_at is not None:
+        if claim_expires_at < now_utc:
+            return True, "claim_expired"
+        return False, ""
+
+    for candidate_key in ("updated_at", "started_at", "created_at"):
+        candidate_dt = _parse_iso_datetime(row[candidate_key])
+        if candidate_dt is None:
+            continue
+        age_seconds = (now_utc - candidate_dt).total_seconds()
+        if age_seconds > stale_seconds:
+            return True, f"{candidate_key}_timeout"
+        return False, ""
+    return True, "missing_timestamps"
+
+
+def _reconcile_stale_vp_missions_once(
+    conn: Any,
+    *,
+    lane_label: str,
+    stale_seconds: Optional[int] = None,
+    max_rows: int = 1000,
+) -> int:
+    if conn is None:
+        return 0
+    now_utc = datetime.now(timezone.utc)
+    stale_window = max(60, int(stale_seconds if stale_seconds is not None else _vp_stale_reconcile_seconds))
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM vp_missions
+        WHERE status = 'running'
+        ORDER BY updated_at ASC
+        LIMIT ?
+        """,
+        (max(1, min(int(max_rows), 10000)),),
+    ).fetchall()
+    reconciled = 0
+    for row in rows:
+        stale, stale_reason = _vp_is_running_mission_stale(
+            row,
+            now_utc=now_utc,
+            stale_seconds=stale_window,
+        )
+        if not stale:
+            continue
+
+        mission_id = str(row["mission_id"] or "").strip()
+        vp_id = str(row["vp_id"] or "").strip()
+        if not mission_id or not vp_id:
+            continue
+        final_status = "cancelled" if int(row["cancel_requested"] or 0) == 1 else "failed"
+        finalized = finalize_vp_mission(
+            conn,
+            mission_id,
+            final_status,
+            result_ref=str(row["result_ref"] or "").strip() or None,
+        )
+        if not finalized:
+            continue
+
+        context = _vp_mission_source_context_from_row(row)
+        append_vp_event(
+            conn,
+            event_id=f"vp-event-{uuid.uuid4().hex}",
+            mission_id=mission_id,
+            vp_id=vp_id,
+            event_type=f"vp.mission.{final_status}",
+            payload={
+                **context,
+                "reason": "stale_running_reconciled",
+                "stale_reason": stale_reason,
+                "storage_lane": lane_label,
+                "reconciled_by": "gateway.startup",
+                "previous_status": "running",
+            },
+        )
+        reconciled += 1
+
+    return reconciled
+
+
+def _reconcile_stale_vp_missions_on_startup() -> int:
+    if not _vp_stale_reconcile_enabled:
+        return 0
+    gateway = get_gateway()
+    conns: list[tuple[str, Any]] = []
+    if hasattr(gateway, "get_vp_db_conn"):
+        try:
+            conns.append(("external", gateway.get_vp_db_conn()))
+        except Exception:
+            pass
+    if hasattr(gateway, "get_coder_vp_db_conn"):
+        try:
+            conns.append(("coder", gateway.get_coder_vp_db_conn()))
+        except Exception:
+            pass
+
+    seen_files: set[str] = set()
+    reconciled_total = 0
+    for lane_label, conn in conns:
+        if conn is None:
+            continue
+        db_file = ""
+        try:
+            row = conn.execute("PRAGMA database_list").fetchone()
+            db_file = str(row["file"] or "") if row else ""
+        except Exception:
+            db_file = ""
+        dedupe_key = f"{lane_label}:{db_file}" if db_file else f"{lane_label}:{id(conn)}"
+        if dedupe_key in seen_files:
+            continue
+        seen_files.add(dedupe_key)
+        reconciled_total += _reconcile_stale_vp_missions_once(
+            conn,
+            lane_label=lane_label,
+            stale_seconds=_vp_stale_reconcile_seconds,
+        )
+    return reconciled_total
+
+
+def _vp_api_error(operation: str, exc: Exception) -> HTTPException:
+    request_id = f"vp-{uuid.uuid4().hex[:10]}"
+    if isinstance(exc, sqlite3.OperationalError) and is_sqlite_lock_error(exc):
+        logger.warning(
+            "VP API lock contention: op=%s request_id=%s error=%s",
+            operation,
+            request_id,
+            exc,
+        )
+        return HTTPException(
+            status_code=503,
+            detail={
+                "code": "vp_db_locked",
+                "message": "VP storage is temporarily busy; retry shortly.",
+                "retryable": True,
+                "request_id": request_id,
+            },
+        )
+
+    logger.exception(
+        "VP API failure: op=%s request_id=%s",
+        operation,
+        request_id,
+    )
+    return HTTPException(
+        status_code=500,
+        detail={
+            "code": "vp_internal_error",
+            "message": "VP operation failed unexpectedly.",
+            "request_id": request_id,
+        },
+    )
+
+
+def _external_vp_conn(gateway: Any) -> Any:
+    vp_conn = None
+    if hasattr(gateway, "get_vp_db_conn"):
+        try:
+            vp_conn = gateway.get_vp_db_conn()
+        except Exception:
+            vp_conn = None
+    if vp_conn is None:
+        raise HTTPException(status_code=503, detail="VP DB not initialized")
+    return vp_conn
 
 
 def _vp_recovery_snapshot(
@@ -1244,16 +1508,25 @@ def _vp_metrics_snapshot(
     vp_id: str,
     mission_limit: int,
     event_limit: int,
+    *,
+    storage_lane: str = "external",
 ) -> dict[str, Any]:
     gateway = get_gateway()
-    vp_conn = None
-    if hasattr(gateway, "get_coder_vp_db_conn"):
-        try:
-            vp_conn = gateway.get_coder_vp_db_conn()
-        except Exception:
-            vp_conn = None
+    primary_conn = None
+    if storage_lane == "coder":
+        if hasattr(gateway, "get_coder_vp_db_conn"):
+            try:
+                primary_conn = gateway.get_coder_vp_db_conn()
+            except Exception:
+                primary_conn = None
+    else:
+        if hasattr(gateway, "get_vp_db_conn"):
+            try:
+                primary_conn = gateway.get_vp_db_conn()
+            except Exception:
+                primary_conn = None
     runtime_conn = getattr(gateway, "_runtime_db_conn", None)
-    conn = vp_conn or runtime_conn
+    conn = primary_conn or runtime_conn
     if conn is None:
         raise HTTPException(status_code=503, detail="Runtime DB not initialized")
 
@@ -1265,7 +1538,7 @@ def _vp_metrics_snapshot(
     # Backward compatibility: if VP data was written to runtime_state.db on older
     # builds, keep dashboard metrics visible during transition.
     if (
-        conn is vp_conn
+        conn is primary_conn
         and runtime_conn is not None
         and not session_row
         and not missions
@@ -1955,6 +2228,233 @@ def _broadcast_system_event(session_id: str, event: dict) -> None:
         "timestamp": datetime.now().isoformat(),
     }
     asyncio.create_task(manager.broadcast(session_id, payload))
+
+
+def _vp_event_bridge_prime_cursor_to_latest() -> None:
+    global _vp_event_bridge_last_rowid
+    gateway = get_gateway()
+    conn = getattr(gateway, "get_vp_db_conn", lambda: None)()
+    if conn is None:
+        return
+    persisted_cursor = get_vp_bridge_cursor(conn, _vp_event_bridge_cursor_key)
+    if persisted_cursor is None:
+        row = conn.execute("SELECT COALESCE(MAX(rowid), 0) AS max_rowid FROM vp_events").fetchone()
+        persisted_cursor = int(row["max_rowid"] or 0) if row else 0
+        upsert_vp_bridge_cursor(conn, _vp_event_bridge_cursor_key, persisted_cursor)
+    _vp_event_bridge_last_rowid = max(0, int(persisted_cursor))
+
+
+def _vp_event_bridge_snapshot() -> dict[str, Any]:
+    gateway = get_gateway()
+    conn = getattr(gateway, "get_vp_db_conn", lambda: None)()
+    if conn is None:
+        return {
+            "enabled": _vp_event_bridge_enabled,
+            "interval_seconds": _vp_event_bridge_interval_seconds,
+            "cursor_key": _vp_event_bridge_cursor_key,
+            "db_ready": False,
+            "in_memory_cursor": _vp_event_bridge_last_rowid,
+            "persisted_cursor": None,
+            "max_rowid": None,
+            "backlog_rows": None,
+            "task_running": bool(_vp_event_bridge_task and not _vp_event_bridge_task.done()),
+            "stop_requested": bool(_vp_event_bridge_stop_event and _vp_event_bridge_stop_event.is_set()),
+            **_vp_event_bridge_metrics,
+        }
+
+    row = conn.execute("SELECT COALESCE(MAX(rowid), 0) AS max_rowid FROM vp_events").fetchone()
+    max_rowid = int(row["max_rowid"] or 0) if row else 0
+    persisted_cursor = get_vp_bridge_cursor(conn, _vp_event_bridge_cursor_key)
+    persisted_value = max(0, int(persisted_cursor or 0))
+    in_memory_cursor = max(0, int(_vp_event_bridge_last_rowid))
+    effective_cursor = max(in_memory_cursor, persisted_value)
+
+    return {
+        "enabled": _vp_event_bridge_enabled,
+        "interval_seconds": _vp_event_bridge_interval_seconds,
+        "cursor_key": _vp_event_bridge_cursor_key,
+        "db_ready": True,
+        "in_memory_cursor": in_memory_cursor,
+        "persisted_cursor": persisted_value,
+        "max_rowid": max_rowid,
+        "backlog_rows": max(0, max_rowid - effective_cursor),
+        "task_running": bool(_vp_event_bridge_task and not _vp_event_bridge_task.done()),
+        "stop_requested": bool(_vp_event_bridge_stop_event and _vp_event_bridge_stop_event.is_set()),
+        **_vp_event_bridge_metrics,
+    }
+
+
+def _vp_event_bridge_control_cursor(
+    *,
+    action: str,
+    requested_rowid: Optional[int],
+) -> dict[str, Any]:
+    global _vp_event_bridge_last_rowid
+    gateway = get_gateway()
+    conn = getattr(gateway, "get_vp_db_conn", lambda: None)()
+    if conn is None:
+        raise HTTPException(status_code=503, detail="VP DB not initialized")
+
+    normalized_action = str(action or "").strip().lower()
+    row = conn.execute("SELECT COALESCE(MAX(rowid), 0) AS max_rowid FROM vp_events").fetchone()
+    max_rowid = int(row["max_rowid"] or 0) if row else 0
+    previous_cursor = get_vp_bridge_cursor(conn, _vp_event_bridge_cursor_key)
+    previous_value = max(0, int(previous_cursor or 0))
+
+    if normalized_action == "reset_to_latest":
+        target_rowid = max_rowid
+    elif normalized_action == "reset_to_zero":
+        target_rowid = 0
+    elif normalized_action == "set":
+        if requested_rowid is None:
+            raise HTTPException(status_code=400, detail="rowid is required when action='set'")
+        parsed = int(requested_rowid)
+        if parsed < 0:
+            raise HTTPException(status_code=400, detail="rowid must be >= 0")
+        target_rowid = min(parsed, max_rowid)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported action. Use: set | reset_to_latest | reset_to_zero",
+        )
+
+    upsert_vp_bridge_cursor(conn, _vp_event_bridge_cursor_key, target_rowid)
+    _vp_event_bridge_last_rowid = target_rowid
+    _vp_event_bridge_metrics["manual_updates"] = int(
+        _vp_event_bridge_metrics.get("manual_updates", 0) or 0
+    ) + 1
+    _vp_event_bridge_metrics["last_manual_update_at"] = datetime.now(timezone.utc).isoformat()
+    _vp_event_bridge_metrics["last_error"] = None
+
+    return {
+        "action": normalized_action,
+        "requested_rowid": requested_rowid,
+        "target_rowid": target_rowid,
+        "max_rowid": max_rowid,
+        "previous_rowid": previous_value,
+        "clamped": (
+            normalized_action == "set"
+            and requested_rowid is not None
+            and int(requested_rowid) != target_rowid
+        ),
+    }
+
+
+def _vp_source_context(conn: Any, mission_id: str) -> dict[str, Any]:
+    mission = get_vp_mission(conn, mission_id)
+    if mission is None:
+        return {}
+    payload = _parse_json_text(mission["payload_json"]) if "payload_json" in mission.keys() else None
+    if not isinstance(payload, dict):
+        payload = {}
+    return {
+        "source_session_id": str(payload.get("source_session_id") or "").strip(),
+        "source_turn_id": str(payload.get("source_turn_id") or "").strip(),
+        "reply_mode": str(payload.get("reply_mode") or "").strip(),
+        "mission_status": str(mission["status"] or "").strip(),
+        "result_ref": str(mission["result_ref"] or "").strip(),
+        "objective": str(mission["objective"] or "").strip(),
+    }
+
+
+def _vp_bridge_event_record(*, event_row: Any, mission_context: dict[str, Any]) -> dict[str, Any]:
+    raw_payload = _parse_json_text(event_row["payload_json"]) if "payload_json" in event_row.keys() else None
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    created_at = str(event_row["created_at"] or datetime.now().isoformat())
+    return {
+        "event_id": f"evt_vp_{event_row['event_id']}",
+        "type": "vp_mission_event",
+        "payload": {
+            "event_type": str(event_row["event_type"] or ""),
+            "mission_id": str(event_row["mission_id"] or ""),
+            "vp_id": str(event_row["vp_id"] or ""),
+            "source_session_id": mission_context.get("source_session_id"),
+            "source_turn_id": mission_context.get("source_turn_id"),
+            "reply_mode": mission_context.get("reply_mode"),
+            "mission_status": mission_context.get("mission_status"),
+            "result_ref": mission_context.get("result_ref"),
+            "objective": mission_context.get("objective"),
+            "event_payload": payload,
+            "event_created_at": created_at,
+        },
+        "created_at": created_at,
+    }
+
+
+def _bridge_vp_events_once(*, limit: int = 200) -> int:
+    global _vp_event_bridge_last_rowid
+    _vp_event_bridge_metrics["cycles"] = int(_vp_event_bridge_metrics.get("cycles", 0) or 0) + 1
+    _vp_event_bridge_metrics["last_run_at"] = datetime.now(timezone.utc).isoformat()
+    _vp_event_bridge_metrics["events_bridged_last"] = 0
+    gateway = get_gateway()
+    conn = getattr(gateway, "get_vp_db_conn", lambda: None)()
+    if conn is None:
+        return 0
+    rows = conn.execute(
+        """
+        SELECT rowid AS rowid, *
+        FROM vp_events
+        WHERE rowid > ?
+        ORDER BY rowid ASC
+        LIMIT ?
+        """,
+        (_vp_event_bridge_last_rowid, max(1, min(int(limit), 2000))),
+    ).fetchall()
+    if not rows:
+        return 0
+
+    bridged = 0
+    cursor_advanced = False
+    for row in rows:
+        rowid = int(row["rowid"] or 0)
+        mission_id = str(row["mission_id"] or "").strip()
+        mission_context = _vp_source_context(conn, mission_id) if mission_id else {}
+        if not mission_context.get("source_session_id"):
+            fallback_payload = _parse_json_text(row["payload_json"]) if "payload_json" in row.keys() else None
+            if isinstance(fallback_payload, dict):
+                source_session_id = str(fallback_payload.get("source_session_id") or "").strip()
+                source_turn_id = str(fallback_payload.get("source_turn_id") or "").strip()
+                if source_session_id:
+                    mission_context["source_session_id"] = source_session_id
+                if source_turn_id:
+                    mission_context["source_turn_id"] = source_turn_id
+        source_session_id = str(mission_context.get("source_session_id") or "").strip()
+        if source_session_id:
+            event = _vp_bridge_event_record(event_row=row, mission_context=mission_context)
+            _enqueue_system_event(source_session_id, event)
+            if source_session_id in manager.session_connections:
+                _broadcast_system_event(source_session_id, event)
+            bridged += 1
+        next_cursor = max(_vp_event_bridge_last_rowid, rowid)
+        if next_cursor != _vp_event_bridge_last_rowid:
+            _vp_event_bridge_last_rowid = next_cursor
+            cursor_advanced = True
+    if cursor_advanced:
+        upsert_vp_bridge_cursor(conn, _vp_event_bridge_cursor_key, _vp_event_bridge_last_rowid)
+    _vp_event_bridge_metrics["events_bridged_last"] = bridged
+    _vp_event_bridge_metrics["events_bridged_total"] = int(
+        _vp_event_bridge_metrics.get("events_bridged_total", 0) or 0
+    ) + bridged
+    if bridged > 0:
+        _vp_event_bridge_metrics["last_error"] = None
+    return bridged
+
+
+async def _vp_event_bridge_loop() -> None:
+    global _vp_event_bridge_stop_event
+    stop_event = _vp_event_bridge_stop_event or asyncio.Event()
+    _vp_event_bridge_stop_event = stop_event
+    while not stop_event.is_set():
+        try:
+            _bridge_vp_events_once()
+        except Exception as exc:
+            logger.warning("VP event bridge iteration failed: %s", exc)
+            _vp_event_bridge_metrics["errors"] = int(_vp_event_bridge_metrics.get("errors", 0) or 0) + 1
+            _vp_event_bridge_metrics["last_error"] = str(exc)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_vp_event_bridge_interval_seconds)
+        except asyncio.TimeoutError:
+            continue
 
 
 def _notification_targets() -> dict:
@@ -3689,6 +4189,7 @@ async def lifespan(app: FastAPI):
     
     # Initialize Heartbeat Service
     global _heartbeat_service, _cron_service, _ops_service, _hooks_service
+    global _vp_event_bridge_task, _vp_event_bridge_stop_event
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
         _heartbeat_service = HeartbeatService(
@@ -3731,9 +4232,44 @@ async def lifespan(app: FastAPI):
         _scheduling_projection.seed_from_runtime()
         logger.info("📈 Scheduling projection enabled (event-driven chron projection path)")
 
+    if _vp_event_bridge_enabled:
+        _vp_event_bridge_prime_cursor_to_latest()
+
+    try:
+        reconciled = _reconcile_stale_vp_missions_on_startup()
+    except Exception:
+        logger.exception("Failed reconciling stale running VP missions on startup")
+    else:
+        if not _vp_stale_reconcile_enabled:
+            logger.info("⏸️ VP stale-mission reconciliation disabled (UA_VP_STALE_RECONCILE_ENABLED)")
+        elif reconciled > 0:
+            logger.warning("🧹 Reconciled %d stale running VP mission(s) on startup", reconciled)
+        else:
+            logger.info("🧹 No stale running VP missions detected on startup")
+
+    if _vp_event_bridge_enabled:
+        _vp_event_bridge_stop_event = asyncio.Event()
+        _vp_event_bridge_task = asyncio.create_task(_vp_event_bridge_loop())
+        logger.info(
+            "🔁 VP event bridge enabled (interval=%.2fs, cursor=%s)",
+            _vp_event_bridge_interval_seconds,
+            _vp_event_bridge_last_rowid,
+        )
+    else:
+        logger.info("⏸️ VP event bridge disabled (UA_VP_EVENT_BRIDGE_ENABLED)")
+
     yield
     
     # Cleanup
+    if _vp_event_bridge_stop_event is not None:
+        _vp_event_bridge_stop_event.set()
+    if _vp_event_bridge_task is not None:
+        try:
+            await _vp_event_bridge_task
+        except Exception:
+            pass
+        _vp_event_bridge_task = None
+    _vp_event_bridge_stop_event = None
     if _heartbeat_service:
         await _heartbeat_service.stop()
     if _cron_service:
@@ -3906,6 +4442,7 @@ async def dashboard_coder_vp_metrics(
             vp_id=vp_identifier,
             mission_limit=clamped_mission_limit,
             event_limit=clamped_event_limit,
+            storage_lane="coder",
         )
         return {"status": "ok", "metrics": metrics}
     except HTTPException as exc:
@@ -5162,6 +5699,22 @@ async def ops_scheduling_runtime_metrics(request: Request):
     return {"metrics": _scheduling_runtime_metrics_snapshot()}
 
 
+@app.get("/api/v1/ops/metrics/vp-bridge")
+async def ops_vp_bridge_metrics(request: Request):
+    _require_ops_auth(request)
+    return {"metrics": _vp_event_bridge_snapshot()}
+
+
+@app.post("/api/v1/ops/vp/bridge/cursor")
+async def ops_vp_bridge_cursor_update(
+    request: Request,
+    body: OpsVpBridgeCursorUpdateRequest,
+):
+    _require_ops_auth(request)
+    update = _vp_event_bridge_control_cursor(action=body.action, requested_rowid=body.rowid)
+    return {"status": "ok", "update": update, "metrics": _vp_event_bridge_snapshot()}
+
+
 @app.get("/api/v1/ops/metrics/vp")
 async def ops_vp_metrics(
     request: Request,
@@ -5173,11 +5726,17 @@ async def ops_vp_metrics(
     vp_identifier = (vp_id or "").strip()
     if not vp_identifier:
         raise HTTPException(status_code=400, detail="vp_id is required")
-    return _vp_metrics_snapshot(
-        vp_id=vp_identifier,
-        mission_limit=max(1, min(int(mission_limit), 500)),
-        event_limit=max(1, min(int(event_limit), 1000)),
-    )
+    try:
+        return _vp_metrics_snapshot(
+            vp_id=vp_identifier,
+            mission_limit=max(1, min(int(mission_limit), 500)),
+            event_limit=max(1, min(int(event_limit), 1000)),
+            storage_lane="external",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _vp_api_error("metrics_external", exc) from exc
 
 
 @app.get("/api/v1/ops/vp/sessions")
@@ -5188,14 +5747,20 @@ async def ops_vp_sessions(
 ):
     _require_ops_auth(request)
     gateway = get_gateway()
-    conn = getattr(gateway, "_runtime_db_conn", None)
-    if conn is None:
-        raise HTTPException(status_code=503, detail="Runtime DB not initialized")
+    conn = _external_vp_conn(gateway)
     statuses = None
     if status.strip().lower() != "all":
         statuses = [part.strip().lower() for part in status.split(",") if part.strip()]
-    rows = list_vp_sessions(conn, statuses=statuses, limit=max(1, min(int(limit), 500)))
-    return {"sessions": [_vp_session_to_dict(row) for row in rows]}
+    try:
+        rows = list_vp_sessions(conn, statuses=statuses, limit=max(1, min(int(limit), 500)))
+        runtime_conn = getattr(gateway, "_runtime_db_conn", None)
+        if not rows and runtime_conn is not None and runtime_conn is not conn:
+            rows = list_vp_sessions(runtime_conn, statuses=statuses, limit=max(1, min(int(limit), 500)))
+        return {"sessions": [_vp_session_to_dict(row) for row in rows]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _vp_api_error("list_sessions", exc) from exc
 
 
 @app.get("/api/v1/ops/vp/missions")
@@ -5207,20 +5772,31 @@ async def ops_vp_missions(
 ):
     _require_ops_auth(request)
     gateway = get_gateway()
-    conn = getattr(gateway, "_runtime_db_conn", None)
-    if conn is None:
-        raise HTTPException(status_code=503, detail="Runtime DB not initialized")
+    conn = _external_vp_conn(gateway)
     statuses = None
     if status.strip().lower() != "all":
         statuses = [part.strip().lower() for part in status.split(",") if part.strip()]
     vp_identifier = vp_id.strip() or None
-    rows = list_vp_missions(
-        conn,
-        vp_id=vp_identifier,
-        statuses=statuses,
-        limit=max(1, min(int(limit), 500)),
-    )
-    return {"missions": [_vp_mission_to_dict(row) for row in rows]}
+    try:
+        rows = list_vp_missions(
+            conn,
+            vp_id=vp_identifier,
+            statuses=statuses,
+            limit=max(1, min(int(limit), 500)),
+        )
+        runtime_conn = getattr(gateway, "_runtime_db_conn", None)
+        if not rows and runtime_conn is not None and runtime_conn is not conn:
+            rows = list_vp_missions(
+                runtime_conn,
+                vp_id=vp_identifier,
+                statuses=statuses,
+                limit=max(1, min(int(limit), 500)),
+            )
+        return {"missions": [_vp_mission_to_dict(row) for row in rows]}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _vp_api_error("list_missions", exc) from exc
 
 
 @app.post("/api/v1/ops/vp/missions/dispatch")
@@ -5230,9 +5806,7 @@ async def ops_vp_dispatch_mission(
 ):
     _require_ops_auth(request)
     gateway = get_gateway()
-    conn = getattr(gateway, "_runtime_db_conn", None)
-    if conn is None:
-        raise HTTPException(status_code=503, detail="Runtime DB not initialized")
+    conn = _external_vp_conn(gateway)
     vp_identifier = body.vp_id.strip()
     if not vp_identifier:
         raise HTTPException(status_code=400, detail="vp_id is required")
@@ -5241,7 +5815,7 @@ async def ops_vp_dispatch_mission(
         raise HTTPException(status_code=400, detail="objective is required")
 
     try:
-        mission = dispatch_mission(
+        mission = dispatch_mission_with_retry(
             conn=conn,
             request=MissionDispatchRequest(
                 vp_id=vp_identifier,
@@ -5260,6 +5834,10 @@ async def ops_vp_dispatch_mission(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _vp_api_error("dispatch_mission", exc) from exc
     return {"mission": _vp_mission_to_dict(mission)}
 
 
@@ -5271,16 +5849,19 @@ async def ops_vp_cancel_mission(
 ):
     _require_ops_auth(request)
     gateway = get_gateway()
-    conn = getattr(gateway, "_runtime_db_conn", None)
-    if conn is None:
-        raise HTTPException(status_code=503, detail="Runtime DB not initialized")
+    conn = _external_vp_conn(gateway)
     if not mission_id.strip():
         raise HTTPException(status_code=400, detail="mission_id is required")
-    cancelled = cancel_mission(conn, mission_id.strip(), reason=(body.reason or "cancel_requested"))
-    if not cancelled:
-        raise HTTPException(status_code=404, detail="Mission not found or not cancellable")
-    mission = get_vp_mission(conn, mission_id.strip())
-    return {"status": "cancel_requested", "mission": _vp_mission_to_dict(mission)}
+    try:
+        cancelled = cancel_mission(conn, mission_id.strip(), reason=(body.reason or "cancel_requested"))
+        if not cancelled:
+            raise HTTPException(status_code=404, detail="Mission not found or not cancellable")
+        mission = get_vp_mission(conn, mission_id.strip())
+        return {"status": "cancel_requested", "mission": _vp_mission_to_dict(mission)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _vp_api_error("cancel_mission", exc) from exc
 
 
 @app.get("/api/v1/ops/metrics/coder-vp")
@@ -5297,11 +5878,17 @@ async def ops_coder_vp_metrics(
 
     clamped_mission_limit = max(1, min(int(mission_limit), 500))
     clamped_event_limit = max(1, min(int(event_limit), 1000))
-    return _vp_metrics_snapshot(
-        vp_id=vp_identifier,
-        mission_limit=clamped_mission_limit,
-        event_limit=clamped_event_limit,
-    )
+    try:
+        return _vp_metrics_snapshot(
+            vp_id=vp_identifier,
+            mission_limit=clamped_mission_limit,
+            event_limit=clamped_event_limit,
+            storage_lane="coder",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _vp_api_error("metrics_coder", exc) from exc
 
 
 @app.get("/api/v1/ops/scheduling/events")
