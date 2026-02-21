@@ -40,5 +40,19 @@
     "preview": "active sessions. To bypass this check, unset the CLAUDECODE environment variable. ERROR:claude_agent_sdk._internal.query:Fatal error in message reader: Command fa ``` #### \ud83d\udee0\ufe0f Tool Call: `Skill` (+946.289s) <details> <summary><b>Input Par...",
     "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-20.md",
     "content_hash": "9d5eebf93852cd63603b70081c84f0776646ebefa41bd63c6a8a81675121edfa"
+  },
+  {
+    "entry_id": "70a0fcf5-0bab-4c9e-99d9-7459c16eb028",
+    "timestamp": "2026-02-21T04:04:34.479718+00:00",
+    "source": "pre_compact",
+    "session_id": "8b6f4b4e-0d42-4c8e-b9b4-98cb7da5b0f7",
+    "tags": [
+      "pre_compact",
+      "trigger:exit"
+    ],
+    "summary": "test-8c18facc-7f25-4693-918c-7252c15d36b2` | | **Trace ID** | `019c7e5d8b34dc5edaf7d6e5258a24e7` | | **Logfire Trace** | [View Full Trace](https://logfire.pydantic.dev/Kjdragan/composio-claudemultiagent?q=trace_id%3D%27019c7e5d8b34dc5eda...",
+    "preview": "test-8c18facc-7f25-4693-918c-7252c15d36b2` | | **Trace ID** | `019c7e5d8b34dc5edaf7d6e5258a24e7` | | **Logfire Trace** | [View Full Trace](https://logfire.pydantic.dev/Kjdragan/composio-claudemultiagent?q=trace_id%3D%27019c7e5d8b34dc5eda...",
+    "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-21.md",
+    "content_hash": "2953719950272adee47843a1c1b9feb4ab9d10a2718337b5d2a0ec8370db1cc2"
   }
 ]

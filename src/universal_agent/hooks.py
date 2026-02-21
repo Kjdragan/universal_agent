@@ -55,6 +55,13 @@ _TOOL_EVENT_CALLBACK_VAR: ContextVar[Optional[Callable[[AgentEvent], None]]] = C
 _EMITTED_TOOL_CALL_IDS_VAR: ContextVar[set] = ContextVar("_EMITTED_TOOL_CALL_IDS", default=set())
 _EMITTED_TOOL_RESULT_IDS_VAR: ContextVar[set] = ContextVar("_EMITTED_TOOL_RESULT_IDS", default=set())
 _EMITTED_ITERATION_END_VAR: ContextVar[bool] = ContextVar("_EMITTED_ITERATION_END", default=False)
+_VP_EXPLICIT_INTENT_PATTERNS = (
+    re.compile(r"\bgeneral(?:ist)?\s+vp\b", re.IGNORECASE),
+    re.compile(r"\bcoder\s+vp\b", re.IGNORECASE),
+    re.compile(r"\bvp\.(?:general|coder)\.primary\b", re.IGNORECASE),
+    re.compile(r"\buse\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+vp\b", re.IGNORECASE),
+    re.compile(r"\bdelegate\s+to\s+(?:the\s+)?(?:general(?:ist)?|coder)\s+vp\b", re.IGNORECASE),
+)
 
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
@@ -236,6 +243,23 @@ def _is_heartbeat_investigation_mode() -> bool:
         return False
     raw = str(os.getenv("UA_HEARTBEAT_INVESTIGATION_ONLY", "1") or "1").strip().lower()
     return raw not in {"0", "false", "no", "off", ""}
+
+
+def _looks_like_explicit_vp_intent(text: Any) -> bool:
+    candidate = str(text or "").strip()
+    if not candidate:
+        return False
+    return any(pattern.search(candidate) for pattern in _VP_EXPLICIT_INTENT_PATTERNS)
+
+
+def _is_subagent_context_for_tool(input_data: dict, primary_transcript_path: Optional[str]) -> bool:
+    parent_tool_use_id = input_data.get("parent_tool_use_id")
+    transcript_path = str(input_data.get("transcript_path", "") or "")
+    return bool(parent_tool_use_id) or (
+        bool(primary_transcript_path)
+        and bool(transcript_path)
+        and transcript_path != primary_transcript_path
+    )
 
 
 def _resolve_tool_target_path(path_value: Any, workspace_dir: str | None) -> Path | None:
@@ -440,6 +464,9 @@ class AgentHookSet:
         self._current_turn_tool_count = 0
         self._current_turn_history = []
         self._skill_candidate_log_path = None
+        self._current_turn_prompt = ""
+        self._requires_vp_tool_path = False
+        self._vp_dispatch_seen_this_turn = False
 
     def build_hooks(self) -> dict:
         """Return the hook dictionary compatible with UniversalAgent."""
@@ -658,6 +685,43 @@ class AgentHookSet:
         tool_input = input_data.get("tool_input", {}) or {}
         if not isinstance(tool_input, dict):
             tool_input = {}
+        try:
+            normalized_tool_name = parse_tool_identity(tool_name).tool_name.lower()
+        except Exception:
+            normalized_tool_name = tool_name.lower()
+
+        if normalized_tool_name == "vp_dispatch_mission":
+            self._vp_dispatch_seen_this_turn = True
+
+        if normalized_tool_name == "task":
+            is_subagent_context = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
+            task_vp_intent = _looks_like_explicit_vp_intent(
+                " ".join(
+                    [
+                        str(tool_input.get("subagent_type", "") or ""),
+                        str(tool_input.get("description", "") or ""),
+                        str(tool_input.get("prompt", "") or ""),
+                    ]
+                )
+            )
+            if not is_subagent_context and not self._vp_dispatch_seen_this_turn and (
+                self._requires_vp_tool_path or task_vp_intent
+            ):
+                return {
+                    "systemMessage": (
+                        "⚠️ Explicit VP routing intent detected. Do not use `Task(...)` for this turn.\n\n"
+                        "Required path:\n"
+                        "1) `vp_dispatch_mission({vp_id: 'vp.general.primary'|'vp.coder.primary', objective, ...})`\n"
+                        "2) `vp_wait_mission({mission_id, ...})`\n"
+                        "3) Return VP result to user."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Explicit VP intent must route through vp_dispatch_mission/vp_wait_mission, not Task.",
+                    },
+                }
 
         if _is_heartbeat_investigation_mode():
             upper_name = tool_name.upper()
@@ -926,6 +990,16 @@ class AgentHookSet:
         """
         UserPromptSubmit Hook: Reset tool counters for new turn and setup usage logging.
         """
+        prompt_text = str(
+            (input_data or {}).get("prompt")
+            or (input_data or {}).get("text")
+            or (input_data or {}).get("user_input")
+            or ""
+        )
+        self._current_turn_prompt = prompt_text
+        self._requires_vp_tool_path = _looks_like_explicit_vp_intent(prompt_text)
+        self._vp_dispatch_seen_this_turn = False
+
         # Reset counters for the new user turn
         self._current_turn_tool_count = 0
         self._current_turn_history = []

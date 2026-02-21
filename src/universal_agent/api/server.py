@@ -75,6 +75,9 @@ TEXT_EXTENSIONS = (
     ".xml",
     ".csv",
 )
+_STORAGE_ROOT_SOURCES = {"local", "mirror"}
+_STORAGE_SCOPES = {"workspaces", "artifacts"}
+_SESSION_PREFIXES = ("session_", "session-hook_", "session_hook_", "tg_", "api_", "vp_")
 
 # Import agent bridge
 from universal_agent.api.agent_bridge import get_agent_bridge
@@ -463,12 +466,42 @@ class VpsSyncRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class VpsStorageDeleteRequest(BaseModel):
+    """Batch delete request for storage explorer entries."""
+
+    scope: str = "workspaces"
+    root_source: str = "local"
+    paths: list[str] = []
+
+
+def _normalize_storage_scope(raw_scope: str) -> str:
+    scope_clean = (raw_scope or "").strip().lower()
+    if scope_clean not in _STORAGE_SCOPES:
+        raise HTTPException(status_code=400, detail="scope must be 'workspaces' or 'artifacts'")
+    return scope_clean
+
+
+def _normalize_storage_root_source(raw_root_source: str) -> str:
+    root_source_clean = (raw_root_source or "").strip().lower() or "local"
+    if root_source_clean not in _STORAGE_ROOT_SOURCES:
+        raise HTTPException(status_code=400, detail="root_source must be 'local' or 'mirror'")
+    return root_source_clean
+
+
+def _storage_root(scope: str, root_source: str) -> Path:
+    scope_clean = _normalize_storage_scope(scope)
+    source_clean = _normalize_storage_root_source(root_source)
+    if scope_clean == "workspaces":
+        return WORKSPACES_DIR if source_clean == "local" else VPS_WORKSPACES_MIRROR_DIR
+    return ARTIFACTS_DIR if source_clean == "local" else VPS_ARTIFACTS_MIRROR_DIR
+
+
 def _resolve_path_under_root(root: Path, path: str = "") -> Path:
     target = root / path if path else root
     try:
         target = target.resolve()
         root_resolved = root.resolve()
-        if not str(target).startswith(str(root_resolved)):
+        if target != root_resolved and root_resolved not in target.parents:
             raise HTTPException(status_code=403, detail="Access denied")
     except HTTPException:
         raise
@@ -523,6 +556,53 @@ def _read_file_from_root(root: Path, file_path: str) -> Response:
     if filename.endswith(TEXT_EXTENSIONS):
         return Response(content=content, media_type="text/plain")
     return Response(content=content, media_type=content_type)
+
+
+def _delete_paths_from_root(root: Path, paths: list[str]) -> dict[str, Any]:
+    deleted: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    seen: set[str] = set()
+    for raw_path in paths:
+        path_clean = str(raw_path or "").strip().strip("/")
+        if not path_clean:
+            continue
+        if path_clean in seen:
+            continue
+        seen.add(path_clean)
+
+        try:
+            target = _resolve_path_under_root(root, path_clean)
+        except HTTPException as exc:
+            errors.append({"path": path_clean, "error": str(exc.detail)})
+            continue
+
+        if target == root:
+            errors.append({"path": path_clean, "error": "Cannot delete storage root"})
+            continue
+        if not target.exists():
+            skipped.append({"path": path_clean, "reason": "not_found"})
+            continue
+
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+                deleted.append({"path": path_clean, "kind": "directory"})
+            else:
+                target.unlink()
+                deleted.append({"path": path_clean, "kind": "file"})
+        except Exception as exc:
+            errors.append({"path": path_clean, "error": str(exc)})
+
+    return {
+        "deleted": deleted,
+        "skipped": skipped,
+        "errors": errors,
+        "deleted_count": len(deleted),
+        "skipped_count": len(skipped),
+        "error_count": len(errors),
+    }
 
 
 def _copytree_merge(src: Path, dst: Path) -> None:
@@ -745,6 +825,8 @@ def _workspace_source_type(workspace_id: str) -> str:
         return "hook"
     if sid.startswith("tg_"):
         return "telegram"
+    if sid.startswith("vp_"):
+        return "vp"
     if sid.startswith("session_") or sid.startswith("api_"):
         return "web"
     return "other"
@@ -794,8 +876,33 @@ def _read_workspace_sync_marker(workspace_dir: Path) -> dict[str, Any]:
     }
 
 
-def _storage_session_items(source: str = "all", limit: int = 100, include_size: bool = True) -> list[dict[str, Any]]:
-    root = VPS_WORKSPACES_MIRROR_DIR
+def _looks_like_session_workspace(workspace_dir: Path) -> bool:
+    workspace_id = workspace_dir.name.lower()
+    if workspace_id.startswith(_SESSION_PREFIXES):
+        return True
+    return any(
+        (workspace_dir / marker_name).exists()
+        for marker_name in ("run.log", "session_checkpoint.json", "trace.json", "sync_ready.json")
+    )
+
+
+def _storage_session_items(
+    source: str = "all",
+    limit: int = 100,
+    include_size: bool = True,
+    *,
+    root: Optional[Path] = None,
+) -> list[dict[str, Any]]:
+    root_path = root or VPS_WORKSPACES_MIRROR_DIR
+    root_resolved = root_path.resolve()
+    root_name = root_resolved.name.lower()
+    if root_name in {"remote_vps_workspaces", "remote_vps_sync_state"}:
+        default_mode = "mirror"
+    else:
+        default_mode = "local"
+    root_source = "mirror" if "remote_vps_" in root_name else default_mode
+
+    root = root_resolved
     if not root.exists() or not root.is_dir():
         return []
 
@@ -803,6 +910,8 @@ def _storage_session_items(source: str = "all", limit: int = 100, include_size: 
     items: list[dict[str, Any]] = []
     for workspace_dir in root.iterdir():
         if not workspace_dir.is_dir():
+            continue
+        if not _looks_like_session_workspace(workspace_dir):
             continue
         workspace_id = workspace_dir.name
         source_type = _workspace_source_type(workspace_id)
@@ -831,6 +940,7 @@ def _storage_session_items(source: str = "all", limit: int = 100, include_size: 
                 "run_log_path": f"{workspace_id}/run.log" if run_log_path.exists() else None,
                 "marker_path": marker.get("marker_path"),
                 "marker_exists": marker.get("marker_exists"),
+                "root_source": root_source,
                 "_workspace_dir": workspace_dir,
             }
         )
@@ -868,8 +978,8 @@ def _extract_artifact_field(payload: Optional[dict[str, Any]], keys: tuple[str, 
     return None
 
 
-def _storage_artifact_items(limit: int = 100) -> list[dict[str, Any]]:
-    root = VPS_ARTIFACTS_MIRROR_DIR
+def _storage_artifact_items(limit: int = 100, *, root: Optional[Path] = None) -> list[dict[str, Any]]:
+    root = root or VPS_ARTIFACTS_MIRROR_DIR
     if not root.exists() or not root.is_dir():
         return []
 
@@ -1318,14 +1428,17 @@ async def vps_sync_now(payload: VpsSyncRequest):
 
 
 @app.get("/api/vps/storage/sessions")
-async def vps_storage_sessions(source: str = "all", limit: int = 100):
+async def vps_storage_sessions(source: str = "all", limit: int = 100, root_source: str = "local"):
     source_clean = (source or "all").strip().lower()
-    if source_clean not in {"all", "web", "hook", "telegram"}:
-        raise HTTPException(status_code=400, detail="source must be one of: all, web, hook, telegram")
+    if source_clean not in {"all", "web", "hook", "telegram", "vp"}:
+        raise HTTPException(status_code=400, detail="source must be one of: all, web, hook, telegram, vp")
+    root_source_clean = _normalize_storage_root_source(root_source)
+    workspace_root = _storage_root("workspaces", root_source_clean)
     limit_clamped = max(1, min(limit, 500))
-    sessions = _storage_session_items(source_clean, limit_clamped, include_size=True)
+    sessions = _storage_session_items(source_clean, limit_clamped, include_size=True, root=workspace_root)
     return {
-        "workspace_root": str(VPS_WORKSPACES_MIRROR_DIR),
+        "workspace_root": str(workspace_root),
+        "root_source": root_source_clean,
         "source": source_clean,
         "limit": limit_clamped,
         "sessions": sessions,
@@ -1333,18 +1446,24 @@ async def vps_storage_sessions(source: str = "all", limit: int = 100):
 
 
 @app.get("/api/vps/storage/artifacts")
-async def vps_storage_artifacts(limit: int = 100):
+async def vps_storage_artifacts(limit: int = 100, root_source: str = "local"):
+    root_source_clean = _normalize_storage_root_source(root_source)
+    artifacts_root = _storage_root("artifacts", root_source_clean)
     limit_clamped = max(1, min(limit, 500))
-    artifacts = _storage_artifact_items(limit_clamped)
+    artifacts = _storage_artifact_items(limit_clamped, root=artifacts_root)
     return {
-        "artifacts_root": str(VPS_ARTIFACTS_MIRROR_DIR),
+        "artifacts_root": str(artifacts_root),
+        "root_source": root_source_clean,
         "limit": limit_clamped,
         "artifacts": artifacts,
     }
 
 
 @app.get("/api/vps/storage/overview")
-async def vps_storage_overview():
+async def vps_storage_overview(root_source: str = "local"):
+    root_source_clean = _normalize_storage_root_source(root_source)
+    workspace_root = _storage_root("workspaces", root_source_clean)
+    artifacts_root = _storage_root("artifacts", root_source_clean)
     probe = await _run_vps_sync_status_probe()
     pending_ready_count = int(probe.get("pending_ready_count") or 0) if probe.get("ok") else 0
     sync_state = str(probe.get("sync_state") or "unknown")
@@ -1353,8 +1472,8 @@ async def vps_storage_overview():
     if not probe.get("ok"):
         sync_state = "unknown"
 
-    sessions = _storage_session_items("all", 500, include_size=False)
-    latest_sessions: dict[str, Optional[dict[str, Any]]] = {"web": None, "hook": None, "telegram": None}
+    sessions = _storage_session_items("all", 500, include_size=False, root=workspace_root)
+    latest_sessions: dict[str, Optional[dict[str, Any]]] = {"web": None, "hook": None, "telegram": None, "vp": None}
     for session in sessions:
         source_type = str(session.get("source_type") or "")
         if source_type in latest_sessions and latest_sessions[source_type] is None:
@@ -1362,7 +1481,7 @@ async def vps_storage_overview():
         if all(latest_sessions.values()):
             break
 
-    artifacts = _storage_artifact_items(1)
+    artifacts = _storage_artifact_items(1, root=artifacts_root)
     latest_artifact = artifacts[0] if artifacts else None
 
     return {
@@ -1373,41 +1492,56 @@ async def vps_storage_overview():
         "lag_seconds": _as_float(probe.get("lag_seconds")),
         "latest_sessions": latest_sessions,
         "latest_artifact": latest_artifact,
-        "workspace_root": str(VPS_WORKSPACES_MIRROR_DIR),
-        "artifacts_root": str(VPS_ARTIFACTS_MIRROR_DIR),
+        "workspace_root": str(workspace_root),
+        "artifacts_root": str(artifacts_root),
+        "root_source": root_source_clean,
         "probe_ok": bool(probe.get("ok")),
         "probe_error": probe.get("error"),
     }
 
 
 @app.get("/api/vps/files")
-async def list_vps_files(scope: str = "workspaces", path: str = ""):
+async def list_vps_files(scope: str = "workspaces", path: str = "", root_source: str = "local"):
     """
     List mirrored VPS files.
 
     scope=workspaces -> configured UA_VPS_WORKSPACES_MIRROR_DIR
     scope=artifacts  -> configured UA_VPS_ARTIFACTS_MIRROR_DIR
     """
-    scope_clean = (scope or "").strip().lower()
-    if scope_clean not in {"workspaces", "artifacts"}:
-        raise HTTPException(status_code=400, detail="scope must be 'workspaces' or 'artifacts'")
-    root = VPS_WORKSPACES_MIRROR_DIR if scope_clean == "workspaces" else VPS_ARTIFACTS_MIRROR_DIR
+    scope_clean = _normalize_storage_scope(scope)
+    root_source_clean = _normalize_storage_root_source(root_source)
+    root = _storage_root(scope_clean, root_source_clean)
     payload = _list_directory(root, path)
     payload["scope"] = scope_clean
+    payload["root_source"] = root_source_clean
     return payload
 
 
 @app.get("/api/vps/file")
-async def read_vps_file(scope: str = "workspaces", path: str = ""):
+async def read_vps_file(scope: str = "workspaces", path: str = "", root_source: str = "local"):
     """Read a file from mirrored VPS files."""
-    scope_clean = (scope or "").strip().lower()
-    if scope_clean not in {"workspaces", "artifacts"}:
-        raise HTTPException(status_code=400, detail="scope must be 'workspaces' or 'artifacts'")
+    scope_clean = _normalize_storage_scope(scope)
+    root_source_clean = _normalize_storage_root_source(root_source)
     path_clean = (path or "").strip()
     if not path_clean:
         raise HTTPException(status_code=400, detail="path is required")
-    root = VPS_WORKSPACES_MIRROR_DIR if scope_clean == "workspaces" else VPS_ARTIFACTS_MIRROR_DIR
+    root = _storage_root(scope_clean, root_source_clean)
     return _read_file_from_root(root, path_clean)
+
+
+@app.post("/api/vps/files/delete")
+async def delete_vps_files(payload: VpsStorageDeleteRequest):
+    scope_clean = _normalize_storage_scope(payload.scope)
+    root_source_clean = _normalize_storage_root_source(payload.root_source)
+    if not isinstance(payload.paths, list) or not payload.paths:
+        raise HTTPException(status_code=400, detail="paths must include at least one entry")
+
+    root = _storage_root(scope_clean, root_source_clean)
+    result = _delete_paths_from_root(root, payload.paths)
+    result["scope"] = scope_clean
+    result["root_source"] = root_source_clean
+    result["root"] = str(root)
+    return result
 
 
 @app.post("/api/approvals")

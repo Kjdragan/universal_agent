@@ -6796,7 +6796,10 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 if event.type == EventType.TOOL_CALL:
                                     tool_call_count += 1
                                     if isinstance(event.data, dict):
-                                        mission_tracker.record_tool_call(str(event.data.get("name") or ""))
+                                        mission_tracker.record_tool_call(
+                                            str(event.data.get("name") or ""),
+                                            tool_input=event.data.get("input"),
+                                        )
                                 elif event.type == EventType.ITERATION_END and isinstance(event.data, dict):
                                     execution_duration_seconds = float(
                                         event.data.get("duration_seconds") or execution_duration_seconds
