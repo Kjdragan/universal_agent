@@ -167,7 +167,7 @@ ssh -i "$SSH_KEY" "$VPS_HOST" "
     echo \"ERROR: VP state DB not found at \$vp_db\" >&2
     exit 47
   fi
-  sqlite3 \"\$vp_db\" \"SELECT vp_id, status, worker_id FROM vp_sessions WHERE vp_id IN ('vp.general.primary','vp.coder.primary') ORDER BY vp_id;\" || true
+  sqlite3 \"\$vp_db\" \"SELECT vp_id, status, session_id, lease_owner FROM vp_sessions WHERE vp_id IN ('vp.general.primary','vp.coder.primary') ORDER BY vp_id;\" || true
   for vp in vp.general.primary vp.coder.primary; do
     ready=\$(sqlite3 \"\$vp_db\" \"SELECT COUNT(1) FROM vp_sessions WHERE vp_id='\$vp' AND status IN ('idle','active');\")
     if [ \"\$ready\" = '0' ]; then
