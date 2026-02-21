@@ -207,7 +207,10 @@ class InterviewConductor:
     
     def _get_interview_options(self) -> ClaudeAgentOptions:
         """Build options for the interview agent."""
-        from universal_agent.utils.model_resolution import resolve_claude_code_model
+        from universal_agent.utils.model_resolution import (
+            resolve_agent_teams_enabled,
+            resolve_claude_code_model,
+        )
 
         return ClaudeAgentOptions(
             model=resolve_claude_code_model(default="sonnet"),
@@ -222,6 +225,11 @@ class InterviewConductor:
             output_format={
                 "type": "json_schema",
                 "schema": Plan.model_json_schema()
+            },
+            env={
+                "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+                if resolve_agent_teams_enabled(default=True)
+                else "0",
             },
             system_prompt=self.build_planning_prompt(),
             max_turns=30

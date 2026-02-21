@@ -7533,7 +7533,10 @@ async def setup_session(
     )
     if attach_stdio:
         setup_log_bridge(agent)
-    from universal_agent.utils.model_resolution import resolve_claude_code_model
+    from universal_agent.utils.model_resolution import (
+        resolve_agent_teams_enabled,
+        resolve_claude_code_model,
+    )
 
     base_system_prompt = _build_legacy_system_prompt(
         workspace_dir=abs_workspace_path,
@@ -7554,6 +7557,9 @@ async def setup_session(
         env={
             "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.getenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000"),
             "MAX_MCP_OUTPUT_TOKENS": os.getenv("MAX_MCP_OUTPUT_TOKENS", "64000"),
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+            if resolve_agent_teams_enabled(default=True)
+            else "0",
             "CURRENT_SESSION_WORKSPACE": abs_workspace_path,
             "UA_ARTIFACTS_DIR": os.path.abspath(
                 os.getenv(

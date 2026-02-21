@@ -405,7 +405,10 @@ class AgentSetup:
                 "mcp__internal__memory_search",
             ])
 
-        from universal_agent.utils.model_resolution import resolve_claude_code_model
+        from universal_agent.utils.model_resolution import (
+            resolve_agent_teams_enabled,
+            resolve_claude_code_model,
+        )
 
         return ClaudeAgentOptions(
             model=resolve_claude_code_model(default="sonnet"),
@@ -415,6 +418,9 @@ class AgentSetup:
             env={
                 "CLAUDE_CODE_MAX_OUTPUT_TOKENS": os.getenv("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "64000"),
                 "MAX_MCP_OUTPUT_TOKENS": os.getenv("MAX_MCP_OUTPUT_TOKENS", "64000"),
+                "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+                if resolve_agent_teams_enabled(default=True)
+                else "0",
                 "CURRENT_SESSION_WORKSPACE": os.path.abspath(self.workspace_dir),
                 # Durable outputs should go here; session workspace is scratch.
                 "UA_ARTIFACTS_DIR": os.path.abspath(
