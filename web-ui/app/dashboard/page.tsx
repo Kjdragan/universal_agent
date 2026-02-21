@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
 import { fetchSessionDirectory, deleteSessionDirectoryEntry, SessionDirectoryItem } from "@/lib/sessionDirectory";
+import { LinkifiedText } from "@/components/LinkifiedText";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -30,6 +32,9 @@ type DashboardNotification = {
 type VpSessionSnapshot = {
   vp_id: string;
   status?: string;
+  effective_status?: string;
+  stale?: boolean;
+  stale_reason?: string | null;
   session_id?: string;
   worker_id?: string;
   lease_expires_at?: string;
@@ -52,9 +57,13 @@ type VpMissionSnapshot = {
   started_at?: string;
   completed_at?: string;
   duration_seconds?: number | null;
+  payload?: Record<string, unknown> | null;
 };
 
 type VpEventSnapshot = {
+  event_id?: string;
+  mission_id?: string;
+  vp_id?: string;
   event_type?: string;
   payload?: Record<string, unknown> | null;
   created_at?: string;
@@ -84,6 +93,79 @@ const EMPTY_SUMMARY: SummaryResponse = {
 
 const VP_IDS = ["vp.coder.primary", "vp.general.primary"] as const;
 const VP_STALE_WINDOW_MS = 15 * 60 * 1000;
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function workspacePathFromResultRef(resultRef?: string | null): string {
+  const ref = asText(resultRef);
+  if (!ref.startsWith("workspace://")) return "";
+  return ref.replace("workspace://", "").trim();
+}
+
+function missionArtifactPath(resultRef?: string | null, artifactRelpath?: string | null): string {
+  const root = workspacePathFromResultRef(resultRef);
+  const rel = asText(artifactRelpath);
+  if (!root || !rel) return "";
+  return `${root.replace(/\/+$/, "")}/${rel.replace(/^\/+/, "")}`;
+}
+
+function workspaceExplorerHref(path?: string | null): string {
+  const normalized = asText(path).replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!normalized) return "";
+  const marker = "AGENT_RUN_WORKSPACES/";
+  const markerIdx = normalized.indexOf(marker);
+  const relativePath = markerIdx >= 0
+    ? normalized.slice(markerIdx + marker.length)
+    : (normalized.startsWith("vp_") || normalized.startsWith("session_") || normalized.startsWith("tg_") || normalized.startsWith("api_"))
+      ? normalized
+      : "";
+  if (!relativePath) return "";
+  if (!relativePath.includes("/")) return "";
+  const params = new URLSearchParams({
+    tab: "explorer",
+    scope: "workspaces",
+    path: relativePath,
+  });
+  return `/storage?${params.toString()}`;
+}
+
+function RefLine({
+  label,
+  value,
+  storagePath,
+}: {
+  label: string;
+  value?: string | null;
+  storagePath?: string | null;
+}) {
+  const text = asText(value);
+  if (!text) return null;
+  const explorerHref = workspaceExplorerHref(storagePath || "");
+  return (
+    <p className="mt-1 flex flex-wrap items-start gap-2 text-[10px] text-slate-400">
+      <span className="text-slate-500">{label}:</span>
+      <span className="min-w-[180px] flex-1 break-all">
+        <LinkifiedText text={text} />
+      </span>
+      {explorerHref && (
+        <Link
+          href={explorerHref}
+          className="rounded border border-cyan-900/70 bg-cyan-950/40 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-cyan-200 hover:bg-cyan-900/45"
+        >
+          Open in Storage
+        </Link>
+      )}
+    </p>
+  );
+}
 
 function formatLocalDateTime(value?: string | number | null): string {
   if (!value) return "--";
@@ -360,6 +442,16 @@ export default function DashboardPage() {
     [selectedVpId, vpSessions],
   );
 
+  const vpMissionById = useMemo(() => {
+    const index = new Map<string, VpMissionSnapshot>();
+    for (const mission of vpMissions) {
+      if (mission.mission_id) {
+        index.set(mission.mission_id, mission);
+      }
+    }
+    return index;
+  }, [vpMissions]);
+
   const missionCountByStatus = useMemo(() => {
     const counts = {
       queued: 0,
@@ -396,6 +488,11 @@ export default function DashboardPage() {
   const activeWorkerCount = useMemo(
     () =>
       filteredVpSessions.filter((session) => {
+        if (session.stale === true) return false;
+        const effectiveStatus = String(session.effective_status || "").toLowerCase();
+        if (effectiveStatus) {
+          return ["active", "running", "healthy"].includes(effectiveStatus);
+        }
         if (!["active", "running", "healthy"].includes(String(session.status || "").toLowerCase())) {
           return false;
         }
@@ -747,10 +844,11 @@ export default function DashboardPage() {
             const metrics = vpMetrics[vpId];
             const vpSession = vpSessions.find((row) => row.vp_id === vpId);
             const p95Latency = metrics?.latency_seconds?.p95_seconds;
+            const workerStatus = String(vpSession?.effective_status || vpSession?.status || metrics?.session?.status || "unknown");
             return (
               <div key={vpId} className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-3 text-xs text-slate-300">
                 <p className="text-[10px] uppercase tracking-[0.12em] text-slate-500">{vpId}</p>
-                <p className="mt-1">worker status: {vpSession?.status || metrics?.session?.status || "unknown"}</p>
+                <p className="mt-1">worker status: {workerStatus}</p>
                 <p className="mt-1">session: {vpSession?.session_id || metrics?.session?.session_id || "--"}</p>
                 <p className="mt-1">
                   queue/running: {metrics?.mission_counts?.queued ?? 0}/{metrics?.mission_counts?.running ?? 0}
@@ -782,6 +880,11 @@ export default function DashboardPage() {
                 Date.now() - updatedTs > VP_STALE_WINDOW_MS;
               const effectiveStatus = staleByClaim || staleByNoClaim ? "stalled" : missionStatus;
               const cancellable = missionStatus === "queued" || (missionStatus === "running" && effectiveStatus !== "stalled");
+              const missionPayload = asRecord(mission.payload);
+              const artifactRelpath = asText(missionPayload.artifact_relpath);
+              const resultRef = asText(mission.result_ref);
+              const resultPath = workspacePathFromResultRef(resultRef);
+              const artifactPath = missionArtifactPath(resultRef, artifactRelpath);
               return (
                 <div key={mission.mission_id} className="rounded border border-slate-800 bg-slate-900/40 px-2 py-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -799,9 +902,11 @@ export default function DashboardPage() {
                     )}
                   </div>
                   <p className="mt-1 text-slate-200">{mission.objective || "(no objective)"}</p>
-                  <p className="mt-1 text-[10px] text-slate-500">
-                    updated: {formatLocalDateTime(mission.updated_at)} · result: {mission.result_ref || "--"}
-                  </p>
+                  <p className="mt-1 text-[10px] text-slate-500">updated: {formatLocalDateTime(mission.updated_at)}</p>
+                  <RefLine label="result_ref" value={resultRef} />
+                  <RefLine label="result_path" value={resultPath} storagePath={resultPath} />
+                  <RefLine label="artifact_relpath" value={artifactRelpath} />
+                  <RefLine label="artifact_path" value={artifactPath} storagePath={artifactPath} />
                 </div>
               );
             })}
@@ -814,12 +919,43 @@ export default function DashboardPage() {
         {recentVpEvents.length > 0 && (
           <div className="mt-3 rounded-lg border border-cyan-900/60 bg-cyan-950/10 p-3 text-xs">
             <p className="text-[10px] uppercase tracking-[0.12em] text-cyan-300">Recent VP Events</p>
-            <div className="mt-2 space-y-1 text-cyan-100">
-              {recentVpEvents.map((event, idx) => (
-                <p key={`${event.created_at || "event"}-${idx}`}>
-                  {formatLocalDateTime(event.created_at)} · {event.event_type || "event"}
-                </p>
-              ))}
+            <div className="mt-2 space-y-2 text-cyan-100">
+              {recentVpEvents.map((event, idx) => {
+                const eventPayload = asRecord(event.payload);
+                const missionId = asText(event.mission_id) || asText(eventPayload.mission_id);
+                const vpId = asText(event.vp_id) || asText(eventPayload.vp_id);
+                const mission = missionId ? vpMissionById.get(missionId) : undefined;
+                const missionStatus = asText(mission?.status);
+                const resultRef = asText(mission?.result_ref);
+                const resultPath = workspacePathFromResultRef(resultRef);
+                const artifactRelpath = asText(eventPayload.artifact_relpath);
+                const artifactPath = missionArtifactPath(resultRef, artifactRelpath);
+                const receiptRelpath = asText(eventPayload.mission_receipt_relpath);
+                const receiptPath = missionArtifactPath(resultRef, receiptRelpath);
+                const syncReadyRelpath = asText(eventPayload.sync_ready_marker_relpath);
+                const syncReadyPath = missionArtifactPath(resultRef, syncReadyRelpath);
+                return (
+                  <div
+                    key={`${event.event_id || event.created_at || "event"}-${idx}`}
+                    className="rounded border border-cyan-900/60 bg-cyan-950/10 px-2 py-1.5"
+                  >
+                    <p>
+                      {formatLocalDateTime(event.created_at)} · {event.event_type || "event"}
+                    </p>
+                    <p className="mt-1 text-[10px] text-cyan-200/80">
+                      {missionId || "--"} · {vpId || "--"} · {missionStatus || "--"}
+                    </p>
+                    <RefLine label="result_ref" value={resultRef} />
+                    <RefLine label="result_path" value={resultPath} storagePath={resultPath} />
+                    <RefLine label="artifact_relpath" value={artifactRelpath} />
+                    <RefLine label="artifact_path" value={artifactPath} storagePath={artifactPath} />
+                    <RefLine label="mission_receipt_relpath" value={receiptRelpath} />
+                    <RefLine label="mission_receipt_path" value={receiptPath} storagePath={receiptPath} />
+                    <RefLine label="sync_ready_marker_relpath" value={syncReadyRelpath} />
+                    <RefLine label="sync_ready_marker_path" value={syncReadyPath} storagePath={syncReadyPath} />
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

@@ -3,6 +3,7 @@ import json
 import shutil
 import time
 import asyncio
+import sqlite3
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,9 @@ from universal_agent.cron_service import CronService
 from universal_agent.durable.state import (
     append_vp_event,
     append_vp_session_event,
+    get_vp_mission,
+    get_vp_bridge_cursor,
+    list_vp_events,
     upsert_vp_mission,
     upsert_vp_session,
 )
@@ -35,6 +39,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str((tmp_path / "coder_vp_state.db").resolve()))
+    monkeypatch.setenv("UA_VP_DB_PATH", str((tmp_path / "vp_state.db").resolve()))
     
     # We must reset the global singletons to force re-init with new path
     monkeypatch.setattr(gateway_server, "_gateway", None)
@@ -49,6 +54,23 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_calendar_missed_events", {})
     monkeypatch.setattr(gateway_server, "_calendar_missed_notifications", set())
     monkeypatch.setattr(gateway_server, "_calendar_change_proposals", {})
+    monkeypatch.setattr(gateway_server, "_vp_event_bridge_task", None)
+    monkeypatch.setattr(gateway_server, "_vp_event_bridge_stop_event", None)
+    monkeypatch.setattr(gateway_server, "_vp_event_bridge_last_rowid", 0)
+    monkeypatch.setattr(
+        gateway_server,
+        "_vp_event_bridge_metrics",
+        {
+            "cycles": 0,
+            "events_bridged_total": 0,
+            "events_bridged_last": 0,
+            "errors": 0,
+            "last_error": None,
+            "last_run_at": None,
+            "manual_updates": 0,
+            "last_manual_update_at": None,
+        },
+    )
     monkeypatch.setattr(gateway_server, "SCHED_EVENT_PROJECTION_ENABLED", False)
     monkeypatch.setattr(gateway_server, "HEARTBEAT_ENABLED", False)
     monkeypatch.setattr(gateway_server, "CRON_ENABLED", False)
@@ -148,6 +170,37 @@ def _create_dummy_session(base_dir: Path, session_id: str, logs: list[str]):
     if logs:
         (session_dir / "run.log").write_text("\n".join(logs), encoding="utf-8")
     return session_dir
+
+
+def test_gateway_lifespan_runs_stale_reconcile_on_startup(tmp_path, monkeypatch):
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
+    monkeypatch.setenv("UA_CODER_VP_DB_PATH", str((tmp_path / "coder_vp_state.db").resolve()))
+    monkeypatch.setenv("UA_VP_DB_PATH", str((tmp_path / "vp_state.db").resolve()))
+    monkeypatch.setenv("UA_GATEWAY_PORT", "0")
+    monkeypatch.setenv("UA_DISABLE_HEARTBEAT", "1")
+    monkeypatch.setenv("UA_DISABLE_CRON", "1")
+    monkeypatch.setattr(gateway_server, "_gateway", None)
+    monkeypatch.setattr(gateway_server, "_ops_service", None)
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_session_runtime", {})
+    monkeypatch.setattr(gateway_server, "_vp_event_bridge_task", None)
+    monkeypatch.setattr(gateway_server, "_vp_event_bridge_stop_event", None)
+    monkeypatch.setattr(gateway_server, "_vp_event_bridge_last_rowid", 0)
+    monkeypatch.setattr(gateway_server, "HEARTBEAT_ENABLED", False)
+    monkeypatch.setattr(gateway_server, "CRON_ENABLED", False)
+    monkeypatch.setattr(gateway_server, "_vp_event_bridge_enabled", False)
+
+    calls: list[int] = []
+
+    def _fake_reconcile() -> int:
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr(gateway_server, "_reconcile_stale_vp_missions_on_startup", _fake_reconcile)
+    with TestClient(gateway_server.app):
+        pass
+    assert len(calls) == 1
 
 
 def test_hooks_readyz_reports_not_initialized(client, monkeypatch):
@@ -780,6 +833,228 @@ def test_ops_vp_dispatch_list_cancel_flow(client):
     assert cancel_resp.json()["status"] == "cancel_requested"
 
 
+def test_ops_vp_sessions_reports_effective_stale_status(client):
+    gateway = gateway_server.get_gateway()
+    conn = gateway.get_vp_db_conn()
+    assert conn is not None
+
+    stale_vp_id = f"vp.general.stale.{time.time_ns()}"
+    fresh_vp_id = f"vp.general.fresh.{time.time_ns()}"
+    old_ts = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    now_ts = datetime.now(timezone.utc).isoformat()
+
+    upsert_vp_session(
+        conn=conn,
+        vp_id=stale_vp_id,
+        runtime_id="runtime.general.external",
+        status="active",
+        session_id=f"{stale_vp_id}.session",
+        workspace_dir="/tmp/vp-stale-session",
+    )
+    conn.execute(
+        "UPDATE vp_sessions SET last_heartbeat_at = ?, updated_at = ? WHERE vp_id = ?",
+        (old_ts, old_ts, stale_vp_id),
+    )
+    conn.commit()
+
+    upsert_vp_session(
+        conn=conn,
+        vp_id=fresh_vp_id,
+        runtime_id="runtime.general.external",
+        status="active",
+        session_id=f"{fresh_vp_id}.session",
+        workspace_dir="/tmp/vp-fresh-session",
+        last_heartbeat_at=now_ts,
+    )
+
+    resp = client.get("/api/v1/ops/vp/sessions?status=all&limit=100")
+    assert resp.status_code == 200
+    rows = resp.json()["sessions"]
+    stale_row = next(item for item in rows if item["vp_id"] == stale_vp_id)
+    fresh_row = next(item for item in rows if item["vp_id"] == fresh_vp_id)
+
+    assert stale_row["status"] == "active"
+    assert stale_row["stale"] is True
+    assert stale_row["effective_status"] == "stale"
+    assert stale_row["stale_reason"] in {"heartbeat_timeout", "update_timeout"}
+
+    assert fresh_row["status"] == "active"
+    assert fresh_row["stale"] is False
+    assert fresh_row["effective_status"] == "active"
+
+
+def test_reconcile_stale_running_mission_marks_failed_and_emits_event(client):
+    gateway = gateway_server.get_gateway()
+    conn = gateway.get_vp_db_conn()
+    assert conn is not None
+
+    vp_id = f"vp.general.reconcile.failed.{time.time_ns()}"
+    mission_id = f"{vp_id}.mission"
+    source_session_id = f"session.{time.time_ns()}"
+    source_turn_id = f"turn.{time.time_ns()}"
+    now_utc = datetime.now(timezone.utc)
+    started_at = (now_utc - timedelta(minutes=45)).isoformat()
+    claim_expires_at = (now_utc - timedelta(minutes=30)).isoformat()
+
+    upsert_vp_session(
+        conn=conn,
+        vp_id=vp_id,
+        runtime_id="runtime.general.external",
+        status="active",
+        session_id=f"{vp_id}.session",
+        workspace_dir="/tmp/vp-reconcile-failed",
+    )
+    upsert_vp_mission(
+        conn=conn,
+        mission_id=mission_id,
+        vp_id=vp_id,
+        status="running",
+        objective="stale-running mission should be reconciled",
+        payload={
+            "source_session_id": source_session_id,
+            "source_turn_id": source_turn_id,
+            "reply_mode": "async",
+        },
+        started_at=started_at,
+        claim_expires_at=claim_expires_at,
+        worker_id="worker.reconcile.failed",
+        result_ref=f"workspace:///tmp/vp/{mission_id}",
+    )
+
+    reconciled = gateway_server._reconcile_stale_vp_missions_once(
+        conn,
+        lane_label="external",
+        stale_seconds=300,
+    )
+    assert reconciled == 1
+
+    mission = get_vp_mission(conn, mission_id)
+    assert mission is not None
+    assert mission["status"] == "failed"
+    assert mission["completed_at"]
+    assert mission["claim_expires_at"] is None
+
+    events = list_vp_events(conn, mission_id=mission_id, limit=10)
+    reconcile_events = [row for row in events if row["event_type"] == "vp.mission.failed"]
+    assert reconcile_events
+    payload = json.loads(reconcile_events[-1]["payload_json"] or "{}")
+    assert payload["reason"] == "stale_running_reconciled"
+    assert payload["stale_reason"] == "claim_expired"
+    assert payload["storage_lane"] == "external"
+    assert payload["reconciled_by"] == "gateway.startup"
+    assert payload["source_session_id"] == source_session_id
+    assert payload["source_turn_id"] == source_turn_id
+    assert payload["reply_mode"] == "async"
+
+
+def test_reconcile_stale_running_cancel_requested_mission_marks_cancelled(client):
+    gateway = gateway_server.get_gateway()
+    conn = gateway.get_vp_db_conn()
+    assert conn is not None
+
+    vp_id = f"vp.general.reconcile.cancelled.{time.time_ns()}"
+    mission_id = f"{vp_id}.mission"
+    started_at = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
+
+    upsert_vp_session(
+        conn=conn,
+        vp_id=vp_id,
+        runtime_id="runtime.general.external",
+        status="active",
+        session_id=f"{vp_id}.session",
+        workspace_dir="/tmp/vp-reconcile-cancelled",
+    )
+    upsert_vp_mission(
+        conn=conn,
+        mission_id=mission_id,
+        vp_id=vp_id,
+        status="running",
+        objective="stale cancel requested mission should be reconciled",
+        cancel_requested=True,
+        started_at=started_at,
+        worker_id="worker.reconcile.cancelled",
+    )
+    conn.execute(
+        "UPDATE vp_missions SET updated_at = ? WHERE mission_id = ?",
+        ((datetime.now(timezone.utc) - timedelta(minutes=35)).isoformat(), mission_id),
+    )
+    conn.commit()
+
+    reconciled = gateway_server._reconcile_stale_vp_missions_once(
+        conn,
+        lane_label="external",
+        stale_seconds=120,
+    )
+    assert reconciled == 1
+
+    mission = get_vp_mission(conn, mission_id)
+    assert mission is not None
+    assert mission["status"] == "cancelled"
+    assert mission["completed_at"]
+    assert mission["claim_expires_at"] is None
+
+    events = list_vp_events(conn, mission_id=mission_id, limit=10)
+    reconcile_events = [row for row in events if row["event_type"] == "vp.mission.cancelled"]
+    assert reconcile_events
+    payload = json.loads(reconcile_events[-1]["payload_json"] or "{}")
+    assert payload["reason"] == "stale_running_reconciled"
+    assert payload["storage_lane"] == "external"
+    assert payload["reconciled_by"] == "gateway.startup"
+    assert payload["previous_status"] == "running"
+    assert payload["stale_reason"] in {"updated_at_timeout", "started_at_timeout"}
+
+
+def test_ops_vp_dispatch_lock_returns_retryable_503(client, monkeypatch):
+    def _raise_locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(gateway_server, "dispatch_mission_with_retry", _raise_locked)
+    resp = client.post(
+        "/api/v1/ops/vp/missions/dispatch",
+        json={
+            "vp_id": "vp.general.primary",
+            "objective": "Trigger locked error",
+        },
+    )
+    assert resp.status_code == 503
+    payload = resp.json()
+    detail = payload.get("detail", {})
+    assert detail.get("code") == "vp_db_locked"
+    assert detail.get("retryable") is True
+
+
+def test_ops_vp_missions_duration_handles_mixed_timezone_values(client):
+    gateway = gateway_server.get_gateway()
+    conn = gateway.get_vp_db_conn()
+    assert conn is not None
+
+    vp_id = f"vp.general.tz.{time.time_ns()}"
+    mission_id = f"{vp_id}.mission"
+    upsert_vp_session(
+        conn=conn,
+        vp_id=vp_id,
+        runtime_id="runtime.general.external",
+        status="active",
+        session_id=f"{vp_id}.session",
+        workspace_dir="/tmp/vp-general-tz",
+    )
+    upsert_vp_mission(
+        conn=conn,
+        mission_id=mission_id,
+        vp_id=vp_id,
+        status="completed",
+        objective="timezone normalization check",
+        started_at="2026-02-21T10:00:00",
+        completed_at="2026-02-21T10:00:05+00:00",
+    )
+
+    resp = client.get(f"/api/v1/ops/vp/missions?vp_id={vp_id}&status=completed&limit=20")
+    assert resp.status_code == 200
+    missions = resp.json()["missions"]
+    mission = next(item for item in missions if item["mission_id"] == mission_id)
+    assert mission["duration_seconds"] == 5.0
+
+
 def test_ops_vp_general_worker_execution_and_workproduct_tracking(client, tmp_path):
     class _FakeGeneralistClient(VpClient):
         async def run_mission(self, *, mission, workspace_root):
@@ -813,7 +1088,7 @@ def test_ops_vp_general_worker_execution_and_workproduct_tracking(client, tmp_pa
     mission_id = dispatch_resp.json()["mission"]["mission_id"]
 
     gateway = gateway_server.get_gateway()
-    conn = getattr(gateway, "_runtime_db_conn", None)
+    conn = getattr(gateway, "_vp_db_conn", None)
     assert conn is not None
 
     loop = VpWorkerLoop(
@@ -837,6 +1112,20 @@ def test_ops_vp_general_worker_execution_and_workproduct_tracking(client, tmp_pa
 
     workspace_path = Path(result_ref.replace("workspace://", "", 1))
     assert (workspace_path / "work_products" / "summary.md").exists()
+    receipt_path = workspace_path / "mission_receipt.json"
+    marker_path = workspace_path / "sync_ready.json"
+    assert receipt_path.exists()
+    assert marker_path.exists()
+
+    receipt_payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt_payload["mission_id"] == mission_id
+    assert receipt_payload["status"] == "completed"
+    assert receipt_payload["outcome"]["payload"]["artifact_relpath"] == "work_products/summary.md"
+
+    marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    assert marker_payload["mission_id"] == mission_id
+    assert marker_payload["state"] == "completed"
+    assert marker_payload["ready"] is True
 
     metrics_resp = client.get("/api/v1/ops/metrics/vp?vp_id=vp.general.primary&mission_limit=20&event_limit=50")
     assert metrics_resp.status_code == 200
@@ -844,6 +1133,294 @@ def test_ops_vp_general_worker_execution_and_workproduct_tracking(client, tmp_pa
     assert metrics["mission_counts"].get("completed", 0) >= 1
     assert metrics["event_counts"].get("vp.mission.started", 0) >= 1
     assert metrics["event_counts"].get("vp.mission.completed", 0) >= 1
+
+
+def test_vp_event_bridge_injects_lifecycle_events_into_source_session_feed(client, tmp_path):
+    session_resp = client.post("/api/v1/sessions", json={"user_id": "vp_bridge_user"})
+    assert session_resp.status_code == 200
+    source_session_id = session_resp.json()["session_id"]
+
+    class _FakeGeneralistClient(VpClient):
+        async def run_mission(self, *, mission, workspace_root):
+            mission_id = str(mission.get("mission_id") or "mission")
+            mission_dir = (workspace_root / mission_id).resolve()
+            work_products_dir = mission_dir / "work_products"
+            work_products_dir.mkdir(parents=True, exist_ok=True)
+            (work_products_dir / "result.md").write_text("# Result\n\nok\n", encoding="utf-8")
+            return MissionOutcome(
+                status="completed",
+                result_ref=f"workspace://{mission_dir}",
+                payload={"artifact_relpath": "work_products/result.md"},
+            )
+
+    dispatch_resp = client.post(
+        "/api/v1/ops/vp/missions/dispatch",
+        json={
+            "vp_id": "vp.general.primary",
+            "mission_type": "general_task",
+            "objective": "Bridge this mission back to session feed.",
+            "constraints": {},
+            "budget": {"max_minutes": 5},
+            "idempotency_key": "vp-bridge-session-events-1",
+            "source_session_id": source_session_id,
+            "source_turn_id": "turn-bridge-1",
+            "reply_mode": "async",
+        },
+    )
+    assert dispatch_resp.status_code == 200
+    mission_id = dispatch_resp.json()["mission"]["mission_id"]
+
+    gateway = gateway_server.get_gateway()
+    conn = gateway.get_vp_db_conn()
+    assert conn is not None
+
+    loop = VpWorkerLoop(
+        conn=conn,
+        vp_id="vp.general.primary",
+        workspace_base=tmp_path,
+        poll_interval_seconds=1,
+        lease_ttl_seconds=60,
+    )
+    loop._client = _FakeGeneralistClient()  # type: ignore[assignment]
+    asyncio.run(loop._tick())
+
+    bridged_count = gateway_server._bridge_vp_events_once()
+    assert bridged_count >= 1
+
+    events_resp = client.get(f"/api/v1/system/events?session_id={source_session_id}")
+    assert events_resp.status_code == 200
+    events = events_resp.json()["events"]
+    vp_events = [item for item in events if item.get("type") == "vp_mission_event"]
+    assert vp_events
+    assert any(item.get("payload", {}).get("mission_id") == mission_id for item in vp_events)
+    completed_events = [
+        item
+        for item in vp_events
+        if item.get("payload", {}).get("event_type") == "vp.mission.completed"
+    ]
+    assert completed_events
+    assert any(
+        str(item.get("payload", {}).get("result_ref") or "").startswith("workspace://")
+        for item in vp_events
+    )
+    assert any(
+        item.get("payload", {}).get("mission_status") == "completed"
+        for item in completed_events
+    )
+    assert any(
+        item.get("payload", {}).get("event_payload", {}).get("artifact_relpath")
+        == "work_products/result.md"
+        for item in completed_events
+    )
+    assert any(
+        item.get("payload", {}).get("event_payload", {}).get("mission_receipt_relpath")
+        == "mission_receipt.json"
+        for item in completed_events
+    )
+    assert any(
+        item.get("payload", {}).get("event_payload", {}).get("sync_ready_marker_relpath")
+        == "sync_ready.json"
+        for item in completed_events
+    )
+
+
+def test_vp_event_bridge_cursor_persists_across_restart_and_prevents_duplicates(client, tmp_path):
+    session_resp = client.post("/api/v1/sessions", json={"user_id": "vp_bridge_cursor_user"})
+    assert session_resp.status_code == 200
+    source_session_id = session_resp.json()["session_id"]
+
+    class _FakeGeneralistClient(VpClient):
+        async def run_mission(self, *, mission, workspace_root):
+            mission_id = str(mission.get("mission_id") or "mission")
+            mission_dir = (workspace_root / mission_id).resolve()
+            wp = mission_dir / "work_products"
+            wp.mkdir(parents=True, exist_ok=True)
+            (wp / "result.md").write_text("# Result\n\ncursor test\n", encoding="utf-8")
+            return MissionOutcome(
+                status="completed",
+                result_ref=f"workspace://{mission_dir}",
+                payload={"artifact_relpath": "work_products/result.md"},
+            )
+
+    dispatch_resp = client.post(
+        "/api/v1/ops/vp/missions/dispatch",
+        json={
+            "vp_id": "vp.general.primary",
+            "mission_type": "general_task",
+            "objective": "Persist bridge cursor",
+            "constraints": {},
+            "budget": {"max_minutes": 5},
+            "idempotency_key": "vp-bridge-cursor-1",
+            "source_session_id": source_session_id,
+            "source_turn_id": "turn-cursor-1",
+            "reply_mode": "async",
+        },
+    )
+    assert dispatch_resp.status_code == 200
+    mission_id = dispatch_resp.json()["mission"]["mission_id"]
+
+    gateway = gateway_server.get_gateway()
+    conn = gateway.get_vp_db_conn()
+    assert conn is not None
+
+    loop = VpWorkerLoop(
+        conn=conn,
+        vp_id="vp.general.primary",
+        workspace_base=tmp_path,
+        poll_interval_seconds=1,
+        lease_ttl_seconds=60,
+    )
+    loop._client = _FakeGeneralistClient()  # type: ignore[assignment]
+    asyncio.run(loop._tick())
+
+    first_count = gateway_server._bridge_vp_events_once()
+    assert first_count >= 1
+
+    cursor_before_restart = get_vp_bridge_cursor(conn, "gateway.session_feed")
+    assert cursor_before_restart is not None and cursor_before_restart > 0
+
+    # Simulate gateway restart: clear in-memory cursor + queue, then re-prime from DB.
+    gateway_server._vp_event_bridge_last_rowid = 0
+    gateway_server._system_events[source_session_id] = []
+    gateway_server._vp_event_bridge_prime_cursor_to_latest()
+    assert gateway_server._vp_event_bridge_last_rowid == cursor_before_restart
+
+    duplicate_count = gateway_server._bridge_vp_events_once()
+    assert duplicate_count == 0
+    events_resp = client.get(f"/api/v1/system/events?session_id={source_session_id}")
+    assert events_resp.status_code == 200
+    assert events_resp.json()["events"] == []
+
+    append_vp_event(
+        conn=conn,
+        event_id=f"vp-event-cursor-{time.time_ns()}",
+        mission_id=mission_id,
+        vp_id="vp.general.primary",
+        event_type="vp.mission.progress",
+        payload={"source_session_id": source_session_id, "note": "post-restart-progress"},
+    )
+
+    new_count = gateway_server._bridge_vp_events_once()
+    assert new_count == 1
+    cursor_after_new = get_vp_bridge_cursor(conn, "gateway.session_feed")
+    assert cursor_after_new is not None and cursor_after_new > cursor_before_restart
+
+    events_resp = client.get(f"/api/v1/system/events?session_id={source_session_id}")
+    assert events_resp.status_code == 200
+    events = events_resp.json()["events"]
+    vp_events = [item for item in events if item.get("type") == "vp_mission_event"]
+    assert any(item.get("payload", {}).get("event_type") == "vp.mission.progress" for item in vp_events)
+
+
+def test_ops_vp_bridge_metrics_endpoint_reports_cursor_and_backlog(client):
+    resp = client.get("/api/v1/ops/metrics/vp-bridge")
+    assert resp.status_code == 200
+    metrics = resp.json()["metrics"]
+    assert metrics["cursor_key"] == "gateway.session_feed"
+    assert metrics["db_ready"] is True
+    assert isinstance(metrics["backlog_rows"], int)
+    assert metrics["backlog_rows"] >= 0
+    assert "events_bridged_total" in metrics
+    assert "cycles" in metrics
+
+
+def test_ops_vp_bridge_metrics_endpoint_handles_missing_vp_db(client, monkeypatch):
+    gateway = gateway_server.get_gateway()
+    monkeypatch.setattr(gateway, "_vp_db_conn", None)
+
+    resp = client.get("/api/v1/ops/metrics/vp-bridge")
+    assert resp.status_code == 200
+    metrics = resp.json()["metrics"]
+    assert metrics["db_ready"] is False
+    assert metrics["persisted_cursor"] is None
+
+
+def test_ops_vp_bridge_cursor_update_controls_persisted_cursor(client):
+    gateway = gateway_server.get_gateway()
+    conn = gateway.get_vp_db_conn()
+    assert conn is not None
+
+    vp_id = f"vp.general.bridge.control.{time.time_ns()}"
+    mission_id = f"{vp_id}.mission"
+    upsert_vp_session(
+        conn=conn,
+        vp_id=vp_id,
+        runtime_id="runtime.general.external",
+        status="active",
+        session_id=f"{vp_id}.session",
+        workspace_dir="/tmp/vp-bridge-control",
+    )
+    upsert_vp_mission(
+        conn=conn,
+        mission_id=mission_id,
+        vp_id=vp_id,
+        status="queued",
+        objective="bridge cursor control seed mission",
+    )
+    append_vp_event(
+        conn=conn,
+        event_id=f"{mission_id}.evt.1",
+        mission_id=mission_id,
+        vp_id=vp_id,
+        event_type="vp.mission.dispatched",
+        payload={"source_session_id": "seed-session"},
+    )
+    append_vp_event(
+        conn=conn,
+        event_id=f"{mission_id}.evt.2",
+        mission_id=mission_id,
+        vp_id=vp_id,
+        event_type="vp.mission.started",
+        payload={"source_session_id": "seed-session"},
+    )
+
+    reset_zero = client.post("/api/v1/ops/vp/bridge/cursor", json={"action": "reset_to_zero"})
+    assert reset_zero.status_code == 200
+    payload_zero = reset_zero.json()
+    assert payload_zero["update"]["target_rowid"] == 0
+    assert payload_zero["metrics"]["persisted_cursor"] == 0
+    assert payload_zero["metrics"]["manual_updates"] >= 1
+
+    set_resp = client.post("/api/v1/ops/vp/bridge/cursor", json={"action": "set", "rowid": 1})
+    assert set_resp.status_code == 200
+    payload_set = set_resp.json()
+    assert payload_set["update"]["target_rowid"] == 1
+    assert payload_set["metrics"]["persisted_cursor"] == 1
+
+    latest_resp = client.post("/api/v1/ops/vp/bridge/cursor", json={"action": "reset_to_latest"})
+    assert latest_resp.status_code == 200
+    payload_latest = latest_resp.json()
+    assert payload_latest["update"]["target_rowid"] == payload_latest["update"]["max_rowid"]
+    assert payload_latest["metrics"]["persisted_cursor"] == payload_latest["update"]["max_rowid"]
+
+    clamp_resp = client.post("/api/v1/ops/vp/bridge/cursor", json={"action": "set", "rowid": 999999})
+    assert clamp_resp.status_code == 200
+    payload_clamp = clamp_resp.json()
+    assert payload_clamp["update"]["clamped"] is True
+    assert payload_clamp["update"]["target_rowid"] == payload_clamp["update"]["max_rowid"]
+
+
+def test_ops_vp_bridge_cursor_update_validation_errors(client):
+    missing_rowid = client.post("/api/v1/ops/vp/bridge/cursor", json={"action": "set"})
+    assert missing_rowid.status_code == 400
+    assert "rowid is required" in str(missing_rowid.json().get("detail", ""))
+
+    negative_rowid = client.post("/api/v1/ops/vp/bridge/cursor", json={"action": "set", "rowid": -1})
+    assert negative_rowid.status_code == 400
+    assert "rowid must be >= 0" in str(negative_rowid.json().get("detail", ""))
+
+    invalid_action = client.post("/api/v1/ops/vp/bridge/cursor", json={"action": "rewind"})
+    assert invalid_action.status_code == 400
+    assert "Unsupported action" in str(invalid_action.json().get("detail", ""))
+
+
+def test_ops_vp_bridge_cursor_update_requires_vp_db(client, monkeypatch):
+    gateway = gateway_server.get_gateway()
+    monkeypatch.setattr(gateway, "_vp_db_conn", None)
+
+    resp = client.post("/api/v1/ops/vp/bridge/cursor", json={"action": "reset_to_zero"})
+    assert resp.status_code == 503
+    assert "VP DB not initialized" in str(resp.json().get("detail", ""))
 
 
 def test_ops_scheduling_runtime_metrics_endpoint(client):

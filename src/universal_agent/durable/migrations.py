@@ -147,6 +147,12 @@ CREATE TABLE IF NOT EXISTS vp_events (
   FOREIGN KEY(vp_id) REFERENCES vp_sessions(vp_id)
 );
 
+CREATE TABLE IF NOT EXISTS vp_bridge_cursors (
+  cursor_key TEXT PRIMARY KEY,
+  last_rowid INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_tool_calls_run_step ON tool_calls(run_id, step_id);
 CREATE INDEX IF NOT EXISTS idx_run_steps_run ON run_steps(run_id, step_index);
 CREATE INDEX IF NOT EXISTS idx_tool_receipts_run ON tool_receipts(run_id);

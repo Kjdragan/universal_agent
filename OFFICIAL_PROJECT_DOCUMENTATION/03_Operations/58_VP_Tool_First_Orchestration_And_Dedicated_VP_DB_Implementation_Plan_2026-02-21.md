@@ -170,3 +170,33 @@ The approach is:
 3. External workers remain autonomous executors; Simone remains control-plane orchestrator.
 4. Tool-first orchestration is mandatory; shell/curl VP control is non-standard and discouraged.
 5. CODIE and Generalist remain equivalent at mission-control API/tool layer via `vp_id`.
+
+## Implementation Status (2026-02-21)
+1. Phase A completed:
+- Dedicated `vp_state.db` routing implemented and validated.
+- VP dispatch retry/lock handling and retryable error contract in place.
+- Datetime duration handling normalized to prevent mixed tz subtraction crashes.
+2. Phase B completed:
+- Internal `vp_*` tool module implemented and registered:
+  `vp_dispatch_mission`, `vp_get_mission`, `vp_list_missions`,
+  `vp_wait_mission`, `vp_cancel_mission`, `vp_read_result_artifacts`.
+3. Phase C completed:
+- `vp-orchestration` skill added.
+- Prompt guidance kept thin and tool-first.
+4. Phase D completed:
+- Mission lifecycle events bridged into source session channel.
+- Dashboard/chat lifecycle parity and artifact/result refs visibility implemented.
+- Stale session normalization added (`stale`, `stale_reason`, `effective_status`).
+- Mission event bridge cursor persistence added in DB for restart-safe de-dup.
+- Startup stale-running mission reconciliation added (terminalize stuck running rows).
+5. Phase E completed:
+- CODIE and Generalist parity at mission-control interface via `vp_id`.
+- CODIE target-path guardrails preserved.
+- CODIE finalize artifacts and result-ref conventions aligned with Generalist lane.
+6. Phase F completed in code/tests:
+- Unit tests: VP DB path guardrails, tool schemas/flows, mission duration behavior.
+- Integration tests: Generalist + CODIE tool-first mission execution and artifact readback.
+- Concurrency test: simultaneous dispatch/list/cancel while worker polls `vp_state.db`.
+- Regression tests: core non-VP gateway session behavior verified unaffected.
+7. Remaining operational step (non-code rollout):
+- Run 24h production observation for lock/fallback/error-rate metrics after deployment.

@@ -31,7 +31,11 @@ from universal_agent.timeout_policy import (
     websocket_connect_kwargs,
 )
 from universal_agent.workspace import seed_workspace_bootstrap
-from universal_agent.vp import CoderVPRuntime, MissionDispatchRequest, dispatch_mission
+from universal_agent.vp import (
+    CoderVPRuntime,
+    MissionDispatchRequest,
+    dispatch_mission_with_retry,
+)
 
 try:
     from universal_agent.agent_core import AgentEvent, EventType
@@ -499,7 +503,7 @@ class InProcessGateway(Gateway):
         metadata = request.metadata or {}
         constraints = metadata.get("constraints") if isinstance(metadata.get("constraints"), dict) else {}
         budget = metadata.get("budget") if isinstance(metadata.get("budget"), dict) else {}
-        mission_row = dispatch_mission(
+        mission_row = dispatch_mission_with_retry(
             conn=conn,
             request=MissionDispatchRequest(
                 vp_id=vp_id,

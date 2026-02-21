@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -26,6 +27,10 @@ from universal_agent.guardrails.workspace_guard import (
     enforce_external_target_path,
 )
 from universal_agent.vp.profiles import VpProfile, get_vp_profile
+
+
+DEFAULT_DISPATCH_MAX_ATTEMPTS = 4
+DEFAULT_DISPATCH_INITIAL_BACKOFF_SECONDS = 0.05
 
 
 @dataclass(frozen=True)
@@ -108,6 +113,51 @@ def dispatch_mission(
     if row is None:
         raise RuntimeError("Mission queueing failed unexpectedly.")
     return row
+
+
+def is_sqlite_lock_error(exc: Exception) -> bool:
+    detail = str(exc or "").strip().lower()
+    return "database is locked" in detail or "database table is locked" in detail
+
+
+def dispatch_mission_with_retry(
+    conn: sqlite3.Connection,
+    request: MissionDispatchRequest,
+    *,
+    workspace_base: Optional[Path | str] = None,
+    max_attempts: int = DEFAULT_DISPATCH_MAX_ATTEMPTS,
+    initial_backoff_seconds: float = DEFAULT_DISPATCH_INITIAL_BACKOFF_SECONDS,
+) -> sqlite3.Row:
+    attempts = max(1, int(max_attempts))
+    backoff = max(0.0, float(initial_backoff_seconds))
+
+    dispatch_request = request
+    # Keep retries idempotent even when caller omitted idempotency_key.
+    if not str(request.idempotency_key or "").strip():
+        dispatch_request = replace(
+            request,
+            idempotency_key=f"vp-dispatch-auto-{uuid.uuid4().hex}",
+        )
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return dispatch_mission(
+                conn=conn,
+                request=dispatch_request,
+                workspace_base=workspace_base,
+            )
+        except sqlite3.OperationalError as exc:
+            if not is_sqlite_lock_error(exc):
+                raise
+            if attempt >= attempts:
+                raise
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            time.sleep(backoff * attempt)
+
+    raise RuntimeError("dispatch_mission_with_retry exhausted without returning")
 
 
 def cancel_mission(

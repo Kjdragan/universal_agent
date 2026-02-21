@@ -154,6 +154,105 @@ interface AgentStore {
   reset: () => void;
 }
 
+type VpMissionEventPayload = {
+  event_type?: string;
+  mission_id?: string;
+  vp_id?: string;
+  mission_status?: string;
+  result_ref?: string;
+  objective?: string;
+  event_payload?: Record<string, unknown>;
+};
+
+function asObjectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function asTrimmedText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function workspacePathFromResultRef(resultRef: string): string {
+  if (!resultRef.startsWith("workspace://")) return "";
+  return resultRef.replace("workspace://", "").trim();
+}
+
+function vpMissionEventLevel(eventType: string): "INFO" | "WARN" | "ERROR" {
+  if (eventType.endsWith(".failed")) return "ERROR";
+  if (eventType.endsWith(".cancelled") || eventType.endsWith(".cancel_requested")) return "WARN";
+  return "INFO";
+}
+
+function vpMissionEventActivityLog(
+  eventPayload: VpMissionEventPayload,
+): {
+  message: string;
+  level: string;
+  prefix: string;
+  event_kind?: string;
+  metadata?: Record<string, unknown>;
+} | null {
+  const eventType = asTrimmedText(eventPayload.event_type);
+  if (!eventType) return null;
+
+  const missionId = asTrimmedText(eventPayload.mission_id);
+  const vpId = asTrimmedText(eventPayload.vp_id);
+  const missionStatus = asTrimmedText(eventPayload.mission_status);
+  const resultRef = asTrimmedText(eventPayload.result_ref);
+  const objective = asTrimmedText(eventPayload.objective);
+  const nestedPayload = asObjectRecord(eventPayload.event_payload);
+  const artifactRelpath = asTrimmedText(nestedPayload.artifact_relpath);
+  const receiptRelpath = asTrimmedText(nestedPayload.mission_receipt_relpath);
+  const syncMarkerRelpath = asTrimmedText(nestedPayload.sync_ready_marker_relpath);
+  const resultPath = workspacePathFromResultRef(resultRef);
+  const artifactPath =
+    resultPath && artifactRelpath
+      ? `${resultPath.replace(/\/+$/, "")}/${artifactRelpath.replace(/^\/+/, "")}`
+      : "";
+  const receiptPath =
+    resultPath && receiptRelpath
+      ? `${resultPath.replace(/\/+$/, "")}/${receiptRelpath.replace(/^\/+/, "")}`
+      : "";
+  const syncMarkerPath =
+    resultPath && syncMarkerRelpath
+      ? `${resultPath.replace(/\/+$/, "")}/${syncMarkerRelpath.replace(/^\/+/, "")}`
+      : "";
+
+  const messageParts = [
+    `VP lifecycle event ${eventType}`,
+    missionId ? `mission=${missionId}` : "",
+    vpId ? `vp=${vpId}` : "",
+    missionStatus ? `status=${missionStatus}` : "",
+    resultRef ? `result_ref=${resultRef}` : "",
+    resultPath ? `result_path=${resultPath}` : "",
+    artifactPath ? `artifact_path=${artifactPath}` : "",
+    receiptPath ? `mission_receipt_path=${receiptPath}` : "",
+    syncMarkerPath ? `sync_ready_marker_path=${syncMarkerPath}` : "",
+    objective ? `objective=${objective}` : "",
+  ].filter(Boolean);
+
+  return {
+    message: messageParts.join(" | "),
+    level: vpMissionEventLevel(eventType),
+    prefix: "VP",
+    event_kind: "vp_mission_event",
+    metadata: {
+      event_type: eventType,
+      mission_id: missionId || undefined,
+      vp_id: vpId || undefined,
+      mission_status: missionStatus || undefined,
+      result_ref: resultRef || undefined,
+      result_path: resultPath || undefined,
+      artifact_path: artifactPath || undefined,
+      mission_receipt_path: receiptPath || undefined,
+      sync_ready_marker_path: syncMarkerPath || undefined,
+      payload: nestedPayload,
+    },
+  };
+}
+
 // =============================================================================
 // Create Store
 // =============================================================================
@@ -582,12 +681,20 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
     case "system_event": {
       const data = event.data as Record<string, unknown>;
       const currentSession = store.currentSession?.session_id;
+      const eventType = (data.type as string) ?? "system_event";
+      const payload = asObjectRecord(data.payload ?? data);
       store.addSystemEvent({
-        event_type: (data.type as string) ?? "system_event",
-        payload: (data.payload as Record<string, unknown>) ?? data,
+        event_type: eventType,
+        payload,
         created_at: (data.created_at as string) ?? undefined,
         session_id: (data.session_id as string) ?? currentSession,
       });
+      if (eventType === "vp_mission_event") {
+        const lifecycleLog = vpMissionEventActivityLog(payload as VpMissionEventPayload);
+        if (lifecycleLog) {
+          store.addLog(lifecycleLog);
+        }
+      }
       break;
     }
 

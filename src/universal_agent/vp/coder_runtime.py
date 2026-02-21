@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -30,6 +33,8 @@ from universal_agent.feature_flags import (
     coder_vp_shadow_mode,
     coder_vp_workspace_dir,
 )
+
+logger = logging.getLogger(__name__)
 
 
 _CODING_INTENT_MARKERS = (
@@ -427,6 +432,7 @@ class CoderVPRuntime:
             return
 
         completed_at = self._now_iso()
+        normalized_result_ref = self._normalize_result_ref(mission_id=mission_id, result_ref=result_ref)
         upsert_vp_mission(
             self._conn,
             mission_id=mission_id,
@@ -434,18 +440,27 @@ class CoderVPRuntime:
             status="completed",
             objective=str(mission["objective"]),
             budget=self._parse_budget(mission["budget_json"]),
-            result_ref=result_ref,
+            result_ref=normalized_result_ref,
             run_id=mission["run_id"],
             started_at=mission["started_at"],
             completed_at=completed_at,
         )
         event_payload = {
             "trace_id": trace_id,
-            "result_ref": result_ref,
+            "result_ref": normalized_result_ref,
             "completed_at": completed_at,
         }
         if payload:
             event_payload.update(payload)
+        event_payload.update(
+            self._write_finalize_artifacts(
+                mission_id=mission_id,
+                mission_row=mission,
+                terminal_status="completed",
+                result_ref=normalized_result_ref,
+                event_payload=event_payload,
+            )
+        )
         append_vp_event(
             self._conn,
             event_id=f"vp-event-{uuid.uuid4().hex}",
@@ -467,6 +482,10 @@ class CoderVPRuntime:
             return
 
         completed_at = self._now_iso()
+        normalized_result_ref = self._normalize_result_ref(
+            mission_id=mission_id,
+            result_ref=str(mission["result_ref"] or ""),
+        )
         upsert_vp_mission(
             self._conn,
             mission_id=mission_id,
@@ -474,7 +493,7 @@ class CoderVPRuntime:
             status="failed",
             objective=str(mission["objective"]),
             budget=self._parse_budget(mission["budget_json"]),
-            result_ref=mission["result_ref"],
+            result_ref=normalized_result_ref,
             run_id=mission["run_id"],
             started_at=mission["started_at"],
             completed_at=completed_at,
@@ -483,9 +502,19 @@ class CoderVPRuntime:
             "trace_id": trace_id,
             "error": error_message,
             "completed_at": completed_at,
+            "result_ref": normalized_result_ref,
         }
         if payload:
             event_payload.update(payload)
+        event_payload.update(
+            self._write_finalize_artifacts(
+                mission_id=mission_id,
+                mission_row=mission,
+                terminal_status="failed",
+                result_ref=normalized_result_ref,
+                event_payload=event_payload,
+            )
+        )
         append_vp_event(
             self._conn,
             event_id=f"vp-event-{uuid.uuid4().hex}",
@@ -524,6 +553,114 @@ class CoderVPRuntime:
         safe_name = vp_identifier.replace(".", "_")
         return (self._workspace_base / safe_name).resolve()
 
+    def _mission_workspace_dir(self, *, mission_id: str, result_ref: str) -> Path:
+        if result_ref.startswith("workspace://"):
+            base = Path(result_ref.replace("workspace://", "", 1)).expanduser()
+            try:
+                resolved = base.resolve()
+                if resolved.name == mission_id or mission_id in resolved.parts:
+                    return resolved
+                return (resolved / mission_id).resolve()
+            except Exception:
+                pass
+        vp_workspace = self._resolve_workspace_dir(coder_vp_id())
+        return (vp_workspace / mission_id).resolve()
+
+    def _normalize_result_ref(self, *, mission_id: str, result_ref: Optional[str]) -> str:
+        mission_workspace = self._mission_workspace_dir(
+            mission_id=mission_id,
+            result_ref=str(result_ref or ""),
+        )
+        return f"workspace://{mission_workspace}"
+
+    def _write_finalize_artifacts(
+        self,
+        *,
+        mission_id: str,
+        mission_row: sqlite3.Row,
+        terminal_status: str,
+        result_ref: Optional[str],
+        event_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        mission_workspace = self._mission_workspace_dir(
+            mission_id=mission_id,
+            result_ref=str(result_ref or ""),
+        )
+        completed_epoch = time.time()
+        mission_payload = self._parse_json_payload(mission_row["payload_json"])
+        references: dict[str, Any] = {}
+
+        if _env_true("UA_VP_MISSION_RECEIPT_ENABLED", True):
+            receipt_payload: dict[str, Any] = {
+                "version": 1,
+                "mission_id": mission_id,
+                "vp_id": str(mission_row["vp_id"] or ""),
+                "status": terminal_status,
+                "objective": str(mission_row["objective"] or ""),
+                "mission_type": str(mission_row["mission_type"] or "") or None,
+                "result_ref": str(result_ref or mission_row["result_ref"] or "") or None,
+                "run_id": str(mission_row["run_id"] or "") or None,
+                "created_at": str(mission_row["created_at"] or "") or None,
+                "started_at": str(mission_row["started_at"] or "") or None,
+                "updated_at": str(mission_row["updated_at"] or "") or None,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at_epoch": completed_epoch,
+                "mission_payload": mission_payload,
+                "outcome": {
+                    "status": terminal_status,
+                    "event_payload": dict(event_payload),
+                },
+            }
+            receipt_path = mission_workspace / "mission_receipt.json"
+            if self._write_json_file(receipt_path, receipt_payload):
+                references["mission_receipt_relpath"] = "mission_receipt.json"
+                references["mission_receipt_path"] = str(receipt_path)
+
+        if _env_true("UA_VP_SYNC_READY_MARKER_ENABLED", True):
+            marker_name = (os.getenv("UA_VP_SYNC_READY_MARKER_FILENAME") or "").strip() or "sync_ready.json"
+            marker_payload: dict[str, Any] = {
+                "version": 1,
+                "mission_id": mission_id,
+                "vp_id": str(mission_row["vp_id"] or ""),
+                "state": terminal_status,
+                "ready": True,
+                "updated_at_epoch": completed_epoch,
+                "completed_at_epoch": completed_epoch,
+                "result_ref": str(result_ref or mission_row["result_ref"] or "") or None,
+            }
+            marker_path = mission_workspace / marker_name
+            if self._write_json_file(marker_path, marker_payload):
+                references["sync_ready_marker_relpath"] = marker_name
+                references["sync_ready_marker_path"] = str(marker_path)
+
+        return references
+
+    @staticmethod
+    def _write_json_file(path: Path, payload: dict[str, Any]) -> bool:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            return True
+        except Exception as exc:
+            logger.warning("Coder VP failed writing file path=%s err=%s", path, exc)
+            return False
+
+    @staticmethod
+    def _parse_json_payload(raw_payload: Any) -> dict[str, Any]:
+        if isinstance(raw_payload, dict):
+            return raw_payload
+        if isinstance(raw_payload, str):
+            text = raw_payload.strip()
+            if not text:
+                return {}
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                return {}
+        return {}
+
     def _append_session_event(
         self,
         vp_id: str,
@@ -556,3 +693,10 @@ class CoderVPRuntime:
     @staticmethod
     def _now_iso() -> str:
         return datetime.now(timezone.utc).isoformat()
+
+
+def _env_true(name: str, default: bool) -> bool:
+    raw = (os.getenv(name) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
