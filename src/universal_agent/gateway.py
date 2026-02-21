@@ -16,6 +16,7 @@ from universal_agent.durable.db import (
     connect_runtime_db,
     get_coder_vp_db_path,
     get_runtime_db_path,
+    get_vp_db_path,
 )
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.feature_flags import (
@@ -171,6 +172,7 @@ class InProcessGateway(Gateway):
         self._coder_vp_lease_owner = "simone-control-plane"
         self._runtime_db_conn = None
         self._coder_vp_db_conn = None
+        self._vp_db_conn = None
         self._coder_vp_runtime: Optional[CoderVPRuntime] = None
 
         try:
@@ -180,6 +182,9 @@ class InProcessGateway(Gateway):
             # writes to prevent cross-lane sqlite lock contention.
             self._coder_vp_db_conn = connect_runtime_db(get_coder_vp_db_path())
             ensure_schema(self._coder_vp_db_conn)
+            # Dedicated VP mission ledger DB for external primary workers.
+            self._vp_db_conn = connect_runtime_db(get_vp_db_path())
+            ensure_schema(self._vp_db_conn)
             self._coder_vp_runtime = CoderVPRuntime(
                 conn=self._coder_vp_db_conn,
                 workspace_base=self._workspace_base,
@@ -195,8 +200,14 @@ class InProcessGateway(Gateway):
                     self._coder_vp_db_conn.close()
                 except Exception:
                     pass
+            if self._vp_db_conn is not None:
+                try:
+                    self._vp_db_conn.close()
+                except Exception:
+                    pass
             self._runtime_db_conn = None
             self._coder_vp_db_conn = None
+            self._vp_db_conn = None
             self._coder_vp_runtime = None
 
         if self._use_legacy:
@@ -278,6 +289,9 @@ class InProcessGateway(Gateway):
 
     def get_coder_vp_db_conn(self) -> Any:
         return self._coder_vp_db_conn
+
+    def get_vp_db_conn(self) -> Any:
+        return self._vp_db_conn
 
     async def create_session(
         self, user_id: str, workspace_dir: Optional[str] = None
@@ -479,9 +493,9 @@ class InProcessGateway(Gateway):
         vp_id: str,
         mission_type: str,
     ) -> str:
-        conn = self._runtime_db_conn
+        conn = self._vp_db_conn
         if conn is None:
-            raise RuntimeError("Runtime DB not initialized for external VP dispatch")
+            raise RuntimeError("VP DB not initialized for external VP dispatch")
         metadata = request.metadata or {}
         constraints = metadata.get("constraints") if isinstance(metadata.get("constraints"), dict) else {}
         budget = metadata.get("budget") if isinstance(metadata.get("budget"), dict) else {}
@@ -1235,6 +1249,12 @@ class InProcessGateway(Gateway):
             except Exception:
                 pass
             self._coder_vp_db_conn = None
+        if self._vp_db_conn is not None:
+            try:
+                self._vp_db_conn.close()
+            except Exception:
+                pass
+            self._vp_db_conn = None
 
 
 class ExternalGateway(Gateway):
