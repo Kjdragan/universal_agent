@@ -48,6 +48,52 @@ type HydratedChatMessage = {
   content: string;
 };
 
+type HydratedActivityLog = {
+  message: string;
+  level: string;
+  prefix: string;
+  event_kind?: string;
+  metadata?: Record<string, unknown>;
+};
+
+type VpMetricsMission = {
+  mission_id?: string;
+  status?: string;
+  objective?: string;
+  updated_at?: string;
+};
+
+type VpMetricsEvent = {
+  event_id?: string;
+  mission_id?: string;
+  event_type?: string;
+  created_at?: string;
+  payload?: Record<string, unknown> | null;
+};
+
+type VpMetricsPayload = {
+  vp_id?: string;
+  session?: {
+    status?: string;
+    last_heartbeat_at?: string;
+    lease_expires_at?: string;
+    lease_owner?: string;
+    last_error?: string;
+  };
+  mission_counts?: Record<string, number>;
+  event_counts?: Record<string, number>;
+  recent_missions?: VpMetricsMission[];
+  recent_events?: VpMetricsEvent[];
+  recent_session_events?: VpMetricsEvent[];
+};
+
+type VpHydrationSnapshot = {
+  vpId: string;
+  messages: HydratedChatMessage[];
+  logs: HydratedActivityLog[];
+  warning?: string;
+};
+
 const RUN_LOG_USER_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+👤\s+USER:\s*(.+)$/;
 const RUN_LOG_ASSISTANT_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+🤖\s+ASSISTANT:\s*(.+)$/;
 
@@ -69,6 +115,132 @@ function extractChatHistoryFromRunLog(raw: string): HydratedChatMessage[] {
     }
   }
   return entries;
+}
+
+function vpIdFromObserverSession(sessionId: string): string {
+  const sid = String(sessionId || "").trim();
+  if (!sid) return "";
+  if (/^vp\./i.test(sid)) {
+    return sid.replace(/\.external$/i, "");
+  }
+  if (!/^vp_/i.test(sid)) {
+    return "";
+  }
+  const normalized = sid
+    .replace(/^vp_/i, "vp.")
+    .replace(/_external$/i, "")
+    .replace(/_/g, ".");
+  return normalized;
+}
+
+function vpEventLevel(eventType: string): string {
+  const normalized = String(eventType || "").trim().toLowerCase();
+  if (normalized.endsWith(".failed")) return "ERROR";
+  if (normalized.endsWith(".cancelled") || normalized.endsWith(".cancel_requested")) return "WARN";
+  return "INFO";
+}
+
+function parseIsoMillis(value: string): number {
+  const parsed = Date.parse(String(value || ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function fetchVpHydrationSnapshot(sessionId: string): Promise<VpHydrationSnapshot | null> {
+  const vpId = vpIdFromObserverSession(sessionId);
+  if (!vpId) return null;
+
+  const query = `vp_id=${encodeURIComponent(vpId)}&mission_limit=30&event_limit=80`;
+  const candidates = [
+    `${API_BASE}/api/v1/ops/metrics/vp?${query}`,
+    `/api/dashboard/gateway/api/v1/ops/metrics/vp?${query}`,
+  ];
+  let response: Response | null = null;
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+    try {
+      const current = await fetch(candidate);
+      if (current.ok) {
+        response = current;
+        break;
+      }
+    } catch {
+      continue;
+    }
+  }
+  if (!response) return null;
+
+  const payload = (await response.json()) as VpMetricsPayload;
+  const recentMissions = Array.isArray(payload.recent_missions) ? payload.recent_missions : [];
+  const recentEvents = Array.isArray(payload.recent_events) ? payload.recent_events : [];
+  const recentSessionEvents = Array.isArray(payload.recent_session_events) ? payload.recent_session_events : [];
+
+  const messages: HydratedChatMessage[] = recentMissions
+    .slice()
+    .sort((a, b) => String(a.updated_at || "").localeCompare(String(b.updated_at || "")))
+    .map((mission) => {
+      const missionId = String(mission.mission_id || "").trim() || "unknown_mission";
+      const status = String(mission.status || "unknown").trim();
+      const objective = String(mission.objective || "").trim();
+      return {
+        role: "assistant",
+        content: `[${status.toUpperCase()}] ${missionId}${objective ? `\nObjective: ${objective}` : ""}`,
+      };
+    });
+
+  const eventRows = [...recentEvents, ...recentSessionEvents];
+  const logs: HydratedActivityLog[] = eventRows
+    .slice()
+    .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
+    .map((eventRow) => {
+      const eventType = String(eventRow.event_type || "unknown").trim();
+      const missionId = String(eventRow.mission_id || "").trim();
+      const eventPayload =
+        eventRow.payload && typeof eventRow.payload === "object" ? eventRow.payload : {};
+      const resultRef = String(eventPayload.result_ref || "").trim();
+      const sourceSession = String(eventPayload.source_session_id || "").trim();
+      const objective = String(eventPayload.objective || "").trim();
+      return {
+        message: [
+          `VP lifecycle event ${eventType}`,
+          missionId ? `mission=${missionId}` : "",
+          resultRef ? `result_ref=${resultRef}` : "",
+          sourceSession ? `source_session=${sourceSession}` : "",
+          objective ? `objective=${objective}` : "",
+        ]
+          .filter(Boolean)
+          .join(" | "),
+        level: vpEventLevel(eventType),
+        prefix: "VP",
+        event_kind: "vp_mission_event",
+        metadata: {
+          event_id: eventRow.event_id || undefined,
+          mission_id: missionId || undefined,
+          event_type: eventType || undefined,
+          payload: eventPayload,
+        },
+      };
+    });
+  const missionCounts = payload.mission_counts && typeof payload.mission_counts === "object"
+    ? payload.mission_counts
+    : {};
+  const eventCounts = payload.event_counts && typeof payload.event_counts === "object"
+    ? payload.event_counts
+    : {};
+  const queuedCount = Number(missionCounts.queued || 0);
+  const claimedCount = Number(eventCounts["vp.mission.claimed"] || 0);
+  const startedCount = Number(eventCounts["vp.mission.started"] || 0);
+  const heartbeatAt = parseIsoMillis(String(payload.session?.last_heartbeat_at || ""));
+  const heartbeatAgeMs = heartbeatAt > 0 ? Date.now() - heartbeatAt : Number.POSITIVE_INFINITY;
+  const heartbeatStale = heartbeatAgeMs > 3 * 60 * 1000;
+  let warning: string | undefined;
+  if (queuedCount > 0 && claimedCount === 0 && startedCount === 0 && heartbeatStale) {
+    const status = String(payload.session?.status || "unknown");
+    warning = `VP worker appears inactive for ${vpId}: queued=${queuedCount}, claimed=0, started=0, session_status=${status}.`;
+  }
+
+  return { vpId, messages, logs, warning };
 }
 
 
@@ -800,12 +972,14 @@ function ChatInterface() {
   const [pendingQuery, setPendingQuery] = useState<string | null>(null);
   const [chatRole, setChatRole] = useState<"writer" | "viewer">("writer");
   const [historyHydrationNotice, setHistoryHydrationNotice] = useState<string | null>(null);
+  const [requestedSessionIdFromUrl, setRequestedSessionIdFromUrl] = useState("");
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
   const inputRef = React.useRef<HTMLInputElement>(null);
   const handleSendRef = React.useRef<(textOverride?: string) => Promise<void>>(async () => {});
   const hydratedSessionIdsRef = React.useRef<Set<string>>(new Set());
-  const isVpObserverSession = /^vp_/i.test((currentSession?.session_id || "").trim());
+  const effectiveSessionId = (currentSession?.session_id || requestedSessionIdFromUrl || "").trim();
+  const isVpObserverSession = /^vp_/i.test(effectiveSessionId);
 
   const focusInput = React.useCallback(() => {
     if (chatRole === "viewer") return;
@@ -819,6 +993,7 @@ function ChatInterface() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
+    setRequestedSessionIdFromUrl((params.get("session_id") || "").trim());
     const role = (params.get("role") || "").trim().toLowerCase();
     const nextRole = role === "viewer" ? "viewer" : "writer";
     setChatRole(nextRole);
@@ -924,13 +1099,14 @@ function ChatInterface() {
   }, [messages, currentStreamingMessage]);
 
   useEffect(() => {
-    const sessionId = (currentSession?.session_id || "").trim();
+    const sessionId = effectiveSessionId;
     if (!sessionId) return;
     setHistoryHydrationNotice(null);
     if (hydratedSessionIdsRef.current.has(sessionId)) return;
 
-    // If stream events have already populated the timeline, avoid duplicate hydration.
-    if (useAgentStore.getState().messages.length > 0) {
+    // If stream events have already populated the timeline, avoid duplicate hydration
+    // for normal sessions. VP observer sessions still need VP event/log hydration.
+    if (useAgentStore.getState().messages.length > 0 && !isVpObserverSession) {
       hydratedSessionIdsRef.current.add(sessionId);
       return;
     }
@@ -938,26 +1114,69 @@ function ChatInterface() {
     let cancelled = false;
     (async () => {
       try {
-        const response = await fetch(`${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`);
-        if (!response.ok) return;
-        const raw = await response.text();
-        const history = extractChatHistoryFromRunLog(raw).slice(-80);
-        if (cancelled || history.length === 0) return;
-
         const store = useAgentStore.getState();
-        if (store.messages.length > 0) return;
+        let hydratedMessageCount = 0;
+        let hydratedLogCount = 0;
 
-        for (const msg of history) {
-          store.addMessage({
-            role: msg.role,
-            content: msg.content,
-            time_offset: 0,
-            is_complete: true,
-          });
+        const response = await fetch(`${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`);
+        if (response.ok) {
+          const raw = await response.text();
+          const history = extractChatHistoryFromRunLog(raw).slice(-80);
+          if (!cancelled && history.length > 0 && store.messages.length === 0) {
+            for (const msg of history) {
+              store.addMessage({
+                role: msg.role,
+                content: msg.content,
+                time_offset: 0,
+                is_complete: true,
+              });
+            }
+            hydratedMessageCount += history.length;
+          }
         }
-        setHistoryHydrationNotice(`Hydrated ${history.length} messages from run.log`);
+
+        if (!cancelled && isVpObserverSession) {
+          const vpSnapshot = await fetchVpHydrationSnapshot(sessionId);
+          if (vpSnapshot) {
+            if (store.messages.length === 0 && vpSnapshot.messages.length > 0) {
+              for (const msg of vpSnapshot.messages.slice(-20)) {
+                store.addMessage({
+                  role: msg.role,
+                  content: msg.content,
+                  time_offset: 0,
+                  is_complete: true,
+                  author: "VP Observer",
+                });
+              }
+              hydratedMessageCount += Math.min(vpSnapshot.messages.length, 20);
+            }
+            if (vpSnapshot.logs.length > 0) {
+              for (const log of vpSnapshot.logs) {
+                store.addLog(log);
+              }
+              hydratedLogCount += vpSnapshot.logs.length;
+            }
+            if (vpSnapshot.warning) {
+              store.addMessage({
+                role: "system",
+                content: vpSnapshot.warning,
+                time_offset: 0,
+                is_complete: true,
+                author: "VP Orchestrator",
+              });
+            }
+          }
+        }
+
+        if (hydratedMessageCount > 0 || hydratedLogCount > 0) {
+          const fragments = [
+            hydratedMessageCount > 0 ? `${hydratedMessageCount} messages` : "",
+            hydratedLogCount > 0 ? `${hydratedLogCount} activity events` : "",
+          ].filter(Boolean);
+          setHistoryHydrationNotice(`Hydrated ${fragments.join(" + ")} for ${sessionId}`);
+        }
       } catch (error) {
-        console.warn("Failed to rehydrate chat history from run.log", error);
+        console.warn("Failed to rehydrate session history", error);
       } finally {
         hydratedSessionIdsRef.current.add(sessionId);
       }
@@ -966,7 +1185,7 @@ function ChatInterface() {
     return () => {
       cancelled = true;
     };
-  }, [currentSession?.session_id]);
+  }, [effectiveSessionId, isVpObserverSession]);
 
   return (
     <div className="flex flex-col h-full">
@@ -989,9 +1208,9 @@ function ChatInterface() {
             Commands are disabled in this session. Use the primary Simone chat to direct CODIE.
           </div>
         )}
-        {sessionAttachMode === "tail" && currentSession?.session_id && (
+        {sessionAttachMode === "tail" && effectiveSessionId && (
           <div className="mb-3 flex items-center justify-between rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-emerald-300">
-            <span>Attached Session (Tail): <span className="font-mono">{currentSession.session_id}</span></span>
+            <span>Attached Session (Tail): <span className="font-mono">{effectiveSessionId}</span></span>
             <button
               type="button"
               onClick={() => setSessionAttachMode("default")}
@@ -1402,6 +1621,15 @@ export default function HomePage() {
     } else if (requestedSessionId) {
       const store = useAgentStore.getState();
       store.setSessionAttachMode(requestedAttach === "tail" ? "tail" : "default");
+      if (!store.currentSession?.session_id) {
+        store.setCurrentSession({
+          session_id: requestedSessionId,
+          workspace: "",
+          user_id: "observer",
+          session_url: undefined,
+          logfire_enabled: false,
+        });
+      }
       ws.attachToSession(requestedSessionId);
     } else {
       ws.connect();

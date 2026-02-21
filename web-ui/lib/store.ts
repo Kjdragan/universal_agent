@@ -253,6 +253,37 @@ function vpMissionEventActivityLog(
   };
 }
 
+function isTerminalVpMissionEvent(eventType: string): boolean {
+  const normalized = String(eventType || "").trim().toLowerCase();
+  return (
+    normalized === "vp.mission.completed"
+    || normalized === "vp.mission.failed"
+    || normalized === "vp.mission.cancelled"
+  );
+}
+
+function vpMissionTerminalChatNotice(eventPayload: VpMissionEventPayload): string | null {
+  const eventType = asTrimmedText(eventPayload.event_type);
+  if (!isTerminalVpMissionEvent(eventType)) return null;
+
+  const missionId = asTrimmedText(eventPayload.mission_id) || "unknown_mission";
+  const status = eventType.replace(/^vp\.mission\./, "").toUpperCase();
+  const resultRef = asTrimmedText(eventPayload.result_ref);
+  const objective = asTrimmedText(eventPayload.objective);
+  const nestedPayload = asObjectRecord(eventPayload.event_payload);
+  const artifactRelpath = asTrimmedText(nestedPayload.artifact_relpath);
+  const receiptRelpath = asTrimmedText(nestedPayload.mission_receipt_relpath);
+
+  const lines = [
+    `VP mission ${status}: ${missionId}`,
+    objective ? `Objective: ${objective}` : "",
+    resultRef ? `Result: ${resultRef}` : "",
+    artifactRelpath ? `Artifact: ${artifactRelpath}` : "",
+    receiptRelpath ? `Receipt: ${receiptRelpath}` : "",
+  ].filter(Boolean);
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
 // =============================================================================
 // Create Store
 // =============================================================================
@@ -693,6 +724,16 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
         const lifecycleLog = vpMissionEventActivityLog(payload as VpMissionEventPayload);
         if (lifecycleLog) {
           store.addLog(lifecycleLog);
+        }
+        const terminalNotice = vpMissionTerminalChatNotice(payload as VpMissionEventPayload);
+        if (terminalNotice) {
+          store.addMessage({
+            role: "system",
+            content: terminalNotice,
+            time_offset: ((data.time_offset as number) ?? (event.time_offset as number) ?? 0),
+            is_complete: true,
+            author: "VP Orchestrator",
+          });
         }
       }
       break;

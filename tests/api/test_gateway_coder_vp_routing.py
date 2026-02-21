@@ -1,10 +1,17 @@
+import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.durable.state import get_vp_session, list_vp_events, list_vp_missions
+from universal_agent.durable.state import (
+    get_vp_session,
+    list_vp_events,
+    list_vp_missions,
+    upsert_vp_session,
+)
 from universal_agent.gateway import GatewayRequest, InProcessGateway
 
 
@@ -39,6 +46,22 @@ class FakeProcessTurnAdapter:
 
     async def close(self):
         return None
+
+
+def seed_live_external_vp_session(conn, vp_id: str) -> None:
+    now = datetime.now(timezone.utc)
+    upsert_vp_session(
+        conn=conn,
+        vp_id=vp_id,
+        runtime_id=f"runtime.{vp_id.replace('.', '_')}.external",
+        status="idle",
+        session_id=f"{vp_id}.external",
+        workspace_dir=f"/tmp/{vp_id.replace('.', '_')}",
+        lease_owner=f"{vp_id}.worker.test",
+        lease_expires_at=(now + timedelta(minutes=5)).isoformat(),
+        last_heartbeat_at=now.isoformat(),
+        metadata={"client_kind": "test", "display_name": vp_id},
+    )
 
 
 def test_gateway_uses_dedicated_coder_vp_db(monkeypatch, tmp_path):
@@ -453,6 +476,9 @@ async def test_gateway_external_coder_dispatch_queues_async_mission(monkeypatch,
     monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
 
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+    vp_conn = gateway.get_vp_db_conn()
+    assert vp_conn is not None
+    seed_live_external_vp_session(vp_conn, "vp.coder.primary")
     session = await gateway.create_session(user_id="owner_primary")
     request = GatewayRequest(
         user_input="Build an end-to-end Python project with integration tests for a new service"
@@ -470,8 +496,6 @@ async def test_gateway_external_coder_dispatch_queues_async_mission(monkeypatch,
         for event in events
     )
 
-    vp_conn = gateway.get_vp_db_conn()
-    assert vp_conn is not None
     queued = list_vp_missions(vp_conn, "vp.coder.primary")
     assert len(queued) == 1
     assert queued[0]["status"] == "queued"
@@ -480,7 +504,7 @@ async def test_gateway_external_coder_dispatch_queues_async_mission(monkeypatch,
 
 
 @pytest.mark.asyncio
-async def test_gateway_explicit_general_dp_intent_auto_dispatches_external_vp(monkeypatch, tmp_path):
+async def test_gateway_explicit_general_vp_intent_auto_dispatches_external_vp(monkeypatch, tmp_path):
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
     monkeypatch.setenv("UA_VP_DB_PATH", str(tmp_path / "vp_state.db"))
@@ -495,9 +519,12 @@ async def test_gateway_explicit_general_dp_intent_auto_dispatches_external_vp(mo
     monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
 
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+    vp_conn = gateway.get_vp_db_conn()
+    assert vp_conn is not None
+    seed_live_external_vp_session(vp_conn, "vp.general.primary")
     session = await gateway.create_session(user_id="owner_primary")
     request = GatewayRequest(
-        user_input="Simone, use the general DP to create a short story and email it to me."
+        user_input="Simone, use the General VP to create a short story and email it to me."
     )
 
     events = [event async for event in gateway.execute(session, request)]
@@ -518,8 +545,6 @@ async def test_gateway_explicit_general_dp_intent_auto_dispatches_external_vp(mo
         for event in events
     )
 
-    vp_conn = gateway.get_vp_db_conn()
-    assert vp_conn is not None
     queued = list_vp_missions(vp_conn, "vp.general.primary")
     assert len(queued) == 1
     assert queued[0]["status"] == "queued"
@@ -571,5 +596,165 @@ async def test_gateway_strict_explicit_general_vp_blocks_primary_fallback_when_e
     assert vp_conn is not None
     queued = list_vp_missions(vp_conn, "vp.general.primary")
     assert queued == []
+
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_strict_explicit_general_vp_dispatches_when_enable_flag_unset(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
+    monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
+    monkeypatch.setenv("UA_VP_DB_PATH", str(tmp_path / "vp_state.db"))
+    monkeypatch.delenv("UA_VP_EXTERNAL_DISPATCH_ENABLED", raising=False)
+    monkeypatch.setenv("UA_VP_DISPATCH_MODE", "db_pull")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "1")
+    monkeypatch.setenv("UA_VP_ENABLED_IDS", "vp.general.primary,vp.coder.primary")
+    monkeypatch.setenv("UA_VP_WORKER_RECOVERY_WAIT_SECONDS", "0")
+
+    import universal_agent.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "ProcessTurnAdapter", FakeProcessTurnAdapter)
+    monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
+
+    gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+    vp_conn = gateway.get_vp_db_conn()
+    assert vp_conn is not None
+    seed_live_external_vp_session(vp_conn, "vp.general.primary")
+    session = await gateway.create_session(user_id="owner_primary")
+    request = GatewayRequest(
+        user_input="Use the VP General agent. Create a story about a dog and Gmail it to me."
+    )
+
+    events = [event async for event in gateway.execute(session, request)]
+
+    assert any(
+        event.type == EventType.STATUS
+        and event.data.get("routing") == "delegated_to_external_vp"
+        and event.data.get("vp_id") == "vp.general.primary"
+        for event in events
+    )
+    assert any(
+        event.type == EventType.TEXT
+        and "mission queued to `vp.general.primary`" in str(event.data.get("text", "")).lower()
+        for event in events
+    )
+    assert not any(
+        event.type == EventType.ERROR
+        and event.data.get("routing") == "external_vp_dispatch_unavailable_strict"
+        for event in events
+    )
+
+    queued = list_vp_missions(vp_conn, "vp.general.primary")
+    assert len(queued) == 1
+    assert queued[0]["status"] == "queued"
+
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_strict_explicit_general_vp_errors_when_worker_unavailable(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
+    monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
+    monkeypatch.setenv("UA_VP_DB_PATH", str(tmp_path / "vp_state.db"))
+    monkeypatch.delenv("UA_VP_EXTERNAL_DISPATCH_ENABLED", raising=False)
+    monkeypatch.setenv("UA_VP_DISPATCH_MODE", "db_pull")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "1")
+    monkeypatch.setenv("UA_VP_ENABLED_IDS", "vp.general.primary,vp.coder.primary")
+    monkeypatch.setenv("UA_VP_WORKER_RECOVERY_WAIT_SECONDS", "0")
+
+    import universal_agent.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "ProcessTurnAdapter", FakeProcessTurnAdapter)
+    monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
+
+    gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+    session = await gateway.create_session(user_id="owner_primary")
+    request = GatewayRequest(
+        user_input="Use the VP General agent to create a story and email it to me."
+    )
+
+    events = [event async for event in gateway.execute(session, request)]
+
+    assert any(
+        event.type == EventType.STATUS
+        and event.data.get("routing") == "external_vp_dispatch_failed_strict"
+        for event in events
+    )
+    assert any(
+        event.type == EventType.ERROR
+        and "worker `vp.general.primary` is unavailable" in str(event.data.get("error", "")).lower()
+        for event in events
+    )
+    assert not any(
+        event.type == EventType.TEXT and "mission queued to `vp.general.primary`" in str(event.data.get("text", "")).lower()
+        for event in events
+    )
+
+    vp_conn = gateway.get_vp_db_conn()
+    assert vp_conn is not None
+    queued = list_vp_missions(vp_conn, "vp.general.primary")
+    assert queued == []
+
+    await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_gateway_strict_explicit_general_vp_retries_after_worker_recovers(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
+    monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
+    monkeypatch.setenv("UA_VP_DB_PATH", str(tmp_path / "vp_state.db"))
+    monkeypatch.delenv("UA_VP_EXTERNAL_DISPATCH_ENABLED", raising=False)
+    monkeypatch.setenv("UA_VP_DISPATCH_MODE", "db_pull")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "1")
+    monkeypatch.setenv("UA_VP_ENABLED_IDS", "vp.general.primary,vp.coder.primary")
+    monkeypatch.setenv("UA_VP_WORKER_RECOVERY_WAIT_SECONDS", "2")
+    monkeypatch.setenv("UA_VP_WORKER_RECOVERY_POLL_SECONDS", "1")
+
+    import universal_agent.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "ProcessTurnAdapter", FakeProcessTurnAdapter)
+    monkeypatch.setattr(gateway_module, "EXECUTION_ENGINE_AVAILABLE", True)
+
+    gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
+    vp_conn = gateway.get_vp_db_conn()
+    assert vp_conn is not None
+    session = await gateway.create_session(user_id="owner_primary")
+    request = GatewayRequest(
+        user_input="Use the VP General agent. Create a story about a dog and Gmail it to me."
+    )
+
+    async def _recover_worker_later() -> None:
+        await asyncio.sleep(0.1)
+        seed_live_external_vp_session(vp_conn, "vp.general.primary")
+
+    recover_task = asyncio.create_task(_recover_worker_later())
+    events = [event async for event in gateway.execute(session, request)]
+    await recover_task
+
+    assert any(
+        event.type == EventType.STATUS
+        and event.data.get("routing") == "external_vp_dispatch_worker_recovered"
+        for event in events
+    )
+    assert any(
+        event.type == EventType.STATUS
+        and event.data.get("routing") == "delegated_to_external_vp"
+        for event in events
+    )
+    assert any(
+        event.type == EventType.TEXT
+        and "mission queued to `vp.general.primary`" in str(event.data.get("text", "")).lower()
+        for event in events
+    )
+
+    queued = list_vp_missions(vp_conn, "vp.general.primary")
+    assert len(queued) == 1
+    assert queued[0]["status"] == "queued"
 
     await gateway.close()
