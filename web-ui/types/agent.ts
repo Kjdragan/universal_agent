@@ -361,10 +361,11 @@ export interface SystemPresenceData {
 // =============================================================================
 
 export type StorageSyncState = "in_sync" | "behind" | "syncing" | "unknown" | "error";
+export type StorageRootSource = "local" | "mirror";
 
 export interface StorageSessionItem {
   session_id: string;
-  source_type: "web" | "hook" | "telegram" | "other";
+  source_type: "web" | "hook" | "telegram" | "vp" | "other";
   status: string;
   ready: boolean;
   completed_at_epoch?: number | null;
@@ -375,6 +376,7 @@ export interface StorageSessionItem {
   run_log_path?: string | null;
   marker_path?: string | null;
   marker_exists?: boolean;
+  root_source?: StorageRootSource;
 }
 
 export interface StorageArtifactItem {
@@ -400,10 +402,12 @@ export interface StorageOverview {
     web: StorageSessionItem | null;
     hook: StorageSessionItem | null;
     telegram: StorageSessionItem | null;
+    vp?: StorageSessionItem | null;
   };
   latest_artifact: StorageArtifactItem | null;
   workspace_root: string;
   artifacts_root: string;
+  root_source?: StorageRootSource;
   probe_ok: boolean;
   probe_error?: string | null;
 }

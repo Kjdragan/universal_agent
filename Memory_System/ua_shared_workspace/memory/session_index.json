@@ -123,5 +123,20 @@
     "preview": "VICE SIZE/OFF    NODE NAME\npython3 341048 kjdragan   14ur  REG    8,6   126976 5652324 /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/runtime_state.db\npython3 341048 kjdragan   17ur  REG    8,6   126976 5652324 /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACE",
     "file_path": "memory/sessions/f8a19f48-65de-4764-a024-950dc8c9cdfc_2026-02-20.md",
     "content_hash": "1b009e76f3f10cc13e0ff23059d45b87ba8cc908a0c23d40b249bcf0708975d6"
+  },
+  {
+    "entry_id": "b460da53-1b58-423d-bc82-fca1359c8299",
+    "timestamp": "2026-02-21T04:04:34.476399+00:00",
+    "source": "session_index",
+    "session_id": "8b6f4b4e-0d42-4c8e-b9b4-98cb7da5b0f7",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:8b6f4b4e-0d42-4c8e-b9b4-98cb7da5b0f7"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-20 22:04:34**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c7e5d8b34dc5edaf7d6e5258a24e7` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/8b6f4b4e-0d42-4c8e-b9b4-98cb7da5b0f7_2026-02-21.md",
+    "content_hash": "2837baed0de1ad585aa2eebd6297b505fc7b0b9523362cde66b3e740aacc18d4"
   }
 ]

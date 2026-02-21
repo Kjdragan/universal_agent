@@ -11,13 +11,15 @@ import { useAgentStore } from "@/lib/store";
 import {
   StorageArtifactItem,
   StorageOverview,
+  StorageRootSource,
   StorageSessionItem,
   StorageSyncState,
 } from "@/types/agent";
 
 type StorageTab = "sessions" | "artifacts" | "explorer";
-type SessionSourceFilter = "all" | "web" | "hook" | "telegram";
+type SessionSourceFilter = "all" | "web" | "hook" | "telegram" | "vp";
 type ExplorerScope = "workspaces" | "artifacts";
+type RootSourceFilter = StorageRootSource;
 
 function getNetworkRouteLabel(): "Tailscale" | "Public" {
   if (typeof window === "undefined") return "Public";
@@ -34,13 +36,27 @@ function normalizeTab(value: string | null): StorageTab {
 }
 
 function normalizeSource(value: string | null): SessionSourceFilter {
-  if (value === "web" || value === "hook" || value === "telegram") return value;
+  if (value === "web" || value === "hook" || value === "telegram" || value === "vp") return value;
   return "all";
 }
 
 function normalizeScope(value: string | null): ExplorerScope {
   if (value === "artifacts") return "artifacts";
   return "workspaces";
+}
+
+function defaultRootSource(): RootSourceFilter {
+  if (typeof window === "undefined") return "local";
+  const host = (window.location.hostname || "").toLowerCase();
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+    return "local";
+  }
+  return "mirror";
+}
+
+function normalizeRootSource(value: string | null, fallback: RootSourceFilter): RootSourceFilter {
+  if (value === "mirror" || value === "local") return value;
+  return fallback;
 }
 
 export function StoragePageClient() {
@@ -59,11 +75,13 @@ export function StoragePageClient() {
   const [error, setError] = useState("");
 
   const [optimisticSyncState, setOptimisticSyncState] = useState<StorageSyncState | null>(null);
+  const defaultRoot = useMemo(() => defaultRootSource(), []);
 
   const activeTab = normalizeTab(searchParams.get("tab"));
   const sourceFilter = normalizeSource(searchParams.get("source"));
   const explorerScope = normalizeScope(searchParams.get("scope"));
   const explorerPath = searchParams.get("path") || "";
+  const rootSource = normalizeRootSource(searchParams.get("root_source"), defaultRoot);
   const networkRoute = useMemo(() => getNetworkRouteLabel(), []);
 
   const syncState = optimisticSyncState || overview?.sync_state || "unknown";
@@ -80,7 +98,7 @@ export function StoragePageClient() {
 
   const refreshOverview = useCallback(async () => {
     try {
-      const res = await fetch("/api/vps/storage/overview", { cache: "no-store" });
+      const res = await fetch(`/api/vps/storage/overview?root_source=${rootSource}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.detail || `Failed (${res.status})`);
@@ -96,12 +114,12 @@ export function StoragePageClient() {
       setLoadingOverview(false);
       setOptimisticSyncState(null);
     }
-  }, [setStorageSyncState]);
+  }, [rootSource, setStorageSyncState]);
 
   const refreshSessions = useCallback(async (source: SessionSourceFilter) => {
     setLoadingSessions(true);
     try {
-      const res = await fetch(`/api/vps/storage/sessions?source=${source}&limit=200`, { cache: "no-store" });
+      const res = await fetch(`/api/vps/storage/sessions?source=${source}&limit=200&root_source=${rootSource}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.detail || `Failed (${res.status})`);
@@ -113,12 +131,12 @@ export function StoragePageClient() {
     } finally {
       setLoadingSessions(false);
     }
-  }, []);
+  }, [rootSource]);
 
   const refreshArtifacts = useCallback(async () => {
     setLoadingArtifacts(true);
     try {
-      const res = await fetch("/api/vps/storage/artifacts?limit=200", { cache: "no-store" });
+      const res = await fetch(`/api/vps/storage/artifacts?limit=200&root_source=${rootSource}`, { cache: "no-store" });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.detail || `Failed (${res.status})`);
@@ -130,7 +148,7 @@ export function StoragePageClient() {
     } finally {
       setLoadingArtifacts(false);
     }
-  }, []);
+  }, [rootSource]);
 
   useEffect(() => {
     void refreshOverview();
@@ -193,12 +211,16 @@ export function StoragePageClient() {
   };
 
   const openExplorer = (scope: ExplorerScope, path: string) => {
-    updateQuery({ tab: "explorer", scope, path: path || null });
+    updateQuery({ tab: "explorer", scope, path: path || null, root_source: rootSource });
   };
 
   const openVpsFile = (scope: ExplorerScope, path: string) => {
     if (!path) return;
-    window.open(`/api/vps/file?scope=${scope}&path=${encodeURIComponent(path)}`, "_blank", "noopener,noreferrer");
+    window.open(
+      `/api/vps/file?scope=${scope}&root_source=${rootSource}&path=${encodeURIComponent(path)}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
   };
 
   return (
@@ -247,6 +269,21 @@ export function StoragePageClient() {
                 ? "Loading sync overview..."
                 : `Pending ready runs: ${overview?.pending_ready_count || 0}${typeof overview?.lag_seconds === "number" ? ` • Lag: ${Math.round(overview.lag_seconds)}s` : ""}${overview?.probe_error ? ` • Probe: ${overview.probe_error}` : ""}`}
             </span>
+            <span className="text-xs text-slate-400">
+              Root: {rootSource} {overview?.workspace_root ? `• ${overview.workspace_root}` : ""}
+            </span>
+            <div className="flex items-center gap-2">
+              {(["local", "mirror"] as const).map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => updateQuery({ root_source: option === defaultRoot ? null : option })}
+                  className={`rounded border px-2 py-1 text-[10px] uppercase tracking-wider ${rootSource === option ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-950 text-slate-300"}`}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
             <div className="ml-auto flex items-center gap-2">
               <Link
                 href="/"
@@ -263,7 +300,7 @@ export function StoragePageClient() {
           <section className="min-h-0 flex-1 space-y-3 overflow-auto">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs uppercase tracking-wider text-slate-400">Source filter</span>
-              {(["all", "web", "hook", "telegram"] as const).map((option) => (
+              {(["all", "web", "hook", "telegram", "vp"] as const).map((option) => (
                 <button
                   key={option}
                   type="button"
@@ -277,6 +314,7 @@ export function StoragePageClient() {
             <SessionsTable
               sessions={sessions}
               loading={loadingSessions}
+              rootSource={rootSource}
               onOpenRoot={(path) => openExplorer("workspaces", path)}
               onOpenRunLog={(path) => openVpsFile("workspaces", path)}
             />
@@ -296,7 +334,7 @@ export function StoragePageClient() {
 
         {activeTab === "explorer" && (
           <section className="min-h-0 flex-1">
-            <ExplorerPanel initialScope={explorerScope} initialPath={explorerPath} />
+            <ExplorerPanel initialScope={explorerScope} initialPath={explorerPath} initialRootSource={rootSource} />
           </section>
         )}
       </div>

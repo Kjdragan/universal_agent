@@ -49,7 +49,7 @@ class MissionGuardrailTracker:
         self.email_send_count = 0
         self.gmail_send_count = 0
 
-    def record_tool_call(self, tool_name: str) -> None:
+    def record_tool_call(self, tool_name: str, *, tool_input: Any = None) -> None:
         name = str(tool_name or "").strip()
         if not name:
             return
@@ -59,6 +59,12 @@ class MissionGuardrailTracker:
             self.email_send_count += 1
         if _is_gmail_send_tool(low):
             self.gmail_send_count += 1
+        for nested_tool in _extract_nested_tool_names(tool_input):
+            nested_lower = nested_tool.lower()
+            if _is_email_send_tool(nested_lower):
+                self.email_send_count += 1
+            if _is_gmail_send_tool(nested_lower):
+                self.gmail_send_count += 1
 
     def evaluate(self) -> dict[str, Any]:
         missing: list[dict[str, Any]] = []
@@ -133,3 +139,19 @@ def _is_gmail_send_tool(tool_name_lower: str) -> bool:
     if "gmail" not in tool_name_lower:
         return False
     return any(token in tool_name_lower for token in ("send", "reply", "draft", "compose"))
+
+
+def _extract_nested_tool_names(tool_input: Any) -> list[str]:
+    if not isinstance(tool_input, dict):
+        return []
+    nested = tool_input.get("tools")
+    if not isinstance(nested, list):
+        return []
+    names: list[str] = []
+    for item in nested:
+        if not isinstance(item, dict):
+            continue
+        slug = str(item.get("tool_slug") or "").strip()
+        if slug:
+            names.append(slug)
+    return names

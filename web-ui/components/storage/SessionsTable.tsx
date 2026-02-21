@@ -18,16 +18,17 @@ function formatBytes(bytes?: number | null): string {
 type SessionsTableProps = {
   sessions: StorageSessionItem[];
   loading: boolean;
+  rootSource: "local" | "mirror";
   onOpenRoot: (path: string) => void;
   onOpenRunLog: (path: string) => void;
 };
 
-export function SessionsTable({ sessions, loading, onOpenRoot, onOpenRunLog }: SessionsTableProps) {
+export function SessionsTable({ sessions, loading, rootSource, onOpenRoot, onOpenRunLog }: SessionsTableProps) {
   if (loading) {
     return <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400">Loading sessions...</div>;
   }
   if (!sessions.length) {
-    return <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400">No sessions found in mirror.</div>;
+    return <div className="rounded-lg border border-slate-800 bg-slate-900/50 p-4 text-sm text-slate-400">No sessions found in {rootSource} storage root.</div>;
   }
 
   return (

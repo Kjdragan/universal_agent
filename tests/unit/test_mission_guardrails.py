@@ -33,3 +33,24 @@ def test_goal_satisfaction_passes_when_required_email_sends_recorded():
     assert result["passed"] is True
     assert result["observed"]["email_send_count"] == 2
     assert result["missing"] == []
+
+
+def test_goal_satisfaction_counts_nested_multi_execute_gmail_send():
+    contract = build_mission_contract("Use Gmail for final output")
+    tracker = MissionGuardrailTracker(contract)
+    tracker.record_tool_call(
+        "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+        tool_input={
+            "tools": [
+                {
+                    "tool_slug": "GMAIL_SEND_EMAIL",
+                    "arguments": {"recipient_email": "me", "subject": "x", "body": "y"},
+                }
+            ]
+        },
+    )
+
+    result = tracker.evaluate()
+    assert result["passed"] is True
+    assert result["observed"]["email_send_count"] == 1
+    assert result["observed"]["gmail_send_count"] == 1
