@@ -472,6 +472,11 @@ class AgentHookSet:
         self._current_turn_prompt = ""
         self._requires_vp_tool_path = False
         self._vp_dispatch_seen_this_turn = False
+        workspace_norm = str(active_workspace or "").replace("\\", "/").lower()
+        self._is_vp_worker_lane = (
+            "/agent_run_workspaces/vp_" in workspace_norm
+            and "/vp-mission-" in workspace_norm
+        )
 
     def build_hooks(self) -> dict:
         """Return the hook dictionary compatible with UniversalAgent."""
@@ -699,7 +704,12 @@ class AgentHookSet:
             self._vp_dispatch_seen_this_turn = True
 
         is_subagent_context = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
-        if self._requires_vp_tool_path and not self._vp_dispatch_seen_this_turn and not is_subagent_context:
+        if (
+            self._requires_vp_tool_path
+            and not self._vp_dispatch_seen_this_turn
+            and not is_subagent_context
+            and not self._is_vp_worker_lane
+        ):
             pre_dispatch_allowed = {
                 "vp_dispatch_mission",
                 "vp_wait_mission",
@@ -736,7 +746,7 @@ class AgentHookSet:
             )
             if not is_subagent_context and not self._vp_dispatch_seen_this_turn and (
                 self._requires_vp_tool_path or task_vp_intent
-            ):
+            ) and not self._is_vp_worker_lane:
                 # Lock the remaining turn into the VP control-plane lane, even when
                 # initial user-prompt intent detection missed a phrasing variant.
                 self._requires_vp_tool_path = True
@@ -1030,7 +1040,10 @@ class AgentHookSet:
             or ""
         )
         self._current_turn_prompt = prompt_text
-        self._requires_vp_tool_path = _looks_like_explicit_vp_intent(prompt_text)
+        self._requires_vp_tool_path = (
+            _looks_like_explicit_vp_intent(prompt_text)
+            and not self._is_vp_worker_lane
+        )
         self._vp_dispatch_seen_this_turn = False
 
         # Reset counters for the new user turn

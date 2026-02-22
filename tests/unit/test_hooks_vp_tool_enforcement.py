@@ -208,3 +208,30 @@ def test_allows_task_when_no_explicit_vp_intent():
         )
     )
     assert result == {}
+
+
+def test_vp_worker_lane_does_not_require_nested_vp_dispatch():
+    hooks = AgentHookSet(
+        run_id="unit-vp-worker-lane-bypass",
+        active_workspace=(
+            "/tmp/AGENT_RUN_WORKSPACES/"
+            "vp_general_primary_external/vp-mission-1234567890abcdef"
+        ),
+    )
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {"prompt": "Use the VP general to create a story and email it."}
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Read",
+                "tool_input": {"file_path": "/tmp/foo.md"},
+            },
+            "tool-read-allowed-in-vp-worker-lane",
+            {},
+        )
+    )
+    assert result == {}

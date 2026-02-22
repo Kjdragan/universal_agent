@@ -263,5 +263,140 @@
     "preview": "Simone, I need you to use the general DP to create get it to create a thousand word story about free bears and then gmail that to me.",
     "file_path": "memory/sessions/session_20260220_231738_ff29045a_2026-02-21_simone-i-need-you-to-use-the-general-dp-to-create-get-it-to-crea.md",
     "content_hash": "a4fd58d41467e4c7121e641fd73af8aae818d6f907583c2c8451c952852f7e58"
+  },
+  {
+    "entry_id": "dea83ebd-fc76-4525-a2d3-9da69cc454f8",
+    "timestamp": "2026-02-21T22:31:23.852206+00:00",
+    "source": "session_index",
+    "session_id": "9e36a8b6-d178-455d-a437-5b8605709a31",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:9e36a8b6-d178-455d-a437-5b8605709a31"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 16:30:47**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c82537476395996087a348b91c03b` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/9e36a8b6-d178-455d-a437-5b8605709a31_2026-02-21.md",
+    "content_hash": "faca880967cd90eea9e4a70b76fff88edfad9240c9102e7e171052f30e8f43f1"
+  },
+  {
+    "entry_id": "b07b1f34-b3fd-4600-a4e7-9aa0762574cb",
+    "timestamp": "2026-02-21T22:46:17.383643+00:00",
+    "source": "session_index",
+    "session_id": "e7ed788f-e3e2-48da-be07-a1b83a73129e",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:e7ed788f-e3e2-48da-be07-a1b83a73129e"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 16:46:17**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c82613ba4bfdc7207ada6c42c80a5` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/e7ed788f-e3e2-48da-be07-a1b83a73129e_2026-02-21.md",
+    "content_hash": "fa7b76efa6cf4c9bb0065d1b5c2663420f610a5e2c2d422fde47ccdd2f0c4df2"
+  },
+  {
+    "entry_id": "b93068aa-cfad-4bbb-baae-ac6ec15f8e1b",
+    "timestamp": "2026-02-21T23:00:38.510628+00:00",
+    "source": "session_index",
+    "session_id": "49f8826f-f303-48a1-8ebf-93d81ad892fb",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:49f8826f-f303-48a1-8ebf-93d81ad892fb"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 17:00:38**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c826eb4551cbcdf94d048e564ddab` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/49f8826f-f303-48a1-8ebf-93d81ad892fb_2026-02-21.md",
+    "content_hash": "485b4fdaad543fce602362ae38b1efec98beec80524c4ea5303fc834b5fc94c1"
+  },
+  {
+    "entry_id": "d9024a66-2cf4-4537-8906-52a8665fc81a",
+    "timestamp": "2026-02-21T23:10:14.035230+00:00",
+    "source": "session_index",
+    "session_id": "932d23f8-b01a-4874-855b-53a1826fec53",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:932d23f8-b01a-4874-855b-53a1826fec53"
+    ],
+    "summary": null,
+    "preview": "like waves in the wind, lived a young elephant named Barnaby. Unlike the other elephants in his herd who took pride in their mighty trumpets and thunderous footsteps, Barnaby was different\\u2014he was quiet.\\n\\nWhile the other elephants announced their presence with loud calls th",
+    "file_path": "memory/sessions/932d23f8-b01a-4874-855b-53a1826fec53_2026-02-21.md",
+    "content_hash": "60f2a872ea04d01fe9e3dd43e21709c04c09ec0f8719f0018eab961284db8a06"
+  },
+  {
+    "entry_id": "b6ae1ac9-bcab-4846-ba20-11c5e00f0ebf",
+    "timestamp": "2026-02-21T23:10:23.007427+00:00",
+    "source": "session_index",
+    "session_id": "932d23f8-b01a-4874-855b-53a1826fec53",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:932d23f8-b01a-4874-855b-53a1826fec53"
+    ],
+    "summary": null,
+    "preview": "drwxrwxr-x  5 kjdragan kjdragan     4096 Feb 21 17:08 AGENT_RUN_WORKSPACES\ndrwxrwxr-x  6 kjdragan kjdragan     4096 Feb 21 17:07 AGENT_RUN_WORKSPACES_ARCHIVE\ndrwxrwxr-x  3 kjdragan kjdragan     4096 Feb 14 07:31 CURRENT_SESSION_WORKSPACE\ndrwxrwxr-x  2 kjdragan kjdragan     4096 F",
+    "file_path": "memory/sessions/932d23f8-b01a-4874-855b-53a1826fec53_2026-02-21.md",
+    "content_hash": "3ee9bf2185b3800462c555784949b7696c29a60f0370784dc5e4a84b9bc4e548"
+  },
+  {
+    "entry_id": "4e268e96-6927-4c48-8e21-e5fc5c7a33f6",
+    "timestamp": "2026-02-21T23:30:28.241211+00:00",
+    "source": "session_index",
+    "session_id": "0eb205c4-988c-4a89-84b9-5a249a7ad028",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:0eb205c4-988c-4a89-84b9-5a249a7ad028"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 17:30:28**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c828a0a061cec838deeb0a9d07196` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/0eb205c4-988c-4a89-84b9-5a249a7ad028_2026-02-21.md",
+    "content_hash": "1c910e43940bf80067ee055e285761c1e1f9fb4cffea47ad893e5832c0c25677"
+  },
+  {
+    "entry_id": "8559a58d-a9fd-43f3-aee4-0dd51594c5e4",
+    "timestamp": "2026-02-21T23:34:02.118368+00:00",
+    "source": "session_index",
+    "session_id": "4f3d9d38-f19a-47c5-b4d7-4e7171b7e664",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:4f3d9d38-f19a-47c5-b4d7-4e7171b7e664"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 17:34:02**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c828d0e14bc4d6fd1532d1420e96b` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/4f3d9d38-f19a-47c5-b4d7-4e7171b7e664_2026-02-21.md",
+    "content_hash": "90cf428d4aa2d7ba3906b82d8797e3b770d4d6d4feb599723c0f095a7d5cc042"
+  },
+  {
+    "entry_id": "f0b4527a-1559-414c-9d43-2058136f051a",
+    "timestamp": "2026-02-22T00:06:42.668197+00:00",
+    "source": "session_index",
+    "session_id": "7e05a67c-d1eb-4040-bba6-ec2a7f57db28",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:7e05a67c-d1eb-4040-bba6-ec2a7f57db28"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 18:06:42**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c82aad5b5dcd4e010f3e5363fcd7c` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/7e05a67c-d1eb-4040-bba6-ec2a7f57db28_2026-02-22.md",
+    "content_hash": "30a24d48328c9afde9b6c60f83466fd4d3f497b9df4a7068e50cba6f9cb06a82"
+  },
+  {
+    "entry_id": "ec032c9c-3582-4213-990a-a107be27060c",
+    "timestamp": "2026-02-22T00:17:41.190067+00:00",
+    "source": "session_index",
+    "session_id": "3567addd-d4b4-4302-b22b-40eab9fd5bd1",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:3567addd-d4b4-4302-b22b-40eab9fd5bd1"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 18:17:41**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c82b4f597294e50661f20d53c98d3` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/3567addd-d4b4-4302-b22b-40eab9fd5bd1_2026-02-22.md",
+    "content_hash": "26e9df8292e672157e38e7fce6d95b91e4824a86c1c55ac34e02f877ad0793f7"
   }
 ]
