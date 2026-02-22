@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SYNC_SCRIPT="${REPO_ROOT}/scripts/sync_remote_workspaces.sh"
 
 DEFAULT_SERVICE_NAME="ua-remote-workspace-sync"
-DEFAULT_REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@100.106.113.93}"
+DEFAULT_REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@srv1360701.taildcc090.ts.net}"
 DEFAULT_REMOTE_DIR="${UA_REMOTE_WORKSPACES_DIR:-/opt/universal_agent/AGENT_RUN_WORKSPACES}"
 DEFAULT_LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES/remote_vps_workspaces}"
 DEFAULT_REMOTE_ARTIFACTS_DIR="${UA_REMOTE_ARTIFACTS_DIR:-/opt/universal_agent/artifacts}"
@@ -15,6 +15,7 @@ DEFAULT_STATE_DIR="${UA_REMOTE_SYNC_STATE_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES
 DEFAULT_MANIFEST_FILE="${UA_REMOTE_SYNC_MANIFEST_FILE:-${DEFAULT_STATE_DIR}/synced_workspaces.txt}"
 DEFAULT_INTERVAL_SEC="${UA_REMOTE_SYNC_INTERVAL_SEC:-30}"
 DEFAULT_SSH_PORT="${UA_REMOTE_SSH_PORT:-22}"
+DEFAULT_SSH_AUTH_MODE="${UA_SSH_AUTH_MODE:-keys}"
 DEFAULT_PRUNE_MIN_AGE_SEC="${UA_REMOTE_PRUNE_MIN_AGE_SEC:-300}"
 DEFAULT_GATEWAY_URL="${UA_REMOTE_GATEWAY_URL:-https://api.clearspringcg.com}"
 DEFAULT_REQUIRE_READY_MARKER="${UA_REMOTE_SYNC_REQUIRE_READY_MARKER:-true}"
@@ -45,6 +46,7 @@ Options:
   --no-skip-synced           Disable manifest-based skip behavior.
   --interval <seconds>       Timer interval.
   --ssh-port <port>          SSH port.
+  --ssh-auth-mode <mode>     SSH auth mode: keys|tailscale_ssh (default: keys).
   --ssh-key <path>           Optional SSH private key.
   --session-id <id>          Mirror only one session/cron workspace.
   --include-runtime-db       Include runtime_state.db and sidecar files.
@@ -108,6 +110,7 @@ LOCAL_ARTIFACTS_DIR="${DEFAULT_LOCAL_ARTIFACTS_DIR}"
 MANIFEST_FILE="${DEFAULT_MANIFEST_FILE}"
 INTERVAL_SEC="${DEFAULT_INTERVAL_SEC}"
 SSH_PORT="${DEFAULT_SSH_PORT}"
+SSH_AUTH_MODE="${DEFAULT_SSH_AUTH_MODE}"
 SSH_KEY=""
 SESSION_ID=""
 INCLUDE_RUNTIME_DB="false"
@@ -171,6 +174,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ssh-port)
       SSH_PORT="${2:-}"
+      shift 2
+      ;;
+    --ssh-auth-mode)
+      SSH_AUTH_MODE="${2:-}"
       shift 2
       ;;
     --ssh-key)
@@ -258,6 +265,20 @@ assert_positive_integer "${SSH_PORT}" "--ssh-port"
 assert_nonnegative_integer "${PRUNE_MIN_AGE_SEC}" "--prune-min-age-seconds"
 assert_nonnegative_integer "${READY_MIN_AGE_SEC}" "--ready-min-age-seconds"
 
+case "$(printf '%s' "${SSH_AUTH_MODE}" | tr '[:upper:]' '[:lower:]')" in
+  keys)
+    SSH_AUTH_MODE="keys"
+    ;;
+  tailscale_ssh)
+    SSH_AUTH_MODE="tailscale_ssh"
+    SSH_KEY=""
+    ;;
+  *)
+    echo "--ssh-auth-mode must be keys or tailscale_ssh. Got: ${SSH_AUTH_MODE}" >&2
+    exit 1
+    ;;
+esac
+
 case "$(printf '%s' "${REQUIRE_READY_MARKER}" | tr '[:upper:]' '[:lower:]')" in
   1|true|yes|on)
     REQUIRE_READY_MARKER="true"
@@ -267,7 +288,7 @@ case "$(printf '%s' "${REQUIRE_READY_MARKER}" | tr '[:upper:]' '[:lower:]')" in
     ;;
 esac
 
-if [[ -n "${SSH_KEY}" && ! -f "${SSH_KEY}" ]]; then
+if [[ "${SSH_AUTH_MODE}" == "keys" && -n "${SSH_KEY}" && ! -f "${SSH_KEY}" ]]; then
   echo "SSH key does not exist: ${SSH_KEY}" >&2
   exit 1
 fi
@@ -302,12 +323,13 @@ exec_start=(
   --manifest-file "${MANIFEST_FILE}"
   --interval "${INTERVAL_SEC}"
   --ssh-port "${SSH_PORT}"
+  --ssh-auth-mode "${SSH_AUTH_MODE}"
 )
 
 if [[ "${SKIP_SYNCED}" != "true" ]]; then
   exec_start+=(--no-skip-synced)
 fi
-if [[ -n "${SSH_KEY}" ]]; then
+if [[ "${SSH_AUTH_MODE}" == "keys" && -n "${SSH_KEY}" ]]; then
   exec_start+=(--ssh-key "${SSH_KEY}")
 fi
 if [[ -n "${SESSION_ID}" ]]; then

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-DEFAULT_REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@100.106.113.93}"
+DEFAULT_REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@srv1360701.taildcc090.ts.net}"
 DEFAULT_REMOTE_DIR="${UA_REMOTE_WORKSPACES_DIR:-/opt/universal_agent/AGENT_RUN_WORKSPACES}"
 DEFAULT_LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES/remote_vps_workspaces}"
 DEFAULT_REMOTE_ARTIFACTS_DIR="${UA_REMOTE_ARTIFACTS_DIR:-/opt/universal_agent/artifacts}"
@@ -13,6 +13,7 @@ DEFAULT_STATE_DIR="${UA_REMOTE_SYNC_STATE_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES
 DEFAULT_MANIFEST_FILE="${UA_REMOTE_SYNC_MANIFEST_FILE:-${DEFAULT_STATE_DIR}/synced_workspaces.txt}"
 DEFAULT_INTERVAL_SEC="${UA_REMOTE_SYNC_INTERVAL_SEC:-30}"
 DEFAULT_SSH_PORT="${UA_REMOTE_SSH_PORT:-22}"
+DEFAULT_SSH_AUTH_MODE="${UA_SSH_AUTH_MODE:-keys}"
 DEFAULT_PRUNE_MIN_AGE_SEC="${UA_REMOTE_PRUNE_MIN_AGE_SEC:-300}"
 DEFAULT_GATEWAY_URL="${UA_REMOTE_GATEWAY_URL:-https://api.clearspringcg.com}"
 DEFAULT_REMOTE_TOGGLE_PATH="${UA_REMOTE_SYNC_TOGGLE_PATH:-/api/v1/ops/remote-sync}"
@@ -20,6 +21,8 @@ DEFAULT_REQUIRE_READY_MARKER="${UA_REMOTE_SYNC_REQUIRE_READY_MARKER:-true}"
 DEFAULT_READY_MARKER_FILENAME="${UA_REMOTE_SYNC_READY_MARKER_FILENAME:-sync_ready.json}"
 DEFAULT_READY_MIN_AGE_SEC="${UA_REMOTE_SYNC_READY_MIN_AGE_SECONDS:-45}"
 DEFAULT_READY_SESSION_PREFIX="${UA_REMOTE_SYNC_READY_SESSION_PREFIX:-session_,tg_}"
+DEFAULT_TAILNET_PREFLIGHT="${UA_TAILNET_PREFLIGHT:-auto}"
+DEFAULT_SKIP_TAILNET_PREFLIGHT="${UA_SKIP_TAILNET_PREFLIGHT:-false}"
 
 print_usage() {
   cat <<'USAGE'
@@ -43,6 +46,7 @@ Options:
   --no-skip-synced           Disable manifest-based skip behavior.
   --interval <seconds>       Sync loop interval (continuous mode only).
   --ssh-port <port>          SSH port for rsync transport.
+  --ssh-auth-mode <mode>     SSH auth mode: keys|tailscale_ssh (default: keys).
   --ssh-key <path>           Optional SSH private key path.
   --session-id <id>          Mirror only one session/cron workspace directory.
   --include-runtime-db       Include runtime_state.db and sidecar files.
@@ -125,6 +129,7 @@ LOCAL_ARTIFACTS_DIR="${DEFAULT_LOCAL_ARTIFACTS_DIR}"
 MANIFEST_FILE="${DEFAULT_MANIFEST_FILE}"
 INTERVAL_SEC="${DEFAULT_INTERVAL_SEC}"
 SSH_PORT="${DEFAULT_SSH_PORT}"
+SSH_AUTH_MODE="${DEFAULT_SSH_AUTH_MODE}"
 SSH_KEY=""
 SESSION_ID=""
 RUN_ONCE="false"
@@ -145,6 +150,8 @@ REQUIRE_READY_MARKER="${DEFAULT_REQUIRE_READY_MARKER}"
 READY_MARKER_FILENAME="${DEFAULT_READY_MARKER_FILENAME}"
 READY_MIN_AGE_SEC="${DEFAULT_READY_MIN_AGE_SEC}"
 READY_SESSION_PREFIX="${DEFAULT_READY_SESSION_PREFIX}"
+TAILNET_PREFLIGHT_MODE="${DEFAULT_TAILNET_PREFLIGHT}"
+SKIP_TAILNET_PREFLIGHT="${DEFAULT_SKIP_TAILNET_PREFLIGHT}"
 SYNCED_WORKSPACE_LAST="false"
 
 while [[ $# -gt 0 ]]; do
@@ -187,6 +194,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ssh-port)
       SSH_PORT="${2:-}"
+      shift 2
+      ;;
+    --ssh-auth-mode)
+      SSH_AUTH_MODE="${2:-}"
       shift 2
       ;;
     --ssh-key)
@@ -295,11 +306,25 @@ case "$(printf '%s' "${REQUIRE_READY_MARKER}" | tr '[:upper:]' '[:lower:]')" in
     ;;
 esac
 
+case "$(printf '%s' "${SSH_AUTH_MODE}" | tr '[:upper:]' '[:lower:]')" in
+  keys)
+    SSH_AUTH_MODE="keys"
+    ;;
+  tailscale_ssh)
+    SSH_AUTH_MODE="tailscale_ssh"
+    SSH_KEY=""
+    ;;
+  *)
+    echo "--ssh-auth-mode must be one of: keys, tailscale_ssh. Got: ${SSH_AUTH_MODE}" >&2
+    exit 1
+    ;;
+esac
+
 if [[ -z "${READY_MARKER_FILENAME}" ]]; then
   READY_MARKER_FILENAME="${DEFAULT_READY_MARKER_FILENAME}"
 fi
 
-if [[ -n "${SSH_KEY}" && ! -f "${SSH_KEY}" ]]; then
+if [[ "${SSH_AUTH_MODE}" == "keys" && -n "${SSH_KEY}" && ! -f "${SSH_KEY}" ]]; then
   echo "SSH key does not exist: ${SSH_KEY}" >&2
   exit 1
 fi
@@ -480,6 +505,41 @@ remote_toggle_enabled() {
   fi
   log "Remote toggle is OFF; skipping sync cycle."
   return 1
+}
+
+run_tailnet_preflight() {
+  local host_only="${REMOTE_HOST#*@}"
+  local tailnet_host="false"
+  case "${host_only}" in
+    *.tail*.ts.net|100.*) tailnet_host="true" ;;
+  esac
+
+  local should_run="false"
+  case "$(printf '%s' "${TAILNET_PREFLIGHT_MODE}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on|force|required) should_run="true" ;;
+    0|false|no|off|disabled) should_run="false" ;;
+    *) [[ "${tailnet_host}" == "true" ]] && should_run="true" ;;
+  esac
+  case "$(printf '%s' "${SKIP_TAILNET_PREFLIGHT}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) should_run="false" ;;
+  esac
+
+  if [[ "${should_run}" != "true" ]]; then
+    return 0
+  fi
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "tailscale CLI is required for tailnet preflight." >&2
+    echo "Set UA_TAILNET_PREFLIGHT=off (or UA_SKIP_TAILNET_PREFLIGHT=true) for break-glass bypass." >&2
+    return 1
+  fi
+  if ! tailscale status >/dev/null 2>&1; then
+    echo "tailscale status check failed." >&2
+    return 1
+  fi
+  if ! tailscale ping "${host_only}" >/dev/null 2>&1; then
+    echo "tailscale ping failed for ${host_only}." >&2
+    return 1
+  fi
 }
 
 remote_exec() {
@@ -721,6 +781,10 @@ prune_remote_workspaces_missing_locally() {
 }
 
 sync_once() {
+  if ! run_tailnet_preflight; then
+    warn "Tailnet preflight failed; skipping sync cycle."
+    return 0
+  fi
   if ! remote_toggle_enabled; then
     return 0
   fi
@@ -753,6 +817,11 @@ sync_once() {
 }
 
 sync_status_json() {
+  if ! run_tailnet_preflight; then
+    printf '{"ok":false,"sync_state":"unknown","pending_ready_count":0,"error":"%s"}\n' \
+      "tailnet preflight failed"
+    return 1
+  fi
   local pending_ready_count=0
   local ready_total_count=0
   local synced_ready_count=0

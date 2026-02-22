@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SYNC_SCRIPT="${REPO_ROOT}/scripts/sync_remote_workspaces.sh"
 
-REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@100.106.113.93}"
+REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@srv1360701.taildcc090.ts.net}"
 REMOTE_DIR="${UA_REMOTE_WORKSPACES_DIR:-/opt/universal_agent/AGENT_RUN_WORKSPACES}"
 LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES/remote_vps_workspaces}"
 REMOTE_ARTIFACTS_DIR="${UA_REMOTE_ARTIFACTS_DIR:-/opt/universal_agent/artifacts}"
@@ -13,6 +13,7 @@ LOCAL_ARTIFACTS_DIR="${UA_LOCAL_ARTIFACTS_MIRROR_DIR:-${REPO_ROOT}/artifacts/rem
 MANIFEST_FILE="${UA_REMOTE_SYNC_MANIFEST_FILE:-${REPO_ROOT}/AGENT_RUN_WORKSPACES/remote_vps_sync_state/synced_workspaces.txt}"
 SSH_KEY="${UA_REMOTE_SSH_KEY:-${HOME}/.ssh/id_ed25519}"
 SSH_PORT="${UA_REMOTE_SSH_PORT:-22}"
+SSH_AUTH_MODE="${UA_SSH_AUTH_MODE:-keys}"
 INCLUDE_ARTIFACTS_SYNC="${UA_REMOTE_SYNC_INCLUDE_ARTIFACTS:-true}"
 REQUIRE_READY_MARKER="${UA_REMOTE_SYNC_REQUIRE_READY_MARKER:-true}"
 READY_MARKER_FILENAME="${UA_REMOTE_SYNC_READY_MARKER_FILENAME:-sync_ready.json}"
@@ -27,6 +28,7 @@ fi
 
 args=(
   --once
+  --ssh-auth-mode "${SSH_AUTH_MODE}"
   --host "${REMOTE_HOST}"
   --remote-dir "${REMOTE_DIR}"
   --local-dir "${LOCAL_DIR}"
@@ -34,8 +36,19 @@ args=(
   --local-artifacts-dir "${LOCAL_ARTIFACTS_DIR}"
   --manifest-file "${MANIFEST_FILE}"
   --ssh-port "${SSH_PORT}"
-  --ssh-key "${SSH_KEY}"
 )
+
+case "$(printf '%s' "${SSH_AUTH_MODE}" | tr '[:upper:]' '[:lower:]')" in
+  keys)
+    args+=(--ssh-key "${SSH_KEY}")
+    ;;
+  tailscale_ssh)
+    ;;
+  *)
+    echo "UA_SSH_AUTH_MODE must be keys or tailscale_ssh. Got: ${SSH_AUTH_MODE}" >&2
+    exit 1
+    ;;
+esac
 
 if [[ "${INCLUDE_ARTIFACTS_SYNC}" != "true" ]]; then
   args+=(--no-artifacts)
