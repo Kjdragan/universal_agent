@@ -126,6 +126,12 @@ After CSI playlist cutover stability is confirmed, the next planned phase is RSS
    2. or suppress second source by policy.
 5. Finalize dedupe policy and document it in PRD/runbook.
 
+Implementation status update (2026-02-22):
+1. RSS watchlist now supports file-based loading via `watchlist_file`.
+2. Active path uses `/opt/universal_agent/CSI_Ingester/development/channels_watchlist.json`.
+3. VPS load confirmed with `channels=443` in `csi-ingester` logs.
+4. Signed `youtube_channel_rss` smoke event confirmed ingest+dispatch (`200`, `internal_dispatches=1`).
+
 ### 7.3 RSS Acceptance Gates
 
 1. `SOURCE_youtube_channel_rss_RECENT_TOTAL > 0` during test window.

@@ -1,0 +1,3109 @@
+{
+  "extraction_date": "2026-02-22",
+  "playlist_id": "PLjL3liQSixtvyu1yGb6IOwPUPMKeS067E",
+  "total_videos_found": 930,
+  "unique_channels": 443,
+  "channels": [
+    {
+      "channel_id": "UC0m81bQuthaQZmFbXEY9QSw",
+      "channel_name": "AICodeKing",
+      "video_count": 32,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0m81bQuthaQZmFbXEY9QSw",
+      "youtube_url": "https://www.youtube.com/channel/UC0m81bQuthaQZmFbXEY9QSw"
+    },
+    {
+      "channel_id": "UCC-lyoTfSrcJzA1ab3APAgw",
+      "channel_name": "LangChain",
+      "video_count": 20,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCC-lyoTfSrcJzA1ab3APAgw",
+      "youtube_url": "https://www.youtube.com/channel/UCC-lyoTfSrcJzA1ab3APAgw"
+    },
+    {
+      "channel_id": "UCMwVTLZIRRUyyVrkjDpn4pA",
+      "channel_name": "Cole Medin",
+      "video_count": 19,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCMwVTLZIRRUyyVrkjDpn4pA",
+      "youtube_url": "https://www.youtube.com/channel/UCMwVTLZIRRUyyVrkjDpn4pA"
+    },
+    {
+      "channel_id": "UC_x36zCEGilGpB1m-V4gmjg",
+      "channel_name": "IndyDevDan",
+      "video_count": 18,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_x36zCEGilGpB1m-V4gmjg",
+      "youtube_url": "https://www.youtube.com/channel/UC_x36zCEGilGpB1m-V4gmjg"
+    },
+    {
+      "channel_id": "UCR9j1jqqB5Rse69wjUnbYwA",
+      "channel_name": "All About AI",
+      "video_count": 18,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCR9j1jqqB5Rse69wjUnbYwA",
+      "youtube_url": "https://www.youtube.com/channel/UCR9j1jqqB5Rse69wjUnbYwA"
+    },
+    {
+      "channel_id": "UCfOvNb3xj28SNqPQ_JIbumg",
+      "channel_name": "Discover AI",
+      "video_count": 17,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfOvNb3xj28SNqPQ_JIbumg",
+      "youtube_url": "https://www.youtube.com/channel/UCfOvNb3xj28SNqPQ_JIbumg"
+    },
+    {
+      "channel_id": "UCqcbQf6yw5KzRoDDcZ_wBSw",
+      "channel_name": "Wes Roth",
+      "video_count": 14,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCqcbQf6yw5KzRoDDcZ_wBSw",
+      "youtube_url": "https://www.youtube.com/channel/UCqcbQf6yw5KzRoDDcZ_wBSw"
+    },
+    {
+      "channel_id": "UCbY9xX3_jW5c2fjlZVBI4cg",
+      "channel_name": "TheAIGRID",
+      "video_count": 13,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbY9xX3_jW5c2fjlZVBI4cg",
+      "youtube_url": "https://www.youtube.com/channel/UCbY9xX3_jW5c2fjlZVBI4cg"
+    },
+    {
+      "channel_id": "UCeM9aUhYQxR26OucWZuGggA",
+      "channel_name": "I'd Prefer Not",
+      "video_count": 11,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCeM9aUhYQxR26OucWZuGggA",
+      "youtube_url": "https://www.youtube.com/channel/UCeM9aUhYQxR26OucWZuGggA"
+    },
+    {
+      "channel_id": "UCyqdVXH6EMYjxF5AKPg4NLw",
+      "channel_name": "Richard Aragon",
+      "video_count": 11,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCyqdVXH6EMYjxF5AKPg4NLw",
+      "youtube_url": "https://www.youtube.com/channel/UCyqdVXH6EMYjxF5AKPg4NLw"
+    },
+    {
+      "channel_id": "UC55ODQSvARtgSyc8ThfiepQ",
+      "channel_name": "Sam Witteveen",
+      "video_count": 11,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC55ODQSvARtgSyc8ThfiepQ",
+      "youtube_url": "https://www.youtube.com/channel/UC55ODQSvARtgSyc8ThfiepQ"
+    },
+    {
+      "channel_id": "UCelfWQr9sXVMTvBzviPGlFw",
+      "channel_name": "AI LABS",
+      "video_count": 10,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCelfWQr9sXVMTvBzviPGlFw",
+      "youtube_url": "https://www.youtube.com/channel/UCelfWQr9sXVMTvBzviPGlFw"
+    },
+    {
+      "channel_id": "UCDq7SjbgRKty5TgGafW8Clg",
+      "channel_name": "Prompt Engineering",
+      "video_count": 9,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDq7SjbgRKty5TgGafW8Clg",
+      "youtube_url": "https://www.youtube.com/channel/UCDq7SjbgRKty5TgGafW8Clg"
+    },
+    {
+      "channel_id": "UCWTyktbw5JYoSBduu8LsBgQ",
+      "channel_name": "Mervin Praison",
+      "video_count": 9,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWTyktbw5JYoSBduu8LsBgQ",
+      "youtube_url": "https://www.youtube.com/channel/UCWTyktbw5JYoSBduu8LsBgQ"
+    },
+    {
+      "channel_id": "UCctL30i8tVgSS9A37Q532eg",
+      "channel_name": "Income stream surfers",
+      "video_count": 8,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCctL30i8tVgSS9A37Q532eg",
+      "youtube_url": "https://www.youtube.com/channel/UCctL30i8tVgSS9A37Q532eg"
+    },
+    {
+      "channel_id": "UCFosLT-CZzauB5gXQPc2a0g",
+      "channel_name": "Yeyu Lab",
+      "video_count": 8,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCFosLT-CZzauB5gXQPc2a0g",
+      "youtube_url": "https://www.youtube.com/channel/UCFosLT-CZzauB5gXQPc2a0g"
+    },
+    {
+      "channel_id": "UCawZsQWqfGSbCI5yjkdVkTA",
+      "channel_name": "Matthew Berman",
+      "video_count": 8,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCawZsQWqfGSbCI5yjkdVkTA",
+      "youtube_url": "https://www.youtube.com/channel/UCawZsQWqfGSbCI5yjkdVkTA"
+    },
+    {
+      "channel_id": "UCPix8N6PMRI4KzgyjuZeF0g",
+      "channel_name": "Fahd Mirza",
+      "video_count": 8,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPix8N6PMRI4KzgyjuZeF0g",
+      "youtube_url": "https://www.youtube.com/channel/UCPix8N6PMRI4KzgyjuZeF0g"
+    },
+    {
+      "channel_id": "UCy6rH4hKHMLdd5s-FUrto7Q",
+      "channel_name": "Adam Lucek",
+      "video_count": 7,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCy6rH4hKHMLdd5s-FUrto7Q",
+      "youtube_url": "https://www.youtube.com/channel/UCy6rH4hKHMLdd5s-FUrto7Q"
+    },
+    {
+      "channel_id": "UCQd9wpBDkfQxqxGIBko2fKg",
+      "channel_name": "GosuCoder",
+      "video_count": 7,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQd9wpBDkfQxqxGIBko2fKg",
+      "youtube_url": "https://www.youtube.com/channel/UCQd9wpBDkfQxqxGIBko2fKg"
+    },
+    {
+      "channel_id": "UCq_MHfMX5FBBB3bqnJPAEzA",
+      "channel_name": "Ray Fernando",
+      "video_count": 7,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCq_MHfMX5FBBB3bqnJPAEzA",
+      "youtube_url": "https://www.youtube.com/channel/UCq_MHfMX5FBBB3bqnJPAEzA"
+    },
+    {
+      "channel_id": "UCL7przoMtZTmiQMhc9ifIww",
+      "channel_name": "echohive",
+      "video_count": 7,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCL7przoMtZTmiQMhc9ifIww",
+      "youtube_url": "https://www.youtube.com/channel/UCL7przoMtZTmiQMhc9ifIww"
+    },
+    {
+      "channel_id": "UCLKPca3kwwd-B59HNr-_lvA",
+      "channel_name": "AI Engineer",
+      "video_count": 6,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCLKPca3kwwd-B59HNr-_lvA",
+      "youtube_url": "https://www.youtube.com/channel/UCLKPca3kwwd-B59HNr-_lvA"
+    },
+    {
+      "channel_id": "UC4JX40jDee_tINbkjycV4Sg",
+      "channel_name": "Tech With Tim",
+      "video_count": 6,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4JX40jDee_tINbkjycV4Sg",
+      "youtube_url": "https://www.youtube.com/channel/UC4JX40jDee_tINbkjycV4Sg"
+    },
+    {
+      "channel_id": "UCuCwMz8aMJBFfhDnYicfdjg",
+      "channel_name": "Yaron Been",
+      "video_count": 6,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuCwMz8aMJBFfhDnYicfdjg",
+      "youtube_url": "https://www.youtube.com/channel/UCuCwMz8aMJBFfhDnYicfdjg"
+    },
+    {
+      "channel_id": "UCrXSVX9a1mj8l0CMLwKgMVw",
+      "channel_name": "AI Jason",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCrXSVX9a1mj8l0CMLwKgMVw",
+      "youtube_url": "https://www.youtube.com/channel/UCrXSVX9a1mj8l0CMLwKgMVw"
+    },
+    {
+      "channel_id": "UCPjNBjflYl0-HQtUvOx0Ibw",
+      "channel_name": "Greg Isenberg",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPjNBjflYl0-HQtUvOx0Ibw",
+      "youtube_url": "https://www.youtube.com/channel/UCPjNBjflYl0-HQtUvOx0Ibw"
+    },
+    {
+      "channel_id": "UCE4PyAWiZ5gdPVFxDe4lLPQ",
+      "channel_name": "Chong-U — AI Oriented Dev",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCE4PyAWiZ5gdPVFxDe4lLPQ",
+      "youtube_url": "https://www.youtube.com/channel/UCE4PyAWiZ5gdPVFxDe4lLPQ"
+    },
+    {
+      "channel_id": "UCrnqntHQ4oNe7HJtfiAMQ2g",
+      "channel_name": "Tyler AI",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCrnqntHQ4oNe7HJtfiAMQ2g",
+      "youtube_url": "https://www.youtube.com/channel/UCrnqntHQ4oNe7HJtfiAMQ2g"
+    },
+    {
+      "channel_id": "UCaIm6rTg-RXb6rB19fYJgTg",
+      "channel_name": "JeredBlu",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCaIm6rTg-RXb6rB19fYJgTg",
+      "youtube_url": "https://www.youtube.com/channel/UCaIm6rTg-RXb6rB19fYJgTg"
+    },
+    {
+      "channel_id": "UCncVoOXAma1zJUNTJGL6Ncw",
+      "channel_name": "Chris Hay",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCncVoOXAma1zJUNTJGL6Ncw",
+      "youtube_url": "https://www.youtube.com/channel/UCncVoOXAma1zJUNTJGL6Ncw"
+    },
+    {
+      "channel_id": "UC5l7RouTQ60oUjLjt1Nh-UQ",
+      "channel_name": "AI Revolution",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC5l7RouTQ60oUjLjt1Nh-UQ",
+      "youtube_url": "https://www.youtube.com/channel/UC5l7RouTQ60oUjLjt1Nh-UQ"
+    },
+    {
+      "channel_id": "UC7-TPqKMViddKZeo4K2P2jg",
+      "channel_name": "Pyotr Kurzin | Geopolitics",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC7-TPqKMViddKZeo4K2P2jg",
+      "youtube_url": "https://www.youtube.com/channel/UC7-TPqKMViddKZeo4K2P2jg"
+    },
+    {
+      "channel_id": "UC6P5WCWjqhhXVFBqbJHNxyw",
+      "channel_name": "Gao Dalie (高達烈)",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC6P5WCWjqhhXVFBqbJHNxyw",
+      "youtube_url": "https://www.youtube.com/channel/UC6P5WCWjqhhXVFBqbJHNxyw"
+    },
+    {
+      "channel_id": "UCyna_OxOWL7IEuOwb7WhmxQ",
+      "channel_name": "Elvis Saravia",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCyna_OxOWL7IEuOwb7WhmxQ",
+      "youtube_url": "https://www.youtube.com/channel/UCyna_OxOWL7IEuOwb7WhmxQ"
+    },
+    {
+      "channel_id": "UCBr1IoxBAF9RDPdTzb6459g",
+      "channel_name": "Volo Builds",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCBr1IoxBAF9RDPdTzb6459g",
+      "youtube_url": "https://www.youtube.com/channel/UCBr1IoxBAF9RDPdTzb6459g"
+    },
+    {
+      "channel_id": "UCtwEIq8U94Hnd-A0kl5GkZA",
+      "channel_name": "YourTechBud Codes",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCtwEIq8U94Hnd-A0kl5GkZA",
+      "youtube_url": "https://www.youtube.com/channel/UCtwEIq8U94Hnd-A0kl5GkZA"
+    },
+    {
+      "channel_id": "UCfZA9WrN9X0_upG1RIZYHuw",
+      "channel_name": "Launch Intelligence",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfZA9WrN9X0_upG1RIZYHuw",
+      "youtube_url": "https://www.youtube.com/channel/UCfZA9WrN9X0_upG1RIZYHuw"
+    },
+    {
+      "channel_id": "UCvKRFNawVcuz4b9ihUTApCg",
+      "channel_name": "David Shapiro",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCvKRFNawVcuz4b9ihUTApCg",
+      "youtube_url": "https://www.youtube.com/channel/UCvKRFNawVcuz4b9ihUTApCg"
+    },
+    {
+      "channel_id": "UCcQNMvqrSiXtxmXJQfwS4ZA",
+      "channel_name": "Codewello",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCcQNMvqrSiXtxmXJQfwS4ZA",
+      "youtube_url": "https://www.youtube.com/channel/UCcQNMvqrSiXtxmXJQfwS4ZA"
+    },
+    {
+      "channel_id": "UCxgkN3luQgLQOd_L7tbOdhQ",
+      "channel_name": "Kno2gether",
+      "video_count": 5,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCxgkN3luQgLQOd_L7tbOdhQ",
+      "youtube_url": "https://www.youtube.com/channel/UCxgkN3luQgLQOd_L7tbOdhQ"
+    },
+    {
+      "channel_id": "UC2WmuBuFq6gL08QYG-JjXKw",
+      "channel_name": "WorldofAI",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC2WmuBuFq6gL08QYG-JjXKw",
+      "youtube_url": "https://www.youtube.com/channel/UC2WmuBuFq6gL08QYG-JjXKw"
+    },
+    {
+      "channel_id": "UC_x5XG1OV2P6uZZ5FSM9Ttw",
+      "channel_name": "Google for Developers",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_x5XG1OV2P6uZZ5FSM9Ttw",
+      "youtube_url": "https://www.youtube.com/channel/UC_x5XG1OV2P6uZZ5FSM9Ttw"
+    },
+    {
+      "channel_id": "UC6-EGajbNF0DPD9AJ8oQC1A",
+      "channel_name": "Matt Maher",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC6-EGajbNF0DPD9AJ8oQC1A",
+      "youtube_url": "https://www.youtube.com/channel/UC6-EGajbNF0DPD9AJ8oQC1A"
+    },
+    {
+      "channel_id": "UCXl4i9dYBrFOabk0xGmbkRA",
+      "channel_name": "Dwarkesh Patel",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXl4i9dYBrFOabk0xGmbkRA",
+      "youtube_url": "https://www.youtube.com/channel/UCXl4i9dYBrFOabk0xGmbkRA"
+    },
+    {
+      "channel_id": "UCYeiozh-4QwuC1sjgCmB92w",
+      "channel_name": "DevOps Toolbox",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYeiozh-4QwuC1sjgCmB92w",
+      "youtube_url": "https://www.youtube.com/channel/UCYeiozh-4QwuC1sjgCmB92w"
+    },
+    {
+      "channel_id": "UC3QIolTSR29ba4_u15vtEUQ",
+      "channel_name": "Cloudflare Developers",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3QIolTSR29ba4_u15vtEUQ",
+      "youtube_url": "https://www.youtube.com/channel/UC3QIolTSR29ba4_u15vtEUQ"
+    },
+    {
+      "channel_id": "UCrDwWp7EBBv4NwvScIpBDOA",
+      "channel_name": "Anthropic",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCrDwWp7EBBv4NwvScIpBDOA",
+      "youtube_url": "https://www.youtube.com/channel/UCrDwWp7EBBv4NwvScIpBDOA"
+    },
+    {
+      "channel_id": "UCkVfrGwV-iG9bSsgCbrNPxQ",
+      "channel_name": "Better Stack",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCkVfrGwV-iG9bSsgCbrNPxQ",
+      "youtube_url": "https://www.youtube.com/channel/UCkVfrGwV-iG9bSsgCbrNPxQ"
+    },
+    {
+      "channel_id": "UC8wZnXYK_CGKlBcZp-GxYPA",
+      "channel_name": "NeuralNine",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC8wZnXYK_CGKlBcZp-GxYPA",
+      "youtube_url": "https://www.youtube.com/channel/UC8wZnXYK_CGKlBcZp-GxYPA"
+    },
+    {
+      "channel_id": "UCVhQ2NnY5Rskt6UjCUkJ_DA",
+      "channel_name": "ArjanCodes",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVhQ2NnY5Rskt6UjCUkJ_DA",
+      "youtube_url": "https://www.youtube.com/channel/UCVhQ2NnY5Rskt6UjCUkJ_DA"
+    },
+    {
+      "channel_id": "UC5Wz4fFacYuON6IKbhSa7Zw",
+      "channel_name": "MattVidPro AI",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC5Wz4fFacYuON6IKbhSa7Zw",
+      "youtube_url": "https://www.youtube.com/channel/UC5Wz4fFacYuON6IKbhSa7Zw"
+    },
+    {
+      "channel_id": "UCO1aucBAJgFR8odzfXOZ5uw",
+      "channel_name": "Execute Automation",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCO1aucBAJgFR8odzfXOZ5uw",
+      "youtube_url": "https://www.youtube.com/channel/UCO1aucBAJgFR8odzfXOZ5uw"
+    },
+    {
+      "channel_id": "UCLIo-9WnXvQcXfXomQvYSOg",
+      "channel_name": "Eduards Ruzga",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCLIo-9WnXvQcXfXomQvYSOg",
+      "youtube_url": "https://www.youtube.com/channel/UCLIo-9WnXvQcXfXomQvYSOg"
+    },
+    {
+      "channel_id": "UC-zVytOQB62OwMhKRi0TDvg",
+      "channel_name": "AI Anytime",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-zVytOQB62OwMhKRi0TDvg",
+      "youtube_url": "https://www.youtube.com/channel/UC-zVytOQB62OwMhKRi0TDvg"
+    },
+    {
+      "channel_id": "UCxBcwypKK-W3GHd_RZ9FZrQ",
+      "channel_name": "Latent Space",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCxBcwypKK-W3GHd_RZ9FZrQ",
+      "youtube_url": "https://www.youtube.com/channel/UCxBcwypKK-W3GHd_RZ9FZrQ"
+    },
+    {
+      "channel_id": "UCpV_X0VrL8-jg3t6wYGS-1g",
+      "channel_name": "1littlecoder",
+      "video_count": 4,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpV_X0VrL8-jg3t6wYGS-1g",
+      "youtube_url": "https://www.youtube.com/channel/UCpV_X0VrL8-jg3t6wYGS-1g"
+    },
+    {
+      "channel_id": "UC0FBv8ckxw1hrZxbUm3G7hA",
+      "channel_name": "Rob The AI Guy",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0FBv8ckxw1hrZxbUm3G7hA",
+      "youtube_url": "https://www.youtube.com/channel/UC0FBv8ckxw1hrZxbUm3G7hA"
+    },
+    {
+      "channel_id": "UCfFEE8vgtFJITrQuLQFgucA",
+      "channel_name": "Zachary Huang",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfFEE8vgtFJITrQuLQFgucA",
+      "youtube_url": "https://www.youtube.com/channel/UCfFEE8vgtFJITrQuLQFgucA"
+    },
+    {
+      "channel_id": "UCFig7skuwYrCIGy0tuZHA2Q",
+      "channel_name": "Sean Kochel",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCFig7skuwYrCIGy0tuZHA2Q",
+      "youtube_url": "https://www.youtube.com/channel/UCFig7skuwYrCIGy0tuZHA2Q"
+    },
+    {
+      "channel_id": "UC0C-17n9iuUQPylguM1d-lQ",
+      "channel_name": "AI News & Strategy Daily | Nate B Jones",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0C-17n9iuUQPylguM1d-lQ",
+      "youtube_url": "https://www.youtube.com/channel/UC0C-17n9iuUQPylguM1d-lQ"
+    },
+    {
+      "channel_id": "UCORX3Cl7ByidjEgzSCgv9Yw",
+      "channel_name": "Anastasi In Tech",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCORX3Cl7ByidjEgzSCgv9Yw",
+      "youtube_url": "https://www.youtube.com/channel/UCORX3Cl7ByidjEgzSCgv9Yw"
+    },
+    {
+      "channel_id": "UCgkApalw5crKXOtr_mqtPQg",
+      "channel_name": "MCP Developers Summit",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCgkApalw5crKXOtr_mqtPQg",
+      "youtube_url": "https://www.youtube.com/channel/UCgkApalw5crKXOtr_mqtPQg"
+    },
+    {
+      "channel_id": "UCJS9pqu9BzkAMNTmzNMNhvg",
+      "channel_name": "Google Cloud Tech",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJS9pqu9BzkAMNTmzNMNhvg",
+      "youtube_url": "https://www.youtube.com/channel/UCJS9pqu9BzkAMNTmzNMNhvg"
+    },
+    {
+      "channel_id": "UCyaN6mg5u8Cjy2ZI4ikWaug",
+      "channel_name": "My First Million",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCyaN6mg5u8Cjy2ZI4ikWaug",
+      "youtube_url": "https://www.youtube.com/channel/UCyaN6mg5u8Cjy2ZI4ikWaug"
+    },
+    {
+      "channel_id": "UC1weYqfDgX0ALlNOSzcyblQ",
+      "channel_name": "ManuAGI - AutoGPT Tutorials",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1weYqfDgX0ALlNOSzcyblQ",
+      "youtube_url": "https://www.youtube.com/channel/UC1weYqfDgX0ALlNOSzcyblQ"
+    },
+    {
+      "channel_id": "UCHkzp52CldSPZqU5T49mOnA",
+      "channel_name": "Mark Kashef",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCHkzp52CldSPZqU5T49mOnA",
+      "youtube_url": "https://www.youtube.com/channel/UCHkzp52CldSPZqU5T49mOnA"
+    },
+    {
+      "channel_id": "UCF7fVZmwNUgL7BFH56PnigQ",
+      "channel_name": "theailanguage",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCF7fVZmwNUgL7BFH56PnigQ",
+      "youtube_url": "https://www.youtube.com/channel/UCF7fVZmwNUgL7BFH56PnigQ"
+    },
+    {
+      "channel_id": "UCn8ujwUInbJkBhffxqAPBVQ",
+      "channel_name": "Dave Ebbelaar",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCn8ujwUInbJkBhffxqAPBVQ",
+      "youtube_url": "https://www.youtube.com/channel/UCn8ujwUInbJkBhffxqAPBVQ"
+    },
+    {
+      "channel_id": "UC1RO76_HDT13u-lPXOA0t9A",
+      "channel_name": "Tech Friend AJ",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1RO76_HDT13u-lPXOA0t9A",
+      "youtube_url": "https://www.youtube.com/channel/UC1RO76_HDT13u-lPXOA0t9A"
+    },
+    {
+      "channel_id": "UCIqqIb7M6_6EoQ5s3BobT8Q",
+      "channel_name": "The Feature Crew",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCIqqIb7M6_6EoQ5s3BobT8Q",
+      "youtube_url": "https://www.youtube.com/channel/UCIqqIb7M6_6EoQ5s3BobT8Q"
+    },
+    {
+      "channel_id": "UCNTVzV1InxHV-YR0fSajqPQ",
+      "channel_name": "Supabase",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCNTVzV1InxHV-YR0fSajqPQ",
+      "youtube_url": "https://www.youtube.com/channel/UCNTVzV1InxHV-YR0fSajqPQ"
+    },
+    {
+      "channel_id": "UC3xGUI2ENj-86adpm-USKbg",
+      "channel_name": "LLMs for Devs",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3xGUI2ENj-86adpm-USKbg",
+      "youtube_url": "https://www.youtube.com/channel/UC3xGUI2ENj-86adpm-USKbg"
+    },
+    {
+      "channel_id": "UCcXAhu4M6Zqc0GU3sVacPhw",
+      "channel_name": "Zahiruddin Tavargere",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCcXAhu4M6Zqc0GU3sVacPhw",
+      "youtube_url": "https://www.youtube.com/channel/UCcXAhu4M6Zqc0GU3sVacPhw"
+    },
+    {
+      "channel_id": "UCGpsgNbzdF7BECCVbB1COHw",
+      "channel_name": "Julian Goldie SEO",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCGpsgNbzdF7BECCVbB1COHw",
+      "youtube_url": "https://www.youtube.com/channel/UCGpsgNbzdF7BECCVbB1COHw"
+    },
+    {
+      "channel_id": "UC98CzaYuFNAA_gOINFB0e4Q",
+      "channel_name": "EuroPython Conference",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC98CzaYuFNAA_gOINFB0e4Q",
+      "youtube_url": "https://www.youtube.com/channel/UC98CzaYuFNAA_gOINFB0e4Q"
+    },
+    {
+      "channel_id": "UCvVZ19DRSLIC2-RUOeWx8ug",
+      "channel_name": "Jie Jenn",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCvVZ19DRSLIC2-RUOeWx8ug",
+      "youtube_url": "https://www.youtube.com/channel/UCvVZ19DRSLIC2-RUOeWx8ug"
+    },
+    {
+      "channel_id": "UCPGrgwfbkjTIgPoOh2q1BAg",
+      "channel_name": "David Ondrej",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPGrgwfbkjTIgPoOh2q1BAg",
+      "youtube_url": "https://www.youtube.com/channel/UCPGrgwfbkjTIgPoOh2q1BAg"
+    },
+    {
+      "channel_id": "UCn5fhcGRrCvrmFibPbT6q1A",
+      "channel_name": "Brian Lagerstrom ",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCn5fhcGRrCvrmFibPbT6q1A",
+      "youtube_url": "https://www.youtube.com/channel/UCn5fhcGRrCvrmFibPbT6q1A"
+    },
+    {
+      "channel_id": "UCuGxbFmuThl3vWO-tozt43A",
+      "channel_name": "Coding Crash Courses",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuGxbFmuThl3vWO-tozt43A",
+      "youtube_url": "https://www.youtube.com/channel/UCuGxbFmuThl3vWO-tozt43A"
+    },
+    {
+      "channel_id": "UCSv4qL8vmoSH7GaPjuqRiCQ",
+      "channel_name": "Arseny Shatokhin",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCSv4qL8vmoSH7GaPjuqRiCQ",
+      "youtube_url": "https://www.youtube.com/channel/UCSv4qL8vmoSH7GaPjuqRiCQ"
+    },
+    {
+      "channel_id": "UCxZEC_fR0VrefLmtiJPBTBA",
+      "channel_name": "VinciBits",
+      "video_count": 3,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCxZEC_fR0VrefLmtiJPBTBA",
+      "youtube_url": "https://www.youtube.com/channel/UCxZEC_fR0VrefLmtiJPBTBA"
+    },
+    {
+      "channel_id": "UCY0w_qU4qO5MgHpEkpRLocg",
+      "channel_name": "Craig Hewitt",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCY0w_qU4qO5MgHpEkpRLocg",
+      "youtube_url": "https://www.youtube.com/channel/UCY0w_qU4qO5MgHpEkpRLocg"
+    },
+    {
+      "channel_id": "UC-kM5kL9CgjN9s9pim089gg",
+      "channel_name": "Adam Conover",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-kM5kL9CgjN9s9pim089gg",
+      "youtube_url": "https://www.youtube.com/channel/UC-kM5kL9CgjN9s9pim089gg"
+    },
+    {
+      "channel_id": "UCOXRjenlq9PmlTqd_JhAbMQ",
+      "channel_name": "Eric Tech",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCOXRjenlq9PmlTqd_JhAbMQ",
+      "youtube_url": "https://www.youtube.com/channel/UCOXRjenlq9PmlTqd_JhAbMQ"
+    },
+    {
+      "channel_id": "UCOEqiv0-yg_hx0nJiaWJK4Q",
+      "channel_name": "Kenny Liao",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCOEqiv0-yg_hx0nJiaWJK4Q",
+      "youtube_url": "https://www.youtube.com/channel/UCOEqiv0-yg_hx0nJiaWJK4Q"
+    },
+    {
+      "channel_id": "UCp38w5n099xkvoqciOaeFag",
+      "channel_name": "Taylor Lorenz",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCp38w5n099xkvoqciOaeFag",
+      "youtube_url": "https://www.youtube.com/channel/UCp38w5n099xkvoqciOaeFag"
+    },
+    {
+      "channel_id": "UC70SrI3VkT1MXALRtf0pcHg",
+      "channel_name": "Thomas DeLauer",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC70SrI3VkT1MXALRtf0pcHg",
+      "youtube_url": "https://www.youtube.com/channel/UC70SrI3VkT1MXALRtf0pcHg"
+    },
+    {
+      "channel_id": "UCqZMJXEtBw0umDvzFQ8oXtQ",
+      "channel_name": "Letta",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCqZMJXEtBw0umDvzFQ8oXtQ",
+      "youtube_url": "https://www.youtube.com/channel/UCqZMJXEtBw0umDvzFQ8oXtQ"
+    },
+    {
+      "channel_id": "UCxVxcTULO9cFU6SB9qVaisQ",
+      "channel_name": "Jack Roberts",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCxVxcTULO9cFU6SB9qVaisQ",
+      "youtube_url": "https://www.youtube.com/channel/UCxVxcTULO9cFU6SB9qVaisQ"
+    },
+    {
+      "channel_id": "UCH1kIzuOiRii_OwMet-DBZg",
+      "channel_name": "Chef Billy Parisi",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCH1kIzuOiRii_OwMet-DBZg",
+      "youtube_url": "https://www.youtube.com/channel/UCH1kIzuOiRii_OwMet-DBZg"
+    },
+    {
+      "channel_id": "UClbsdjQcVS_696NLB_z9_ug",
+      "channel_name": "The Dev Logger",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UClbsdjQcVS_696NLB_z9_ug",
+      "youtube_url": "https://www.youtube.com/channel/UClbsdjQcVS_696NLB_z9_ug"
+    },
+    {
+      "channel_id": "UCnpBg7yqNauHtlNSpOl5-cg",
+      "channel_name": "Peter Yang",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCnpBg7yqNauHtlNSpOl5-cg",
+      "youtube_url": "https://www.youtube.com/channel/UCnpBg7yqNauHtlNSpOl5-cg"
+    },
+    {
+      "channel_id": "UCOCahKBCEUuzDJawM7yN1dg",
+      "channel_name": "Bijan Bowen",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCOCahKBCEUuzDJawM7yN1dg",
+      "youtube_url": "https://www.youtube.com/channel/UCOCahKBCEUuzDJawM7yN1dg"
+    },
+    {
+      "channel_id": "UC8F7X90NDmMr1mGx8897r_A",
+      "channel_name": "Bart Slodyczka",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC8F7X90NDmMr1mGx8897r_A",
+      "youtube_url": "https://www.youtube.com/channel/UC8F7X90NDmMr1mGx8897r_A"
+    },
+    {
+      "channel_id": "UCwU4Z4vzyvY4XzNUjTi0SUg",
+      "channel_name": "Coding the Future With AI",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCwU4Z4vzyvY4XzNUjTi0SUg",
+      "youtube_url": "https://www.youtube.com/channel/UCwU4Z4vzyvY4XzNUjTi0SUg"
+    },
+    {
+      "channel_id": "UCD4EOyXKjfDUhCI6jlOZZYQ",
+      "channel_name": "Eli the Computer Guy",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCD4EOyXKjfDUhCI6jlOZZYQ",
+      "youtube_url": "https://www.youtube.com/channel/UCD4EOyXKjfDUhCI6jlOZZYQ"
+    },
+    {
+      "channel_id": "UCfQNB91qRP_5ILeu_S_bSkg",
+      "channel_name": "Alex Finn",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfQNB91qRP_5ILeu_S_bSkg",
+      "youtube_url": "https://www.youtube.com/channel/UCfQNB91qRP_5ILeu_S_bSkg"
+    },
+    {
+      "channel_id": "UC9Rd0gi2po8pDZC5qKlQW6Q",
+      "channel_name": "Burke Holland",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9Rd0gi2po8pDZC5qKlQW6Q",
+      "youtube_url": "https://www.youtube.com/channel/UC9Rd0gi2po8pDZC5qKlQW6Q"
+    },
+    {
+      "channel_id": "UCZonap26CSIMtVKesNQN4dw",
+      "channel_name": "Frank Nillard",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCZonap26CSIMtVKesNQN4dw",
+      "youtube_url": "https://www.youtube.com/channel/UCZonap26CSIMtVKesNQN4dw"
+    },
+    {
+      "channel_id": "UCKlET6nkHSKNWef97D_UBkQ",
+      "channel_name": "Latifs Inspired",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKlET6nkHSKNWef97D_UBkQ",
+      "youtube_url": "https://www.youtube.com/channel/UCKlET6nkHSKNWef97D_UBkQ"
+    },
+    {
+      "channel_id": "UCiGWNa6QK6CiKPvv5-YPv8g",
+      "channel_name": "Sabrina Ramonov 🍄",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCiGWNa6QK6CiKPvv5-YPv8g",
+      "youtube_url": "https://www.youtube.com/channel/UCiGWNa6QK6CiKPvv5-YPv8g"
+    },
+    {
+      "channel_id": "UCPS2CLdJZaG_rFUXfwn2jpA",
+      "channel_name": "Mikkel Malmberg",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPS2CLdJZaG_rFUXfwn2jpA",
+      "youtube_url": "https://www.youtube.com/channel/UCPS2CLdJZaG_rFUXfwn2jpA"
+    },
+    {
+      "channel_id": "UCMLtBahI5DMrt0NPvDSoIRQ",
+      "channel_name": "Machine Learning Street Talk",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCMLtBahI5DMrt0NPvDSoIRQ",
+      "youtube_url": "https://www.youtube.com/channel/UCMLtBahI5DMrt0NPvDSoIRQ"
+    },
+    {
+      "channel_id": "UCPzGwk1N5ea7sV3S2c2x1kg",
+      "channel_name": "Simon Willison",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPzGwk1N5ea7sV3S2c2x1kg",
+      "youtube_url": "https://www.youtube.com/channel/UCPzGwk1N5ea7sV3S2c2x1kg"
+    },
+    {
+      "channel_id": "UCX6c6hTIqcphjMsXbeanJ1g",
+      "channel_name": "Prompt Engineer",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCX6c6hTIqcphjMsXbeanJ1g",
+      "youtube_url": "https://www.youtube.com/channel/UCX6c6hTIqcphjMsXbeanJ1g"
+    },
+    {
+      "channel_id": "UC9FCbOYPZl6QhXgxj_MGRkw",
+      "channel_name": "Franklin AI",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9FCbOYPZl6QhXgxj_MGRkw",
+      "youtube_url": "https://www.youtube.com/channel/UC9FCbOYPZl6QhXgxj_MGRkw"
+    },
+    {
+      "channel_id": "UCyC5AJFvZmJqs_H5_rdSuTA",
+      "channel_name": "SkillCurb",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCyC5AJFvZmJqs_H5_rdSuTA",
+      "youtube_url": "https://www.youtube.com/channel/UCyC5AJFvZmJqs_H5_rdSuTA"
+    },
+    {
+      "channel_id": "UCJL_hSRHW8414diAIleErnw",
+      "channel_name": "Yifan - Beyond the Hype",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJL_hSRHW8414diAIleErnw",
+      "youtube_url": "https://www.youtube.com/channel/UCJL_hSRHW8414diAIleErnw"
+    },
+    {
+      "channel_id": "UCfXE1-o59x5sZIjH27QJCYg",
+      "channel_name": "TechyTacos",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfXE1-o59x5sZIjH27QJCYg",
+      "youtube_url": "https://www.youtube.com/channel/UCfXE1-o59x5sZIjH27QJCYg"
+    },
+    {
+      "channel_id": "UCHhYXsLBEVVnbvsq57n1MTQ",
+      "channel_name": "The AI Advantage",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCHhYXsLBEVVnbvsq57n1MTQ",
+      "youtube_url": "https://www.youtube.com/channel/UCHhYXsLBEVVnbvsq57n1MTQ"
+    },
+    {
+      "channel_id": "UC-jT0gfrP522feUmGKvJ9Nw",
+      "channel_name": "Aritra Sen",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-jT0gfrP522feUmGKvJ9Nw",
+      "youtube_url": "https://www.youtube.com/channel/UC-jT0gfrP522feUmGKvJ9Nw"
+    },
+    {
+      "channel_id": "UC2WHjPDvbE6O328n17ZGcfg",
+      "channel_name": "ForrestKnight",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC2WHjPDvbE6O328n17ZGcfg",
+      "youtube_url": "https://www.youtube.com/channel/UC2WHjPDvbE6O328n17ZGcfg"
+    },
+    {
+      "channel_id": "UCRjSO-juFtngAeJGJRMdIZw",
+      "channel_name": "Gary Explains",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCRjSO-juFtngAeJGJRMdIZw",
+      "youtube_url": "https://www.youtube.com/channel/UCRjSO-juFtngAeJGJRMdIZw"
+    },
+    {
+      "channel_id": "UCbfYPyITQ-7l4upoX8nvctg",
+      "channel_name": "Two Minute Papers",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbfYPyITQ-7l4upoX8nvctg",
+      "youtube_url": "https://www.youtube.com/channel/UCbfYPyITQ-7l4upoX8nvctg"
+    },
+    {
+      "channel_id": "UCIgnGlGkVRhd4qNFcEwLL4A",
+      "channel_name": "AI Search",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCIgnGlGkVRhd4qNFcEwLL4A",
+      "youtube_url": "https://www.youtube.com/channel/UCIgnGlGkVRhd4qNFcEwLL4A"
+    },
+    {
+      "channel_id": "UCgfe2ooZD3VJPB6aJAnuQng",
+      "channel_name": "bycloud",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCgfe2ooZD3VJPB6aJAnuQng",
+      "youtube_url": "https://www.youtube.com/channel/UCgfe2ooZD3VJPB6aJAnuQng"
+    },
+    {
+      "channel_id": "UCmZqTB34wHK3KdDoZAlNr0g",
+      "channel_name": "Blazing Zebra",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCmZqTB34wHK3KdDoZAlNr0g",
+      "youtube_url": "https://www.youtube.com/channel/UCmZqTB34wHK3KdDoZAlNr0g"
+    },
+    {
+      "channel_id": "UCgLxmJ8xER7Y7sywMN5SfWg",
+      "channel_name": "Underfitted",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCgLxmJ8xER7Y7sywMN5SfWg",
+      "youtube_url": "https://www.youtube.com/channel/UCgLxmJ8xER7Y7sywMN5SfWg"
+    },
+    {
+      "channel_id": "UC13cYu7lec-oOcqQf5L-brg",
+      "channel_name": "Carberra",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC13cYu7lec-oOcqQf5L-brg",
+      "youtube_url": "https://www.youtube.com/channel/UC13cYu7lec-oOcqQf5L-brg"
+    },
+    {
+      "channel_id": "UCfI2Wf-yji9reXIhn8U4jkQ",
+      "channel_name": "AISeeKing",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfI2Wf-yji9reXIhn8U4jkQ",
+      "youtube_url": "https://www.youtube.com/channel/UCfI2Wf-yji9reXIhn8U4jkQ"
+    },
+    {
+      "channel_id": "UCYPPEiSfHfUkWXYq52EFKtw",
+      "channel_name": "Hands-on AI ",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYPPEiSfHfUkWXYq52EFKtw",
+      "youtube_url": "https://www.youtube.com/channel/UCYPPEiSfHfUkWXYq52EFKtw"
+    },
+    {
+      "channel_id": "UCY2ifv8iH1Dsgjrz-h3lWLQ",
+      "channel_name": "Part Time Larry",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCY2ifv8iH1Dsgjrz-h3lWLQ",
+      "youtube_url": "https://www.youtube.com/channel/UCY2ifv8iH1Dsgjrz-h3lWLQ"
+    },
+    {
+      "channel_id": "UCj1bLFQXps6qOnbfT7Y1XXg",
+      "channel_name": "Opennote ",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCj1bLFQXps6qOnbfT7Y1XXg",
+      "youtube_url": "https://www.youtube.com/channel/UCj1bLFQXps6qOnbfT7Y1XXg"
+    },
+    {
+      "channel_id": "UCl51pyBtbbRYvemY9o9s-yg",
+      "channel_name": "Professor Patterns",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCl51pyBtbbRYvemY9o9s-yg",
+      "youtube_url": "https://www.youtube.com/channel/UCl51pyBtbbRYvemY9o9s-yg"
+    },
+    {
+      "channel_id": "UCA4GfsgbI09cLzonTKryC6g",
+      "channel_name": "Lev Selector",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCA4GfsgbI09cLzonTKryC6g",
+      "youtube_url": "https://www.youtube.com/channel/UCA4GfsgbI09cLzonTKryC6g"
+    },
+    {
+      "channel_id": "UCs5Y5_7XK8HLDX0SLNwkd3w",
+      "channel_name": "Visual Studio Code",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCs5Y5_7XK8HLDX0SLNwkd3w",
+      "youtube_url": "https://www.youtube.com/channel/UCs5Y5_7XK8HLDX0SLNwkd3w"
+    },
+    {
+      "channel_id": "UC1yNl2E66ZzKApQdRuTQ4tw",
+      "channel_name": "Sabine Hossenfelder",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1yNl2E66ZzKApQdRuTQ4tw",
+      "youtube_url": "https://www.youtube.com/channel/UC1yNl2E66ZzKApQdRuTQ4tw"
+    },
+    {
+      "channel_id": "UCuxhTSKtnMJizinblLs9xOA",
+      "channel_name": "pixegami",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuxhTSKtnMJizinblLs9xOA",
+      "youtube_url": "https://www.youtube.com/channel/UCuxhTSKtnMJizinblLs9xOA"
+    },
+    {
+      "channel_id": "UCeRjipR4_SsCddq9VZ2AeKg",
+      "channel_name": "LlamaIndex",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCeRjipR4_SsCddq9VZ2AeKg",
+      "youtube_url": "https://www.youtube.com/channel/UCeRjipR4_SsCddq9VZ2AeKg"
+    },
+    {
+      "channel_id": "UCf-N3fMCdbhVdBTXHgvSv1A",
+      "channel_name": "ZeroToProduct",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCf-N3fMCdbhVdBTXHgvSv1A",
+      "youtube_url": "https://www.youtube.com/channel/UCf-N3fMCdbhVdBTXHgvSv1A"
+    },
+    {
+      "channel_id": "UCqzK60-oUOEq36uU9B1MMUg",
+      "channel_name": "Julia McCoy",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCqzK60-oUOEq36uU9B1MMUg",
+      "youtube_url": "https://www.youtube.com/channel/UCqzK60-oUOEq36uU9B1MMUg"
+    },
+    {
+      "channel_id": "UCYmtslfhDgLbCdXpnvfg22w",
+      "channel_name": "Vibe Coding AI",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYmtslfhDgLbCdXpnvfg22w",
+      "youtube_url": "https://www.youtube.com/channel/UCYmtslfhDgLbCdXpnvfg22w"
+    },
+    {
+      "channel_id": "UCKelCK4ZaO6HeEI1KQjqzWA",
+      "channel_name": "The AI Daily Brief: Artificial Intelligence News",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKelCK4ZaO6HeEI1KQjqzWA",
+      "youtube_url": "https://www.youtube.com/channel/UCKelCK4ZaO6HeEI1KQjqzWA"
+    },
+    {
+      "channel_id": "UCuE6iwZKgGz8s6kznBRI9LQ",
+      "channel_name": "Developers Digest",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuE6iwZKgGz8s6kznBRI9LQ",
+      "youtube_url": "https://www.youtube.com/channel/UCuE6iwZKgGz8s6kznBRI9LQ"
+    },
+    {
+      "channel_id": "UCjNRVMBVI30Sak_p6HRWhIA",
+      "channel_name": "Cognitive Revolution \"How AI Changes Everything\"",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCjNRVMBVI30Sak_p6HRWhIA",
+      "youtube_url": "https://www.youtube.com/channel/UCjNRVMBVI30Sak_p6HRWhIA"
+    },
+    {
+      "channel_id": "UCIzXayRP7-P0ANpq-nD-h5g",
+      "channel_name": "The Sun",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCIzXayRP7-P0ANpq-nD-h5g",
+      "youtube_url": "https://www.youtube.com/channel/UCIzXayRP7-P0ANpq-nD-h5g"
+    },
+    {
+      "channel_id": "UCh6wT1M9abL0wiJz4eZTwdw",
+      "channel_name": "Moritz | AI Builder",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCh6wT1M9abL0wiJz4eZTwdw",
+      "youtube_url": "https://www.youtube.com/channel/UCh6wT1M9abL0wiJz4eZTwdw"
+    },
+    {
+      "channel_id": "UCWkyIm1vy0Vx7BpMuIKhw7g",
+      "channel_name": "Wes Higbee",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWkyIm1vy0Vx7BpMuIKhw7g",
+      "youtube_url": "https://www.youtube.com/channel/UCWkyIm1vy0Vx7BpMuIKhw7g"
+    },
+    {
+      "channel_id": "UCgKy5hcRubKAMrPSDtY-jyg",
+      "channel_name": "Code Playbook",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCgKy5hcRubKAMrPSDtY-jyg",
+      "youtube_url": "https://www.youtube.com/channel/UCgKy5hcRubKAMrPSDtY-jyg"
+    },
+    {
+      "channel_id": "UC9V7DJCQCOOTec2MelKmA8w",
+      "channel_name": "GrabDuck!",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9V7DJCQCOOTec2MelKmA8w",
+      "youtube_url": "https://www.youtube.com/channel/UC9V7DJCQCOOTec2MelKmA8w"
+    },
+    {
+      "channel_id": "UCSHZKyawb77ixDdsGog4iWA",
+      "channel_name": "Lex Fridman",
+      "video_count": 2,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCSHZKyawb77ixDdsGog4iWA",
+      "youtube_url": "https://www.youtube.com/channel/UCSHZKyawb77ixDdsGog4iWA"
+    },
+    {
+      "channel_id": "UCdn86UYrf54lXfVli9CB6Aw",
+      "channel_name": "Barack Obama",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCdn86UYrf54lXfVli9CB6Aw",
+      "youtube_url": "https://www.youtube.com/channel/UCdn86UYrf54lXfVli9CB6Aw"
+    },
+    {
+      "channel_id": "UCPmHSkid9IOYbdN1Psh24lg",
+      "channel_name": "Tiger Data (creators of TimescaleDB)",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPmHSkid9IOYbdN1Psh24lg",
+      "youtube_url": "https://www.youtube.com/channel/UCPmHSkid9IOYbdN1Psh24lg"
+    },
+    {
+      "channel_id": "UC1rFmaGLYr0Ve_Y_soxZNWQ",
+      "channel_name": "Quinn's Ideas",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1rFmaGLYr0Ve_Y_soxZNWQ",
+      "youtube_url": "https://www.youtube.com/channel/UC1rFmaGLYr0Ve_Y_soxZNWQ"
+    },
+    {
+      "channel_id": "UC7XJj9pv_11a11FUxCMz15g",
+      "channel_name": "Vuk Rosić",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC7XJj9pv_11a11FUxCMz15g",
+      "youtube_url": "https://www.youtube.com/channel/UC7XJj9pv_11a11FUxCMz15g"
+    },
+    {
+      "channel_id": "UCuoS-cgppnO46VCcQi81jvQ",
+      "channel_name": "Kevin McAleer",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuoS-cgppnO46VCcQi81jvQ",
+      "youtube_url": "https://www.youtube.com/channel/UCuoS-cgppnO46VCcQi81jvQ"
+    },
+    {
+      "channel_id": "UCZXW8E1__d5tZb-wLFOt8TQ",
+      "channel_name": "Bog",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCZXW8E1__d5tZb-wLFOt8TQ",
+      "youtube_url": "https://www.youtube.com/channel/UCZXW8E1__d5tZb-wLFOt8TQ"
+    },
+    {
+      "channel_id": "UCPiMR-Ize9p3dgjzZ8bo9ZQ",
+      "channel_name": "The Tech Report",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPiMR-Ize9p3dgjzZ8bo9ZQ",
+      "youtube_url": "https://www.youtube.com/channel/UCPiMR-Ize9p3dgjzZ8bo9ZQ"
+    },
+    {
+      "channel_id": "UC9H0HzpKf5JlazkADWnW1Jw",
+      "channel_name": "bashbunni",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9H0HzpKf5JlazkADWnW1Jw",
+      "youtube_url": "https://www.youtube.com/channel/UC9H0HzpKf5JlazkADWnW1Jw"
+    },
+    {
+      "channel_id": "UCh8gHdtzO2tXd593_bjErWg",
+      "channel_name": "Doobydobap",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCh8gHdtzO2tXd593_bjErWg",
+      "youtube_url": "https://www.youtube.com/channel/UCh8gHdtzO2tXd593_bjErWg"
+    },
+    {
+      "channel_id": "UCstLIadsuuLmDdIzMZxesfg",
+      "channel_name": "WILD HOMESTEAD",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCstLIadsuuLmDdIzMZxesfg",
+      "youtube_url": "https://www.youtube.com/channel/UCstLIadsuuLmDdIzMZxesfg"
+    },
+    {
+      "channel_id": "UChIs72whgZI9w6d6FhwGGHA",
+      "channel_name": "Gamers Nexus",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChIs72whgZI9w6d6FhwGGHA",
+      "youtube_url": "https://www.youtube.com/channel/UChIs72whgZI9w6d6FhwGGHA"
+    },
+    {
+      "channel_id": "UCGfFUc6eWxfbtjYeun6r9xg",
+      "channel_name": "FloatHeadPhysics",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCGfFUc6eWxfbtjYeun6r9xg",
+      "youtube_url": "https://www.youtube.com/channel/UCGfFUc6eWxfbtjYeun6r9xg"
+    },
+    {
+      "channel_id": "UCs-2QQd9DYsjnQnHBrI4yJg",
+      "channel_name": "WesOps",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCs-2QQd9DYsjnQnHBrI4yJg",
+      "youtube_url": "https://www.youtube.com/channel/UCs-2QQd9DYsjnQnHBrI4yJg"
+    },
+    {
+      "channel_id": "UCX-xHRN9CnoXto5gcPskANA",
+      "channel_name": "UNITED24",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCX-xHRN9CnoXto5gcPskANA",
+      "youtube_url": "https://www.youtube.com/channel/UCX-xHRN9CnoXto5gcPskANA"
+    },
+    {
+      "channel_id": "UCnRmC8k3qzn0Qxq-nQOWmOA",
+      "channel_name": "Wes O'Donnell",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCnRmC8k3qzn0Qxq-nQOWmOA",
+      "youtube_url": "https://www.youtube.com/channel/UCnRmC8k3qzn0Qxq-nQOWmOA"
+    },
+    {
+      "channel_id": "UChKqZ1_RlN_MlP9NEeZqglA",
+      "channel_name": "Prof. Giordano Scarciotti",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChKqZ1_RlN_MlP9NEeZqglA",
+      "youtube_url": "https://www.youtube.com/channel/UChKqZ1_RlN_MlP9NEeZqglA"
+    },
+    {
+      "channel_id": "UCCw3DHyZnOhaxf8d9PAfN4Q",
+      "channel_name": "Lisha Li, PhD to AI CEO | Math, Physics & Startups",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCCw3DHyZnOhaxf8d9PAfN4Q",
+      "youtube_url": "https://www.youtube.com/channel/UCCw3DHyZnOhaxf8d9PAfN4Q"
+    },
+    {
+      "channel_id": "UCK0z0_5uL7mb9IjntOKi5XQ",
+      "channel_name": "The Atlantic",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCK0z0_5uL7mb9IjntOKi5XQ",
+      "youtube_url": "https://www.youtube.com/channel/UCK0z0_5uL7mb9IjntOKi5XQ"
+    },
+    {
+      "channel_id": "UCt9WqM6o0y5YGqQm1nffFWQ",
+      "channel_name": "Boundary",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCt9WqM6o0y5YGqQm1nffFWQ",
+      "youtube_url": "https://www.youtube.com/channel/UCt9WqM6o0y5YGqQm1nffFWQ"
+    },
+    {
+      "channel_id": "UC9x0AN7BWHpCDHSm9NiJFJQ",
+      "channel_name": "NetworkChuck",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9x0AN7BWHpCDHSm9NiJFJQ",
+      "youtube_url": "https://www.youtube.com/channel/UC9x0AN7BWHpCDHSm9NiJFJQ"
+    },
+    {
+      "channel_id": "UC1JoCw5K0iVcmA1Sf5SQv9g",
+      "channel_name": "مطبخنا اليمني Our Yemeni Kitchen",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1JoCw5K0iVcmA1Sf5SQv9g",
+      "youtube_url": "https://www.youtube.com/channel/UC1JoCw5K0iVcmA1Sf5SQv9g"
+    },
+    {
+      "channel_id": "UCVy16RS5eEDh8anP8j94G2A",
+      "channel_name": "DB Tech",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVy16RS5eEDh8anP8j94G2A",
+      "youtube_url": "https://www.youtube.com/channel/UCVy16RS5eEDh8anP8j94G2A"
+    },
+    {
+      "channel_id": "UCrB7UFnkosBjAhOg3a9NdWw",
+      "channel_name": "Grace Leung",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCrB7UFnkosBjAhOg3a9NdWw",
+      "youtube_url": "https://www.youtube.com/channel/UCrB7UFnkosBjAhOg3a9NdWw"
+    },
+    {
+      "channel_id": "UCQTkxcTnQejxvlAxq4rpTGw",
+      "channel_name": "War & Politics 24",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQTkxcTnQejxvlAxq4rpTGw",
+      "youtube_url": "https://www.youtube.com/channel/UCQTkxcTnQejxvlAxq4rpTGw"
+    },
+    {
+      "channel_id": "UCBHGZpDF2fsqPIPi0pNyuTg",
+      "channel_name": "Pivot with Kara Swisher and Scott Galloway",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCBHGZpDF2fsqPIPi0pNyuTg",
+      "youtube_url": "https://www.youtube.com/channel/UCBHGZpDF2fsqPIPi0pNyuTg"
+    },
+    {
+      "channel_id": "UCehBVAPy-bxmnbNARF-_tvA",
+      "channel_name": "More Perfect Union",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCehBVAPy-bxmnbNARF-_tvA",
+      "youtube_url": "https://www.youtube.com/channel/UCehBVAPy-bxmnbNARF-_tvA"
+    },
+    {
+      "channel_id": "UCz-yrxeZYIYdpEZgHGvIydA",
+      "channel_name": "Nic Barker",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCz-yrxeZYIYdpEZgHGvIydA",
+      "youtube_url": "https://www.youtube.com/channel/UCz-yrxeZYIYdpEZgHGvIydA"
+    },
+    {
+      "channel_id": "UCXuwhn5_41m4VxZJ3wcDyxA",
+      "channel_name": "Facts Matter with Roman Balmakov",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXuwhn5_41m4VxZJ3wcDyxA",
+      "youtube_url": "https://www.youtube.com/channel/UCXuwhn5_41m4VxZJ3wcDyxA"
+    },
+    {
+      "channel_id": "UC4tpMC_bflphcXUtPk59Vyw",
+      "channel_name": "Feral Historian",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4tpMC_bflphcXUtPk59Vyw",
+      "youtube_url": "https://www.youtube.com/channel/UC4tpMC_bflphcXUtPk59Vyw"
+    },
+    {
+      "channel_id": "UCCkFJmUgzrZdkeHl_qPItsA",
+      "channel_name": "Anne of All Trades",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCCkFJmUgzrZdkeHl_qPItsA",
+      "youtube_url": "https://www.youtube.com/channel/UCCkFJmUgzrZdkeHl_qPItsA"
+    },
+    {
+      "channel_id": "UCtwRmIz_R9ZVI6JUWLiH6Ug",
+      "channel_name": "Ken Cao ",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCtwRmIz_R9ZVI6JUWLiH6Ug",
+      "youtube_url": "https://www.youtube.com/channel/UCtwRmIz_R9ZVI6JUWLiH6Ug"
+    },
+    {
+      "channel_id": "UC_iUeUzozCHEReJ-shKcCYA",
+      "channel_name": "Internet Anarchist",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_iUeUzozCHEReJ-shKcCYA",
+      "youtube_url": "https://www.youtube.com/channel/UC_iUeUzozCHEReJ-shKcCYA"
+    },
+    {
+      "channel_id": "UCpb-xu6Oun_d41RjztUgFWA",
+      "channel_name": "How To Home",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpb-xu6Oun_d41RjztUgFWA",
+      "youtube_url": "https://www.youtube.com/channel/UCpb-xu6Oun_d41RjztUgFWA"
+    },
+    {
+      "channel_id": "UCZnfMdVCt4Wg7qP2YKCGvQA",
+      "channel_name": "The Blood Pressure Doc",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCZnfMdVCt4Wg7qP2YKCGvQA",
+      "youtube_url": "https://www.youtube.com/channel/UCZnfMdVCt4Wg7qP2YKCGvQA"
+    },
+    {
+      "channel_id": "UCA-mWX9CvCTVFWRMb9bKc9w",
+      "channel_name": "Dan Martell",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCA-mWX9CvCTVFWRMb9bKc9w",
+      "youtube_url": "https://www.youtube.com/channel/UCA-mWX9CvCTVFWRMb9bKc9w"
+    },
+    {
+      "channel_id": "UC4tQodst5JD0nHzD5VX0OAA",
+      "channel_name": "Adam Byatt",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4tQodst5JD0nHzD5VX0OAA",
+      "youtube_url": "https://www.youtube.com/channel/UC4tQodst5JD0nHzD5VX0OAA"
+    },
+    {
+      "channel_id": "UCiq1FIgtEK7LRAOB1JXTPig",
+      "channel_name": "Silicon Valley Girl",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCiq1FIgtEK7LRAOB1JXTPig",
+      "youtube_url": "https://www.youtube.com/channel/UCiq1FIgtEK7LRAOB1JXTPig"
+    },
+    {
+      "channel_id": "UCSouanxGVjunqQrxqjMDYXg",
+      "channel_name": "Watch This Instead",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCSouanxGVjunqQrxqjMDYXg",
+      "youtube_url": "https://www.youtube.com/channel/UCSouanxGVjunqQrxqjMDYXg"
+    },
+    {
+      "channel_id": "UC3KfcvCLVi2PW_QY80hEwTA",
+      "channel_name": "Military & History",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3KfcvCLVi2PW_QY80hEwTA",
+      "youtube_url": "https://www.youtube.com/channel/UC3KfcvCLVi2PW_QY80hEwTA"
+    },
+    {
+      "channel_id": "UCzuie21ADz_tGifBxkNXS9w",
+      "channel_name": "Ant's BBQ Story",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCzuie21ADz_tGifBxkNXS9w",
+      "youtube_url": "https://www.youtube.com/channel/UCzuie21ADz_tGifBxkNXS9w"
+    },
+    {
+      "channel_id": "UC51fwc9aSHDgOu29cyo2-TQ",
+      "channel_name": "Ana Wallace Johnson",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC51fwc9aSHDgOu29cyo2-TQ",
+      "youtube_url": "https://www.youtube.com/channel/UC51fwc9aSHDgOu29cyo2-TQ"
+    },
+    {
+      "channel_id": "UC1E1SVcVyU3ntWMSQEp38Yw",
+      "channel_name": "The Prof G Pod – Scott Galloway",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1E1SVcVyU3ntWMSQEp38Yw",
+      "youtube_url": "https://www.youtube.com/channel/UC1E1SVcVyU3ntWMSQEp38Yw"
+    },
+    {
+      "channel_id": "UC0-7PyfpOIJpNyi8WrHiyXA",
+      "channel_name": "Jason Carman",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0-7PyfpOIJpNyi8WrHiyXA",
+      "youtube_url": "https://www.youtube.com/channel/UC0-7PyfpOIJpNyi8WrHiyXA"
+    },
+    {
+      "channel_id": "UC3J6Rx5Qcx6-v6W9BBgF8sw",
+      "channel_name": "Silicon Curtain",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3J6Rx5Qcx6-v6W9BBgF8sw",
+      "youtube_url": "https://www.youtube.com/channel/UC3J6Rx5Qcx6-v6W9BBgF8sw"
+    },
+    {
+      "channel_id": "UCsT0YIqwnpJCM-mx7-gSA4Q",
+      "channel_name": "TEDx Talks",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCsT0YIqwnpJCM-mx7-gSA4Q",
+      "youtube_url": "https://www.youtube.com/channel/UCsT0YIqwnpJCM-mx7-gSA4Q"
+    },
+    {
+      "channel_id": "UC4FK5DEcMLB3CyJcbJfZEJA",
+      "channel_name": "Nick Puru | AI Automation",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4FK5DEcMLB3CyJcbJfZEJA",
+      "youtube_url": "https://www.youtube.com/channel/UC4FK5DEcMLB3CyJcbJfZEJA"
+    },
+    {
+      "channel_id": "UCnjgxChqYYnyoqO4k_Q1d6Q",
+      "channel_name": "The Diary Of A CEO Clips",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCnjgxChqYYnyoqO4k_Q1d6Q",
+      "youtube_url": "https://www.youtube.com/channel/UCnjgxChqYYnyoqO4k_Q1d6Q"
+    },
+    {
+      "channel_id": "UCSNgS5ZY7JudYXoK6N3dqFA",
+      "channel_name": "Man Made",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCSNgS5ZY7JudYXoK6N3dqFA",
+      "youtube_url": "https://www.youtube.com/channel/UCSNgS5ZY7JudYXoK6N3dqFA"
+    },
+    {
+      "channel_id": "UCVyRiMvfUNMA1UPlDPzG5Ow",
+      "channel_name": "DesignCourse",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVyRiMvfUNMA1UPlDPzG5Ow",
+      "youtube_url": "https://www.youtube.com/channel/UCVyRiMvfUNMA1UPlDPzG5Ow"
+    },
+    {
+      "channel_id": "UC-yRDvpR99LUc5l7i7jLzew",
+      "channel_name": "Bg2 Pod",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-yRDvpR99LUc5l7i7jLzew",
+      "youtube_url": "https://www.youtube.com/channel/UC-yRDvpR99LUc5l7i7jLzew"
+    },
+    {
+      "channel_id": "UC5w_8GUoH9PeRLWatDKJ79Q",
+      "channel_name": "Pipelex",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC5w_8GUoH9PeRLWatDKJ79Q",
+      "youtube_url": "https://www.youtube.com/channel/UC5w_8GUoH9PeRLWatDKJ79Q"
+    },
+    {
+      "channel_id": "UCGy7SkBjcIAgTiwkXEtPnYg",
+      "channel_name": "Andrei Jikh",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCGy7SkBjcIAgTiwkXEtPnYg",
+      "youtube_url": "https://www.youtube.com/channel/UCGy7SkBjcIAgTiwkXEtPnYg"
+    },
+    {
+      "channel_id": "UCpuqYFKLkcEryEieomiAv3Q",
+      "channel_name": "Therapy in a Nutshell",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpuqYFKLkcEryEieomiAv3Q",
+      "youtube_url": "https://www.youtube.com/channel/UCpuqYFKLkcEryEieomiAv3Q"
+    },
+    {
+      "channel_id": "UCzYZk4bZ07yJeK7Zd_z37Cw",
+      "channel_name": "Food Network UK",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCzYZk4bZ07yJeK7Zd_z37Cw",
+      "youtube_url": "https://www.youtube.com/channel/UCzYZk4bZ07yJeK7Zd_z37Cw"
+    },
+    {
+      "channel_id": "UC8LbCdO57DhJsCmhUeL-DZA",
+      "channel_name": "Devs Kingdom",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC8LbCdO57DhJsCmhUeL-DZA",
+      "youtube_url": "https://www.youtube.com/channel/UC8LbCdO57DhJsCmhUeL-DZA"
+    },
+    {
+      "channel_id": "UCESLZhusAkFfsNsApnjF_Cg",
+      "channel_name": "All-In Podcast",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCESLZhusAkFfsNsApnjF_Cg",
+      "youtube_url": "https://www.youtube.com/channel/UCESLZhusAkFfsNsApnjF_Cg"
+    },
+    {
+      "channel_id": "UCv5y_1vvrbTaPOAwIY_3AaA",
+      "channel_name": "Ann Undefined",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCv5y_1vvrbTaPOAwIY_3AaA",
+      "youtube_url": "https://www.youtube.com/channel/UCv5y_1vvrbTaPOAwIY_3AaA"
+    },
+    {
+      "channel_id": "UCPzxPFwYykRjEneXL7dL3oQ",
+      "channel_name": "AI Frontiers",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPzxPFwYykRjEneXL7dL3oQ",
+      "youtube_url": "https://www.youtube.com/channel/UCPzxPFwYykRjEneXL7dL3oQ"
+    },
+    {
+      "channel_id": "UC-dmJ79518WlKMbsu50eMTQ",
+      "channel_name": "Clark Kegley",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-dmJ79518WlKMbsu50eMTQ",
+      "youtube_url": "https://www.youtube.com/channel/UC-dmJ79518WlKMbsu50eMTQ"
+    },
+    {
+      "channel_id": "UC1oAPWSf9lAfRGugPaeALHA",
+      "channel_name": "Ghetto The NPC",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1oAPWSf9lAfRGugPaeALHA",
+      "youtube_url": "https://www.youtube.com/channel/UC1oAPWSf9lAfRGugPaeALHA"
+    },
+    {
+      "channel_id": "UCwffSP9kO8pMZVr1Ugqvbzw",
+      "channel_name": "HTX Studio",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCwffSP9kO8pMZVr1Ugqvbzw",
+      "youtube_url": "https://www.youtube.com/channel/UCwffSP9kO8pMZVr1Ugqvbzw"
+    },
+    {
+      "channel_id": "UCAuUUnT6oDeKwE6v1NGQxug",
+      "channel_name": "TED",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCAuUUnT6oDeKwE6v1NGQxug",
+      "youtube_url": "https://www.youtube.com/channel/UCAuUUnT6oDeKwE6v1NGQxug"
+    },
+    {
+      "channel_id": "UCsQdi6X-12eUKBBBze46STA",
+      "channel_name": "Glucose Revolution",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCsQdi6X-12eUKBBBze46STA",
+      "youtube_url": "https://www.youtube.com/channel/UCsQdi6X-12eUKBBBze46STA"
+    },
+    {
+      "channel_id": "UCYHosdETLPp6dpJEsgIUTmw",
+      "channel_name": "Jake Broe",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYHosdETLPp6dpJEsgIUTmw",
+      "youtube_url": "https://www.youtube.com/channel/UCYHosdETLPp6dpJEsgIUTmw"
+    },
+    {
+      "channel_id": "UCqJxABBuzx4vj_RxogCbAFA",
+      "channel_name": "Code with Ali",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCqJxABBuzx4vj_RxogCbAFA",
+      "youtube_url": "https://www.youtube.com/channel/UCqJxABBuzx4vj_RxogCbAFA"
+    },
+    {
+      "channel_id": "UCxIJaCMEptJjxmmQgGFsnCg",
+      "channel_name": "YC Root Access",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCxIJaCMEptJjxmmQgGFsnCg",
+      "youtube_url": "https://www.youtube.com/channel/UCxIJaCMEptJjxmmQgGFsnCg"
+    },
+    {
+      "channel_id": "UCyb38ARmbRdMlVEVXDBD4xw",
+      "channel_name": "Run it Bare",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCyb38ARmbRdMlVEVXDBD4xw",
+      "youtube_url": "https://www.youtube.com/channel/UCyb38ARmbRdMlVEVXDBD4xw"
+    },
+    {
+      "channel_id": "UC5fdyC4LxyyYv8Am6nDrkmg",
+      "channel_name": "FoundMyFitness Clips",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC5fdyC4LxyyYv8Am6nDrkmg",
+      "youtube_url": "https://www.youtube.com/channel/UC5fdyC4LxyyYv8Am6nDrkmg"
+    },
+    {
+      "channel_id": "UCWZ_8BX5HpmKN4iTgLQGalw",
+      "channel_name": "Rachel's Step by Step",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWZ_8BX5HpmKN4iTgLQGalw",
+      "youtube_url": "https://www.youtube.com/channel/UCWZ_8BX5HpmKN4iTgLQGalw"
+    },
+    {
+      "channel_id": "UCymFcSHutO2_6as95Sjvk0Q",
+      "channel_name": "How To Vibe Code ",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCymFcSHutO2_6as95Sjvk0Q",
+      "youtube_url": "https://www.youtube.com/channel/UCymFcSHutO2_6as95Sjvk0Q"
+    },
+    {
+      "channel_id": "UCr17eO9Sbr1Jh1jcGexcXQA",
+      "channel_name": "eXtreme",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCr17eO9Sbr1Jh1jcGexcXQA",
+      "youtube_url": "https://www.youtube.com/channel/UCr17eO9Sbr1Jh1jcGexcXQA"
+    },
+    {
+      "channel_id": "UCJIfeSCssxSC_Dhc5s7woww",
+      "channel_name": "Lex Clips",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJIfeSCssxSC_Dhc5s7woww",
+      "youtube_url": "https://www.youtube.com/channel/UCJIfeSCssxSC_Dhc5s7woww"
+    },
+    {
+      "channel_id": "UCzu6pddFMRuia9JfLe19aQQ",
+      "channel_name": "AI Unleashed",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCzu6pddFMRuia9JfLe19aQQ",
+      "youtube_url": "https://www.youtube.com/channel/UCzu6pddFMRuia9JfLe19aQQ"
+    },
+    {
+      "channel_id": "UC6N_qOUJ78rJRxw7Kie4dXw",
+      "channel_name": "Tim Carambat",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC6N_qOUJ78rJRxw7Kie4dXw",
+      "youtube_url": "https://www.youtube.com/channel/UC6N_qOUJ78rJRxw7Kie4dXw"
+    },
+    {
+      "channel_id": "UCfQk5qGOEO5cPPDFlQe2lFQ",
+      "channel_name": "Your Average Tech Bro",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfQk5qGOEO5cPPDFlQe2lFQ",
+      "youtube_url": "https://www.youtube.com/channel/UCfQk5qGOEO5cPPDFlQe2lFQ"
+    },
+    {
+      "channel_id": "UCMcoud_ZW7cfxeIugBflSBw",
+      "channel_name": "Riley Brown",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCMcoud_ZW7cfxeIugBflSBw",
+      "youtube_url": "https://www.youtube.com/channel/UCMcoud_ZW7cfxeIugBflSBw"
+    },
+    {
+      "channel_id": "UCPAsdtOiE8n4jBEOOUPr-pA",
+      "channel_name": "OneGrep (YC W24)",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPAsdtOiE8n4jBEOOUPr-pA",
+      "youtube_url": "https://www.youtube.com/channel/UCPAsdtOiE8n4jBEOOUPr-pA"
+    },
+    {
+      "channel_id": "UCEENWVBdvDy-QWfuQoXC9HQ",
+      "channel_name": "Species | Documenting AGI",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCEENWVBdvDy-QWfuQoXC9HQ",
+      "youtube_url": "https://www.youtube.com/channel/UCEENWVBdvDy-QWfuQoXC9HQ"
+    },
+    {
+      "channel_id": "UCSxPE9PHHxQUEt6ajGmQyMA",
+      "channel_name": "Brian Casel",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCSxPE9PHHxQUEt6ajGmQyMA",
+      "youtube_url": "https://www.youtube.com/channel/UCSxPE9PHHxQUEt6ajGmQyMA"
+    },
+    {
+      "channel_id": "UC6MhHkSosYXAD-LTXBWyLMg",
+      "channel_name": "Neural Breakdown with AVB",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC6MhHkSosYXAD-LTXBWyLMg",
+      "youtube_url": "https://www.youtube.com/channel/UC6MhHkSosYXAD-LTXBWyLMg"
+    },
+    {
+      "channel_id": "UCP4bf6IHJJQehibu6ai__cg",
+      "channel_name": "Firebase",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCP4bf6IHJJQehibu6ai__cg",
+      "youtube_url": "https://www.youtube.com/channel/UCP4bf6IHJJQehibu6ai__cg"
+    },
+    {
+      "channel_id": "UCWmGT9NatF2mhCLgUcXkT0g",
+      "channel_name": "Testosterone Growth",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWmGT9NatF2mhCLgUcXkT0g",
+      "youtube_url": "https://www.youtube.com/channel/UCWmGT9NatF2mhCLgUcXkT0g"
+    },
+    {
+      "channel_id": "UCkQ2J1LUtzt_kNzH_cC24AA",
+      "channel_name": "Internet Education",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCkQ2J1LUtzt_kNzH_cC24AA",
+      "youtube_url": "https://www.youtube.com/channel/UCkQ2J1LUtzt_kNzH_cC24AA"
+    },
+    {
+      "channel_id": "UChhw6DlKKTQ9mYSpTfXUYqA",
+      "channel_name": "Starter Story",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChhw6DlKKTQ9mYSpTfXUYqA",
+      "youtube_url": "https://www.youtube.com/channel/UChhw6DlKKTQ9mYSpTfXUYqA"
+    },
+    {
+      "channel_id": "UCI2LD1AclsdXluJiJZTWKAQ",
+      "channel_name": "Isaac",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCI2LD1AclsdXluJiJZTWKAQ",
+      "youtube_url": "https://www.youtube.com/channel/UCI2LD1AclsdXluJiJZTWKAQ"
+    },
+    {
+      "channel_id": "UCTMRxtyHoE3LPcrl-kT4AQQ",
+      "channel_name": "Google Cloud",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCTMRxtyHoE3LPcrl-kT4AQQ",
+      "youtube_url": "https://www.youtube.com/channel/UCTMRxtyHoE3LPcrl-kT4AQQ"
+    },
+    {
+      "channel_id": "UCT09qC2vwlbJvofZRIdLalg",
+      "channel_name": "Flick Connection",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCT09qC2vwlbJvofZRIdLalg",
+      "youtube_url": "https://www.youtube.com/channel/UCT09qC2vwlbJvofZRIdLalg"
+    },
+    {
+      "channel_id": "UCiv_dpEdqEJKPAdc0wpFAkA",
+      "channel_name": "Greg Baugues",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCiv_dpEdqEJKPAdc0wpFAkA",
+      "youtube_url": "https://www.youtube.com/channel/UCiv_dpEdqEJKPAdc0wpFAkA"
+    },
+    {
+      "channel_id": "UCphvapYK_MX5ZeMSFxFTQFQ",
+      "channel_name": "Rajib Deb",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCphvapYK_MX5ZeMSFxFTQFQ",
+      "youtube_url": "https://www.youtube.com/channel/UCphvapYK_MX5ZeMSFxFTQFQ"
+    },
+    {
+      "channel_id": "UCbHAbP7Fh1cYRCNvJO6J5TQ",
+      "channel_name": "Angel Poon",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbHAbP7Fh1cYRCNvJO6J5TQ",
+      "youtube_url": "https://www.youtube.com/channel/UCbHAbP7Fh1cYRCNvJO6J5TQ"
+    },
+    {
+      "channel_id": "UCqQIRMJAorARJQpcHzlf1oQ",
+      "channel_name": "Dan Barrett",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCqQIRMJAorARJQpcHzlf1oQ",
+      "youtube_url": "https://www.youtube.com/channel/UCqQIRMJAorARJQpcHzlf1oQ"
+    },
+    {
+      "channel_id": "UClWTCPVi-AU9TeCN6FkGARg",
+      "channel_name": "EO",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UClWTCPVi-AU9TeCN6FkGARg",
+      "youtube_url": "https://www.youtube.com/channel/UClWTCPVi-AU9TeCN6FkGARg"
+    },
+    {
+      "channel_id": "UCujMOyMfjf4hvYn7aRe1JEQ",
+      "channel_name": "Everyday AI",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCujMOyMfjf4hvYn7aRe1JEQ",
+      "youtube_url": "https://www.youtube.com/channel/UCujMOyMfjf4hvYn7aRe1JEQ"
+    },
+    {
+      "channel_id": "UCJFMlSxcvlZg5yZUYJT0Pug",
+      "channel_name": "corbin",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJFMlSxcvlZg5yZUYJT0Pug",
+      "youtube_url": "https://www.youtube.com/channel/UCJFMlSxcvlZg5yZUYJT0Pug"
+    },
+    {
+      "channel_id": "UCVU1nsZgWGjLGcZevDpcCmA",
+      "channel_name": "Nariman Codes",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVU1nsZgWGjLGcZevDpcCmA",
+      "youtube_url": "https://www.youtube.com/channel/UCVU1nsZgWGjLGcZevDpcCmA"
+    },
+    {
+      "channel_id": "UCVC1GrIK_002p3V1D94VO9A",
+      "channel_name": "Pydantic",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVC1GrIK_002p3V1D94VO9A",
+      "youtube_url": "https://www.youtube.com/channel/UCVC1GrIK_002p3V1D94VO9A"
+    },
+    {
+      "channel_id": "UCXZCJLdBC09xxGZ6gcdrc6A",
+      "channel_name": "OpenAI",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXZCJLdBC09xxGZ6gcdrc6A",
+      "youtube_url": "https://www.youtube.com/channel/UCXZCJLdBC09xxGZ6gcdrc6A"
+    },
+    {
+      "channel_id": "UCARTd6lVfdAm2T04MYl_TDw",
+      "channel_name": "Angie Jones",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCARTd6lVfdAm2T04MYl_TDw",
+      "youtube_url": "https://www.youtube.com/channel/UCARTd6lVfdAm2T04MYl_TDw"
+    },
+    {
+      "channel_id": "UCj7NrzZWW3w3lHTk5v-GuXw",
+      "channel_name": "MG",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCj7NrzZWW3w3lHTk5v-GuXw",
+      "youtube_url": "https://www.youtube.com/channel/UCj7NrzZWW3w3lHTk5v-GuXw"
+    },
+    {
+      "channel_id": "UCyU5wkjgQYGRB0hIHMwm2Sg",
+      "channel_name": "Syntax",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCyU5wkjgQYGRB0hIHMwm2Sg",
+      "youtube_url": "https://www.youtube.com/channel/UCyU5wkjgQYGRB0hIHMwm2Sg"
+    },
+    {
+      "channel_id": "UCn-HpdiYZtRq6vhWgDBQlEw",
+      "channel_name": "Loopelligence",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCn-HpdiYZtRq6vhWgDBQlEw",
+      "youtube_url": "https://www.youtube.com/channel/UCn-HpdiYZtRq6vhWgDBQlEw"
+    },
+    {
+      "channel_id": "UCFxwS8HIGH5_ut1fk0PNAHw",
+      "channel_name": "Eric Roby",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCFxwS8HIGH5_ut1fk0PNAHw",
+      "youtube_url": "https://www.youtube.com/channel/UCFxwS8HIGH5_ut1fk0PNAHw"
+    },
+    {
+      "channel_id": "UCQ9WFkn0FZwy0EyT5Di-ihg",
+      "channel_name": "ricette arabe",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQ9WFkn0FZwy0EyT5Di-ihg",
+      "youtube_url": "https://www.youtube.com/channel/UCQ9WFkn0FZwy0EyT5Di-ihg"
+    },
+    {
+      "channel_id": "UCecfdozd4wiDEuc6tq0hJoQ",
+      "channel_name": "Daily AI Coding & Strategy | Parker Rex ",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCecfdozd4wiDEuc6tq0hJoQ",
+      "youtube_url": "https://www.youtube.com/channel/UCecfdozd4wiDEuc6tq0hJoQ"
+    },
+    {
+      "channel_id": "UCFiU1vIpPD3lQltke_18m3A",
+      "channel_name": "Wanderloots",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCFiU1vIpPD3lQltke_18m3A",
+      "youtube_url": "https://www.youtube.com/channel/UCFiU1vIpPD3lQltke_18m3A"
+    },
+    {
+      "channel_id": "UCZf_9SblvM8iTTkouFEcHtA",
+      "channel_name": "Marina Wyss - AI & Machine Learning",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCZf_9SblvM8iTTkouFEcHtA",
+      "youtube_url": "https://www.youtube.com/channel/UCZf_9SblvM8iTTkouFEcHtA"
+    },
+    {
+      "channel_id": "UCDDG9vOcmgwlslJJpCWjqOg",
+      "channel_name": "Salvatore Sanfilippo",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDDG9vOcmgwlslJJpCWjqOg",
+      "youtube_url": "https://www.youtube.com/channel/UCDDG9vOcmgwlslJJpCWjqOg"
+    },
+    {
+      "channel_id": "UC2rCpcqVtfwddasPSAtIyxA",
+      "channel_name": "Adam Gardner",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC2rCpcqVtfwddasPSAtIyxA",
+      "youtube_url": "https://www.youtube.com/channel/UC2rCpcqVtfwddasPSAtIyxA"
+    },
+    {
+      "channel_id": "UCgRZxW2HxemVkz_ogRaYZrw",
+      "channel_name": "Riza",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCgRZxW2HxemVkz_ogRaYZrw",
+      "youtube_url": "https://www.youtube.com/channel/UCgRZxW2HxemVkz_ogRaYZrw"
+    },
+    {
+      "channel_id": "UC73V2lmC9ovmYr8LJoENdjg",
+      "channel_name": "Gourcer",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC73V2lmC9ovmYr8LJoENdjg",
+      "youtube_url": "https://www.youtube.com/channel/UC73V2lmC9ovmYr8LJoENdjg"
+    },
+    {
+      "channel_id": "UC3GMCEqmje5CAbKN__cffBw",
+      "channel_name": "Mahmut Kasimoglu | AI Creatives",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3GMCEqmje5CAbKN__cffBw",
+      "youtube_url": "https://www.youtube.com/channel/UC3GMCEqmje5CAbKN__cffBw"
+    },
+    {
+      "channel_id": "UCdNxNJY367Cd06z1GnhucaA",
+      "channel_name": "TechRill",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCdNxNJY367Cd06z1GnhucaA",
+      "youtube_url": "https://www.youtube.com/channel/UCdNxNJY367Cd06z1GnhucaA"
+    },
+    {
+      "channel_id": "UCUm5D6tXtHeI_hLSdAwSFow",
+      "channel_name": "Sefy Tofan | AI Automation",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCUm5D6tXtHeI_hLSdAwSFow",
+      "youtube_url": "https://www.youtube.com/channel/UCUm5D6tXtHeI_hLSdAwSFow"
+    },
+    {
+      "channel_id": "UCytBox4fnNdt_TEaI_UN8zw",
+      "channel_name": "Ryan Braund - writer | director | animator",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCytBox4fnNdt_TEaI_UN8zw",
+      "youtube_url": "https://www.youtube.com/channel/UCytBox4fnNdt_TEaI_UN8zw"
+    },
+    {
+      "channel_id": "UC_9HuD0H59oFO3tShAMd8aQ",
+      "channel_name": "Reda Marzouk",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_9HuD0H59oFO3tShAMd8aQ",
+      "youtube_url": "https://www.youtube.com/channel/UC_9HuD0H59oFO3tShAMd8aQ"
+    },
+    {
+      "channel_id": "UCuj3s14vnc9QMkzBcXwN6Rg",
+      "channel_name": "U-Taste",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuj3s14vnc9QMkzBcXwN6Rg",
+      "youtube_url": "https://www.youtube.com/channel/UCuj3s14vnc9QMkzBcXwN6Rg"
+    },
+    {
+      "channel_id": "UCD7amT5yMTtEnAgVhA68vgQ",
+      "channel_name": "Jeremy London, MD",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCD7amT5yMTtEnAgVhA68vgQ",
+      "youtube_url": "https://www.youtube.com/channel/UCD7amT5yMTtEnAgVhA68vgQ"
+    },
+    {
+      "channel_id": "UC2xOn0xQj1HIpHJpOy5tvpA",
+      "channel_name": "Stream Developers",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC2xOn0xQj1HIpHJpOy5tvpA",
+      "youtube_url": "https://www.youtube.com/channel/UC2xOn0xQj1HIpHJpOy5tvpA"
+    },
+    {
+      "channel_id": "UC9_p50tH3WmMslWRWKnM7dQ",
+      "channel_name": "Adam Ragusea",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9_p50tH3WmMslWRWKnM7dQ",
+      "youtube_url": "https://www.youtube.com/channel/UC9_p50tH3WmMslWRWKnM7dQ"
+    },
+    {
+      "channel_id": "UCYq0KbZ_0m81HTx5gdTK8kQ",
+      "channel_name": "Ai Austin",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYq0KbZ_0m81HTx5gdTK8kQ",
+      "youtube_url": "https://www.youtube.com/channel/UCYq0KbZ_0m81HTx5gdTK8kQ"
+    },
+    {
+      "channel_id": "UCbyjYRUS9gADwAGuUxcfVcA",
+      "channel_name": "Sip and Feast",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbyjYRUS9gADwAGuUxcfVcA",
+      "youtube_url": "https://www.youtube.com/channel/UCbyjYRUS9gADwAGuUxcfVcA"
+    },
+    {
+      "channel_id": "UCFU9Go20p01kC64w-tmFORw",
+      "channel_name": "Evren Ozkip",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCFU9Go20p01kC64w-tmFORw",
+      "youtube_url": "https://www.youtube.com/channel/UCFU9Go20p01kC64w-tmFORw"
+    },
+    {
+      "channel_id": "UCmvYCRYPDlzSHVNCI_ViJDQ",
+      "channel_name": "Tiago Forte",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCmvYCRYPDlzSHVNCI_ViJDQ",
+      "youtube_url": "https://www.youtube.com/channel/UCmvYCRYPDlzSHVNCI_ViJDQ"
+    },
+    {
+      "channel_id": "UCHsThxa9HvDpSywv4bP55NA",
+      "channel_name": "J. Gravelle",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCHsThxa9HvDpSywv4bP55NA",
+      "youtube_url": "https://www.youtube.com/channel/UCHsThxa9HvDpSywv4bP55NA"
+    },
+    {
+      "channel_id": "UC_oqZXtcxfJTaw1j2M1H1XQ",
+      "channel_name": "Sauce Stache",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_oqZXtcxfJTaw1j2M1H1XQ",
+      "youtube_url": "https://www.youtube.com/channel/UC_oqZXtcxfJTaw1j2M1H1XQ"
+    },
+    {
+      "channel_id": "UC0BHO4AbCeBpghWNifMbH5Q",
+      "channel_name": "Leonardo Grigorio | Build & Ship with AI",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0BHO4AbCeBpghWNifMbH5Q",
+      "youtube_url": "https://www.youtube.com/channel/UC0BHO4AbCeBpghWNifMbH5Q"
+    },
+    {
+      "channel_id": "UC1oXUA7qgs0GZc_yk46K2OQ",
+      "channel_name": "Alejandro AO",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1oXUA7qgs0GZc_yk46K2OQ",
+      "youtube_url": "https://www.youtube.com/channel/UC1oXUA7qgs0GZc_yk46K2OQ"
+    },
+    {
+      "channel_id": "UCO60vEm-6WAAtGckVqCi6Vg",
+      "channel_name": "Firecrawl",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCO60vEm-6WAAtGckVqCi6Vg",
+      "youtube_url": "https://www.youtube.com/channel/UCO60vEm-6WAAtGckVqCi6Vg"
+    },
+    {
+      "channel_id": "UCDbZvuDA_tZ6XP5wKKFuemQ",
+      "channel_name": "Rainbow Plant Life",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDbZvuDA_tZ6XP5wKKFuemQ",
+      "youtube_url": "https://www.youtube.com/channel/UCDbZvuDA_tZ6XP5wKKFuemQ"
+    },
+    {
+      "channel_id": "UC08Fah8EIryeOZRkjBRohcQ",
+      "channel_name": "Creator Magic",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC08Fah8EIryeOZRkjBRohcQ",
+      "youtube_url": "https://www.youtube.com/channel/UC08Fah8EIryeOZRkjBRohcQ"
+    },
+    {
+      "channel_id": "UCcuaQecz84wTuxKzr1Yxi4Q",
+      "channel_name": "Parker Rex",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCcuaQecz84wTuxKzr1Yxi4Q",
+      "youtube_url": "https://www.youtube.com/channel/UCcuaQecz84wTuxKzr1Yxi4Q"
+    },
+    {
+      "channel_id": "UCtvGCaEzQZX7GwUJi-E3ALQ",
+      "channel_name": "jobstr",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCtvGCaEzQZX7GwUJi-E3ALQ",
+      "youtube_url": "https://www.youtube.com/channel/UCtvGCaEzQZX7GwUJi-E3ALQ"
+    },
+    {
+      "channel_id": "UCc98QQw1D-y38wg6mO3w4MQ",
+      "channel_name": "Dan Vega",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCc98QQw1D-y38wg6mO3w4MQ",
+      "youtube_url": "https://www.youtube.com/channel/UCc98QQw1D-y38wg6mO3w4MQ"
+    },
+    {
+      "channel_id": "UCpe4azYvizhOPP22aSYnxwQ",
+      "channel_name": "Matt Palmer",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpe4azYvizhOPP22aSYnxwQ",
+      "youtube_url": "https://www.youtube.com/channel/UCpe4azYvizhOPP22aSYnxwQ"
+    },
+    {
+      "channel_id": "UCj3p_1jOCJXB_L_we-DjLbA",
+      "channel_name": "Physionic",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCj3p_1jOCJXB_L_we-DjLbA",
+      "youtube_url": "https://www.youtube.com/channel/UCj3p_1jOCJXB_L_we-DjLbA"
+    },
+    {
+      "channel_id": "UCJ_twZENBaL3L6AmIGYHVrw",
+      "channel_name": "Toni Dev",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJ_twZENBaL3L6AmIGYHVrw",
+      "youtube_url": "https://www.youtube.com/channel/UCJ_twZENBaL3L6AmIGYHVrw"
+    },
+    {
+      "channel_id": "UCAl9Ld79qaZxp9JzEOwd3aA",
+      "channel_name": "Bankless",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCAl9Ld79qaZxp9JzEOwd3aA",
+      "youtube_url": "https://www.youtube.com/channel/UCAl9Ld79qaZxp9JzEOwd3aA"
+    },
+    {
+      "channel_id": "UCw3fku0sH3qA3c3pZeJwdAw",
+      "channel_name": "Daily Mail World",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCw3fku0sH3qA3c3pZeJwdAw",
+      "youtube_url": "https://www.youtube.com/channel/UCw3fku0sH3qA3c3pZeJwdAw"
+    },
+    {
+      "channel_id": "UCYjJeNVpgjAz-Sv4dhs13VQ",
+      "channel_name": "acooknamedMatt",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYjJeNVpgjAz-Sv4dhs13VQ",
+      "youtube_url": "https://www.youtube.com/channel/UCYjJeNVpgjAz-Sv4dhs13VQ"
+    },
+    {
+      "channel_id": "UCjrE1Mdf8JKg6iu3_CvmtgA",
+      "channel_name": "Healthy Immune Doc",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCjrE1Mdf8JKg6iu3_CvmtgA",
+      "youtube_url": "https://www.youtube.com/channel/UCjrE1Mdf8JKg6iu3_CvmtgA"
+    },
+    {
+      "channel_id": "UCEuoGOJFuXUZZhprSAAK85Q",
+      "channel_name": "Composio",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCEuoGOJFuXUZZhprSAAK85Q",
+      "youtube_url": "https://www.youtube.com/channel/UCEuoGOJFuXUZZhprSAAK85Q"
+    },
+    {
+      "channel_id": "UC4w1YQAJMWOz4qtxinq55LQ",
+      "channel_name": "Level1Techs",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4w1YQAJMWOz4qtxinq55LQ",
+      "youtube_url": "https://www.youtube.com/channel/UC4w1YQAJMWOz4qtxinq55LQ"
+    },
+    {
+      "channel_id": "UConVfxXodg78Tzh5nNu85Ew",
+      "channel_name": "Welch Labs",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UConVfxXodg78Tzh5nNu85Ew",
+      "youtube_url": "https://www.youtube.com/channel/UConVfxXodg78Tzh5nNu85Ew"
+    },
+    {
+      "channel_id": "UCilMYYyoot7vhLn4Tinzmmg",
+      "channel_name": "Mo Gawdat",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCilMYYyoot7vhLn4Tinzmmg",
+      "youtube_url": "https://www.youtube.com/channel/UCilMYYyoot7vhLn4Tinzmmg"
+    },
+    {
+      "channel_id": "UCbd-KDLSBfuPMGxn1oXxZVg",
+      "channel_name": "Doug Campbell",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbd-KDLSBfuPMGxn1oXxZVg",
+      "youtube_url": "https://www.youtube.com/channel/UCbd-KDLSBfuPMGxn1oXxZVg"
+    },
+    {
+      "channel_id": "UCsVgseBnKuyIGaH54XVoK3Q",
+      "channel_name": "Rob Shocks",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCsVgseBnKuyIGaH54XVoK3Q",
+      "youtube_url": "https://www.youtube.com/channel/UCsVgseBnKuyIGaH54XVoK3Q"
+    },
+    {
+      "channel_id": "UCIr0vkvqiYN3DGs44U5eGsw",
+      "channel_name": "G‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ‎ ",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCIr0vkvqiYN3DGs44U5eGsw",
+      "youtube_url": "https://www.youtube.com/channel/UCIr0vkvqiYN3DGs44U5eGsw"
+    },
+    {
+      "channel_id": "UCwyN-gKhx3dahEWpSnzwHfg",
+      "channel_name": "Theo in Tech",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCwyN-gKhx3dahEWpSnzwHfg",
+      "youtube_url": "https://www.youtube.com/channel/UCwyN-gKhx3dahEWpSnzwHfg"
+    },
+    {
+      "channel_id": "UC_aPdSc59nRAeFbK3AFunVg",
+      "channel_name": "Aiify",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_aPdSc59nRAeFbK3AFunVg",
+      "youtube_url": "https://www.youtube.com/channel/UC_aPdSc59nRAeFbK3AFunVg"
+    },
+    {
+      "channel_id": "UCRU9gfeM85WxFqxJFrDsCFQ",
+      "channel_name": "Cole Caccamise",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCRU9gfeM85WxFqxJFrDsCFQ",
+      "youtube_url": "https://www.youtube.com/channel/UCRU9gfeM85WxFqxJFrDsCFQ"
+    },
+    {
+      "channel_id": "UCruC3Lkt_-StdHlPiyWbPSg",
+      "channel_name": "Trelis Research",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCruC3Lkt_-StdHlPiyWbPSg",
+      "youtube_url": "https://www.youtube.com/channel/UCruC3Lkt_-StdHlPiyWbPSg"
+    },
+    {
+      "channel_id": "UCrxAhy0g_dkSftmUrWI51hA",
+      "channel_name": "Doug's Coding Corner",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCrxAhy0g_dkSftmUrWI51hA",
+      "youtube_url": "https://www.youtube.com/channel/UCrxAhy0g_dkSftmUrWI51hA"
+    },
+    {
+      "channel_id": "UCoxa63aolYceclQs3hwLwGg",
+      "channel_name": "Clean Master",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCoxa63aolYceclQs3hwLwGg",
+      "youtube_url": "https://www.youtube.com/channel/UCoxa63aolYceclQs3hwLwGg"
+    },
+    {
+      "channel_id": "UCgoJjdR6-7AMu9fDitb6nVw",
+      "channel_name": "Replit",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCgoJjdR6-7AMu9fDitb6nVw",
+      "youtube_url": "https://www.youtube.com/channel/UCgoJjdR6-7AMu9fDitb6nVw"
+    },
+    {
+      "channel_id": "UCXUPKJO5MZQN11PqgIvyuvQ",
+      "channel_name": "Andrej Karpathy",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
+      "youtube_url": "https://www.youtube.com/channel/UCXUPKJO5MZQN11PqgIvyuvQ"
+    },
+    {
+      "channel_id": "UCLGY6_j7kZfA1dmmjR1J_7w",
+      "channel_name": "The Morpheus Tutorials",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCLGY6_j7kZfA1dmmjR1J_7w",
+      "youtube_url": "https://www.youtube.com/channel/UCLGY6_j7kZfA1dmmjR1J_7w"
+    },
+    {
+      "channel_id": "UCagO3YGMBqDjrWBhw7wKuGA",
+      "channel_name": "Keith Edwards",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCagO3YGMBqDjrWBhw7wKuGA",
+      "youtube_url": "https://www.youtube.com/channel/UCagO3YGMBqDjrWBhw7wKuGA"
+    },
+    {
+      "channel_id": "UCKONdcQCTP3aozARj1ntKhw",
+      "channel_name": "Warp",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKONdcQCTP3aozARj1ntKhw",
+      "youtube_url": "https://www.youtube.com/channel/UCKONdcQCTP3aozARj1ntKhw"
+    },
+    {
+      "channel_id": "UCvQECJukTDE2i6aCoMnS-Vg",
+      "channel_name": "Big Think",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCvQECJukTDE2i6aCoMnS-Vg",
+      "youtube_url": "https://www.youtube.com/channel/UCvQECJukTDE2i6aCoMnS-Vg"
+    },
+    {
+      "channel_id": "UCzH5n3Ih5kgQoiDAQt2FwLw",
+      "channel_name": "LifebyMikeG",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCzH5n3Ih5kgQoiDAQt2FwLw",
+      "youtube_url": "https://www.youtube.com/channel/UCzH5n3Ih5kgQoiDAQt2FwLw"
+    },
+    {
+      "channel_id": "UCCKXnAHTnRLmyE_h6qUiqRA",
+      "channel_name": "Glenn Raya",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCCKXnAHTnRLmyE_h6qUiqRA",
+      "youtube_url": "https://www.youtube.com/channel/UCCKXnAHTnRLmyE_h6qUiqRA"
+    },
+    {
+      "channel_id": "UCu4e1JfAO1nZ7vIiwTUqFOQ",
+      "channel_name": "Nicolas Leão",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCu4e1JfAO1nZ7vIiwTUqFOQ",
+      "youtube_url": "https://www.youtube.com/channel/UCu4e1JfAO1nZ7vIiwTUqFOQ"
+    },
+    {
+      "channel_id": "UCzCsyvyrq38R6TnztEzOmgg",
+      "channel_name": "ByteMonk",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCzCsyvyrq38R6TnztEzOmgg",
+      "youtube_url": "https://www.youtube.com/channel/UCzCsyvyrq38R6TnztEzOmgg"
+    },
+    {
+      "channel_id": "UCf8uu3IE42b6hRUusufEH8g",
+      "channel_name": "Akamai Developer",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCf8uu3IE42b6hRUusufEH8g",
+      "youtube_url": "https://www.youtube.com/channel/UCf8uu3IE42b6hRUusufEH8g"
+    },
+    {
+      "channel_id": "UCsrVDPJBYeXItETFHG0qzyw",
+      "channel_name": "Web Dev Cody",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCsrVDPJBYeXItETFHG0qzyw",
+      "youtube_url": "https://www.youtube.com/channel/UCsrVDPJBYeXItETFHG0qzyw"
+    },
+    {
+      "channel_id": "UCg-_lYeV8hBnDSay7nmphUA",
+      "channel_name": "Sampson Boat Co",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCg-_lYeV8hBnDSay7nmphUA",
+      "youtube_url": "https://www.youtube.com/channel/UCg-_lYeV8hBnDSay7nmphUA"
+    },
+    {
+      "channel_id": "UCWb40FwBq3m8JBljAcwu7EA",
+      "channel_name": "How To Do Stuff",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWb40FwBq3m8JBljAcwu7EA",
+      "youtube_url": "https://www.youtube.com/channel/UCWb40FwBq3m8JBljAcwu7EA"
+    },
+    {
+      "channel_id": "UCfPQkvtb1HQD1_cBfaB3RAQ",
+      "channel_name": "Chantel Reads All Day",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfPQkvtb1HQD1_cBfaB3RAQ",
+      "youtube_url": "https://www.youtube.com/channel/UCfPQkvtb1HQD1_cBfaB3RAQ"
+    },
+    {
+      "channel_id": "UCKWaEZ-_VweaEx1j62do_vQ",
+      "channel_name": "IBM Technology",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKWaEZ-_VweaEx1j62do_vQ",
+      "youtube_url": "https://www.youtube.com/channel/UCKWaEZ-_VweaEx1j62do_vQ"
+    },
+    {
+      "channel_id": "UCVls1GmFKf6WlTraIb_IaJg",
+      "channel_name": "DistroTube",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVls1GmFKf6WlTraIb_IaJg",
+      "youtube_url": "https://www.youtube.com/channel/UCVls1GmFKf6WlTraIb_IaJg"
+    },
+    {
+      "channel_id": "UCajiMK_CY9icRhLepS8_3ug",
+      "channel_name": "Alex Ziskind",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCajiMK_CY9icRhLepS8_3ug",
+      "youtube_url": "https://www.youtube.com/channel/UCajiMK_CY9icRhLepS8_3ug"
+    },
+    {
+      "channel_id": "UCjqDDqUh1DgjrlNjLR5p8nw",
+      "channel_name": "AI Papers Academy",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCjqDDqUh1DgjrlNjLR5p8nw",
+      "youtube_url": "https://www.youtube.com/channel/UCjqDDqUh1DgjrlNjLR5p8nw"
+    },
+    {
+      "channel_id": "UCqNkn5PNeSqbQTAR5RP-L-Q",
+      "channel_name": "Andy Cooks",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCqNkn5PNeSqbQTAR5RP-L-Q",
+      "youtube_url": "https://www.youtube.com/channel/UCqNkn5PNeSqbQTAR5RP-L-Q"
+    },
+    {
+      "channel_id": "UCNU_lfiiWBdtULKOw6X0Dig",
+      "channel_name": "Krish Naik",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCNU_lfiiWBdtULKOw6X0Dig",
+      "youtube_url": "https://www.youtube.com/channel/UCNU_lfiiWBdtULKOw6X0Dig"
+    },
+    {
+      "channel_id": "UClnEMtKghVQWqw1tOX2NeMQ",
+      "channel_name": "Kyiv Post",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UClnEMtKghVQWqw1tOX2NeMQ",
+      "youtube_url": "https://www.youtube.com/channel/UClnEMtKghVQWqw1tOX2NeMQ"
+    },
+    {
+      "channel_id": "UCiamy6DLsjIeCgfz8TLXg9Q",
+      "channel_name": "Violin MD",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCiamy6DLsjIeCgfz8TLXg9Q",
+      "youtube_url": "https://www.youtube.com/channel/UCiamy6DLsjIeCgfz8TLXg9Q"
+    },
+    {
+      "channel_id": "UCUvkPEm38w6pq8w5QYgtPPw",
+      "channel_name": "CyberFlow",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCUvkPEm38w6pq8w5QYgtPPw",
+      "youtube_url": "https://www.youtube.com/channel/UCUvkPEm38w6pq8w5QYgtPPw"
+    },
+    {
+      "channel_id": "UC6ftm8PwH1RU_LM1jwG0LQA",
+      "channel_name": "Qdrant Vector Search",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC6ftm8PwH1RU_LM1jwG0LQA",
+      "youtube_url": "https://www.youtube.com/channel/UC6ftm8PwH1RU_LM1jwG0LQA"
+    },
+    {
+      "channel_id": "UCIAy0-SWMNxLjOmBCYSNBzg",
+      "channel_name": "Pilots of AI",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCIAy0-SWMNxLjOmBCYSNBzg",
+      "youtube_url": "https://www.youtube.com/channel/UCIAy0-SWMNxLjOmBCYSNBzg"
+    },
+    {
+      "channel_id": "UCE3Ay7LrWbJAOybaPvFkhmA",
+      "channel_name": "Michael Breitung",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCE3Ay7LrWbJAOybaPvFkhmA",
+      "youtube_url": "https://www.youtube.com/channel/UCE3Ay7LrWbJAOybaPvFkhmA"
+    },
+    {
+      "channel_id": "UCn2bInQrjdDYKEEmbpwblLQ",
+      "channel_name": "Langflow",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCn2bInQrjdDYKEEmbpwblLQ",
+      "youtube_url": "https://www.youtube.com/channel/UCn2bInQrjdDYKEEmbpwblLQ"
+    },
+    {
+      "channel_id": "UCesrGc4OC4E6iSG6E5ivVcw",
+      "channel_name": "Purrallel Universe",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCesrGc4OC4E6iSG6E5ivVcw",
+      "youtube_url": "https://www.youtube.com/channel/UCesrGc4OC4E6iSG6E5ivVcw"
+    },
+    {
+      "channel_id": "UCx-3sLMjglW_ydEwkvR1xbg",
+      "channel_name": "Mike the Credit Guy ",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCx-3sLMjglW_ydEwkvR1xbg",
+      "youtube_url": "https://www.youtube.com/channel/UCx-3sLMjglW_ydEwkvR1xbg"
+    },
+    {
+      "channel_id": "UCA_gs2-Nzh8asC5DQFvREPQ",
+      "channel_name": "Kevin Leneway",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCA_gs2-Nzh8asC5DQFvREPQ",
+      "youtube_url": "https://www.youtube.com/channel/UCA_gs2-Nzh8asC5DQFvREPQ"
+    },
+    {
+      "channel_id": "UCbX3YkedQunLt7EQAdVxh7w",
+      "channel_name": "Home Assistant",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCbX3YkedQunLt7EQAdVxh7w",
+      "youtube_url": "https://www.youtube.com/channel/UCbX3YkedQunLt7EQAdVxh7w"
+    },
+    {
+      "channel_id": "UCUBj_5pwQZaoXfBrEQQbADw",
+      "channel_name": "Chase Hughes",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCUBj_5pwQZaoXfBrEQQbADw",
+      "youtube_url": "https://www.youtube.com/channel/UCUBj_5pwQZaoXfBrEQQbADw"
+    },
+    {
+      "channel_id": "UCI0vQvr9aFn27yR6Ej6n5UA",
+      "channel_name": "Real Python",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCI0vQvr9aFn27yR6Ej6n5UA",
+      "youtube_url": "https://www.youtube.com/channel/UCI0vQvr9aFn27yR6Ej6n5UA"
+    },
+    {
+      "channel_id": "UC78Ib99EBhMN3NemVjYm3Ig",
+      "channel_name": "Grant Sanderson",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC78Ib99EBhMN3NemVjYm3Ig",
+      "youtube_url": "https://www.youtube.com/channel/UC78Ib99EBhMN3NemVjYm3Ig"
+    },
+    {
+      "channel_id": "UCfJT_eYDTmDE-ovKaxVE1ig",
+      "channel_name": "Kevin Stratvert",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfJT_eYDTmDE-ovKaxVE1ig",
+      "youtube_url": "https://www.youtube.com/channel/UCfJT_eYDTmDE-ovKaxVE1ig"
+    },
+    {
+      "channel_id": "UCFqXmQ56-Gp1rIKa-GoAJvQ",
+      "channel_name": "Andy Stapleton",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCFqXmQ56-Gp1rIKa-GoAJvQ",
+      "youtube_url": "https://www.youtube.com/channel/UCFqXmQ56-Gp1rIKa-GoAJvQ"
+    },
+    {
+      "channel_id": "UC05XpvbHZUQOfA6xk4dlmcw",
+      "channel_name": "DJ Ware",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC05XpvbHZUQOfA6xk4dlmcw",
+      "youtube_url": "https://www.youtube.com/channel/UC05XpvbHZUQOfA6xk4dlmcw"
+    },
+    {
+      "channel_id": "UCxQbYGpbdrh-b2ND-AfIybg",
+      "channel_name": "Maker's Muse",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCxQbYGpbdrh-b2ND-AfIybg",
+      "youtube_url": "https://www.youtube.com/channel/UCxQbYGpbdrh-b2ND-AfIybg"
+    },
+    {
+      "channel_id": "UCKe0IIt9rF9fd--xw5j1MkQ",
+      "channel_name": "Meg Faibisch Kuhn",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKe0IIt9rF9fd--xw5j1MkQ",
+      "youtube_url": "https://www.youtube.com/channel/UCKe0IIt9rF9fd--xw5j1MkQ"
+    },
+    {
+      "channel_id": "UCEzrs7gK6Nf6t_tadEprzxQ",
+      "channel_name": "aiwithbrandon",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCEzrs7gK6Nf6t_tadEprzxQ",
+      "youtube_url": "https://www.youtube.com/channel/UCEzrs7gK6Nf6t_tadEprzxQ"
+    },
+    {
+      "channel_id": "UCj4b_YT4QnFy6nx3dRCuc1w",
+      "channel_name": "Python Coding (CLCODING)",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCj4b_YT4QnFy6nx3dRCuc1w",
+      "youtube_url": "https://www.youtube.com/channel/UCj4b_YT4QnFy6nx3dRCuc1w"
+    },
+    {
+      "channel_id": "UCKe7TlwyDiH2RM7jhI5vnXw",
+      "channel_name": "Skolo Online",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKe7TlwyDiH2RM7jhI5vnXw",
+      "youtube_url": "https://www.youtube.com/channel/UCKe7TlwyDiH2RM7jhI5vnXw"
+    },
+    {
+      "channel_id": "UC3fICY_FqiUnnjgQZyN1AjQ",
+      "channel_name": "Neuro Symbolic",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3fICY_FqiUnnjgQZyN1AjQ",
+      "youtube_url": "https://www.youtube.com/channel/UC3fICY_FqiUnnjgQZyN1AjQ"
+    },
+    {
+      "channel_id": "UCs-hXDMwqs1Ri9Yh9QRgaqQ",
+      "channel_name": "NetWork From Home",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCs-hXDMwqs1Ri9Yh9QRgaqQ",
+      "youtube_url": "https://www.youtube.com/channel/UCs-hXDMwqs1Ri9Yh9QRgaqQ"
+    },
+    {
+      "channel_id": "UC_TneqvSfh-KsIyZMlJjVsQ",
+      "channel_name": "Kanal13",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC_TneqvSfh-KsIyZMlJjVsQ",
+      "youtube_url": "https://www.youtube.com/channel/UC_TneqvSfh-KsIyZMlJjVsQ"
+    },
+    {
+      "channel_id": "UCvV2LZZGhxzTK2pSumTArEg",
+      "channel_name": "Select10",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCvV2LZZGhxzTK2pSumTArEg",
+      "youtube_url": "https://www.youtube.com/channel/UCvV2LZZGhxzTK2pSumTArEg"
+    },
+    {
+      "channel_id": "UCPEmk9eb21N_LGwZaoqRPHA",
+      "channel_name": "AI Learning Communities",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCPEmk9eb21N_LGwZaoqRPHA",
+      "youtube_url": "https://www.youtube.com/channel/UCPEmk9eb21N_LGwZaoqRPHA"
+    },
+    {
+      "channel_id": "UCWQaM7SpSECp9FELz-cHzuQ",
+      "channel_name": "Dreams of Code",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWQaM7SpSECp9FELz-cHzuQ",
+      "youtube_url": "https://www.youtube.com/channel/UCWQaM7SpSECp9FELz-cHzuQ"
+    },
+    {
+      "channel_id": "UCJcVFhNVcdYpG8VOms68wtg",
+      "channel_name": "Mir Global Academy",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJcVFhNVcdYpG8VOms68wtg",
+      "youtube_url": "https://www.youtube.com/channel/UCJcVFhNVcdYpG8VOms68wtg"
+    },
+    {
+      "channel_id": "UCK2-KwTwamfWK_LjfxGEe8Q",
+      "channel_name": "Off Duty Canvas",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCK2-KwTwamfWK_LjfxGEe8Q",
+      "youtube_url": "https://www.youtube.com/channel/UCK2-KwTwamfWK_LjfxGEe8Q"
+    },
+    {
+      "channel_id": "UCkCehM7kj5tZLrrUN5T7T6w",
+      "channel_name": "Pat Ruff",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCkCehM7kj5tZLrrUN5T7T6w",
+      "youtube_url": "https://www.youtube.com/channel/UCkCehM7kj5tZLrrUN5T7T6w"
+    },
+    {
+      "channel_id": "UCAM8mXlq6gw0QXHR30CkKbg",
+      "channel_name": "Kevin Badi | AI Operating Systems ",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCAM8mXlq6gw0QXHR30CkKbg",
+      "youtube_url": "https://www.youtube.com/channel/UCAM8mXlq6gw0QXHR30CkKbg"
+    },
+    {
+      "channel_id": "UCfWNZIJkm268rLO_yeRlcww",
+      "channel_name": "Business Basics",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCfWNZIJkm268rLO_yeRlcww",
+      "youtube_url": "https://www.youtube.com/channel/UCfWNZIJkm268rLO_yeRlcww"
+    },
+    {
+      "channel_id": "UCVkTLOkJ9VLfT0K6PZ0Wthg",
+      "channel_name": "Py Man",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVkTLOkJ9VLfT0K6PZ0Wthg",
+      "youtube_url": "https://www.youtube.com/channel/UCVkTLOkJ9VLfT0K6PZ0Wthg"
+    },
+    {
+      "channel_id": "UC0rjDnTTPaYJoJmO-NGKKWA",
+      "channel_name": "techronin",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0rjDnTTPaYJoJmO-NGKKWA",
+      "youtube_url": "https://www.youtube.com/channel/UC0rjDnTTPaYJoJmO-NGKKWA"
+    },
+    {
+      "channel_id": "UCA-ORpF9LEgECmkP3nvVLXQ",
+      "channel_name": "Matt Layman",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCA-ORpF9LEgECmkP3nvVLXQ",
+      "youtube_url": "https://www.youtube.com/channel/UCA-ORpF9LEgECmkP3nvVLXQ"
+    },
+    {
+      "channel_id": "UCG6qpjVnBTTT8wLGBygANOQ",
+      "channel_name": "MLOps.community",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCG6qpjVnBTTT8wLGBygANOQ",
+      "youtube_url": "https://www.youtube.com/channel/UCG6qpjVnBTTT8wLGBygANOQ"
+    },
+    {
+      "channel_id": "UCdZV4jz0TFVHJDtZaH3K4tw",
+      "channel_name": "Unscripted Coding",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCdZV4jz0TFVHJDtZaH3K4tw",
+      "youtube_url": "https://www.youtube.com/channel/UCdZV4jz0TFVHJDtZaH3K4tw"
+    },
+    {
+      "channel_id": "UCjjhwmUo6aBpCRExIGWCxhA",
+      "channel_name": "Code with Richardson Dackam",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCjjhwmUo6aBpCRExIGWCxhA",
+      "youtube_url": "https://www.youtube.com/channel/UCjjhwmUo6aBpCRExIGWCxhA"
+    },
+    {
+      "channel_id": "UCDNfdoa_IoS1QTldXJJ9fnQ",
+      "channel_name": "Half-Ass Movie Podcast",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDNfdoa_IoS1QTldXJJ9fnQ",
+      "youtube_url": "https://www.youtube.com/channel/UCDNfdoa_IoS1QTldXJJ9fnQ"
+    },
+    {
+      "channel_id": "UCBsT-SA6H9JXth2mb7_mfeg",
+      "channel_name": "Corey Blake",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCBsT-SA6H9JXth2mb7_mfeg",
+      "youtube_url": "https://www.youtube.com/channel/UCBsT-SA6H9JXth2mb7_mfeg"
+    },
+    {
+      "channel_id": "UCuK2Mf5As9OKfWU7XV6yzCg",
+      "channel_name": "The Next Wave - AI and the Future of Technology",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuK2Mf5As9OKfWU7XV6yzCg",
+      "youtube_url": "https://www.youtube.com/channel/UCuK2Mf5As9OKfWU7XV6yzCg"
+    },
+    {
+      "channel_id": "UC-DN_3LKlMTrouRNa9X0siQ",
+      "channel_name": "Dev G",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-DN_3LKlMTrouRNa9X0siQ",
+      "youtube_url": "https://www.youtube.com/channel/UC-DN_3LKlMTrouRNa9X0siQ"
+    },
+    {
+      "channel_id": "UC0NErq0RhP51iXx64ZmyVfg",
+      "channel_name": "Bret Fisher",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0NErq0RhP51iXx64ZmyVfg",
+      "youtube_url": "https://www.youtube.com/channel/UC0NErq0RhP51iXx64ZmyVfg"
+    },
+    {
+      "channel_id": "UCP_lo1MFyx5IXDeD9s_6nUw",
+      "channel_name": "Meta Developers",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCP_lo1MFyx5IXDeD9s_6nUw",
+      "youtube_url": "https://www.youtube.com/channel/UCP_lo1MFyx5IXDeD9s_6nUw"
+    },
+    {
+      "channel_id": "UCsHbJuyHI7eKje1AH_joWyQ",
+      "channel_name": "Yankee Maharjan",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCsHbJuyHI7eKje1AH_joWyQ",
+      "youtube_url": "https://www.youtube.com/channel/UCsHbJuyHI7eKje1AH_joWyQ"
+    },
+    {
+      "channel_id": "UCBEkTaFA7DAcgjZZcVjfBLw",
+      "channel_name": "Michael - Coding Tutor",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCBEkTaFA7DAcgjZZcVjfBLw",
+      "youtube_url": "https://www.youtube.com/channel/UCBEkTaFA7DAcgjZZcVjfBLw"
+    },
+    {
+      "channel_id": "UCuudpdbKmQWq2PPzYgVCWlA",
+      "channel_name": "Indently",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuudpdbKmQWq2PPzYgVCWlA",
+      "youtube_url": "https://www.youtube.com/channel/UCuudpdbKmQWq2PPzYgVCWlA"
+    },
+    {
+      "channel_id": "UC8URMa1fI4rlaLc-Lhev2fQ",
+      "channel_name": "Ryan McBeth",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC8URMa1fI4rlaLc-Lhev2fQ",
+      "youtube_url": "https://www.youtube.com/channel/UC8URMa1fI4rlaLc-Lhev2fQ"
+    },
+    {
+      "channel_id": "UCMiJRAwDNSNzuYeN2uWa0pA",
+      "channel_name": "Mrwhosetheboss",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCMiJRAwDNSNzuYeN2uWa0pA",
+      "youtube_url": "https://www.youtube.com/channel/UCMiJRAwDNSNzuYeN2uWa0pA"
+    },
+    {
+      "channel_id": "UCpjlh0e319ksmoOD7bQFSiw",
+      "channel_name": "Rich Roll",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpjlh0e319ksmoOD7bQFSiw",
+      "youtube_url": "https://www.youtube.com/channel/UCpjlh0e319ksmoOD7bQFSiw"
+    },
+    {
+      "channel_id": "UCTvYEid8tmg0jqGPDkehc_Q",
+      "channel_name": "Preppy Kitchen",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCTvYEid8tmg0jqGPDkehc_Q",
+      "youtube_url": "https://www.youtube.com/channel/UCTvYEid8tmg0jqGPDkehc_Q"
+    },
+    {
+      "channel_id": "UCqN4Z5KT_WnYgS4c19oXSvw",
+      "channel_name": "Ben Goshawk",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCqN4Z5KT_WnYgS4c19oXSvw",
+      "youtube_url": "https://www.youtube.com/channel/UCqN4Z5KT_WnYgS4c19oXSvw"
+    },
+    {
+      "channel_id": "UCy287hC44mRWpFLj4hK8gKA",
+      "channel_name": "China Update",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCy287hC44mRWpFLj4hK8gKA",
+      "youtube_url": "https://www.youtube.com/channel/UCy287hC44mRWpFLj4hK8gKA"
+    },
+    {
+      "channel_id": "UC0Wu-J4_SoFOYVKA8JRuRRg",
+      "channel_name": "What The Func? w/ Ed Zynda",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC0Wu-J4_SoFOYVKA8JRuRRg",
+      "youtube_url": "https://www.youtube.com/channel/UC0Wu-J4_SoFOYVKA8JRuRRg"
+    },
+    {
+      "channel_id": "UCJDIGW0ywWw9Kh9_vtwqxXA",
+      "channel_name": "William Spaniel",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJDIGW0ywWw9Kh9_vtwqxXA",
+      "youtube_url": "https://www.youtube.com/channel/UCJDIGW0ywWw9Kh9_vtwqxXA"
+    },
+    {
+      "channel_id": "UCP7jMXSY2xbc3KCAE0MHQ-A",
+      "channel_name": "Google DeepMind",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCP7jMXSY2xbc3KCAE0MHQ-A",
+      "youtube_url": "https://www.youtube.com/channel/UCP7jMXSY2xbc3KCAE0MHQ-A"
+    },
+    {
+      "channel_id": "UCpM_g95uzZ_OyhgukvrbbiQ",
+      "channel_name": "Helena Liu",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpM_g95uzZ_OyhgukvrbbiQ",
+      "youtube_url": "https://www.youtube.com/channel/UCpM_g95uzZ_OyhgukvrbbiQ"
+    },
+    {
+      "channel_id": "UCVGVbOl6F5rGF4wSYS6Y5yQ",
+      "channel_name": "MIgardener",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVGVbOl6F5rGF4wSYS6Y5yQ",
+      "youtube_url": "https://www.youtube.com/channel/UCVGVbOl6F5rGF4wSYS6Y5yQ"
+    },
+    {
+      "channel_id": "UCD75P6Wl2tbmCpFba81bQaA",
+      "channel_name": "Adam Skjervold",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCD75P6Wl2tbmCpFba81bQaA",
+      "youtube_url": "https://www.youtube.com/channel/UCD75P6Wl2tbmCpFba81bQaA"
+    },
+    {
+      "channel_id": "UCUcg6az6etU_gRtZVAhBXaw",
+      "channel_name": "Google Workspace Developers",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCUcg6az6etU_gRtZVAhBXaw",
+      "youtube_url": "https://www.youtube.com/channel/UCUcg6az6etU_gRtZVAhBXaw"
+    },
+    {
+      "channel_id": "UC2H-_WWy_5z2C6C3Vgnk1Qw",
+      "channel_name": "SullyOmar",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC2H-_WWy_5z2C6C3Vgnk1Qw",
+      "youtube_url": "https://www.youtube.com/channel/UC2H-_WWy_5z2C6C3Vgnk1Qw"
+    },
+    {
+      "channel_id": "UC27C_HWo-UmKkdWGsRJZ8EA",
+      "channel_name": "Pailin's Kitchen",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC27C_HWo-UmKkdWGsRJZ8EA",
+      "youtube_url": "https://www.youtube.com/channel/UC27C_HWo-UmKkdWGsRJZ8EA"
+    },
+    {
+      "channel_id": "UCL44k-cLrlsdr7PYuMU4yIw",
+      "channel_name": "That Chapter",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCL44k-cLrlsdr7PYuMU4yIw",
+      "youtube_url": "https://www.youtube.com/channel/UCL44k-cLrlsdr7PYuMU4yIw"
+    },
+    {
+      "channel_id": "UCDVt6xCSRx3dqr_SGgc1hng",
+      "channel_name": "Instantly",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDVt6xCSRx3dqr_SGgc1hng",
+      "youtube_url": "https://www.youtube.com/channel/UCDVt6xCSRx3dqr_SGgc1hng"
+    },
+    {
+      "channel_id": "UC9r9HYFxEQOBXSopFS61ZWg",
+      "channel_name": "MeidasTouch",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9r9HYFxEQOBXSopFS61ZWg",
+      "youtube_url": "https://www.youtube.com/channel/UC9r9HYFxEQOBXSopFS61ZWg"
+    },
+    {
+      "channel_id": "UCazRf1jcMNZEL1MS5i_rWQQ",
+      "channel_name": "Midwest Safety",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCazRf1jcMNZEL1MS5i_rWQQ",
+      "youtube_url": "https://www.youtube.com/channel/UCazRf1jcMNZEL1MS5i_rWQQ"
+    },
+    {
+      "channel_id": "UC88FeYcHJzqKsRJJxN8kAIA",
+      "channel_name": "feedthepudge",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC88FeYcHJzqKsRJJxN8kAIA",
+      "youtube_url": "https://www.youtube.com/channel/UC88FeYcHJzqKsRJJxN8kAIA"
+    },
+    {
+      "channel_id": "UC8xQy0wlMBLTvvAcvehz0Kg",
+      "channel_name": "Tony the Antonio",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC8xQy0wlMBLTvvAcvehz0Kg",
+      "youtube_url": "https://www.youtube.com/channel/UC8xQy0wlMBLTvvAcvehz0Kg"
+    },
+    {
+      "channel_id": "UC9yXyitkbU_WSy7bd_41SqQ",
+      "channel_name": "Kye Gomez",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC9yXyitkbU_WSy7bd_41SqQ",
+      "youtube_url": "https://www.youtube.com/channel/UC9yXyitkbU_WSy7bd_41SqQ"
+    },
+    {
+      "channel_id": "UC1EasxeXGzoXJb2y3HTMsLA",
+      "channel_name": "Yishai Fleisher",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC1EasxeXGzoXJb2y3HTMsLA",
+      "youtube_url": "https://www.youtube.com/channel/UC1EasxeXGzoXJb2y3HTMsLA"
+    },
+    {
+      "channel_id": "UCuz8u0tRDZEnC1TgddBTnvA",
+      "channel_name": "Stoched",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuz8u0tRDZEnC1TgddBTnvA",
+      "youtube_url": "https://www.youtube.com/channel/UCuz8u0tRDZEnC1TgddBTnvA"
+    },
+    {
+      "channel_id": "UCTrSsPMmZavLbc3Ex7VhjDg",
+      "channel_name": "Brandon Herrera",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCTrSsPMmZavLbc3Ex7VhjDg",
+      "youtube_url": "https://www.youtube.com/channel/UCTrSsPMmZavLbc3Ex7VhjDg"
+    },
+    {
+      "channel_id": "UCKq-lHnyradGRmFClX_ACMw",
+      "channel_name": "Ryan & Matt Data Science",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCKq-lHnyradGRmFClX_ACMw",
+      "youtube_url": "https://www.youtube.com/channel/UCKq-lHnyradGRmFClX_ACMw"
+    },
+    {
+      "channel_id": "UCJWKjrrUh2KL1d3zXQW79cQ",
+      "channel_name": "EXPLORE WITH US",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJWKjrrUh2KL1d3zXQW79cQ",
+      "youtube_url": "https://www.youtube.com/channel/UCJWKjrrUh2KL1d3zXQW79cQ"
+    },
+    {
+      "channel_id": "UCQgC5luoDkJYjnM0222uJIg",
+      "channel_name": "Alex Gear & Tech",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQgC5luoDkJYjnM0222uJIg",
+      "youtube_url": "https://www.youtube.com/channel/UCQgC5luoDkJYjnM0222uJIg"
+    },
+    {
+      "channel_id": "UCQBmS_gC-i1ddMCcp9Wt_Qw",
+      "channel_name": "Econ Lessons",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCQBmS_gC-i1ddMCcp9Wt_Qw",
+      "youtube_url": "https://www.youtube.com/channel/UCQBmS_gC-i1ddMCcp9Wt_Qw"
+    },
+    {
+      "channel_id": "UC28n0tlcNSa1iPe5mettocg",
+      "channel_name": "voidzilla",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC28n0tlcNSa1iPe5mettocg",
+      "youtube_url": "https://www.youtube.com/channel/UC28n0tlcNSa1iPe5mettocg"
+    },
+    {
+      "channel_id": "UCL_DTHlvMUDGnBV0_B7NTyQ",
+      "channel_name": "AI FOR DEVS",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCL_DTHlvMUDGnBV0_B7NTyQ",
+      "youtube_url": "https://www.youtube.com/channel/UCL_DTHlvMUDGnBV0_B7NTyQ"
+    },
+    {
+      "channel_id": "UCGMJJ9UaqiDfkr_9sa33hdg",
+      "channel_name": "Bit N Pi",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCGMJJ9UaqiDfkr_9sa33hdg",
+      "youtube_url": "https://www.youtube.com/channel/UCGMJJ9UaqiDfkr_9sa33hdg"
+    },
+    {
+      "channel_id": "UCCRKoQ6K4-bgTB_XArcl2Dg",
+      "channel_name": "Nadia - AI Insiders",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCCRKoQ6K4-bgTB_XArcl2Dg",
+      "youtube_url": "https://www.youtube.com/channel/UCCRKoQ6K4-bgTB_XArcl2Dg"
+    },
+    {
+      "channel_id": "UCM-eRxEc_TutiPIbOS1YYbw",
+      "channel_name": "The Enforcer",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCM-eRxEc_TutiPIbOS1YYbw",
+      "youtube_url": "https://www.youtube.com/channel/UCM-eRxEc_TutiPIbOS1YYbw"
+    },
+    {
+      "channel_id": "UCUl-s_Vp-Kkk_XVyDylNwLA",
+      "channel_name": "Unsupervised Learning: Redpoint's AI Podcast",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCUl-s_Vp-Kkk_XVyDylNwLA",
+      "youtube_url": "https://www.youtube.com/channel/UCUl-s_Vp-Kkk_XVyDylNwLA"
+    },
+    {
+      "channel_id": "UCRyBAwyO6dX2kECLFdSzcLw",
+      "channel_name": "JankoWTF",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCRyBAwyO6dX2kECLFdSzcLw",
+      "youtube_url": "https://www.youtube.com/channel/UCRyBAwyO6dX2kECLFdSzcLw"
+    },
+    {
+      "channel_id": "UCtZNqEGzfQ6jO4SXWz51bRw",
+      "channel_name": "New York Times Events",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCtZNqEGzfQ6jO4SXWz51bRw",
+      "youtube_url": "https://www.youtube.com/channel/UCtZNqEGzfQ6jO4SXWz51bRw"
+    },
+    {
+      "channel_id": "UCJHK8REI-eDYKf1mLvI92-w",
+      "channel_name": "Limitless AI",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCJHK8REI-eDYKf1mLvI92-w",
+      "youtube_url": "https://www.youtube.com/channel/UCJHK8REI-eDYKf1mLvI92-w"
+    },
+    {
+      "channel_id": "UC3w193M5tYPJqF0Hi-7U-2g",
+      "channel_name": "Dr. Eric Berg DC",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC3w193M5tYPJqF0Hi-7U-2g",
+      "youtube_url": "https://www.youtube.com/channel/UC3w193M5tYPJqF0Hi-7U-2g"
+    },
+    {
+      "channel_id": "UC-RKpEc4eE9PwJaupN91xYQ",
+      "channel_name": "Sprouts",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-RKpEc4eE9PwJaupN91xYQ",
+      "youtube_url": "https://www.youtube.com/channel/UC-RKpEc4eE9PwJaupN91xYQ"
+    },
+    {
+      "channel_id": "UCAZlsFFzPjkGamdPIse4olQ",
+      "channel_name": "Logan Kilpatrick",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCAZlsFFzPjkGamdPIse4olQ",
+      "youtube_url": "https://www.youtube.com/channel/UCAZlsFFzPjkGamdPIse4olQ"
+    },
+    {
+      "channel_id": "UCakdY-DuPRO9M0VVNmk9qgw",
+      "channel_name": "Fru Dev",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCakdY-DuPRO9M0VVNmk9qgw",
+      "youtube_url": "https://www.youtube.com/channel/UCakdY-DuPRO9M0VVNmk9qgw"
+    },
+    {
+      "channel_id": "UC8butISFwT-Wl7EV0hUK0BQ",
+      "channel_name": "freeCodeCamp.org",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC8butISFwT-Wl7EV0hUK0BQ",
+      "youtube_url": "https://www.youtube.com/channel/UC8butISFwT-Wl7EV0hUK0BQ"
+    },
+    {
+      "channel_id": "UC29ju8bIPH5as8OGnQzwJyA",
+      "channel_name": "Traversy Media",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC29ju8bIPH5as8OGnQzwJyA",
+      "youtube_url": "https://www.youtube.com/channel/UC29ju8bIPH5as8OGnQzwJyA"
+    },
+    {
+      "channel_id": "UCupGvsi8kOqBO6f3HOIUI5Q",
+      "channel_name": "Sanava",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCupGvsi8kOqBO6f3HOIUI5Q",
+      "youtube_url": "https://www.youtube.com/channel/UCupGvsi8kOqBO6f3HOIUI5Q"
+    },
+    {
+      "channel_id": "UCDwe1zllqq7kLoxBe2c4mPA",
+      "channel_name": "CTMU Radio",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDwe1zllqq7kLoxBe2c4mPA",
+      "youtube_url": "https://www.youtube.com/channel/UCDwe1zllqq7kLoxBe2c4mPA"
+    },
+    {
+      "channel_id": "UCldfgbzNILYZA4dmDt4Cd6A",
+      "channel_name": "Secular Talk",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCldfgbzNILYZA4dmDt4Cd6A",
+      "youtube_url": "https://www.youtube.com/channel/UCldfgbzNILYZA4dmDt4Cd6A"
+    },
+    {
+      "channel_id": "UCTwwnM-YB8zWC0RWwhO5sGw",
+      "channel_name": "Ben Young AI",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCTwwnM-YB8zWC0RWwhO5sGw",
+      "youtube_url": "https://www.youtube.com/channel/UCTwwnM-YB8zWC0RWwhO5sGw"
+    },
+    {
+      "channel_id": "UCpaq31GdKM0sqDOiT30g0pg",
+      "channel_name": "Tinybird",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCpaq31GdKM0sqDOiT30g0pg",
+      "youtube_url": "https://www.youtube.com/channel/UCpaq31GdKM0sqDOiT30g0pg"
+    },
+    {
+      "channel_id": "UCzDlYCwWbpJ3RZDcRbkyx0w",
+      "channel_name": "mikegchambers",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCzDlYCwWbpJ3RZDcRbkyx0w",
+      "youtube_url": "https://www.youtube.com/channel/UCzDlYCwWbpJ3RZDcRbkyx0w"
+    },
+    {
+      "channel_id": "UCINkul2kgQYqt4GuD-352DQ",
+      "channel_name": "Derek Cheung | AI Agents Automation",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCINkul2kgQYqt4GuD-352DQ",
+      "youtube_url": "https://www.youtube.com/channel/UCINkul2kgQYqt4GuD-352DQ"
+    },
+    {
+      "channel_id": "UC7sg9FpMWMamzWE2lJPY-Dg",
+      "channel_name": "The Back Focus",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC7sg9FpMWMamzWE2lJPY-Dg",
+      "youtube_url": "https://www.youtube.com/channel/UC7sg9FpMWMamzWE2lJPY-Dg"
+    },
+    {
+      "channel_id": "UCHDvy-B0O0zFHaD36gF90TQ",
+      "channel_name": "Systems Thinking with David Shapiro",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCHDvy-B0O0zFHaD36gF90TQ",
+      "youtube_url": "https://www.youtube.com/channel/UCHDvy-B0O0zFHaD36gF90TQ"
+    },
+    {
+      "channel_id": "UCZjRcM1ukeciMZ7_fvzsezQ",
+      "channel_name": "Coding Is Fun",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCZjRcM1ukeciMZ7_fvzsezQ",
+      "youtube_url": "https://www.youtube.com/channel/UCZjRcM1ukeciMZ7_fvzsezQ"
+    },
+    {
+      "channel_id": "UCdBK94H6oZT2Q7l0-b0xmMg",
+      "channel_name": "ShortCircuit",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCdBK94H6oZT2Q7l0-b0xmMg",
+      "youtube_url": "https://www.youtube.com/channel/UCdBK94H6oZT2Q7l0-b0xmMg"
+    },
+    {
+      "channel_id": "UChit3QKk051fCsqliwVrbuQ",
+      "channel_name": "OFF GRID with DOUG & STACY",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UChit3QKk051fCsqliwVrbuQ",
+      "youtube_url": "https://www.youtube.com/channel/UChit3QKk051fCsqliwVrbuQ"
+    },
+    {
+      "channel_id": "UC4_wTN-Jui5mQZGR_JBqg_A",
+      "channel_name": "Enfes Yemek Tarifleri",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4_wTN-Jui5mQZGR_JBqg_A",
+      "youtube_url": "https://www.youtube.com/channel/UC4_wTN-Jui5mQZGR_JBqg_A"
+    },
+    {
+      "channel_id": "UCHvm5vA2Rey8ukVdpEXb-jg",
+      "channel_name": "Alex Volkov from ThursdAI",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCHvm5vA2Rey8ukVdpEXb-jg",
+      "youtube_url": "https://www.youtube.com/channel/UCHvm5vA2Rey8ukVdpEXb-jg"
+    },
+    {
+      "channel_id": "UC-nPM1_kSZf91ZGkcgy_95Q",
+      "channel_name": "How to ADHD",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC-nPM1_kSZf91ZGkcgy_95Q",
+      "youtube_url": "https://www.youtube.com/channel/UC-nPM1_kSZf91ZGkcgy_95Q"
+    },
+    {
+      "channel_id": "UCYEHmQ-b1iC02-LMeseQsvw",
+      "channel_name": "The Metaverse Guy",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCYEHmQ-b1iC02-LMeseQsvw",
+      "youtube_url": "https://www.youtube.com/channel/UCYEHmQ-b1iC02-LMeseQsvw"
+    },
+    {
+      "channel_id": "UCBa5G_ESCn8Yd4vw5U-gIcg",
+      "channel_name": "Stanford Online",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCBa5G_ESCn8Yd4vw5U-gIcg",
+      "youtube_url": "https://www.youtube.com/channel/UCBa5G_ESCn8Yd4vw5U-gIcg"
+    },
+    {
+      "channel_id": "UCv83tO5cePwHMt1952IVVHw",
+      "channel_name": "James Briggs",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCv83tO5cePwHMt1952IVVHw",
+      "youtube_url": "https://www.youtube.com/channel/UCv83tO5cePwHMt1952IVVHw"
+    },
+    {
+      "channel_id": "UCaRv3TNtku5NNRzxWB_XZNg",
+      "channel_name": "Matthew Rathbun",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCaRv3TNtku5NNRzxWB_XZNg",
+      "youtube_url": "https://www.youtube.com/channel/UCaRv3TNtku5NNRzxWB_XZNg"
+    },
+    {
+      "channel_id": "UCK2IvRB36OUwXwMRD1iDmvg",
+      "channel_name": "Nodus Labs",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCK2IvRB36OUwXwMRD1iDmvg",
+      "youtube_url": "https://www.youtube.com/channel/UCK2IvRB36OUwXwMRD1iDmvg"
+    },
+    {
+      "channel_id": "UCS2ZJXnzT2I3qI92naQRQ9A",
+      "channel_name": "Akinyemi Bajulaiye",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCS2ZJXnzT2I3qI92naQRQ9A",
+      "youtube_url": "https://www.youtube.com/channel/UCS2ZJXnzT2I3qI92naQRQ9A"
+    },
+    {
+      "channel_id": "UCmoEsq6a6ePXxgZeA4CVrUw",
+      "channel_name": "Ford Brewer MD MPH",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCmoEsq6a6ePXxgZeA4CVrUw",
+      "youtube_url": "https://www.youtube.com/channel/UCmoEsq6a6ePXxgZeA4CVrUw"
+    },
+    {
+      "channel_id": "UCs10x-muRrTQMJ4Ya-fmIlw",
+      "channel_name": "Snowflake Inc.",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCs10x-muRrTQMJ4Ya-fmIlw",
+      "youtube_url": "https://www.youtube.com/channel/UCs10x-muRrTQMJ4Ya-fmIlw"
+    },
+    {
+      "channel_id": "UCuS26YCwztJJebH9rqba1yg",
+      "channel_name": "Ryan Doser",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCuS26YCwztJJebH9rqba1yg",
+      "youtube_url": "https://www.youtube.com/channel/UCuS26YCwztJJebH9rqba1yg"
+    },
+    {
+      "channel_id": "UCDIHy3udOhhuqUyWR1IolLg",
+      "channel_name": "Camirra's Kitchen",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDIHy3udOhhuqUyWR1IolLg",
+      "youtube_url": "https://www.youtube.com/channel/UCDIHy3udOhhuqUyWR1IolLg"
+    },
+    {
+      "channel_id": "UCML7DcvQrG9sUw5kGqAGtaA",
+      "channel_name": "Soundproof Guide",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCML7DcvQrG9sUw5kGqAGtaA",
+      "youtube_url": "https://www.youtube.com/channel/UCML7DcvQrG9sUw5kGqAGtaA"
+    },
+    {
+      "channel_id": "UCNJ1Ymd5yFuUPtn21xtRbbw",
+      "channel_name": "AI Explained",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCNJ1Ymd5yFuUPtn21xtRbbw",
+      "youtube_url": "https://www.youtube.com/channel/UCNJ1Ymd5yFuUPtn21xtRbbw"
+    },
+    {
+      "channel_id": "UC4ZxumoeyWyxk4oZq3EiiKA",
+      "channel_name": "Viacheslav Druzhynin",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC4ZxumoeyWyxk4oZq3EiiKA",
+      "youtube_url": "https://www.youtube.com/channel/UC4ZxumoeyWyxk4oZq3EiiKA"
+    },
+    {
+      "channel_id": "UCZf5IX90oe5gdPppMXGImwg",
+      "channel_name": "Dr Waku",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCZf5IX90oe5gdPppMXGImwg",
+      "youtube_url": "https://www.youtube.com/channel/UCZf5IX90oe5gdPppMXGImwg"
+    },
+    {
+      "channel_id": "UCq6XkhO5SZ66N04IcPbqNcw",
+      "channel_name": "Keith Galli",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCq6XkhO5SZ66N04IcPbqNcw",
+      "youtube_url": "https://www.youtube.com/channel/UCq6XkhO5SZ66N04IcPbqNcw"
+    },
+    {
+      "channel_id": "UCiaQzXI5528Il6r2NNkrkJA",
+      "channel_name": "Digital Spaceport",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCiaQzXI5528Il6r2NNkrkJA",
+      "youtube_url": "https://www.youtube.com/channel/UCiaQzXI5528Il6r2NNkrkJA"
+    },
+    {
+      "channel_id": "UCWD0OMrAWdSUan3Hh_q9QCA",
+      "channel_name": "Nico | AI Ranking",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCWD0OMrAWdSUan3Hh_q9QCA",
+      "youtube_url": "https://www.youtube.com/channel/UCWD0OMrAWdSUan3Hh_q9QCA"
+    },
+    {
+      "channel_id": "UCFBjrAIU1Jht3oTq2hOsV-w",
+      "channel_name": "Artificially Inspired",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCFBjrAIU1Jht3oTq2hOsV-w",
+      "youtube_url": "https://www.youtube.com/channel/UCFBjrAIU1Jht3oTq2hOsV-w"
+    },
+    {
+      "channel_id": "UCDsVC_ewpcEW_AQcO-H-RDQ",
+      "channel_name": "Jane Street",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCDsVC_ewpcEW_AQcO-H-RDQ",
+      "youtube_url": "https://www.youtube.com/channel/UCDsVC_ewpcEW_AQcO-H-RDQ"
+    },
+    {
+      "channel_id": "UCBnLhz50WZAvsF4S72xtESA",
+      "channel_name": "Dhru Purohit",
+      "video_count": 1,
+      "rss_feed_url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCBnLhz50WZAvsF4S72xtESA",
+      "youtube_url": "https://www.youtube.com/channel/UCBnLhz50WZAvsF4S72xtESA"
+    }
+  ]
+}
