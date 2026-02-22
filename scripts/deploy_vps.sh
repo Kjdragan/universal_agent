@@ -223,18 +223,34 @@ rsync -az \
     universal-agent-telegram \
     universal-agent-vp-worker@vp.general.primary \
     universal-agent-vp-worker@vp.coder.primary
-  sleep 4
-
-  echo '== Service status =='
-  for s in \
+  echo '== Service status (bounded wait for active) =='
+  services=(\
     universal-agent-gateway \
     universal-agent-api \
     universal-agent-webui \
     universal-agent-telegram \
     universal-agent-vp-worker@vp.general.primary \
-    universal-agent-vp-worker@vp.coder.primary; do
-    printf '%s=' \"\$s\"
-    systemctl is-active \"\$s\"
+    universal-agent-vp-worker@vp.coder.primary \
+  )
+  max_attempts=12
+  sleep_seconds=5
+  for s in \"\${services[@]}\"; do
+    attempt=1
+    while true; do
+      status=\$(systemctl is-active \"\$s\" || true)
+      if [ \"\$status\" = 'active' ]; then
+        printf '%s=%s\n' \"\$s\" \"\$status\"
+        break
+      fi
+      if [ \"\$attempt\" -ge \"\$max_attempts\" ]; then
+        echo \"ERROR: service did not reach active state: \$s (last status=\$status)\" >&2
+        systemctl status \"\$s\" --no-pager -n 60 || true
+        exit 51
+      fi
+      echo \"WARN: waiting for service to become active: \$s (status=\$status, attempt=\$attempt/\$max_attempts)\"
+      attempt=\$((attempt + 1))
+      sleep \"\$sleep_seconds\"
+    done
   done
 
   echo

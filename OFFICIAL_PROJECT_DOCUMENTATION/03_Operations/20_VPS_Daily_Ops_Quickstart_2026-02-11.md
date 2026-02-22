@@ -30,13 +30,14 @@ Public URLs:
 
 ## Login
 ```bash
-ssh root@100.106.113.93
+ssh root@srv1360701.taildcc090.ts.net
 cd /opt/universal_agent
 ```
 
 Tailscale note:
-1. Use `root@100.106.113.93` for all operator SSH commands.
+1. Use `root@srv1360701.taildcc090.ts.net` for all operator SSH commands.
 2. Treat legacy public IP examples as historical only.
+3. SSH mode switch is available via `UA_SSH_AUTH_MODE=keys|tailscale_ssh`.
 
 ---
 
@@ -198,7 +199,7 @@ Default toggle state is OFF when unset.
 ```bash
 cd /home/kjdragan/lrepos/universal_agent
 scripts/sync_remote_workspaces.sh --once \
-  --host root@100.106.113.93 \
+  --host root@srv1360701.taildcc090.ts.net \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES \
@@ -210,7 +211,7 @@ Automate every 30s with user systemd timer:
 
 ```bash
 scripts/install_remote_workspace_sync_timer.sh \
-  --host root@100.106.113.93 \
+  --host root@srv1360701.taildcc090.ts.net \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES \
@@ -223,6 +224,27 @@ Notes:
 1. Default behavior skips previously synced workspace IDs, even if local mirror folders were later deleted.
 2. Optional remote cleanup is available with `--prune-remote-when-local-missing --allow-remote-delete` (destructive; use intentionally).
 3. Prune mode only deletes remote directories older than 300s by default (`--prune-min-age-seconds`).
+4. For canary auth migration, set `UA_SSH_AUTH_MODE=tailscale_ssh` before running sync/pull/control commands.
+
+## Tailnet Staging Quick Check (Private Integration Path)
+
+On VPS:
+```bash
+cd /opt/universal_agent
+bash scripts/configure_tailnet_staging.sh --verify-only
+tailscale serve status
+```
+
+Expected:
+1. UI/API local health checks pass.
+2. Serve status includes configured staging ports.
+
+Source-of-truth rule:
+1. Pick one lane per validation pass:
+   1. local runtime
+   2. VPS runtime
+   3. public smoke
+2. Do not mix observations from multiple lanes in a single conclusion.
 
 ---
 
