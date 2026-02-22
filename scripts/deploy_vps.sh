@@ -5,9 +5,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VPS_HOST="${UA_VPS_HOST:-root@100.106.113.93}"
+VPS_HOST="${UA_VPS_HOST:-root@srv1360701.taildcc090.ts.net}"
 SSH_KEY="${UA_VPS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+SSH_AUTH_MODE="${UA_SSH_AUTH_MODE:-keys}"
 REMOTE_DIR="${UA_VPS_APP_DIR:-/opt/universal_agent}"
+TAILNET_PREFLIGHT_MODE="${UA_TAILNET_PREFLIGHT:-auto}"
+SKIP_TAILNET_PREFLIGHT="${UA_SKIP_TAILNET_PREFLIGHT:-false}"
+TAILNET_STAGING_MODE="${UA_TAILNET_STAGING_MODE:-auto}"
 
 if ! command -v rsync >/dev/null 2>&1; then
   echo "ERROR: rsync is required for deployment."
@@ -19,23 +23,99 @@ if ! command -v ssh >/dev/null 2>&1; then
   exit 1
 fi
 
+case "$(printf '%s' "${SSH_AUTH_MODE}" | tr '[:upper:]' '[:lower:]')" in
+  keys)
+    SSH_AUTH_MODE="keys"
+    ;;
+  tailscale_ssh)
+    SSH_AUTH_MODE="tailscale_ssh"
+    SSH_KEY=""
+    ;;
+  *)
+    echo "ERROR: UA_SSH_AUTH_MODE must be keys or tailscale_ssh. Got: ${SSH_AUTH_MODE}"
+    exit 1
+    ;;
+esac
+
+if [[ "${SSH_AUTH_MODE}" == "keys" && -n "${SSH_KEY}" && ! -f "${SSH_KEY}" ]]; then
+  echo "ERROR: SSH key does not exist: ${SSH_KEY}"
+  exit 1
+fi
+
+host_only="${VPS_HOST#*@}"
+case "${host_only}" in
+  *.tail*.ts.net|100.*) tailnet_host="true" ;;
+  *) tailnet_host="false" ;;
+esac
+
+should_run_tailnet_preflight="false"
+case "$(printf '%s' "${TAILNET_PREFLIGHT_MODE}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on|force|required)
+    should_run_tailnet_preflight="true"
+    ;;
+  0|false|no|off|disabled)
+    should_run_tailnet_preflight="false"
+    ;;
+  *)
+    if [[ "${tailnet_host}" == "true" ]]; then
+      should_run_tailnet_preflight="true"
+    fi
+    ;;
+esac
+
+case "$(printf '%s' "${SKIP_TAILNET_PREFLIGHT}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    should_run_tailnet_preflight="false"
+    ;;
+esac
+
+if [[ "${should_run_tailnet_preflight}" == "true" ]]; then
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "ERROR: tailscale CLI is required for tailnet preflight."
+    echo "Set UA_TAILNET_PREFLIGHT=off (or UA_SKIP_TAILNET_PREFLIGHT=true) for break-glass bypass."
+    exit 1
+  fi
+  echo "Running tailnet preflight for ${host_only}..."
+  if ! tailscale status >/dev/null 2>&1; then
+    echo "ERROR: tailscale status check failed."
+    exit 1
+  fi
+  if ! tailscale ping "${host_only}" >/dev/null 2>&1; then
+    echo "ERROR: tailscale ping failed for ${host_only}."
+    exit 1
+  fi
+  echo "Tailnet preflight passed."
+fi
+
 echo "Deploying local HEAD to VPS"
 echo "Host: $VPS_HOST"
+echo "SSH auth mode: $SSH_AUTH_MODE"
 echo "Remote dir: $REMOTE_DIR"
 echo "Local commit: $(cd "$REPO_ROOT" && git rev-parse --short HEAD)"
 
+ssh_base=(ssh -o StrictHostKeyChecking=no)
+if [[ "${SSH_AUTH_MODE}" == "keys" && -n "${SSH_KEY}" ]]; then
+  ssh_base+=(-i "$SSH_KEY")
+fi
+
 # Pre-flight check: Verify connectivity before attempting deployment
 echo "Checking connectivity to $VPS_HOST..."
-if ! ssh -q -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no -i "$SSH_KEY" "$VPS_HOST" "echo 'Connection established'" >/dev/null 2>&1; then
+if ! "${ssh_base[@]}" -q -o BatchMode=yes -o ConnectTimeout=10 "$VPS_HOST" "echo 'Connection established'" >/dev/null 2>&1; then
   echo "ERROR: Cannot connect to $VPS_HOST."
   echo "  - Check if Tailscale is up (if using VPN)"
-  echo "  - Check if SSH key is valid: $SSH_KEY"
+  if [[ "${SSH_AUTH_MODE}" == "keys" ]]; then
+    echo "  - Check if SSH key is valid: $SSH_KEY"
+  fi
   echo "  - Check if host is online"
   exit 1
 fi
 echo "Connectivity confirmed."
 
-RSYNC_RSH="ssh -i $SSH_KEY -o StrictHostKeyChecking=no"
+rsync_ssh=(ssh -o StrictHostKeyChecking=no)
+if [[ "${SSH_AUTH_MODE}" == "keys" && -n "${SSH_KEY}" ]]; then
+  rsync_ssh+=(-i "$SSH_KEY")
+fi
+RSYNC_RSH="$(printf '%q ' "${rsync_ssh[@]}")"
 
 # Sync tracked project content while preserving runtime secrets/state on VPS.
 rsync -az \
@@ -50,7 +130,7 @@ rsync -az \
   -e "$RSYNC_RSH" \
   "$REPO_ROOT/" "$VPS_HOST:$REMOTE_DIR/"
 
-ssh -i "$SSH_KEY" "$VPS_HOST" "
+"${ssh_base[@]}" "$VPS_HOST" "
   set -euo pipefail
   cd '$REMOTE_DIR'
 
@@ -132,7 +212,7 @@ ssh -i "$SSH_KEY" "$VPS_HOST" "
   esac
 
   echo '== Install/refresh VP worker services =='
-  chmod 0755 scripts/start_vp_worker.sh scripts/install_vp_worker_services.sh
+  chmod 0755 scripts/start_vp_worker.sh scripts/install_vp_worker_services.sh scripts/configure_tailnet_staging.sh
   APP_ROOT='$REMOTE_DIR' bash scripts/install_vp_worker_services.sh vp.general.primary vp.coder.primary
 
   echo '== Restart services =='
@@ -156,6 +236,42 @@ ssh -i "$SSH_KEY" "$VPS_HOST" "
     printf '%s=' \"\$s\"
     systemctl is-active \"\$s\"
   done
+
+  echo
+  echo '== Tailnet staging setup =='
+  tailnet_staging_mode='${TAILNET_STAGING_MODE}'
+  case \"\$(printf '%s' \"\$tailnet_staging_mode\" | tr '[:upper:]' '[:lower:]')\" in
+    0|false|no|off|disabled)
+      echo 'Tailnet staging mode disabled; skipping setup.'
+      ;;
+    *)
+      if command -v tailscale >/dev/null 2>&1; then
+        if bash scripts/configure_tailnet_staging.sh --ensure; then
+          echo 'Tailnet staging setup complete.'
+        else
+          case \"\$(printf '%s' \"\$tailnet_staging_mode\" | tr '[:upper:]' '[:lower:]')\" in
+            required|force|strict)
+              echo 'ERROR: tailnet staging setup failed in required mode.' >&2
+              exit 49
+              ;;
+            *)
+              echo 'WARN: tailnet staging setup failed (non-strict mode); continuing deploy.' >&2
+              ;;
+          esac
+        fi
+      else
+        case \"\$(printf '%s' \"\$tailnet_staging_mode\" | tr '[:upper:]' '[:lower:]')\" in
+          required|force|strict)
+            echo 'ERROR: tailscale command not found but tailnet staging mode is required.' >&2
+            exit 50
+            ;;
+          *)
+            echo 'WARN: tailscale command not found; skipping tailnet staging setup.' >&2
+            ;;
+        esac
+      fi
+      ;;
+  esac
 
   echo
   echo '== VP session readiness =='

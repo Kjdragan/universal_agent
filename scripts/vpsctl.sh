@@ -10,14 +10,18 @@ set -euo pipefail
 #   scripts/vpsctl.sh logs gateway
 #
 # Config via env:
-#   UA_VPS_HOST=root@100.106.113.93
+#   UA_VPS_HOST=root@srv1360701.taildcc090.ts.net
+#   UA_SSH_AUTH_MODE=keys|tailscale_ssh
 #   UA_VPS_SSH_KEY=~/.ssh/id_ed25519
 #   UA_VPS_APP_DIR=/opt/universal_agent
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VPS_HOST="${UA_VPS_HOST:-root@100.106.113.93}"
+VPS_HOST="${UA_VPS_HOST:-root@srv1360701.taildcc090.ts.net}"
 SSH_KEY="${UA_VPS_SSH_KEY:-$HOME/.ssh/id_ed25519}"
+SSH_AUTH_MODE="${UA_SSH_AUTH_MODE:-keys}"
 REMOTE_DIR="${UA_VPS_APP_DIR:-/opt/universal_agent}"
+TAILNET_PREFLIGHT_MODE="${UA_TAILNET_PREFLIGHT:-auto}"
+SKIP_TAILNET_PREFLIGHT="${UA_SKIP_TAILNET_PREFLIGHT:-false}"
 
 usage() {
   cat <<'EOF'
@@ -57,15 +61,84 @@ unit_for() {
 }
 
 ssh_vps() {
-  ssh -i "$SSH_KEY" "$VPS_HOST" "$@"
+  local ssh_args=(ssh)
+  if [[ "${SSH_AUTH_MODE}" == "keys" && -n "${SSH_KEY}" ]]; then
+    ssh_args+=(-i "$SSH_KEY")
+  fi
+  "${ssh_args[@]}" "$VPS_HOST" "$@"
 }
 
 scp_vps() {
-  scp -i "$SSH_KEY" "$@"
+  local scp_args=(scp)
+  if [[ "${SSH_AUTH_MODE}" == "keys" && -n "${SSH_KEY}" ]]; then
+    scp_args+=(-i "$SSH_KEY")
+  fi
+  "${scp_args[@]}" "$@"
+}
+
+run_tailnet_preflight() {
+  local host_only="${VPS_HOST#*@}"
+  local tailnet_host="false"
+  case "${host_only}" in
+    *.tail*.ts.net|100.*) tailnet_host="true" ;;
+  esac
+
+  local should_run="false"
+  case "$(printf '%s' "${TAILNET_PREFLIGHT_MODE}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on|force|required) should_run="true" ;;
+    0|false|no|off|disabled) should_run="false" ;;
+    *) [[ "${tailnet_host}" == "true" ]] && should_run="true" ;;
+  esac
+  case "$(printf '%s' "${SKIP_TAILNET_PREFLIGHT}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) should_run="false" ;;
+  esac
+
+  if [[ "${should_run}" != "true" ]]; then
+    return 0
+  fi
+  if ! command -v tailscale >/dev/null 2>&1; then
+    echo "ERROR: tailscale CLI is required for tailnet preflight." >&2
+    echo "Set UA_TAILNET_PREFLIGHT=off (or UA_SKIP_TAILNET_PREFLIGHT=true) for break-glass bypass." >&2
+    exit 1
+  fi
+  if ! tailscale status >/dev/null 2>&1; then
+    echo "ERROR: tailscale status check failed." >&2
+    exit 1
+  fi
+  if ! tailscale ping "${host_only}" >/dev/null 2>&1; then
+    echo "ERROR: tailscale ping failed for ${host_only}." >&2
+    exit 1
+  fi
 }
 
 cmd="${1:-}"
 shift || true
+
+case "$(printf '%s' "${SSH_AUTH_MODE}" | tr '[:upper:]' '[:lower:]')" in
+  keys)
+    SSH_AUTH_MODE="keys"
+    if [[ -n "${SSH_KEY}" && ! -f "${SSH_KEY}" ]]; then
+      echo "ERROR: SSH key does not exist: ${SSH_KEY}" >&2
+      exit 1
+    fi
+    ;;
+  tailscale_ssh)
+    SSH_AUTH_MODE="tailscale_ssh"
+    SSH_KEY=""
+    ;;
+  *)
+    echo "ERROR: UA_SSH_AUTH_MODE must be keys or tailscale_ssh. Got: ${SSH_AUTH_MODE}" >&2
+    exit 1
+    ;;
+esac
+
+case "$cmd" in
+  -h|--help|help|"")
+    ;;
+  *)
+    run_tailnet_preflight
+    ;;
+esac
 
 case "$cmd" in
   push)
@@ -208,4 +281,3 @@ case "$cmd" in
     exit 2
     ;;
 esac
-

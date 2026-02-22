@@ -15,7 +15,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
 export PYTHONPATH="${REPO_ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
-export UV_CACHE_DIR="${UV_CACHE_DIR:-${REPO_ROOT}/.uv-cache}"
+export UV_CACHE_DIR="${REPO_ROOT}/.uv-cache"
 export PYTHONHASHSEED="${PYTHONHASHSEED:-1}"
 mkdir -p "${UV_CACHE_DIR}" 2>/dev/null || true
 
