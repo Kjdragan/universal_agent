@@ -160,7 +160,7 @@ check_service() {
   reset_fail_count "$service"
 }
 
-DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health\nuniversal-agent-api|http://127.0.0.1:8001/api/health\nuniversal-agent-webui|http://127.0.0.1:3000/\nuniversal-agent-telegram|'
+DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health\nuniversal-agent-api|http://127.0.0.1:8001/api/health\nuniversal-agent-webui|http://127.0.0.1:3000/\nuniversal-agent-telegram|\ncsi-ingester|http://127.0.0.1:8091/healthz'
 SERVICE_SPECS="${UA_WATCHDOG_SERVICE_SPECS:-$DEFAULT_SERVICE_SPECS}"
 
 while IFS= read -r spec; do

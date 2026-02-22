@@ -1,0 +1,13 @@
+[Unit]
+Description=Universal Agent YouTube Playlist Poller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/scripts/run_youtube_playlist_poller.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -30,6 +30,19 @@ This is the source-of-truth explanation of exactly what was done to deploy Unive
 3. Nginx receives on port 443 and proxies to local gateway process.
 4. Gateway verifies signature, applies webhook mapping/transform, and dispatches agent action.
 
+### Composio Trigger Configuration
+
+This document covers VPS infrastructure setup. For detailed Composio trigger creation, configuration, and troubleshooting:
+
+→ **Document 75**: Composio YouTube Trigger Complete Implementation Guide
+
+Document 75 includes:
+- Step-by-step trigger creation
+- Playlist ID requirements and pitfalls
+- Webhook secret synchronization
+- Complete troubleshooting guide
+- Template for any Composio service trigger
+
 Manual path:
 
 1. You (or a script) send a bearer-token POST to:

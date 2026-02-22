@@ -5,6 +5,7 @@ Persistent context for the agent.
 ## [RECENT_CONTEXT]
 Recent context snapshots (most recent first):
 
+- 2026-02-22T04:25:21.734108+00:00: ollow the recommended plan below. Extract steps before execution, adapt to your current context, execute sequentially with current_step parameter, and check known pitfalls to avoid errors.","recommended_plan_steps":["[Optional (if attach... (tags: pre_compact, trigger:exit)
 - 2026-02-22T00:17:41.192908+00:00: d. Please obtain a fresh s3key by: (1) downloading an attachment from another email using GMAIL_GET_ATTACHMENT action, or (2) uploading a new file using a file upload action. Then use the s3key from that action\'s response immediately to... (tags: pre_compact, trigger:exit)
 - 2026-02-22T00:06:42.670074+00:00: sed hand. The child took it, and together\u2014with the Admiral circling overhead\u2014they brought the strange dory to shore.\n\nAnd that, the locals would later say, was how Stilhaven gained its second mystery.\n\nThe first was the fog... (tags: pre_compact, trigger:exit)
 - 2026-02-22T00:00:43.639041+00:00: # 🎬 Session Transcript **generated at 2026-02-21 18:00:43** ## 📋 Session Info | Metadata | Value | |----------|-------| | **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` | | **Trace ID** | `019c82a5b8b8845cd983e3c2bb46d04a` ... (tags: pre_compact, trigger:exit)
@@ -14,5 +15,4 @@ Recent context snapshots (most recent first):
 - 2026-02-21T23:00:38.519007+00:00: # 🎬 Session Transcript **generated at 2026-02-21 17:00:38** ## 📋 Session Info | Metadata | Value | |----------|-------| | **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` | | **Trace ID** | `019c826eb4551cbcdf94d048e564ddab` ... (tags: pre_compact, trigger:exit)
 - 2026-02-21T22:46:17.388583+00:00: ) <details> <summary><b>Input Parameters</b></summary> ```json { "subagent_type": "general-purpose", "description": "Create racecar story and email", "prompt": "You are executing an autonomous mission as the GENERALIST VP agent.\n\n**Obj... (tags: pre_compact, trigger:exit)
 - 2026-02-21T22:30:47.649929+00:00: # 🎬 Session Transcript **generated at 2026-02-21 16:30:47** ## 📋 Session Info | Metadata | Value | |----------|-------| | **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` | | **Trace ID** | `019c82537476395996087a348b91c03b` ... (tags: pre_compact, trigger:exit)
-- 2026-02-21T16:54:33.264944+00:00: nder intent, recipients, subject/body, and HTML vs text; get explicit send approval before using GMAIL_SEND_EMAIL.","[Optional (if recipient address is unknown)] [Prerequisite]: Resolve/confirm recipient email(s) using GMAIL_SEARCH_PEOPL... (tags: pre_compact, trigger:exit)
 

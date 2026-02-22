@@ -395,6 +395,43 @@ class HooksService:
             logger.exception("Error processing hook")
             return Response(json.dumps({"ok": False, "error": str(e)}), status_code=500, media_type="application/json")
 
+    async def dispatch_internal_payload(
+        self,
+        *,
+        subpath: str,
+        payload: dict[str, Any],
+        headers: Optional[dict[str, str]] = None,
+    ) -> tuple[bool, str]:
+        """
+        Dispatch an internal payload through hook mappings without external auth checks.
+
+        Intended for trusted in-process producers (for example CSI ingest path)
+        that need to reuse existing hook transforms and action routing.
+        """
+        if not self.config.enabled:
+            return False, "hooks_disabled"
+
+        effective_headers = {str(k).lower(): str(v) for k, v in (headers or {}).items()}
+        body_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        context = {
+            "payload": payload,
+            "headers": effective_headers,
+            "path": subpath,
+            "query": {},
+            "raw_body": body_bytes,
+            "raw_body_text": body_bytes.decode("utf-8", errors="replace"),
+        }
+
+        for mapping in self.config.mappings:
+            if not self._mapping_matches(mapping, context):
+                continue
+            action = await self._build_action(mapping, context)
+            if action is None:
+                return True, "skipped"
+            asyncio.create_task(self._dispatch_action(action))
+            return True, action.kind
+        return False, "no_match"
+
     def _extract_action_field(self, message: str, key: str) -> str:
         if not message:
             return ""

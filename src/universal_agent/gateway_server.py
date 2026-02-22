@@ -36,7 +36,7 @@ from universal_agent.utils.env_aliases import apply_xai_key_aliases
 apply_xai_key_aliases()
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -103,6 +103,11 @@ from universal_agent.session_policy import (
 )
 from universal_agent.utils.json_utils import extract_json_payload
 from universal_agent.youtube_ingest import ingest_youtube_transcript, normalize_video_target
+from universal_agent.signals_ingest import (
+    extract_valid_events,
+    process_signals_ingest_payload,
+    to_manual_youtube_payload,
+)
 from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
@@ -4324,6 +4329,7 @@ async def root():
             "sessions": "/api/v1/sessions",
             "stream": "/api/v1/sessions/{session_id}/stream",
             "health": "/api/v1/health",
+            "signals_ingest": "/api/v1/signals/ingest",
         },
     }
 
@@ -4354,6 +4360,33 @@ async def hooks_endpoint(request: Request, subpath: str):
     if not _hooks_service:
         raise HTTPException(status_code=503, detail="Hooks service not initialized")
     return await _hooks_service.handle_request(request, subpath)
+
+
+@app.post("/api/v1/signals/ingest")
+async def signals_ingest_endpoint(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_json"})
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "invalid_json"})
+    status_code, body = process_signals_ingest_payload(payload, dict(request.headers))
+    if status_code in {200, 207} and _hooks_service:
+        dispatch_count = 0
+        for event in extract_valid_events(payload):
+            manual_payload = to_manual_youtube_payload(event)
+            if not manual_payload:
+                continue
+            ok, _reason = await _hooks_service.dispatch_internal_payload(
+                subpath="youtube/manual",
+                payload=manual_payload,
+                headers={"x-csi-source": "signals_ingest"},
+            )
+            if ok:
+                dispatch_count += 1
+        if dispatch_count > 0:
+            body["internal_dispatches"] = dispatch_count
+    return JSONResponse(status_code=status_code, content=body)
 
 
 @app.post("/api/v1/youtube/ingest")
