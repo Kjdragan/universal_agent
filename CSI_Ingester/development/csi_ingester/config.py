@@ -37,7 +37,7 @@ class CSIConfig:
 
     @property
     def instance_id(self) -> str:
-        return str(self.raw.get("csi", {}).get("instance_id") or os.getenv("CSI_INSTANCE_ID") or "csi-local")
+        return str(os.getenv("CSI_INSTANCE_ID") or self.raw.get("csi", {}).get("instance_id") or "csi-local")
 
     @property
     def db_path(self) -> Path:
@@ -64,4 +64,3 @@ def load_config(config_path: str | None = None) -> CSIConfig:
     if not isinstance(payload, dict):
         raise ValueError(f"config file must parse to object: {path}")
     return CSIConfig(raw=_expand_tree(payload))
-

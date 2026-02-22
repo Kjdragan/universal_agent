@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from csi_ingester.adapters.youtube_channel_rss import YouTubeChannelRSSAdapter
 
 
@@ -119,3 +122,18 @@ async def test_rss_adapter_persists_seed_state_across_restart(monkeypatch):
     events = await second_adapter.fetch_events()
     assert len(events) == 1
     assert events[0].payload["video_id"] == "v_new"
+
+
+def test_rss_adapter_loads_watchlist_from_json_file(tmp_path: Path):
+    payload = {
+        "channels": [
+            {"channel_id": "UC_ONE"},
+            {"channel_id": "UC_TWO"},
+            {"channel_id": "UC_ONE"},
+        ]
+    }
+    watchlist_file = tmp_path / "channels_watchlist.json"
+    watchlist_file.write_text(json.dumps(payload), encoding="utf-8")
+    adapter = YouTubeChannelRSSAdapter({"watchlist_file": str(watchlist_file), "watchlist": []})
+    resolved = adapter._resolve_watchlist()
+    assert [item["channel_id"] for item in resolved] == ["UC_ONE", "UC_TWO"]

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
+import logging
+from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
 
@@ -12,6 +15,7 @@ from csi_ingester.adapters.base import RawEvent, SourceAdapter
 from csi_ingester.contract import CreatorSignalEvent
 
 ATOM_NS = {"a": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
+logger = logging.getLogger(__name__)
 
 
 class YouTubeChannelRSSAdapter(SourceAdapter):
@@ -25,6 +29,9 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         self._seeded_by_channel: dict[str, bool] = {}
         self._seed_on_first_run = bool(config.get("seed_on_first_run", True))
         self._max_seen_cache = max(50, int(config.get("max_seen_cache_per_channel", 1000)))
+        self._watchlist_file = str(config.get("watchlist_file") or "").strip()
+        self._watchlist_file_mtime: float | None = None
+        self._watchlist_file_channels: list[dict[str, str]] = []
         self._load_state_fn = lambda source_key: None
         self._save_state_fn = lambda source_key, state: None
 
@@ -33,7 +40,7 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         self._save_state_fn = save_state_fn
 
     async def fetch_events(self) -> list[RawEvent]:
-        watchlist = list(self.config.get("watchlist") or [])
+        watchlist = self._resolve_watchlist()
         timeout_seconds = max(5, int(self.config.get("timeout_seconds", 20)))
         events: list[RawEvent] = []
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
@@ -69,6 +76,74 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
                 self._seen_by_channel[channel_id] = set(current_ids[: self._max_seen_cache])
                 self._persist_channel_state(channel_id)
         return events
+
+    def _resolve_watchlist(self) -> list[dict[str, str]]:
+        configured = list(self.config.get("watchlist") or [])
+        merged: list[dict[str, str]] = []
+        seen: set[str] = set()
+
+        def _push_item(item: dict[str, Any]) -> None:
+            channel_id = str(item.get("channel_id") or "").strip()
+            if not channel_id or channel_id in seen:
+                return
+            seen.add(channel_id)
+            merged.append({"channel_id": channel_id})
+
+        for item in configured:
+            if isinstance(item, dict):
+                _push_item(item)
+
+        for item in self._load_watchlist_file_channels():
+            _push_item(item)
+
+        return merged
+
+    def _load_watchlist_file_channels(self) -> list[dict[str, str]]:
+        if not self._watchlist_file:
+            return []
+        path = Path(self._watchlist_file).expanduser()
+        if not path.exists():
+            if self._watchlist_file_channels:
+                logger.warning("RSS watchlist file missing path=%s; keeping previous cached list", path)
+            return self._watchlist_file_channels
+
+        try:
+            mtime = path.stat().st_mtime
+        except OSError as exc:
+            logger.warning("RSS watchlist file stat failed path=%s error=%s", path, exc)
+            return self._watchlist_file_channels
+
+        if self._watchlist_file_mtime is not None and mtime == self._watchlist_file_mtime:
+            return self._watchlist_file_channels
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:  # pragma: no cover - defensive logging
+            logger.warning("RSS watchlist file parse failed path=%s error=%s", path, exc)
+            return self._watchlist_file_channels
+
+        channels: list[dict[str, str]] = []
+        if isinstance(payload, dict):
+            raw_channels = payload.get("channels")
+            if isinstance(raw_channels, list):
+                for row in raw_channels:
+                    if isinstance(row, dict):
+                        channel_id = str(row.get("channel_id") or "").strip()
+                        if channel_id:
+                            channels.append({"channel_id": channel_id})
+        elif isinstance(payload, list):
+            for row in payload:
+                if isinstance(row, dict):
+                    channel_id = str(row.get("channel_id") or "").strip()
+                    if channel_id:
+                        channels.append({"channel_id": channel_id})
+                elif isinstance(row, str) and row.strip():
+                    channels.append({"channel_id": row.strip()})
+
+        self._watchlist_file_mtime = mtime
+        self._watchlist_file_channels = channels
+        logger.info("RSS watchlist loaded path=%s channels=%d", path, len(channels))
+        return self._watchlist_file_channels
 
     async def _fetch_channel_entries(self, client: httpx.AsyncClient, *, channel_id: str) -> list[dict[str, Any]]:
         headers = {"Accept": "application/atom+xml,application/xml,text/xml"}
