@@ -78,6 +78,10 @@ export UA_DASHBOARD_GATEWAY_URL="http://localhost:${UA_GATEWAY_PORT}"
 MODE="full"
 BROWSER_PREF="${UA_START_BROWSER:-chrome}"
 AUTO_OPEN_BROWSER=1
+VP_WORKERS_ENABLED="${UA_START_VP_WORKERS:-1}"
+VP_WORKER_IDS_RAW="${UA_VP_START_IDS:-vp.general.primary,vp.coder.primary}"
+VP_WORKERS_STRICT_STARTUP="${UA_START_VP_WORKERS_STRICT:-1}"
+declare -a VP_WORKER_PIDS=()
 
 print_usage() {
     cat <<'EOF'
@@ -237,11 +241,80 @@ run_gateway_background() {
     fi
 }
 
+run_vp_worker_background() {
+    local vp_id="$1"
+    local safe_vp_id="${vp_id//[^a-zA-Z0-9._-]/_}"
+    local log_file="vp_worker_${safe_vp_id}.log"
+    local repo_root
+    repo_root="$(pwd)"
+    local uv_cache
+    uv_cache="${UV_CACHE_DIR:-${repo_root}/.uv-cache}"
+    local worker_cmd
+    worker_cmd="cd '${repo_root}' && export PYTHONPATH='${repo_root}/src':\${PYTHONPATH:-} && export UV_CACHE_DIR='${uv_cache}' && export PYTHONHASHSEED=\${PYTHONHASHSEED:-1} && mkdir -p \"\$UV_CACHE_DIR\" 2>/dev/null || true; uv run python -m universal_agent.vp.worker_main --vp-id '${vp_id}'"
+    if [ "$(id -u)" -eq 0 ] && id -u appuser >/dev/null 2>&1; then
+        echo "👤 Running VP worker ${vp_id} as appuser (via su)"
+        su -m -s /bin/bash appuser -c "${worker_cmd}" > "${log_file}" 2>&1 &
+    else
+        echo "👤 Running VP worker ${vp_id} as $(id -un)"
+        /bin/bash -lc "${worker_cmd}" > "${log_file}" 2>&1 &
+    fi
+}
+
+start_vp_workers_background() {
+    if [ "${VP_WORKERS_ENABLED}" = "0" ]; then
+        echo "ℹ️  VP worker autostart disabled (UA_START_VP_WORKERS=0)."
+        return 0
+    fi
+
+    local ids_raw="${VP_WORKER_IDS_RAW}"
+    if [ -z "${ids_raw}" ]; then
+        echo "ℹ️  No VP worker IDs configured (UA_VP_START_IDS empty)."
+        return 0
+    fi
+
+    local startup_failures=0
+    IFS=',' read -r -a vp_ids <<< "${ids_raw}"
+    for vp_id in "${vp_ids[@]}"; do
+        vp_id="$(echo "${vp_id}" | xargs)"
+        if [ -z "${vp_id}" ]; then
+            continue
+        fi
+        echo "🧠 Starting VP worker: ${vp_id}"
+        run_vp_worker_background "${vp_id}"
+        local worker_pid=$!
+        VP_WORKER_PIDS+=("${worker_pid}")
+        local safe_vp_id="${vp_id//[^a-zA-Z0-9._-]/_}"
+        local log_file="vp_worker_${safe_vp_id}.log"
+        echo "   PID: ${worker_pid} (Logs: tail -f ${log_file})"
+        sleep 1
+        if ! kill -0 "${worker_pid}" 2>/dev/null; then
+            startup_failures=$((startup_failures + 1))
+            echo "   ❌ VP worker failed to stay alive: ${vp_id}"
+            if [ -f "${log_file}" ]; then
+                echo "   ↳ Recent log output (${log_file}):"
+                tail -n 20 "${log_file}" | sed 's/^/      /'
+            fi
+        else
+            echo "   ✅ VP worker online: ${vp_id}"
+        fi
+    done
+
+    if [ "${startup_failures}" -gt 0 ] && [ "${VP_WORKERS_STRICT_STARTUP}" = "1" ]; then
+        echo "❌ One or more VP workers failed startup (count=${startup_failures})."
+        echo "   Set UA_START_VP_WORKERS_STRICT=0 to continue without failing fast."
+        exit 1
+    fi
+}
+
 cleanup() {
     echo ""
     echo "🛑 Shutting down..."
     [ -n "$GATEWAY_PID" ] && kill $GATEWAY_PID 2>/dev/null
     [ -n "$API_PID" ] && kill $API_PID 2>/dev/null
+    for pid in "${VP_WORKER_PIDS[@]}"; do
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
+    done
+    pkill -f "python -m universal_agent.vp.worker_main --vp-id" 2>/dev/null || true
     [ -n "$BROWSER_WAIT_PID" ] && kill $BROWSER_WAIT_PID 2>/dev/null
     fuser -k "${UA_GATEWAY_PORT}"/tcp 2>/dev/null
     fuser -k 8001/tcp 2>/dev/null
@@ -260,6 +333,7 @@ clean_runtime_state() {
     fuser -k 3000/tcp 2>/dev/null || true
     pkill -f "universal_agent.gateway_server" 2>/dev/null || true
     pkill -f "python -m universal_agent.api.server" 2>/dev/null || true
+    pkill -f "python -m universal_agent.vp.worker_main --vp-id" 2>/dev/null || true
     pkill -f "next dev" 2>/dev/null || true
     pkill -f "npm run dev" 2>/dev/null || true
     sleep 1
@@ -318,7 +392,11 @@ start_full_stack() {
     fuser -k "${UA_GATEWAY_PORT}"/tcp 2>/dev/null
     fuser -k 8001/tcp 2>/dev/null
     fuser -k 3000/tcp 2>/dev/null
+    pkill -f "python -m universal_agent.vp.worker_main --vp-id" 2>/dev/null || true
     sleep 1
+
+    # 0. Start VP workers (background)
+    start_vp_workers_background
 
     # 1. Start Gateway Server (background)
     echo "🚀 Starting Gateway Server (Port ${UA_GATEWAY_PORT})..."
@@ -390,6 +468,11 @@ case "$MODE" in
         echo "║    UA_GATEWAY_URL=http://localhost:${UA_GATEWAY_PORT} ./start_cli_dev.sh   ║"
         echo "╚══════════════════════════════════════════════════════════════╝"
         echo ""
+        echo "🧹 Cleaning up existing gateway/worker processes..."
+        fuser -k "${UA_GATEWAY_PORT}"/tcp 2>/dev/null || true
+        pkill -f "python -m universal_agent.vp.worker_main --vp-id" 2>/dev/null || true
+        sleep 1
+        start_vp_workers_background
         run_gateway_foreground
         ;;
 

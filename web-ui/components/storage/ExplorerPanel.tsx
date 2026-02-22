@@ -18,6 +18,7 @@ type ExplorerPanelProps = {
   initialScope?: VpsScope;
   initialPath?: string;
   initialRootSource?: StorageRootSource;
+  initialPreviewPath?: string;
 };
 
 function parentPath(path: string): string {
@@ -51,6 +52,7 @@ export function ExplorerPanel({
   initialScope = "workspaces",
   initialPath = "",
   initialRootSource = "local",
+  initialPreviewPath = "",
 }: ExplorerPanelProps) {
   const [scope, setScope] = useState<VpsScope>(initialScope);
   const [path, setPath] = useState(initialPath);
@@ -118,28 +120,19 @@ export function ExplorerPanel({
     }
   }, [path, rootSource, scope]);
 
-  useEffect(() => {
-    const run = async () => {
-      await loadEntries();
-    };
-    void run();
-  }, [loadEntries]);
-
-  const openEntry = async (entry: FileEntry) => {
-    if (entry.is_dir) {
-      setPath(entry.path);
-      return;
-    }
-    const isImage = isImageFilePath(entry.name) || isImageFilePath(entry.path);
-    setPreviewTitle(entry.path);
+  const openFileByPath = useCallback(async (filePath: string) => {
+    const normalizedPath = String(filePath || "").trim();
+    if (!normalizedPath) return;
+    const isImage = isImageFilePath(normalizedPath);
+    setPreviewTitle(normalizedPath);
     setPreviewText("");
-    setPreviewIsMarkdown(isMarkdownFilePath(entry.name) || isMarkdownFilePath(entry.path));
+    setPreviewIsMarkdown(isMarkdownFilePath(normalizedPath));
     setPreviewImageUrl("");
     setPreviewLoading(true);
 
     if (isImage) {
       setPreviewImageUrl(
-        `/api/vps/file?scope=${scope}&root_source=${rootSource}&path=${encodeURIComponent(entry.path)}`,
+        `/api/vps/file?scope=${scope}&root_source=${rootSource}&path=${encodeURIComponent(normalizedPath)}`,
       );
       setPreviewLoading(false);
       return;
@@ -147,7 +140,7 @@ export function ExplorerPanel({
 
     try {
       const res = await fetch(
-        `/api/vps/file?scope=${scope}&root_source=${rootSource}&path=${encodeURIComponent(entry.path)}`,
+        `/api/vps/file?scope=${scope}&root_source=${rootSource}&path=${encodeURIComponent(normalizedPath)}`,
       );
       const text = await res.text();
       if (!res.ok) {
@@ -160,6 +153,28 @@ export function ExplorerPanel({
     } finally {
       setPreviewLoading(false);
     }
+  }, [rootSource, scope]);
+
+  useEffect(() => {
+    const run = async () => {
+      await loadEntries();
+    };
+    void run();
+  }, [loadEntries]);
+
+  useEffect(() => {
+    const candidate = String(initialPreviewPath || "").trim();
+    if (!candidate) return;
+    if (parentPath(candidate) !== path) return;
+    void openFileByPath(candidate);
+  }, [initialPreviewPath, openFileByPath, path]);
+
+  const openEntry = async (entry: FileEntry) => {
+    if (entry.is_dir) {
+      setPath(entry.path);
+      return;
+    }
+    await openFileByPath(entry.path);
   };
 
   const toggleSelected = (entryPath: string, checked: boolean) => {
@@ -177,6 +192,13 @@ export function ExplorerPanel({
 
   const clearSelection = () => {
     setSelectedPaths(new Set());
+  };
+
+  const previewSelected = () => {
+    if (!selectedPaths.size) return;
+    const selectedFile = entries.find((entry) => selectedPaths.has(entry.path) && !entry.is_dir);
+    if (!selectedFile) return;
+    void openFileByPath(selectedFile.path);
   };
 
   const deleteSelected = async (forceProtected = false) => {
@@ -312,6 +334,14 @@ export function ExplorerPanel({
           </button>
           <button
             type="button"
+            onClick={previewSelected}
+            disabled={!selectedPaths.size}
+            className="rounded border border-cyan-700 bg-cyan-600/15 px-2 py-1 text-[10px] uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25 disabled:opacity-40"
+          >
+            Preview Selected
+          </button>
+          <button
+            type="button"
             onClick={() => void deleteSelected(false)}
             disabled={!selectedPaths.size || deleting}
             className="rounded border border-red-700 bg-red-600/20 px-2 py-1 text-[10px] uppercase tracking-wider text-red-100 hover:bg-red-600/30 disabled:opacity-40"
@@ -359,6 +389,15 @@ export function ExplorerPanel({
                     <span className="flex-1 truncate font-mono">{entry.name}</span>
                     <span className="text-[11px] text-slate-500">{entry.is_dir ? "" : formatBytes(entry.size)}</span>
                   </button>
+                  {!entry.is_dir && (
+                    <button
+                      type="button"
+                      onClick={() => void openFileByPath(entry.path)}
+                      className="rounded border border-cyan-700/70 bg-cyan-600/15 px-2 py-0.5 text-[10px] uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25"
+                    >
+                      Preview
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

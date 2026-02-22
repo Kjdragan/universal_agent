@@ -9,6 +9,7 @@ import { getWebSocket } from "@/lib/websocket";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
 
 const API_BASE = "/api/dashboard/gateway";
+const VPS_API_BASE = "";
 const SCHED_PUSH_ENABLED = (process.env.NEXT_PUBLIC_UA_SCHED_PUSH_ENABLED ?? "1").trim().toLowerCase() !== "0";
 const RESULT_STATUSES = new Set(["success", "failed", "missed"]);
 
@@ -138,6 +139,12 @@ function safeJsonParse(v: string): { ok: true; data: Record<string, unknown> } |
     if (p && typeof p === "object" && !Array.isArray(p)) return { ok: true, data: p };
     return { ok: false, error: "Config must be a JSON object" };
   } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+function tailTextLines(value: string, maxLines: number): string {
+  const lines = String(value || "").split(/\r?\n/);
+  if (lines.length <= maxLines) return value;
+  return lines.slice(-maxLines).join("\n");
 }
 
 function parseHeartbeatSummary(raw: unknown): { text?: string; skipMarker?: string } {
@@ -284,9 +291,60 @@ export function OpsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const fetchLogs = useCallback(async (sid: string) => {
-    try { const r = await fetch(`${API_BASE}/api/v1/ops/logs/tail?session_id=${encodeURIComponent(sid)}&limit=120`, { headers: buildHeaders() }); const d = await r.json(); setLogTail((d.lines || []).join("\n")); }
+    try {
+      const r = await fetch(
+        `${API_BASE}/api/v1/ops/logs/tail?session_id=${encodeURIComponent(sid)}&limit=120`,
+        { headers: buildHeaders() },
+      );
+      const d = await r.json();
+      const directTail = (d.lines || []).join("\n");
+
+      if (!/^vp_/i.test(String(sid || "")) || directTail.trim()) {
+        setLogTail(directTail);
+        return;
+      }
+
+      // VP lanes often delegate to vp-mission-* child directories; fall back to
+      // the latest mission run.log when the lane root log is empty.
+      const lane = sessions.find((s) => s.session_id === sid);
+      const wsHint = String(lane?.workspace_dir || "").replace(/\\/g, "/");
+      const baseCandidates = new Set<string>([sid]);
+      const marker = "AGENT_RUN_WORKSPACES/";
+      const idx = wsHint.indexOf(marker);
+      if (idx >= 0) {
+        const relative = wsHint.slice(idx + marker.length).replace(/^\/+|\/+$/g, "");
+        if (relative) baseCandidates.add(relative);
+      }
+
+      for (const basePath of baseCandidates) {
+        const listResp = await fetch(
+          `${VPS_API_BASE}/api/vps/files?scope=workspaces&path=${encodeURIComponent(basePath)}`,
+          { headers: buildHeaders() },
+        );
+        if (!listResp.ok) continue;
+        const listData = await listResp.json();
+        const rows = Array.isArray(listData?.files) ? listData.files : [];
+        const missions = rows
+          .filter((row: any) => Boolean(row?.is_dir) && /^vp-mission-/i.test(String(row?.name || "")))
+          .sort((a: any, b: any) => Number(b?.modified || 0) - Number(a?.modified || 0));
+        if (!missions.length) continue;
+
+        const latestMissionPath = `${basePath.replace(/\/+$/g, "")}/${String(missions[0].name)}/run.log`;
+        const runLogResp = await fetch(
+          `${VPS_API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(latestMissionPath)}`,
+          { headers: buildHeaders() },
+        );
+        if (!runLogResp.ok) continue;
+        const missionText = await runLogResp.text();
+        if (!missionText.trim()) continue;
+        setLogTail(tailTextLines(missionText, 120));
+        return;
+      }
+
+      setLogTail("");
+    }
     catch (e) { console.error("Ops logs fetch failed", e); }
-  }, []);
+  }, [sessions]);
 
   const fetchSystemEvents = useCallback(async (sid: string) => {
     try {
@@ -846,7 +904,7 @@ export function SessionsSection({
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button onClick={cancelOutstandingRuns} className="text-[11px] px-2 py-1 rounded border border-orange-500/40 bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-all" disabled={runningCount === 0}>Kill Outstanding Runs ({runningCount})</button>
             <button onClick={fetchSessions} className="text-[11px] px-2 py-1 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" disabled={loading}>{loading ? "..." : "↻ Refresh"}</button>
-            {selected && (
+            {selected && !isVpSelected && (
               <button onClick={() => attachToChat(selected)} className="text-[11px] px-2 py-1 rounded border bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" disabled={attaching}>
                 {attaching ? "Attaching..." : "Open Chat"}
               </button>
@@ -985,7 +1043,7 @@ export function SessionsSection({
                 {expandLogTail ? "Compact" : "Expand"}
               </button>
             </div>
-            <pre className={`text-[10px] font-mono whitespace-pre-wrap overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border ${expandLogTail ? (isFull ? "max-h-[46vh]" : "max-h-80") : "max-h-40"}`}>{logTail || "(empty)"}</pre>
+            <pre className={`text-[10px] font-mono whitespace-pre-wrap overflow-y-auto scrollbar-thin bg-background/50 p-2 rounded border ${expandLogTail ? (isFull ? "max-h-[46vh]" : "max-h-80") : "max-h-40"}`}>{logTail || (isVpSelected ? "(empty lane log; no recent root VP lane output)" : "(empty)")}</pre>
           </div>
           <div className="border rounded bg-background/40 p-2 space-y-2">
             <div className="font-semibold">Delivery Workflow</div>

@@ -930,6 +930,12 @@ export default function DashboardPage() {
                 const resultPath = workspacePathFromResultRef(resultRef);
                 const artifactRelpath = asText(eventPayload.artifact_relpath);
                 const artifactPath = missionArtifactPath(resultRef, artifactRelpath);
+                const workProductsPath = resultPath
+                  ? `${resultPath.replace(/\/+$/, "")}/work_products`
+                  : "";
+                const runLogPath = resultPath
+                  ? `${resultPath.replace(/\/+$/, "")}/run.log`
+                  : "";
                 const receiptRelpath = asText(eventPayload.mission_receipt_relpath);
                 const receiptPath = missionArtifactPath(resultRef, receiptRelpath);
                 const syncReadyRelpath = asText(eventPayload.sync_ready_marker_relpath);
@@ -947,6 +953,8 @@ export default function DashboardPage() {
                     </p>
                     <RefLine label="result_ref" value={resultRef} />
                     <RefLine label="result_path" value={resultPath} storagePath={resultPath} />
+                    <RefLine label="work_products_path" value={workProductsPath} storagePath={workProductsPath} />
+                    <RefLine label="run_log_path" value={runLogPath} storagePath={runLogPath} />
                     <RefLine label="artifact_relpath" value={artifactRelpath} />
                     <RefLine label="artifact_path" value={artifactPath} storagePath={artifactPath} />
                     <RefLine label="mission_receipt_relpath" value={receiptRelpath} />

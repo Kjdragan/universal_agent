@@ -35,7 +35,7 @@ const isLikelyPath = (value: string) => {
 };
 
 const splitTrailingPunctuation = (token: string): [string, string] => {
-  const match = token.match(/^(.*?)([),.;!?]+)$/);
+  const match = token.match(/^(.*?)([),.;!?|]+)$/);
   if (!match) return [token, ""];
   return [match[1], match[2]];
 };
@@ -53,9 +53,36 @@ const resolveArtifactRelativePath = (path: string): string | null => {
   return null;
 };
 
+const resolveWorkspaceRelativePath = (path: string): string | null => {
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.startsWith("AGENT_RUN_WORKSPACES/")) {
+    return normalized.slice("AGENT_RUN_WORKSPACES/".length);
+  }
+  const marker = "/AGENT_RUN_WORKSPACES/";
+  const idx = normalized.indexOf(marker);
+  if (idx >= 0) {
+    return normalized.slice(idx + marker.length);
+  }
+  if (normalized.startsWith("workspace://")) {
+    const raw = normalized.slice("workspace://".length);
+    const withLeadingSlash = raw.startsWith("/") ? raw : `/${raw}`;
+    const markerIdx = withLeadingSlash.indexOf(marker);
+    if (markerIdx >= 0) {
+      return withLeadingSlash.slice(markerIdx + marker.length);
+    }
+  }
+  return null;
+};
+
 export function PathLink({ path, className }: { path: string; className?: string }) {
   const setViewingFile = useAgentStore((s) => s.setViewingFile);
   const currentSession = useAgentStore((s) => s.currentSession);
+
+  const hasLikelyFileExtension = (value: string): boolean => {
+    const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+    const lastSegment = normalized.split("/").pop() || "";
+    return /\.[A-Za-z0-9]{1,8}$/.test(lastSegment);
+  };
 
   return (
     <button
@@ -67,6 +94,22 @@ export function PathLink({ path, className }: { path: string; className?: string
         const artifactRelativePath = resolveArtifactRelativePath(path);
         if (artifactRelativePath) {
           setViewingFile({ name, path: artifactRelativePath, type: "artifact" });
+          return;
+        }
+
+        const workspaceRelativePath = resolveWorkspaceRelativePath(path);
+        if (workspaceRelativePath) {
+          if (!hasLikelyFileExtension(workspaceRelativePath)) {
+            const params = new URLSearchParams({
+              tab: "explorer",
+              scope: "workspaces",
+              path: workspaceRelativePath,
+            });
+            const href = `/storage?${params.toString()}`;
+            window.open(href, "_blank", "noopener,noreferrer");
+            return;
+          }
+          setViewingFile({ name, path: workspaceRelativePath, type: "vps_workspace" });
           return;
         }
 

@@ -6866,7 +6866,18 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 logger.warning(f"⚠️ Failed to save checkpoint: {ckpt_err}")
 
                             if not bool(goal_satisfaction.get("passed")):
-                                goal_message = "Mission requirements were not satisfied; required tool checkpoints are missing."
+                                missing_items = goal_satisfaction.get("missing")
+                                goal_message = "Mission requirements were not satisfied."
+                                if isinstance(missing_items, list) and missing_items:
+                                    first_missing = missing_items[0] if isinstance(missing_items[0], dict) else {}
+                                    missing_message = str(first_missing.get("message") or "").strip()
+                                    missing_requirement = str(first_missing.get("requirement") or "").strip()
+                                    if missing_message:
+                                        goal_message = f"{goal_message} {missing_message}"
+                                    elif missing_requirement:
+                                        goal_message = (
+                                            f"{goal_message} Missing requirement: {missing_requirement}."
+                                        )
                                 _add_notification(
                                     kind="assistance_needed",
                                     title="Mission Guardrail Blocked Completion",

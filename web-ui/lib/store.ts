@@ -174,9 +174,40 @@ function asTrimmedText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function asTrimmedTextArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => asTrimmedText(item))
+    .filter(Boolean);
+}
+
 function workspacePathFromResultRef(resultRef: string): string {
   if (!resultRef.startsWith("workspace://")) return "";
   return resultRef.replace("workspace://", "").trim();
+}
+
+function classifyArtifactPaths(paths: string[]): { primary: string[]; supporting: string[] } {
+  const unique = Array.from(new Set(paths.filter(Boolean)));
+  const supportingPatterns = [
+    /\/run\.log$/i,
+    /\/trace\.json$/i,
+    /\/trace_catalog\.(md|json)$/i,
+    /\/transcript\.md$/i,
+    /\/capabilities\.md$/i,
+    /\/work_products\/logfire-eval\//i,
+    /\/mission_receipt\.json$/i,
+    /\/sync_ready\.json$/i,
+  ];
+  const supporting: string[] = [];
+  const primary: string[] = [];
+  for (const path of unique) {
+    if (supportingPatterns.some((pattern) => pattern.test(path))) {
+      supporting.push(path);
+    } else {
+      primary.push(path);
+    }
+  }
+  return { primary, supporting };
 }
 
 function vpMissionEventLevel(eventType: string): "INFO" | "WARN" | "ERROR" {
@@ -206,11 +237,19 @@ function vpMissionEventActivityLog(
   const artifactRelpath = asTrimmedText(nestedPayload.artifact_relpath);
   const receiptRelpath = asTrimmedText(nestedPayload.mission_receipt_relpath);
   const syncMarkerRelpath = asTrimmedText(nestedPayload.sync_ready_marker_relpath);
+  const artifactRelpaths = asTrimmedTextArray(nestedPayload.artifact_relpaths);
   const resultPath = workspacePathFromResultRef(resultRef);
   const artifactPath =
     resultPath && artifactRelpath
       ? `${resultPath.replace(/\/+$/, "")}/${artifactRelpath.replace(/^\/+/, "")}`
       : "";
+  const artifactPaths = resultPath
+    ? Array.from(
+        new Set(
+          artifactRelpaths.map((relpath) => `${resultPath.replace(/\/+$/, "")}/${relpath.replace(/^\/+/, "")}`),
+        ),
+      )
+    : [];
   const receiptPath =
     resultPath && receiptRelpath
       ? `${resultPath.replace(/\/+$/, "")}/${receiptRelpath.replace(/^\/+/, "")}`
@@ -228,6 +267,7 @@ function vpMissionEventActivityLog(
     resultRef ? `result_ref=${resultRef}` : "",
     resultPath ? `result_path=${resultPath}` : "",
     artifactPath ? `artifact_path=${artifactPath}` : "",
+    artifactPaths.length ? `artifact_paths=${artifactPaths.join(",")}` : "",
     receiptPath ? `mission_receipt_path=${receiptPath}` : "",
     syncMarkerPath ? `sync_ready_marker_path=${syncMarkerPath}` : "",
     objective ? `objective=${objective}` : "",
@@ -246,6 +286,7 @@ function vpMissionEventActivityLog(
       result_ref: resultRef || undefined,
       result_path: resultPath || undefined,
       artifact_path: artifactPath || undefined,
+      artifact_paths: artifactPaths.length ? artifactPaths : undefined,
       mission_receipt_path: receiptPath || undefined,
       sync_ready_marker_path: syncMarkerPath || undefined,
       payload: nestedPayload,
@@ -269,17 +310,51 @@ function vpMissionTerminalChatNotice(eventPayload: VpMissionEventPayload): strin
   const missionId = asTrimmedText(eventPayload.mission_id) || "unknown_mission";
   const status = eventType.replace(/^vp\.mission\./, "").toUpperCase();
   const resultRef = asTrimmedText(eventPayload.result_ref);
+  const resultPath = workspacePathFromResultRef(resultRef);
   const objective = asTrimmedText(eventPayload.objective);
   const nestedPayload = asObjectRecord(eventPayload.event_payload);
   const artifactRelpath = asTrimmedText(nestedPayload.artifact_relpath);
+  const artifactRelpaths = asTrimmedTextArray(nestedPayload.artifact_relpaths);
   const receiptRelpath = asTrimmedText(nestedPayload.mission_receipt_relpath);
+  const syncMarkerRelpath = asTrimmedText(nestedPayload.sync_ready_marker_relpath);
+  const outcomeMessage =
+    asTrimmedText(nestedPayload.message) || asTrimmedText(nestedPayload.final_text);
+  const artifactPath =
+    resultPath && artifactRelpath
+      ? `${resultPath.replace(/\/+$/, "")}/${artifactRelpath.replace(/^\/+/, "")}`
+      : "";
+  const artifactPaths = resultPath
+    ? Array.from(
+        new Set(
+          artifactRelpaths.map((relpath) => `${resultPath.replace(/\/+$/, "")}/${relpath.replace(/^\/+/, "")}`),
+        ),
+      )
+    : [];
+  const listedArtifactPaths = artifactPath
+    ? artifactPaths.filter((candidate) => candidate !== artifactPath)
+    : artifactPaths;
+  const allArtifactPaths = artifactPath ? [artifactPath, ...listedArtifactPaths] : listedArtifactPaths;
+  const { primary: primaryArtifactPaths, supporting: supportingArtifactPaths } =
+    classifyArtifactPaths(allArtifactPaths);
+  const receiptPath =
+    resultPath && receiptRelpath
+      ? `${resultPath.replace(/\/+$/, "")}/${receiptRelpath.replace(/^\/+/, "")}`
+      : "";
+  const syncMarkerPath =
+    resultPath && syncMarkerRelpath
+      ? `${resultPath.replace(/\/+$/, "")}/${syncMarkerRelpath.replace(/^\/+/, "")}`
+      : "";
 
   const lines = [
-    `VP mission ${status}: ${missionId}`,
+    `VP task update (${status}): ${missionId}`,
     objective ? `Objective: ${objective}` : "",
+    outcomeMessage ? `VP summary: ${outcomeMessage}` : "",
     resultRef ? `Result: ${resultRef}` : "",
-    artifactRelpath ? `Artifact: ${artifactRelpath}` : "",
-    receiptRelpath ? `Receipt: ${receiptRelpath}` : "",
+    resultPath ? `Result workspace: ${resultPath}` : "",
+    ...primaryArtifactPaths.map((path) => `Primary work product: ${path}`),
+    ...supportingArtifactPaths.map((path) => `Supporting artifact: ${path}`),
+    receiptPath ? `Receipt: ${receiptPath}` : "",
+    syncMarkerPath ? `Sync Marker: ${syncMarkerPath}` : "",
   ].filter(Boolean);
   return lines.length > 0 ? lines.join("\n") : null;
 }
@@ -324,7 +399,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   currentAuthor: undefined,
   currentOffset: undefined,
   appendToStream: (text, author, offset) => set((state) => {
-    const incomingAuthor = author || "Primary Agent";
+    const incomingAuthor = author || "Simone";
     const currentAuthor = state.currentAuthor || incomingAuthor;
 
     // If the author changed and we have buffered text, finalize the old stream first
@@ -728,11 +803,11 @@ export function processWebSocketEvent(event: WebSocketEvent): void {
         const terminalNotice = vpMissionTerminalChatNotice(payload as VpMissionEventPayload);
         if (terminalNotice) {
           store.addMessage({
-            role: "system",
+            role: "assistant",
             content: terminalNotice,
             time_offset: ((data.time_offset as number) ?? (event.time_offset as number) ?? 0),
             is_complete: true,
-            author: "VP Orchestrator",
+            author: "Simone",
           });
         }
       }

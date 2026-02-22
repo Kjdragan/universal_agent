@@ -140,6 +140,20 @@ function vpEventLevel(eventType: string): string {
   return "INFO";
 }
 
+function workspaceRelativePathFromAbsolute(pathValue: string): string {
+  const normalized = String(pathValue || "").replace(/\\/g, "/");
+  if (!normalized) return "";
+  const marker = "/AGENT_RUN_WORKSPACES/";
+  if (normalized.startsWith("AGENT_RUN_WORKSPACES/")) {
+    return normalized.slice("AGENT_RUN_WORKSPACES/".length);
+  }
+  const idx = normalized.indexOf(marker);
+  if (idx >= 0) {
+    return normalized.slice(idx + marker.length);
+  }
+  return "";
+}
+
 function parseIsoMillis(value: string): number {
   const parsed = Date.parse(String(value || ""));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -857,8 +871,14 @@ function getAgentStyle(author: string) {
   if (a.includes("subagent")) {
     return { icon: "⚙️", labelColor: "text-emerald-400", iconBg: "bg-emerald-500/10", iconBorder: "border-emerald-500/20", borderAccent: "border-l-emerald-500/40" };
   }
-  // Primary Agent (default)
+  // Simone (default lane)
   return { icon: "🤖", labelColor: "text-blue-400", iconBg: "bg-blue-500/10", iconBorder: "border-blue-500/20", borderAccent: "border-l-blue-500/40" };
+}
+
+function displayAuthorName(author: string): string {
+  const normalized = String(author || "").trim().toLowerCase();
+  if (normalized === "primary agent") return "Simone";
+  return author;
 }
 
 function ChatMessage({ message }: { message: any }) {
@@ -918,7 +938,8 @@ function ChatMessage({ message }: { message: any }) {
   }
 
   // Assistant: single consolidated bubble per message
-  const author = message.author || "Primary Agent";
+  const author = message.author || "Simone";
+  const authorDisplay = displayAuthorName(author);
   const style = getAgentStyle(author);
 
   return (
@@ -934,7 +955,7 @@ function ChatMessage({ message }: { message: any }) {
           <div className="flex flex-col flex-1">
             <div className="flex items-center justify-between mb-1">
               <div className={`text-[10px] uppercase tracking-wider font-medium ${style.labelColor}`}>
-                {author}
+                {authorDisplay}
               </div>
               <div className="text-[9px] text-muted-foreground opacity-50 ml-4">
                 {formattedDelta}
@@ -978,6 +999,7 @@ function ChatInterface() {
   const inputRef = React.useRef<HTMLInputElement>(null);
   const handleSendRef = React.useRef<(textOverride?: string) => Promise<void>>(async () => {});
   const hydratedSessionIdsRef = React.useRef<Set<string>>(new Set());
+  const lastSessionIdRef = React.useRef<string>("");
   const effectiveSessionId = (currentSession?.session_id || requestedSessionIdFromUrl || "").trim();
   const isVpObserverSession = /^vp_/i.test(effectiveSessionId);
 
@@ -1099,15 +1121,39 @@ function ChatInterface() {
   }, [messages, currentStreamingMessage]);
 
   useEffect(() => {
+    if (!effectiveSessionId) return;
+    if (!lastSessionIdRef.current) {
+      lastSessionIdRef.current = effectiveSessionId;
+      return;
+    }
+    if (lastSessionIdRef.current === effectiveSessionId) return;
+
+    const store = useAgentStore.getState();
+    store.clearMessages();
+    store.clearToolCalls();
+    store.clearLogs();
+    store.clearWorkProducts();
+    store.setCurrentThinking("");
+    store.finishStream();
+    setHistoryHydrationNotice(null);
+    hydratedSessionIdsRef.current.clear();
+    lastSessionIdRef.current = effectiveSessionId;
+  }, [effectiveSessionId]);
+
+  useEffect(() => {
     const sessionId = effectiveSessionId;
     if (!sessionId) return;
+    const vpWorkspaceRel = workspaceRelativePathFromAbsolute(currentSession?.workspace || "");
+    const hydrationKey = isVpObserverSession
+      ? `${sessionId}::${vpWorkspaceRel || "no_workspace"}`
+      : sessionId;
     setHistoryHydrationNotice(null);
-    if (hydratedSessionIdsRef.current.has(sessionId)) return;
+    if (hydratedSessionIdsRef.current.has(hydrationKey)) return;
 
     // If stream events have already populated the timeline, avoid duplicate hydration
     // for normal sessions. VP observer sessions still need VP event/log hydration.
     if (useAgentStore.getState().messages.length > 0 && !isVpObserverSession) {
-      hydratedSessionIdsRef.current.add(sessionId);
+      hydratedSessionIdsRef.current.add(hydrationKey);
       return;
     }
 
@@ -1118,7 +1164,10 @@ function ChatInterface() {
         let hydratedMessageCount = 0;
         let hydratedLogCount = 0;
 
-        const response = await fetch(`${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`);
+        const runLogUrl = isVpObserverSession && vpWorkspaceRel
+          ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/run.log`)}`
+          : `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`;
+        const response = await fetch(runLogUrl);
         if (response.ok) {
           const raw = await response.text();
           const history = extractChatHistoryFromRunLog(raw).slice(-80);
@@ -1178,14 +1227,14 @@ function ChatInterface() {
       } catch (error) {
         console.warn("Failed to rehydrate session history", error);
       } finally {
-        hydratedSessionIdsRef.current.add(sessionId);
+        hydratedSessionIdsRef.current.add(hydrationKey);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [effectiveSessionId, isVpObserverSession]);
+  }, [effectiveSessionId, isVpObserverSession, currentSession?.workspace]);
 
   return (
     <div className="flex flex-col h-full">
@@ -1250,7 +1299,8 @@ function ChatInterface() {
             {currentThinking && <ThinkingBubble content={currentThinking} />}
 
             {currentStreamingMessage && (() => {
-              const author = currentAuthor || "Primary Agent";
+              const author = currentAuthor || "Simone";
+              const authorDisplay = displayAuthorName(author);
               const style = getAgentStyle(author);
               // Re-trigger the scanline animation whenever streaming text grows.
               // This is intentionally keyed on length to avoid adding any per-character latency.
@@ -1263,7 +1313,7 @@ function ChatInterface() {
                     </div>
                     <div className="flex flex-col flex-1">
                       <div className={`text-[10px] uppercase tracking-wider font-medium mb-1 ${style.labelColor}`}>
-                        {author}
+                        {authorDisplay}
                       </div>
                       <div className={`relative overflow-hidden bg-card border border-border/50 border-l-2 ${style.borderAccent} shadow-md rounded-xl p-4 text-sm leading-relaxed`}>
                         <span key={scanlineKey} className="ua-scanline-pulse" aria-hidden="true" />
@@ -1839,7 +1889,7 @@ export default function HomePage() {
                 <button
                   type="button"
                   onClick={() => setChatCollapsed(true)}
-                  className="hidden md:inline-flex absolute top-2 right-2 z-20 h-7 w-7 items-center justify-center rounded border border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-200"
+                  className="hidden md:inline-flex absolute top-2 right-14 z-20 h-7 w-7 items-center justify-center rounded border border-slate-700 bg-slate-900/70 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-200"
                   title="Collapse Chat Panel"
                 >
                   ◀

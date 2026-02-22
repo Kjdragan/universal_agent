@@ -281,6 +281,28 @@ def _write_json_file(path: Path, payload: dict[str, Any]) -> bool:
         return False
 
 
+def _collect_user_artifact_relpaths(
+    mission_workspace: Path,
+    *,
+    ignore_names: set[str],
+    max_items: int = 8,
+) -> list[str]:
+    if not mission_workspace.exists() or max_items <= 0:
+        return []
+    relpaths: list[str] = []
+    for file_path in sorted(path for path in mission_workspace.rglob("*") if path.is_file()):
+        relpath = str(file_path.relative_to(mission_workspace))
+        normalized_name = file_path.name.strip().lower()
+        if normalized_name in ignore_names:
+            continue
+        if relpath.startswith("."):
+            continue
+        relpaths.append(relpath)
+        if len(relpaths) >= max_items:
+            break
+    return relpaths
+
+
 def _write_vp_finalize_artifacts(
     *,
     mission_id: str,
@@ -315,6 +337,9 @@ def _write_vp_finalize_artifacts(
             mission_payload = {}
 
     artifact_refs: dict[str, Any] = {}
+    receipt_filename = "mission_receipt.json"
+    marker_name = (os.getenv("UA_VP_SYNC_READY_MARKER_FILENAME") or "").strip() or "sync_ready.json"
+
     if _env_true("UA_VP_MISSION_RECEIPT_ENABLED", True):
         receipt_payload = {
             "version": 1,
@@ -340,13 +365,12 @@ def _write_vp_finalize_artifacts(
                 "payload": dict(getattr(outcome, "payload", {}) or {}),
             },
         }
-        receipt_path = mission_workspace / "mission_receipt.json"
+        receipt_path = mission_workspace / receipt_filename
         if _write_json_file(receipt_path, receipt_payload):
-            artifact_refs["mission_receipt_relpath"] = "mission_receipt.json"
+            artifact_refs["mission_receipt_relpath"] = receipt_filename
             artifact_refs["mission_receipt_path"] = str(receipt_path)
 
     if _env_true("UA_VP_SYNC_READY_MARKER_ENABLED", True):
-        marker_name = (os.getenv("UA_VP_SYNC_READY_MARKER_FILENAME") or "").strip() or "sync_ready.json"
         marker_payload = {
             "version": 1,
             "mission_id": mission_id,
@@ -365,5 +389,13 @@ def _write_vp_finalize_artifacts(
         if _write_json_file(marker_path, marker_payload):
             artifact_refs["sync_ready_marker_relpath"] = marker_name
             artifact_refs["sync_ready_marker_path"] = str(marker_path)
+
+    user_artifact_relpaths = _collect_user_artifact_relpaths(
+        mission_workspace,
+        ignore_names={receipt_filename.lower(), marker_name.lower()},
+    )
+    if user_artifact_relpaths:
+        artifact_refs["artifact_relpath"] = user_artifact_relpaths[0]
+        artifact_refs["artifact_relpaths"] = user_artifact_relpaths
 
     return artifact_refs

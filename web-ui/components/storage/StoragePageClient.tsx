@@ -59,6 +59,14 @@ function normalizeRootSource(value: string | null, fallback: RootSourceFilter): 
   return fallback;
 }
 
+function parentDirectory(path: string): string {
+  const normalized = String(path || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!normalized) return "";
+  const parts = normalized.split("/").filter(Boolean);
+  parts.pop();
+  return parts.join("/");
+}
+
 export function StoragePageClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -211,16 +219,57 @@ export function StoragePageClient() {
   };
 
   const openExplorer = (scope: ExplorerScope, path: string) => {
-    updateQuery({ tab: "explorer", scope, path: path || null, root_source: rootSource });
+    updateQuery({ tab: "explorer", scope, path: path || null, root_source: rootSource, preview: null });
   };
 
-  const openVpsFile = (scope: ExplorerScope, path: string) => {
-    if (!path) return;
-    window.open(
-      `/api/vps/file?scope=${scope}&root_source=${rootSource}&path=${encodeURIComponent(path)}`,
-      "_blank",
-      "noopener,noreferrer",
-    );
+  const openVpsFile = async (scope: ExplorerScope, path: string) => {
+    const normalizedPath = String(path || "").trim().replace(/\\/g, "/");
+    if (!normalizedPath) return;
+
+    // VP lane roots often have an empty lane-level run.log while child
+    // vp-mission-*/run.log contains the actual transcript.
+    if (scope === "workspaces" && /\/run\.log$/i.test(normalizedPath) && /^vp_/i.test(normalizedPath)) {
+      try {
+        const laneRunResp = await fetch(
+          `/api/vps/file?scope=workspaces&root_source=${rootSource}&path=${encodeURIComponent(normalizedPath)}`,
+          { cache: "no-store" },
+        );
+        const laneRunText = laneRunResp.ok ? await laneRunResp.text() : "";
+        if (!laneRunText.trim()) {
+          const lanePath = normalizedPath.replace(/\/run\.log$/i, "");
+          const laneEntriesResp = await fetch(
+            `/api/vps/files?scope=workspaces&root_source=${rootSource}&path=${encodeURIComponent(lanePath)}`,
+            { cache: "no-store" },
+          );
+          const laneEntriesData = laneEntriesResp.ok ? await laneEntriesResp.json() : {};
+          const laneEntries = Array.isArray(laneEntriesData?.files) ? laneEntriesData.files : [];
+          const missions = laneEntries
+            .filter((entry: any) => Boolean(entry?.is_dir) && /^vp-mission-/i.test(String(entry?.name || "")))
+            .sort((a: any, b: any) => Number(b?.modified || 0) - Number(a?.modified || 0));
+          if (missions.length > 0) {
+            const candidate = `${lanePath}/${String(missions[0].name)}/run.log`;
+            updateQuery({
+              tab: "explorer",
+              scope: "workspaces",
+              path: candidate.replace(/\/run\.log$/i, ""),
+              root_source: rootSource,
+              preview: candidate,
+            });
+            return;
+          }
+        }
+      } catch {
+        // Fall through to direct explorer preview on any lookup issue.
+      }
+    }
+
+    updateQuery({
+      tab: "explorer",
+      scope,
+      path: parentDirectory(normalizedPath) || null,
+      root_source: rootSource,
+      preview: normalizedPath,
+    });
   };
 
   return (
@@ -316,7 +365,7 @@ export function StoragePageClient() {
               loading={loadingSessions}
               rootSource={rootSource}
               onOpenRoot={(path) => openExplorer("workspaces", path)}
-              onOpenRunLog={(path) => openVpsFile("workspaces", path)}
+              onOpenRunLog={(path) => { void openVpsFile("workspaces", path); }}
             />
           </section>
         )}
@@ -327,14 +376,19 @@ export function StoragePageClient() {
               artifacts={artifacts}
               loading={loadingArtifacts}
               onOpenPath={(path) => openExplorer("artifacts", path)}
-              onOpenFile={(path) => openVpsFile("artifacts", path)}
+              onOpenFile={(path) => { void openVpsFile("artifacts", path); }}
             />
           </section>
         )}
 
         {activeTab === "explorer" && (
           <section className="min-h-0 flex-1">
-            <ExplorerPanel initialScope={explorerScope} initialPath={explorerPath} initialRootSource={rootSource} />
+            <ExplorerPanel
+              initialScope={explorerScope}
+              initialPath={explorerPath}
+              initialRootSource={rootSource}
+              initialPreviewPath={searchParams.get("preview") || ""}
+            />
           </section>
         )}
       </div>
