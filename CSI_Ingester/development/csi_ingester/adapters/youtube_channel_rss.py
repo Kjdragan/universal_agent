@@ -46,6 +46,7 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             for item in watchlist:
                 channel_id = str(item.get("channel_id") or "").strip()
+                channel_name = str(item.get("channel_name") or "").strip()
                 if not channel_id:
                     continue
                 self._hydrate_channel_state(channel_id)
@@ -53,6 +54,9 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
                 if not entries:
                     self._persist_channel_state(channel_id)
                     continue
+                if channel_name:
+                    for entry in entries:
+                        entry.setdefault("channel_name", channel_name)
                 seen = self._seen_by_channel.setdefault(channel_id, set())
                 current_ids = [entry["video_id"] for entry in entries if entry.get("video_id")]
                 seeded = self._seeded_by_channel.get(channel_id, False)
@@ -87,7 +91,11 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
             if not channel_id or channel_id in seen:
                 return
             seen.add(channel_id)
-            merged.append({"channel_id": channel_id})
+            channel_name = str(item.get("channel_name") or "").strip()
+            row = {"channel_id": channel_id}
+            if channel_name:
+                row["channel_name"] = channel_name
+            merged.append(row)
 
         for item in configured:
             if isinstance(item, dict):
@@ -130,13 +138,21 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
                     if isinstance(row, dict):
                         channel_id = str(row.get("channel_id") or "").strip()
                         if channel_id:
-                            channels.append({"channel_id": channel_id})
+                            channel_name = str(row.get("channel_name") or "").strip()
+                            item = {"channel_id": channel_id}
+                            if channel_name:
+                                item["channel_name"] = channel_name
+                            channels.append(item)
         elif isinstance(payload, list):
             for row in payload:
                 if isinstance(row, dict):
                     channel_id = str(row.get("channel_id") or "").strip()
                     if channel_id:
-                        channels.append({"channel_id": channel_id})
+                        channel_name = str(row.get("channel_name") or "").strip()
+                        item = {"channel_id": channel_id}
+                        if channel_name:
+                            item["channel_name"] = channel_name
+                        channels.append(item)
                 elif isinstance(row, str) and row.strip():
                     channels.append({"channel_id": row.strip()})
 
@@ -195,6 +211,7 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
             "platform": "youtube",
             "video_id": str(payload.get("video_id") or ""),
             "channel_id": str(payload.get("channel_id") or ""),
+            "channel_name": str(payload.get("channel_name") or ""),
             "url": str(payload.get("url") or ""),
             "title": str(payload.get("title") or ""),
             "published_at": str(payload.get("published_at") or now),

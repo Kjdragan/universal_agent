@@ -127,7 +127,7 @@ async def test_rss_adapter_persists_seed_state_across_restart(monkeypatch):
 def test_rss_adapter_loads_watchlist_from_json_file(tmp_path: Path):
     payload = {
         "channels": [
-            {"channel_id": "UC_ONE"},
+            {"channel_id": "UC_ONE", "channel_name": "Creator One"},
             {"channel_id": "UC_TWO"},
             {"channel_id": "UC_ONE"},
         ]
@@ -137,3 +137,4 @@ def test_rss_adapter_loads_watchlist_from_json_file(tmp_path: Path):
     adapter = YouTubeChannelRSSAdapter({"watchlist_file": str(watchlist_file), "watchlist": []})
     resolved = adapter._resolve_watchlist()
     assert [item["channel_id"] for item in resolved] == ["UC_ONE", "UC_TWO"]
+    assert resolved[0]["channel_name"] == "Creator One"
