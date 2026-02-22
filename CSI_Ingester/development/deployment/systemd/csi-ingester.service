@@ -1,0 +1,15 @@
+[Unit]
+Description=CSI Ingester Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
+ExecStart=/usr/bin/env uv run uvicorn csi_ingester.app:app --host 127.0.0.1 --port 8091
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+

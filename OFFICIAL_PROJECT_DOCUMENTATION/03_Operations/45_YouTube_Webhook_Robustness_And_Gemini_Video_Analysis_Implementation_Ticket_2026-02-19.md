@@ -1,5 +1,20 @@
 # 45. YouTube Webhook Robustness And Gemini Video Analysis Implementation Ticket (2026-02-19)
 
+## Related Documentation
+
+**For Composio YouTube trigger setup and configuration:**
+→ **Document 75**: Composio YouTube Trigger Complete Implementation Guide
+
+Document 75 covers:
+- Composio trigger creation
+- Webhook verification
+- Playlist ID requirements
+- Troubleshooting common issues
+
+This document (45) covers transcript ingestion improvements and anti-blocking strategies.
+
+---
+
 ## 1. Objective
 
 Harden the YouTube webhook pipeline for production reliability and shift to a transcript-first + Gemini multimodal video-analysis workflow.

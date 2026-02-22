@@ -398,5 +398,20 @@
     "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 18:17:41**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c82b4f597294e50661f20d53c98d3` |\n| **Logfire Trace** | [View Full Trace](",
     "file_path": "memory/sessions/3567addd-d4b4-4302-b22b-40eab9fd5bd1_2026-02-22.md",
     "content_hash": "26e9df8292e672157e38e7fce6d95b91e4824a86c1c55ac34e02f877ad0793f7"
+  },
+  {
+    "entry_id": "bec14efc-d52f-4ffc-9a15-52c37cf0b2cf",
+    "timestamp": "2026-02-22T04:25:21.732182+00:00",
+    "source": "session_index",
+    "session_id": "4c8dd3d1-c25b-40c0-bbb0-c9dcf99a79f8",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:4c8dd3d1-c25b-40c0-bbb0-c9dcf99a79f8"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 22:25:21**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c839778a6137bd3dac3fa690f2625` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/4c8dd3d1-c25b-40c0-bbb0-c9dcf99a79f8_2026-02-22.md",
+    "content_hash": "18dcd8b5d3df8da59de616c99cdc8a8af4de8d7418e8f87d774460f02ad6e464"
   }
 ]

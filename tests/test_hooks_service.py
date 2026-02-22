@@ -268,6 +268,84 @@ async def test_header_match_failure(hooks_service):
     response = await hooks_service.handle_request(request, "test")
     assert response.status_code == 404
 
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_payload_agent_dispatch(hooks_service):
+    hooks_service.config.enabled = True
+    hooks_service.config.mappings = [
+        HookMappingConfig(
+            id="internal-agent",
+            match=HookMatchConfig(path="youtube/manual"),
+            action="agent",
+            message_template="video={{ payload.video_url }}",
+            name="InternalHook",
+            session_key="internal-session",
+        )
+    ]
+    hooks_service._dispatch_action = AsyncMock(return_value=None)
+
+    ok, reason = await hooks_service.dispatch_internal_payload(
+        subpath="youtube/manual",
+        payload={"video_url": "https://www.youtube.com/watch?v=abc123xyz00"},
+        headers={"x-internal": "1"},
+    )
+    assert ok is True
+    assert reason == "agent"
+    await asyncio.sleep(0.05)
+    hooks_service._dispatch_action.assert_called_once()
+    action = hooks_service._dispatch_action.call_args[0][0]
+    assert action.kind == "agent"
+    assert "video=https://www.youtube.com/watch?v=abc123xyz00" in (action.message or "")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_payload_skipped_when_transform_returns_none(hooks_service):
+    hooks_service.config.enabled = True
+    hooks_service.config.mappings = [
+        HookMappingConfig(
+            id="internal-skip",
+            match=HookMatchConfig(path="youtube/manual"),
+            action="agent",
+            message_template="ignored",
+            name="InternalSkip",
+            session_key="internal-skip-session",
+        )
+    ]
+    hooks_service._build_action = AsyncMock(return_value=None)
+    hooks_service._dispatch_action = AsyncMock(return_value=None)
+
+    ok, reason = await hooks_service.dispatch_internal_payload(
+        subpath="youtube/manual",
+        payload={"video_url": "https://www.youtube.com/watch?v=abc"},
+    )
+    assert ok is True
+    assert reason == "skipped"
+    hooks_service._dispatch_action.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_internal_payload_no_match(hooks_service):
+    hooks_service.config.enabled = True
+    hooks_service.config.mappings = [
+        HookMappingConfig(
+            id="internal-unmatched",
+            match=HookMatchConfig(path="youtube/manual"),
+            action="agent",
+            message_template="x",
+            name="InternalNoMatch",
+            session_key="internal-no-match",
+        )
+    ]
+    hooks_service._dispatch_action = AsyncMock(return_value=None)
+
+    ok, reason = await hooks_service.dispatch_internal_payload(
+        subpath="youtube/other",
+        payload={"video_url": "https://www.youtube.com/watch?v=abc"},
+    )
+    assert ok is False
+    assert reason == "no_match"
+    hooks_service._dispatch_action.assert_not_called()
+
 @pytest.mark.asyncio
 async def test_template_rendering(hooks_service):
     context = {

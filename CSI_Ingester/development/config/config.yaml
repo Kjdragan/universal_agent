@@ -1,0 +1,20 @@
+csi:
+  instance_id: "csi-local-01"
+  environment: "development"
+
+storage:
+  db_path: "var/csi.db"
+
+sources:
+  youtube_playlist:
+    enabled: true
+    poll_interval_seconds: 30
+    playlists:
+      - id: "${CSI_YT_PLAYLIST_ID}"
+  youtube_channel_rss:
+    enabled: true
+    poll_interval_seconds: 300
+    watchlist: []
+
+delivery:
+  ua_endpoint: "${CSI_UA_ENDPOINT}"
