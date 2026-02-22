@@ -5,9 +5,11 @@ MODE="ensure"
 UI_HTTPS_PORT="${UA_TAILNET_STAGING_UI_HTTPS_PORT:-443}"
 UI_TARGET="${UA_TAILNET_STAGING_UI_TARGET:-http://127.0.0.1:3000}"
 API_HTTPS_PORT="${UA_TAILNET_STAGING_API_HTTPS_PORT:-8443}"
-API_TARGET="${UA_TAILNET_STAGING_API_TARGET:-http://127.0.0.1:8001}"
+API_TARGET="${UA_TAILNET_STAGING_API_TARGET:-http://127.0.0.1:8002}"
 API_HEALTH_PATH="${UA_TAILNET_STAGING_API_HEALTH_PATH:-/api/v1/health}"
 UI_HEALTH_PATH="${UA_TAILNET_STAGING_UI_HEALTH_PATH:-/}"
+HEALTH_MAX_ATTEMPTS="${UA_TAILNET_STAGING_HEALTH_MAX_ATTEMPTS:-12}"
+HEALTH_SLEEP_SECONDS="${UA_TAILNET_STAGING_HEALTH_SLEEP_SECONDS:-5}"
 
 usage() {
   cat <<'EOF'
@@ -20,7 +22,7 @@ Environment overrides:
   UA_TAILNET_STAGING_UI_HTTPS_PORT   (default: 443)
   UA_TAILNET_STAGING_UI_TARGET       (default: http://127.0.0.1:3000)
   UA_TAILNET_STAGING_API_HTTPS_PORT  (default: 8443)
-  UA_TAILNET_STAGING_API_TARGET      (default: http://127.0.0.1:8001)
+  UA_TAILNET_STAGING_API_TARGET      (default: http://127.0.0.1:8002)
   UA_TAILNET_STAGING_UI_HEALTH_PATH  (default: /)
   UA_TAILNET_STAGING_API_HEALTH_PATH (default: /api/v1/health)
 EOF
@@ -54,41 +56,65 @@ check_tailscale_ready() {
 
 configure_serve() {
   log "Configuring tailnet staging serve routes..."
-  tailscale serve --yes --bg --https="${UI_HTTPS_PORT}" "${UI_TARGET}" >/dev/null
-  tailscale serve --yes --bg --https="${API_HTTPS_PORT}" "${API_TARGET}" >/dev/null
+  local out=""
+  if ! out="$(tailscale serve --yes --bg --https="${UI_HTTPS_PORT}" "${UI_TARGET}" 2>&1)"; then
+    if grep -qi "Serve is not enabled on your tailnet" <<< "${out}"; then
+      echo "Tailnet policy blocker: tailscale serve is not enabled for this tailnet/node." >&2
+      echo "${out}" >&2
+      return 1
+    fi
+    echo "${out}" >&2
+    return 1
+  fi
+  if ! out="$(tailscale serve --yes --bg --https="${API_HTTPS_PORT}" "${API_TARGET}" 2>&1)"; then
+    if grep -qi "Serve is not enabled on your tailnet" <<< "${out}"; then
+      echo "Tailnet policy blocker: tailscale serve is not enabled for this tailnet/node." >&2
+      echo "${out}" >&2
+      return 1
+    fi
+    echo "${out}" >&2
+    return 1
+  fi
 }
 
 verify_local_health() {
   require_command curl
-  local ui_code api_code
+  local ui_code api_code attempt
+  local ui_url="${UI_TARGET%/}${UI_HEALTH_PATH}"
+  local api_url="${API_TARGET%/}${API_HEALTH_PATH}"
 
-  ui_code="$(curl -s -o /dev/null -w '%{http_code}' "${UI_TARGET%/}${UI_HEALTH_PATH}" || true)"
-  api_code="$(curl -s -o /dev/null -w '%{http_code}' "${API_TARGET%/}${API_HEALTH_PATH}" || true)"
-
-  if [[ "${ui_code}" != "200" ]]; then
-    echo "UI local health check failed: ${UI_TARGET%/}${UI_HEALTH_PATH} (HTTP ${ui_code:-n/a})" >&2
-    return 1
-  fi
-  if [[ "${api_code}" != "200" ]]; then
-    echo "API local health check failed: ${API_TARGET%/}${API_HEALTH_PATH} (HTTP ${api_code:-n/a})" >&2
-    return 1
-  fi
-
-  log "Local health OK (ui=${ui_code}, api=${api_code})."
+  attempt=1
+  while true; do
+    ui_code="$(curl -s -o /dev/null -w '%{http_code}' "${ui_url}" || true)"
+    api_code="$(curl -s -o /dev/null -w '%{http_code}' "${api_url}" || true)"
+    if [[ "${ui_code}" == "200" && "${api_code}" == "200" ]]; then
+      log "Local health OK (ui=${ui_code}, api=${api_code})."
+      return 0
+    fi
+    if [[ "${attempt}" -ge "${HEALTH_MAX_ATTEMPTS}" ]]; then
+      echo "Local health check failed after ${HEALTH_MAX_ATTEMPTS} attempts." >&2
+      echo "UI:  ${ui_url} (HTTP ${ui_code:-n/a})" >&2
+      echo "API: ${api_url} (HTTP ${api_code:-n/a})" >&2
+      return 1
+    fi
+    log "Waiting for local health (attempt ${attempt}/${HEALTH_MAX_ATTEMPTS}, ui=${ui_code:-n/a}, api=${api_code:-n/a})..."
+    attempt=$((attempt + 1))
+    sleep "${HEALTH_SLEEP_SECONDS}"
+  done
 }
 
 verify_serve_status() {
   local status
   status="$(tailscale serve status 2>&1 || true)"
-  if ! grep -q ":${UI_HTTPS_PORT}" <<< "${status}"; then
-    echo "tailscale serve status missing UI HTTPS port ${UI_HTTPS_PORT}." >&2
+  if ! grep -q "proxy ${UI_TARGET}" <<< "${status}"; then
+    echo "tailscale serve status missing UI proxy target ${UI_TARGET}." >&2
     return 1
   fi
-  if ! grep -q ":${API_HTTPS_PORT}" <<< "${status}"; then
-    echo "tailscale serve status missing API HTTPS port ${API_HTTPS_PORT}." >&2
+  if ! grep -q "proxy ${API_TARGET}" <<< "${status}"; then
+    echo "tailscale serve status missing API proxy target ${API_TARGET}." >&2
     return 1
   fi
-  log "tailscale serve status includes ui_port=${UI_HTTPS_PORT} api_port=${API_HTTPS_PORT}."
+  log "tailscale serve status includes UI/API proxy targets and expected ports."
 }
 
 reset_serve() {
@@ -113,12 +139,24 @@ while [[ $# -gt 0 ]]; do
 done
 
 if ! is_positive_int "${UI_HTTPS_PORT}"; then
+  UI_HTTPS_PORT="443"
+fi
+if ! is_positive_int "${UI_HTTPS_PORT}"; then
   echo "Invalid UA_TAILNET_STAGING_UI_HTTPS_PORT: ${UI_HTTPS_PORT}" >&2
   exit 1
 fi
 if ! is_positive_int "${API_HTTPS_PORT}"; then
+  API_HTTPS_PORT="8443"
+fi
+if ! is_positive_int "${API_HTTPS_PORT}"; then
   echo "Invalid UA_TAILNET_STAGING_API_HTTPS_PORT: ${API_HTTPS_PORT}" >&2
   exit 1
+fi
+if ! is_positive_int "${HEALTH_MAX_ATTEMPTS}"; then
+  HEALTH_MAX_ATTEMPTS="12"
+fi
+if ! is_positive_int "${HEALTH_SLEEP_SECONDS}"; then
+  HEALTH_SLEEP_SECONDS="5"
 fi
 
 check_tailscale_ready
@@ -144,4 +182,3 @@ case "${MODE}" in
     exit 1
     ;;
 esac
-

@@ -7,11 +7,12 @@ This runbook defines the standard production deployment path for the VPS.
 ## Prerequisites
 
 - **Tailscale Active**: You must be connected to the Tailscale VPN to access the VPS SSH port.
-- **SSH Key**: `~/.ssh/id_ed25519` must be authorized on `root@100.106.113.93`.
+- **SSH Mode**: `UA_SSH_AUTH_MODE=keys|tailscale_ssh` (default: `keys`).
+- **SSH Key (keys mode only)**: `~/.ssh/id_ed25519` must be authorized on the VPS host.
 
 Target:
 
-1. Host: `root@100.106.113.93` (Tailscale Secure Mesh)
+1. Host: `root@srv1360701.taildcc090.ts.net` (Tailscale Secure Mesh, MagicDNS canonical)
 2. App dir: `/opt/universal_agent`
 3. Services:
    1. `universal-agent-gateway`
@@ -62,6 +63,13 @@ What this script does:
 6. Restarts all core services.
 7. Verifies service health and public endpoint responses.
 8. Verifies ops auth gate (`401` unauth, `200` auth) when token is present.
+9. Runs tailnet preflight checks (`tailscale status` + `tailscale ping`) in supported modes.
+10. Runs tailnet staging setup/post-check via `scripts/configure_tailnet_staging.sh` unless disabled.
+
+Auth mode notes:
+1. `UA_SSH_AUTH_MODE=keys` keeps current `-i ~/.ssh/id_ed25519` behavior.
+2. `UA_SSH_AUTH_MODE=tailscale_ssh` skips key injection and relies on tailnet SSH policy.
+3. For staging post-check strictness use `UA_TAILNET_STAGING_MODE=auto|required|disabled` (default `auto`).
 
 ## Why this method
 
@@ -88,11 +96,26 @@ If deploy fails:
    1. `UA_DEPLOYMENT_PROFILE=vps`
 3. Ensure ops/internal tokens remain present in VPS `.env`.
 4. Keep SSH key-based access and host hardening controls active.
+5. Prefer MagicDNS host targeting over hardcoded Tailscale IPs.
+
+## Tailnet Staging Verification
+
+Run on VPS after deploy:
+
+```bash
+cd /opt/universal_agent
+bash scripts/configure_tailnet_staging.sh --verify-only
+tailscale serve status
+```
+
+Expected:
+1. Local UI/API health checks pass.
+2. `tailscale serve status` contains staging ports for UI/API routing.
 
 ## Quick Post-Deploy Check
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@100.106.113.93 '
+ssh -i ~/.ssh/id_ed25519 root@srv1360701.taildcc090.ts.net '
 for s in universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram; do
   printf "%s=" "$s"; systemctl is-active "$s"
 done

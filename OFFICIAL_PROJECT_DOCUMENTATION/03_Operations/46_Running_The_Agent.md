@@ -146,7 +146,7 @@ Web UI toggle behavior:
 
 ```bash
 scripts/sync_remote_workspaces.sh --once \
-  --host root@100.106.113.93 \
+  --host root@srv1360701.taildcc090.ts.net \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_workspaces \
@@ -158,7 +158,7 @@ scripts/sync_remote_workspaces.sh --once \
 
 ```bash
 scripts/sync_remote_workspaces.sh \
-  --host root@100.106.113.93 \
+  --host root@srv1360701.taildcc090.ts.net \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_workspaces \
@@ -177,7 +177,7 @@ Behavior note:
 
 ```bash
 scripts/install_remote_workspace_sync_timer.sh \
-  --host root@100.106.113.93 \
+  --host root@srv1360701.taildcc090.ts.net \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --remote-artifacts-dir /opt/universal_agent/artifacts \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_workspaces \
@@ -190,7 +190,7 @@ Optional remote cleanup (explicitly destructive):
 
 ```bash
 scripts/install_remote_workspace_sync_timer.sh \
-  --host root@100.106.113.93 \
+  --host root@srv1360701.taildcc090.ts.net \
   --remote-dir /opt/universal_agent/AGENT_RUN_WORKSPACES \
   --local-dir /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_workspaces \
   --manifest-file /home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/remote_vps_sync_state/synced_workspaces.txt \
@@ -203,6 +203,36 @@ scripts/install_remote_workspace_sync_timer.sh \
 Prune safety:
 - `--prune-remote-when-local-missing` only deletes remote directories older than 300s by default.
 - Set `--prune-min-age-seconds 0` only if you intentionally want immediate pruning.
+
+SSH auth mode for sync/deploy tools:
+- `UA_SSH_AUTH_MODE=keys` (default): pass `-i` key as before.
+- `UA_SSH_AUTH_MODE=tailscale_ssh`: skip key injection and rely on tailnet SSH policy.
+
+## 7. Tailnet-Only Staging Checks (VPS Runtime)
+
+Phase B staging setup script:
+
+```bash
+cd /opt/universal_agent
+bash scripts/configure_tailnet_staging.sh --ensure
+```
+
+Verification:
+
+```bash
+cd /opt/universal_agent
+bash scripts/configure_tailnet_staging.sh --verify-only
+tailscale serve status
+```
+
+## 8. Source-of-Truth Discipline
+
+For any diagnosis or acceptance statement, explicitly tag which runtime lane produced the evidence:
+1. Local runtime (`localhost` stack).
+2. VPS runtime (tailnet/private path).
+3. Public smoke (`app.clearspringcg.com` / `api.clearspringcg.com`).
+
+Do not mix evidence from multiple lanes in one conclusion unless you explicitly compare lanes.
 
 Check timer status:
 
