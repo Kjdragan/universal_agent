@@ -119,6 +119,8 @@ Adaptive category behavior:
 - CSI can auto-create new categories when recurring `other_interest` topics emerge.
 - Category count is capped (`--max-categories` or `CSI_RSS_ANALYSIS_MAX_CATEGORIES`, default `10`).
 - When capped, CSI retires the narrowest dynamic category first to keep taxonomy broad and avoid uncategorized spillover.
+- Low-signal/trivial dynamic labels (e.g. pronoun/short-form noise) are blocked from category creation.
+- Core-topic tokens are forced back into core categories (`ai`, `political`, `war`) instead of becoming one-off dynamic categories.
 
 Run RSS trend report manually:
 
