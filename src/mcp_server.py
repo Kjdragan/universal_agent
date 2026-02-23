@@ -2465,7 +2465,7 @@ async def finalize_research(
     AUTOMATED RESEARCH PIPELINE (Inbox Pattern):
     1. Scans 'search_results/' INBOX for NEW JSON search outputs.
     2. Archives processed JSONs to 'search_results/processed_json/'.
-    3. Executes parallel crawl on extracted URLs (saves raw to global 'search_results/').
+    3. Executes parallel crawl on extracted URLs (saves raw to session 'search_results/').
     4. Generates scoped 'research_overview.md' in 'tasks/{task_name}/'.
 
     Args:
@@ -2479,35 +2479,32 @@ async def finalize_research(
     """
     try:
         session_dir = fix_path_typos(session_dir)
-        # Robustness: Check for search_results directory
-        search_results_dir = os.path.join(session_dir, "search_results")
-        
-        # If standard path missing, check if session_dir IS the search results dir (fallback)
-        if not os.path.exists(search_results_dir):
-            if os.path.basename(session_dir.rstrip("/\\")) == "search_results" and os.path.exists(session_dir):
-                 search_results_dir = session_dir
-                 # Adjust session_dir up one level for task output
-                 session_dir = os.path.dirname(session_dir.rstrip("/\\"))
-            else:
-                 # Last ditch: check if there are JSONs directly in session_dir (agent passed root)
-                 root_jsons = [f for f in os.listdir(session_dir) if f.endswith(".json")]
-                 if root_jsons and "search_results" not in os.listdir(session_dir):
-                     search_results_dir = session_dir
-                 else:
-                     # Fallback: use resolved workspace if it has search_results
-                     fallback_workspace = _resolve_workspace()
-                     fallback_search = (
-                         os.path.join(fallback_workspace, "search_results")
-                         if fallback_workspace
-                         else ""
-                     )
-                     if fallback_workspace and os.path.exists(fallback_search):
-                         search_results_dir = fallback_search
-                         session_dir = fallback_workspace
-                     else:
-                         return json.dumps(
-                             {"error": f"Search results directory not found at {search_results_dir} or {session_dir}"}
-                         )
+        session_path = Path(session_dir).expanduser().resolve()
+        active_workspace = _resolve_workspace()
+        if active_workspace:
+            active_workspace_path = Path(active_workspace).expanduser().resolve()
+            if session_path != active_workspace_path:
+                return json.dumps(
+                    {
+                        "error": (
+                            "Session scope violation: finalize_research must run against the active "
+                            f"CURRENT_SESSION_WORKSPACE. Got {session_path}, expected {active_workspace_path}."
+                        )
+                    }
+                )
+
+        search_results_dir = str((session_path / "search_results").resolve())
+        if not os.path.isdir(search_results_dir):
+            return json.dumps(
+                {
+                    "error": (
+                        "Search results directory not found in session workspace. "
+                        f"Expected: {search_results_dir}"
+                    )
+                }
+            )
+
+        session_dir = str(session_path)
 
         processed_dir = os.path.join(search_results_dir, "processed_json")
         
@@ -2928,8 +2925,6 @@ async def finalize_research(
         
         if len(filtered_files) > 0:
             try:
-                from pathlib import Path
-                
                 sys.stderr.write(
                     f"[finalize] ⏳ Running corpus refinement ({len(filtered_files)} files, mode=expanded). This leverages LLMs and may take ~1-2 minutes...\n"
                 )

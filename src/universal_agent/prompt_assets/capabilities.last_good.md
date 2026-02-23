@@ -1,6 +1,6 @@
 <!-- Runtime Capabilities Snapshot (Auto) -->
 
-<!-- Generated: 2026-02-23 13:45:22 -->
+<!-- Generated: 2026-02-23 14:55:46 -->
 
 ### Capability Routing Doctrine
 - Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.
@@ -71,7 +71,7 @@
   -> Delegate: `Task(subagent_type='evaluation-judge', ...)`
 - **report-writer**: Multi-phase research report generator with image integration support.
   -> Delegate: `Task(subagent_type='report-writer', ...)`
-- **research-specialist**: Sub-agent for a unified research pipeline: Search followed by automated Crawl & Refine.
+- **research-specialist**: Sub-agent for multi-mode research with an LLM strategy decision and mode-specific execution policies.
   -> Delegate: `Task(subagent_type='research-specialist', ...)`
 - **trend-specialist**: Sub-agent for dynamic discovery and "pulse" checks on current topics (Reddit, X, Trends).
   -> Delegate: `Task(subagent_type='trend-specialist', ...)`

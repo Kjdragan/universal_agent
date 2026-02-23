@@ -31,3 +31,23 @@ def test_image_expert_can_write_manifest_json():
     assert "Write" in tools
     assert "Read" in tools  # used for outline-driven image planning and verification
 
+
+def test_research_specialist_prompt_declares_mode_selection_and_strict_phase_invariant():
+    path = Path(".claude/agents/research-specialist.md")
+    text = path.read_text(encoding="utf-8")
+
+    frontmatter = _parse_frontmatter(text)
+    tools = _parse_tools(frontmatter)
+
+    assert "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL" in tools
+    assert "mcp__internal__run_research_phase" in tools
+
+    assert "## MODE SELECTION (REQUIRED FIRST STEP)" in text
+    assert '"research_mode": "composio_pipeline | exploratory_web | archive_or_special_source"' in text
+    assert "## MODE RULES: composio_pipeline (STRICT)" in text
+    assert (
+        "If search JSON files exist in `search_results/` and `run_research_phase` has not been attempted"
+        in text
+    )
+    assert "Disallowed before Step 2 attempt" in text
+

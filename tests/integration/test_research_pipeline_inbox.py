@@ -9,6 +9,9 @@ import mcp_server
 @pytest.mark.asyncio
 async def test_finalize_research_creates_refined_corpus(tmp_path, monkeypatch):
     workspace = tmp_path
+    marker_path = workspace / "missing_workspace_marker.txt"
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE_FILE", str(marker_path))
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
     search_dir = workspace / "search_results"
     search_dir.mkdir(parents=True, exist_ok=True)
 
@@ -85,3 +88,24 @@ async def test_finalize_research_creates_refined_corpus(tmp_path, monkeypatch):
     assert refined_path.exists()
     assert processed_dir.exists()
     assert any(processed_dir.glob("*.json"))
+
+
+@pytest.mark.asyncio
+async def test_finalize_research_blocks_session_scope_violation(tmp_path, monkeypatch):
+    active_workspace = tmp_path / "active_workspace"
+    requested_workspace = tmp_path / "requested_workspace"
+    active_workspace.mkdir(parents=True, exist_ok=True)
+    requested_workspace.mkdir(parents=True, exist_ok=True)
+    (requested_workspace / "search_results").mkdir(parents=True, exist_ok=True)
+
+    marker_path = tmp_path / "missing_workspace_marker.txt"
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE_FILE", str(marker_path))
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(active_workspace))
+
+    result = await mcp_server.finalize_research(
+        session_dir=str(requested_workspace),
+        task_name="test_task",
+        enable_topic_filter=False,
+    )
+    payload = json.loads(result)
+    assert "Session scope violation" in payload.get("error", "")

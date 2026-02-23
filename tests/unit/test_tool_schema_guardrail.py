@@ -248,6 +248,171 @@ async def test_schema_guardrail_blocks_primary_run_research_phase_without_inputs
 
 
 @pytest.mark.anyio
+async def test_schema_guardrail_blocks_research_tool_discovery_before_research_phase(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Bash",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {
+                "command": (
+                    'find . -name "run_research_phase*" -o -name "*research*pipeline*" '
+                    "2>/dev/null | head -20"
+                )
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+
+    assert result.get("decision") == "block"
+    assert "run_research_phase" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_blocks_workspace_scouting_bash_before_research_phase(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_NEWS_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Bash",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {
+                "command": "pwd",
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+
+    assert result.get("decision") == "block"
+    assert "run_research_phase" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_blocks_workspace_root_listing_before_research_phase(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_NEWS_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__list_directory",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {"path": str(workspace)},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+
+    assert result.get("decision") == "block"
+    assert "run_research_phase" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_detects_subagent_context_from_transcript_path(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Bash",
+            "transcript_path": str(
+                workspace / "subagent_outputs" / "task:abc123" / "transcript.md"
+            ),
+            "tool_input": {
+                "command": "ls -la",
+            },
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+
+    assert result.get("decision") == "block"
+    assert "run_research_phase" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_allows_recovery_after_research_phase_attempt(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    first = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__run_research_phase",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {"query": "latest news", "task_name": "ai_news"},
+        },
+        run_id="run-test-attempt",
+        step_id="step-test",
+    )
+    assert first == {}
+
+    second = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "Bash",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {
+                "command": "pwd",
+            },
+        },
+        run_id="run-test-attempt",
+        step_id="step-test",
+    )
+    assert second == {}
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_allows_search_results_listing_before_research_phase(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__list_directory",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {"path": str(search_dir)},
+        },
+        run_id="run-test",
+        step_id="step-test",
+    )
+
+    assert result == {}
+
+
+@pytest.mark.anyio
 async def test_schema_guardrail_blocks_composio_search_tools_for_reddit():
     result = await pre_tool_use_schema_guardrail(
         {

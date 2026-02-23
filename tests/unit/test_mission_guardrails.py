@@ -54,3 +54,46 @@ def test_goal_satisfaction_counts_nested_multi_execute_gmail_send():
     assert result["passed"] is True
     assert result["observed"]["email_send_count"] == 1
     assert result["observed"]["gmail_send_count"] == 1
+
+
+def test_research_pipeline_adherence_passes_when_run_phase_called_before_scouting():
+    contract = build_mission_contract("Research latest updates and send report")
+    tracker = MissionGuardrailTracker(contract)
+    tracker.record_tool_call(
+        "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+        tool_input={
+            "tools": [
+                {"tool_slug": "COMPOSIO_SEARCH_NEWS", "arguments": {"query": "x"}},
+            ]
+        },
+    )
+    tracker.record_tool_call("mcp__internal__run_research_phase")
+    tracker.record_tool_call("Bash")
+
+    result = tracker.evaluate()
+    adherence = result["observed"]["research_pipeline_adherence"]
+    assert adherence["required"] is True
+    assert adherence["run_research_phase_called"] is True
+    assert adherence["pre_phase_workspace_scouting_calls"] == 0
+    assert adherence["passed"] is True
+
+
+def test_research_pipeline_adherence_fails_when_scouting_happens_before_run_phase():
+    contract = build_mission_contract("Research latest updates and send report")
+    tracker = MissionGuardrailTracker(contract)
+    tracker.record_tool_call(
+        "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+        tool_input={
+            "tools": [
+                {"tool_slug": "COMPOSIO_SEARCH_WEB", "arguments": {"query": "x"}},
+            ]
+        },
+    )
+    tracker.record_tool_call("mcp__internal__list_directory")
+
+    result = tracker.evaluate()
+    adherence = result["observed"]["research_pipeline_adherence"]
+    assert adherence["required"] is True
+    assert adherence["run_research_phase_called"] is False
+    assert adherence["pre_phase_workspace_scouting_calls"] == 1
+    assert adherence["passed"] is False

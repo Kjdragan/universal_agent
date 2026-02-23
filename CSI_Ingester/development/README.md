@@ -38,7 +38,7 @@ uv run python scripts/csi_local_e2e_smoke.py
 Run endpoint smoke against a live UA endpoint:
 
 ```bash
-scripts/csi_run.sh uv run python scripts/csi_emit_smoke_event.py --require-internal-dispatch
+PYTHONPATH=src:CSI_Ingester/development .venv/bin/python CSI_Ingester/development/scripts/csi_emit_smoke_event.py --require-internal-dispatch
 ```
 
 Run RSS digest in dry-run mode (no Telegram send):
@@ -80,6 +80,11 @@ Telegram channel separation options:
 - Playlist tutorial digest now has built-in follow-up behavior:
 - when a new playlist video is first detected but no tutorial artifact exists yet, it is tracked in pending state;
 - on later timer runs, once artifacts appear, CSI sends a second "Tutorial Artifacts Ready" message automatically and clears that pending item.
+- if artifacts remain pending past threshold, CSI now sends periodic pending reminder messages with workspace hints instead of staying silent.
+- pending reminder controls:
+- `CSI_TUTORIAL_PENDING_REMINDER_MINUTES` (default `30`)
+- `CSI_TUTORIAL_PENDING_REMINDER_COOLDOWN_MINUTES` (default `120`)
+- `CSI_TUTORIAL_WORKSPACE_ROOT` (optional; defaults to `/opt/universal_agent/AGENT_RUN_WORKSPACES`)
 
 Install periodic systemd jobs on VPS (requires root):
 
