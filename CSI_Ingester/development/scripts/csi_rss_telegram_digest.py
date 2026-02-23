@@ -369,11 +369,11 @@ def main() -> int:
     )
 
     if not chat_id:
-        print("RSS_TELEGRAM_CHAT_ID_MISSING (set CSI_RSS_TELEGRAM_CHAT_ID)")
-        return 3
+        print("RSS_TELEGRAM_SKIPPED_CHAT_ID_MISSING (set CSI_RSS_TELEGRAM_CHAT_ID)")
+        return 0
     if not bot_token:
-        print("RSS_TELEGRAM_BOT_TOKEN_MISSING (set CSI_RSS_TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN)")
-        return 3
+        print("RSS_TELEGRAM_SKIPPED_BOT_TOKEN_MISSING (set CSI_RSS_TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN)")
+        return 0
 
     digest, usage = _maybe_build_claude_digest(
         rows,
