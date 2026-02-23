@@ -23,6 +23,12 @@ install_unit "csi-category-quality-loop.service"
 install_unit "csi-category-quality-loop.timer"
 install_unit "csi-analysis-task-runner.service"
 install_unit "csi-analysis-task-runner.timer"
+install_unit "csi-analysis-task-bootstrap.service"
+install_unit "csi-analysis-task-bootstrap.timer"
+install_unit "csi-rss-quality-gate.service"
+install_unit "csi-rss-quality-gate.timer"
+install_unit "csi-report-product-finalize.service"
+install_unit "csi-report-product-finalize.timer"
 install_unit "csi-daily-summary.service"
 install_unit "csi-daily-summary.timer"
 install_unit "csi-hourly-token-report.service"
@@ -36,6 +42,9 @@ systemctl enable --now csi-rss-insight-analyst.timer
 systemctl enable --now csi-rss-reclassify-categories.timer
 systemctl enable --now csi-category-quality-loop.timer
 systemctl enable --now csi-analysis-task-runner.timer
+systemctl enable --now csi-analysis-task-bootstrap.timer
+systemctl enable --now csi-rss-quality-gate.timer
+systemctl enable --now csi-report-product-finalize.timer
 systemctl enable --now csi-daily-summary.timer
 systemctl enable --now csi-hourly-token-report.timer
 
@@ -47,5 +56,8 @@ systemctl is-active csi-rss-insight-analyst.timer
 systemctl is-active csi-rss-reclassify-categories.timer
 systemctl is-active csi-category-quality-loop.timer
 systemctl is-active csi-analysis-task-runner.timer
+systemctl is-active csi-analysis-task-bootstrap.timer
+systemctl is-active csi-rss-quality-gate.timer
+systemctl is-active csi-report-product-finalize.timer
 systemctl is-active csi-daily-summary.timer
 systemctl is-active csi-hourly-token-report.timer

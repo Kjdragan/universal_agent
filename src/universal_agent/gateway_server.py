@@ -106,6 +106,7 @@ from universal_agent.youtube_ingest import ingest_youtube_transcript, normalize_
 from universal_agent.signals_ingest import (
     extract_valid_events,
     process_signals_ingest_payload,
+    to_csi_analytics_action,
     to_manual_youtube_payload,
 )
 from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
@@ -4373,19 +4374,29 @@ async def signals_ingest_endpoint(request: Request):
     status_code, body = process_signals_ingest_payload(payload, dict(request.headers))
     if status_code in {200, 207} and _hooks_service:
         dispatch_count = 0
+        analytics_dispatch_count = 0
         for event in extract_valid_events(payload):
             manual_payload = to_manual_youtube_payload(event)
-            if not manual_payload:
+            if manual_payload:
+                ok, _reason = await _hooks_service.dispatch_internal_payload(
+                    subpath="youtube/manual",
+                    payload=manual_payload,
+                    headers={"x-csi-source": "signals_ingest"},
+                )
+                if ok:
+                    dispatch_count += 1
                 continue
-            ok, _reason = await _hooks_service.dispatch_internal_payload(
-                subpath="youtube/manual",
-                payload=manual_payload,
-                headers={"x-csi-source": "signals_ingest"},
-            )
+
+            analytics_action = to_csi_analytics_action(event)
+            if not analytics_action:
+                continue
+            ok, _reason = await _hooks_service.dispatch_internal_action(analytics_action)
             if ok:
-                dispatch_count += 1
+                analytics_dispatch_count += 1
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count
+        if analytics_dispatch_count > 0:
+            body["analytics_internal_dispatches"] = analytics_dispatch_count
     return JSONResponse(status_code=status_code, content=body)
 
 

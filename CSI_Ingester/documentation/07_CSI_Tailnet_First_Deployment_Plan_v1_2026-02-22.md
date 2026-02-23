@@ -225,3 +225,66 @@ Purpose: bypass YouTube cloud-IP transcript blocking without introducing third-p
 5. Reusable implementation primitive:
    1. `csi_ingester/net/egress_adapter.py`
    2. exposes generic failover + anti-bot detection for other blocked outbound calls.
+
+## 12. UA Consumer Integration For CSI Analytics (Implemented)
+
+Status (2026-02-23): Implemented in repo.
+
+1. UA `/api/v1/signals/ingest` now dispatches two internal paths:
+   1. playlist source (`youtube_playlist`) -> existing manual YouTube tutorial route,
+   2. CSI analytics/analyst sources (`csi_analytics`, `csi_analyst`) -> internal UA trend/data-agent dispatch.
+2. Mapping logic is centralized in `src/universal_agent/signals_ingest.py`:
+   1. `to_manual_youtube_payload(...)`
+   2. `to_csi_analytics_action(...)`
+3. Hook routing now supports trusted direct action dispatch:
+   1. `HooksService.dispatch_internal_action(...)`
+   2. avoids dependence on external hooks mapping/auth for CSI-native analytics events.
+
+## 13. Task Loop Activation + Quality Gates (Implemented)
+
+Status (2026-02-23): Implemented in repo and wired for systemd deployment.
+
+1. Recurring task bootstrap:
+   1. Script: `scripts/csi_analysis_task_bootstrap.py`
+   2. Unit/timer:
+      1. `csi-analysis-task-bootstrap.service`
+      2. `csi-analysis-task-bootstrap.timer` (hourly at `:03`)
+   3. Function:
+      1. auto-seeds baseline CSI analyst tasks when queue is idle,
+      2. keeps `trend_followup`, `category_deep_dive`, `channel_deep_dive` active.
+2. RSS quality gates:
+   1. Script: `scripts/csi_rss_quality_gate.py`
+   2. Unit/timer:
+      1. `csi-rss-quality-gate.service`
+      2. `csi-rss-quality-gate.timer` (every 15 minutes)
+   3. Checks:
+      1. recent RSS volume,
+      2. undelivered and DLQ counts,
+      3. transcript success ratio,
+      4. staleness age,
+      5. `other_interest` overflow ratio.
+   4. Emits `rss_quality_gate_alert` / `rss_quality_gate_ok` CSI events to UA.
+
+## 14. Report Product Finalization (Implemented)
+
+Status (2026-02-23): Implemented in repo and wired for systemd deployment.
+
+1. Script: `scripts/csi_report_product_finalize.py`
+2. Unit/timer:
+   1. `csi-report-product-finalize.service`
+   2. `csi-report-product-finalize.timer` (hourly at `:35`)
+3. Output:
+   1. materialized product artifacts under `/opt/universal_agent/artifacts/csi-reports/<day>/product/`,
+   2. emitted CSI event `report_product_ready` with artifact paths + token snapshot.
+
+## 15. Reddit Discovery On-Deck
+
+Status: next source onboarding after RSS hardening rollout verification.
+
+1. Keep Reddit in discovery/scaffold phase first:
+   1. adapter contract alignment,
+   2. source-specific dedupe policy,
+   3. low-risk canary subreddits.
+2. Do not merge Reddit into production timer set until:
+   1. RSS quality gate remains stable for full observation window,
+   2. UA trend consumer confirms analytics signal usefulness from RSS pipeline.

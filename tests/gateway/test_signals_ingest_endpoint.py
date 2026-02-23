@@ -48,9 +48,14 @@ def _payload(source: str = "youtube_playlist") -> dict:
 class _HookStub:
     def __init__(self):
         self.calls = []
+        self.action_calls = []
 
     async def dispatch_internal_payload(self, *, subpath, payload, headers=None):
         self.calls.append({"subpath": subpath, "payload": payload, "headers": headers or {}})
+        return True, "agent"
+
+    async def dispatch_internal_action(self, action_payload):
+        self.action_calls.append(action_payload)
         return True, "agent"
 
 
@@ -134,3 +139,37 @@ def test_signals_ingest_rss_source_skips_internal_dispatch(client, monkeypatch):
     assert body["accepted"] == 1
     assert "internal_dispatches" not in body
     assert hook_stub.calls == []
+    assert hook_stub.action_calls == []
+
+
+def test_signals_ingest_csi_analytics_dispatches_internal_action(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "rss_trend_report"
+    payload["events"][0]["subject"] = {
+        "window_start_utc": "2026-02-22T00:00:00Z",
+        "window_end_utc": "2026-02-22T01:00:00Z",
+        "totals": {"items": 2, "by_category": {"ai": 2}},
+    }
+    request_id = "req-4"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] == 1
+    assert body["analytics_internal_dispatches"] == 1
+    assert hook_stub.calls == []
+    assert len(hook_stub.action_calls) == 1
+    assert hook_stub.action_calls[0]["to"] == "trend-specialist"

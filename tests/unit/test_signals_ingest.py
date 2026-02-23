@@ -3,7 +3,12 @@ import hmac
 import json
 import time
 
-from universal_agent.signals_ingest import extract_valid_events, process_signals_ingest_payload, to_manual_youtube_payload
+from universal_agent.signals_ingest import (
+    extract_valid_events,
+    process_signals_ingest_payload,
+    to_csi_analytics_action,
+    to_manual_youtube_payload,
+)
 
 
 def _sign(secret: str, request_id: str, timestamp: str, payload: dict) -> str:
@@ -153,3 +158,36 @@ def test_to_manual_youtube_payload_skips_rss_event():
     event = extract_valid_events(payload)[0]
     mapped = to_manual_youtube_payload(event)
     assert mapped is None
+
+
+def test_to_csi_analytics_action_maps_trend_report():
+    payload = _valid_payload()
+    payload["events"][0]["source"] = "csi_analytics"
+    payload["events"][0]["event_type"] = "rss_trend_report"
+    payload["events"][0]["subject"] = {
+        "window_start_utc": "2026-02-22T00:00:00Z",
+        "window_end_utc": "2026-02-22T01:00:00Z",
+        "totals": {"items": 4, "by_category": {"ai": 3, "other_interest": 1}},
+    }
+    event = extract_valid_events(payload)[0]
+    action = to_csi_analytics_action(event)
+    assert action is not None
+    assert action["to"] == "trend-specialist"
+    assert "rss_trend_report" in action["message"]
+
+
+def test_to_csi_analytics_action_routes_token_report_to_data_analyst():
+    payload = _valid_payload()
+    payload["events"][0]["source"] = "csi_analytics"
+    payload["events"][0]["event_type"] = "hourly_token_usage_report"
+    payload["events"][0]["subject"] = {"totals": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+    event = extract_valid_events(payload)[0]
+    action = to_csi_analytics_action(event)
+    assert action is not None
+    assert action["to"] == "data-analyst"
+
+
+def test_to_csi_analytics_action_skips_playlist_source():
+    event = extract_valid_events(_valid_payload())[0]
+    action = to_csi_analytics_action(event)
+    assert action is None

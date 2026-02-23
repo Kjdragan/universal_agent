@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from csi_ingester.adapters.base import SourceAdapter
+from csi_ingester.adapters.reddit_discovery import RedditDiscoveryAdapter
 from csi_ingester.adapters.youtube_channel_rss import YouTubeChannelRSSAdapter
 from csi_ingester.adapters.youtube_playlist import YouTubePlaylistAdapter
 from csi_ingester.config import CSIConfig
@@ -51,6 +52,9 @@ class CSIService:
         yt_rss_cfg = sources.get("youtube_channel_rss")
         if isinstance(yt_rss_cfg, dict) and yt_rss_cfg.get("enabled", False):
             self.adapters["youtube_channel_rss"] = YouTubeChannelRSSAdapter(yt_rss_cfg)
+        reddit_cfg = sources.get("reddit_discovery")
+        if isinstance(reddit_cfg, dict) and reddit_cfg.get("enabled", False):
+            self.adapters["reddit_discovery"] = RedditDiscoveryAdapter(reddit_cfg)
         for adapter in self.adapters.values():
             if hasattr(adapter, "set_state_backend"):
                 adapter.set_state_backend(
