@@ -279,12 +279,24 @@ Status (2026-02-23): Implemented in repo and wired for systemd deployment.
 
 ## 15. Reddit Discovery On-Deck
 
-Status: next source onboarding after RSS hardening rollout verification.
+Status (2026-02-23): canary scaffolding implemented, default disabled.
 
-1. Keep Reddit in discovery/scaffold phase first:
-   1. adapter contract alignment,
-   2. source-specific dedupe policy,
-   3. low-risk canary subreddits.
-2. Do not merge Reddit into production timer set until:
-   1. RSS quality gate remains stable for full observation window,
-   2. UA trend consumer confirms analytics signal usefulness from RSS pipeline.
+1. Implemented assets:
+   1. Adapter: `csi_ingester/adapters/reddit_discovery.py`
+   2. Watchlist file: `CSI_Ingester/development/reddit_watchlist.json`
+   3. Probe script: `scripts/csi_reddit_probe.py`
+   4. Canary toggle script: `scripts/csi_reddit_canary_setup.sh`
+2. Canary shortlist:
+   1. `r/artificial`
+   2. `r/LocalLLaMA`
+   3. `r/geopolitics`
+   4. `r/WarCollege`
+3. Canary policy:
+   1. run probe first (no ingestion side effects),
+   2. enable canary only after probe is healthy,
+   3. keep `seed_on_first_run=true` to avoid initial backlog flood,
+   4. review quality-gate + delivery metrics before broadening subreddit set.
+4. Promotion gates before broader rollout:
+   1. no sustained DLQ growth from reddit source,
+   2. acceptable signal quality for trend reports,
+   3. RSS quality gates remain healthy during reddit canary period.

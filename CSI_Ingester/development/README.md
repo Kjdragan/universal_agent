@@ -138,6 +138,27 @@ Run report product finalization manually:
 scripts/csi_run.sh python3 scripts/csi_report_product_finalize.py --db-path /path/to/csi.db --window-hours 24 --force
 ```
 
+## Reddit Canary Activation
+
+Reddit ingestion is scaffolded and disabled by default. Use canary mode to validate source quality safely.
+
+1. Probe the watchlist without ingesting events:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_reddit_probe.py --watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json
+```
+
+2. Enable/disable canary ingestion:
+
+```bash
+/opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_canary_setup.sh enable
+/opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_canary_setup.sh disable
+```
+
+Default canary watchlist file:
+
+- `/opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json`
+
 ## UA ↔ CSI Analyst Task Protocol
 
 CSI ingester API now exposes task endpoints for delegating analysis work into CSI:

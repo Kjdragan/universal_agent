@@ -43,3 +43,27 @@ def test_reddit_discovery_subreddit_list_supports_strings_and_dicts():
 
     subreddits = adapter._subreddits()  # intentional direct check for normalization behavior
     assert subreddits == ["artificial", "MachineLearning"]
+
+
+def test_reddit_discovery_subreddit_list_includes_watchlist_file(tmp_path):
+    watchlist = tmp_path / "reddit_watchlist.json"
+    watchlist.write_text(
+        """
+        {
+          "subreddits": [
+            {"name": "artificial"},
+            {"subreddit": "LocalLLaMA"},
+            "geopolitics"
+          ]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    adapter = RedditDiscoveryAdapter(
+        {
+            "subreddits": ["artificial", {"name": "MachineLearning"}],
+            "watchlist_file": str(watchlist),
+        }
+    )
+    subreddits = adapter._subreddits()
+    assert subreddits == ["artificial", "MachineLearning", "LocalLLaMA", "geopolitics"]

@@ -1,0 +1,20 @@
+{
+  "subreddits": [
+    {
+      "name": "artificial",
+      "category_hint": "ai"
+    },
+    {
+      "name": "LocalLLaMA",
+      "category_hint": "ai"
+    },
+    {
+      "name": "geopolitics",
+      "category_hint": "political"
+    },
+    {
+      "name": "WarCollege",
+      "category_hint": "war"
+    }
+  ]
+}
