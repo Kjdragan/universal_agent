@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SYNC_SCRIPT="${REPO_ROOT}/scripts/sync_remote_workspaces.sh"
 
-REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@srv1360701.taildcc090.ts.net}"
+REMOTE_HOST="${UA_REMOTE_SSH_HOST:-root@100.106.113.93}"
 REMOTE_DIR="${UA_REMOTE_WORKSPACES_DIR:-/opt/universal_agent/AGENT_RUN_WORKSPACES}"
 LOCAL_DIR="${UA_LOCAL_MIRROR_DIR:-${REPO_ROOT}/AGENT_RUN_WORKSPACES/remote_vps_workspaces}"
 REMOTE_ARTIFACTS_DIR="${UA_REMOTE_ARTIFACTS_DIR:-/opt/universal_agent/artifacts}"

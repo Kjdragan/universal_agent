@@ -208,7 +208,13 @@ This would make “work in web UI only” practical while still moving assets/de
 ## `vpsctl` helper (local)
 For safer/faster repetitive deploy loops, use:
 - `scripts/vpsctl.sh push <path...>`
-- `scripts/vpsctl.sh restart gateway|api|webui|telegram|all`
-- `scripts/vpsctl.sh logs gateway|api|webui|telegram`
+- `scripts/vpsctl.sh restart gateway|api|webui|telegram|csi|all`
+- `scripts/vpsctl.sh status gateway|api|webui|telegram|csi|all`
+- `scripts/vpsctl.sh logs gateway|api|webui|telegram|csi`
+- `scripts/vpsctl.sh run <cmd...>`
+- `scripts/vpsctl.sh run-file <local_script.sh>`
+- `scripts/vpsctl.sh doctor`
+- `scripts/vpsctl.sh fix-perms`
 
 This uses only `scp`/`ssh` and preserves the “copy exact files + restart only what changed” workflow.
+Prefer `run-file` for multi-step remote procedures to avoid shell quoting/line-wrap failures from ad-hoc inline SSH commands.

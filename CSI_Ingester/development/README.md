@@ -41,6 +41,88 @@ Run endpoint smoke against a live UA endpoint:
 scripts/csi_run.sh uv run python scripts/csi_emit_smoke_event.py --require-internal-dispatch
 ```
 
+Run RSS digest in dry-run mode (no Telegram send):
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_rss_telegram_digest.py --db-path /path/to/csi.db --seed-current-on-first-run --dry-run
+```
+
+Install periodic systemd jobs on VPS (requires root):
+
+```bash
+/opt/universal_agent/CSI_Ingester/development/scripts/csi_install_systemd_extras.sh
+```
+
+Timers installed:
+
+- `csi-rss-telegram-digest.timer` -> every 10 minutes (sends one batched Telegram digest when new RSS events exist)
+- `csi-rss-semantic-enrich.timer` -> every 10 minutes at `:02` (transcript extraction + ai/non_ai semantic summary)
+- `csi-rss-trend-report.timer` -> hourly at minute `:12` (aggregated trend report event to UA)
+- `csi-daily-summary.timer` -> daily at `00:10 UTC` (writes summary artifacts under `/opt/universal_agent/artifacts/csi-reports/<day>/`)
+- `csi-hourly-token-report.timer` -> hourly at minute 05 (sends `hourly_token_usage_report` event to UA)
+
+Run hourly token report manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_hourly_token_report.py --db-path /path/to/csi.db --force
+```
+
+Run RSS semantic enrichment manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_rss_semantic_enrich.py --db-path /path/to/csi.db --max-events 12
+```
+
+Run RSS trend report manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_rss_trend_report.py --db-path /path/to/csi.db --window-hours 24 --force
+```
+
+## Tailnet Residential Transcript Worker
+
+Use this when VPS transcript extraction is blocked by YouTube cloud-IP anti-bot controls.
+
+1. Run a transcript worker endpoint on a residential Tailnet node (same API path):
+   - `http://<residential-tailnet-ip>:8002/api/v1/youtube/ingest`
+2. Configure CSI endpoint failover in `deployment/systemd/csi-ingester.env`:
+
+```bash
+CSI_RSS_ANALYSIS_TRANSCRIPT_ENDPOINTS=http://<residential-tailnet-ip>:8002/api/v1/youtube/ingest,http://127.0.0.1:8002/api/v1/youtube/ingest
+```
+
+Or use helper script on VPS:
+
+```bash
+/opt/universal_agent/CSI_Ingester/development/scripts/csi_set_transcript_endpoints.sh http://<residential-tailnet-ip>:8002/api/v1/youtube/ingest
+```
+
+This helper updates both:
+
+- `CSI_RSS_ANALYSIS_TRANSCRIPT_ENDPOINTS` in `csi-ingester.env`
+- `UA_HOOKS_YOUTUBE_INGEST_URLS` in `/opt/universal_agent/.env`
+- and preserves gateway-readable `.env` permissions (`root:ua`, mode `640`) when `ua` exists.
+
+3. Restart CSI and validate:
+
+```bash
+systemctl restart csi-ingester
+systemctl start csi-rss-semantic-enrich.service
+journalctl -u csi-rss-semantic-enrich.service -n 80 --no-pager
+```
+
+Notes:
+
+- Endpoints are tried left-to-right until one returns a transcript.
+- `rss_event_analysis.analysis_json` stores endpoint attempts for troubleshooting.
+- `transcript_ref` includes endpoint host, e.g. `youtube_transcript_api@100.95.187.38:8002`.
+- Shared adapter module for other blocked network actions:
+  - `csi_ingester/net/egress_adapter.py`
+  - functions: `parse_endpoint_list`, `detect_anti_bot_block`, `post_json_with_failover`.
+- If runtime services fail after env edits, run:
+  - `scripts/vpsctl.sh doctor`
+  - `scripts/vpsctl.sh fix-perms`
+
 ## Structure
 
 - `csi_ingester/`: runtime package

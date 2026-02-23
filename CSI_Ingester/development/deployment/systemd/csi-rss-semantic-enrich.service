@@ -1,0 +1,10 @@
+[Unit]
+Description=CSI RSS Semantic Enrichment (Transcript + AI Classification)
+After=network.target csi-ingester.service universal-agent-gateway.service
+Wants=csi-ingester.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_rss_semantic_enrich.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --max-events 12 --transcript-min-chars 20

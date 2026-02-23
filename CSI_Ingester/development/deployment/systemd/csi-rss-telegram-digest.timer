@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CSI RSS Telegram digest every 10 minutes
+
+[Timer]
+OnCalendar=*:0/10
+Persistent=true
+Unit=csi-rss-telegram-digest.service
+
+[Install]
+WantedBy=timers.target
+

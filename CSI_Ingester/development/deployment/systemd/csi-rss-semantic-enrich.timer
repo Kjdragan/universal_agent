@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI RSS semantic enrichment every 10 minutes
+
+[Timer]
+OnCalendar=*:02/10
+Persistent=true
+Unit=csi-rss-semantic-enrich.service
+
+[Install]
+WantedBy=timers.target

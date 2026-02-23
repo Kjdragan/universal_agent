@@ -110,3 +110,27 @@ def test_signals_ingest_non_youtube_source_skips_internal_dispatch(client, monke
     assert "internal_dispatches" not in body
     assert hook_stub.calls == []
 
+
+def test_signals_ingest_rss_source_skips_internal_dispatch(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="youtube_channel_rss")
+    request_id = "req-3"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] == 1
+    assert "internal_dispatches" not in body
+    assert hook_stub.calls == []

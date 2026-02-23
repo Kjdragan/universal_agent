@@ -127,6 +127,11 @@ class HooksService:
         self._youtube_ingest_url = (
             os.getenv("UA_HOOKS_YOUTUBE_INGEST_URL", default_ingest_url).strip()
         )
+        ingest_urls_raw = (os.getenv("UA_HOOKS_YOUTUBE_INGEST_URLS") or "").strip()
+        self._youtube_ingest_urls = self._parse_endpoint_list(
+            ingest_urls_raw,
+            fallback=self._youtube_ingest_url,
+        )
         self._youtube_ingest_token = (
             os.getenv("UA_HOOKS_YOUTUBE_INGEST_TOKEN") or self._forward_youtube_token
         ).strip()
@@ -286,7 +291,8 @@ class HooksService:
             "mapping_count": len(mapping_ids),
             "mapping_ids": mapping_ids,
             "youtube_ingest_mode": self._youtube_ingest_mode or "disabled",
-            "youtube_ingest_url_configured": bool(self._youtube_ingest_url),
+            "youtube_ingest_url_configured": bool(self._youtube_ingest_urls),
+            "youtube_ingest_url_count": len(self._youtube_ingest_urls),
             "youtube_ingest_fail_open": bool(self._youtube_ingest_fail_open),
             "youtube_ingest_min_chars": int(self._youtube_ingest_min_chars),
             "youtube_ingest_retry_attempts": int(self._youtube_ingest_retries),
@@ -536,6 +542,23 @@ class HooksService:
             return False
         return bool(default)
 
+    def _parse_endpoint_list(self, raw: str, *, fallback: str = "") -> list[str]:
+        endpoints: list[str] = []
+        for item in (raw or "").split(","):
+            value = item.strip()
+            if not value:
+                continue
+            if not value.startswith("http://") and not value.startswith("https://"):
+                continue
+            endpoints.append(value)
+        if not endpoints and fallback.strip():
+            endpoints.append(fallback.strip())
+        deduped: list[str] = []
+        for endpoint in endpoints:
+            if endpoint not in deduped:
+                deduped.append(endpoint)
+        return deduped
+
     def _is_youtube_local_ingest_target(self, action: HookAction) -> bool:
         return (
             (action.kind or "").strip().lower() == "agent"
@@ -614,7 +637,7 @@ class HooksService:
         session_id: str,
         min_chars: int,
     ) -> dict[str, Any]:
-        if not self._youtube_ingest_url:
+        if not self._youtube_ingest_urls:
             return {"ok": False, "status": "failed", "error": "missing_ingest_url"}
 
         headers: dict[str, str] = {"Content-Type": "application/json"}
@@ -630,28 +653,84 @@ class HooksService:
             "min_chars": max(20, min(int(min_chars or 0), 5000)),
         }
 
-        try:
-            timeout = httpx.Timeout(timeout=float(max(5, self._youtube_ingest_timeout_seconds + 10)))
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(self._youtube_ingest_url, headers=headers, json=payload)
-            if 200 <= resp.status_code < 300:
-                try:
-                    data = resp.json()
-                except Exception:
-                    data = {"ok": False, "status": "failed", "error": "invalid_json_response"}
-                if isinstance(data, dict):
-                    data.setdefault("http_status", resp.status_code)
-                    return data
-                return {"ok": False, "status": "failed", "error": "invalid_response_shape"}
-            return {
-                "ok": False,
-                "status": "failed",
-                "error": "ingest_http_error",
-                "http_status": resp.status_code,
-                "detail": (resp.text or "")[:2000],
-            }
-        except Exception as exc:
-            return {"ok": False, "status": "failed", "error": "ingest_request_error", "detail": str(exc)}
+        timeout = httpx.Timeout(timeout=float(max(5, self._youtube_ingest_timeout_seconds + 10)))
+        attempts: list[dict[str, Any]] = []
+        last_result: dict[str, Any] = {"ok": False, "status": "failed", "error": "ingest_request_error"}
+
+        for endpoint in self._youtube_ingest_urls:
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.post(endpoint, headers=headers, json=payload)
+                if 200 <= resp.status_code < 300:
+                    try:
+                        data = resp.json()
+                    except Exception:
+                        data = {"ok": False, "status": "failed", "error": "invalid_json_response"}
+                    if isinstance(data, dict):
+                        data.setdefault("http_status", resp.status_code)
+                        data["ingest_endpoint"] = endpoint
+                        attempts.append(
+                            {
+                                "endpoint": endpoint,
+                                "ok": bool(data.get("ok")),
+                                "http_status": int(resp.status_code),
+                                "error": str(data.get("error") or ""),
+                                "failure_class": str(data.get("failure_class") or ""),
+                            }
+                        )
+                        if bool(data.get("ok")):
+                            data["ingest_endpoint_attempts"] = attempts
+                            return data
+                        last_result = data
+                        continue
+                    last_result = {"ok": False, "status": "failed", "error": "invalid_response_shape"}
+                    attempts.append(
+                        {
+                            "endpoint": endpoint,
+                            "ok": False,
+                            "http_status": int(resp.status_code),
+                            "error": "invalid_response_shape",
+                            "failure_class": "",
+                        }
+                    )
+                    continue
+
+                last_result = {
+                    "ok": False,
+                    "status": "failed",
+                    "error": "ingest_http_error",
+                    "http_status": resp.status_code,
+                    "detail": (resp.text or "")[:2000],
+                }
+                attempts.append(
+                    {
+                        "endpoint": endpoint,
+                        "ok": False,
+                        "http_status": int(resp.status_code),
+                        "error": "ingest_http_error",
+                        "failure_class": "",
+                    }
+                )
+            except Exception as exc:
+                last_result = {
+                    "ok": False,
+                    "status": "failed",
+                    "error": "ingest_request_error",
+                    "detail": str(exc),
+                }
+                attempts.append(
+                    {
+                        "endpoint": endpoint,
+                        "ok": False,
+                        "http_status": 0,
+                        "error": "ingest_request_error",
+                        "failure_class": "",
+                    }
+                )
+
+        out = dict(last_result)
+        out["ingest_endpoint_attempts"] = attempts
+        return out
 
     def _write_text_file(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -804,6 +883,7 @@ class HooksService:
                 "local_youtube_ingest_mode: local_worker",
                 "local_youtube_ingest_status: succeeded",
                 f"local_youtube_ingest_source: {str(ingest_result.get('source') or 'unknown')}",
+                f"local_youtube_ingest_endpoint: {str(ingest_result.get('ingest_endpoint') or '')}",
                 f"local_youtube_ingest_transcript_chars: {int(ingest_result.get('transcript_chars') or 0)}",
                 f"local_youtube_ingest_transcript_file: {transcript_path}",
                 f"local_youtube_ingest_metadata_file: {meta_path}",
@@ -816,6 +896,7 @@ class HooksService:
                 "hook_youtube_ingest_mode": "local_worker",
                 "hook_youtube_ingest_status": "succeeded",
                 "hook_youtube_ingest_source": str(ingest_result.get("source") or "unknown"),
+                "hook_youtube_ingest_endpoint": str(ingest_result.get("ingest_endpoint") or ""),
                 "hook_youtube_ingest_transcript_file": str(transcript_path),
                 "hook_youtube_ingest_video_key": video_key,
             }
@@ -827,7 +908,8 @@ class HooksService:
             "video_url": video_url,
             "video_id": video_id,
             "video_key": video_key,
-            "ingest_url": self._youtube_ingest_url,
+            "ingest_url": self._youtube_ingest_urls[0] if self._youtube_ingest_urls else "",
+            "ingest_urls": list(self._youtube_ingest_urls),
             "min_chars": int(self._youtube_ingest_min_chars),
             "attempts": errors,
             "last_result": ingest_result,
