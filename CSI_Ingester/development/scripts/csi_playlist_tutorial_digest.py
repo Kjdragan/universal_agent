@@ -251,10 +251,6 @@ def _build_digest_from_items(
     max_items: int,
     window_label: str,
 ) -> str:
-
-    first_ts = str(rows[0]["created_at"] or "")
-    last_ts = str(rows[-1]["created_at"] or "")
-
     lines: list[str] = []
     lines.append(f"Playlist Tutorial Digest ({window_label})")
     lines.append(f"New playlist videos: {len(items)}")
