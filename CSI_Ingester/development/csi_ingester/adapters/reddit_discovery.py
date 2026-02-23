@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
+import logging
+from pathlib import Path
 from typing import Any
 
 import httpx
 
 from csi_ingester.adapters.base import RawEvent, SourceAdapter
 from csi_ingester.contract import CreatorSignalEvent
+
+logger = logging.getLogger(__name__)
 
 
 class RedditDiscoveryAdapter(SourceAdapter):
@@ -20,6 +25,9 @@ class RedditDiscoveryAdapter(SourceAdapter):
         self._seeded_by_subreddit: dict[str, bool] = {}
         self._seed_on_first_run = bool(config.get("seed_on_first_run", True))
         self._max_seen_cache = max(100, int(config.get("max_seen_cache_per_subreddit", 2000)))
+        self._watchlist_file = str(config.get("watchlist_file") or "").strip()
+        self._watchlist_file_mtime: float | None = None
+        self._watchlist_file_subreddits: list[str] = []
         self._load_state_fn = lambda source_key: None
         self._save_state_fn = lambda source_key, state: None
 
@@ -62,8 +70,11 @@ class RedditDiscoveryAdapter(SourceAdapter):
                     out.append(item.strip())
                 elif isinstance(item, dict):
                     name = str(item.get("name") or "").strip()
+                    if not name:
+                        name = str(item.get("subreddit") or "").strip()
                     if name:
                         out.append(name)
+        out.extend(self._load_watchlist_file_subreddits())
         deduped: list[str] = []
         seen: set[str] = set()
         for item in out:
@@ -73,6 +84,59 @@ class RedditDiscoveryAdapter(SourceAdapter):
             seen.add(key)
             deduped.append(item)
         return deduped
+
+    def _load_watchlist_file_subreddits(self) -> list[str]:
+        if not self._watchlist_file:
+            return []
+        path = Path(self._watchlist_file).expanduser()
+        if not path.exists():
+            if self._watchlist_file_subreddits:
+                logger.warning("Reddit watchlist file missing path=%s; keeping previous cached list", path)
+            return self._watchlist_file_subreddits
+
+        try:
+            mtime = path.stat().st_mtime
+        except OSError as exc:
+            logger.warning("Reddit watchlist file stat failed path=%s error=%s", path, exc)
+            return self._watchlist_file_subreddits
+
+        if self._watchlist_file_mtime is not None and mtime == self._watchlist_file_mtime:
+            return self._watchlist_file_subreddits
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Reddit watchlist file parse failed path=%s error=%s", path, exc)
+            return self._watchlist_file_subreddits
+
+        subreddits: list[str] = []
+        if isinstance(payload, dict):
+            raw_subreddits = payload.get("subreddits")
+            if isinstance(raw_subreddits, list):
+                for row in raw_subreddits:
+                    if isinstance(row, str) and row.strip():
+                        subreddits.append(row.strip())
+                    elif isinstance(row, dict):
+                        name = str(row.get("name") or "").strip()
+                        if not name:
+                            name = str(row.get("subreddit") or "").strip()
+                        if name:
+                            subreddits.append(name)
+        elif isinstance(payload, list):
+            for row in payload:
+                if isinstance(row, str) and row.strip():
+                    subreddits.append(row.strip())
+                elif isinstance(row, dict):
+                    name = str(row.get("name") or "").strip()
+                    if not name:
+                        name = str(row.get("subreddit") or "").strip()
+                    if name:
+                        subreddits.append(name)
+
+        self._watchlist_file_mtime = mtime
+        self._watchlist_file_subreddits = subreddits
+        logger.info("Reddit watchlist loaded path=%s subreddits=%d", path, len(subreddits))
+        return self._watchlist_file_subreddits
 
     async def fetch_events(self) -> list[RawEvent]:
         subreddits = self._subreddits()

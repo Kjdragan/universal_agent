@@ -21,6 +21,9 @@ sources:
     poll_interval_seconds: 300
     limit: 30
     user_agent: "CSIIngester/1.0 (by u/csi_ingester)"
+    watchlist_file: "/opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
+    seed_on_first_run: true
+    max_seen_cache_per_subreddit: 2000
     subreddits: []
 
 delivery:
