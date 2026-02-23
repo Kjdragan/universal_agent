@@ -11,10 +11,16 @@ install_unit() {
 
 install_unit "csi-rss-telegram-digest.service"
 install_unit "csi-rss-telegram-digest.timer"
+install_unit "csi-reddit-telegram-digest.service"
+install_unit "csi-reddit-telegram-digest.timer"
+install_unit "csi-playlist-tutorial-digest.service"
+install_unit "csi-playlist-tutorial-digest.timer"
 install_unit "csi-rss-semantic-enrich.service"
 install_unit "csi-rss-semantic-enrich.timer"
 install_unit "csi-rss-trend-report.service"
 install_unit "csi-rss-trend-report.timer"
+install_unit "csi-reddit-trend-report.service"
+install_unit "csi-reddit-trend-report.timer"
 install_unit "csi-rss-insight-analyst.service"
 install_unit "csi-rss-insight-analyst.timer"
 install_unit "csi-rss-reclassify-categories.service"
@@ -36,8 +42,11 @@ install_unit "csi-hourly-token-report.timer"
 
 systemctl daemon-reload
 systemctl enable --now csi-rss-telegram-digest.timer
+systemctl enable --now csi-reddit-telegram-digest.timer
+systemctl enable --now csi-playlist-tutorial-digest.timer
 systemctl enable --now csi-rss-semantic-enrich.timer
 systemctl enable --now csi-rss-trend-report.timer
+systemctl enable --now csi-reddit-trend-report.timer
 systemctl enable --now csi-rss-insight-analyst.timer
 systemctl enable --now csi-rss-reclassify-categories.timer
 systemctl enable --now csi-category-quality-loop.timer
@@ -50,8 +59,11 @@ systemctl enable --now csi-hourly-token-report.timer
 
 echo "SYSTEMD_EXTRAS_INSTALLED=1"
 systemctl is-active csi-rss-telegram-digest.timer
+systemctl is-active csi-reddit-telegram-digest.timer
+systemctl is-active csi-playlist-tutorial-digest.timer
 systemctl is-active csi-rss-semantic-enrich.timer
 systemctl is-active csi-rss-trend-report.timer
+systemctl is-active csi-reddit-trend-report.timer
 systemctl is-active csi-rss-insight-analyst.timer
 systemctl is-active csi-rss-reclassify-categories.timer
 systemctl is-active csi-category-quality-loop.timer

@@ -47,8 +47,27 @@ Run RSS digest in dry-run mode (no Telegram send):
 scripts/csi_run.sh python3 scripts/csi_rss_telegram_digest.py --db-path /path/to/csi.db --seed-current-on-first-run --dry-run
 ```
 
+Run Reddit digest in dry-run mode (no Telegram send):
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_reddit_telegram_digest.py --db-path /path/to/csi.db --seed-current-on-first-run --dry-run
+```
+
+Run playlist tutorial digest in dry-run mode (no Telegram send):
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_playlist_tutorial_digest.py --db-path /path/to/csi.db --seed-current-on-first-run --dry-run
+```
+
 If Telegram chat routing is not configured yet (`CSI_RSS_TELEGRAM_CHAT_ID` unset), the digest job now exits cleanly in "skipped" mode instead of failing the systemd service.
 Digest format includes adaptive category sections. Core categories are `AI`, `Political`, `War`, `Other Interest`; additional dynamic categories can be created automatically from recurring topics (capped by max category settings).
+
+Telegram channel separation options:
+
+- `CSI_RSS_TELEGRAM_CHAT_ID` for YouTube RSS digest stream.
+- `CSI_REDDIT_TELEGRAM_CHAT_ID` for Reddit digest stream.
+- `CSI_TUTORIAL_TELEGRAM_CHAT_ID` for playlist tutorial updates (new playlist videos + discovered artifact paths).
+- Stream scripts fall back to generic Telegram envs if stream-specific chat IDs are not set.
 
 Install periodic systemd jobs on VPS (requires root):
 
@@ -59,8 +78,11 @@ Install periodic systemd jobs on VPS (requires root):
 Timers installed:
 
 - `csi-rss-telegram-digest.timer` -> every 10 minutes (sends one batched Telegram digest when new RSS events exist)
+- `csi-reddit-telegram-digest.timer` -> every 10 minutes at `:01` (sends one batched Telegram digest when new Reddit watchlist events exist)
+- `csi-playlist-tutorial-digest.timer` -> every 10 minutes at `:04` (playlist-triggered tutorial updates with artifact paths)
 - `csi-rss-semantic-enrich.timer` -> every 10 minutes at `:02` (transcript extraction + adaptive semantic categorization)
 - `csi-rss-trend-report.timer` -> hourly at minute `:12` (aggregated trend report event to UA)
+- `csi-reddit-trend-report.timer` -> hourly at minute `:18` (aggregated Reddit trend report event to UA)
 - `csi-rss-insight-analyst.timer` -> hourly at minute `:22` (CSI-native insight reports: emerging + daily cadence)
 - `csi-rss-reclassify-categories.timer` -> every 6 hours at minute `:17` (reclassify older RSS rows with current taxonomy)
 - `csi-category-quality-loop.timer` -> hourly at minute `:27` (adaptive taxonomy quality loop + threshold/category tuning)
@@ -94,6 +116,12 @@ Run RSS trend report manually:
 
 ```bash
 scripts/csi_run.sh python3 scripts/csi_rss_trend_report.py --db-path /path/to/csi.db --window-hours 24 --force
+```
+
+Run Reddit trend report manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_reddit_trend_report.py --db-path /path/to/csi.db --window-hours 24 --force
 ```
 
 Run CSI insight analyst manually:
