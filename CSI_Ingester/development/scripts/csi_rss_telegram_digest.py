@@ -71,25 +71,27 @@ def _get_from_env_file(path: Path, keys: list[str]) -> str:
     return ""
 
 
-def _resolve_setting(keys: list[str], env_file: Path | None) -> str:
+def _resolve_setting(keys: list[str], env_files: list[Path]) -> str:
     for key in keys:
         val = os.getenv(key, "").strip()
         if val:
             return val
-    if env_file is not None:
-        return _get_from_env_file(env_file, keys).strip()
+    for env_file in env_files:
+        found = _get_from_env_file(env_file, keys).strip()
+        if found:
+            return found
     return ""
 
 
-def _resolve_chat_id(env_file: Path | None) -> str:
+def _resolve_chat_id(env_files: list[Path]) -> str:
     chat_id = _resolve_setting(
         ["CSI_RSS_TELEGRAM_CHAT_ID", "TELEGRAM_CHAT_ID", "TELEGRAM_DEFAULT_CHAT_ID"],
-        env_file,
+        env_files,
     )
     if chat_id:
         return chat_id
 
-    raw_allowed = _resolve_setting(["TELEGRAM_ALLOWED_USER_IDS"], env_file)
+    raw_allowed = _resolve_setting(["TELEGRAM_ALLOWED_USER_IDS"], env_files)
     if raw_allowed:
         first = raw_allowed.split(",", 1)[0].strip()
         if first:
@@ -236,13 +238,13 @@ def _maybe_build_claude_digest(
     *,
     max_items: int,
     window_label: str,
-    env_file: Path | None,
+    env_files: list[Path],
 ) -> tuple[str | None, dict[str, int]]:
     use_claude = os.getenv("CSI_RSS_DIGEST_USE_CLAUDE", "0").strip() == "1"
     if not use_claude:
         return None, {}
 
-    api_key = _resolve_setting(["ANTHROPIC_API_KEY"], env_file)
+    api_key = _resolve_setting(["ANTHROPIC_API_KEY"], env_files)
     if not api_key:
         return None, {}
 
@@ -390,6 +392,11 @@ def main() -> int:
         help="Fallback env file for Telegram/Anthropic keys",
     )
     parser.add_argument(
+        "--csi-env-file",
+        default="/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env",
+        help="Additional env file for CSI-specific overrides",
+    )
+    parser.add_argument(
         "--seed-current-on-first-run",
         action="store_true",
         help="When no state exists, set cursor to current max id and do not notify.",
@@ -403,7 +410,11 @@ def main() -> int:
         return 2
 
     state_path = Path(args.state_path).expanduser()
-    env_file = Path(args.env_file).expanduser() if args.env_file else None
+    env_files: list[Path] = []
+    if args.env_file:
+        env_files.append(Path(args.env_file).expanduser())
+    if args.csi_env_file:
+        env_files.append(Path(args.csi_env_file).expanduser())
     state = _load_state(state_path)
 
     conn = _connect(db_path)
@@ -441,9 +452,9 @@ def main() -> int:
     if not rows:
         return 0
 
-    chat_id = (args.chat_id or "").strip() or _resolve_chat_id(env_file)
+    chat_id = (args.chat_id or "").strip() or _resolve_chat_id(env_files)
     bot_token = (args.bot_token or "").strip() or _resolve_setting(
-        ["CSI_RSS_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"], env_file
+        ["CSI_RSS_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"], env_files
     )
 
     if not chat_id:
@@ -457,7 +468,7 @@ def main() -> int:
         rows,
         max_items=max(1, int(args.max_items)),
         window_label=args.window_label,
-        env_file=env_file,
+        env_files=env_files,
     )
     if digest is None:
         digest = _build_fallback_digest(
