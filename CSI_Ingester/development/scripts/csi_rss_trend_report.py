@@ -18,6 +18,11 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
+from csi_ingester.analytics.categories import (
+    canonicalize_category,
+    ensure_taxonomy_state,
+    format_category_label,
+)
 from csi_ingester.config import load_config
 from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.emitter.ua_client import UAEmitter
@@ -88,7 +93,9 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _build_report_data(conn: sqlite3.Connection, start_db: str, end_db: str) -> dict[str, Any]:
+def _build_report_data(
+    conn: sqlite3.Connection, start_db: str, end_db: str, taxonomy_state: dict[str, Any]
+) -> dict[str, Any]:
     rows = conn.execute(
         """
         SELECT
@@ -113,9 +120,7 @@ def _build_report_data(conn: sqlite3.Connection, start_db: str, end_db: str) -> 
     category_summaries: dict[str, list[dict[str, str]]] = defaultdict(list)
 
     for row in rows:
-        category = str(row["category"] or "unknown").strip().lower() or "unknown"
-        if category not in {"ai", "non_ai"}:
-            category = "unknown"
+        category = canonicalize_category(str(row["category"] or ""), state=taxonomy_state)
         by_category[category] += 1
         channel_name = str(row["channel_name"] or "").strip()
         channel_id = str(row["channel_id"] or "").strip()
@@ -167,8 +172,9 @@ def _fallback_markdown(report_data: dict[str, Any], start_iso: str, end_iso: str
     by_category = report_data.get("by_category", {})
     if isinstance(by_category, dict):
         lines.append(f"- AI items: {int(by_category.get('ai') or 0)}")
-        lines.append(f"- Non-AI items: {int(by_category.get('non_ai') or 0)}")
-        lines.append(f"- Unknown items: {int(by_category.get('unknown') or 0)}")
+        lines.append(f"- Political items: {int(by_category.get('political') or 0)}")
+        lines.append(f"- War items: {int(by_category.get('war') or 0)}")
+        lines.append(f"- Other-interest items: {int(by_category.get('other_interest') or 0)}")
     lines.append("")
     lines.append("## Top Channels")
     for item in report_data.get("top_channels", [])[:10]:
@@ -185,10 +191,39 @@ def _fallback_markdown(report_data: dict[str, Any], start_iso: str, end_iso: str
         if isinstance(sample, dict):
             lines.append(f"- {sample.get('channel')}: {sample.get('title')}")
     lines.append("")
-    lines.append("## Non-AI Samples")
-    for sample in report_data.get("samples", {}).get("non_ai", [])[:6]:
+    lines.append("## Political Samples")
+    for sample in report_data.get("samples", {}).get("political", [])[:6]:
         if isinstance(sample, dict):
             lines.append(f"- {sample.get('channel')}: {sample.get('title')}")
+    lines.append("")
+    lines.append("## War Samples")
+    for sample in report_data.get("samples", {}).get("war", [])[:6]:
+        if isinstance(sample, dict):
+            lines.append(f"- {sample.get('channel')}: {sample.get('title')}")
+    lines.append("")
+    lines.append("## Other Interest Samples")
+    for sample in report_data.get("samples", {}).get("other_interest", [])[:6]:
+        if isinstance(sample, dict):
+            lines.append(f"- {sample.get('channel')}: {sample.get('title')}")
+
+    extra: list[tuple[str, int]] = []
+    if isinstance(by_category, dict):
+        for slug, count in by_category.items():
+            key = str(slug).strip()
+            if key and key not in {"ai", "political", "war", "other_interest"}:
+                extra.append((key, int(count or 0)))
+    extra.sort(key=lambda item: item[1], reverse=True)
+    if extra:
+        lines.append("")
+        lines.append("## Emerging Categories")
+        for slug, count in extra[:8]:
+            lines.append(f"- {format_category_label(slug)}: {count}")
+        for slug, _count in extra[:3]:
+            lines.append("")
+            lines.append(f"### {format_category_label(slug)} Samples")
+            for sample in report_data.get("samples", {}).get(slug, [])[:5]:
+                if isinstance(sample, dict):
+                    lines.append(f"- {sample.get('channel')}: {sample.get('title')}")
     return "\n".join(lines).strip()
 
 
@@ -204,7 +239,8 @@ def _claude_trend_markdown(
     prompt = (
         "Produce a concise trend report in markdown for monitored YouTube uploads.\n"
         "Focus on meaningful shifts and recurring narratives.\n"
-        "Sections required: Executive Summary, AI Trend Signals, Non-AI Trend Signals, Watch Items.\n"
+        "Sections required: Executive Summary, AI Trend Signals, Political Trend Signals, "
+        "War Trend Signals, Other Interest Signals, Emerging Categories, Watch Items.\n"
         "Keep under 2200 words.\n\n"
         f"Window: {start_iso} -> {end_iso}\n"
         f"Data JSON:\n{json.dumps(report_data, ensure_ascii=False)}"
@@ -318,6 +354,7 @@ def main() -> int:
     env_file_values = _load_env_file(Path(args.env_file).expanduser())
     conn = connect(Path(args.db_path).expanduser())
     ensure_schema(conn)
+    taxonomy_state = ensure_taxonomy_state(conn)
     config = load_config()
 
     start_dt, end_dt = _window(max(1, int(args.window_hours)))
@@ -341,7 +378,7 @@ def main() -> int:
         conn.close()
         return 0
 
-    report_data = _build_report_data(conn, start_db, end_db)
+    report_data = _build_report_data(conn, start_db, end_db, taxonomy_state)
     total_items = int(report_data.get("total_items") or 0)
     if total_items == 0:
         state_path.parent.mkdir(parents=True, exist_ok=True)

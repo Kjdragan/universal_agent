@@ -18,6 +18,7 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
+from csi_ingester.analytics.categories import canonicalize_category, format_category_label
 from csi_ingester.store import token_usage as token_usage_store
 
 
@@ -126,9 +127,7 @@ def _build_fallback_digest(
 
         title = str(subject.get("title") or "").strip() or "(untitled)"
         created_at = str(row["created_at"] or "")
-        raw_category = str(row["category"] or "").strip().lower()
-        if raw_category not in {"ai", "non_ai"}:
-            raw_category = "unknown"
+        raw_category = canonicalize_category(str(row["category"] or ""))
         category_counts[raw_category] += 1
 
         items.append(
@@ -149,9 +148,17 @@ def _build_fallback_digest(
     lines.append(
         "Category mix: "
         f"AI={category_counts.get('ai', 0)} | "
-        f"Non-AI={category_counts.get('non_ai', 0)} | "
-        f"Unknown={category_counts.get('unknown', 0)}"
+        f"Political={category_counts.get('political', 0)} | "
+        f"War={category_counts.get('war', 0)} | "
+        f"Other={category_counts.get('other_interest', 0)}"
     )
+    extras = [
+        f"{format_category_label(slug)}={count}"
+        for slug, count in sorted(category_counts.items())
+        if slug not in {"ai", "political", "war", "other_interest"}
+    ]
+    if extras:
+        lines.append(f"Emerging mix: {' | '.join(extras[:6])}")
     lines.append(f"Window: {first_ts} -> {last_ts}")
     lines.append("")
     lines.append("Top channels:")
@@ -160,14 +167,25 @@ def _build_fallback_digest(
     lines.append("")
     lines.append("Videos by category:")
 
-    buckets: dict[str, list[dict[str, str]]] = {"ai": [], "non_ai": [], "unknown": []}
+    buckets: dict[str, list[dict[str, str]]] = {}
     for item in items:
-        buckets[item.get("category", "unknown")].append(item)
+        key = item.get("category", "other_interest")
+        buckets.setdefault(key, []).append(item)
 
     emitted = 0
     max_emit = max(1, max_items)
-    ordered = [("ai", "AI"), ("non_ai", "Non-AI"), ("unknown", "Unknown")]
-    non_empty = [(k, l) for (k, l) in ordered if buckets[k]]
+    ordered_base = ["ai", "political", "war", "other_interest"]
+    ordered = [(slug, format_category_label(slug)) for slug in ordered_base if buckets.get(slug)]
+    extras_in_order = [
+        (slug, format_category_label(slug))
+        for slug, _count in sorted(
+            [(key, len(value)) for key, value in buckets.items() if key not in ordered_base],
+            key=lambda item: item[1],
+            reverse=True,
+        )
+    ]
+    ordered.extend(extras_in_order)
+    non_empty = [(k, l) for (k, l) in ordered if buckets.get(k)]
     quotas: dict[str, int] = {k: 0 for k, _ in ordered}
     used_per_bucket: dict[str, int] = {k: 0 for k, _ in ordered}
 
@@ -248,7 +266,7 @@ def _maybe_build_claude_digest(
                 "title": str(subject.get("title") or ""),
                 "video_id": str(subject.get("video_id") or ""),
                 "url": str(subject.get("url") or ""),
-                "category": str(row["category"] or "unknown"),
+                "category": canonicalize_category(str(row["category"] or "")),
             }
         )
 
@@ -260,7 +278,7 @@ def _maybe_build_claude_digest(
         "Rules:\n"
         "- Plain text only (no markdown)\n"
         "- Keep under 3000 characters\n"
-        "- Include explicit sections: AI, Non-AI, Unknown\n"
+        "- Include explicit sections: AI, Political, War, Other Interest, Emerging Categories\n"
         "- Group related items when useful\n"
         "- Focus on channel + video title + URL\n\n"
         f"Events JSON:\n{json.dumps(compact_events, ensure_ascii=False)}"
@@ -408,7 +426,7 @@ def main() -> int:
             e.created_at,
             e.delivered,
             e.subject_json,
-            COALESCE(a.category, 'unknown') AS category
+            COALESCE(a.category, 'other_interest') AS category
         FROM events e
         LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id
         WHERE e.source = ? AND e.delivered = 1 AND e.id > ?

@@ -48,7 +48,7 @@ scripts/csi_run.sh python3 scripts/csi_rss_telegram_digest.py --db-path /path/to
 ```
 
 If Telegram chat routing is not configured yet (`CSI_RSS_TELEGRAM_CHAT_ID` unset), the digest job now exits cleanly in "skipped" mode instead of failing the systemd service.
-Digest format includes category sections (`AI`, `Non-AI`, `Unknown`) using `rss_event_analysis.category` when available.
+Digest format includes adaptive category sections. Core categories are `AI`, `Political`, `War`, `Other Interest`; additional dynamic categories can be created automatically from recurring topics (capped by max category settings).
 
 Install periodic systemd jobs on VPS (requires root):
 
@@ -59,7 +59,7 @@ Install periodic systemd jobs on VPS (requires root):
 Timers installed:
 
 - `csi-rss-telegram-digest.timer` -> every 10 minutes (sends one batched Telegram digest when new RSS events exist)
-- `csi-rss-semantic-enrich.timer` -> every 10 minutes at `:02` (transcript extraction + ai/non_ai semantic summary)
+- `csi-rss-semantic-enrich.timer` -> every 10 minutes at `:02` (transcript extraction + adaptive semantic categorization)
 - `csi-rss-trend-report.timer` -> hourly at minute `:12` (aggregated trend report event to UA)
 - `csi-daily-summary.timer` -> daily at `00:10 UTC` (writes summary artifacts under `/opt/universal_agent/artifacts/csi-reports/<day>/`)
 - `csi-hourly-token-report.timer` -> hourly at minute 05 (sends `hourly_token_usage_report` event to UA)
@@ -75,6 +75,13 @@ Run RSS semantic enrichment manually:
 ```bash
 scripts/csi_run.sh python3 scripts/csi_rss_semantic_enrich.py --db-path /path/to/csi.db --max-events 12
 ```
+
+Adaptive category behavior:
+
+- Base categories are always present: `ai`, `political`, `war`, `other_interest`.
+- CSI can auto-create new categories when recurring `other_interest` topics emerge.
+- Category count is capped (`--max-categories` or `CSI_RSS_ANALYSIS_MAX_CATEGORIES`, default `10`).
+- When capped, CSI retires the narrowest dynamic category first to keep taxonomy broad and avoid uncategorized spillover.
 
 Run RSS trend report manually:
 

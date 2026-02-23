@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS rss_event_analysis (
     transcript_status TEXT NOT NULL DEFAULT 'missing',
     transcript_chars INTEGER DEFAULT 0,
     transcript_ref TEXT,
-    category TEXT NOT NULL DEFAULT 'unknown',
+    category TEXT NOT NULL DEFAULT 'other_interest',
     summary_text TEXT,
     model_name TEXT,
     prompt_tokens INTEGER DEFAULT 0,
