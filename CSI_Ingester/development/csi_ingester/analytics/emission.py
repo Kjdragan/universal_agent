@@ -35,7 +35,14 @@ def emit_and_track(
         shared_secret=config.ua_shared_secret,
         instance_id=config.instance_id,
     )
-    delivered, status_code, payload = asyncio.run(emitter.emit_with_retries([event], max_attempts=retry_count))
+    try:
+        delivered, status_code, payload = asyncio.run(
+            emitter.emit_with_retries([event], max_attempts=retry_count)
+        )
+    except Exception as exc:
+        delivered = False
+        status_code = 599
+        payload = {"error": f"emit_exception:{type(exc).__name__}", "detail": str(exc)[:400]}
     if delivered:
         event_store.mark_delivered(conn, event.event_id)
         return True, status_code, payload
