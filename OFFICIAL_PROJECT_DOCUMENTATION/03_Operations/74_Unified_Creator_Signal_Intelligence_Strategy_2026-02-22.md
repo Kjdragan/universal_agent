@@ -347,6 +347,17 @@ This keeps trigger infrastructure independent from specific skill logic.
 3. Reuse the same UA action router and reporting pipeline.
 4. Add source-specific scoring and noise suppression rules.
 
+### Phase 4 Status Update (2026-02-23)
+
+1. Reddit source adapter scaffold is live with watchlist-file loading and canary enable/disable workflow.
+2. Reddit now has dedicated delivery surfaces:
+   1. `csi-reddit-telegram-digest.timer` for feed notifications.
+   2. `csi-reddit-trend-report.timer` for UA analytics event ingestion (`reddit_trend_report`).
+3. Telegram stream separation is explicit at env level:
+   1. `CSI_RSS_TELEGRAM_CHAT_ID` (YouTube RSS feed digest),
+   2. `CSI_REDDIT_TELEGRAM_CHAT_ID` (Reddit feed digest),
+   3. `CSI_TUTORIAL_TELEGRAM_CHAT_ID` (playlist tutorial run updates + artifact links/paths).
+
 ### Phase 5: Threads adapter using the same four-layer pattern
 
 1. Implement Threads source adapter in `CSI Ingestor`.

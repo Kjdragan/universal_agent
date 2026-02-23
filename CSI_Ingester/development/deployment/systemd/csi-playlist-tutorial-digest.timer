@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI playlist tutorial digest every 10 minutes
+
+[Timer]
+OnCalendar=*:4/10
+Persistent=true
+Unit=csi-playlist-tutorial-digest.service
+
+[Install]
+WantedBy=timers.target

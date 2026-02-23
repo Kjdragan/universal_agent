@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI Reddit trend report hourly
+
+[Timer]
+OnCalendar=*:18
+Persistent=true
+Unit=csi-reddit-trend-report.service
+
+[Install]
+WantedBy=timers.target

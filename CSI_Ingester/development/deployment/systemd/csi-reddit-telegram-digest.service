@@ -1,0 +1,10 @@
+[Unit]
+Description=CSI Reddit Telegram Digest (10-minute batch)
+After=network.target csi-ingester.service
+Wants=csi-ingester.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_telegram_digest.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --seed-current-on-first-run --window-label 10m
