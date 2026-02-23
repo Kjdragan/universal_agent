@@ -74,20 +74,44 @@ def _resolve_setting(keys: list[str], env_files: list[Path]) -> str:
     return ""
 
 
-def _resolve_chat_id(env_files: list[Path]) -> str:
-    chat_id = _resolve_setting(
-        [
-            "CSI_TUTORIAL_TELEGRAM_CHAT_ID",
-            "CSI_TELEGRAM_CHAT_ID_TUTORIALS",
-            "TELEGRAM_CHAT_ID_TUTORIALS",
-            "CSI_RSS_TELEGRAM_CHAT_ID",
-            "TELEGRAM_CHAT_ID",
-            "TELEGRAM_DEFAULT_CHAT_ID",
-        ],
-        env_files,
-    )
+def _is_truthy(raw: str) -> bool:
+    return (raw or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_optional_thread_id(raw: str) -> int | None:
+    val = (raw or "").strip()
+    if not val:
+        return None
+    try:
+        parsed = int(val)
+    except ValueError:
+        return None
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _resolve_chat_id(env_files: list[Path], *, strict: bool = False) -> str:
+    keys = [
+        "CSI_TUTORIAL_TELEGRAM_CHAT_ID",
+        "CSI_TELEGRAM_CHAT_ID_TUTORIALS",
+        "TELEGRAM_CHAT_ID_TUTORIALS",
+    ]
+    if not strict:
+        keys.extend(
+            [
+                "CSI_RSS_TELEGRAM_CHAT_ID",
+                "TELEGRAM_CHAT_ID",
+                "TELEGRAM_DEFAULT_CHAT_ID",
+            ]
+        )
+
+    chat_id = _resolve_setting(keys, env_files)
     if chat_id:
         return chat_id
+
+    if strict:
+        return ""
 
     raw_allowed = _resolve_setting(["TELEGRAM_ALLOWED_USER_IDS"], env_files)
     if raw_allowed:
@@ -95,6 +119,17 @@ def _resolve_chat_id(env_files: list[Path]) -> str:
         if first:
             return first
     return ""
+
+
+def _resolve_thread_id(env_files: list[Path], *, strict: bool = False) -> int | None:
+    keys = [
+        "CSI_TUTORIAL_TELEGRAM_THREAD_ID",
+        "CSI_TELEGRAM_THREAD_ID_TUTORIALS",
+        "TELEGRAM_THREAD_ID_TUTORIALS",
+    ]
+    if not strict:
+        keys.extend(["CSI_RSS_TELEGRAM_THREAD_ID", "TELEGRAM_THREAD_ID"])
+    return _parse_optional_thread_id(_resolve_setting(keys, env_files))
 
 
 def _safe_json(path: Path) -> dict[str, Any]:
@@ -231,13 +266,21 @@ def _build_digest(
     return msg
 
 
-def _send_telegram_message(bot_token: str, chat_id: str, text: str) -> tuple[bool, str]:
+def _send_telegram_message(
+    bot_token: str,
+    chat_id: str,
+    text: str,
+    *,
+    thread_id: int | None = None,
+) -> tuple[bool, str]:
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     body = {
         "chat_id": chat_id,
         "text": text,
         "disable_web_page_preview": True,
     }
+    if thread_id is not None:
+        body["message_thread_id"] = thread_id
     payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         url,
@@ -275,6 +318,7 @@ def main() -> int:
     parser.add_argument("--window-label", default="10m", help="Label for digest window")
     parser.add_argument("--chat-id", default="", help="Telegram chat id override")
     parser.add_argument("--bot-token", default="", help="Telegram bot token override")
+    parser.add_argument("--thread-id", default="", help="Telegram topic/thread id override")
     parser.add_argument(
         "--artifacts-root",
         default="",
@@ -294,6 +338,11 @@ def main() -> int:
         "--seed-current-on-first-run",
         action="store_true",
         help="When no state exists, set cursor to current max id and do not notify.",
+    )
+    parser.add_argument(
+        "--strict-stream-routing",
+        action="store_true",
+        help="Require stream-specific tutorial Telegram chat/thread ids and disable fallback to RSS/default chat ids.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print digest but do not send Telegram")
     args = parser.parse_args()
@@ -339,14 +388,31 @@ def main() -> int:
     if not rows:
         return 0
 
-    chat_id = (args.chat_id or "").strip() or _resolve_chat_id(env_files)
+    strict_stream_routing = args.strict_stream_routing or _is_truthy(
+        _resolve_setting(
+            ["CSI_TUTORIAL_TELEGRAM_STRICT_STREAM_ROUTING", "CSI_TELEGRAM_STRICT_STREAM_ROUTING"],
+            env_files,
+        )
+    )
+
+    chat_id = (args.chat_id or "").strip() or _resolve_chat_id(env_files, strict=strict_stream_routing)
+    thread_id = _parse_optional_thread_id(args.thread_id) or _resolve_thread_id(
+        env_files,
+        strict=strict_stream_routing,
+    )
     bot_token = (args.bot_token or "").strip() or _resolve_setting(
         ["CSI_TUTORIAL_TELEGRAM_BOT_TOKEN", "CSI_RSS_TELEGRAM_BOT_TOKEN", "TELEGRAM_BOT_TOKEN"],
         env_files,
     )
 
     if not chat_id:
-        print("PLAYLIST_TUTORIAL_SKIPPED_CHAT_ID_MISSING (set CSI_TUTORIAL_TELEGRAM_CHAT_ID)")
+        if strict_stream_routing:
+            print(
+                "PLAYLIST_TUTORIAL_SKIPPED_CHAT_ID_MISSING_STRICT "
+                "(set CSI_TUTORIAL_TELEGRAM_CHAT_ID or disable strict stream routing)"
+            )
+        else:
+            print("PLAYLIST_TUTORIAL_SKIPPED_CHAT_ID_MISSING (set CSI_TUTORIAL_TELEGRAM_CHAT_ID)")
         return 0
     if not bot_token:
         print("PLAYLIST_TUTORIAL_SKIPPED_BOT_TOKEN_MISSING (set CSI_TUTORIAL_TELEGRAM_BOT_TOKEN or TELEGRAM_BOT_TOKEN)")
@@ -374,7 +440,12 @@ def main() -> int:
         print(f"PLAYLIST_TUTORIAL_NEXT_LAST_SENT_ID={next_last_sent_id}")
         return 0
 
-    ok, reason = _send_telegram_message(bot_token=bot_token, chat_id=chat_id, text=digest)
+    ok, reason = _send_telegram_message(
+        bot_token=bot_token,
+        chat_id=chat_id,
+        text=digest,
+        thread_id=thread_id,
+    )
     if not ok:
         print(f"PLAYLIST_TUTORIAL_SEND_FAILED reason={reason}")
         return 4

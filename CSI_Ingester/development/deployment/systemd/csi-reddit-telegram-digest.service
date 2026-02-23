@@ -7,4 +7,4 @@ Wants=csi-ingester.service
 Type=oneshot
 WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
 EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
-ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_telegram_digest.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --seed-current-on-first-run --window-label 10m
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_telegram_digest.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --seed-current-on-first-run --window-label 10m --strict-stream-routing
