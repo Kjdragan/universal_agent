@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -149,6 +150,7 @@ def _find_tutorial_artifacts(
     video_id: str,
     max_hits: int = 3,
     max_day_dirs: int = 45,
+    artifacts_base_url: str = "",
 ) -> list[dict[str, str]]:
     if not video_id:
         return []
@@ -174,12 +176,29 @@ def _find_tutorial_artifacts(
 
             status = str(manifest.get("status") or "").strip() or "unknown"
             title = str(manifest.get("title") or "").strip()
+            run_url = ""
+            manifest_url = ""
+            base = (artifacts_base_url or "").strip().rstrip("/")
+            if base:
+                try:
+                    rel_run = run_dir.resolve().relative_to(artifacts_root.resolve()).as_posix()
+                    run_url = f"{base}/api/artifacts?path={urllib.parse.quote(rel_run, safe='/')}"
+                except Exception:
+                    run_url = ""
+                if manifest_path.exists():
+                    try:
+                        rel_manifest = manifest_path.resolve().relative_to(artifacts_root.resolve()).as_posix()
+                        manifest_url = f"{base}/api/artifacts/files/{urllib.parse.quote(rel_manifest, safe='/')}"
+                    except Exception:
+                        manifest_url = ""
             hits.append(
                 {
                     "run_path": str(run_dir),
                     "manifest_path": str(manifest_path) if manifest_path.exists() else "",
                     "status": status,
                     "title": title,
+                    "run_url": run_url,
+                    "manifest_url": manifest_url,
                 }
             )
             if len(hits) >= max_hits:
@@ -191,7 +210,12 @@ def _now_iso_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _item_from_row(row: sqlite3.Row, *, artifacts_root: Path) -> dict[str, Any]:
+def _item_from_row(
+    row: sqlite3.Row,
+    *,
+    artifacts_root: Path,
+    artifacts_base_url: str = "",
+) -> dict[str, Any]:
     try:
         subject = json.loads(str(row["subject_json"] or "{}"))
         if not isinstance(subject, dict):
@@ -207,6 +231,7 @@ def _item_from_row(row: sqlite3.Row, *, artifacts_root: Path) -> dict[str, Any]:
     artifacts = _find_tutorial_artifacts(
         artifacts_root=artifacts_root,
         video_id=video_id,
+        artifacts_base_url=artifacts_base_url,
     )
     return {
         "video_id": video_id,
@@ -253,9 +278,15 @@ def _build_digest_from_items(
                 run_path = str(artifact.get("run_path") or "")
                 status = str(artifact.get("status") or "unknown")
                 manifest_path = str(artifact.get("manifest_path") or "")
+                run_url = str(artifact.get("run_url") or "")
+                manifest_url = str(artifact.get("manifest_url") or "")
                 lines.append(f"  - status={status} run={run_path}")
                 if manifest_path:
                     lines.append(f"    manifest={manifest_path}")
+                if run_url:
+                    lines.append(f"    run_url={run_url}")
+                if manifest_url:
+                    lines.append(f"    manifest_url={manifest_url}")
         else:
             lines.append("  tutorial_artifacts: pending (no run artifact found yet)")
 
@@ -296,9 +327,15 @@ def _build_followup_digest(
             run_path = str(artifact.get("run_path") or "")
             status = str(artifact.get("status") or "unknown")
             manifest_path = str(artifact.get("manifest_path") or "")
+            run_url = str(artifact.get("run_url") or "")
+            manifest_url = str(artifact.get("manifest_url") or "")
             lines.append(f"  - status={status} run={run_path}")
             if manifest_path:
                 lines.append(f"    manifest={manifest_path}")
+            if run_url:
+                lines.append(f"    run_url={run_url}")
+            if manifest_url:
+                lines.append(f"    manifest_url={manifest_url}")
         emit += 1
 
     remaining = len(ready_items) - emit
@@ -368,6 +405,11 @@ def main() -> int:
         "--artifacts-root",
         default="",
         help="Artifacts root override (falls back to UA_ARTIFACTS_DIR or /opt/universal_agent/artifacts)",
+    )
+    parser.add_argument(
+        "--artifacts-base-url",
+        default="",
+        help="Optional public UA API base URL for clickable artifact links (example: https://api.example.com).",
     )
     parser.add_argument(
         "--env-file",
@@ -476,8 +518,19 @@ def main() -> int:
         env_files,
     )
     artifacts_root = Path(artifacts_root_raw).expanduser() if artifacts_root_raw else Path("/opt/universal_agent/artifacts")
+    artifacts_base_url = (args.artifacts_base_url or "").strip() or _resolve_setting(
+        ["CSI_TUTORIAL_ARTIFACTS_BASE_URL", "CSI_ARTIFACTS_BASE_URL", "UA_API_BASE_URL"],
+        env_files,
+    )
 
-    items = [_item_from_row(row, artifacts_root=artifacts_root) for row in rows]
+    items = [
+        _item_from_row(
+            row,
+            artifacts_root=artifacts_root,
+            artifacts_base_url=artifacts_base_url,
+        )
+        for row in rows
+    ]
     next_last_sent_id = last_sent_id
     next_pending_by_video = dict(pending_by_video)
 
@@ -533,6 +586,7 @@ def main() -> int:
         artifacts = _find_tutorial_artifacts(
             artifacts_root=artifacts_root,
             video_id=video_id,
+            artifacts_base_url=artifacts_base_url,
         )
         if artifacts:
             ready_items.append(
