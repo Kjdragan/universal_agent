@@ -16,6 +16,12 @@ sources:
     poll_interval_seconds: 300
     watchlist_file: "/opt/universal_agent/CSI_Ingester/development/channels_watchlist.json"
     watchlist: []
+  reddit_discovery:
+    enabled: false
+    poll_interval_seconds: 300
+    limit: 30
+    user_agent: "CSIIngester/1.0 (by u/csi_ingester)"
+    subreddits: []
 
 delivery:
   ua_endpoint: "${CSI_UA_ENDPOINT}"

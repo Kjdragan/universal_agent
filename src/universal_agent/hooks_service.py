@@ -438,6 +438,22 @@ class HooksService:
             return True, action.kind
         return False, "no_match"
 
+    async def dispatch_internal_action(self, action_payload: dict[str, Any]) -> tuple[bool, str]:
+        """
+        Dispatch a trusted in-process hook action directly.
+
+        This bypasses mapping resolution and auth because the caller is already
+        trusted (for example UA's CSI ingest route).
+        """
+        if not self.config.enabled:
+            return False, "hooks_disabled"
+        try:
+            action = HookAction.model_validate(action_payload)
+        except Exception:
+            return False, "invalid_action"
+        asyncio.create_task(self._dispatch_action(action))
+        return True, action.kind
+
     def _extract_action_field(self, message: str, key: str) -> str:
         if not message:
             return ""

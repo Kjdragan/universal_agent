@@ -64,7 +64,10 @@ Timers installed:
 - `csi-rss-insight-analyst.timer` -> hourly at minute `:22` (CSI-native insight reports: emerging + daily cadence)
 - `csi-rss-reclassify-categories.timer` -> every 6 hours at minute `:17` (reclassify older RSS rows with current taxonomy)
 - `csi-category-quality-loop.timer` -> hourly at minute `:27` (adaptive taxonomy quality loop + threshold/category tuning)
+- `csi-rss-quality-gate.timer` -> every 15 minutes (SLO-style quality gates + alert event emission)
 - `csi-analysis-task-runner.timer` -> every 10 minutes at `:06` (runs UA-submitted CSI analysis tasks)
+- `csi-analysis-task-bootstrap.timer` -> hourly at minute `:03` (auto-seeds baseline recurring analysis tasks)
+- `csi-report-product-finalize.timer` -> hourly at minute `:35` (materializes report artifacts + emits `report_product_ready`)
 - `csi-daily-summary.timer` -> daily at `00:10 UTC` (writes summary artifacts under `/opt/universal_agent/artifacts/csi-reports/<day>/`)
 - `csi-hourly-token-report.timer` -> hourly at minute 05 (sends `hourly_token_usage_report` event to UA)
 
@@ -117,6 +120,24 @@ Run analysis task runner manually:
 scripts/csi_run.sh python3 scripts/csi_analysis_task_runner.py --db-path /path/to/csi.db --max-tasks 8
 ```
 
+Run analysis task bootstrap manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_analysis_task_bootstrap.py --db-path /path/to/csi.db --force
+```
+
+Run RSS quality gate manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_rss_quality_gate.py --db-path /path/to/csi.db --window-hours 6 --force
+```
+
+Run report product finalization manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_report_product_finalize.py --db-path /path/to/csi.db --window-hours 24 --force
+```
+
 ## UA ↔ CSI Analyst Task Protocol
 
 CSI ingester API now exposes task endpoints for delegating analysis work into CSI:
@@ -142,6 +163,8 @@ Example create payload:
 ```
 
 Task runner executes queued tasks and emits `analysis_task_completed` / `analysis_task_failed` events back to UA.
+
+Task bootstrap keeps baseline recurring tasks in queue (`trend_followup`, `category_deep_dive`, `channel_deep_dive`) so the CSI analyst loop stays active even without manual task submissions.
 
 ## Tailnet Residential Transcript Worker
 
@@ -198,3 +221,4 @@ Key runtime notes:
 
 - SQLite schema is migration-based (`schema_migrations` table).
 - Adapter checkpoint/seed state is persisted in `source_state` for restart-safe behavior.
+- Reddit source onboarding scaffold exists as `csi_ingester/adapters/reddit_discovery.py` and is disabled by default (`sources.reddit_discovery.enabled=false`).

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI report product finalize hourly
+
+[Timer]
+OnCalendar=*:35
+Persistent=true
+Unit=csi-report-product-finalize.service
+
+[Install]
+WantedBy=timers.target

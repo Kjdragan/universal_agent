@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI analysis task bootstrap hourly
+
+[Timer]
+OnCalendar=*:03
+Persistent=true
+Unit=csi-analysis-task-bootstrap.service
+
+[Install]
+WantedBy=timers.target
