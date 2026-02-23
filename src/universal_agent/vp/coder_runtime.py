@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -37,52 +38,11 @@ from universal_agent.feature_flags import (
 logger = logging.getLogger(__name__)
 
 
-_CODING_INTENT_MARKERS = (
-    "code",
-    "python",
-    "bash",
-    "shell",
-    "typescript",
-    "javascript",
-    "refactor",
-    "bug",
-    "test",
-    "implement",
-    "fix",
-    "function",
-    "class",
-    "api",
-    "endpoint",
-)
-
-_CODIE_SCOPE_MARKERS = (
-    "script",
-    "project",
-    "module",
-    "service",
-    "workflow",
-    "autonomous",
-    "end-to-end",
-    "multi-file",
-    "across files",
-    "test suite",
-    "integration test",
-    "full implementation",
-    "production-ready",
-)
-
-_UTILITY_REQUEST_MARKERS = (
-    "bash command",
-    "shell command",
-    "cli command",
-    "one-liner",
-    "one liner",
-    "quick command",
-    "utility function",
-    "helper function",
-    "small helper",
-    "small snippet",
-    "quick snippet",
+_CODIE_EXPLICIT_INTENT_PATTERNS = (
+    re.compile(r"\bcod(?:ie|y|i)\b", re.IGNORECASE),
+    re.compile(r"\bcoder[\s\-_]*vp\b", re.IGNORECASE),
+    re.compile(r"\bvp[\s\-_]*coder\b", re.IGNORECASE),
+    re.compile(r"\bvp[\s\._-]*coder[\s\._-]*primary\b", re.IGNORECASE),
 )
 
 _INTERNAL_SYSTEM_MARKERS = (
@@ -199,18 +159,15 @@ class CoderVPRuntime:
         )
 
     def is_coding_intent(self, user_input: str) -> bool:
-        text = (user_input or "").lower()
-        if "```" in text:
-            return True
-        return any(marker in text for marker in _CODING_INTENT_MARKERS)
+        text = str(user_input or "").strip()
+        if not text:
+            return False
+        return any(pattern.search(text) for pattern in _CODIE_EXPLICIT_INTENT_PATTERNS)
 
     def meets_delegation_threshold(self, user_input: str) -> bool:
-        text = (user_input or "").lower()
-        if not self.is_coding_intent(text):
-            return False
-        if any(marker in text for marker in _CODIE_SCOPE_MARKERS):
-            return True
-        return not any(marker in text for marker in _UTILITY_REQUEST_MARKERS)
+        # CODIE is now explicit-intent only: if the user did not explicitly
+        # call for CODIE/VP Coder, this lane should not be selected.
+        return self.is_coding_intent(user_input)
 
     def is_internal_system_request(self, user_input: str) -> bool:
         text = (user_input or "").lower()

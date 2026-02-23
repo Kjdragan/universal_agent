@@ -431,6 +431,12 @@ def main() -> int:
         action="store_true",
         help="Require stream-specific tutorial Telegram chat/thread ids and disable fallback to RSS/default chat ids.",
     )
+    parser.add_argument(
+        "--backfill-pending-count",
+        type=int,
+        default=20,
+        help="Backfill unresolved pending videos from recent delivered playlist events up to this count.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Print digest but do not send Telegram")
     args = parser.parse_args()
 
@@ -477,7 +483,6 @@ def main() -> int:
         """,
         (source, last_sent_id),
     ).fetchall()
-    conn.close()
 
     print(f"PLAYLIST_TUTORIAL_LAST_SENT_ID={last_sent_id}")
     print(f"PLAYLIST_TUTORIAL_NEW_COUNT={len(rows)}")
@@ -579,6 +584,44 @@ def main() -> int:
                 "created_at": str(item.get("created_at") or ""),
                 "pending_since": _now_iso_utc(),
             }
+
+    backfill_count = max(0, int(args.backfill_pending_count))
+    backfilled = 0
+    if backfill_count > 0 and last_sent_id > 0:
+        backfill_rows = conn.execute(
+            """
+            SELECT id, created_at, subject_json
+            FROM events
+            WHERE source = ? AND delivered = 1 AND id <= ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (source, last_sent_id, backfill_count),
+        ).fetchall()
+        for row in backfill_rows:
+            item = _item_from_row(
+                row,
+                artifacts_root=artifacts_root,
+                artifacts_base_url=artifacts_base_url,
+            )
+            video_id = str(item.get("video_id") or "").strip()
+            if not video_id:
+                continue
+            if video_id in next_pending_by_video:
+                continue
+            if item.get("artifacts"):
+                continue
+            next_pending_by_video[video_id] = {
+                "video_id": video_id,
+                "title": str(item.get("title") or ""),
+                "video_url": str(item.get("video_url") or ""),
+                "playlist_id": str(item.get("playlist_id") or ""),
+                "created_at": str(item.get("created_at") or ""),
+                "pending_since": _now_iso_utc(),
+            }
+            backfilled += 1
+    conn.close()
+    print(f"PLAYLIST_TUTORIAL_PENDING_BACKFILLED={backfilled}")
 
     ready_items: list[dict[str, Any]] = []
     remaining_pending: dict[str, dict[str, Any]] = {}
