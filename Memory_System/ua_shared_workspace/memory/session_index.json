@@ -413,5 +413,20 @@
     "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-21 22:25:21**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c839778a6137bd3dac3fa690f2625` |\n| **Logfire Trace** | [View Full Trace](",
     "file_path": "memory/sessions/4c8dd3d1-c25b-40c0-bbb0-c9dcf99a79f8_2026-02-22.md",
     "content_hash": "18dcd8b5d3df8da59de616c99cdc8a8af4de8d7418e8f87d774460f02ad6e464"
+  },
+  {
+    "entry_id": "1744bdd4-af1c-46d7-8503-b0e6c37993b2",
+    "timestamp": "2026-02-23T20:04:50.678783+00:00",
+    "source": "session_index",
+    "session_id": "a239afda-f646-42f0-8bd8-30ff781e83c1",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:a239afda-f646-42f0-8bd8-30ff781e83c1"
+    ],
+    "summary": null,
+    "preview": "@mcp.tool()\n1594:@mcp.tool()\n1641:@mcp.tool()\n1793:@mcp.tool()\n1827:@mcp.tool()\n1840:@mcp.tool()\n2456:@mcp.tool()\n3155:@mcp.tool()\n3387:@mcp.tool()\n3823:@mcp.tool()\n3982:@mcp.tool()\n4010:@mcp.tool()\n4070:@mcp.tool()\n4163:# @mcp.tool()\n4278:@mcp.tool()\n4333:@mcp.tool()\n```\n\n#### \ud83d\udee0",
+    "file_path": "memory/sessions/a239afda-f646-42f0-8bd8-30ff781e83c1_2026-02-23.md",
+    "content_hash": "87c26872c9c68687965e8444fb0c3c5fbe2aee5ae2d23da71a250dddc64349f1"
   }
 ]
