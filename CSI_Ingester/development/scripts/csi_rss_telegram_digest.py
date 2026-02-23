@@ -103,6 +103,7 @@ def _build_fallback_digest(
     window_label: str,
 ) -> str:
     channel_counts: Counter[str] = Counter()
+    category_counts: Counter[str] = Counter()
     items: list[dict[str, str]] = []
 
     for row in rows:
@@ -125,6 +126,10 @@ def _build_fallback_digest(
 
         title = str(subject.get("title") or "").strip() or "(untitled)"
         created_at = str(row["created_at"] or "")
+        raw_category = str(row["category"] or "").strip().lower()
+        if raw_category not in {"ai", "non_ai"}:
+            raw_category = "unknown"
+        category_counts[raw_category] += 1
 
         items.append(
             {
@@ -132,6 +137,7 @@ def _build_fallback_digest(
                 "title": title.replace("\n", " "),
                 "url": video_url,
                 "created_at": created_at,
+                "category": raw_category,
             }
         )
 
@@ -140,21 +146,66 @@ def _build_fallback_digest(
     lines: list[str] = []
     lines.append(f"YouTube RSS Digest ({window_label})")
     lines.append(f"New videos: {len(rows)}")
+    lines.append(
+        "Category mix: "
+        f"AI={category_counts.get('ai', 0)} | "
+        f"Non-AI={category_counts.get('non_ai', 0)} | "
+        f"Unknown={category_counts.get('unknown', 0)}"
+    )
     lines.append(f"Window: {first_ts} -> {last_ts}")
     lines.append("")
     lines.append("Top channels:")
     for channel, count in channel_counts.most_common(5):
         lines.append(f"- {channel}: {count}")
     lines.append("")
-    lines.append("Videos:")
+    lines.append("Videos by category:")
 
-    for item in items[: max(1, max_items)]:
-        lines.append(f"- {item['channel']}: {item['title']}")
-        if item["url"]:
-            lines.append(f"  {item['url']}")
+    buckets: dict[str, list[dict[str, str]]] = {"ai": [], "non_ai": [], "unknown": []}
+    for item in items:
+        buckets[item.get("category", "unknown")].append(item)
 
-    if len(items) > max_items:
-        lines.append(f"- ... and {len(items) - max_items} more")
+    emitted = 0
+    max_emit = max(1, max_items)
+    ordered = [("ai", "AI"), ("non_ai", "Non-AI"), ("unknown", "Unknown")]
+    non_empty = [(k, l) for (k, l) in ordered if buckets[k]]
+    quotas: dict[str, int] = {k: 0 for k, _ in ordered}
+    used_per_bucket: dict[str, int] = {k: 0 for k, _ in ordered}
+
+    if non_empty:
+        base = max_emit // len(non_empty)
+        remainder = max_emit % len(non_empty)
+        for idx, (key, _) in enumerate(non_empty):
+            quotas[key] = base + (1 if idx < remainder else 0)
+            if quotas[key] == 0:
+                quotas[key] = 1
+
+    for key, label in non_empty:
+        lines.append(f"{label}:")
+        quota = quotas[key]
+        for item in buckets[key][:quota]:
+            if emitted >= max_emit:
+                break
+            lines.append(f"- {item['channel']}: {item['title']}")
+            if item["url"]:
+                lines.append(f"  {item['url']}")
+            emitted += 1
+            used_per_bucket[key] += 1
+
+    if emitted < max_emit:
+        for key, _label in ordered:
+            if emitted >= max_emit:
+                break
+            start = used_per_bucket[key]
+            for item in buckets[key][start:]:
+                if emitted >= max_emit:
+                    break
+                lines.append(f"- {item['channel']}: {item['title']}")
+                if item["url"]:
+                    lines.append(f"  {item['url']}")
+                emitted += 1
+
+    if len(items) > emitted:
+        lines.append(f"- ... and {len(items) - emitted} more")
 
     msg = "\n".join(lines).strip()
     if len(msg) > 3900:
@@ -197,6 +248,7 @@ def _maybe_build_claude_digest(
                 "title": str(subject.get("title") or ""),
                 "video_id": str(subject.get("video_id") or ""),
                 "url": str(subject.get("url") or ""),
+                "category": str(row["category"] or "unknown"),
             }
         )
 
@@ -208,6 +260,7 @@ def _maybe_build_claude_digest(
         "Rules:\n"
         "- Plain text only (no markdown)\n"
         "- Keep under 3000 characters\n"
+        "- Include explicit sections: AI, Non-AI, Unknown\n"
         "- Group related items when useful\n"
         "- Focus on channel + video title + URL\n\n"
         f"Events JSON:\n{json.dumps(compact_events, ensure_ascii=False)}"
@@ -349,10 +402,17 @@ def main() -> int:
     last_sent_id = int(state.get("last_sent_id") or 0)
     rows = conn.execute(
         """
-        SELECT id, event_id, created_at, delivered, subject_json
-        FROM events
-        WHERE source = ? AND delivered = 1 AND id > ?
-        ORDER BY id ASC
+        SELECT
+            e.id,
+            e.event_id,
+            e.created_at,
+            e.delivered,
+            e.subject_json,
+            COALESCE(a.category, 'unknown') AS category
+        FROM events e
+        LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id
+        WHERE e.source = ? AND e.delivered = 1 AND e.id > ?
+        ORDER BY e.id ASC
         """,
         (source, last_sent_id),
     ).fetchall()

@@ -48,6 +48,7 @@ scripts/csi_run.sh python3 scripts/csi_rss_telegram_digest.py --db-path /path/to
 ```
 
 If Telegram chat routing is not configured yet (`CSI_RSS_TELEGRAM_CHAT_ID` unset), the digest job now exits cleanly in "skipped" mode instead of failing the systemd service.
+Digest format includes category sections (`AI`, `Non-AI`, `Unknown`) using `rss_event_analysis.category` when available.
 
 Install periodic systemd jobs on VPS (requires root):
 
