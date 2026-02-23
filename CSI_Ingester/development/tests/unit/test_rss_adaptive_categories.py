@@ -120,3 +120,26 @@ def test_reset_taxonomy_state_removes_dynamic_categories(tmp_path: Path):
         assert set(["ai", "political", "war", "other_interest"]).issubset(keys)
     finally:
         conn.close()
+
+
+def test_generic_fallback_words_do_not_spawn_dynamic_category(tmp_path: Path):
+    conn = _conn(tmp_path)
+    try:
+        for _ in range(12):
+            cat, state = classify_and_update_category(
+                conn,
+                suggested_category="other_interest",
+                title="Video update",
+                channel_name="General Channel",
+                summary_text="transcript unavailable metadata-only classification",
+                transcript_text="",
+                themes=["general_interest"],
+                confidence=0.55,
+                max_categories=10,
+            )
+            assert cat == "other_interest"
+
+        keys = set(state["categories"].keys())
+        assert keys == {"ai", "political", "war", "other_interest"}
+    finally:
+        conn.close()

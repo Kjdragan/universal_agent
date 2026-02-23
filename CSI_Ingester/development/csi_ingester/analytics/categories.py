@@ -116,6 +116,39 @@ GENERIC_TOPIC_WORDS = {
     "show",
     "watch",
     "review",
+    "classification",
+    "classified",
+    "general_interest",
+    "general_news",
+    "ai_tools",
+    "public_policy",
+    "security",
+    "geopolitics",
+    "metadata",
+    "transcript",
+    "summary",
+    "unavailable",
+    "missing",
+    "only",
+    "general",
+    "interest",
+    "topic",
+    "signal",
+    "signals",
+    "trend",
+    "trends",
+    "creator",
+    "creators",
+    "content",
+    "category",
+    "categories",
+    "analysis",
+    "analyze",
+    "detected",
+    "detector",
+    "tracking",
+    "monitoring",
+    "watchlist",
 }
 
 
@@ -164,7 +197,6 @@ def _extract_topic_candidates(
     source = " ".join(
         [
             title or "",
-            channel_name or "",
             summary_text or "",
             (transcript_text or "")[:1600],
         ]
@@ -204,7 +236,7 @@ def _new_state(max_categories: int) -> dict[str, Any]:
     return {
         "version": 1,
         "max_categories": max(4, int(max_categories)),
-        "new_category_min_topic_hits": 6,
+        "new_category_min_topic_hits": 8,
         "categories": categories,
         "other_interest_topic_counts": {},
         "total_classified": 0,
@@ -249,7 +281,7 @@ def ensure_taxonomy_state(conn: sqlite3.Connection, *, max_categories: int = 10)
             changed = True
 
     state["max_categories"] = max(4, int(state.get("max_categories") or max_categories))
-    state["new_category_min_topic_hits"] = max(3, int(state.get("new_category_min_topic_hits") or 6))
+    state["new_category_min_topic_hits"] = max(5, int(state.get("new_category_min_topic_hits") or 8))
     if not isinstance(state.get("other_interest_topic_counts"), dict):
         state["other_interest_topic_counts"] = {}
         changed = True
@@ -397,8 +429,10 @@ def classify_and_update_category(
             create_hint = ""
         if create_hint in CORE_ORDER:
             create_hint = ""
+        if create_hint in GENERIC_TOPIC_WORDS:
+            create_hint = ""
 
-        threshold = int(state.get("new_category_min_topic_hits") or 6)
+        threshold = int(state.get("new_category_min_topic_hits") or 8)
         category_candidate = ""
         if create_hint and create_hint not in categories:
             category_candidate = create_hint
