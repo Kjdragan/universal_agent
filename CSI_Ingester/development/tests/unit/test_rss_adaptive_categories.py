@@ -6,6 +6,7 @@ from csi_ingester.analytics.categories import (
     canonicalize_category,
     classify_and_update_category,
     ensure_taxonomy_state,
+    reset_taxonomy_state,
 )
 from csi_ingester.store.sqlite import connect, ensure_schema
 
@@ -96,3 +97,26 @@ def test_dynamic_categories_respect_max_and_retire_narrowest(tmp_path: Path):
     finally:
         conn.close()
 
+
+def test_reset_taxonomy_state_removes_dynamic_categories(tmp_path: Path):
+    conn = _conn(tmp_path)
+    try:
+        created, _state = classify_and_update_category(
+            conn,
+            suggested_category="economics",
+            title="Macro economics weekly",
+            channel_name="Markets",
+            summary_text="",
+            transcript_text="",
+            themes=["economics"],
+            confidence=0.9,
+            max_categories=10,
+        )
+        assert created == "economics"
+
+        reset = reset_taxonomy_state(conn, max_categories=10)
+        keys = set(reset["categories"].keys())
+        assert "economics" not in keys
+        assert set(["ai", "political", "war", "other_interest"]).issubset(keys)
+    finally:
+        conn.close()

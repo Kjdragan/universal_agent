@@ -1,5 +1,5 @@
 [Unit]
-Description=CSI RSS Semantic Enrichment (Transcript + AI Classification)
+Description=CSI RSS Semantic Enrichment (Transcript + Adaptive Categorization)
 After=network.target csi-ingester.service universal-agent-gateway.service
 Wants=csi-ingester.service
 

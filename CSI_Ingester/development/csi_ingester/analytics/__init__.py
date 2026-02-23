@@ -7,6 +7,7 @@ from csi_ingester.analytics.categories import (
     ensure_taxonomy_state,
     format_category_label,
     normalize_existing_analysis_categories,
+    reset_taxonomy_state,
 )
 
 __all__ = [
@@ -16,5 +17,5 @@ __all__ = [
     "ensure_taxonomy_state",
     "format_category_label",
     "normalize_existing_analysis_categories",
+    "reset_taxonomy_state",
 ]
-
