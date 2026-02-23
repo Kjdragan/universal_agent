@@ -84,6 +84,12 @@ Telegram channel separation options:
 - pending reminder controls:
 - `CSI_TUTORIAL_PENDING_REMINDER_MINUTES` (default `30`)
 - `CSI_TUTORIAL_PENDING_REMINDER_COOLDOWN_MINUTES` (default `120`)
+- playlist tutorial digest also runs a stalled-turn watchdog:
+- it scans matching tutorial workspaces for `turn_started` entries without `turn_finalized`;
+- if a turn stays open beyond threshold, CSI sends a "Tutorial Session Stalled" alert into the tutorial Telegram stream with workspace hints.
+- stalled-turn controls:
+- `CSI_TUTORIAL_STALLED_TURN_MINUTES` (default `15`)
+- `CSI_TUTORIAL_STALLED_TURN_COOLDOWN_MINUTES` (default `90`)
 - `CSI_TUTORIAL_WORKSPACE_ROOT` (optional; defaults to `/opt/universal_agent/AGENT_RUN_WORKSPACES`)
 
 Install periodic systemd jobs on VPS (requires root):

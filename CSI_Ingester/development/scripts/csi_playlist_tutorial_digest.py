@@ -76,6 +76,25 @@ def _resolve_setting(keys: list[str], env_files: list[Path]) -> str:
     return ""
 
 
+def _resolve_int_arg_or_env(
+    *,
+    cli_value: int | None,
+    keys: list[str],
+    env_files: list[Path],
+    default: int,
+    minimum: int = 0,
+) -> int:
+    if cli_value is not None:
+        return max(minimum, int(cli_value))
+    raw = _resolve_setting(keys, env_files)
+    if raw:
+        try:
+            return max(minimum, int(raw.strip()))
+        except Exception:
+            pass
+    return max(minimum, int(default))
+
+
 def _is_truthy(raw: str) -> bool:
     return (raw or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -268,6 +287,79 @@ def _find_workspace_session_hints(
     return out
 
 
+def _find_stalled_workspace_turns(
+    *,
+    workspace_root: Path,
+    video_id: str,
+    min_age_minutes: int,
+    now: datetime,
+    max_hits: int = 3,
+) -> list[dict[str, Any]]:
+    if not video_id:
+        return []
+    if not workspace_root.exists() or not workspace_root.is_dir():
+        return []
+    pattern = f"session_hook_yt_*_{video_id}"
+    sessions: list[tuple[float, Path]] = []
+    for candidate in workspace_root.glob(pattern):
+        if not candidate.is_dir():
+            continue
+        try:
+            mtime = float(candidate.stat().st_mtime)
+        except Exception:
+            mtime = 0.0
+        sessions.append((mtime, candidate))
+    sessions.sort(key=lambda item: item[0], reverse=True)
+
+    stalled: list[dict[str, Any]] = []
+    for _, session_dir in sessions:
+        turns_dir = session_dir / "turns"
+        if not turns_dir.exists() or not turns_dir.is_dir():
+            continue
+        turn_files = sorted(
+            turns_dir.glob("*.jsonl"),
+            key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
+            reverse=True,
+        )
+        for turn_file in turn_files:
+            started_at = ""
+            finalized = False
+            try:
+                for line in turn_file.read_text(encoding="utf-8").splitlines():
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    event = json.loads(raw)
+                    if not isinstance(event, dict):
+                        continue
+                    kind = str(event.get("event") or "").strip()
+                    if kind == "turn_started" and not started_at:
+                        started_at = str(event.get("timestamp") or "").strip()
+                    elif kind == "turn_finalized":
+                        finalized = True
+                if finalized or not started_at:
+                    continue
+            except Exception:
+                continue
+
+            age_minutes = _minutes_since(started_at, now=now)
+            if age_minutes is None or age_minutes < min_age_minutes:
+                continue
+
+            stalled.append(
+                {
+                    "session_path": str(session_dir),
+                    "turn_id": turn_file.stem,
+                    "started_at": started_at,
+                    "age_minutes": age_minutes,
+                }
+            )
+            break
+        if len(stalled) >= max(1, max_hits):
+            return stalled
+    return stalled
+
+
 def _item_from_row(
     row: sqlite3.Row,
     *,
@@ -443,6 +535,45 @@ def _build_pending_digest(
     return msg
 
 
+def _build_stalled_digest(
+    stalled_items: list[dict[str, Any]],
+    *,
+    max_items: int,
+    window_label: str,
+) -> str:
+    lines: list[str] = []
+    lines.append(f"Tutorial Session Stalled ({window_label})")
+    lines.append(f"Potentially stuck items: {len(stalled_items)}")
+    lines.append("")
+    lines.append("Detected open turns without turn_finalized:")
+
+    emit = 0
+    for item in stalled_items:
+        if emit >= max(1, max_items):
+            break
+        lines.append(f"- {item.get('title') or '(untitled)'}")
+        lines.append(f"  video_id={item.get('video_id') or ''} playlist_id={item.get('playlist_id') or ''}")
+        if item.get("video_url"):
+            lines.append(f"  {item['video_url']}")
+        for turn in (item.get("stalled_turns") or [])[:2]:
+            lines.append(
+                "  stalled_turn="
+                f"{turn.get('turn_id') or ''} age_minutes={turn.get('age_minutes') or 0} started_at={turn.get('started_at') or ''}"
+            )
+            lines.append(f"  workspace_hint={turn.get('session_path') or ''}")
+        lines.append("  status_hint=turn_started_without_turn_finalized")
+        emit += 1
+
+    remaining = len(stalled_items) - emit
+    if remaining > 0:
+        lines.append(f"- ... and {remaining} more")
+
+    msg = "\n".join(lines).strip()
+    if len(msg) > 3900:
+        msg = msg[:3897] + "..."
+    return msg
+
+
 def _send_telegram_message(
     bot_token: str,
     chat_id: str,
@@ -535,14 +666,32 @@ def main() -> int:
     parser.add_argument(
         "--pending-reminder-minutes",
         type=int,
-        default=30,
+        default=None,
         help="When pending artifacts are older than this many minutes, send a pending reminder digest.",
     )
     parser.add_argument(
         "--pending-reminder-cooldown-minutes",
         type=int,
-        default=120,
+        default=None,
         help="Minimum minutes between pending reminder messages for the same video.",
+    )
+    parser.add_argument(
+        "--stalled-turn-minutes",
+        type=int,
+        default=None,
+        help="Alert when open tutorial turns exceed this age in minutes without turn_finalized.",
+    )
+    parser.add_argument(
+        "--stalled-turn-cooldown-minutes",
+        type=int,
+        default=None,
+        help="Minimum minutes between stalled-turn alerts for the same video.",
+    )
+    parser.add_argument(
+        "--stalled-turn-max-items",
+        type=int,
+        default=6,
+        help="Maximum stalled-turn bullets in one Telegram message.",
     )
     parser.add_argument(
         "--workspace-root",
@@ -799,8 +948,39 @@ def main() -> int:
     else:
         pending_for_state = remaining_pending
 
-    reminder_threshold_minutes = max(0, int(args.pending_reminder_minutes))
-    reminder_cooldown_minutes = max(1, int(args.pending_reminder_cooldown_minutes))
+    reminder_threshold_minutes = _resolve_int_arg_or_env(
+        cli_value=args.pending_reminder_minutes,
+        keys=["CSI_TUTORIAL_PENDING_REMINDER_MINUTES"],
+        env_files=env_files,
+        default=30,
+        minimum=0,
+    )
+    reminder_cooldown_minutes = _resolve_int_arg_or_env(
+        cli_value=args.pending_reminder_cooldown_minutes,
+        keys=["CSI_TUTORIAL_PENDING_REMINDER_COOLDOWN_MINUTES"],
+        env_files=env_files,
+        default=120,
+        minimum=1,
+    )
+    stalled_threshold_minutes = _resolve_int_arg_or_env(
+        cli_value=args.stalled_turn_minutes,
+        keys=["CSI_TUTORIAL_STALLED_TURN_MINUTES"],
+        env_files=env_files,
+        default=15,
+        minimum=0,
+    )
+    stalled_cooldown_minutes = _resolve_int_arg_or_env(
+        cli_value=args.stalled_turn_cooldown_minutes,
+        keys=["CSI_TUTORIAL_STALLED_TURN_COOLDOWN_MINUTES"],
+        env_files=env_files,
+        default=90,
+        minimum=1,
+    )
+    print(f"PLAYLIST_TUTORIAL_PENDING_REMINDER_MINUTES={reminder_threshold_minutes}")
+    print(f"PLAYLIST_TUTORIAL_PENDING_REMINDER_COOLDOWN_MINUTES={reminder_cooldown_minutes}")
+    print(f"PLAYLIST_TUTORIAL_STALLED_TURN_MINUTES={stalled_threshold_minutes}")
+    print(f"PLAYLIST_TUTORIAL_STALLED_TURN_COOLDOWN_MINUTES={stalled_cooldown_minutes}")
+
     now_utc = datetime.now(timezone.utc)
     pending_reminder_items: list[dict[str, Any]] = []
     if pending_for_state and reminder_threshold_minutes > 0:
@@ -856,6 +1036,57 @@ def main() -> int:
                 print("PLAYLIST_TUTORIAL_PENDING_REMINDER_SENT=1")
             else:
                 print(f"PLAYLIST_TUTORIAL_PENDING_REMINDER_SEND_FAILED reason={reason}")
+
+    stalled_items: list[dict[str, Any]] = []
+    if pending_for_state and stalled_threshold_minutes > 0:
+        for video_id, meta in list(pending_for_state.items()):
+            since_last_stalled_alert = _minutes_since(str(meta.get("last_stalled_alert_at") or ""), now=now_utc)
+            if since_last_stalled_alert is not None and since_last_stalled_alert < stalled_cooldown_minutes:
+                continue
+            stalled_turns = _find_stalled_workspace_turns(
+                workspace_root=workspace_root,
+                video_id=video_id,
+                min_age_minutes=stalled_threshold_minutes,
+                now=now_utc,
+                max_hits=max(1, int(args.stalled_turn_max_items)),
+            )
+            if not stalled_turns:
+                continue
+            stalled_items.append(
+                {
+                    "video_id": video_id,
+                    "title": str(meta.get("title") or ""),
+                    "video_url": str(meta.get("video_url") or ""),
+                    "playlist_id": str(meta.get("playlist_id") or ""),
+                    "stalled_turns": stalled_turns,
+                }
+            )
+            updated = dict(meta)
+            updated["last_stalled_alert_at"] = _now_iso_utc()
+            pending_for_state[video_id] = updated
+    print(f"PLAYLIST_TUTORIAL_STALLED_COUNT={len(stalled_items)}")
+    if stalled_items:
+        stalled_digest = _build_stalled_digest(
+            stalled_items,
+            max_items=max(1, int(args.stalled_turn_max_items)),
+            window_label=args.window_label,
+        )
+        if args.dry_run:
+            print("PLAYLIST_TUTORIAL_STALLED_DRY_RUN=1")
+            print("---- STALLED DIGEST BEGIN ----")
+            print(stalled_digest)
+            print("---- STALLED DIGEST END ----")
+        else:
+            ok, reason = _send_telegram_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                text=stalled_digest,
+                thread_id=thread_id,
+            )
+            if ok:
+                print("PLAYLIST_TUTORIAL_STALLED_SENT=1")
+            else:
+                print(f"PLAYLIST_TUTORIAL_STALLED_SEND_FAILED reason={reason}")
 
     _save_state(
         state_path,
