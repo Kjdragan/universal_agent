@@ -6898,6 +6898,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 checkpoint_result = SimpleNamespace(
                                     tool_calls=tool_call_count,
                                     execution_time_seconds=execution_duration_seconds,
+                                    goal_satisfaction=goal_satisfaction,
                                 )
                                 checkpoint = generator.generate_from_result(
                                     session_id=session.session_id,

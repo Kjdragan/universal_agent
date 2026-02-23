@@ -210,6 +210,64 @@ def _now_iso_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _parse_datetime_any(value: str) -> datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S",):
+        try:
+            parsed = datetime.strptime(raw, fmt)
+            return parsed.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+    return None
+
+
+def _minutes_since(value: str, *, now: datetime | None = None) -> int | None:
+    parsed = _parse_datetime_any(value)
+    if parsed is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    delta = current - parsed
+    return max(0, int(delta.total_seconds() // 60))
+
+
+def _find_workspace_session_hints(
+    *,
+    workspace_root: Path,
+    video_id: str,
+    max_hits: int = 3,
+) -> list[str]:
+    if not video_id:
+        return []
+    if not workspace_root.exists() or not workspace_root.is_dir():
+        return []
+    pattern = f"session_hook_yt_*_{video_id}"
+    hits: list[tuple[float, Path]] = []
+    for candidate in workspace_root.glob(pattern):
+        if not candidate.is_dir():
+            continue
+        try:
+            mtime = float(candidate.stat().st_mtime)
+        except Exception:
+            mtime = 0.0
+        hits.append((mtime, candidate))
+    hits.sort(key=lambda item: item[0], reverse=True)
+    out: list[str] = []
+    for _, path in hits[: max(1, max_hits)]:
+        out.append(str(path))
+    return out
+
+
 def _item_from_row(
     row: sqlite3.Row,
     *,
@@ -344,6 +402,47 @@ def _build_followup_digest(
     return msg
 
 
+def _build_pending_digest(
+    pending_items: list[dict[str, Any]],
+    *,
+    max_items: int,
+    window_label: str,
+) -> str:
+    lines: list[str] = []
+    lines.append(f"Tutorial Artifacts Pending ({window_label})")
+    lines.append(f"Pending items: {len(pending_items)}")
+    lines.append("")
+    lines.append("Waiting on artifacts for:")
+
+    emit = 0
+    for item in pending_items:
+        if emit >= max(1, max_items):
+            break
+        lines.append(f"- {item.get('title') or '(untitled)'}")
+        lines.append(f"  video_id={item.get('video_id') or ''} playlist_id={item.get('playlist_id') or ''}")
+        if item.get("video_url"):
+            lines.append(f"  {item['video_url']}")
+        age_minutes = item.get("age_minutes")
+        if isinstance(age_minutes, int):
+            lines.append(f"  pending_age_minutes={age_minutes}")
+        last_checked = str(item.get("last_checked_at") or "")
+        if last_checked:
+            lines.append(f"  last_checked_at={last_checked}")
+        for hint in (item.get("workspace_hints") or [])[:2]:
+            lines.append(f"  workspace_hint={hint}")
+        lines.append("  status_hint=waiting_for_tutorial_artifacts")
+        emit += 1
+
+    remaining = len(pending_items) - emit
+    if remaining > 0:
+        lines.append(f"- ... and {remaining} more")
+
+    msg = "\n".join(lines).strip()
+    if len(msg) > 3900:
+        msg = msg[:3897] + "..."
+    return msg
+
+
 def _send_telegram_message(
     bot_token: str,
     chat_id: str,
@@ -432,6 +531,23 @@ def main() -> int:
         type=int,
         default=20,
         help="Backfill unresolved pending videos from recent delivered playlist events up to this count.",
+    )
+    parser.add_argument(
+        "--pending-reminder-minutes",
+        type=int,
+        default=30,
+        help="When pending artifacts are older than this many minutes, send a pending reminder digest.",
+    )
+    parser.add_argument(
+        "--pending-reminder-cooldown-minutes",
+        type=int,
+        default=120,
+        help="Minimum minutes between pending reminder messages for the same video.",
+    )
+    parser.add_argument(
+        "--workspace-root",
+        default="",
+        help="Workspace root for session hint discovery (defaults to /opt/universal_agent/AGENT_RUN_WORKSPACES).",
     )
     parser.add_argument("--dry-run", action="store_true", help="Print digest but do not send Telegram")
     args = parser.parse_args()
@@ -522,6 +638,15 @@ def main() -> int:
     artifacts_base_url = (args.artifacts_base_url or "").strip() or _resolve_setting(
         ["CSI_TUTORIAL_ARTIFACTS_BASE_URL", "CSI_ARTIFACTS_BASE_URL", "UA_API_BASE_URL"],
         env_files,
+    )
+    workspace_root_raw = (args.workspace_root or "").strip() or _resolve_setting(
+        ["CSI_TUTORIAL_WORKSPACE_ROOT", "UA_WORKSPACES_DIR"],
+        env_files,
+    )
+    workspace_root = (
+        Path(workspace_root_raw).expanduser()
+        if workspace_root_raw
+        else Path("/opt/universal_agent/AGENT_RUN_WORKSPACES")
     )
 
     items = [
@@ -673,6 +798,64 @@ def main() -> int:
                 pending_for_state = next_pending_by_video
     else:
         pending_for_state = remaining_pending
+
+    reminder_threshold_minutes = max(0, int(args.pending_reminder_minutes))
+    reminder_cooldown_minutes = max(1, int(args.pending_reminder_cooldown_minutes))
+    now_utc = datetime.now(timezone.utc)
+    pending_reminder_items: list[dict[str, Any]] = []
+    if pending_for_state and reminder_threshold_minutes > 0:
+        for video_id, meta in list(pending_for_state.items()):
+            age_minutes = _minutes_since(
+                str(meta.get("pending_since") or meta.get("created_at") or ""),
+                now=now_utc,
+            )
+            if age_minutes is None or age_minutes < reminder_threshold_minutes:
+                continue
+            since_last_reminder = _minutes_since(str(meta.get("last_pending_reminder_at") or ""), now=now_utc)
+            if since_last_reminder is not None and since_last_reminder < reminder_cooldown_minutes:
+                continue
+
+            workspace_hints = _find_workspace_session_hints(
+                workspace_root=workspace_root,
+                video_id=video_id,
+            )
+            pending_reminder_items.append(
+                {
+                    "video_id": video_id,
+                    "title": str(meta.get("title") or ""),
+                    "video_url": str(meta.get("video_url") or ""),
+                    "playlist_id": str(meta.get("playlist_id") or ""),
+                    "last_checked_at": str(meta.get("last_checked_at") or ""),
+                    "age_minutes": age_minutes,
+                    "workspace_hints": workspace_hints,
+                }
+            )
+            updated = dict(meta)
+            updated["last_pending_reminder_at"] = _now_iso_utc()
+            pending_for_state[video_id] = updated
+    print(f"PLAYLIST_TUTORIAL_PENDING_REMINDER_COUNT={len(pending_reminder_items)}")
+    if pending_reminder_items:
+        pending_digest = _build_pending_digest(
+            pending_reminder_items,
+            max_items=max(1, int(args.max_items)),
+            window_label=args.window_label,
+        )
+        if args.dry_run:
+            print("PLAYLIST_TUTORIAL_PENDING_REMINDER_DRY_RUN=1")
+            print("---- PENDING DIGEST BEGIN ----")
+            print(pending_digest)
+            print("---- PENDING DIGEST END ----")
+        else:
+            ok, reason = _send_telegram_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                text=pending_digest,
+                thread_id=thread_id,
+            )
+            if ok:
+                print("PLAYLIST_TUTORIAL_PENDING_REMINDER_SENT=1")
+            else:
+                print(f"PLAYLIST_TUTORIAL_PENDING_REMINDER_SEND_FAILED reason={reason}")
 
     _save_state(
         state_path,

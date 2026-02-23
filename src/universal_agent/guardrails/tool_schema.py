@@ -18,6 +18,9 @@ from zoneinfo import ZoneInfo
 from universal_agent.durable.tool_gateway import parse_tool_identity
 
 
+_RESEARCH_PHASE_ATTEMPTED_RUNS: set[tuple[str, str]] = set()
+
+
 @dataclass(frozen=True)
 class ToolSchema:
     required: Sequence[str] = field(default_factory=tuple)
@@ -374,6 +377,141 @@ def _looks_like_file_reference(value: str) -> bool:
     return False
 
 
+def _is_subagent_context(input_data: dict) -> bool:
+    if bool(input_data.get("is_subagent_context")):
+        return True
+
+    parent_tool_use_id = input_data.get("parent_tool_use_id")
+    transcript_path = str(input_data.get("transcript_path", "") or "")
+    primary_transcript = str(globals().get("_primary_transcript_path") or "")
+    if bool(parent_tool_use_id):
+        return True
+
+    if (
+        bool(primary_transcript)
+        and bool(transcript_path)
+        and transcript_path != primary_transcript
+    ):
+        return True
+
+    lowered = transcript_path.replace("\\", "/").lower()
+    if not lowered:
+        return False
+
+    # Fallback for hook payloads that do not include parent_tool_use_id and
+    # when primary transcript tracking is unavailable in this module.
+    return any(
+        marker in lowered
+        for marker in (
+            "/subagent_outputs/",
+            "/task:",
+            "subagent",
+        )
+    )
+
+
+def _has_search_results_inputs(workspace: str) -> bool:
+    if not workspace:
+        return False
+    search_dir = Path(workspace) / "search_results"
+    return search_dir.exists() and any(search_dir.glob("*.json"))
+
+
+def _has_refined_corpus_outputs(workspace: str) -> bool:
+    if not workspace:
+        return False
+    tasks_dir = Path(workspace) / "tasks"
+    if not tasks_dir.is_dir():
+        return False
+    return any(tasks_dir.glob("*/refined_corpus.md"))
+
+
+def _should_enforce_research_phase_next(workspace: str) -> bool:
+    return _has_search_results_inputs(workspace) and not _has_refined_corpus_outputs(workspace)
+
+
+def _looks_like_research_tool_discovery(command: str) -> bool:
+    lowered = (command or "").strip().lower()
+    if not lowered:
+        return False
+    discovery_patterns = [
+        r"\bfind\b.*\brun_research_phase\b",
+        r"\bgrep\b.*\brun_research_phase\b",
+        r"\bgrep\b.*\bfinalize_research\b",
+        r"\bfind\b.*research.*pipeline",
+        r"\bgrep\b.*research.*pipeline",
+        r"\bgrep\b.*\bmcp_server\.py\b",
+        r"\bfind\b.*\bmcp_server\b",
+    ]
+    return any(re.search(pattern, lowered) for pattern in discovery_patterns)
+
+
+def _looks_like_workspace_scouting_command(command: str, workspace: str) -> bool:
+    lowered = (command or "").strip().lower()
+    if not lowered:
+        return False
+
+    if lowered in {"pwd", "ls", "ls -la", "ls -l", "tree"}:
+        return True
+
+    scout_patterns = [
+        r"\b(ls|find|tree|pwd)\b",
+        r"\bsearch_results\b",
+        r"\bresearch_output\b",
+        r"\bresearch_archive\b",
+    ]
+    if any(re.search(pattern, lowered) for pattern in scout_patterns):
+        return True
+
+    workspace_l = str(workspace or "").replace("\\", "/").lower().rstrip("/")
+    return bool(workspace_l) and workspace_l in lowered
+
+
+def _research_attempt_key(run_id: Optional[str], workspace: str) -> Optional[tuple[str, str]]:
+    key = str(run_id or "").strip()
+    ws = str(workspace or "").strip()
+    if not key or not ws:
+        return None
+    return (key, ws)
+
+
+def _mark_research_phase_attempted(run_id: Optional[str], workspace: str) -> None:
+    key = _research_attempt_key(run_id, workspace)
+    if key is not None:
+        _RESEARCH_PHASE_ATTEMPTED_RUNS.add(key)
+
+
+def _has_research_phase_attempted(run_id: Optional[str], workspace: str) -> bool:
+    key = _research_attempt_key(run_id, workspace)
+    return key in _RESEARCH_PHASE_ATTEMPTED_RUNS if key is not None else False
+
+
+def _should_block_list_directory_research(path_value: str, workspace: str) -> bool:
+    raw_path = (path_value or "").strip()
+    if not raw_path or not workspace:
+        return False
+    try:
+        resolved_path = Path(raw_path).resolve()
+    except Exception:
+        return False
+
+    workspace_path = Path(workspace).resolve()
+    search_results_path = (workspace_path / "search_results").resolve()
+
+    if resolved_path == search_results_path or search_results_path in resolved_path.parents:
+        return False
+
+    if resolved_path == workspace_path:
+        return True
+
+    # During strict phase transition, any listing outside session search_results/
+    # is considered workspace scouting and should be blocked.
+    if workspace_path not in resolved_path.parents:
+        return True
+
+    return True
+
+
 def _resolve_refined_corpus_path(task_name: Optional[str]) -> Optional[str]:
     workspace = (os.getenv("CURRENT_SESSION_WORKSPACE") or "").strip()
     if not workspace:
@@ -650,10 +788,13 @@ async def pre_tool_use_schema_guardrail(
         }
 
     normalized_name = identity.tool_name.lower()
+    workspace = os.getenv("CURRENT_SESSION_WORKSPACE", "")
+    is_subagent_context = _is_subagent_context(input_data)
+    run_key = str(run_id or input_data.get("run_id") or "").strip()
 
     # 1.5. Research-phase guardrail for primary-agent misuse.
     if normalized_name.endswith("run_research_phase"):
-        workspace = os.getenv("CURRENT_SESSION_WORKSPACE", "")
+        _mark_research_phase_attempted(run_key, workspace)
         if not workspace:
             # Still block if workspace is completely missing - this is a config error
             return {
@@ -669,17 +810,8 @@ async def pre_tool_use_schema_guardrail(
                 },
             }
         # Primary should not call this tool directly; it belongs in delegated research workflows.
-        parent_tool_use_id = input_data.get("parent_tool_use_id")
-        transcript_path = str(input_data.get("transcript_path", "") or "")
-        primary_transcript = str(globals().get("_primary_transcript_path") or "")
-        is_subagent_context = bool(parent_tool_use_id) or (
-            bool(primary_transcript)
-            and bool(transcript_path)
-            and transcript_path != primary_transcript
-        )
         if not is_subagent_context:
-            search_dir = Path(workspace) / "search_results"
-            has_search_inputs = search_dir.exists() and any(search_dir.glob("*.json"))
+            has_search_inputs = _has_search_results_inputs(workspace)
             if not has_search_inputs:
                 return {
                     "systemMessage": (
@@ -698,6 +830,46 @@ async def pre_tool_use_schema_guardrail(
                     },
                 }
     if isinstance(tool_input, dict):
+        if (
+            is_subagent_context
+            and _should_enforce_research_phase_next(workspace)
+            and not _has_research_phase_attempted(run_key, workspace)
+            and not normalized_name.endswith("run_research_phase")
+        ):
+            if normalized_name.endswith("bash"):
+                command = str(tool_input.get("command", "") or "")
+                if _looks_like_research_tool_discovery(
+                    command
+                ) or _looks_like_workspace_scouting_command(command, workspace):
+                    return {
+                        "systemMessage": (
+                            "⚠️ Research pipeline guardrail: search inputs are ready in `search_results/` and "
+                            "the next required step is `mcp__internal__run_research_phase` before tool discovery/scouting. "
+                            "One explicit attempt is required before any fallback path."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "Run research phase next before searching for tool/source paths.",
+                        },
+                    }
+            if normalized_name.endswith("list_directory"):
+                target_path = str(tool_input.get("path", "") or "")
+                if _should_block_list_directory_research(target_path, workspace):
+                    return {
+                        "systemMessage": (
+                            "⚠️ Research pipeline guardrail: avoid workspace scouting after search collection. "
+                            "Call `mcp__internal__run_research_phase` next."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": "Run research phase next before listing workspace roots.",
+                        },
+                    }
+
         if normalized_name == "task":
             subagent_type = str(tool_input.get("subagent_type", "") or "").strip().lower()
             prompt_text = str(tool_input.get("prompt", "") or "")

@@ -55,6 +55,7 @@ class SessionCheckpoint:
     # Stats
     tool_call_count: int = 0
     execution_time_seconds: float = 0.0
+    goal_satisfaction: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -131,6 +132,31 @@ class SessionCheckpoint:
                 stats_parts.append(f"{self.execution_time_seconds:.1f}s execution")
             sections.append(f"- {' | '.join(stats_parts)}")
             sections.append("")
+
+        # Goal satisfaction / adherence summary
+        if self.goal_satisfaction:
+            sections.append("### Goal Satisfaction")
+            passed = bool(self.goal_satisfaction.get("passed"))
+            sections.append(f"- Mission guardrail: {'passed' if passed else 'failed'}")
+
+            observed = self.goal_satisfaction.get("observed")
+            if isinstance(observed, dict):
+                adherence = observed.get("research_pipeline_adherence")
+                if isinstance(adherence, dict) and adherence.get("required"):
+                    adherence_passed = bool(adherence.get("passed"))
+                    sections.append(
+                        "- Research pipeline adherence: "
+                        + ("passed" if adherence_passed else "failed")
+                    )
+                    sections.append(
+                        "- run_research_phase called: "
+                        + str(bool(adherence.get("run_research_phase_called"))).lower()
+                    )
+                    sections.append(
+                        "- pre-phase scouting calls: "
+                        + str(int(adherence.get("pre_phase_workspace_scouting_calls") or 0))
+                    )
+            sections.append("")
         
         result = "\n".join(sections)
         
@@ -188,6 +214,8 @@ class SessionCheckpointGenerator:
             checkpoint.tool_call_count = result.tool_calls
         if hasattr(result, "execution_time_seconds"):
             checkpoint.execution_time_seconds = result.execution_time_seconds
+        if hasattr(result, "goal_satisfaction") and isinstance(result.goal_satisfaction, dict):
+            checkpoint.goal_satisfaction = result.goal_satisfaction
         
         # Scan workspace for artifacts
         checkpoint.artifacts = self._scan_artifacts()

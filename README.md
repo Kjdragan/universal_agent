@@ -50,6 +50,24 @@ cp .env.sample .env  # Configure your API keys
 uv run python src/universal_agent/main.py --task "Research quantum computing trends"
 ```
 
+### Canonical commands (local + VPS)
+
+Use these Make targets so commands stay consistent across local shells, VPS sessions, and automation:
+
+```bash
+# Install/update Python dependencies from pyproject/lock
+make sync
+
+# Run all tests
+make test
+
+# Run only unit tests
+make test-unit
+
+# Run one test file
+make test-file FILE=tests/unit/test_tool_schema_guardrail.py
+```
+
 For detailed usage, see **[Getting Started](Project_Documentation/02_Getting_Started.md)**.
 
 ## 🧠 Memory Persistence Runbook

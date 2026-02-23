@@ -46,6 +46,7 @@ class MissionGuardrailTracker:
     def __init__(self, contract: MissionContract):
         self.contract = contract
         self.tool_names: list[str] = []
+        self._tool_flow: list[str] = []
         self.email_send_count = 0
         self.gmail_send_count = 0
 
@@ -55,12 +56,14 @@ class MissionGuardrailTracker:
             return
         self.tool_names.append(name)
         low = name.lower()
+        self._tool_flow.append(low)
         if _is_email_send_tool(low):
             self.email_send_count += 1
         if _is_gmail_send_tool(low):
             self.gmail_send_count += 1
         for nested_tool in _extract_nested_tool_names(tool_input):
             nested_lower = nested_tool.lower()
+            self._tool_flow.append(nested_lower)
             if _is_email_send_tool(nested_lower):
                 self.email_send_count += 1
             if _is_gmail_send_tool(nested_lower):
@@ -82,6 +85,7 @@ class MissionGuardrailTracker:
                 )
 
         passed = len(missing) == 0
+        research_pipeline_adherence = _evaluate_research_pipeline_adherence(self._tool_flow)
         return {
             "passed": passed,
             "contract": self.contract.to_dict(),
@@ -90,6 +94,7 @@ class MissionGuardrailTracker:
                 "gmail_send_count": self.gmail_send_count,
                 "tool_calls_total": len(self.tool_names),
                 "tool_names": self.tool_names[-100:],
+                "research_pipeline_adherence": research_pipeline_adherence,
             },
             "missing": missing,
         }
@@ -155,3 +160,38 @@ def _extract_nested_tool_names(tool_input: Any) -> list[str]:
         if slug:
             names.append(slug)
     return names
+
+
+def _evaluate_research_pipeline_adherence(tool_flow: list[str]) -> dict[str, Any]:
+    search_index: int | None = None
+    run_research_phase_index: int | None = None
+    scouting_calls_before_phase = 0
+
+    for idx, name in enumerate(tool_flow):
+        normalized = str(name or "").lower()
+        if search_index is None and _is_research_search_tool(normalized):
+            search_index = idx
+        if run_research_phase_index is None and normalized.endswith("run_research_phase"):
+            run_research_phase_index = idx
+            continue
+
+        if search_index is not None and run_research_phase_index is None:
+            if normalized.endswith("bash") or normalized.endswith("list_directory"):
+                scouting_calls_before_phase += 1
+
+    required = search_index is not None
+    run_research_phase_called = run_research_phase_index is not None
+    passed = (not required) or (run_research_phase_called and scouting_calls_before_phase == 0)
+    return {
+        "required": required,
+        "passed": passed,
+        "search_collection_detected": required,
+        "run_research_phase_called": run_research_phase_called,
+        "pre_phase_workspace_scouting_calls": scouting_calls_before_phase,
+    }
+
+
+def _is_research_search_tool(tool_name_lower: str) -> bool:
+    return tool_name_lower.endswith("composio_search_news") or tool_name_lower.endswith(
+        "composio_search_web"
+    )
