@@ -145,3 +145,11 @@ def test_to_manual_youtube_payload_maps_youtube_event():
     assert mapped is not None
     assert mapped["video_id"] == "dQw4w9WgXcQ"
     assert mapped["mode"] == "explainer_plus_code"
+
+
+def test_to_manual_youtube_payload_skips_rss_event():
+    payload = _valid_payload()
+    payload["events"][0]["source"] = "youtube_channel_rss"
+    event = extract_valid_events(payload)[0]
+    mapped = to_manual_youtube_payload(event)
+    assert mapped is None

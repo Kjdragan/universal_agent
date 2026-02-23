@@ -465,6 +465,8 @@ async def _close_bridge(bridge: Any) -> None:
 class VpsSyncRequest(BaseModel):
     """Request payload for VPS mirror sync."""
     session_id: Optional[str] = None
+    full_resync: bool = False
+    include_in_progress: bool = False
 
 
 class VpsStorageDeleteRequest(BaseModel):
@@ -700,7 +702,12 @@ def _local_sync_without_ssh(session_id: Optional[str], workspace_mirror: Path, a
     }
 
 
-async def _run_vps_pull_sync(session_id: Optional[str] = None) -> dict[str, Any]:
+async def _run_vps_pull_sync(
+    session_id: Optional[str] = None,
+    *,
+    full_resync: bool = False,
+    include_in_progress: bool = False,
+) -> dict[str, Any]:
     if not VPS_PULL_SCRIPT.exists():
         raise HTTPException(status_code=500, detail=f"Sync script missing: {VPS_PULL_SCRIPT}")
 
@@ -711,6 +718,10 @@ async def _run_vps_pull_sync(session_id: Optional[str] = None) -> dict[str, Any]
     cleaned_session_id = (session_id or "").strip()
     if cleaned_session_id:
         cmd.append(cleaned_session_id)
+    if full_resync:
+        cmd.append("--no-skip-synced")
+    if include_in_progress:
+        cmd.append("--ignore-ready-marker")
 
     env = os.environ.copy()
     env["UA_LOCAL_MIRROR_DIR"] = str(VPS_WORKSPACES_MIRROR_DIR)
@@ -1466,7 +1477,11 @@ async def vps_sync_now(payload: VpsSyncRequest):
 
     This uses the existing SSH/Tailscale sync script.
     """
-    result = await _run_vps_pull_sync(payload.session_id)
+    result = await _run_vps_pull_sync(
+        payload.session_id,
+        full_resync=bool(payload.full_resync),
+        include_in_progress=bool(payload.include_in_progress),
+    )
     if not result.get("ok"):
         raise HTTPException(status_code=502, detail=result)
     return result

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CSI daily summary generation at 00:10 UTC
+
+[Timer]
+OnCalendar=*-*-* 00:10:00 UTC
+Persistent=true
+Unit=csi-daily-summary.service
+
+[Install]
+WantedBy=timers.target
+

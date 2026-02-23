@@ -130,7 +130,8 @@ Implementation status update (2026-02-22):
 1. RSS watchlist now supports file-based loading via `watchlist_file`.
 2. Active path uses `/opt/universal_agent/CSI_Ingester/development/channels_watchlist.json`.
 3. VPS load confirmed with `channels=443` in `csi-ingester` logs.
-4. Signed `youtube_channel_rss` smoke event confirmed ingest+dispatch (`200`, `internal_dispatches=1`).
+4. Signed `youtube_channel_rss` events confirmed ingest (`200`) and durable storage in CSI.
+5. UA internal manual-youtube dispatch is now intentionally restricted to `youtube_playlist` only.
 
 ### 7.3 RSS Acceptance Gates
 
@@ -139,3 +140,88 @@ Implementation status update (2026-02-22):
 3. `EVENTS_RECENT_UNDELIVERED=0`.
 4. `DLQ_TOTAL=0` for RSS test period.
 5. No regression in playlist event delivery.
+
+## 8. RSS Notification And Reporting (Phase 5 Hardening)
+
+Status (2026-02-22): Implemented in repo and ready for VPS enablement.
+
+1. 10-minute Telegram digest:
+   1. Script: `scripts/csi_rss_telegram_digest.py`
+   2. systemd:
+      1. `csi-rss-telegram-digest.service`
+      2. `csi-rss-telegram-digest.timer`
+   3. Behavior:
+      1. batches new delivered RSS events by cursor,
+      2. sends one message per 10-minute window only when events exist,
+      3. supports optional Anthropic summarization via `CSI_RSS_DIGEST_USE_CLAUDE=1`.
+2. Daily rollup summaries:
+   1. Script: `scripts/csi_daily_summary.py`
+   2. systemd:
+      1. `csi-daily-summary.service`
+      2. `csi-daily-summary.timer` (00:10 UTC, summarizes previous UTC day)
+3. Installer:
+   1. `/opt/universal_agent/CSI_Ingester/development/scripts/csi_install_systemd_extras.sh`
+4. RSS semantic enrichment and trend analytics:
+   1. `csi-rss-semantic-enrich.timer` (every 10 minutes, transcript + ai/non_ai + summary storage)
+   2. `csi-rss-trend-report.timer` (hourly trend synthesis and UA event emit)
+
+## 9. Token Telemetry To UA (Hourly)
+
+Status (2026-02-22): Implemented in repo.
+
+1. CSI records token usage in `token_usage` sqlite table (migration `0003_token_usage`).
+2. Hourly reporter emits signed CSI event to UA:
+   1. Script: `scripts/csi_hourly_token_report.py`
+   2. Event source: `csi_analytics`
+   3. Event type: `hourly_token_usage_report`
+3. systemd:
+   1. `csi-hourly-token-report.service`
+   2. `csi-hourly-token-report.timer` (`OnCalendar=*:05`)
+4. Report payload includes:
+   1. hourly total prompt/completion/total tokens,
+   2. per-process token totals,
+   3. per-model token totals.
+
+## 10. RSS Semantic Analytics And Trend Delivery
+
+Status (2026-02-22): Implemented in repo and scheduled via systemd timers.
+
+1. Event-level semantic enrichment:
+   1. Script: `scripts/csi_rss_semantic_enrich.py`
+   2. Table: `rss_event_analysis` (migration `0004_rss_analysis`)
+   3. Output per RSS event:
+      1. transcript status and transcript size,
+      2. category (`ai` or `non_ai`),
+      3. summary text,
+      4. optional Claude usage tokens.
+2. Hourly trend report:
+   1. Script: `scripts/csi_rss_trend_report.py`
+   2. Table: `trend_reports`
+   3. Emits signed CSI event to UA:
+      1. source: `csi_analytics`
+      2. event_type: `rss_trend_report`
+      3. includes top channels/themes and markdown report.
+3. Token accounting integration:
+   1. Claude calls in RSS digest, semantic enrich, and trend report each write to `token_usage`.
+   2. Hourly token telemetry event keeps UA informed of process/model-level token consumption.
+
+## 11. Tailnet Residential Transcript Worker (Implemented)
+
+Purpose: bypass YouTube cloud-IP transcript blocking without introducing third-party residential proxies.
+
+1. CSI RSS semantic enricher now supports transcript endpoint failover:
+   1. `CSI_RSS_ANALYSIS_TRANSCRIPT_ENDPOINTS` (comma-separated, left-to-right retry),
+   2. fallback to `CSI_RSS_ANALYSIS_TRANSCRIPT_ENDPOINT` if endpoint list is empty.
+2. Recommended order:
+   1. residential tailnet worker endpoint first,
+   2. VPS-local endpoint (`127.0.0.1`) second.
+3. Runtime behavior:
+   1. per-event endpoint attempts are persisted in `rss_event_analysis.analysis_json`,
+   2. `transcript_ref` stores source+endpoint host for diagnostics.
+4. Operator action:
+   1. set residential worker in `csi-ingester.env`,
+   2. restart `csi-ingester`,
+   3. force `csi-rss-semantic-enrich.service` and verify `RSS_ENRICH_TRANSCRIPT_OK` increases.
+5. Reusable implementation primitive:
+   1. `csi_ingester/net/egress_adapter.py`
+   2. exposes generic failover + anti-bot detection for other blocked outbound calls.

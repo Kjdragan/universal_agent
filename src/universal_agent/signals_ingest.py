@@ -84,7 +84,9 @@ def extract_valid_events(payload: dict[str, Any]) -> list[CreatorSignalEvent]:
 
 def to_manual_youtube_payload(event: CreatorSignalEvent) -> dict[str, Any] | None:
     """Map a CSI event to UA manual YouTube hook payload when applicable."""
-    if str(event.source or "").strip() not in {"youtube_playlist", "youtube_channel_rss"}:
+    # Only playlist events should trigger full UA YouTube learning dispatch.
+    # RSS channel events are handled by CSI-side enrichment/analytics pipelines.
+    if str(event.source or "").strip() != "youtube_playlist":
         return None
     subject = event.subject if isinstance(event.subject, dict) else {}
     if str(subject.get("platform") or "").strip().lower() != "youtube":

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI RSS trend report hourly
+
+[Timer]
+OnCalendar=*:12
+Persistent=true
+Unit=csi-rss-trend-report.service
+
+[Install]
+WantedBy=timers.target

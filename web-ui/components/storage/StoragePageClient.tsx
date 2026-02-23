@@ -67,6 +67,38 @@ function parentDirectory(path: string): string {
   return parts.join("/");
 }
 
+async function readJsonResponse(res: Response): Promise<{ data: unknown; raw: string }> {
+  const raw = await res.text();
+  if (!raw.trim()) {
+    return { data: {}, raw };
+  }
+  try {
+    return { data: JSON.parse(raw), raw };
+  } catch {
+    if (!res.ok) {
+      throw new Error(raw.trim() || `Failed (${res.status})`);
+    }
+    throw new Error(`Expected JSON response but received: ${raw.slice(0, 200)}`);
+  }
+}
+
+function responseErrorMessage(status: number, data: unknown, raw: string, fallback: string): string {
+  if (data && typeof data === "object" && "detail" in data) {
+    const detail = (data as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+    if (detail && typeof detail === "object") {
+      try {
+        return JSON.stringify(detail);
+      } catch {
+        // Fall through to raw/body fallback.
+      }
+    }
+  }
+  const trimmed = raw.trim();
+  if (trimmed) return trimmed;
+  return `${fallback} (${status})`;
+}
+
 export function StoragePageClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -107,9 +139,9 @@ export function StoragePageClient() {
   const refreshOverview = useCallback(async () => {
     try {
       const res = await fetch(`/api/vps/storage/overview?root_source=${rootSource}`, { cache: "no-store" });
-      const data = await res.json();
+      const { data, raw } = await readJsonResponse(res);
       if (!res.ok) {
-        throw new Error(data?.detail || `Failed (${res.status})`);
+        throw new Error(responseErrorMessage(res.status, data, raw, "Failed"));
       }
       const parsed = data as StorageOverview;
       setOverview(parsed);
@@ -128,11 +160,12 @@ export function StoragePageClient() {
     setLoadingSessions(true);
     try {
       const res = await fetch(`/api/vps/storage/sessions?source=${source}&limit=200&root_source=${rootSource}`, { cache: "no-store" });
-      const data = await res.json();
+      const { data, raw } = await readJsonResponse(res);
       if (!res.ok) {
-        throw new Error(data?.detail || `Failed (${res.status})`);
+        throw new Error(responseErrorMessage(res.status, data, raw, "Failed"));
       }
-      setSessions(Array.isArray(data?.sessions) ? (data.sessions as StorageSessionItem[]) : []);
+      const payload = data as { sessions?: unknown };
+      setSessions(Array.isArray(payload.sessions) ? (payload.sessions as StorageSessionItem[]) : []);
     } catch (err: any) {
       setSessions([]);
       setError(err?.message || "Failed to load sessions");
@@ -145,11 +178,12 @@ export function StoragePageClient() {
     setLoadingArtifacts(true);
     try {
       const res = await fetch(`/api/vps/storage/artifacts?limit=200&root_source=${rootSource}`, { cache: "no-store" });
-      const data = await res.json();
+      const { data, raw } = await readJsonResponse(res);
       if (!res.ok) {
-        throw new Error(data?.detail || `Failed (${res.status})`);
+        throw new Error(responseErrorMessage(res.status, data, raw, "Failed"));
       }
-      setArtifacts(Array.isArray(data?.artifacts) ? (data.artifacts as StorageArtifactItem[]) : []);
+      const payload = data as { artifacts?: unknown };
+      setArtifacts(Array.isArray(payload.artifacts) ? (payload.artifacts as StorageArtifactItem[]) : []);
     } catch (err: any) {
       setArtifacts([]);
       setError(err?.message || "Failed to load artifacts");
@@ -203,11 +237,11 @@ export function StoragePageClient() {
       const res = await fetch("/api/vps/sync/now", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ full_resync: true, include_in_progress: true }),
       });
-      const data = await res.json().catch(() => ({}));
+      const { data, raw } = await readJsonResponse(res);
       if (!res.ok) {
-        throw new Error(data?.detail || `Sync failed (${res.status})`);
+        throw new Error(responseErrorMessage(res.status, data, raw, "Sync failed"));
       }
       await Promise.all([refreshOverview(), refreshSessions(sourceFilter), refreshArtifacts()]);
     } catch (err: any) {

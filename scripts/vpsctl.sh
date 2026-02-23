@@ -29,9 +29,13 @@ Usage: scripts/vpsctl.sh <command> [args...]
 
 Commands:
   push <path...>          Copy repo-relative file(s)/dir(s) to VPS under /opt/universal_agent
-  restart <svc|all>       Restart systemd unit(s): gateway|api|webui|telegram|all
+  restart <svc|all>       Restart systemd unit(s): gateway|api|webui|telegram|csi|all
   status <svc|all>        Show is-active for unit(s)
   logs <svc>              Tail recent logs for a unit
+  run <cmd...>            Run a direct remote command via ssh (no shell operators)
+  run-file <local.sh>     Execute a local shell script on VPS via 'bash -s'
+  doctor                  Remote health + permission checks for core runtime env files
+  fix-perms               Repair env file permissions expected by gateway/csi services
 
 File Inspection:
   sessions [filter]       List agent session workspaces (optional prefix filter: chat, cron, hook, tg_)
@@ -44,6 +48,7 @@ Services:
   api     -> universal-agent-api
   webui   -> universal-agent-webui
   telegram-> universal-agent-telegram
+  csi     -> csi-ingester
 EOF
 }
 
@@ -53,6 +58,7 @@ unit_for() {
     api) echo "universal-agent-api" ;;
     webui) echo "universal-agent-webui" ;;
     telegram) echo "universal-agent-telegram" ;;
+    csi) echo "csi-ingester" ;;
     *)
       echo "ERROR: unknown service '$1'" >&2
       exit 2
@@ -109,6 +115,76 @@ run_tailnet_preflight() {
     echo "ERROR: tailscale ping failed for ${host_only}." >&2
     exit 1
   fi
+}
+
+remote_doctor() {
+  ssh_vps "
+    set -euo pipefail
+    ROOT_ENV='$REMOTE_DIR/.env'
+    CSI_ENV='$REMOTE_DIR/CSI_Ingester/development/deployment/systemd/csi-ingester.env'
+    echo '=== service states ==='
+    for s in universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram csi-ingester; do
+      printf '%s=' \"\$s\"
+      systemctl is-active \"\$s\" || true
+    done
+    echo
+    echo '=== env file permissions ==='
+    if [ -f \"\$ROOT_ENV\" ]; then
+      stat -c 'ROOT_ENV %n owner=%U group=%G mode=%a' \"\$ROOT_ENV\"
+    else
+      echo \"ROOT_ENV_MISSING \$ROOT_ENV\"
+    fi
+    if [ -f \"\$CSI_ENV\" ]; then
+      stat -c 'CSI_ENV  %n owner=%U group=%G mode=%a' \"\$CSI_ENV\"
+    else
+      echo \"CSI_ENV_MISSING \$CSI_ENV\"
+    fi
+    echo
+    echo '=== gateway read check (.env) ==='
+    if id -u ua >/dev/null 2>&1 && [ -f \"\$ROOT_ENV\" ]; then
+      if runuser -u ua -- test -r \"\$ROOT_ENV\"; then
+        echo 'UA_CAN_READ_ROOT_ENV=1'
+      else
+        echo 'UA_CAN_READ_ROOT_ENV=0'
+      fi
+    else
+      echo 'UA_USER_MISSING_OR_ROOT_ENV_MISSING=1'
+    fi
+  "
+}
+
+remote_fix_perms() {
+  ssh_vps "
+    set -euo pipefail
+    ROOT_ENV='$REMOTE_DIR/.env'
+    CSI_ENV='$REMOTE_DIR/CSI_Ingester/development/deployment/systemd/csi-ingester.env'
+
+    [ -f \"\$ROOT_ENV\" ] || { echo \"ERROR: missing \$ROOT_ENV\"; exit 2; }
+    if id -u ua >/dev/null 2>&1; then
+      chown root:ua \"\$ROOT_ENV\"
+      chmod 640 \"\$ROOT_ENV\"
+    else
+      chmod 600 \"\$ROOT_ENV\"
+    fi
+
+    if [ -f \"\$CSI_ENV\" ]; then
+      chmod 600 \"\$CSI_ENV\"
+    fi
+
+    if systemctl list-unit-files | grep -q '^universal-agent-gateway.service'; then
+      systemctl restart universal-agent-gateway
+      echo \"GATEWAY_STATUS=\$(systemctl is-active universal-agent-gateway || true)\"
+    fi
+    if systemctl list-unit-files | grep -q '^csi-ingester.service'; then
+      systemctl restart csi-ingester
+      echo \"CSI_STATUS=\$(systemctl is-active csi-ingester || true)\"
+    fi
+
+    stat -c 'ROOT_ENV %n owner=%U group=%G mode=%a' \"\$ROOT_ENV\"
+    if [ -f \"\$CSI_ENV\" ]; then
+      stat -c 'CSI_ENV  %n owner=%U group=%G mode=%a' \"\$CSI_ENV\"
+    fi
+  "
 }
 
 cmd="${1:-}"
@@ -170,8 +246,8 @@ case "$cmd" in
       exit 2
     fi
     if [ "$target" = "all" ]; then
-      ssh_vps "systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram"
-      ssh_vps "systemctl is-active universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram || true"
+      ssh_vps "set -euo pipefail; systemctl restart universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram; if systemctl list-unit-files | grep -q '^csi-ingester.service'; then systemctl restart csi-ingester; fi"
+      ssh_vps "for s in universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram csi-ingester; do if systemctl list-unit-files | grep -q \"^\${s}.service\"; then printf '%s=' \"\$s\"; systemctl is-active \"\$s\" || true; fi; done"
     else
       unit="$(unit_for "$target")"
       ssh_vps "systemctl restart '$unit' && systemctl is-active '$unit' && systemctl status '$unit' --no-pager -n 40"
@@ -180,7 +256,7 @@ case "$cmd" in
   status)
     target="${1:-}"
     if [ -z "$target" ] || [ "$target" = "all" ]; then
-      ssh_vps "for s in universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram; do printf '%s=' \"\$s\"; systemctl is-active \"\$s\" || true; done"
+      ssh_vps "for s in universal-agent-gateway universal-agent-api universal-agent-webui universal-agent-telegram csi-ingester; do if systemctl list-unit-files | grep -q \"^\${s}.service\"; then printf '%s=' \"\$s\"; systemctl is-active \"\$s\" || true; fi; done"
     else
       unit="$(unit_for "$target")"
       ssh_vps "systemctl is-active '$unit' || true; systemctl status '$unit' --no-pager -n 40 || true"
@@ -194,6 +270,35 @@ case "$cmd" in
     fi
     unit="$(unit_for "$target")"
     ssh_vps "journalctl -u '$unit' -n 220 --no-pager"
+    ;;
+  run)
+    if [ $# -lt 1 ]; then
+      echo "ERROR: run requires a command"
+      exit 2
+    fi
+    ssh_vps "$@"
+    ;;
+  run-file)
+    script_file="${1:-}"
+    if [ -z "$script_file" ]; then
+      echo "ERROR: run-file requires a local script path"
+      exit 2
+    fi
+    abs="$REPO_ROOT/$script_file"
+    if [[ "$script_file" = /* ]]; then
+      abs="$script_file"
+    fi
+    if [ ! -f "$abs" ]; then
+      echo "ERROR: script not found: $script_file"
+      exit 2
+    fi
+    ssh_vps "bash -s" < "$abs"
+    ;;
+  doctor)
+    remote_doctor
+    ;;
+  fix-perms)
+    remote_fix_perms
     ;;
 
   # =========================================================================

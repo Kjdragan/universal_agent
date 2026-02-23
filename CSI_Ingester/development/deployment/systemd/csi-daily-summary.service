@@ -1,0 +1,10 @@
+[Unit]
+Description=CSI Daily Summary Artifact Generation
+After=network.target csi-ingester.service
+Wants=csi-ingester.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
+ExecStart=/bin/bash -lc 'DAY="$(date -u -d "yesterday" +%%F)"; /opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_daily_summary.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --day "$DAY"'

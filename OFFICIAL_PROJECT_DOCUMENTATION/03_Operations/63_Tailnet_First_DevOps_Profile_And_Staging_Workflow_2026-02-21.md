@@ -92,7 +92,35 @@ Standardize development and deployment mechanics across local and VPS environmen
 2. Use sync mirror only for remote artifact inspection.
 3. Require VPS gate validation for VP/process behavior.
 4. Use public app only for final smoke acceptance.
+5. Prefer `scripts/vpsctl.sh` for all remote operations (`push`, `status`, `restart`, `logs`, `run`, `run-file`, `doctor`, `fix-perms`) instead of ad-hoc raw `ssh`.
+6. Keep remote procedure scripts checked into repo and execute via `scripts/vpsctl.sh run-file ...` for deterministic, auditable runs.
+7. Runtime env permission baseline:
+   1. `/opt/universal_agent/.env` should be `root:ua` with mode `640` so `ua` services can read secrets.
+   2. `/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env` should be mode `600`.
+   3. Use `scripts/vpsctl.sh doctor` to verify and `scripts/vpsctl.sh fix-perms` to repair drift quickly.
 
 ## Dependencies
 1. VP-process readiness effort remains primary track.
 2. Tailnet-first DevOps can be executed independently if VP rollout is delayed.
+
+## Tailnet Transcript Worker Pattern (Operational Addendum)
+
+Use case: YouTube transcript extraction is blocked from VPS cloud IP ranges.
+
+1. Keep CSI ingestion/analytics on VPS.
+2. Route transcript extraction to a residential Tailnet node exposing:
+   1. `POST /api/v1/youtube/ingest`
+3. Configure CSI with ordered endpoint failover:
+   1. `CSI_RSS_ANALYSIS_TRANSCRIPT_ENDPOINTS=http://<residential-tailnet-ip>:8002/api/v1/youtube/ingest,http://127.0.0.1:8002/api/v1/youtube/ingest`
+4. Configure UA hook workers with ordered endpoint failover for agent-triggered YouTube ingest:
+   1. `UA_HOOKS_YOUTUBE_INGEST_URLS=http://<residential-tailnet-ip>:8002/api/v1/youtube/ingest,http://127.0.0.1:8002/api/v1/youtube/ingest`
+5. Benefits versus third-party residential proxies:
+   1. tighter security boundary (no external proxy credentials),
+   2. lower operating cost,
+   3. deterministic control-plane visibility via Tailnet.
+6. Limitations:
+   1. residential node must be online,
+   2. throughput bounded by single worker unless scaled.
+7. Reusable adapter primitive:
+   1. CSI implementation: `csi_ingester/net/egress_adapter.py`
+   2. standard behavior: ordered endpoint failover + anti-bot/block heuristics.

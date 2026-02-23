@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CSI hourly token usage report at minute 5
+
+[Timer]
+OnCalendar=*:05
+Persistent=true
+Unit=csi-hourly-token-report.service
+
+[Install]
+WantedBy=timers.target
+
