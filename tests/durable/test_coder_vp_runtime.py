@@ -22,60 +22,71 @@ def _conn() -> sqlite3.Connection:
 def test_coder_vp_route_decision_respects_flags(monkeypatch, tmp_path):
     conn = _conn()
     runtime = CoderVPRuntime(conn, workspace_base=tmp_path)
+    explicit_codie_request = "Use CODIE to fix this Python bug in the parser"
 
     monkeypatch.delenv("UA_ENABLE_CODER_VP", raising=False)
     monkeypatch.delenv("UA_DISABLE_CODER_VP", raising=False)
     monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
     monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
 
-    default_on = runtime.route_decision("Please fix this Python bug in the parser")
+    default_on = runtime.route_decision(explicit_codie_request)
     assert default_on.use_coder_vp is True
     assert default_on.reason == "eligible"
+
+    no_explicit_intent = runtime.route_decision("Please fix this Python bug in the parser")
+    assert no_explicit_intent.use_coder_vp is False
+    assert no_explicit_intent.reason == "intent_not_coding"
 
     utility_bash = runtime.route_decision(
         "Write a bash command to recursively find .py files and print their line counts"
     )
     assert utility_bash.use_coder_vp is False
-    assert utility_bash.reason == "below_codie_threshold"
+    assert utility_bash.reason == "intent_not_coding"
 
     utility_python = runtime.route_decision(
         "Give me a small helper function in Python to slugify a string"
     )
     assert utility_python.use_coder_vp is False
-    assert utility_python.reason == "below_codie_threshold"
+    assert utility_python.reason == "intent_not_coding"
 
     scoped_work = runtime.route_decision(
         "Build an end-to-end Python script project with integration test coverage"
     )
-    assert scoped_work.use_coder_vp is True
-    assert scoped_work.reason == "eligible"
+    assert scoped_work.use_coder_vp is False
+    assert scoped_work.reason == "intent_not_coding"
+
+    latest_regression = runtime.route_decision(
+        "Search for the latest information on the Russia-Ukraine war over the past five days"
+    )
+    assert latest_regression.use_coder_vp is False
+    assert latest_regression.reason == "intent_not_coding"
 
     internal_system_task = runtime.route_decision(
-        "Implement a Python refactor in src/universal_agent/gateway_server.py and adjust Simone heartbeat calendar behavior"
+        "CODIE implement a Python refactor in src/universal_agent/gateway_server.py and adjust Simone heartbeat calendar behavior"
     )
     assert internal_system_task.use_coder_vp is False
     assert internal_system_task.reason == "internal_system_request"
 
     monkeypatch.setenv("UA_DISABLE_CODER_VP", "1")
-    disabled = runtime.route_decision("Please fix this Python bug in the parser")
+    disabled = runtime.route_decision(explicit_codie_request)
     assert disabled.use_coder_vp is False
     assert disabled.reason == "feature_disabled"
 
     monkeypatch.delenv("UA_DISABLE_CODER_VP", raising=False)
 
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
-    enabled = runtime.route_decision("Please fix this Python bug in the parser")
+    enabled = runtime.route_decision(explicit_codie_request)
     assert enabled.use_coder_vp is True
     assert enabled.intent_matched is True
 
     monkeypatch.setenv("UA_CODER_VP_SHADOW_MODE", "1")
-    shadow = runtime.route_decision("Please fix this Python bug in the parser")
+    shadow = runtime.route_decision(explicit_codie_request)
     assert shadow.use_coder_vp is False
     assert shadow.shadow_mode is True
     assert shadow.reason == "shadow_mode"
 
     monkeypatch.setenv("UA_CODER_VP_FORCE_FALLBACK", "1")
-    forced = runtime.route_decision("Please fix this Python bug in the parser")
+    forced = runtime.route_decision(explicit_codie_request)
     assert forced.use_coder_vp is False
     assert forced.force_fallback is True
     assert forced.reason == "forced_fallback"
