@@ -434,9 +434,16 @@ def classify_and_update_category(
 
         threshold = int(state.get("new_category_min_topic_hits") or 8)
         category_candidate = ""
+        conf_value = float(confidence or 0.0)
         if create_hint and create_hint not in categories:
-            category_candidate = create_hint
-        else:
+            # Strong, explicit model suggestions can create immediately.
+            if conf_value >= 0.85:
+                category_candidate = create_hint
+            else:
+                # Lower-confidence suggestions must recur before spawning a category.
+                topic_counts[create_hint] = int(topic_counts.get(create_hint) or 0) + 2
+
+        if not category_candidate:
             for topic, count in sorted(topic_counts.items(), key=lambda item: int(item[1]), reverse=True):
                 if int(count) < threshold:
                     break
@@ -445,7 +452,7 @@ def classify_and_update_category(
                 category_candidate = topic
                 break
 
-        if category_candidate and float(confidence or 0.0) >= 0.45:
+        if category_candidate and conf_value >= 0.45:
             while len(categories) >= int(state["max_categories"]):
                 if not _merge_or_retire_narrowest_dynamic(state):
                     break
