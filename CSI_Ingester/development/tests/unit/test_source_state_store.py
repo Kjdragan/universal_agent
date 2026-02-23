@@ -13,6 +13,7 @@ def test_source_state_roundtrip(tmp_path):
         "0002_source_state",
         "0003_token_usage",
         "0004_rss_analysis",
+        "0005_analyst",
     ]
     source_state.set_state(conn, "youtube_playlist:PL1", {"seeded": True, "seen_ids": ["a", "b"]})
     state = source_state.get_state(conn, "youtube_playlist:PL1")

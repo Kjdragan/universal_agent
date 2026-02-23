@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI category quality loop hourly
+
+[Timer]
+OnCalendar=*:27
+Persistent=true
+Unit=csi-category-quality-loop.service
+
+[Install]
+WantedBy=timers.target

@@ -107,6 +107,7 @@ def _build_fallback_digest(
 ) -> str:
     channel_counts: Counter[str] = Counter()
     category_counts: Counter[str] = Counter()
+    theme_counts: Counter[str] = Counter()
     items: list[dict[str, str]] = []
 
     for row in rows:
@@ -131,6 +132,17 @@ def _build_fallback_digest(
         created_at = str(row["created_at"] or "")
         raw_category = canonicalize_category(str(row["category"] or ""))
         category_counts[raw_category] += 1
+        try:
+            analysis_payload = json.loads(str(row["analysis_json"] or "{}"))
+            if isinstance(analysis_payload, dict):
+                themes = analysis_payload.get("themes")
+                if isinstance(themes, list):
+                    for theme in themes:
+                        label = str(theme).strip().lower()
+                        if label:
+                            theme_counts[label] += 1
+        except Exception:
+            pass
 
         items.append(
             {
@@ -166,6 +178,15 @@ def _build_fallback_digest(
     lines.append("Top channels:")
     for channel, count in channel_counts.most_common(5):
         lines.append(f"- {channel}: {count}")
+    lines.append("")
+    lines.append("Watchlist movers:")
+    for channel, count in channel_counts.most_common(5):
+        lines.append(f"- {channel}: +{count}")
+    if theme_counts:
+        lines.append("")
+        lines.append("Top narratives:")
+        for theme, count in theme_counts.most_common(6):
+            lines.append(f"- {theme}: {count}")
     lines.append("")
     lines.append("Videos by category:")
 
@@ -269,6 +290,7 @@ def _maybe_build_claude_digest(
                 "video_id": str(subject.get("video_id") or ""),
                 "url": str(subject.get("url") or ""),
                 "category": canonicalize_category(str(row["category"] or "")),
+                "analysis_json": str(row["analysis_json"] or "{}")[:1200],
             }
         )
 
@@ -437,7 +459,8 @@ def main() -> int:
             e.created_at,
             e.delivered,
             e.subject_json,
-            COALESCE(a.category, 'other_interest') AS category
+            COALESCE(a.category, 'other_interest') AS category,
+            COALESCE(a.analysis_json, '{}') AS analysis_json
         FROM events e
         LEFT JOIN rss_event_analysis a ON a.event_id = e.event_id
         WHERE e.source = ? AND e.delivered = 1 AND e.id > ?

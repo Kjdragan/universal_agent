@@ -94,7 +94,13 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
 
 
 def _build_report_data(
-    conn: sqlite3.Connection, start_db: str, end_db: str, taxonomy_state: dict[str, Any]
+    conn: sqlite3.Connection,
+    start_db: str,
+    end_db: str,
+    taxonomy_state: dict[str, Any],
+    *,
+    start_dt: datetime,
+    end_dt: datetime,
 ) -> dict[str, Any]:
     rows = conn.execute(
         """
@@ -117,6 +123,7 @@ def _build_report_data(
     by_category: dict[str, int] = Counter()
     by_channel: Counter[str] = Counter()
     theme_counter: Counter[str] = Counter()
+    theme_examples: dict[str, list[str]] = defaultdict(list)
     category_summaries: dict[str, list[dict[str, str]]] = defaultdict(list)
 
     for row in rows:
@@ -140,6 +147,8 @@ def _build_report_data(
                 label = str(theme).strip().lower()
                 if label:
                     theme_counter[label] += 1
+                    if len(theme_examples[label]) < 3 and str(row["title"] or "").strip():
+                        theme_examples[label].append(str(row["title"] or "").strip())
 
         category_summaries[category].append(
             {
@@ -153,12 +162,91 @@ def _build_report_data(
 
     top_channels = [{"channel": label, "count": count} for label, count in by_channel.most_common(12)]
     top_themes = [{"theme": label, "count": count} for label, count in theme_counter.most_common(20)]
+    top_narratives = [
+        {"theme": label, "count": count, "examples": theme_examples.get(label, [])}
+        for label, count in theme_counter.most_common(12)
+    ]
+
+    prev_window = end_dt - start_dt
+    prev_start_dt = start_dt - prev_window
+    prev_end_dt = start_dt
+    prev_start_db = prev_start_dt.strftime("%Y-%m-%d %H:%M:%S")
+    prev_end_db = prev_end_dt.strftime("%Y-%m-%d %H:%M:%S")
+    prev_channels = {
+        str(item["channel_name"] or item["channel_id"] or "unknown_channel"): int(item["c"] or 0)
+        for item in conn.execute(
+            """
+            SELECT
+                channel_name,
+                channel_id,
+                COUNT(*) AS c
+            FROM rss_event_analysis
+            WHERE analyzed_at >= ? AND analyzed_at < ?
+            GROUP BY channel_name, channel_id
+            """,
+            (prev_start_db, prev_end_db),
+        ).fetchall()
+    }
+    watchlist_movers: list[dict[str, Any]] = []
+    for item in top_channels:
+        channel = str(item.get("channel") or "")
+        count = int(item.get("count") or 0)
+        prev_count = int(prev_channels.get(channel) or 0)
+        watchlist_movers.append(
+            {
+                "channel": channel,
+                "count": count,
+                "previous_count": prev_count,
+                "delta": count - prev_count,
+            }
+        )
+    watchlist_movers.sort(key=lambda entry: (int(entry["delta"]), int(entry["count"])), reverse=True)
+
+    token_usage = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS records,
+            COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+            COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+            COALESCE(SUM(total_tokens), 0) AS total_tokens
+        FROM token_usage
+        WHERE occurred_at >= ? AND occurred_at < ?
+        """,
+        (start_db, end_db),
+    ).fetchone()
+    token_usage_by_process: list[dict[str, Any]] = []
+    for item in conn.execute(
+        """
+        SELECT process_name, COALESCE(SUM(total_tokens), 0) AS total_tokens
+        FROM token_usage
+        WHERE occurred_at >= ? AND occurred_at < ?
+        GROUP BY process_name
+        ORDER BY total_tokens DESC, process_name ASC
+        LIMIT 10
+        """,
+        (start_db, end_db),
+    ).fetchall():
+        token_usage_by_process.append(
+            {
+                "process_name": str(item["process_name"] or "unknown"),
+                "total_tokens": int(item["total_tokens"] or 0),
+            }
+        )
 
     return {
         "total_items": len(rows),
         "by_category": dict(by_category),
         "top_channels": top_channels,
         "top_themes": top_themes,
+        "top_narratives": top_narratives,
+        "watchlist_movers": watchlist_movers[:10],
+        "token_usage_snapshot": {
+            "records": int(token_usage["records"] or 0),
+            "prompt_tokens": int(token_usage["prompt_tokens"] or 0),
+            "completion_tokens": int(token_usage["completion_tokens"] or 0),
+            "total_tokens": int(token_usage["total_tokens"] or 0),
+            "by_process": token_usage_by_process,
+        },
         "samples": {k: v[:30] for k, v in category_summaries.items()},
     }
 
@@ -185,6 +273,28 @@ def _fallback_markdown(report_data: dict[str, Any], start_iso: str, end_iso: str
     for item in report_data.get("top_themes", [])[:12]:
         if isinstance(item, dict):
             lines.append(f"- {item.get('theme')}: {item.get('count')}")
+    lines.append("")
+    lines.append("## Watchlist Movers")
+    for item in report_data.get("watchlist_movers", [])[:8]:
+        if isinstance(item, dict):
+            lines.append(
+                f"- {item.get('channel')}: {item.get('count')} (prev {item.get('previous_count')}, delta {int(item.get('delta') or 0):+d})"
+            )
+    lines.append("")
+    lines.append("## Top Narratives")
+    for item in report_data.get("top_narratives", [])[:10]:
+        if isinstance(item, dict):
+            lines.append(f"- {item.get('theme')}: {item.get('count')}")
+    lines.append("")
+    lines.append("## Token Usage Snapshot")
+    token_usage = report_data.get("token_usage_snapshot", {})
+    if isinstance(token_usage, dict):
+        lines.append(
+            f"- Total tokens: {int(token_usage.get('total_tokens') or 0)} (prompt={int(token_usage.get('prompt_tokens') or 0)}, completion={int(token_usage.get('completion_tokens') or 0)})"
+        )
+        for item in token_usage.get("by_process", [])[:8]:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('process_name')}: {item.get('total_tokens')}")
     lines.append("")
     lines.append("## AI Samples")
     for sample in report_data.get("samples", {}).get("ai", [])[:6]:
@@ -240,7 +350,8 @@ def _claude_trend_markdown(
         "Produce a concise trend report in markdown for monitored YouTube uploads.\n"
         "Focus on meaningful shifts and recurring narratives.\n"
         "Sections required: Executive Summary, AI Trend Signals, Political Trend Signals, "
-        "War Trend Signals, Other Interest Signals, Emerging Categories, Watch Items.\n"
+        "War Trend Signals, Other Interest Signals, Emerging Categories, Watchlist Movers, "
+        "Top Narratives, Token Usage Snapshot, Watch Items.\n"
         "Keep under 2200 words.\n\n"
         f"Window: {start_iso} -> {end_iso}\n"
         f"Data JSON:\n{json.dumps(report_data, ensure_ascii=False)}"
@@ -378,7 +489,14 @@ def main() -> int:
         conn.close()
         return 0
 
-    report_data = _build_report_data(conn, start_db, end_db, taxonomy_state)
+    report_data = _build_report_data(
+        conn,
+        start_db,
+        end_db,
+        taxonomy_state,
+        start_dt=start_dt,
+        end_dt=end_dt,
+    )
     total_items = int(report_data.get("total_items") or 0)
     if total_items == 0:
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -449,6 +567,9 @@ def main() -> int:
             },
             "top_channels": report_data.get("top_channels", []),
             "top_themes": report_data.get("top_themes", []),
+            "top_narratives": report_data.get("top_narratives", []),
+            "watchlist_movers": report_data.get("watchlist_movers", []),
+            "token_usage_snapshot": report_data.get("token_usage_snapshot", {}),
             "markdown": markdown,
             "token_usage": usage,
         },

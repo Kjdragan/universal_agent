@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI RSS insight analyst hourly
+
+[Timer]
+OnCalendar=*:22
+Persistent=true
+Unit=csi-rss-insight-analyst.service
+
+[Install]
+WantedBy=timers.target

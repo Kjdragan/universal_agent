@@ -61,7 +61,10 @@ Timers installed:
 - `csi-rss-telegram-digest.timer` -> every 10 minutes (sends one batched Telegram digest when new RSS events exist)
 - `csi-rss-semantic-enrich.timer` -> every 10 minutes at `:02` (transcript extraction + adaptive semantic categorization)
 - `csi-rss-trend-report.timer` -> hourly at minute `:12` (aggregated trend report event to UA)
+- `csi-rss-insight-analyst.timer` -> hourly at minute `:22` (CSI-native insight reports: emerging + daily cadence)
 - `csi-rss-reclassify-categories.timer` -> every 6 hours at minute `:17` (reclassify older RSS rows with current taxonomy)
+- `csi-category-quality-loop.timer` -> hourly at minute `:27` (adaptive taxonomy quality loop + threshold/category tuning)
+- `csi-analysis-task-runner.timer` -> every 10 minutes at `:06` (runs UA-submitted CSI analysis tasks)
 - `csi-daily-summary.timer` -> daily at `00:10 UTC` (writes summary artifacts under `/opt/universal_agent/artifacts/csi-reports/<day>/`)
 - `csi-hourly-token-report.timer` -> hourly at minute 05 (sends `hourly_token_usage_report` event to UA)
 
@@ -90,11 +93,55 @@ Run RSS trend report manually:
 scripts/csi_run.sh python3 scripts/csi_rss_trend_report.py --db-path /path/to/csi.db --window-hours 24 --force
 ```
 
+Run CSI insight analyst manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_rss_insight_analyst.py --db-path /path/to/csi.db --force
+```
+
 Run adaptive category reclassification manually:
 
 ```bash
 scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python scripts/csi_rss_reclassify_categories.py --db-path /path/to/csi.db --max-rows 1500
 ```
+
+Run category quality loop manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_category_quality_loop.py --db-path /path/to/csi.db --force
+```
+
+Run analysis task runner manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_analysis_task_runner.py --db-path /path/to/csi.db --max-tasks 8
+```
+
+## UA ↔ CSI Analyst Task Protocol
+
+CSI ingester API now exposes task endpoints for delegating analysis work into CSI:
+
+- `POST /analysis/tasks` create task
+- `GET /analysis/tasks` list tasks (optional `status`, `request_type`, `limit`, `offset`)
+- `GET /analysis/tasks/{task_id}` get one task
+- `POST /analysis/tasks/{task_id}/cancel` cancel pending/running task
+
+Example create payload:
+
+```json
+{
+  "request_type": "category_deep_dive",
+  "priority": 80,
+  "request_source": "ua",
+  "payload": {
+    "category": "ai",
+    "lookback_hours": 72,
+    "limit": 200
+  }
+}
+```
+
+Task runner executes queued tasks and emits `analysis_task_completed` / `analysis_task_failed` events back to UA.
 
 ## Tailnet Residential Transcript Worker
 
