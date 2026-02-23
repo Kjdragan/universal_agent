@@ -357,6 +357,11 @@ This keeps trigger infrastructure independent from specific skill logic.
    1. `CSI_RSS_TELEGRAM_CHAT_ID` (YouTube RSS feed digest),
    2. `CSI_REDDIT_TELEGRAM_CHAT_ID` (Reddit feed digest),
    3. `CSI_TUTORIAL_TELEGRAM_CHAT_ID` (playlist tutorial run updates + artifact links/paths).
+4. Telegram routing supports forum-topic partitioning per stream via:
+   1. `CSI_RSS_TELEGRAM_THREAD_ID`,
+   2. `CSI_REDDIT_TELEGRAM_THREAD_ID`,
+   3. `CSI_TUTORIAL_TELEGRAM_THREAD_ID`.
+5. Reddit and playlist tutorial digest services run strict stream routing mode by default (`--strict-stream-routing`) to prevent accidental cross-posting into the RSS/default stream when stream-specific routing is unset.
 
 ### Phase 5: Threads adapter using the same four-layer pattern
 

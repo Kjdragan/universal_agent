@@ -67,7 +67,15 @@ Telegram channel separation options:
 - `CSI_RSS_TELEGRAM_CHAT_ID` for YouTube RSS digest stream.
 - `CSI_REDDIT_TELEGRAM_CHAT_ID` for Reddit digest stream.
 - `CSI_TUTORIAL_TELEGRAM_CHAT_ID` for playlist tutorial updates (new playlist videos + discovered artifact paths).
-- Stream scripts fall back to generic Telegram envs if stream-specific chat IDs are not set.
+- Optional per-stream Telegram forum topic IDs:
+- `CSI_RSS_TELEGRAM_THREAD_ID`
+- `CSI_REDDIT_TELEGRAM_THREAD_ID`
+- `CSI_TUTORIAL_TELEGRAM_THREAD_ID`
+- Strict stream routing controls:
+- `CSI_TELEGRAM_STRICT_STREAM_ROUTING=1` (global)
+- `CSI_REDDIT_TELEGRAM_STRICT_STREAM_ROUTING=1`
+- `CSI_TUTORIAL_TELEGRAM_STRICT_STREAM_ROUTING=1`
+- `csi-reddit-telegram-digest.service` and `csi-playlist-tutorial-digest.service` run with `--strict-stream-routing` by default, so those streams do not silently fall back into RSS/default chat routing.
 
 Install periodic systemd jobs on VPS (requires root):
 
