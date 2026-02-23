@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI analysis task runner every 10 minutes
+
+[Timer]
+OnCalendar=*:06/10
+Persistent=true
+Unit=csi-analysis-task-runner.service
+
+[Install]
+WantedBy=timers.target

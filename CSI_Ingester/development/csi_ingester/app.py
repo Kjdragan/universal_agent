@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel, Field
 
 from csi_ingester.config import CSIConfig, load_config
 from csi_ingester.logging import configure_logging
 from csi_ingester.metrics import MetricsRegistry
 from csi_ingester.service import CSIService
+from csi_ingester.store import analysis_tasks as analysis_task_store
 from csi_ingester.store.sqlite import connect, ensure_schema
 
 configure_logging()
@@ -23,6 +26,17 @@ _metrics = MetricsRegistry()
 _config: CSIConfig | None = None
 _db_conn = None
 _service: CSIService | None = None
+
+
+class AnalysisTaskCreateRequest(BaseModel):
+    request_type: str = Field(..., min_length=1, max_length=160)
+    priority: int = Field(default=50, ge=0, le=1000)
+    request_source: str = Field(default="ua", min_length=1, max_length=120)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AnalysisTaskCancelRequest(BaseModel):
+    reason: str = Field(default="canceled", max_length=4000)
 
 
 @app.on_event("startup")
@@ -66,3 +80,63 @@ async def readyz() -> dict[str, object]:
 @app.get("/metrics", response_class=PlainTextResponse)
 async def metrics() -> str:
     return _metrics.render_prometheus()
+
+
+@app.post("/analysis/tasks")
+async def create_analysis_task(payload: AnalysisTaskCreateRequest) -> dict[str, Any]:
+    if _db_conn is None:
+        raise HTTPException(status_code=503, detail="db_not_ready")
+    try:
+        task = analysis_task_store.create_task(
+            _db_conn,
+            request_type=payload.request_type,
+            payload=payload.payload,
+            priority=payload.priority,
+            request_source=payload.request_source,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "task": task}
+
+
+@app.get("/analysis/tasks")
+async def list_analysis_tasks(
+    status: str = Query(default="", max_length=64),
+    request_type: str = Query(default="", max_length=160),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, Any]:
+    if _db_conn is None:
+        raise HTTPException(status_code=503, detail="db_not_ready")
+    tasks = analysis_task_store.list_tasks(
+        _db_conn,
+        status=status,
+        request_type=request_type,
+        limit=limit,
+        offset=offset,
+    )
+    return {"ok": True, "tasks": tasks, "count": len(tasks)}
+
+
+@app.get("/analysis/tasks/{task_id}")
+async def get_analysis_task(task_id: str) -> dict[str, Any]:
+    if _db_conn is None:
+        raise HTTPException(status_code=503, detail="db_not_ready")
+    task = analysis_task_store.get_task(_db_conn, task_id.strip())
+    if task is None:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return {"ok": True, "task": task}
+
+
+@app.post("/analysis/tasks/{task_id}/cancel")
+async def cancel_analysis_task(task_id: str, payload: AnalysisTaskCancelRequest) -> dict[str, Any]:
+    if _db_conn is None:
+        raise HTTPException(status_code=503, detail="db_not_ready")
+    task = analysis_task_store.cancel_task(
+        _db_conn,
+        task_id=task_id.strip(),
+        reason=payload.reason,
+    )
+    if task is None:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return {"ok": True, "task": task}
