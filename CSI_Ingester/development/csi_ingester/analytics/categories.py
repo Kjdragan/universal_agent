@@ -53,6 +53,9 @@ CORE_DEFINITIONS: dict[str, dict[str, Any]] = {
             "left wing",
             "right wing",
             "geopolitic",
+            "trump",
+            "biden",
+            "whitehouse",
         ],
     },
     "war": {
@@ -98,6 +101,14 @@ CATEGORY_ALIASES: dict[str, str] = {
     "politics": "political",
     "geopolitics": "political",
     "warfare": "war",
+    "trump": "political",
+    "biden": "political",
+    "putin": "war",
+    "credit_repair": "finance",
+    "financial_services": "finance",
+    "financial_advice": "finance",
+    "debt": "finance",
+    "money": "finance",
 }
 
 GENERIC_TOPIC_WORDS = {
@@ -149,6 +160,29 @@ GENERIC_TOPIC_WORDS = {
     "tracking",
     "monitoring",
     "watchlist",
+}
+
+LOW_SIGNAL_DYNAMIC_TOPICS = {
+    "this",
+    "that",
+    "these",
+    "those",
+    "here",
+    "there",
+    "shorts",
+    "short",
+    "credit",
+    "credits",
+    "after",
+    "before",
+    "caught",
+    "your",
+    "with",
+    "clip",
+    "clips",
+    "vlog",
+    "reel",
+    "reels",
 }
 
 
@@ -217,6 +251,48 @@ def _extract_topic_candidates(
         if len(ranked) >= 24:
             break
     return ranked
+
+
+def _topic_maps_to_core(topic: str) -> str:
+    key = _normalize_key(topic)
+    if key in CORE_ORDER:
+        return key if key != "other_interest" else ""
+
+    mapped = CATEGORY_ALIASES.get(key)
+    if mapped in {"ai", "political", "war"}:
+        return str(mapped)
+
+    for core_slug in ("ai", "political", "war"):
+        keywords = CORE_DEFINITIONS.get(core_slug, {}).get("keywords", [])
+        for kw in keywords:
+            norm_kw = _normalize_key(str(kw))
+            if not norm_kw:
+                continue
+            if key == norm_kw:
+                return core_slug
+            if key.startswith(f"{norm_kw}_") or key.endswith(f"_{norm_kw}"):
+                return core_slug
+            if f"_{norm_kw}_" in f"_{key}_":
+                return core_slug
+    return ""
+
+
+def _is_low_signal_topic(topic: str) -> bool:
+    slug = _slugify(topic)
+    if not slug:
+        return True
+    if slug in GENERIC_TOPIC_WORDS or slug in LOW_SIGNAL_DYNAMIC_TOPICS:
+        return True
+    parts = [p for p in slug.split("_") if p]
+    if not parts:
+        return True
+    if len(parts) == 1:
+        token = parts[0]
+        if token in LOW_SIGNAL_DYNAMIC_TOPICS:
+            return True
+        if len(token) <= 3:
+            return True
+    return False
 
 
 def _new_state(max_categories: int) -> dict[str, Any]:
@@ -288,6 +364,42 @@ def ensure_taxonomy_state(conn: sqlite3.Connection, *, max_categories: int = 10)
     if not isinstance(state.get("retired_categories"), list):
         state["retired_categories"] = []
         changed = True
+
+    retired = state.get("retired_categories")
+    if not isinstance(retired, list):
+        retired = []
+        state["retired_categories"] = retired
+        changed = True
+
+    to_remove: list[tuple[str, str]] = []
+    for slug, payload in categories.items():
+        if slug in CORE_ORDER or not isinstance(payload, dict):
+            continue
+        if str(payload.get("kind") or "") != "dynamic":
+            continue
+        mapped_core = _topic_maps_to_core(slug)
+        if mapped_core:
+            to_remove.append((slug, f"mapped_to_core:{mapped_core}"))
+            continue
+        if _is_low_signal_topic(slug):
+            to_remove.append((slug, "low_signal"))
+
+    for slug, reason in to_remove:
+        payload = categories.get(slug)
+        if not isinstance(payload, dict):
+            continue
+        retired.append(
+            {
+                "slug": slug,
+                "label": str(payload.get("label") or format_category_label(slug)),
+                "count": int(payload.get("count") or 0),
+                "retired_at": now,
+                "reason": reason,
+            }
+        )
+        del categories[slug]
+        changed = True
+
     if changed:
         state["updated_at"] = now
         source_state.set_state(conn, CATEGORY_STATE_KEY, state)
@@ -329,6 +441,11 @@ def _score_category(blob: str, keywords: list[str]) -> int:
 def canonicalize_category(raw_value: str, *, state: dict[str, Any] | None = None) -> str:
     value = _normalize_key(str(raw_value or ""))
     if not value:
+        return "other_interest"
+    mapped_core = _topic_maps_to_core(value)
+    if mapped_core:
+        return mapped_core
+    if _is_low_signal_topic(value):
         return "other_interest"
     if value in CORE_ORDER:
         return value
@@ -422,6 +539,10 @@ def classify_and_update_category(
     if selected == "other_interest":
         topic_counts = state["other_interest_topic_counts"]
         for topic in candidates[:12]:
+            if _is_low_signal_topic(topic):
+                continue
+            if _topic_maps_to_core(topic):
+                continue
             topic_counts[topic] = int(topic_counts.get(topic) or 0) + 1
 
         create_hint = _slugify(suggested_category)
@@ -431,13 +552,18 @@ def classify_and_update_category(
             create_hint = ""
         if create_hint in GENERIC_TOPIC_WORDS:
             create_hint = ""
+        if create_hint and _is_low_signal_topic(create_hint):
+            create_hint = ""
+        if create_hint and _topic_maps_to_core(create_hint):
+            create_hint = ""
 
         threshold = int(state.get("new_category_min_topic_hits") or 8)
         category_candidate = ""
         conf_value = float(confidence or 0.0)
         if create_hint and create_hint not in categories:
             # Strong, explicit model suggestions can create immediately.
-            if conf_value >= 0.85:
+            high_quality_hint = (len(create_hint) >= 6) or ("_" in create_hint)
+            if conf_value >= 0.9 and high_quality_hint:
                 category_candidate = create_hint
             else:
                 # Lower-confidence suggestions must recur before spawning a category.
@@ -448,6 +574,10 @@ def classify_and_update_category(
                 if int(count) < threshold:
                     break
                 if topic in categories or topic in CORE_ORDER or topic in GENERIC_TOPIC_WORDS:
+                    continue
+                if _is_low_signal_topic(topic):
+                    continue
+                if _topic_maps_to_core(topic):
                     continue
                 category_candidate = topic
                 break
@@ -486,6 +616,10 @@ def classify_and_update_category(
         kws = [str(item).lower() for item in chosen.get("keywords", []) if str(item).strip()]
         for token in candidates:
             if token in kws or token in GENERIC_TOPIC_WORDS:
+                continue
+            if _is_low_signal_topic(token):
+                continue
+            if _topic_maps_to_core(token):
                 continue
             kws.append(token)
             if len(kws) >= 28:
