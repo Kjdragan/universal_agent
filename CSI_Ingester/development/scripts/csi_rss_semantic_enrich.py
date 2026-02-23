@@ -10,6 +10,7 @@ import re
 import sqlite3
 import sys
 import urllib.request
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,28 +20,13 @@ SCRIPT_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
+from csi_ingester.analytics.categories import (
+    classify_and_update_category,
+    normalize_existing_analysis_categories,
+)
 from csi_ingester.store import token_usage as token_usage_store
 from csi_ingester.net import parse_endpoint_list, post_json_with_failover
 from csi_ingester.store.sqlite import connect, ensure_schema
-
-AI_KEYWORDS = {
-    "ai",
-    "artificial intelligence",
-    "llm",
-    "gpt",
-    "openai",
-    "anthropic",
-    "claude",
-    "gemini",
-    "agent",
-    "agents",
-    "automation",
-    "machine learning",
-    "neural",
-    "prompt",
-    "inference",
-    "model",
-}
 
 
 def _load_env_file(path: Path) -> dict[str, str]:
@@ -101,26 +87,22 @@ def _fetch_transcript_failover(
     )
 
 
-def _heuristic_category(title: str, transcript_text: str) -> str:
-    blob = f"{title}\n{transcript_text}".lower()
-    for kw in AI_KEYWORDS:
-        if kw in blob:
-            return "ai"
-    return "non_ai"
-
-
 def _fallback_summary(title: str, transcript_text: str, category: str) -> tuple[str, list[str], float]:
     clean = re.sub(r"\s+", " ", transcript_text).strip()
     base = clean[:300] if clean else ""
     if base:
         summary = f"{title.strip()} :: {base}"
     else:
-        summary = f"{title.strip()} :: transcript unavailable; metadata-only classification ({category})"
-    themes: list[str] = []
+        summary = f"{title.strip()} :: transcript unavailable; metadata-only classification"
+    themes: list[str] = [category]
     if category == "ai":
         themes.extend(["ai_tools", "automation"])
+    elif category == "political":
+        themes.extend(["politics", "public_policy"])
+    elif category == "war":
+        themes.extend(["security", "geopolitics"])
     else:
-        themes.extend(["general_news"])
+        themes.extend(["general_interest"])
     return summary[:1000], themes, 0.55
 
 
@@ -160,7 +142,8 @@ def _analyze_with_claude(
     prompt = (
         "Classify and summarize this YouTube upload for trend tracking.\n"
         "Return ONLY valid JSON with keys:\n"
-        "category (ai|non_ai), summary (string <= 700 chars), themes (array up to 6), confidence (0..1).\n\n"
+        "category (ai|political|war|other_interest|or short snake_case category), "
+        "summary (string <= 700 chars), themes (array up to 6), confidence (0..1).\n\n"
         f"Channel Name: {channel_name}\n"
         f"Channel ID: {channel_id}\n"
         f"Title: {title}\n\n"
@@ -317,6 +300,7 @@ def main() -> int:
     parser.add_argument("--transcript-max-chars", type=int, default=120000)
     parser.add_argument("--transcript-min-chars", type=int, default=120)
     parser.add_argument("--claude-model", default="")
+    parser.add_argument("--max-categories", type=int, default=10)
     args = parser.parse_args()
 
     db_path = Path(args.db_path).expanduser()
@@ -327,6 +311,7 @@ def main() -> int:
     merged_env_values = {**env_file_values, **csi_env_values}
     conn = connect(db_path)
     ensure_schema(conn)
+    normalize_existing_analysis_categories(conn)
 
     rows = _select_pending(conn, max(1, int(args.max_events)))
     if not rows:
@@ -361,12 +346,16 @@ def main() -> int:
         or _resolve_setting(["CSI_RSS_ANALYSIS_CLAUDE_MODEL"], merged_env_values).strip()
         or "claude-3-5-haiku-latest"
     )
+    max_categories_setting = _resolve_setting(["CSI_RSS_ANALYSIS_MAX_CATEGORIES"], merged_env_values).strip()
+    try:
+        max_categories = max(4, int(max_categories_setting)) if max_categories_setting else max(4, int(args.max_categories))
+    except Exception:
+        max_categories = max(4, int(args.max_categories))
 
     processed = 0
     transcript_ok = 0
     claude_used = 0
-    ai_count = 0
-    non_ai_count = 0
+    category_counts: Counter[str] = Counter()
     endpoint_success_counts: dict[str, int] = {}
 
     for row in rows:
@@ -417,10 +406,10 @@ def main() -> int:
             if endpoint_host:
                 endpoint_success_counts[endpoint_host] = endpoint_success_counts.get(endpoint_host, 0) + 1
 
-        category = _heuristic_category(title, transcript_text)
-        summary_text, themes, confidence = _fallback_summary(title, transcript_text, category)
+        suggested_category = ""
+        summary_text, themes, confidence = _fallback_summary(title, transcript_text, "other_interest")
         analysis_json: dict[str, Any] = {
-            "category": category,
+            "category": "other_interest",
             "themes": themes,
             "confidence": confidence,
             "transcript_status": transcript_status,
@@ -445,8 +434,8 @@ def main() -> int:
             )
             if parsed:
                 parsed_category = str(parsed.get("category") or "").strip().lower()
-                if parsed_category in {"ai", "non_ai"}:
-                    category = parsed_category
+                if parsed_category:
+                    suggested_category = parsed_category
                 summary_val = str(parsed.get("summary") or "").strip()
                 if summary_val:
                     summary_text = summary_val[:1000]
@@ -459,7 +448,7 @@ def main() -> int:
                 except Exception:
                     confidence = confidence
                 analysis_json = {
-                    "category": category,
+                    "category": suggested_category or "other_interest",
                     "themes": themes,
                     "confidence": max(0.0, min(1.0, confidence)),
                     "transcript_status": transcript_status,
@@ -484,9 +473,25 @@ def main() -> int:
                         metadata={
                             "event_id": event_id,
                             "video_id": video_id,
-                            "category": category,
+                            "category": suggested_category or "other_interest",
                         },
                     )
+
+        category, taxonomy_state = classify_and_update_category(
+            conn,
+            suggested_category=suggested_category,
+            title=title,
+            channel_name=channel_name,
+            summary_text=summary_text,
+            transcript_text=transcript_text,
+            themes=themes,
+            confidence=confidence,
+            max_categories=max_categories,
+        )
+        analysis_json["category"] = category
+        analysis_json["taxonomy_categories"] = sorted(list((taxonomy_state.get("categories") or {}).keys()))
+        analysis_json["taxonomy_total"] = int(taxonomy_state.get("total_classified") or 0)
+        analysis_json["suggested_category"] = suggested_category
 
         _upsert_analysis(
             conn,
@@ -510,10 +515,7 @@ def main() -> int:
             analysis_json=analysis_json,
         )
 
-        if category == "ai":
-            ai_count += 1
-        elif category == "non_ai":
-            non_ai_count += 1
+        category_counts[category] += 1
         processed += 1
 
     conn.close()
@@ -521,8 +523,15 @@ def main() -> int:
     print(f"RSS_ENRICH_PROCESSED={processed}")
     print(f"RSS_ENRICH_TRANSCRIPT_OK={transcript_ok}")
     print(f"RSS_ENRICH_CLAUDE_USED={claude_used}")
-    print(f"RSS_ENRICH_AI={ai_count}")
-    print(f"RSS_ENRICH_NON_AI={non_ai_count}")
+    print(f"RSS_ENRICH_AI={int(category_counts.get('ai') or 0)}")
+    print(f"RSS_ENRICH_POLITICAL={int(category_counts.get('political') or 0)}")
+    print(f"RSS_ENRICH_WAR={int(category_counts.get('war') or 0)}")
+    print(f"RSS_ENRICH_OTHER_INTEREST={int(category_counts.get('other_interest') or 0)}")
+    # Backward-compatible metric for earlier dashboards.
+    print(f"RSS_ENRICH_NON_AI={int(category_counts.get('other_interest') or 0)}")
+    for slug, count in sorted(category_counts.items()):
+        metric = re.sub(r"[^A-Z0-9_]+", "_", slug.upper())
+        print(f"RSS_ENRICH_CATEGORY_{metric}={int(count)}")
     if endpoint_success_counts:
         for host, count in sorted(endpoint_success_counts.items()):
             print(f"RSS_ENRICH_ENDPOINT_OK host={host} count={count}")
