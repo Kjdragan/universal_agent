@@ -1,0 +1,11 @@
+[Unit]
+Description=CSI RSS Adaptive Category Reclassification
+After=network.target csi-ingester.service
+Wants=csi-ingester.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_rss_reclassify_categories.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --max-rows 1500
+

@@ -61,6 +61,7 @@ Timers installed:
 - `csi-rss-telegram-digest.timer` -> every 10 minutes (sends one batched Telegram digest when new RSS events exist)
 - `csi-rss-semantic-enrich.timer` -> every 10 minutes at `:02` (transcript extraction + adaptive semantic categorization)
 - `csi-rss-trend-report.timer` -> hourly at minute `:12` (aggregated trend report event to UA)
+- `csi-rss-reclassify-categories.timer` -> every 6 hours at minute `:17` (reclassify older RSS rows with current taxonomy)
 - `csi-daily-summary.timer` -> daily at `00:10 UTC` (writes summary artifacts under `/opt/universal_agent/artifacts/csi-reports/<day>/`)
 - `csi-hourly-token-report.timer` -> hourly at minute 05 (sends `hourly_token_usage_report` event to UA)
 
@@ -87,6 +88,12 @@ Run RSS trend report manually:
 
 ```bash
 scripts/csi_run.sh python3 scripts/csi_rss_trend_report.py --db-path /path/to/csi.db --window-hours 24 --force
+```
+
+Run adaptive category reclassification manually:
+
+```bash
+scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python scripts/csi_rss_reclassify_categories.py --db-path /path/to/csi.db --max-rows 1500
 ```
 
 ## Tailnet Residential Transcript Worker

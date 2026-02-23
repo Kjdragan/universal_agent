@@ -15,6 +15,8 @@ install_unit "csi-rss-semantic-enrich.service"
 install_unit "csi-rss-semantic-enrich.timer"
 install_unit "csi-rss-trend-report.service"
 install_unit "csi-rss-trend-report.timer"
+install_unit "csi-rss-reclassify-categories.service"
+install_unit "csi-rss-reclassify-categories.timer"
 install_unit "csi-daily-summary.service"
 install_unit "csi-daily-summary.timer"
 install_unit "csi-hourly-token-report.service"
@@ -24,6 +26,7 @@ systemctl daemon-reload
 systemctl enable --now csi-rss-telegram-digest.timer
 systemctl enable --now csi-rss-semantic-enrich.timer
 systemctl enable --now csi-rss-trend-report.timer
+systemctl enable --now csi-rss-reclassify-categories.timer
 systemctl enable --now csi-daily-summary.timer
 systemctl enable --now csi-hourly-token-report.timer
 
@@ -31,5 +34,6 @@ echo "SYSTEMD_EXTRAS_INSTALLED=1"
 systemctl is-active csi-rss-telegram-digest.timer
 systemctl is-active csi-rss-semantic-enrich.timer
 systemctl is-active csi-rss-trend-report.timer
+systemctl is-active csi-rss-reclassify-categories.timer
 systemctl is-active csi-daily-summary.timer
 systemctl is-active csi-hourly-token-report.timer

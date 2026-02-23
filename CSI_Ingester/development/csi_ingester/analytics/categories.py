@@ -213,6 +213,12 @@ def _new_state(max_categories: int) -> dict[str, Any]:
     }
 
 
+def reset_taxonomy_state(conn: sqlite3.Connection, *, max_categories: int = 10) -> dict[str, Any]:
+    state = _new_state(max_categories)
+    source_state.set_state(conn, CATEGORY_STATE_KEY, state)
+    return state
+
+
 def ensure_taxonomy_state(conn: sqlite3.Connection, *, max_categories: int = 10) -> dict[str, Any]:
     state = source_state.get_state(conn, CATEGORY_STATE_KEY)
     if not isinstance(state, dict):

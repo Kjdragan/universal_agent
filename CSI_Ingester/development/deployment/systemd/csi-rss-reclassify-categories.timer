@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CSI RSS adaptive category reclassification every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:17:00
+Persistent=true
+Unit=csi-rss-reclassify-categories.service
+
+[Install]
+WantedBy=timers.target
+
