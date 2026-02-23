@@ -47,6 +47,8 @@ Run RSS digest in dry-run mode (no Telegram send):
 scripts/csi_run.sh python3 scripts/csi_rss_telegram_digest.py --db-path /path/to/csi.db --seed-current-on-first-run --dry-run
 ```
 
+If Telegram chat routing is not configured yet (`CSI_RSS_TELEGRAM_CHAT_ID` unset), the digest job now exits cleanly in "skipped" mode instead of failing the systemd service.
+
 Install periodic systemd jobs on VPS (requires root):
 
 ```bash
