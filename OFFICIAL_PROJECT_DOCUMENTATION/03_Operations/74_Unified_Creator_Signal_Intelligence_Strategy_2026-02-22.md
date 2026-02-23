@@ -362,6 +362,9 @@ This keeps trigger infrastructure independent from specific skill logic.
    2. `CSI_REDDIT_TELEGRAM_THREAD_ID`,
    3. `CSI_TUTORIAL_TELEGRAM_THREAD_ID`.
 5. Reddit and playlist tutorial digest services run strict stream routing mode by default (`--strict-stream-routing`) to prevent accidental cross-posting into the RSS/default stream when stream-specific routing is unset.
+6. Playlist tutorial notifications support two-phase delivery:
+   1. first message on playlist event detection,
+   2. automatic follow-up message when tutorial artifacts become available (artifact-ready callback via periodic digest polling state).
 6. Adaptive taxonomy hardening is active:
    1. low-signal labels are blocked from dynamic category creation,
    2. core-topic tokens are remapped to core categories (`ai`, `political`, `war`) instead of spawning narrow one-off categories.

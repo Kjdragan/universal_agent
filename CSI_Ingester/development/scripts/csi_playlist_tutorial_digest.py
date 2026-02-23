@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from datetime import datetime, timezone
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -186,48 +187,52 @@ def _find_tutorial_artifacts(
     return hits
 
 
-def _build_digest(
-    rows: list[sqlite3.Row],
+def _now_iso_utc() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _item_from_row(row: sqlite3.Row, *, artifacts_root: Path) -> dict[str, Any]:
+    try:
+        subject = json.loads(str(row["subject_json"] or "{}"))
+        if not isinstance(subject, dict):
+            subject = {}
+    except Exception:
+        subject = {}
+
+    video_id = str(subject.get("video_id") or "").strip()
+    video_url = str(subject.get("url") or "").strip()
+    if not video_url and video_id:
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+    artifacts = _find_tutorial_artifacts(
+        artifacts_root=artifacts_root,
+        video_id=video_id,
+    )
+    return {
+        "video_id": video_id,
+        "title": str(subject.get("title") or "(untitled)").strip() or "(untitled)",
+        "video_url": video_url,
+        "playlist_id": str(subject.get("playlist_id") or "").strip(),
+        "created_at": str(row["created_at"] or ""),
+        "artifacts": artifacts,
+    }
+
+
+def _build_digest_from_items(
+    items: list[dict[str, Any]],
     *,
+    first_ts: str,
+    last_ts: str,
     max_items: int,
-    artifacts_root: Path,
     window_label: str,
 ) -> str:
-    items: list[dict[str, Any]] = []
-    for row in rows:
-        try:
-            subject = json.loads(str(row["subject_json"] or "{}"))
-            if not isinstance(subject, dict):
-                subject = {}
-        except Exception:
-            subject = {}
-
-        video_id = str(subject.get("video_id") or "").strip()
-        video_url = str(subject.get("url") or "").strip()
-        if not video_url and video_id:
-            video_url = f"https://www.youtube.com/watch?v={video_id}"
-
-        artifacts = _find_tutorial_artifacts(
-            artifacts_root=artifacts_root,
-            video_id=video_id,
-        )
-        items.append(
-            {
-                "video_id": video_id,
-                "title": str(subject.get("title") or "(untitled)").strip() or "(untitled)",
-                "video_url": video_url,
-                "playlist_id": str(subject.get("playlist_id") or "").strip(),
-                "created_at": str(row["created_at"] or ""),
-                "artifacts": artifacts,
-            }
-        )
 
     first_ts = str(rows[0]["created_at"] or "")
     last_ts = str(rows[-1]["created_at"] or "")
 
     lines: list[str] = []
     lines.append(f"Playlist Tutorial Digest ({window_label})")
-    lines.append(f"New playlist videos: {len(rows)}")
+    lines.append(f"New playlist videos: {len(items)}")
     lines.append(f"Window: {first_ts} -> {last_ts}")
     lines.append("")
     lines.append("Videos:")
@@ -257,6 +262,46 @@ def _build_digest(
         emit += 1
 
     remaining = len(items) - emit
+    if remaining > 0:
+        lines.append(f"- ... and {remaining} more")
+
+    msg = "\n".join(lines).strip()
+    if len(msg) > 3900:
+        msg = msg[:3897] + "..."
+    return msg
+
+
+def _build_followup_digest(
+    ready_items: list[dict[str, Any]],
+    *,
+    max_items: int,
+    window_label: str,
+) -> str:
+    lines: list[str] = []
+    lines.append(f"Tutorial Artifacts Ready ({window_label})")
+    lines.append(f"Ready items: {len(ready_items)}")
+    lines.append("")
+    lines.append("Artifacts:")
+
+    emit = 0
+    for item in ready_items:
+        if emit >= max(1, max_items):
+            break
+        lines.append(f"- {item.get('title') or '(untitled)'}")
+        lines.append(f"  video_id={item.get('video_id') or ''} playlist_id={item.get('playlist_id') or ''}")
+        if item.get("video_url"):
+            lines.append(f"  {item['video_url']}")
+        artifacts = item.get("artifacts") or []
+        for artifact in artifacts[:2]:
+            run_path = str(artifact.get("run_path") or "")
+            status = str(artifact.get("status") or "unknown")
+            manifest_path = str(artifact.get("manifest_path") or "")
+            lines.append(f"  - status={status} run={run_path}")
+            if manifest_path:
+                lines.append(f"    manifest={manifest_path}")
+        emit += 1
+
+    remaining = len(ready_items) - emit
     if remaining > 0:
         lines.append(f"- ... and {remaining} more")
 
@@ -359,6 +404,15 @@ def main() -> int:
     if args.csi_env_file:
         env_files.append(Path(args.csi_env_file).expanduser())
     state = _load_state(state_path)
+    pending_by_video_raw = state.get("pending_by_video") if isinstance(state, dict) else {}
+    pending_by_video: dict[str, dict[str, Any]] = {}
+    if isinstance(pending_by_video_raw, dict):
+        for k, v in pending_by_video_raw.items():
+            if not isinstance(v, dict):
+                continue
+            key = str(k or "").strip()
+            if key:
+                pending_by_video[key] = dict(v)
 
     conn = _connect(db_path)
     source = args.source
@@ -385,8 +439,7 @@ def main() -> int:
 
     print(f"PLAYLIST_TUTORIAL_LAST_SENT_ID={last_sent_id}")
     print(f"PLAYLIST_TUTORIAL_NEW_COUNT={len(rows)}")
-    if not rows:
-        return 0
+    print(f"PLAYLIST_TUTORIAL_PENDING_TRACKED={len(pending_by_video)}")
 
     strict_stream_routing = args.strict_stream_routing or _is_truthy(
         _resolve_setting(
@@ -424,35 +477,118 @@ def main() -> int:
     )
     artifacts_root = Path(artifacts_root_raw).expanduser() if artifacts_root_raw else Path("/opt/universal_agent/artifacts")
 
-    digest = _build_digest(
-        rows,
-        max_items=max(1, int(args.max_items)),
-        artifacts_root=artifacts_root,
-        window_label=args.window_label,
+    items = [_item_from_row(row, artifacts_root=artifacts_root) for row in rows]
+    next_last_sent_id = last_sent_id
+    next_pending_by_video = dict(pending_by_video)
+
+    if rows:
+        first_ts = str(rows[0]["created_at"] or "")
+        last_ts = str(rows[-1]["created_at"] or "")
+        digest = _build_digest_from_items(
+            items,
+            first_ts=first_ts,
+            last_ts=last_ts,
+            max_items=max(1, int(args.max_items)),
+            window_label=args.window_label,
+        )
+        next_last_sent_id = int(rows[-1]["id"])
+        if args.dry_run:
+            print("PLAYLIST_TUTORIAL_DRY_RUN=1")
+            print("---- DIGEST BEGIN ----")
+            print(digest)
+            print("---- DIGEST END ----")
+            print(f"PLAYLIST_TUTORIAL_NEXT_LAST_SENT_ID={next_last_sent_id}")
+        else:
+            ok, reason = _send_telegram_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                text=digest,
+                thread_id=thread_id,
+            )
+            if not ok:
+                print(f"PLAYLIST_TUTORIAL_SEND_FAILED reason={reason}")
+                return 4
+            print("PLAYLIST_TUTORIAL_SENT=1")
+            print(f"PLAYLIST_TUTORIAL_NEXT_LAST_SENT_ID={next_last_sent_id}")
+
+        for item in items:
+            video_id = str(item.get("video_id") or "").strip()
+            if not video_id:
+                continue
+            if item.get("artifacts"):
+                next_pending_by_video.pop(video_id, None)
+                continue
+            next_pending_by_video[video_id] = {
+                "video_id": video_id,
+                "title": str(item.get("title") or ""),
+                "video_url": str(item.get("video_url") or ""),
+                "playlist_id": str(item.get("playlist_id") or ""),
+                "created_at": str(item.get("created_at") or ""),
+                "pending_since": _now_iso_utc(),
+            }
+
+    ready_items: list[dict[str, Any]] = []
+    remaining_pending: dict[str, dict[str, Any]] = {}
+    for video_id, meta in next_pending_by_video.items():
+        artifacts = _find_tutorial_artifacts(
+            artifacts_root=artifacts_root,
+            video_id=video_id,
+        )
+        if artifacts:
+            ready_items.append(
+                {
+                    "video_id": video_id,
+                    "title": str(meta.get("title") or ""),
+                    "video_url": str(meta.get("video_url") or ""),
+                    "playlist_id": str(meta.get("playlist_id") or ""),
+                    "created_at": str(meta.get("created_at") or ""),
+                    "artifacts": artifacts,
+                }
+            )
+        else:
+            updated = dict(meta)
+            updated["last_checked_at"] = _now_iso_utc()
+            remaining_pending[video_id] = updated
+
+    print(f"PLAYLIST_TUTORIAL_FOLLOWUP_READY_COUNT={len(ready_items)}")
+
+    pending_for_state: dict[str, dict[str, Any]]
+    if ready_items:
+        followup = _build_followup_digest(
+            ready_items,
+            max_items=max(1, int(args.max_items)),
+            window_label=args.window_label,
+        )
+        if args.dry_run:
+            print("PLAYLIST_TUTORIAL_FOLLOWUP_DRY_RUN=1")
+            print("---- FOLLOWUP DIGEST BEGIN ----")
+            print(followup)
+            print("---- FOLLOWUP DIGEST END ----")
+            pending_for_state = remaining_pending
+        else:
+            ok, reason = _send_telegram_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                text=followup,
+                thread_id=thread_id,
+            )
+            if ok:
+                print("PLAYLIST_TUTORIAL_FOLLOWUP_SENT=1")
+                pending_for_state = remaining_pending
+            else:
+                print(f"PLAYLIST_TUTORIAL_FOLLOWUP_SEND_FAILED reason={reason}")
+                pending_for_state = next_pending_by_video
+    else:
+        pending_for_state = remaining_pending
+
+    _save_state(
+        state_path,
+        {
+            "last_sent_id": next_last_sent_id,
+            "pending_by_video": pending_for_state,
+        },
     )
-
-    next_last_sent_id = int(rows[-1]["id"])
-    if args.dry_run:
-        print("PLAYLIST_TUTORIAL_DRY_RUN=1")
-        print("---- DIGEST BEGIN ----")
-        print(digest)
-        print("---- DIGEST END ----")
-        print(f"PLAYLIST_TUTORIAL_NEXT_LAST_SENT_ID={next_last_sent_id}")
-        return 0
-
-    ok, reason = _send_telegram_message(
-        bot_token=bot_token,
-        chat_id=chat_id,
-        text=digest,
-        thread_id=thread_id,
-    )
-    if not ok:
-        print(f"PLAYLIST_TUTORIAL_SEND_FAILED reason={reason}")
-        return 4
-
-    _save_state(state_path, {"last_sent_id": next_last_sent_id})
-    print("PLAYLIST_TUTORIAL_SENT=1")
-    print(f"PLAYLIST_TUTORIAL_NEXT_LAST_SENT_ID={next_last_sent_id}")
+    print(f"PLAYLIST_TUTORIAL_PENDING_REMAINING={len(pending_for_state)}")
     return 0
 
 

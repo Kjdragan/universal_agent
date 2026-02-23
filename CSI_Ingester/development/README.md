@@ -76,6 +76,9 @@ Telegram channel separation options:
 - `CSI_REDDIT_TELEGRAM_STRICT_STREAM_ROUTING=1`
 - `CSI_TUTORIAL_TELEGRAM_STRICT_STREAM_ROUTING=1`
 - `csi-reddit-telegram-digest.service` and `csi-playlist-tutorial-digest.service` run with `--strict-stream-routing` by default, so those streams do not silently fall back into RSS/default chat routing.
+- Playlist tutorial digest now has built-in follow-up behavior:
+- when a new playlist video is first detected but no tutorial artifact exists yet, it is tracked in pending state;
+- on later timer runs, once artifacts appear, CSI sends a second "Tutorial Artifacts Ready" message automatically and clears that pending item.
 
 Install periodic systemd jobs on VPS (requires root):
 
