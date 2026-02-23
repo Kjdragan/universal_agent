@@ -67,6 +67,7 @@ Telegram channel separation options:
 - `CSI_RSS_TELEGRAM_CHAT_ID` for YouTube RSS digest stream.
 - `CSI_REDDIT_TELEGRAM_CHAT_ID` for Reddit digest stream.
 - `CSI_TUTORIAL_TELEGRAM_CHAT_ID` for playlist tutorial updates (new playlist videos + discovered artifact paths).
+- `CSI_TUTORIAL_ARTIFACTS_BASE_URL` (optional) to include clickable artifact URLs in tutorial digest messages (for example `https://api.clearspringcg.com`).
 - Optional per-stream Telegram forum topic IDs:
 - `CSI_RSS_TELEGRAM_THREAD_ID`
 - `CSI_REDDIT_TELEGRAM_THREAD_ID`
