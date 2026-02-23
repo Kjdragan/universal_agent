@@ -12,7 +12,12 @@ async def commands_middleware(ctx: BotContext, next_fn: Callable[[], Awaitable[N
         return
 
     text = msg.text.strip()
-    user_id = ctx.update.effective_user.id
+    user = ctx.update.effective_user
+    # Channel posts/system updates may not have an effective user; skip command handling.
+    if not user:
+        await next_fn()
+        return
+    user_id = user.id
     task_manager = ctx.task_manager
     
     if not task_manager:
