@@ -1,9 +1,0 @@
-
-# === Logs ===
-logs/
-
-# === RLM Data ===
-RLM/corpora/
-
-# === Claude Internal ===
-.claude/worktrees/
