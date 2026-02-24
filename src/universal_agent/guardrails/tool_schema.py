@@ -568,6 +568,14 @@ def _normalize_tool_input(tool_name: str, tool_input: dict) -> Optional[dict]:
     normalized_name = (tool_name or "").lower()
     if normalized_name == "task":
         subagent_type = str(tool_input.get("subagent_type", "") or "").strip().lower()
+        # Strip run_in_background for sequential-pipeline subagents.
+        # Research and report tasks are prerequisites for downstream steps;
+        # running them async wastes turns polling for completion.
+        _FOREGROUND_ONLY_SUBAGENTS = {"research-specialist", "report-writer"}
+        if subagent_type in _FOREGROUND_ONLY_SUBAGENTS and tool_input.get("run_in_background"):
+            updated = dict(tool_input)
+            updated.pop("run_in_background", None)
+            return updated
         prompt = tool_input.get("prompt")
         if subagent_type == "research-specialist" and isinstance(prompt, str):
             match = re.search(

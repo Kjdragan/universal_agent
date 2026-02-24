@@ -443,6 +443,9 @@ def build_system_prompt(
         "- After a Composio search, the Observer AUTO-SAVES results to `search_results/` directory.\n"
         "- DO NOT write reports yourself. The sub-agent scrapes ALL URLs for full article content.\n"
         "- Trust the Observer. Trust the sub-agent.\n"
+        "**CRITICAL: Do NOT use `run_in_background: true` for research-specialist or report-writer.**\n"
+        "These tasks are sequential prerequisites — you MUST wait for research to complete before generating the report.\n"
+        "Running research in the background wastes turns polling for completion. Run it foreground (synchronous).\n"
         "NOTE: This is ONE execution pattern. If the task needs computation, media, real-world actions, "
         "or delivery beyond a report, use appropriate Composio tools and subagents for those phases too."
     )

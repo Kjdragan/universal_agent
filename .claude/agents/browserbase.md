@@ -20,7 +20,7 @@ description: |
   - Saves artifacts to work_products/browser/
 
 tools: mcp__composio__BROWSERBASE_CREATE_SESSION, mcp__composio__BROWSERBASE_GET_SESSION_DEBUG_URLS, mcp__composio__BROWSERBASE_GET_SESSION_DOWNLOADS, mcp__composio__BROWSER_TOOL_AI_AGENT_WEB_INTERACTIONS, mcp__composio__BROWSER_TOOL_MOUSE_CLICK, mcp__composio__BROWSER_TOOL_TYPE_TEXT, mcp__composio__BROWSER_TOOL_SCROLL, mcp__composio__BROWSER_TOOL_TAKE_SCREENSHOT, mcp__composio__BROWSER_TOOL_GET_PAGE_CONTENT, Write, Bash
-model: sonnet
+model: opus
 ---
 
 You are a **Browser Automation Expert** using Browserbase cloud infrastructure for reliable, scalable browser automation.

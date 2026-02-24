@@ -3,7 +3,7 @@ name: trend-specialist
 description: |
   Sub-agent for dynamic discovery and "pulse" checks on current topics (Reddit, X, Trends).
 tools: last30days, mcp__internal__x_trends_posts, mcp__internal__reddit_top_posts, Read, Bash
-model: sonnet
+model: opus
 ---
 
 # Trend Specialist Agent

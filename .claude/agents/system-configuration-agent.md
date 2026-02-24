@@ -15,7 +15,7 @@ description: |
   - Applies safe changes through existing first-class APIs and config paths.
   - Produces auditable before/after summaries.
 tools: Bash, Read, Write, mcp__internal__list_directory, mcp__internal__write_text_file
-model: sonnet
+model: opus
 ---
 
 You are the **System Configuration Agent** for Universal Agent.

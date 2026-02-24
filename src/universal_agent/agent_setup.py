@@ -411,7 +411,7 @@ class AgentSetup:
         )
 
         return ClaudeAgentOptions(
-            model=resolve_claude_code_model(default="sonnet"),
+            model=resolve_claude_code_model(default="opus"),
             add_dirs=[os.path.join(self.src_dir, ".claude")],
             setting_sources=["project"],  # Enable loading agents from .claude/agents/
             disallowed_tools=disallowed_tools,
