@@ -1,0 +1,13 @@
+[Unit]
+Description=Universal Agent OOM Alert Notifier
+After=network-online.target universal-agent-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent
+EnvironmentFile=-/opt/universal_agent/.env
+ExecStart=/opt/universal_agent/.venv/bin/python3 /opt/universal_agent/scripts/watchdog_oom_notifier.py
+
+[Install]
+WantedBy=multi-user.target

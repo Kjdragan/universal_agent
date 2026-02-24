@@ -7,9 +7,13 @@ Type=simple
 WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
 EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
 ExecStart=/usr/bin/env uv run uvicorn csi_ingester.app:app --host 127.0.0.1 --port 8091
+MemoryHigh=900M
+MemoryMax=1400M
+MemorySwapMax=1024M
+TasksMax=2048
+OOMPolicy=continue
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
-

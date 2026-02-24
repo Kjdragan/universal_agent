@@ -12,6 +12,9 @@ REMOTE_DIR="${UA_VPS_APP_DIR:-/opt/universal_agent}"
 TAILNET_PREFLIGHT_MODE="${UA_TAILNET_PREFLIGHT:-auto}"
 SKIP_TAILNET_PREFLIGHT="${UA_SKIP_TAILNET_PREFLIGHT:-false}"
 TAILNET_STAGING_MODE="${UA_TAILNET_STAGING_MODE:-auto}"
+DEPLOY_CONFIGURE_SWAP="${UA_DEPLOY_CONFIGURE_SWAP:-true}"
+DEPLOY_MEMORY_GUARDRAILS="${UA_DEPLOY_MEMORY_GUARDRAILS:-true}"
+DEPLOY_OOM_ALERT_TIMER="${UA_DEPLOY_OOM_ALERT_TIMER:-true}"
 
 if ! command -v rsync >/dev/null 2>&1; then
   echo "ERROR: rsync is required for deployment."
@@ -170,6 +173,33 @@ rsync -az \
   fi
   command -v uv >/dev/null 2>&1
   command -v sqlite3 >/dev/null 2>&1
+
+  echo '== Resilience hardening =='
+  chmod 0755 scripts/install_vps_swap.sh scripts/install_vps_memory_guardrails.sh scripts/install_vps_oom_alert.sh scripts/watchdog_oom_notifier.py
+  case \"\$(printf '%s' '${DEPLOY_CONFIGURE_SWAP}' | tr '[:upper:]' '[:lower:]')\" in
+    0|false|no|off)
+      echo 'Swap install disabled by UA_DEPLOY_CONFIGURE_SWAP.'
+      ;;
+    *)
+      APP_ROOT='$REMOTE_DIR' bash scripts/install_vps_swap.sh
+      ;;
+  esac
+  case \"\$(printf '%s' '${DEPLOY_MEMORY_GUARDRAILS}' | tr '[:upper:]' '[:lower:]')\" in
+    0|false|no|off)
+      echo 'Memory guardrails disabled by UA_DEPLOY_MEMORY_GUARDRAILS.'
+      ;;
+    *)
+      APP_ROOT='$REMOTE_DIR' bash scripts/install_vps_memory_guardrails.sh
+      ;;
+  esac
+  case \"\$(printf '%s' '${DEPLOY_OOM_ALERT_TIMER}' | tr '[:upper:]' '[:lower:]')\" in
+    0|false|no|off)
+      echo 'OOM alert timer install disabled by UA_DEPLOY_OOM_ALERT_TIMER.'
+      ;;
+    *)
+      APP_ROOT='$REMOTE_DIR' bash scripts/install_vps_oom_alert.sh
+      ;;
+  esac
 
   echo '== Python deps =='
   runuser -u ua -- bash -lc 'export PATH=\"/home/ua/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"; cd $REMOTE_DIR && uv sync'

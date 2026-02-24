@@ -902,3 +902,109 @@ def test_youtube_ingest_retry_attempts_capped_at_ten(mock_gateway):
     ):
         service = HooksService(mock_gateway)
     assert service._youtube_ingest_retries == 10
+
+
+@pytest.mark.asyncio
+async def test_dispatch_queue_overflow_emits_notification(mock_gateway):
+    config = HooksConfig(
+        enabled=True,
+        token="secret-token",
+        mappings=[
+            HookMappingConfig(
+                id="overflow-hook",
+                match=HookMatchConfig(path="test"),
+                action="agent",
+                message_template="hello",
+                name="OverflowHook",
+                session_key="overflow-session",
+            )
+        ],
+    )
+    session = GatewaySession(
+        session_id="session_hook_overflow-session",
+        user_id="webhook",
+        workspace_dir="/tmp",
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=session)
+    notifications: list[dict] = []
+
+    async def slow_gen(*_args, **_kwargs):
+        await asyncio.sleep(0.4)
+        if False:
+            yield "never"
+
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_AGENT_DISPATCH_CONCURRENCY": "1",
+                "UA_HOOKS_AGENT_DISPATCH_QUEUE_LIMIT": "1",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway, notification_sink=notifications.append)
+        service.config = config
+        mock_gateway.execute.side_effect = slow_gen
+
+        request = MagicMock(spec=Request)
+        request.headers = {"Authorization": "Bearer secret-token"}
+        request.body = AsyncMock(return_value=b"{}")
+        request.query_params = {}
+
+        first = await service.handle_request(request, "test")
+        second = await service.handle_request(request, "test")
+        assert first.status_code == 200
+        assert second.status_code == 200
+
+        await asyncio.sleep(0.2)
+
+    assert any(item.get("kind") == "hook_dispatch_queue_overflow" for item in notifications)
+    # One dispatch should execute, the overflow dispatch should be dropped.
+    assert mock_gateway.execute.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_recover_interrupted_youtube_sessions_queues_recovery(mock_gateway, tmp_path):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict(
+            "os.environ",
+            {
+                "UA_HOOKS_STARTUP_RECOVERY_ENABLED": "1",
+                "UA_HOOKS_STARTUP_RECOVERY_MAX_SESSIONS": "5",
+            },
+            clear=False,
+        ),
+    ):
+        service = HooksService(mock_gateway)
+
+    session_id = "session_hook_yt_UCLIo-9WnXvQcXfXomQvYSOg_km5fvKPRsJw"
+    session_dir = tmp_path / session_id
+    turns_dir = session_dir / "turns"
+    turns_dir.mkdir(parents=True, exist_ok=True)
+    turn_file = turns_dir / "turn_1.jsonl"
+    turn_file.write_text(
+        json.dumps(
+            {
+                "event": "turn_started",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "turn_id": "turn_1",
+                "session_id": session_id,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    service._dispatch_action = AsyncMock(return_value=None)
+    recovered = await service.recover_interrupted_youtube_sessions(tmp_path)
+    assert recovered == 1
+    await asyncio.sleep(0.05)
+    service._dispatch_action.assert_called_once()
+    action = service._dispatch_action.call_args.args[0]
+    assert action.to == "youtube-explainer-expert"
+    assert "km5fvKPRsJw" in (action.message or "")
+    marker = session_dir / ".hook_startup_recovery.json"
+    assert marker.exists()

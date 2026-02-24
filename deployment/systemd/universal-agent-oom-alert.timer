@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Universal Agent OOM Alert Notifier every minute
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Unit=universal-agent-oom-alert.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target
