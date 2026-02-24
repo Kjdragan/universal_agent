@@ -65,6 +65,8 @@ Immediately after the search is complete, you MUST call `mcp__internal__run_rese
 
 This tool handles crawling and refinement programmatically. It produces a `refined_corpus.md`.
 
+- **Composio crawl policy (hard rule):** Never call `COMPOSIO_CRAWL_*` tools. Crawling is handled by the internal Crawl4AI-backed pipeline.
+
 - **Hard invariant**: If search JSON files exist in `search_results/` and `run_research_phase` has not been attempted, your next tool call MUST be `mcp__internal__run_research_phase`.
 - **Disallowed before Step 2 attempt**: `Bash`, `mcp__internal__list_directory`, and source-code/tool discovery behavior.
 - **Fallback gate**: You may switch out of `composio_pipeline` only after one explicit `mcp__internal__run_research_phase` call returns an error receipt.

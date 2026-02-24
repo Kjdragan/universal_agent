@@ -390,6 +390,79 @@ async def test_schema_guardrail_allows_recovery_after_research_phase_attempt(
 
 
 @pytest.mark.anyio
+async def test_schema_guardrail_blocks_composio_crawl_meta_tools_before_research_phase(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    result = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {
+                "tools": [
+                    {
+                        "tool_slug": "COMPOSIO_CRAWL_WEBPAGE",
+                        "arguments": {"url": "https://example.com"},
+                    }
+                ]
+            },
+        },
+        run_id="run-test-crawl-block",
+        step_id="step-test",
+    )
+
+    assert result.get("decision") == "block"
+    assert "DISABLED by policy" in result.get("systemMessage", "")
+    assert "COMPOSIO_CRAWL_WEBPAGE" in result.get("systemMessage", "")
+
+
+@pytest.mark.anyio
+async def test_schema_guardrail_blocks_composio_crawl_meta_tools_after_research_phase_attempt(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "session_workspace"
+    search_dir = workspace / "search_results"
+    search_dir.mkdir(parents=True, exist_ok=True)
+    (search_dir / "COMPOSIO_SEARCH_WEB_0.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("CURRENT_SESSION_WORKSPACE", str(workspace))
+
+    first = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__internal__run_research_phase",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {"query": "latest news", "task_name": "ai_news"},
+        },
+        run_id="run-test-crawl-allow",
+        step_id="step-test",
+    )
+    assert first == {}
+
+    second = await pre_tool_use_schema_guardrail(
+        {
+            "tool_name": "mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL",
+            "parent_tool_use_id": "research-subagent-turn",
+            "tool_input": {
+                "tools": [
+                    {
+                        "tool_slug": "COMPOSIO_CRAWL_WEBPAGE",
+                        "arguments": {"url": "https://example.com"},
+                    }
+                ]
+            },
+        },
+        run_id="run-test-crawl-allow",
+        step_id="step-test",
+    )
+    assert second.get("decision") == "block"
+    assert "DISABLED by policy" in second.get("systemMessage", "")
+
+
+@pytest.mark.anyio
 async def test_schema_guardrail_allows_search_results_listing_before_research_phase(
     monkeypatch, tmp_path
 ):

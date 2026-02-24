@@ -2,7 +2,9 @@
 Constants for Universal Agent.
 """
 
-# Tools that should be blocked (legacy/problematic tools)
+# SDK-level disallowed tools: blocked for ALL agents (primary AND sub-agents).
+# These are truly banned tools (hallucinated, deprecated, legacy aliases).
+# IMPORTANT: Do NOT put tools here that sub-agents need. Use PRIMARY_ONLY_BLOCKED_TOOLS instead.
 DISALLOWED_TOOLS = [
     "TaskOutput",
     "TaskResult",
@@ -13,12 +15,9 @@ DISALLOWED_TOOLS = [
     "WebSearch",
     "web_search",
     "mcp__composio__WebSearch",
-    # Research pipeline internals should be delegated to specialists from Primary.
-    # Sub-agents are allowed through the existing context-aware guardrail.
-    "mcp__internal__run_research_pipeline",
-    "mcp__internal__run_research_phase",
-    "mcp__local_toolkit__run_research_pipeline",  # REPLACED by in-process mcp__internal__run_research_pipeline
-    "mcp__local_toolkit__crawl_parallel",  # REPLACED by in-process mcp__internal__crawl_parallel
+    # Deprecated local_toolkit aliases (replaced by in-process mcp__internal__ tools)
+    "mcp__local_toolkit__run_research_pipeline",
+    "mcp__local_toolkit__crawl_parallel",
     "mcp__local_toolkit__finalize_research",
     "mcp__local_toolkit__list_directory",
     "mcp__local_toolkit__append_to_file",
@@ -30,10 +29,18 @@ DISALLOWED_TOOLS = [
     "mcp__local_toolkit__memory_search",
     "mcp__local_toolkit__memory_get",
     "mcp__local_toolkit__batch_tool_execute",
-    # Force delegation to research-specialist for search/research tasks
-    # mcp__composio__COMPOSIO_SEARCH_TOOLS is ALLOWED for tool discovery
+    # PRIMARY AGENT FORBIDDEN: NEVER use remote workbench directly.
+    "mcp__composio__COMPOSIO_REMOTE_WORKBENCH",
+]
+
+# Hook-level blocked tools: blocked for PRIMARY agent only; sub-agents are allowed.
+# These are enforced by PreToolUse hooks (not the SDK disallowed_tools list).
+# The hook checks subagent context and passes through for sub-agents.
+PRIMARY_ONLY_BLOCKED_TOOLS = [
+    # Research pipeline internals: Primary must delegate to research-specialist.
+    "mcp__internal__run_research_pipeline",
+    "mcp__internal__run_research_phase",
+    # Search tools: Primary must delegate to research-specialist.
     "mcp__composio__COMPOSIO_SEARCH_NEWS",
     "mcp__composio__COMPOSIO_SEARCH_WEB",
-    # 🚫 PRIMARY AGENT FORBIDDEN: NEVER use remote workbench directly. Delegate instead.
-    "mcp__composio__COMPOSIO_REMOTE_WORKBENCH",
 ]

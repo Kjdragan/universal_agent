@@ -466,6 +466,7 @@ def build_cli_hooks() -> dict:
 
 
 from universal_agent.agent_setup import DISALLOWED_TOOLS
+from universal_agent.constants import PRIMARY_ONLY_BLOCKED_TOOLS
 
 
 def _normalize_gateway_tool_call_id(raw_id: object) -> str:
@@ -1257,13 +1258,25 @@ async def on_pre_tool_use_ledger(
             },
         }
 
-    # Check for disallowed/hallucinated tools
+    # Check for disallowed/hallucinated tools (SDK-level: blocked for everyone)
     if tool_name in DISALLOWED_TOOLS:
-        print(f"DEBUG: Checking disallowed tool: {tool_name}")
-        # Context detection for sub-agents (Allow Research Specialist to search)
+        return {
+            "systemMessage": (
+                f"⚠️ Tool '{tool_name}' is not available. "
+                "It may be deprecated or hallucinated. Check available tools."
+            ),
+            "decision": "block",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"Tool '{tool_name}' is globally disallowed.",
+            },
+        }
+
+    # Check for primary-only blocked tools (hook-level: sub-agents are allowed)
+    if tool_name in PRIMARY_ONLY_BLOCKED_TOOLS:
         parent_tool_use_id = input_data.get("parent_tool_use_id")
         transcript_path_chk = input_data.get("transcript_path", "")
-        # Safety check for _primary_transcript_path existence
         primary_path = globals().get("_primary_transcript_path")
         
         is_subagent_context = bool(parent_tool_use_id) or (
@@ -1271,7 +1284,6 @@ async def on_pre_tool_use_ledger(
             and transcript_path_chk 
             and transcript_path_chk != primary_path
         )
-        print(f"DEBUG: is_subagent_context={is_subagent_context} (parent={parent_tool_use_id}, path={transcript_path_chk}, primary={primary_path})")
         
         # If in sub-agent, ALLOW the tool (Specialists need access to tools blocked for Primary)
         if is_subagent_context:
