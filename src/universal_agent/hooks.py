@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 # Constants
 from contextvars import ContextVar
 from universal_agent.agent_core import AgentEvent, EventType
-from universal_agent.constants import DISALLOWED_TOOLS
+from universal_agent.constants import DISALLOWED_TOOLS, PRIMARY_ONLY_BLOCKED_TOOLS
 _TOOL_EVENT_START_TS: Optional[float] = None
 
 # -----------------------------------------------------------------------------
@@ -833,12 +833,25 @@ class AgentHookSet:
                         },
                     }
         
-        # 1. Disallowed Tools Guardrail
+        # 1a. SDK-level disallowed tools (blocked for everyone)
         if tool_name in DISALLOWED_TOOLS:
-             # Context detection for sub-agents (Allow Research Specialist to search)
+                 return {
+                    "systemMessage": (
+                        f"⚠️ Tool '{tool_name}' is not available. "
+                        "It may be deprecated or hallucinated. Check available tools."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": f"Tool '{tool_name}' is globally disallowed.",
+                    },
+                }
+
+        # 1b. Primary-only blocked tools (sub-agents are allowed)
+        if tool_name in PRIMARY_ONLY_BLOCKED_TOOLS:
              parent_tool_use_id = input_data.get("parent_tool_use_id")
              transcript_path_chk = input_data.get("transcript_path", "")
-             # Safety check - _primary_transcript_path is instance state in this class
              primary_path = self._primary_transcript_path
             
              is_subagent_context = bool(parent_tool_use_id) or (

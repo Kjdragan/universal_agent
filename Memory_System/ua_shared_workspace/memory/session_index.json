@@ -443,5 +443,20 @@
     "preview": "Conflict Diplomacy (February 19, 2026)\\n**Source:** The New York Times (February 19, 2026, 12:54 UTC)\\n\\n- Trump envoys Witkoff and Kushner conducting talks on **three conflicts simultaneously**: Iran nuclear, Ukraine war, and Gaza\\n- **Progress in each conflict is scant**\\n- Com",
     "file_path": "memory/sessions/e7c68e3c-a191-4473-a7ca-1cd4f1dd9b23_2026-02-23.md",
     "content_hash": "0292eb0d0d9137dbe0a815a0f0708f91b2d1ca96fd27f129e9e301d6f9cdb3e6"
+  },
+  {
+    "entry_id": "2697c26e-e73d-480b-bbc3-09650424a82b",
+    "timestamp": "2026-02-23T21:47:52.081466+00:00",
+    "source": "session_index",
+    "session_id": "e4c81e63-94ed-43f4-8d3a-bf4e5f205a80",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:e4c81e63-94ed-43f4-8d3a-bf4e5f205a80"
+    ],
+    "summary": null,
+    "preview": "\"tool_slug\": \"COMPOSIO_SEARCH_FETCH_URL_CONTENT\",\n      \"arguments\": {\n        \"urls\": [\n          \"https://www.wsj.com/world/as-peace-talks-stall-russia-and-ukraine-share-one-aim-keep-trump-happy-b105dabc\",\n          \"https://www.reuters.com/world/europe/top-european-spies-scept",
+    "file_path": "memory/sessions/e4c81e63-94ed-43f4-8d3a-bf4e5f205a80_2026-02-23.md",
+    "content_hash": "a89d10c2ac35260d23fdbfca580e9bbdbc875e74319eb2a27628e6cc2d15cb53"
   }
 ]

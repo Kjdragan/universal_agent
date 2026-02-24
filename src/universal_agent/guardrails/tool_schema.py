@@ -301,6 +301,25 @@ def _is_blocked_crontab_mutation(command: str) -> bool:
     return False
 
 
+def _extract_multi_execute_tool_slugs(tool_input: dict) -> list[str]:
+    tools_value = tool_input.get("tools")
+    if not isinstance(tools_value, list):
+        return []
+    slugs: list[str] = []
+    for item in tools_value:
+        if not isinstance(item, dict):
+            continue
+        slug = str(item.get("tool_slug") or "").strip()
+        if slug:
+            slugs.append(slug)
+    return slugs
+
+
+def _is_composio_crawl_meta_slug(slug: str) -> bool:
+    upper = str(slug or "").strip().upper()
+    return upper.startswith("COMPOSIO_CRAWL")
+
+
 def _looks_like_system_configuration_intent(text: str) -> bool:
     lowered = (text or "").strip().lower()
     if not lowered:
@@ -956,25 +975,74 @@ async def pre_tool_use_schema_guardrail(
                             "permissionDecisionReason": "tools entries missing tool_slug or arguments.",
                         },
                     }
-                
-                # [MAX PARALLEL SEARCHES GUARDRAIL]
-                # Composio's backend times out when too many parallel searches are executed.
-                # Limit to 4 tools per call to prevent None responses.
-                MAX_PARALLEL_TOOLS = 4
-                if len(tools_value) > MAX_PARALLEL_TOOLS:
+
+                # Policy: Composio crawl meta-tools are disabled for research execution.
+                # Crawling/refinement must flow through the internal Python path
+                # backed by the Crawl4AI API account (run_research_phase/finalize_research).
+                tool_slugs = _extract_multi_execute_tool_slugs(tool_input)
+                crawl_slugs = [slug for slug in tool_slugs if _is_composio_crawl_meta_slug(slug)]
+                if crawl_slugs:
+                    unique_crawl_slugs = sorted(set(crawl_slugs))
                     return {
                         "systemMessage": (
-                            f"⚠️ TOO MANY PARALLEL TOOLS: You requested {len(tools_value)} tools, but the limit is {MAX_PARALLEL_TOOLS} per call.\n\n"
-                            f"**SOLUTION**: Split your request into multiple `COMPOSIO_MULTI_EXECUTE_TOOL` calls, each with at most {MAX_PARALLEL_TOOLS} tools.\n"
-                            f"Example: If you need 8 searches, make 2 separate calls with 4 tools each."
+                            "⚠️ Composio crawl tools are DISABLED by policy.\n\n"
+                            "Use the internal deterministic research path instead:\n"
+                            "- Search via COMPOSIO_SEARCH_WEB/NEWS\n"
+                            "- Then call `mcp__internal__run_research_phase` (Crawl4AI-backed crawl/refine)\n\n"
+                            f"Blocked tool_slug(s): {', '.join(unique_crawl_slugs)}"
                         ),
                         "decision": "block",
                         "hookSpecificOutput": {
                             "hookEventName": "PreToolUse",
                             "permissionDecision": "deny",
-                            "permissionDecisionReason": f"Too many parallel tools ({len(tools_value)} > {MAX_PARALLEL_TOOLS}). Split into multiple calls.",
+                            "permissionDecisionReason": (
+                                "Composio crawl tools are disabled; use internal Crawl4AI pipeline."
+                            ),
                         },
                     }
+                
+                # [HIGH FAN-OUT TELEMETRY]
+                # This is intentionally NON-BLOCKING. We only log large multi-tool
+                # batches so we can evaluate whether they should become a dedicated
+                # deterministic skill/tool in the future.
+                try:
+                    high_fanout_threshold = int(
+                        os.getenv("UA_COMPOSIO_MULTI_EXECUTE_WARN_THRESHOLD", "4")
+                    )
+                except Exception:
+                    high_fanout_threshold = 4
+                high_fanout_threshold = max(1, high_fanout_threshold)
+
+                if len(tools_value) > high_fanout_threshold:
+                    hard_cap_enabled = str(
+                        os.getenv("UA_COMPOSIO_MULTI_EXECUTE_HARD_CAP", "0") or "0"
+                    ).strip().lower() in {"1", "true", "yes", "on"}
+                    if hard_cap_enabled:
+                        return {
+                            "systemMessage": (
+                                "⚠️ COMPOSIO multi-execute hard cap enabled. "
+                                f"Requested {len(tools_value)} tools exceeds cap {high_fanout_threshold}.\n\n"
+                                "Split into sequential batches to stay within concurrent-session limits."
+                            ),
+                            "decision": "block",
+                            "hookSpecificOutput": {
+                                "hookEventName": "PreToolUse",
+                                "permissionDecision": "deny",
+                                "permissionDecisionReason": (
+                                    "COMPOSIO multi-execute hard cap exceeded."
+                                ),
+                            },
+                        }
+
+                    if logger and hasattr(logger, "warning"):
+                        try:
+                            logger.warning(
+                                "High fan-out COMPOSIO_MULTI_EXECUTE_TOOL observed (count=%s, threshold=%s)",
+                                len(tools_value),
+                                high_fanout_threshold,
+                            )
+                        except Exception:
+                            pass
 
             # recursive validation of inner tools
             if isinstance(tools_value, list):

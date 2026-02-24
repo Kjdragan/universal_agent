@@ -264,5 +264,19 @@
     "preview": "/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260223_145545_1dce6fc1/work_products/report.html\" } ``` #### \ud83d\udee0\ufe0f Tool Call: `mcp__internal__html_to_pdf` (+524.874s) <details> <summary><b>Input Parameters</b></summary> ```j...",
     "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-23.md",
     "content_hash": "4a9a35c23fa7ea65ced510bd4f45f2983d4b7926607acf9b50d4f287a5a6e352"
+  },
+  {
+    "entry_id": "638324f3-3b23-4fa7-b5a3-0f54ee6a359f",
+    "timestamp": "2026-02-23T21:47:52.084712+00:00",
+    "source": "pre_compact",
+    "session_id": "e4c81e63-94ed-43f4-8d3a-bf4e5f205a80",
+    "tags": [
+      "pre_compact",
+      "trigger:exit"
+    ],
+    "summary": "ENT_RUN_WORKSPACES/session_20260223_153611_645f4f90/ukraine_report.pdf ``` #### \ud83d\udee0\ufe0f Tool Call: `mcp__internal__upload_to_composio` (+662.193s) <details> <summary><b>Input Parameters</b></summary> ```json { \"path\": \"/home/kjdragan/lrepos/u...",
+    "preview": "ENT_RUN_WORKSPACES/session_20260223_153611_645f4f90/ukraine_report.pdf ``` #### \ud83d\udee0\ufe0f Tool Call: `mcp__internal__upload_to_composio` (+662.193s) <details> <summary><b>Input Parameters</b></summary> ```json { \"path\": \"/home/kjdragan/lrepos/u...",
+    "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-23.md",
+    "content_hash": "7eb71824634dc77f447e9e69bc18a87b13818cc5c39f0dd2e7c8c10c66e59cdb"
   }
 ]
