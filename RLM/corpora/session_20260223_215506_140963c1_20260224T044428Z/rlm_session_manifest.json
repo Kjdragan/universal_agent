@@ -1,0 +1,14 @@
+{
+  "source_session_dir": "/home/kjdragan/lrepos/universal_agent/AGENT_RUN_WORKSPACES/session_20260223_215506_140963c1",
+  "target_dir": "/home/kjdragan/lrepos/universal_agent/RLM/corpora/session_20260223_215506_140963c1_20260224T044428Z",
+  "copied_subdirs": [
+    "search_results",
+    "work_products",
+    "tasks"
+  ],
+  "document_count": 62,
+  "estimated_tokens": 246625,
+  "total_chars": 986501,
+  "total_words": 126750,
+  "generated_at_utc": "2026-02-24T04:44:28.193178+00:00"
+}

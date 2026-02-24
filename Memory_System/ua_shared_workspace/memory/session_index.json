@@ -458,5 +458,51 @@
     "preview": "\"tool_slug\": \"COMPOSIO_SEARCH_FETCH_URL_CONTENT\",\n      \"arguments\": {\n        \"urls\": [\n          \"https://www.wsj.com/world/as-peace-talks-stall-russia-and-ukraine-share-one-aim-keep-trump-happy-b105dabc\",\n          \"https://www.reuters.com/world/europe/top-european-spies-scept",
     "file_path": "memory/sessions/e4c81e63-94ed-43f4-8d3a-bf4e5f205a80_2026-02-23.md",
     "content_hash": "a89d10c2ac35260d23fdbfca580e9bbdbc875e74319eb2a27628e6cc2d15cb53"
+  },
+  {
+    "entry_id": "ed13560b-43de-4840-b86f-35dda5fd2e3e",
+    "timestamp": "2026-02-24T03:54:57.500463+00:00",
+    "source": "session_transition:ops_delete",
+    "session_id": "session_20260223_215326_605bdd34",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_delete",
+      "session:session_20260223_215326_605bdd34"
+    ],
+    "summary": "Session rollover capture (ops_delete)",
+    "preview": "Session rollover capture (ops_delete)",
+    "file_path": "memory/sessions/session_20260223_215326_605bdd34_2026-02-24_21-53-54-user-search-for-the-latest-information-from-the-red-las.md",
+    "content_hash": "0f7f9569f87f407753e536ea02cb9c6052d36c5456ba5eb164bcbbf5f242222e"
+  },
+  {
+    "entry_id": "64e29c60-06ad-4d20-8948-290a83d1b9f7",
+    "timestamp": "2026-02-24T04:01:51.168555+00:00",
+    "source": "session_index",
+    "session_id": "c6465895-f304-4834-9dfe-1821a059767c",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:c6465895-f304-4834-9dfe-1821a059767c"
+    ],
+    "summary": null,
+    "preview": "# \ud83c\udfac Session Transcript\n**generated at 2026-02-23 22:01:51**\n\n## \ud83d\udccb Session Info\n| Metadata | Value |\n|----------|-------|\n| **User ID** | `pg-test-8c18facc-7f25-4693-918c-7252c15d36b2` |\n| **Trace ID** | `019c8dc9be58528d63b95942da8e879c` |\n| **Logfire Trace** | [View Full Trace](",
+    "file_path": "memory/sessions/c6465895-f304-4834-9dfe-1821a059767c_2026-02-24.md",
+    "content_hash": "03617dcecf1a7e4d7db43dcd73daa34d421bc0bffb3ffb55b8c9812e34632aca"
+  },
+  {
+    "entry_id": "c8ff48a0-27de-43d1-a2d9-1cad54f79ed5",
+    "timestamp": "2026-02-24T04:18:06.933208+00:00",
+    "source": "session_index",
+    "session_id": "c6465895-f304-4834-9dfe-1821a059767c",
+    "tags": [
+      "memory_class:session",
+      "session_index",
+      "session:c6465895-f304-4834-9dfe-1821a059767c"
+    ],
+    "summary": null,
+    "preview": "locked in a grinding stalemate.\",\"source\":\"Northeastern Global News\",\"title\":\"Russia-Ukraine war at four years: A snapshot in numbers\"},{\"date\":\"2 days ago\",\"link\":\"https:/\n```\n\n#### \ud83d\udd0e Tool Call: `mcp__internal__run_research_phase` (+85.105s)\n<details>\n<summary><b>Input Parameter",
+    "file_path": "memory/sessions/c6465895-f304-4834-9dfe-1821a059767c_2026-02-24.md",
+    "content_hash": "0512e8c1a4398ad25639ec315073488e03d6e79a506cc830e1e04e3cbe28ad4f"
   }
 ]

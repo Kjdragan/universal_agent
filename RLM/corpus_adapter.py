@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .types import CorpusBundle, CorpusDocument
 
-_ALLOWED_SUFFIXES = {".md", ".txt", ".markdown"}
+_ALLOWED_SUFFIXES = {".md", ".txt", ".markdown", ".json"}
 
 
 def _estimate_tokens(total_chars: int) -> int:
