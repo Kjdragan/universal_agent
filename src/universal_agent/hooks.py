@@ -700,6 +700,16 @@ class AgentHookSet:
         except Exception:
             normalized_tool_name = tool_name.lower()
 
+        # Track transcript paths to detect sub-agent context.
+        # The first transcript_path seen is the primary agent's; subsequent
+        # different paths indicate sub-agent tool calls.
+        transcript_path = str(input_data.get("transcript_path", "") or "")
+        if transcript_path:
+            if self._primary_transcript_path is None:
+                self._primary_transcript_path = transcript_path
+            if transcript_path not in self._seen_transcript_paths:
+                self._seen_transcript_paths.add(transcript_path)
+
         if normalized_tool_name == "vp_dispatch_mission":
             self._vp_dispatch_seen_this_turn = True
 
@@ -850,17 +860,17 @@ class AgentHookSet:
 
         # 1b. Primary-only blocked tools (sub-agents are allowed)
         if tool_name in PRIMARY_ONLY_BLOCKED_TOOLS:
-             parent_tool_use_id = input_data.get("parent_tool_use_id")
-             transcript_path_chk = input_data.get("transcript_path", "")
-             primary_path = self._primary_transcript_path
-            
-             is_subagent_context = bool(parent_tool_use_id) or (
-                primary_path is not None 
-                and transcript_path_chk 
-                and transcript_path_chk != primary_path
+             is_subagent = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
+             logfire.info(
+                 "primary_only_tool_check",
+                 tool=tool_name,
+                 is_subagent=is_subagent,
+                 parent_tool_use_id=input_data.get("parent_tool_use_id"),
+                 transcript_path=str(input_data.get("transcript_path", ""))[:80],
+                 primary_path=str(self._primary_transcript_path or "")[:80],
              )
             
-             if is_subagent_context:
+             if is_subagent:
                  pass
              else:
                  emit_status_event(f"Hook: blocked '{tool_name}' for Primary Agent (must delegate)", level="WARNING", prefix="Hook")

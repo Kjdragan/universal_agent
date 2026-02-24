@@ -1,6 +1,6 @@
 <!-- Runtime Capabilities Snapshot (Auto) -->
 
-<!-- Generated: 2026-02-23 21:07:52 -->
+<!-- Generated: 2026-02-23 21:51:28 -->
 
 ### Capability Routing Doctrine
 - Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.
@@ -17,7 +17,7 @@
 ### 🤖 Specialist Agents (Live)
 
 #### ⚙️ Engineering & Automation
-- **claude-code-guide**: Internal specialized agent.
+- **claude-code-guide**: Use this agent when the user asks questions ("Can Claude...", "Does Claude...", "How do I...?") about: - Claude Code (CLI features, hooks, slash commands, MCP servers, settings, IDE integrations, keyboard shortcuts) - Claude Agent SDK (building custom agents) - Claude API (formerly Anthropic API) Prefer documentation-based guidance and include references to official Anthropic docs.
   -> Delegate: `Task(subagent_type='claude-code-guide', ...)`
 - **code-writer**: Focused code authoring agent for repo changes (features, refactors, bug fixes, tests). **WHEN TO DELEGATE:** - Implement a new feature or script inside this repo - Fix a failing test / bug / runtime error - Refactor code safely (with tests) - Add guardrails, tooling, or internal MCP tools **THIS SUB-AGENT:** - Reads/writes the local repo - Runs local commands (prefer `uv run ...`) - Produces small, reviewable diffs with tests
   -> Delegate: `Task(subagent_type='code-writer', ...)`

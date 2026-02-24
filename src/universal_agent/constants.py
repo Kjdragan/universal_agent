@@ -40,14 +40,9 @@ DISALLOWED_TOOLS = [
     "mcp__composio__COMPOSIO_FETCH_WEBPAGE",
 ]
 
-# Hook-level blocked tools: blocked for PRIMARY agent only; sub-agents are allowed.
-# These are enforced by PreToolUse hooks (not the SDK disallowed_tools list).
-# The hook checks subagent context and passes through for sub-agents.
-PRIMARY_ONLY_BLOCKED_TOOLS = [
-    # Research pipeline internals: Primary must delegate to research-specialist.
-    "mcp__internal__run_research_pipeline",
-    "mcp__internal__run_research_phase",
-    # Search tools: Primary must delegate to research-specialist.
-    "mcp__composio__COMPOSIO_SEARCH_NEWS",
-    "mcp__composio__COMPOSIO_SEARCH_WEB",
-]
+# Hook-level blocked tools: INTENTIONALLY EMPTY.
+# Subagent detection in PreToolUse hooks is UNRELIABLE for foreground Task calls.
+# transcript_path may not differ; parent_tool_use_id is NOT in PreToolUseHookInput.
+# See docs/002_SDK_PERMISSIONS_HOOKS_SUBAGENTS.md for details.
+# Rely on prompt-level delegation (prompt_builder.py) to steer the primary agent.
+PRIMARY_ONLY_BLOCKED_TOOLS: list[str] = []
