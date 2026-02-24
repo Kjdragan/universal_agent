@@ -163,6 +163,95 @@ def _safe_json(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _relative_path_under_root(path: Path, root: Path) -> str:
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except Exception:
+        return ""
+
+
+def _artifact_file_url(base_url: str, rel_path: str) -> str:
+    base = (base_url or "").strip().rstrip("/")
+    rel = str(rel_path or "").strip().strip("/")
+    if not base or not rel:
+        return ""
+    return f"{base}/api/artifacts/files/{urllib.parse.quote(rel, safe='/')}"
+
+
+def _artifact_viewer_url(dashboard_base_url: str, rel_path: str) -> str:
+    base = (dashboard_base_url or "").strip().rstrip("/")
+    rel = str(rel_path or "").strip().strip("/")
+    if not base or not rel:
+        return ""
+    query = urllib.parse.urlencode(
+        {
+            "tab": "explorer",
+            "scope": "artifacts",
+            "path": rel,
+            "preview": rel,
+        }
+    )
+    return f"{base}/storage?{query}"
+
+
+def _artifact_run_viewer_url(dashboard_base_url: str, run_rel_path: str) -> str:
+    base = (dashboard_base_url or "").strip().rstrip("/")
+    rel = str(run_rel_path or "").strip().strip("/")
+    if not base or not rel:
+        return ""
+    query = urllib.parse.urlencode(
+        {
+            "tab": "explorer",
+            "scope": "artifacts",
+            "path": rel,
+        }
+    )
+    return f"{base}/storage?{query}"
+
+
+def _collect_high_value_files(
+    *,
+    run_dir: Path,
+    artifacts_root: Path,
+    artifacts_base_url: str,
+    dashboard_base_url: str = "",
+    max_code_files: int = 3,
+) -> list[dict[str, str]]:
+    preferred: list[tuple[str, Path]] = []
+    for label, rel in (
+        ("README", "README.md"),
+        ("Concept", "CONCEPT.md"),
+        ("Implementation Guide", "IMPLEMENTATION.md"),
+    ):
+        candidate = run_dir / rel
+        if candidate.exists() and candidate.is_file():
+            preferred.append((label, candidate))
+
+    impl_dir = run_dir / "implementation"
+    if impl_dir.exists() and impl_dir.is_dir():
+        code_candidates: list[Path] = []
+        for ext in ("*.py", "*.ts", "*.tsx", "*.js", "*.sh", "*.ipynb"):
+            code_candidates.extend(impl_dir.glob(ext))
+        code_candidates = [p for p in code_candidates if p.is_file()]
+        code_candidates.sort(key=lambda p: p.name.lower())
+        for path in code_candidates[: max(1, max_code_files)]:
+            preferred.append((f"Code: {path.name}", path))
+
+    out: list[dict[str, str]] = []
+    for label, file_path in preferred:
+        rel = _relative_path_under_root(file_path, artifacts_root)
+        out.append(
+            {
+                "label": label,
+                "path": str(file_path),
+                "rel_path": rel,
+                "url": _artifact_file_url(artifacts_base_url, rel),
+                "viewer_url": _artifact_viewer_url(dashboard_base_url, rel),
+            }
+        )
+    return out
+
+
 def _find_tutorial_artifacts(
     *,
     artifacts_root: Path,
@@ -170,7 +259,8 @@ def _find_tutorial_artifacts(
     max_hits: int = 3,
     max_day_dirs: int = 45,
     artifacts_base_url: str = "",
-) -> list[dict[str, str]]:
+    dashboard_base_url: str = "",
+) -> list[dict[str, Any]]:
     if not video_id:
         return []
     root = artifacts_root / "youtube-tutorial-learning"
@@ -196,11 +286,14 @@ def _find_tutorial_artifacts(
             status = str(manifest.get("status") or "").strip() or "unknown"
             title = str(manifest.get("title") or "").strip()
             run_url = ""
+            run_viewer_url = ""
             manifest_url = ""
+            run_rel = _relative_path_under_root(run_dir, artifacts_root)
             base = (artifacts_base_url or "").strip().rstrip("/")
+            run_viewer_url = _artifact_run_viewer_url(dashboard_base_url, run_rel)
             if base:
                 try:
-                    rel_run = run_dir.resolve().relative_to(artifacts_root.resolve()).as_posix()
+                    rel_run = run_rel or run_dir.resolve().relative_to(artifacts_root.resolve()).as_posix()
                     run_url = f"{base}/api/artifacts?path={urllib.parse.quote(rel_run, safe='/')}"
                 except Exception:
                     run_url = ""
@@ -210,14 +303,23 @@ def _find_tutorial_artifacts(
                         manifest_url = f"{base}/api/artifacts/files/{urllib.parse.quote(rel_manifest, safe='/')}"
                     except Exception:
                         manifest_url = ""
+            high_value_files = _collect_high_value_files(
+                run_dir=run_dir,
+                artifacts_root=artifacts_root,
+                artifacts_base_url=artifacts_base_url,
+                dashboard_base_url=dashboard_base_url,
+            )
             hits.append(
                 {
                     "run_path": str(run_dir),
+                    "run_rel_path": run_rel,
                     "manifest_path": str(manifest_path) if manifest_path.exists() else "",
                     "status": status,
                     "title": title,
                     "run_url": run_url,
+                    "run_viewer_url": run_viewer_url,
                     "manifest_url": manifest_url,
+                    "high_value_files": high_value_files,
                 }
             )
             if len(hits) >= max_hits:
@@ -365,6 +467,7 @@ def _item_from_row(
     *,
     artifacts_root: Path,
     artifacts_base_url: str = "",
+    dashboard_base_url: str = "",
 ) -> dict[str, Any]:
     try:
         subject = json.loads(str(row["subject_json"] or "{}"))
@@ -382,6 +485,7 @@ def _item_from_row(
         artifacts_root=artifacts_root,
         video_id=video_id,
         artifacts_base_url=artifacts_base_url,
+        dashboard_base_url=dashboard_base_url,
     )
     return {
         "video_id": video_id,
@@ -400,6 +504,7 @@ def _build_digest_from_items(
     last_ts: str,
     max_items: int,
     window_label: str,
+    dashboard_base_url: str = "",
 ) -> str:
     lines: list[str] = []
     lines.append(f"Playlist Tutorial Digest ({window_label})")
@@ -419,20 +524,20 @@ def _build_digest_from_items(
 
         artifacts = item.get("artifacts") or []
         if artifacts:
-            lines.append("  tutorial_artifacts:")
+            lines.append("  Result package found:")
             for artifact in artifacts[:2]:
-                run_path = str(artifact.get("run_path") or "")
                 status = str(artifact.get("status") or "unknown")
-                manifest_path = str(artifact.get("manifest_path") or "")
                 run_url = str(artifact.get("run_url") or "")
-                manifest_url = str(artifact.get("manifest_url") or "")
-                lines.append(f"  - status={status} run={run_path}")
-                if manifest_path:
-                    lines.append(f"    manifest={manifest_path}")
-                if run_url:
-                    lines.append(f"    run_url={run_url}")
-                if manifest_url:
-                    lines.append(f"    manifest_url={manifest_url}")
+                run_viewer_url = str(artifact.get("run_viewer_url") or "")
+                lines.append(f"  - status={status}")
+                if run_viewer_url or run_url:
+                    lines.append(f"    view_results={run_viewer_url or run_url}")
+                for hv in (artifact.get("high_value_files") or [])[:3]:
+                    label = str(hv.get("label") or "file")
+                    url = str(hv.get("url") or "")
+                    viewer_url = str(hv.get("viewer_url") or "")
+                    if viewer_url or url:
+                        lines.append(f"    {label}: {viewer_url or url}")
         else:
             lines.append("  tutorial_artifacts: pending (no run artifact found yet)")
 
@@ -441,6 +546,10 @@ def _build_digest_from_items(
     remaining = len(items) - emit
     if remaining > 0:
         lines.append(f"- ... and {remaining} more")
+    dash = (dashboard_base_url or "").strip().rstrip("/")
+    if dash:
+        lines.append("")
+        lines.append(f"Dashboard backlog: {dash}/dashboard/tutorials")
 
     msg = "\n".join(lines).strip()
     if len(msg) > 3900:
@@ -453,40 +562,45 @@ def _build_followup_digest(
     *,
     max_items: int,
     window_label: str,
+    dashboard_base_url: str = "",
 ) -> str:
     lines: list[str] = []
     lines.append(f"Tutorial Artifacts Ready ({window_label})")
     lines.append(f"Ready items: {len(ready_items)}")
     lines.append("")
-    lines.append("Artifacts:")
+    lines.append("Ready to review:")
 
     emit = 0
     for item in ready_items:
         if emit >= max(1, max_items):
             break
         lines.append(f"- {item.get('title') or '(untitled)'}")
-        lines.append(f"  video_id={item.get('video_id') or ''} playlist_id={item.get('playlist_id') or ''}")
+        lines.append(f"  video_id={item.get('video_id') or ''}")
         if item.get("video_url"):
-            lines.append(f"  {item['video_url']}")
+            lines.append(f"  watch={item['video_url']}")
         artifacts = item.get("artifacts") or []
         for artifact in artifacts[:2]:
-            run_path = str(artifact.get("run_path") or "")
             status = str(artifact.get("status") or "unknown")
-            manifest_path = str(artifact.get("manifest_path") or "")
             run_url = str(artifact.get("run_url") or "")
-            manifest_url = str(artifact.get("manifest_url") or "")
-            lines.append(f"  - status={status} run={run_path}")
-            if manifest_path:
-                lines.append(f"    manifest={manifest_path}")
-            if run_url:
-                lines.append(f"    run_url={run_url}")
-            if manifest_url:
-                lines.append(f"    manifest_url={manifest_url}")
+            run_viewer_url = str(artifact.get("run_viewer_url") or "")
+            lines.append(f"  - package_status={status}")
+            if run_viewer_url or run_url:
+                lines.append(f"    view_results={run_viewer_url or run_url}")
+            for hv in (artifact.get("high_value_files") or [])[:5]:
+                label = str(hv.get("label") or "file")
+                url = str(hv.get("url") or "")
+                viewer_url = str(hv.get("viewer_url") or "")
+                if viewer_url or url:
+                    lines.append(f"    {label}: {viewer_url or url}")
         emit += 1
 
     remaining = len(ready_items) - emit
     if remaining > 0:
         lines.append(f"- ... and {remaining} more")
+    dash = (dashboard_base_url or "").strip().rstrip("/")
+    if dash:
+        lines.append("")
+        lines.append(f"Queue for Simone: {dash}/dashboard/tutorials")
 
     msg = "\n".join(lines).strip()
     if len(msg) > 3900:
@@ -636,6 +750,11 @@ def main() -> int:
         "--artifacts-base-url",
         default="",
         help="Optional public UA API base URL for clickable artifact links (example: https://api.example.com).",
+    )
+    parser.add_argument(
+        "--dashboard-base-url",
+        default="",
+        help="Optional public App/Dashboard base URL for tutorial queue links (example: https://app.example.com).",
     )
     parser.add_argument(
         "--env-file",
@@ -788,6 +907,14 @@ def main() -> int:
         ["CSI_TUTORIAL_ARTIFACTS_BASE_URL", "CSI_ARTIFACTS_BASE_URL", "UA_API_BASE_URL"],
         env_files,
     )
+    dashboard_base_url = (args.dashboard_base_url or "").strip() or _resolve_setting(
+        ["CSI_TUTORIAL_DASHBOARD_BASE_URL", "CSI_DASHBOARD_BASE_URL", "UA_DASHBOARD_BASE_URL"],
+        env_files,
+    )
+    if not dashboard_base_url and artifacts_base_url:
+        api_hint = "://api."
+        if api_hint in artifacts_base_url:
+            dashboard_base_url = artifacts_base_url.replace(api_hint, "://app.", 1)
     workspace_root_raw = (args.workspace_root or "").strip() or _resolve_setting(
         ["CSI_TUTORIAL_WORKSPACE_ROOT", "UA_WORKSPACES_DIR"],
         env_files,
@@ -803,6 +930,7 @@ def main() -> int:
             row,
             artifacts_root=artifacts_root,
             artifacts_base_url=artifacts_base_url,
+            dashboard_base_url=dashboard_base_url,
         )
         for row in rows
     ]
@@ -818,6 +946,7 @@ def main() -> int:
             last_ts=last_ts,
             max_items=max(1, int(args.max_items)),
             window_label=args.window_label,
+            dashboard_base_url=dashboard_base_url,
         )
         next_last_sent_id = int(rows[-1]["id"])
         if args.dry_run:
@@ -873,6 +1002,7 @@ def main() -> int:
                 row,
                 artifacts_root=artifacts_root,
                 artifacts_base_url=artifacts_base_url,
+                dashboard_base_url=dashboard_base_url,
             )
             video_id = str(item.get("video_id") or "").strip()
             if not video_id:
@@ -900,6 +1030,7 @@ def main() -> int:
             artifacts_root=artifacts_root,
             video_id=video_id,
             artifacts_base_url=artifacts_base_url,
+            dashboard_base_url=dashboard_base_url,
         )
         if artifacts:
             ready_items.append(
@@ -925,6 +1056,7 @@ def main() -> int:
             ready_items,
             max_items=max(1, int(args.max_items)),
             window_label=args.window_label,
+            dashboard_base_url=dashboard_base_url,
         )
         if args.dry_run:
             print("PLAYLIST_TUTORIAL_FOLLOWUP_DRY_RUN=1")

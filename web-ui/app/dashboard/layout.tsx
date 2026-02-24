@@ -13,6 +13,7 @@ const NAV_ITEMS: { href: string; label: string; external?: boolean; primary?: bo
   { href: "/dashboard/sessions", label: "Sessions" },
   { href: "/dashboard/skills", label: "Skills" },
   { href: "/dashboard/calendar", label: "Calendar" },
+  { href: "/dashboard/tutorials", label: "Tutorials" },
   { href: "/dashboard/events", label: "Events" },
   { href: "/dashboard/approvals", label: "Approvals" },
   { href: "/dashboard/cron-jobs", label: "Cron Jobs" },

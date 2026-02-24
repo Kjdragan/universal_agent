@@ -35,6 +35,15 @@ SESSION_ID_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 DEFAULT_SYNC_READY_MARKER_FILENAME = "sync_ready.json"
 SYNC_READY_MARKER_VERSION = 1
 
+
+class HookReportedTimeout(RuntimeError):
+    """Raised when agent execution reports a timeout via stream output."""
+
+
+class HookIdleTimeout(RuntimeError):
+    """Raised when agent execution makes no observable progress for too long."""
+
+
 class HookMatchConfig(BaseModel):
     path: Optional[str] = None
     source: Optional[str] = None
@@ -102,12 +111,18 @@ class HooksService:
         ] = None,
         run_counter_start: Optional[Callable[[str, str], None]] = None,
         run_counter_finish: Optional[Callable[[str, str], None]] = None,
+        notification_sink: Optional[Callable[[dict[str, Any]], None]] = None,
     ):
         self.gateway = gateway
         self._turn_admitter = turn_admitter
         self._turn_finalizer = turn_finalizer
         self._run_counter_start = run_counter_start
         self._run_counter_finish = run_counter_finish
+        self._notification_sink = notification_sink
+        # Hook dispatches can arrive concurrently, but gateway execution is
+        # globally serialized. Queue here so per-hook timeout only measures
+        # active execution time, not time spent waiting behind another hook.
+        self._agent_dispatch_lock = asyncio.Lock()
         self.config = self._load_config()
         self.transform_cache = {}
         self._seen_webhook_ids: Dict[str, float] = {}
@@ -138,9 +153,11 @@ class HooksService:
         self._youtube_ingest_timeout_seconds = self._safe_int_env(
             "UA_HOOKS_YOUTUBE_INGEST_TIMEOUT_SECONDS", 120
         )
-        self._youtube_ingest_retries = max(
-            1, self._safe_int_env("UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS", 3)
+        configured_retries = self._safe_int_env(
+            "UA_HOOKS_YOUTUBE_INGEST_RETRY_ATTEMPTS",
+            10,
         )
+        self._youtube_ingest_retries = min(10, max(1, configured_retries))
         self._youtube_ingest_retry_delay_seconds = max(
             0.0, self._safe_float_env("UA_HOOKS_YOUTUBE_INGEST_RETRY_DELAY_SECONDS", 20.0)
         )
@@ -167,6 +184,14 @@ class HooksService:
         )
         self._default_hook_timeout_seconds = max(
             0, self._safe_int_env("UA_HOOKS_DEFAULT_TIMEOUT_SECONDS", 0)
+        )
+        self._youtube_hook_timeout_seconds = max(
+            60, self._safe_int_env("UA_HOOKS_YOUTUBE_TIMEOUT_SECONDS", 1800)
+        )
+        self._youtube_hook_idle_timeout_seconds = self._optional_int_env(
+            "UA_HOOKS_YOUTUBE_IDLE_TIMEOUT_SECONDS",
+            default=300,
+            minimum=60,
         )
         self._sync_ready_marker_enabled = self._safe_bool_env(
             "UA_HOOKS_SYNC_READY_MARKER_ENABLED", True
@@ -300,9 +325,51 @@ class HooksService:
             "youtube_ingest_retry_jitter_seconds": float(self._youtube_ingest_retry_jitter_seconds),
             "youtube_ingest_cooldown_seconds": int(self._youtube_ingest_cooldown_seconds),
             "hook_default_timeout_seconds": int(self._default_hook_timeout_seconds or 0),
+            "youtube_hook_timeout_seconds": int(self._youtube_hook_timeout_seconds),
+            "youtube_hook_idle_timeout_seconds": int(self._youtube_hook_idle_timeout_seconds or 0),
             "sync_ready_marker_enabled": bool(self._sync_ready_marker_enabled),
             "sync_ready_marker_filename": str(self._sync_ready_marker_filename),
         }
+
+    def _emit_notification(
+        self,
+        *,
+        kind: str,
+        title: str,
+        message: str,
+        session_id: Optional[str],
+        severity: str,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> None:
+        if not self._notification_sink:
+            return
+        payload = {
+            "kind": str(kind or "").strip() or "hook_event",
+            "title": str(title or "").strip() or "Hook Event",
+            "message": str(message or "").strip() or "Hook event",
+            "session_id": str(session_id or "").strip() or None,
+            "severity": str(severity or "").strip() or "info",
+            "metadata": dict(metadata or {}),
+        }
+        try:
+            self._notification_sink(payload)
+        except Exception:
+            logger.exception("Failed emitting hook notification payload=%s", payload)
+
+    @staticmethod
+    def _format_ingest_failure_reason(
+        *,
+        error: str,
+        failure_class: str,
+        attempts: int,
+        max_attempts: int,
+    ) -> str:
+        err = str(error or "local_ingest_failed").strip()
+        cls = str(failure_class or "unknown").strip()
+        return (
+            f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
+            f"(error={err}, failure_class={cls})"
+        )
 
     async def handle_request(self, request: Request, subpath: str) -> Response:
         if not self.config.enabled:
@@ -558,6 +625,26 @@ class HooksService:
             return False
         return bool(default)
 
+    def _optional_int_env(
+        self,
+        name: str,
+        *,
+        default: int,
+        minimum: int = 0,
+    ) -> Optional[int]:
+        raw = (os.getenv(name) or "").strip()
+        value = default
+        if raw:
+            try:
+                value = int(raw)
+            except Exception:
+                value = default
+        if value <= 0:
+            return None
+        if minimum > 0:
+            value = max(minimum, value)
+        return value
+
     def _parse_endpoint_list(self, raw: str, *, fallback: str = "") -> list[str]:
         endpoints: list[str] = []
         for item in (raw or "").split(","):
@@ -756,6 +843,73 @@ class HooksService:
         marker_name = self._sync_ready_marker_filename.strip() or DEFAULT_SYNC_READY_MARKER_FILENAME
         return workspace_root / marker_name
 
+    def _find_recent_tutorial_manifest(
+        self,
+        *,
+        video_id: str,
+        started_at_epoch: float,
+    ) -> Optional[Path]:
+        artifacts_root = Path(str(resolve_artifacts_dir())).resolve()
+        tutorials_root = artifacts_root / "youtube-tutorial-learning"
+        if not tutorials_root.exists():
+            return None
+
+        best_path: Optional[Path] = None
+        best_mtime = 0.0
+        threshold = float(started_at_epoch or 0.0) - 60.0
+
+        for manifest_path in tutorials_root.rglob("manifest.json"):
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if str(payload.get("video_id") or "").strip() != video_id:
+                continue
+            try:
+                manifest_mtime = manifest_path.stat().st_mtime
+            except Exception:
+                continue
+            if manifest_mtime < threshold:
+                continue
+            if manifest_mtime >= best_mtime:
+                best_mtime = manifest_mtime
+                best_path = manifest_path
+        return best_path
+
+    def _validate_youtube_tutorial_artifacts(
+        self,
+        *,
+        video_id: str,
+        started_at_epoch: float,
+    ) -> dict[str, Any]:
+        manifest_path = self._find_recent_tutorial_manifest(
+            video_id=video_id,
+            started_at_epoch=started_at_epoch,
+        )
+        if manifest_path is None:
+            raise RuntimeError("youtube_artifacts_missing_manifest")
+
+        run_dir = manifest_path.parent
+        missing: list[str] = []
+        for required_name in ("README.md", "CONCEPT.md", "IMPLEMENTATION.md"):
+            if not (run_dir / required_name).is_file():
+                missing.append(required_name)
+        implementation_dir = run_dir / "implementation"
+        if not implementation_dir.is_dir():
+            missing.append("implementation/")
+        else:
+            has_impl_file = any(node.is_file() for node in implementation_dir.rglob("*"))
+            if not has_impl_file:
+                missing.append("implementation/*")
+        if missing:
+            raise RuntimeError(f"youtube_artifacts_incomplete:{','.join(missing)}")
+
+        return {
+            "video_id": video_id,
+            "run_dir": str(run_dir),
+            "manifest_path": str(manifest_path),
+        }
+
     def _write_sync_ready_marker(
         self,
         *,
@@ -919,7 +1073,7 @@ class HooksService:
             return action, metadata, False
 
         pending_payload = {
-            "status": "pending_local_ingest",
+            "status": "failed_local_ingest",
             "session_id": session_id,
             "video_url": video_url,
             "video_id": video_id,
@@ -937,12 +1091,33 @@ class HooksService:
         except Exception:
             logger.warning("Failed writing pending_local_ingest marker session_id=%s", session_id)
 
+        attempts_used = len(errors)
+        max_attempts = int(self._youtube_ingest_retries)
+        failure_error = str(ingest_result.get("error") or "local_ingest_failed")
+        failure_class = str(ingest_result.get("failure_class") or "")
+        failure_reason = self._format_ingest_failure_reason(
+            error=failure_error,
+            failure_class=failure_class,
+            attempts=attempts_used,
+            max_attempts=max_attempts,
+        )
+        logger.error(
+            "Local youtube ingest failed session_id=%s video_id=%s reason=%s pending_file=%s",
+            session_id,
+            str(video_id or ""),
+            failure_reason,
+            pending_path,
+        )
+
         metadata = {
             "hook_youtube_ingest_mode": "local_worker",
-            "hook_youtube_ingest_status": "pending_local_ingest",
+            "hook_youtube_ingest_status": "failed_local_ingest",
             "hook_youtube_ingest_pending_file": str(pending_path),
-            "hook_youtube_ingest_error": str(ingest_result.get("error") or "local_ingest_failed"),
-            "hook_youtube_ingest_failure_class": str(ingest_result.get("failure_class") or ""),
+            "hook_youtube_ingest_error": failure_error,
+            "hook_youtube_ingest_failure_class": failure_class,
+            "hook_youtube_ingest_attempts": attempts_used,
+            "hook_youtube_ingest_max_attempts": max_attempts,
+            "hook_youtube_ingest_reason": failure_reason,
             "hook_youtube_ingest_video_key": video_key,
         }
 
@@ -951,8 +1126,9 @@ class HooksService:
                 "local_youtube_ingest_mode: local_worker",
                 "local_youtube_ingest_status: failed_fail_open",
                 f"local_youtube_ingest_pending_file: {pending_path}",
-                f"local_youtube_ingest_error: {str(ingest_result.get('error') or 'local_ingest_failed')}",
-                f"local_youtube_ingest_failure_class: {str(ingest_result.get('failure_class') or '')}",
+                f"local_youtube_ingest_error: {failure_error}",
+                f"local_youtube_ingest_failure_class: {failure_class}",
+                f"local_youtube_ingest_reason: {failure_reason}",
                 "Local transcript ingestion failed; proceed in degraded mode and record this in manifest.",
             ]
             action = action.model_copy(
@@ -1190,6 +1366,13 @@ class HooksService:
             if action.timeout_seconds is not None
             else (self._default_hook_timeout_seconds or None)
         )
+        is_youtube_tutorial = (action.to or "").strip().lower() == "youtube-explainer-expert"
+        expected_video_id = self._extract_action_field(action.message or "", "video_id")
+        if is_youtube_tutorial:
+            if timeout_seconds is None:
+                timeout_seconds = self._youtube_hook_timeout_seconds
+            else:
+                timeout_seconds = max(timeout_seconds, self._youtube_hook_timeout_seconds)
         if timeout_seconds is not None:
             timeout_seconds = max(1, timeout_seconds)
 
@@ -1212,6 +1395,23 @@ class HooksService:
         session_workspace: Optional[Path] = None
         admitted_turn_id: Optional[str] = None
         start_ts: Optional[float] = None
+        dispatch_lock_acquired = False
+        dispatch_wait_started = time.time()
+
+        await self._agent_dispatch_lock.acquire()
+        dispatch_lock_acquired = True
+        dispatch_queue_wait_seconds = max(0.0, time.time() - dispatch_wait_started)
+        if dispatch_queue_wait_seconds > 0:
+            metadata["hook_dispatch_queue_wait_seconds"] = round(
+                dispatch_queue_wait_seconds,
+                3,
+            )
+        if dispatch_queue_wait_seconds >= 1.0:
+            logger.info(
+                "Hook action queued session_id=%s wait_seconds=%.3f",
+                session_id,
+                dispatch_queue_wait_seconds,
+            )
 
         try:
             session = await self._resolve_or_create_webhook_session(session_id)
@@ -1223,20 +1423,56 @@ class HooksService:
             )
             metadata.update(ingest_metadata)
             if should_skip_dispatch:
+                ingest_status = str(metadata.get("hook_youtube_ingest_status") or "").strip().lower()
+                failed_local_ingest = ingest_status == "failed_local_ingest"
+                marker_state = "failed_local_ingest" if failed_local_ingest else "pending_local_ingest"
+                marker_error = (
+                    str(metadata.get("hook_youtube_ingest_reason") or metadata.get("hook_youtube_ingest_error") or "")
+                    if failed_local_ingest
+                    else None
+                )
                 if session_workspace is not None:
                     self._write_sync_ready_marker(
                         session_id=session_id,
                         workspace_root=session_workspace,
-                        state="pending_local_ingest",
+                        state=marker_state,
                         ready=False,
                         hook_name=hook_name,
                         run_source=run_source,
+                        error=marker_error,
                     )
-                logger.info(
-                    "Hook action deferred session_id=%s hook=%s reason=pending_local_ingest",
-                    session_id,
-                    hook_name,
-                )
+                if failed_local_ingest:
+                    reason = str(metadata.get("hook_youtube_ingest_reason") or "local_ingest_failed").strip()
+                    logger.error(
+                        "Hook action failed pre-dispatch session_id=%s hook=%s reason=%s",
+                        session_id,
+                        hook_name,
+                        reason,
+                    )
+                    self._emit_notification(
+                        kind="youtube_ingest_failed",
+                        title="YouTube Ingest Failed",
+                        message=reason,
+                        session_id=session_id,
+                        severity="error",
+                        metadata={
+                            "source": "hooks",
+                            "hook_name": hook_name,
+                            "hook_session_key": session_key,
+                            "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
+                            "error": str(metadata.get("hook_youtube_ingest_error") or ""),
+                            "failure_class": str(metadata.get("hook_youtube_ingest_failure_class") or ""),
+                            "attempts": int(metadata.get("hook_youtube_ingest_attempts") or 0),
+                            "max_attempts": int(metadata.get("hook_youtube_ingest_max_attempts") or 0),
+                            "pending_file": str(metadata.get("hook_youtube_ingest_pending_file") or ""),
+                        },
+                    )
+                else:
+                    logger.info(
+                        "Hook action deferred session_id=%s hook=%s reason=pending_local_ingest",
+                        session_id,
+                        hook_name,
+                    )
                 return
 
             user_input = self._build_agent_user_input(action)
@@ -1284,12 +1520,30 @@ class HooksService:
                     started_at_epoch=start_ts,
                 )
             execution_summary: dict[str, Any] = {}
-            if timeout_seconds is None:
-                execution_summary = await self._consume_gateway_execute(session, request)
-            else:
-                execution_summary = await asyncio.wait_for(
-                    self._consume_gateway_execute(session, request),
-                    timeout=float(timeout_seconds),
+            idle_timeout_seconds = (
+                int(self._youtube_hook_idle_timeout_seconds)
+                if is_youtube_tutorial and self._youtube_hook_idle_timeout_seconds
+                else None
+            )
+            execution_summary = await self._run_gateway_execute_with_watchdogs(
+                session=session,
+                request=request,
+                workspace_root=session_workspace,
+                total_timeout_seconds=timeout_seconds,
+                idle_timeout_seconds=idle_timeout_seconds,
+            )
+            if execution_summary.get("reported_timeout"):
+                raise HookReportedTimeout(
+                    str(execution_summary.get("reported_timeout_message") or "agent_reported_timeout")
+                )
+            if execution_summary.get("reported_error"):
+                raise RuntimeError(
+                    str(execution_summary.get("reported_error_message") or "agent_reported_error")
+                )
+            if is_youtube_tutorial and expected_video_id:
+                execution_summary["artifact_validation"] = self._validate_youtube_tutorial_artifacts(
+                    video_id=expected_video_id,
+                    started_at_epoch=float(start_ts or 0.0),
                 )
             if admitted_turn_id and self._turn_finalizer:
                 await self._turn_finalizer(
@@ -1312,12 +1566,99 @@ class HooksService:
                     execution_summary=execution_summary,
                 )
             logger.info("Hook action dispatched session_id=%s hook=%s", session_id, hook_name)
+        except HookReportedTimeout as exc:
+            logger.error(
+                "Hook action reported timeout session_key=%s session_id=%s detail=%s",
+                session_key,
+                session_id,
+                exc,
+            )
+            if session_workspace is not None:
+                state = {
+                    "tool_calls": 0,
+                    "duration_seconds": round(max(0.0, time.time() - (start_ts or time.time())), 3),
+                }
+                self._write_sync_ready_marker(
+                    session_id=session_id,
+                    workspace_root=session_workspace,
+                    state="timed_out",
+                    ready=True,
+                    hook_name=hook_name,
+                    run_source=run_source,
+                    started_at_epoch=start_ts,
+                    completed_at_epoch=time.time(),
+                    error="agent_reported_timeout",
+                    execution_summary=state,
+                )
+            if self._turn_finalizer:
+                try:
+                    state = {
+                        "tool_calls": 0,
+                        "duration_seconds": round(max(0.0, time.time() - (start_ts or time.time())), 3),
+                    }
+                    if admitted_turn_id:
+                        await self._turn_finalizer(
+                            session_id,
+                            admitted_turn_id,
+                            "failed",
+                            "agent_reported_timeout",
+                            state,
+                        )
+                except Exception:
+                    logger.exception("Failed finalizing timeout-reported hook turn session_id=%s", session_id)
+        except HookIdleTimeout as exc:
+            logger.error(
+                "Hook action idle timed out session_key=%s session_id=%s detail=%s",
+                session_key,
+                session_id,
+                exc,
+            )
+            await self._abort_active_session_execution(session_id, reason=str(exc))
+            if session_workspace is not None:
+                state = {
+                    "tool_calls": 0,
+                    "duration_seconds": round(max(0.0, time.time() - (start_ts or time.time())), 3),
+                }
+                idle_seconds = int(self._youtube_hook_idle_timeout_seconds or 0)
+                self._write_sync_ready_marker(
+                    session_id=session_id,
+                    workspace_root=session_workspace,
+                    state="timed_out",
+                    ready=True,
+                    hook_name=hook_name,
+                    run_source=run_source,
+                    started_at_epoch=start_ts,
+                    completed_at_epoch=time.time(),
+                    error=f"hook_idle_timeout_{idle_seconds}s",
+                    execution_summary=state,
+                )
+            if self._turn_finalizer:
+                try:
+                    state = {
+                        "tool_calls": 0,
+                        "duration_seconds": round(max(0.0, time.time() - (start_ts or time.time())), 3),
+                    }
+                    if admitted_turn_id:
+                        idle_seconds = int(self._youtube_hook_idle_timeout_seconds or 0)
+                        await self._turn_finalizer(
+                            session_id,
+                            admitted_turn_id,
+                            "failed",
+                            f"hook_idle_timeout_{idle_seconds}s",
+                            state,
+                        )
+                except Exception:
+                    logger.exception("Failed finalizing idle-timeout hook turn session_id=%s", session_id)
         except asyncio.TimeoutError:
             logger.error(
                 "Hook action timed out session_key=%s session_id=%s timeout_seconds=%s",
                 session_key,
                 session_id,
                 timeout_seconds,
+            )
+            await self._abort_active_session_execution(
+                session_id,
+                reason=f"hook_timeout_{timeout_seconds}s",
             )
             if session_workspace is not None:
                 state = {
@@ -1397,24 +1738,149 @@ class HooksService:
                     self._run_counter_finish(session_id, run_source)
                 except Exception:
                     logger.exception("Failed decrementing hook run counter session_id=%s", session_id)
+            if dispatch_lock_acquired:
+                self._agent_dispatch_lock.release()
+
+    @staticmethod
+    def _run_log_progress_marker(run_log_path: Path) -> tuple[int, float]:
+        try:
+            stat = run_log_path.stat()
+            return int(stat.st_size), float(stat.st_mtime)
+        except Exception:
+            return (0, 0.0)
+
+    async def _run_gateway_execute_with_watchdogs(
+        self,
+        *,
+        session,
+        request: GatewayRequest,
+        workspace_root: Optional[Path],
+        total_timeout_seconds: Optional[int],
+        idle_timeout_seconds: Optional[int],
+    ) -> dict[str, Any]:
+        consume_task = asyncio.create_task(self._consume_gateway_execute(session, request))
+        started = time.monotonic()
+        last_progress = started
+        run_log_path = (
+            (workspace_root / "run.log").resolve() if workspace_root is not None else None
+        )
+        last_marker = (
+            self._run_log_progress_marker(run_log_path)
+            if run_log_path is not None
+            else (0, 0.0)
+        )
+        poll_seconds = 5.0
+
+        try:
+            while True:
+                now = time.monotonic()
+                if total_timeout_seconds is not None:
+                    elapsed = now - started
+                    remaining = float(total_timeout_seconds) - elapsed
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError
+                    wait_seconds = min(poll_seconds, remaining)
+                else:
+                    wait_seconds = poll_seconds
+
+                try:
+                    return await asyncio.wait_for(asyncio.shield(consume_task), timeout=wait_seconds)
+                except asyncio.TimeoutError:
+                    now = time.monotonic()
+                    if total_timeout_seconds is not None and (now - started) >= float(total_timeout_seconds):
+                        raise
+                    if idle_timeout_seconds is not None and run_log_path is not None:
+                        marker = self._run_log_progress_marker(run_log_path)
+                        if marker != last_marker:
+                            last_marker = marker
+                            last_progress = now
+                            continue
+                        if (now - last_progress) >= float(idle_timeout_seconds):
+                            raise HookIdleTimeout(
+                                f"idle_no_progress_{int(idle_timeout_seconds)}s"
+                            )
+                    continue
+        finally:
+            if not consume_task.done():
+                consume_task.cancel()
+                try:
+                    await consume_task
+                except BaseException:
+                    pass
 
     async def _consume_gateway_execute(self, session, request: GatewayRequest) -> dict[str, Any]:
         tool_calls = 0
         duration_seconds = 0.0
         started = time.time()
+        reported_error_message: Optional[str] = None
+        reported_timeout_message: Optional[str] = None
+        iteration_status: str = ""
+        text_tail: list[str] = []
         async for event in self.gateway.execute(session, request):
             event_type = getattr(event, "type", None)
             event_name = event_type.value if hasattr(event_type, "value") else str(event_type)
             if event_name == "tool_call":
                 tool_calls += 1
+            elif event_name == "text" and isinstance(getattr(event, "data", None), dict):
+                text = str((event.data or {}).get("text") or "").strip()
+                if text:
+                    text_tail.append(text)
+                    if len(text_tail) > 8:
+                        text_tail = text_tail[-8:]
+            elif event_name == "error" and isinstance(getattr(event, "data", None), dict):
+                message = str((event.data or {}).get("message") or "").strip()
+                detail = str((event.data or {}).get("detail") or "").strip()
+                if message or detail:
+                    reported_error_message = f"{message} {detail}".strip()
             elif event_name == "iteration_end" and isinstance(getattr(event, "data", None), dict):
                 data = getattr(event, "data", {}) or {}
                 duration_seconds = float(data.get("duration_seconds") or duration_seconds)
                 if isinstance(data.get("tool_calls"), int):
                     tool_calls = int(data.get("tool_calls"))
+                iteration_status = str(data.get("status") or "").strip().lower()
         if duration_seconds <= 0:
             duration_seconds = round(max(0.0, time.time() - started), 3)
-        return {"tool_calls": tool_calls, "duration_seconds": duration_seconds}
+        text_window = "\n".join(text_tail).lower()
+        if "request timed out" in text_window or "execution timed out" in text_window:
+            reported_timeout_message = "agent_response_timeout_text"
+        if iteration_status and iteration_status not in {"complete", "completed", "success"}:
+            reported_error_message = reported_error_message or f"iteration_status:{iteration_status}"
+
+        summary: dict[str, Any] = {"tool_calls": tool_calls, "duration_seconds": duration_seconds}
+        if iteration_status:
+            summary["iteration_status"] = iteration_status
+        if reported_timeout_message:
+            summary["reported_timeout"] = True
+            summary["reported_timeout_message"] = reported_timeout_message
+        if reported_error_message:
+            summary["reported_error"] = True
+            summary["reported_error_message"] = reported_error_message[:500]
+        return summary
+
+    async def _abort_active_session_execution(self, session_id: str, *, reason: str) -> None:
+        """Best-effort hard stop when hooks timeout/idle-timeout a running turn."""
+        try:
+            adapters = getattr(self.gateway, "_adapters", None)
+            if not isinstance(adapters, dict):
+                return
+            adapter = adapters.get(session_id)
+            if adapter is None:
+                return
+            reset_fn = getattr(adapter, "reset", None)
+            if reset_fn is None:
+                return
+            await reset_fn()
+            logger.info(
+                "Hook forced adapter reset session_id=%s reason=%s",
+                session_id,
+                reason,
+            )
+        except Exception:
+            logger.exception(
+                "Hook failed adapter reset session_id=%s reason=%s",
+                session_id,
+                reason,
+            )
 
     async def _resolve_or_create_webhook_session(self, session_id: str):
         try:

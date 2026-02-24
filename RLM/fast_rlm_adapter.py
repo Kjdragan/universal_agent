@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .types import CorpusBundle, DistillRequest, LaneResult
+
+
+def _is_debug_enabled() -> bool:
+    return os.environ.get("RLM_DEBUG", "0") in {"1", "true", "TRUE", "yes", "on"}
+
+
+def _debug(message: str) -> None:
+    if not _is_debug_enabled():
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[RLM DEBUG {stamp}] {message}", flush=True)
 
 
 def _extract_json(text: str) -> dict[str, Any] | None:
@@ -27,19 +40,25 @@ def _extract_json(text: str) -> dict[str, Any] | None:
 
 
 def _build_query(bundle: CorpusBundle, request: DistillRequest) -> str:
-    samples = "\n".join(f"- {doc.path}" for doc in bundle.documents[:12])
+    corpus_texts = []
+    for doc in bundle.documents:
+        try:
+            text = doc.path.read_text(encoding="utf-8", errors="replace")
+            corpus_texts.append(f"--- BEGIN FILE: {doc.rel_path} ---\n{text}\n--- END FILE: {doc.rel_path} ---\n")
+        except Exception as exc:
+            _debug(f"Warning: skipped {doc.rel_path} during injection: {exc}")
+
+    full_text = "\n".join(corpus_texts)
+
     return (
         "You are a recursive research distillation agent.\n"
         f"Topic: {request.topic}\n"
         f"Report title: {request.report_title}\n"
-        f"Corpus root: {bundle.source_path}\n"
         f"Estimated tokens: {bundle.estimated_tokens}\n"
-        "Sample files:\n"
-        f"{samples}\n\n"
         "Instructions:\n"
-        "1) Use Python to recursively read markdown/text files under the corpus root.\n"
-        "2) Extract the highest-value facts and claims grounded in source snippets.\n"
-        "3) Return JSON only with this schema:\n"
+        "1) Read the provided corpus text below.\n"
+        "2) Extract the highest-value facts and claims grounded in the source snippets.\n"
+        "3) Write Python to analyze or structure the data if helpful, but ultimately return JSON only with this schema:\n"
         "{\n"
         '  "executive_summary": "string",\n'
         '  "key_findings": ["string", "..."],\n'
@@ -53,9 +72,64 @@ def _build_query(bundle: CorpusBundle, request: DistillRequest) -> str:
         "    }\n"
         "  ]\n"
         "}\n"
-        "4) Include at least 8 evidence items from multiple files.\n"
-        "5) Do not include markdown fences or any extra prose."
+        "4) Include at least 8 evidence items.\n"
+        "5) Do not include markdown fences or any extra prose.\n\n"
+        "=== CORPUS ===\n"
+        f"{full_text}"
     )
+
+
+def _prepare_fast_rlm_runtime_env() -> dict[str, Any]:
+    deno_bin = Path.home() / ".deno" / "bin"
+    current_path = os.environ.get("PATH", "")
+    if deno_bin.exists() and str(deno_bin) not in current_path.split(":"):
+        os.environ["PATH"] = f"{deno_bin}:{current_path}" if current_path else str(deno_bin)
+
+    if not os.environ.get("RLM_MODEL_API_KEY"):
+        for key_name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ZAI_API_KEY"):
+            candidate = os.environ.get(key_name)
+            if candidate:
+                os.environ["RLM_MODEL_API_KEY"] = candidate
+                break
+
+    if not os.environ.get("RLM_MODEL_BASE_URL"):
+        base_url = os.environ.get("OPENAI_BASE_URL")
+        if base_url:
+            # fast-rlm expects an OpenAI-compatible endpoint; for ZAI we prefer
+            # the coding/paas path when a generic paas URL is provided.
+            if base_url.endswith("/api/paas/v4"):
+                base_url = base_url.replace("/api/paas/v4", "/api/coding/paas/v4")
+            os.environ["RLM_MODEL_BASE_URL"] = base_url
+
+    if not os.environ.get("RLM_MODEL_API_KEY"):
+        raise RuntimeError(
+            "fast-rlm requires RLM_MODEL_API_KEY (or OPENAI_API_KEY / ANTHROPIC_API_KEY / "
+            "ANTHROPIC_AUTH_TOKEN / ZAI_API_KEY in env)."
+        )
+
+    primary_model = (
+        os.environ.get("RLM_PRIMARY_MODEL")
+        or os.environ.get("OPENAI_DEFAULT_MODEL")
+        or os.environ.get("MODEL_NAME")
+        or "glm-5"
+    )
+    sub_model = (
+        os.environ.get("RLM_SUB_MODEL")
+        or os.environ.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
+        or primary_model
+    )
+
+    runtime = {
+        "primary_agent": primary_model,
+        "sub_agent": sub_model,
+    }
+    _debug(
+        "fast-rlm runtime env prepared "
+        f"base_url={os.environ.get('RLM_MODEL_BASE_URL', '<unset>')} "
+        f"api_key_set={bool(os.environ.get('RLM_MODEL_API_KEY'))} "
+        f"primary_model={primary_model} sub_model={sub_model}"
+    )
+    return runtime
 
 
 def run_fast_rlm_adapter(request: DistillRequest, bundle: CorpusBundle, run_dir: Path) -> LaneResult:
@@ -70,8 +144,20 @@ def run_fast_rlm_adapter(request: DistillRequest, bundle: CorpusBundle, run_dir:
             "Install/configure upstream fast-rlm first, then retry."
         ) from exc
 
+    runtime_config = _prepare_fast_rlm_runtime_env()
     query = _build_query(bundle, request)
-    response_obj = fast_rlm.run(query, prefix="ua_rlm_eval", verbose=False)
+    _debug(
+        "invoking fast_rlm.run "
+        f"source={bundle.source_path} tokens_est={bundle.estimated_tokens} "
+        f"config={runtime_config}"
+    )
+    response_obj = fast_rlm.run(
+        query,
+        prefix="ua_rlm_eval",
+        config=runtime_config,
+        verbose=False,
+    )
+    _debug(f"fast_rlm.run returned type={type(response_obj).__name__}")
 
     raw_response_path = lane_dir / "fast_rlm_raw_response.json"
     raw_response_path.write_text(

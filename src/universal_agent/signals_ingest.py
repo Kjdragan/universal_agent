@@ -19,6 +19,17 @@ def _bool_env(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _int_env(name: str, default: int, *, minimum: int = 0, maximum: int = 86_400) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return max(minimum, min(maximum, int(default)))
+    try:
+        value = int(raw.strip())
+    except Exception:
+        return max(minimum, min(maximum, int(default)))
+    return max(minimum, min(maximum, value))
+
+
 def _split_csv_env(name: str) -> set[str]:
     raw = (os.getenv(name) or "").strip()
     if not raw:
@@ -217,6 +228,12 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
     route = "trend-specialist"
     if event_type == "hourly_token_usage_report":
         route = "data-analyst"
+    timeout_seconds = _int_env(
+        "UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS",
+        420,
+        minimum=30,
+        maximum=3_600,
+    )
 
     session_key = f"csi_{source}_{event_type or 'event'}"
     return {
@@ -225,6 +242,7 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
         "session_key": session_key,
         "to": route,
         "message": _analytics_message(event),
+        "timeout_seconds": timeout_seconds,
     }
 
 

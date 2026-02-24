@@ -92,3 +92,12 @@ config/user_profile.md
 Thumbs.db
 *.png
 *.Zone.Identifier
+
+# === Logs ===
+logs/
+
+# === RLM Data ===
+RLM/corpora/
+
+# === Claude Internal ===
+.claude/worktrees/
