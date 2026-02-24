@@ -31,6 +31,13 @@ DISALLOWED_TOOLS = [
     "mcp__local_toolkit__batch_tool_execute",
     # PRIMARY AGENT FORBIDDEN: NEVER use remote workbench directly.
     "mcp__composio__COMPOSIO_REMOTE_WORKBENCH",
+    # Composio crawl/fetch tools are globally banned — ALL crawling goes through
+    # Crawl4AI Cloud API via mcp__internal__run_research_phase / crawl_parallel.
+    "mcp__composio__COMPOSIO_CRAWL_WEBPAGE",
+    "mcp__composio__COMPOSIO_CRAWL_URL",
+    "mcp__composio__COMPOSIO_CRAWL_WEBSITE",
+    "mcp__composio__COMPOSIO_FETCH_URL",
+    "mcp__composio__COMPOSIO_FETCH_WEBPAGE",
 ]
 
 # Hook-level blocked tools: blocked for PRIMARY agent only; sub-agents are allowed.

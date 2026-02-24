@@ -3002,6 +3002,8 @@ async def on_pre_task_skill_awareness(
     """
     PreToolUse Hook: Before Task tool executes (spawning a sub-agent),
     inject skill awareness context so the sub-agent knows what skills exist.
+    Also injects CURRENT_SESSION_WORKSPACE so the sub-agent writes to the
+    correct session directory (not the repo root).
     """
     tool_input = input_data.get("tool_input", {})
     subagent_type = tool_input.get("subagent_type", "unknown")
@@ -3015,8 +3017,27 @@ async def on_pre_task_skill_awareness(
 
     tool_knowledge = get_tool_knowledge_block()
     combined_context = ""
+
+    # Inject workspace path so sub-agents know where to save files.
+    # Without this, background sub-agents default to cwd (repo root).
+    workspace_path = OBSERVER_WORKSPACE_DIR or os.getenv("CURRENT_SESSION_WORKSPACE", "")
+    if workspace_path:
+        combined_context = (
+            f"# SESSION WORKSPACE (MANDATORY)\n"
+            f"CURRENT_SESSION_WORKSPACE: {workspace_path}\n"
+            f"ALL file outputs MUST go under this directory. Key subdirectories:\n"
+            f"- `{workspace_path}/search_results/` — search result JSON files\n"
+            f"- `{workspace_path}/tasks/{{task_name}}/` — task outputs including refined_corpus.md\n"
+            f"- `{workspace_path}/work_products/` — final deliverables\n"
+            f"NEVER write files relative to cwd or the repo root. Always use absolute paths under this workspace.\n"
+        )
+
     if awareness_context:
-        combined_context = awareness_context
+        combined_context = (
+            f"{combined_context}\n\n{awareness_context}".strip()
+            if combined_context
+            else awareness_context
+        )
     if tool_knowledge:
         combined_context = (
             f"{combined_context}\n\n{tool_knowledge}".strip()
@@ -7534,7 +7555,7 @@ async def setup_session(
     print(f"🧾 System prompt mode: {prompt_mode}")
 
     options = ClaudeAgentOptions(
-        model=resolve_claude_code_model(default="sonnet"),
+        model=resolve_claude_code_model(default="opus"),
         add_dirs=[os.path.join(src_dir, ".claude")],
         setting_sources=["project"],  # Enable loading agents from .claude/agents/
         disallowed_tools=disallowed_tools,

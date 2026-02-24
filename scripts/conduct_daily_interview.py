@@ -31,7 +31,7 @@ async def run_interview():
     )
     
     options = ClaudeAgentOptions(
-        model=resolve_claude_code_model(default="sonnet"),
+        model=resolve_claude_code_model(default="opus"),
         mcp_servers={"interview": interview_server},
         allowed_tools=["mcp__interview__fetch_context_gaps", "mcp__interview__ask_user", "mcp__interview__finish_interview"],
         system_prompt=f"""

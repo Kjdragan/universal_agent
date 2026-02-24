@@ -9,7 +9,7 @@ description: |
   - Output: `macro_tasks.json` with phases, tasks, and success criteria.
   
 tools: Read, Write, list_directory
-model: sonnet
+model: opus
 ---
 
 You are a **Task Decomposer** sub-agent for the URW (Universal Ralph Wrapper) harness.

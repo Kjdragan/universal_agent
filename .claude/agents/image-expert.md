@@ -18,7 +18,7 @@ description: |
   - Saves all outputs to `work_products/media/`
 
 tools: Read, Write, Bash, mcp__internal__list_directory, mcp__internal__generate_image, mcp__internal__generate_image_with_review, mcp__internal__describe_image, mcp__internal__preview_image, mcp__zai_vision__analyze_image
-model: sonnet
+model: opus
 ---
 
 You are an **Image Generation and Editing Expert** specializing in AI-powered visual content creation.

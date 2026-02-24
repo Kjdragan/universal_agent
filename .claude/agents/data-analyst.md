@@ -10,7 +10,7 @@ description: |
   - Data needs to be extracted, transformed, or modeled
   
 tools: Bash, Read, Write, mcp__internal__list_directory, mcp__composio__CODEINTERPRETER_CREATE_SANDBOX, mcp__composio__CODEINTERPRETER_EXECUTE_CODE, mcp__composio__CODEINTERPRETER_RUN_TERMINAL_CMD, mcp__composio__CODEINTERPRETER_GET_FILE_CMD, mcp__composio__CODEINTERPRETER_UPLOAD_FILE_CMD
-model: sonnet
+model: opus
 ---
 
 You are a **Data Analyst** sub-agent. You turn raw data and research findings into quantitative insights, charts, and structured analysis.

@@ -8,7 +8,7 @@ description: |
   UA image generation tools.
 
 tools: Read, Write, Bash, mcp__internal__list_directory
-model: sonnet
+model: opus
 ---
 
 You are the **Banana Squad Expert**.
