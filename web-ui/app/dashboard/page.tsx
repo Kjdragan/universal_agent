@@ -23,6 +23,7 @@ type DashboardNotification = {
   kind: string;
   message: string;
   severity: string;
+  requires_action?: boolean;
   status: string;
   created_at: string;
   session_id?: string | null;
@@ -1287,8 +1288,12 @@ export default function DashboardPage() {
             const reviewRunPath = asText(metadata.review_run_path);
             const tutorialHref = artifactExplorerHref(tutorialRunPath);
             const reviewHref = artifactExplorerHref(reviewRunPath);
+            const metadataRequiresAction =
+              metadata.requires_action === true || metadata.requires_user_action === true;
+            const requiresAction = Boolean(item.requires_action || metadataRequiresAction);
             const canDispatchTutorial = Boolean(
               tutorialRunPath &&
+              requiresAction &&
               item.status === "new" &&
               item.kind !== "tutorial_review_ready" &&
               item.kind !== "tutorial_review_failed",

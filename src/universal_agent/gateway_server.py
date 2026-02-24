@@ -847,6 +847,16 @@ class NotificationBulkUpdateRequest(BaseModel):
     limit: int = 200
 
 
+class OpsNotificationCreateRequest(BaseModel):
+    kind: str
+    title: str
+    message: str
+    severity: str = "warning"
+    requires_action: bool = False
+    session_id: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
 class TutorialReviewDispatchRequest(BaseModel):
     run_path: str
     note: Optional[str] = None
@@ -2943,6 +2953,7 @@ def _hook_notification_sink(payload: dict[str, Any]) -> None:
         message=str(payload.get("message") or "Hook event"),
         session_id=str(payload.get("session_id") or "").strip() or None,
         severity=str(payload.get("severity") or "info"),
+        requires_action=bool(payload.get("requires_action")),
         metadata=metadata if isinstance(metadata, dict) else None,
     )
 
@@ -4647,6 +4658,15 @@ async def lifespan(app: FastAPI):
         notification_sink=_hook_notification_sink,
     )
     logger.info("🪝 Hooks Service Initialized")
+    try:
+        recovered = await _hooks_service.recover_interrupted_youtube_sessions(WORKSPACES_DIR)
+    except Exception:
+        logger.exception("Failed recovering interrupted youtube hook sessions on startup")
+    else:
+        if recovered > 0:
+            logger.warning("🔁 Recovered %d interrupted youtube hook session(s) on startup", recovered)
+        else:
+            logger.info("🔁 No interrupted youtube hook sessions required recovery")
 
     if _scheduling_projection.enabled:
         _scheduling_projection.seed_from_runtime()
@@ -5972,6 +5992,27 @@ async def delete_session(session_id: str, request: Request):
 # =============================================================================
 # Ops / Control Plane Endpoints
 # =============================================================================
+
+
+@app.post("/api/v1/ops/notifications")
+async def ops_create_notification(request: Request, payload: OpsNotificationCreateRequest):
+    _require_ops_auth(request)
+    session_id = None
+    if payload.session_id:
+        session_id = _sanitize_session_id_or_400(payload.session_id)
+    severity = str(payload.severity or "warning").strip().lower()
+    if severity not in {"info", "warning", "error", "success"}:
+        severity = "warning"
+    record = _add_notification(
+        kind=str(payload.kind or "system_event").strip() or "system_event",
+        title=str(payload.title or "System Event").strip() or "System Event",
+        message=str(payload.message or "").strip() or "No details provided.",
+        session_id=session_id,
+        severity=severity,
+        requires_action=bool(payload.requires_action),
+        metadata=payload.metadata if isinstance(payload.metadata, dict) else None,
+    )
+    return {"notification": record}
 
 
 @app.get("/api/v1/ops/sessions")

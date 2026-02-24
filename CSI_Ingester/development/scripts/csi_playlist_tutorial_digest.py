@@ -231,11 +231,12 @@ def _collect_high_value_files(
     if impl_dir.exists() and impl_dir.is_dir():
         code_candidates: list[Path] = []
         for ext in ("*.py", "*.ts", "*.tsx", "*.js", "*.sh", "*.ipynb"):
-            code_candidates.extend(impl_dir.glob(ext))
+            code_candidates.extend(impl_dir.rglob(ext))
         code_candidates = [p for p in code_candidates if p.is_file()]
-        code_candidates.sort(key=lambda p: p.name.lower())
+        code_candidates.sort(key=lambda p: p.as_posix().lower())
         for path in code_candidates[: max(1, max_code_files)]:
-            preferred.append((f"Code: {path.name}", path))
+            rel_name = path.relative_to(impl_dir).as_posix()
+            preferred.append((f"Code: {rel_name}", path))
 
     out: list[dict[str, str]] = []
     for label, file_path in preferred:
@@ -250,6 +251,18 @@ def _collect_high_value_files(
             }
         )
     return out
+
+
+def _artifact_ready_for_review(hit: dict[str, Any]) -> bool:
+    files = hit.get("high_value_files") if isinstance(hit, dict) else []
+    if not isinstance(files, list) or not files:
+        return False
+    labels = {str(item.get("label") or "").strip() for item in files if isinstance(item, dict)}
+    requires_implementation = bool(hit.get("implementation_required"))
+    required = {"README", "Concept"}
+    if requires_implementation:
+        required.add("Implementation Guide")
+    return required.issubset(labels)
 
 
 def _find_tutorial_artifacts(
@@ -319,9 +332,12 @@ def _find_tutorial_artifacts(
                     "run_url": run_url,
                     "run_viewer_url": run_viewer_url,
                     "manifest_url": manifest_url,
+                    "mode": str(manifest.get("mode") or "").strip(),
+                    "learning_mode": str(manifest.get("learning_mode") or "").strip(),
                     "high_value_files": high_value_files,
                 }
             )
+            hits[-1]["ready_for_review"] = _artifact_ready_for_review(hits[-1])
             if len(hits) >= max_hits:
                 return hits
     return hits
@@ -583,7 +599,10 @@ def _build_digest_from_items(
                 status = str(artifact.get("status") or "unknown")
                 run_url = str(artifact.get("run_url") or "")
                 run_viewer_url = str(artifact.get("run_viewer_url") or "")
+                ready_for_review = bool(artifact.get("ready_for_review"))
                 lines.append(f"  - status={status}")
+                if not ready_for_review:
+                    lines.append("    review_ready=no (core files still generating)")
                 if run_viewer_url or run_url:
                     lines.append(f"    view_results={run_viewer_url or run_url}")
                 for hv in (artifact.get("high_value_files") or [])[:3]:
@@ -643,7 +662,9 @@ def _build_followup_digest(
             status = str(artifact.get("status") or "unknown")
             run_url = str(artifact.get("run_url") or "")
             run_viewer_url = str(artifact.get("run_viewer_url") or "")
+            ready_for_review = bool(artifact.get("ready_for_review"))
             lines.append(f"  - package_status={status}")
+            lines.append(f"    review_ready={'yes' if ready_for_review else 'no'}")
             if run_viewer_url or run_url:
                 lines.append(f"    view_results={run_viewer_url or run_url}")
             for hv in (artifact.get("high_value_files") or [])[:5]:
@@ -1102,7 +1123,8 @@ def main() -> int:
             artifacts_base_url=artifacts_base_url,
             dashboard_base_url=dashboard_base_url,
         )
-        if artifacts:
+        ready_artifacts = [a for a in artifacts if isinstance(a, dict) and bool(a.get("ready_for_review"))]
+        if ready_artifacts:
             ready_items.append(
                 {
                     "video_id": video_id,
@@ -1110,7 +1132,7 @@ def main() -> int:
                     "video_url": str(meta.get("video_url") or ""),
                     "playlist_id": str(meta.get("playlist_id") or ""),
                     "created_at": str(meta.get("created_at") or ""),
-                    "artifacts": artifacts,
+                    "artifacts": ready_artifacts,
                     "ingest_retry_summary": ingest_retry_summary,
                 }
             )
