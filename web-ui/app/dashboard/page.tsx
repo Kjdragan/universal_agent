@@ -137,6 +137,17 @@ function workspaceExplorerHref(path?: string | null): string {
   return `/storage?${params.toString()}`;
 }
 
+function artifactExplorerHref(path?: string | null): string {
+  const normalized = asText(path).replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!normalized) return "";
+  const params = new URLSearchParams({
+    tab: "explorer",
+    scope: "artifacts",
+    path: normalized,
+  });
+  return `/storage?${params.toString()}`;
+}
+
 function RefLine({
   label,
   value,
@@ -203,6 +214,7 @@ export default function DashboardPage() {
   const [dispatchObjective, setDispatchObjective] = useState("");
   const [dispatchPending, setDispatchPending] = useState(false);
   const [dispatchStatus, setDispatchStatus] = useState<string>("");
+  const [tutorialDispatchingId, setTutorialDispatchingId] = useState<string>("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -336,6 +348,37 @@ export default function DashboardPage() {
       }
     },
     [load],
+  );
+
+  const dispatchTutorialToSimone = useCallback(
+    async (notificationId: string, runPath: string) => {
+      const normalizedRunPath = asText(runPath);
+      if (!normalizedRunPath) return;
+      setTutorialDispatchingId(notificationId);
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/dashboard/tutorials/review`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_path: normalizedRunPath }),
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          const detail = asText((payload as Record<string, unknown>).detail) || `Dispatch failed (${res.status})`;
+          throw new Error(detail);
+        }
+        await updateNotificationStatus(
+          notificationId,
+          "acknowledged",
+          "tutorial sent to Simone from notification center",
+        );
+        await load();
+      } catch (error) {
+        console.error("Failed to dispatch tutorial review", error);
+      } finally {
+        setTutorialDispatchingId("");
+      }
+    },
+    [load, updateNotificationStatus],
   );
 
   useEffect(() => {
@@ -1238,16 +1281,60 @@ export default function DashboardPage() {
               No notifications yet.
             </div>
           )}
-          {visibleNotifications.map((item) => (
-            <div key={item.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
+          {visibleNotifications.map((item) => {
+            const metadata = asRecord(item.metadata);
+            const tutorialRunPath = asText(metadata.tutorial_run_path);
+            const reviewRunPath = asText(metadata.review_run_path);
+            const tutorialHref = artifactExplorerHref(tutorialRunPath);
+            const reviewHref = artifactExplorerHref(reviewRunPath);
+            const canDispatchTutorial = Boolean(
+              tutorialRunPath &&
+              item.status === "new" &&
+              item.kind !== "tutorial_review_ready" &&
+              item.kind !== "tutorial_review_failed",
+            );
+            return (
+              <div key={item.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold">{item.title}</p>
                 <span className="text-[11px] uppercase tracking-[0.14em] text-slate-500">{item.status}</span>
               </div>
-              <p className="mt-1 text-sm text-slate-300">{item.message}</p>
+              <p className="mt-1 text-sm text-slate-300">
+                <LinkifiedText text={item.message} />
+              </p>
               <p className="mt-2 text-[11px] text-slate-500">
                 {item.kind} · {item.session_id || "global"} · {item.created_at}
               </p>
+              {(tutorialHref || reviewHref || canDispatchTutorial) && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {tutorialHref && (
+                    <Link
+                      href={tutorialHref}
+                      className="rounded border border-cyan-800/70 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
+                    >
+                      View Tutorial Files
+                    </Link>
+                  )}
+                  {reviewHref && (
+                    <Link
+                      href={reviewHref}
+                      className="rounded border border-violet-800/70 bg-violet-900/20 px-2 py-1 text-[11px] text-violet-200 hover:bg-violet-900/35"
+                    >
+                      View Simone Review
+                    </Link>
+                  )}
+                  {canDispatchTutorial && (
+                    <button
+                      type="button"
+                      className="rounded border border-emerald-800/70 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                      onClick={() => dispatchTutorialToSimone(item.id, tutorialRunPath)}
+                      disabled={tutorialDispatchingId === item.id}
+                    >
+                      {tutorialDispatchingId === item.id ? "Queueing..." : "Send to Simone"}
+                    </button>
+                  )}
+                </div>
+              )}
               {item.kind === "continuity_alert" && (
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
@@ -1297,7 +1384,8 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       </section>
     </div >

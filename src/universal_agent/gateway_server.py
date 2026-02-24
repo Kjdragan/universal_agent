@@ -13,11 +13,13 @@ from collections import deque
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import re
 import shutil
 import sqlite3
 import time
+import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -150,6 +152,23 @@ if env_ws_dir:
 else:
     WORKSPACES_DIR = _default_ws_dir
 
+ARTIFACTS_DIR = resolve_artifacts_dir()
+
+TEXT_EXTENSIONS = (
+    ".txt",
+    ".md",
+    ".log",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".css",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+)
+
 _DEPLOYMENT_PROFILE = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
 if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
     _DEPLOYMENT_PROFILE = "local_workstation"
@@ -179,6 +198,379 @@ def _deployment_profile_defaults() -> dict:
         "remote_access": "local_only_default",
         "notes": "Development workstation defaults prioritize local iteration speed.",
     }
+
+
+def _resolve_path_under_root(root: Path, path: str = "") -> Path:
+    target = root / path if path else root
+    try:
+        target = target.resolve()
+        root_resolved = root.resolve()
+        if target != root_resolved and root_resolved not in target.parents:
+            raise HTTPException(status_code=403, detail="Access denied")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
+    return target
+
+
+def _list_directory_under_root(root: Path, path: str = "") -> dict[str, Any]:
+    target_path = _resolve_path_under_root(root, path)
+    if not target_path.exists():
+        return {"files": [], "path": path, "root": str(root)}
+    if target_path.is_file():
+        return {"files": [], "path": path, "root": str(root), "is_file": True}
+
+    files = []
+    for item in sorted(target_path.iterdir()):
+        try:
+            stat = item.stat()
+            files.append(
+                {
+                    "name": item.name,
+                    "path": str(item.relative_to(root)),
+                    "is_dir": item.is_dir(),
+                    "size": stat.st_size if item.is_file() else None,
+                    "modified": stat.st_mtime,
+                }
+            )
+        except Exception:
+            pass
+    return {"files": files, "path": path, "root": str(root)}
+
+
+def _read_file_from_root(root: Path, file_path: str) -> Response:
+    target_resolved = _resolve_path_under_root(root, file_path)
+    if not target_resolved.exists() or not target_resolved.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    content = target_resolved.read_bytes()
+    filename = target_resolved.name
+    mime, _ = mimetypes.guess_type(str(target_resolved))
+    content_type = mime or "application/octet-stream"
+
+    if filename.endswith(".html"):
+        return Response(content=content, media_type="text/html")
+    if filename.endswith(".json"):
+        try:
+            data = json.loads(content.decode("utf-8"))
+            return Response(content=json.dumps(data, indent=2), media_type="application/json")
+        except Exception:
+            pass
+    if filename.endswith(TEXT_EXTENSIONS):
+        return Response(content=content, media_type="text/plain")
+    return Response(content=content, media_type=content_type)
+
+
+def _safe_slug_component(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    out: list[str] = []
+    prev_sep = False
+    for ch in raw:
+        is_alnum = ("a" <= ch <= "z") or ("0" <= ch <= "9")
+        if is_alnum:
+            out.append(ch)
+            prev_sep = False
+            continue
+        if not prev_sep:
+            out.append("-")
+            prev_sep = True
+    slug = "".join(out).strip("-")
+    return slug or "item"
+
+
+def _storage_explorer_href(*, scope: str, path: str, preview: Optional[str] = None) -> str:
+    normalized_path = str(path or "").strip().replace("\\", "/").strip("/")
+    if not normalized_path:
+        return "/storage?tab=explorer"
+    params: dict[str, str] = {"tab": "explorer", "scope": str(scope or "artifacts"), "path": normalized_path}
+    normalized_preview = str(preview or "").strip().replace("\\", "/").strip("/")
+    if normalized_preview:
+        params["preview"] = normalized_preview
+    return f"/storage?{urllib.parse.urlencode(params)}"
+
+
+def _artifact_rel_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(ARTIFACTS_DIR.resolve()).as_posix()
+    except Exception:
+        return ""
+
+
+def _artifact_api_file_url(rel_path: str) -> str:
+    normalized = str(rel_path or "").strip().strip("/")
+    if not normalized:
+        return ""
+    return f"/api/artifacts/files/{urllib.parse.quote(normalized, safe='/')}"
+
+
+def _tutorial_manifest(run_dir: Path) -> dict[str, Any]:
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists() or not manifest_path.is_file():
+        return {}
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _tutorial_key_files(run_dir: Path, *, max_code_files: int = 4) -> list[dict[str, Any]]:
+    ordered: list[tuple[str, Path]] = []
+    for label, rel in (
+        ("README", "README.md"),
+        ("Concept", "CONCEPT.md"),
+        ("Implementation Guide", "IMPLEMENTATION.md"),
+    ):
+        path = run_dir / rel
+        if path.exists() and path.is_file():
+            ordered.append((label, path))
+
+    impl_dir = run_dir / "implementation"
+    if impl_dir.exists() and impl_dir.is_dir():
+        code: list[Path] = []
+        for pattern in ("*.py", "*.ts", "*.tsx", "*.js", "*.sh", "*.ipynb"):
+            code.extend(impl_dir.glob(pattern))
+        code = [p for p in code if p.is_file()]
+        code.sort(key=lambda p: p.name.lower())
+        for path in code[: max(1, max_code_files)]:
+            ordered.append((f"Code: {path.name}", path))
+
+    files: list[dict[str, Any]] = []
+    for label, path in ordered:
+        rel = _artifact_rel_path(path)
+        files.append(
+            {
+                "label": label,
+                "name": path.name,
+                "path": str(path),
+                "rel_path": rel,
+                "api_url": _artifact_api_file_url(rel),
+                "storage_href": _storage_explorer_href(scope="artifacts", path=rel, preview=rel),
+            }
+        )
+    return files
+
+
+def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
+    root = ARTIFACTS_DIR / "youtube-tutorial-learning"
+    if not root.exists() or not root.is_dir():
+        return []
+
+    runs: list[tuple[float, dict[str, Any]]] = []
+    day_dirs = [d for d in root.iterdir() if d.is_dir()]
+    day_dirs.sort(key=lambda p: p.name, reverse=True)
+    for day_dir in day_dirs:
+        for run_dir in day_dir.iterdir():
+            if not run_dir.is_dir():
+                continue
+            try:
+                mtime = float(run_dir.stat().st_mtime)
+            except Exception:
+                mtime = 0.0
+            manifest = _tutorial_manifest(run_dir)
+            run_rel = _artifact_rel_path(run_dir)
+            if not run_rel:
+                continue
+            files = _tutorial_key_files(run_dir)
+            title = str(manifest.get("title") or "").strip() or run_dir.name
+            video_id = str(manifest.get("video_id") or "").strip()
+            video_url = str(manifest.get("video_url") or "").strip()
+            if not video_url and video_id:
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+            run_item = {
+                "run_path": run_rel,
+                "run_dir": str(run_dir),
+                "run_name": run_dir.name,
+                "created_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+                "status": str(manifest.get("status") or "").strip() or "unknown",
+                "title": title,
+                "video_id": video_id,
+                "video_url": video_url,
+                "channel_id": str(manifest.get("channel_id") or "").strip(),
+                "manifest_path": _artifact_rel_path(run_dir / "manifest.json"),
+                "run_api_url": f"/api/artifacts?path={urllib.parse.quote(run_rel, safe='/')}",
+                "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
+                "files": files,
+            }
+            runs.append((mtime, run_item))
+
+    runs.sort(key=lambda item: item[0], reverse=True)
+    return [item for _, item in runs[: max(1, min(limit, 1000))]]
+
+
+def _remember_tutorial_review_job(job: dict[str, Any]) -> None:
+    job_id = str(job.get("job_id") or "").strip()
+    if not job_id:
+        return
+    _tutorial_review_jobs[job_id] = dict(job)
+    if len(_tutorial_review_jobs) <= _tutorial_review_jobs_max:
+        return
+    ordered = sorted(
+        _tutorial_review_jobs.values(),
+        key=lambda row: float(row.get("queued_at_epoch") or 0.0),
+        reverse=True,
+    )
+    keep = {str(row.get("job_id")) for row in ordered[:_tutorial_review_jobs_max]}
+    for existing in list(_tutorial_review_jobs.keys()):
+        if existing not in keep:
+            _tutorial_review_jobs.pop(existing, None)
+
+
+def _tutorial_review_prompt(
+    *,
+    run: dict[str, Any],
+    review_output_dir: Path,
+    extra_note: str = "",
+) -> str:
+    run_dir = str(run.get("run_dir") or "")
+    video_url = str(run.get("video_url") or "")
+    video_id = str(run.get("video_id") or "")
+    title = str(run.get("title") or run.get("run_name") or "Tutorial").strip()
+    key_files = run.get("files") if isinstance(run.get("files"), list) else []
+    lines = [
+        "Analyze this YouTube tutorial artifact package for immediate project value.",
+        "",
+        f"Tutorial Title: {title}",
+        f"Video URL: {video_url}",
+        f"Video ID: {video_id}",
+        f"Artifact Run Directory: {run_dir}",
+        "",
+        "Key files to inspect first:",
+    ]
+    if key_files:
+        for entry in key_files:
+            if not isinstance(entry, dict):
+                continue
+            label = str(entry.get("label") or entry.get("name") or "file")
+            path = str(entry.get("path") or "")
+            if path:
+                lines.append(f"- {label}: {path}")
+    else:
+        lines.append(f"- {run_dir}")
+
+    if extra_note.strip():
+        lines.extend(["", "Operator note:", extra_note.strip()])
+
+    review_md = review_output_dir / "REVIEW.md"
+    review_json = review_output_dir / "SUMMARY.json"
+    lines.extend(
+        [
+            "",
+            "Deliverables (required):",
+            f"1) Write an actionable markdown review to: {review_md}",
+            f"2) Write a machine-readable summary JSON to: {review_json}",
+            "",
+            "REVIEW.md must include these sections:",
+            "- Executive Summary",
+            "- What Was Built (with concrete file references)",
+            "- Immediate Reuse Opportunities for Universal Agent",
+            "- Skill Candidate Assessment (yes/no, why, rough SKILL.md scope if yes)",
+            "- Recommended Next Actions (prioritized, with effort/risk)",
+            "",
+            "SUMMARY.json schema:",
+            '{ "title": "...", "decision": "adopt_now|prototype|archive", "confidence": 0.0-1.0, '
+            '"skill_candidate": {"recommended": true|false, "name": "...", "why": "..."}, '
+            '"top_actions": [{"action": "...", "effort": "S|M|L", "impact": "low|med|high"}] }',
+            "",
+            "Be concrete, cite exact files, and avoid generic commentary.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+async def _run_tutorial_review_job(
+    *,
+    job_id: str,
+    run: dict[str, Any],
+    review_rel_path: str,
+    note: str = "",
+) -> None:
+    queued = _tutorial_review_jobs.get(job_id, {})
+    try:
+        started = {
+            **queued,
+            "job_id": job_id,
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "review_run_path": review_rel_path,
+        }
+        _remember_tutorial_review_job(started)
+
+        gateway = get_gateway()
+        session_workspace = WORKSPACES_DIR / f"session_tutorial_review_{uuid.uuid4().hex[:10]}"
+        session = await gateway.create_session(
+            user_id="ops_tutorial_review",
+            workspace_dir=str(session_workspace),
+        )
+        running = {
+            **_tutorial_review_jobs.get(job_id, started),
+            "session_id": session.session_id,
+        }
+        _remember_tutorial_review_job(running)
+        review_output_dir = ARTIFACTS_DIR / review_rel_path
+        review_output_dir.mkdir(parents=True, exist_ok=True)
+
+        prompt = _tutorial_review_prompt(
+            run=run,
+            review_output_dir=review_output_dir,
+            extra_note=note,
+        )
+        request = GatewayRequest(
+            user_input=prompt,
+            metadata={
+                "source": "ops",
+                "tutorial_review": True,
+                "tutorial_run_path": str(run.get("run_path") or ""),
+                "tutorial_review_output_path": review_rel_path,
+            },
+        )
+        result = await gateway.run_query(session, request)
+        updated = {
+            **_tutorial_review_jobs.get(job_id, running),
+            "job_id": job_id,
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "session_id": session.session_id,
+            "review_run_path": review_rel_path,
+            "result_preview": str(getattr(result, "response", "") or "")[:400],
+        }
+        _remember_tutorial_review_job(updated)
+        _add_notification(
+            kind="tutorial_review_ready",
+            title="Simone Tutorial Review Ready",
+            message=f"Review completed for: {str(run.get('title') or run.get('run_name') or 'tutorial')}",
+            session_id=session.session_id,
+            severity="info",
+            metadata={
+                "tutorial_run_path": str(run.get("run_path") or ""),
+                "review_run_path": review_rel_path,
+                "review_storage_href": _storage_explorer_href(scope="artifacts", path=review_rel_path),
+                "source": "tutorial_review_worker",
+            },
+        )
+    except Exception as exc:
+        updated = {
+            **_tutorial_review_jobs.get(job_id, queued),
+            "job_id": job_id,
+            "status": "failed",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "error": str(exc),
+            "review_run_path": review_rel_path,
+        }
+        _remember_tutorial_review_job(updated)
+        _add_notification(
+            kind="tutorial_review_failed",
+            title="Simone Tutorial Review Failed",
+            message=f"Review failed for {str(run.get('title') or run.get('run_name') or 'tutorial')}: {exc}",
+            severity="error",
+            requires_action=True,
+            metadata={
+                "tutorial_run_path": str(run.get("run_path") or ""),
+                "review_run_path": review_rel_path,
+                "source": "tutorial_review_worker",
+            },
+        )
 
 # 2. Allowlist Configuration
 ALLOWED_USERS = set()
@@ -455,6 +847,11 @@ class NotificationBulkUpdateRequest(BaseModel):
     limit: int = 200
 
 
+class TutorialReviewDispatchRequest(BaseModel):
+    run_path: str
+    note: Optional[str] = None
+
+
 class SessionPolicyPatchRequest(BaseModel):
     patch: dict = {}
 
@@ -517,6 +914,8 @@ _vp_stale_reconcile_seconds = max(
 _channel_probe_results: dict[str, dict] = {}
 _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
+_tutorial_review_jobs: dict[str, dict[str, Any]] = {}
+_tutorial_review_jobs_max = int(os.getenv("UA_TUTORIAL_REVIEW_JOBS_MAX", "300") or 300)
 _continuity_active_alerts: set[str] = set()
 _continuity_metric_events: deque[dict[str, Any]] = deque(
     maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
@@ -2534,6 +2933,20 @@ def _add_notification(
     return record
 
 
+def _hook_notification_sink(payload: dict[str, Any]) -> None:
+    if not isinstance(payload, dict):
+        return
+    metadata = payload.get("metadata")
+    _add_notification(
+        kind=str(payload.get("kind") or "hook_event"),
+        title=str(payload.get("title") or "Hook Event"),
+        message=str(payload.get("message") or "Hook event"),
+        session_id=str(payload.get("session_id") or "").strip() or None,
+        severity=str(payload.get("severity") or "info"),
+        metadata=metadata if isinstance(metadata, dict) else None,
+    )
+
+
 def _normalize_notification_status(status: str) -> str:
     return str(status or "").strip().lower()
 
@@ -4231,6 +4644,7 @@ async def lifespan(app: FastAPI):
         turn_finalizer=_finalize_hook_turn,
         run_counter_start=_increment_session_active_runs,
         run_counter_finish=_decrement_session_active_runs,
+        notification_sink=_hook_notification_sink,
     )
     logger.info("🪝 Hooks Service Initialized")
 
@@ -4469,6 +4883,20 @@ async def health(response: Response):
     }
 
 
+@app.get("/api/artifacts")
+async def list_artifacts(path: str = ""):
+    """List files under the persistent artifacts root."""
+    payload = _list_directory_under_root(ARTIFACTS_DIR, path)
+    payload["artifacts_root"] = str(ARTIFACTS_DIR)
+    return payload
+
+
+@app.get("/api/artifacts/files/{file_path:path}")
+async def get_artifact_file(file_path: str):
+    """Get file content from the persistent artifacts root."""
+    return _read_file_from_root(ARTIFACTS_DIR, file_path)
+
+
 @app.get("/api/v1/dashboard/metrics/coder-vp")
 async def dashboard_coder_vp_metrics(
     vp_id: str = "vp.coder.primary",
@@ -4693,6 +5121,100 @@ async def dashboard_notification_bulk_update(payload: NotificationBulkUpdateRequ
         "updated": len(updated),
         "status": status_value,
         "notifications": updated,
+    }
+
+
+@app.get("/api/v1/dashboard/tutorials/runs")
+async def dashboard_tutorial_runs(limit: int = 100):
+    clamped_limit = max(1, min(int(limit), 500))
+    return {"runs": _list_tutorial_runs(limit=clamped_limit)}
+
+
+@app.get("/api/v1/dashboard/tutorials/review-jobs")
+async def dashboard_tutorial_review_jobs(limit: int = 50):
+    clamped_limit = max(1, min(int(limit), 500))
+    jobs = sorted(
+        _tutorial_review_jobs.values(),
+        key=lambda row: float(row.get("queued_at_epoch") or 0.0),
+        reverse=True,
+    )
+    return {"jobs": jobs[:clamped_limit]}
+
+
+@app.post("/api/v1/dashboard/tutorials/review")
+async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequest):
+    run_path = str(payload.run_path or "").strip().strip("/")
+    if not run_path:
+        raise HTTPException(status_code=400, detail="run_path is required")
+
+    run_dir = _resolve_path_under_root(ARTIFACTS_DIR, run_path)
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Tutorial run directory not found")
+
+    run_rel = _artifact_rel_path(run_dir)
+    if not run_rel.startswith("youtube-tutorial-learning/"):
+        raise HTTPException(status_code=400, detail="run_path must be under youtube-tutorial-learning/")
+
+    manifest = _tutorial_manifest(run_dir)
+    run_snapshot = {
+        "run_path": run_rel,
+        "run_dir": str(run_dir),
+        "run_name": run_dir.name,
+        "title": str(manifest.get("title") or run_dir.name),
+        "video_id": str(manifest.get("video_id") or ""),
+        "video_url": str(manifest.get("video_url") or ""),
+        "status": str(manifest.get("status") or "unknown"),
+        "files": _tutorial_key_files(run_dir),
+    }
+
+    now = datetime.now(timezone.utc)
+    date_slug = now.strftime("%Y-%m-%d")
+    hhmmss = now.strftime("%H%M%S")
+    base_slug = _safe_slug_component(str(run_snapshot.get("title") or run_dir.name))
+    review_rel = f"youtube-tutorial-reviews/{date_slug}/{base_slug}__{hhmmss}"
+
+    job_id = f"trj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+    job = {
+        "job_id": job_id,
+        "status": "queued",
+        "queued_at": now.isoformat(),
+        "queued_at_epoch": time.time(),
+        "tutorial_run_path": run_rel,
+        "review_run_path": review_rel,
+        "title": run_snapshot.get("title"),
+        "video_url": run_snapshot.get("video_url"),
+    }
+    _remember_tutorial_review_job(job)
+
+    _add_notification(
+        kind="tutorial_review_queued",
+        title="Tutorial Sent To Simone",
+        message=f"Review queued for: {run_snapshot.get('title')}",
+        severity="info",
+        metadata={
+            "job_id": job_id,
+            "tutorial_run_path": run_rel,
+            "review_run_path": review_rel,
+            "tutorial_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
+            "review_storage_href": _storage_explorer_href(scope="artifacts", path=review_rel),
+            "source": "dashboard_tutorial_dispatch",
+        },
+    )
+
+    asyncio.create_task(
+        _run_tutorial_review_job(
+            job_id=job_id,
+            run=run_snapshot,
+            review_rel_path=review_rel,
+            note=str(payload.note or "").strip(),
+        )
+    )
+    return {
+        "queued": True,
+        "job_id": job_id,
+        "tutorial_run_path": run_rel,
+        "review_run_path": review_rel,
+        "review_storage_href": _storage_explorer_href(scope="artifacts", path=review_rel),
     }
 
 

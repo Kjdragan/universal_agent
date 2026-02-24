@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
@@ -102,6 +103,42 @@ def _evaluate_transcript_quality(transcript_text: str, min_chars: int) -> tuple[
     return True, round(score, 4), ""
 
 
+def _parse_proxy_locations(raw: str) -> list[str]:
+    values = [part.strip().lower() for part in (raw or "").split(",") if part.strip()]
+    unique: list[str] = []
+    for value in values:
+        if value not in unique:
+            unique.append(value)
+    return unique
+
+
+def _build_webshare_proxy_config() -> tuple[Optional[Any], str]:
+    username = (os.getenv("PROXY_USERNAME") or "").strip()
+    password = (os.getenv("PROXY_PASSWORD") or "").strip()
+    if not username or not password:
+        return None, "disabled"
+
+    try:
+        from youtube_transcript_api.proxies import WebshareProxyConfig
+    except Exception:
+        return None, "module_unavailable"
+
+    location_raw = (
+        os.getenv("PROXY_FILTER_IP_LOCATIONS")
+        or os.getenv("PROXY_LOCATIONS")
+        or os.getenv("YT_PROXY_FILTER_IP_LOCATIONS")
+        or ""
+    )
+    locations = _parse_proxy_locations(location_raw)
+    kwargs: dict[str, Any] = {
+        "proxy_username": username,
+        "proxy_password": password,
+    }
+    if locations:
+        kwargs["filter_ip_locations"] = locations
+    return WebshareProxyConfig(**kwargs), "webshare"
+
+
 def _run_youtube_transcript_api_extract(video_id: str) -> dict[str, Any]:
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
@@ -115,8 +152,12 @@ def _run_youtube_transcript_api_extract(video_id: str) -> dict[str, Any]:
         }
 
     try:
-        api = YouTubeTranscriptApi()
-        fetched = api.fetch(video_id)
+        proxy_config, proxy_mode = _build_webshare_proxy_config()
+        api_kwargs: dict[str, Any] = {}
+        if proxy_config is not None:
+            api_kwargs["proxy_config"] = proxy_config
+        api = YouTubeTranscriptApi(**api_kwargs)
+        fetched = api.fetch(video_id, languages=["en"])
         lines: list[str] = []
         snippets = getattr(fetched, "snippets", None)
         if snippets is not None:
@@ -140,6 +181,8 @@ def _run_youtube_transcript_api_extract(video_id: str) -> dict[str, Any]:
             "ok": True,
             "transcript_text": transcript_text,
             "source": "youtube_transcript_api",
+            "language": "en",
+            "proxy_mode": proxy_mode,
         }
     except Exception as exc:
         detail = str(exc)

@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
+import select
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from .staging import materialize_markdown_corpus
 from .types import CorpusBundle, DistillRequest, LaneResult
+
+
+def _is_debug_enabled() -> bool:
+    return os.environ.get("RLM_DEBUG", "0") in {"1", "true", "TRUE", "yes", "on"}
 
 
 def _copy_prompts(target_prompts_dir: Path) -> None:
@@ -76,21 +83,65 @@ def run_ua_rom_baseline(request: DistillRequest, bundle: CorpusBundle, run_dir: 
         raise FileNotFoundError(f"Missing baseline runner: {runner_script}")
 
     cmd = [sys.executable, str(runner_script), "--config", str(config_path)]
-    process = subprocess.run(
-        cmd,
-        cwd=str(Path(__file__).resolve().parents[1]),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    child_env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    if _is_debug_enabled():
+        print(f"[RLM DEBUG] ua_rom_baseline launching: {' '.join(cmd)}", flush=True)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            env=child_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        merged_lines: list[str] = []
+        assert proc.stdout is not None
+        started_at = time.time()
+        last_heartbeat = started_at
+        while True:
+            ready, _, _ = select.select([proc.stdout], [], [], 1.0)
+            if ready:
+                line = proc.stdout.readline()
+                if not line and proc.poll() is not None:
+                    break
+                if line:
+                    merged_lines.append(line)
+                    print(f"[RLM BASELINE] {line.rstrip()}", flush=True)
+                    last_heartbeat = time.time()
+            else:
+                if proc.poll() is not None:
+                    break
+                now = time.time()
+                if now - last_heartbeat >= 30:
+                    print(
+                        f"[RLM BASELINE] still running... elapsed_s={now - started_at:.0f}",
+                        flush=True,
+                    )
+                    last_heartbeat = now
+        returncode = proc.wait()
+        stdout_text = "".join(merged_lines)
+        stderr_text = "(RLM_DEBUG=1) stderr merged into stdout.log"
+    else:
+        process = subprocess.run(
+            cmd,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            env=child_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        returncode = process.returncode
+        stdout_text = process.stdout or ""
+        stderr_text = process.stderr or ""
 
-    (lane_dir / "stdout.log").write_text(process.stdout or "", encoding="utf-8")
-    (lane_dir / "stderr.log").write_text(process.stderr or "", encoding="utf-8")
+    (lane_dir / "stdout.log").write_text(stdout_text, encoding="utf-8")
+    (lane_dir / "stderr.log").write_text(stderr_text, encoding="utf-8")
 
-    if process.returncode != 0:
+    if returncode != 0:
         raise RuntimeError(
             "ua_rom_baseline failed "
-            f"(exit={process.returncode}). See {lane_dir / 'stderr.log'}"
+            f"(exit={returncode}). See {lane_dir / 'stderr.log'}"
         )
 
     report_md = lane_output_dir / "report.md"

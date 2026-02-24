@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -9,6 +11,17 @@ from .fast_rlm_adapter import run_fast_rlm_adapter
 from .output_contract import write_contract
 from .types import DistillRequest, DistillResult
 from .ua_rom_baseline import run_ua_rom_baseline
+
+
+def _is_debug_enabled() -> bool:
+    return os.environ.get("RLM_DEBUG", "0") in {"1", "true", "TRUE", "yes", "on"}
+
+
+def _debug(message: str) -> None:
+    if not _is_debug_enabled():
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[RLM DEBUG {stamp}] {message}", flush=True)
 
 
 def _utc_stamp() -> str:
@@ -32,16 +45,35 @@ def _run_lane(request: DistillRequest, run_dir: Path, bundle):
 
 
 def run_distillation(request: DistillRequest) -> DistillResult:
+    start = time.perf_counter()
+    _debug(f"run_distillation started mode={request.mode}")
+
     source_path = resolve_source(request.source, request.workspace, request.task_name)
+    _debug(f"resolved source={source_path}")
+
     bundle = build_corpus_bundle(source_path)
+    _debug(
+        "built corpus "
+        f"docs={len(bundle.documents)} chars={bundle.total_chars} tokens_est={bundle.estimated_tokens}"
+    )
     _ensure_threshold(request, bundle.estimated_tokens)
 
     output_root = Path(request.output_dir).expanduser().resolve()
     run_dir = output_root / f"run_{request.mode}_{_utc_stamp()}"
     run_dir.mkdir(parents=True, exist_ok=True)
+    _debug(f"created run_dir={run_dir}")
 
+    lane_start = time.perf_counter()
     lane_result = _run_lane(request, run_dir, bundle)
+    lane_elapsed = time.perf_counter() - lane_start
+    _debug(f"lane completed mode={request.mode} elapsed_s={lane_elapsed:.2f}")
+
     outputs = write_contract(request, bundle, lane_result, run_dir)
+    total_elapsed = time.perf_counter() - start
+    _debug(
+        "contract written "
+        f"evidence_count={len(lane_result.evidence_items)} total_elapsed_s={total_elapsed:.2f}"
+    )
 
     return DistillResult(
         request=request,
@@ -53,8 +85,17 @@ def run_distillation(request: DistillRequest) -> DistillResult:
 
 
 def compare_lanes(base_request: DistillRequest) -> dict[str, str]:
+    compare_start = time.perf_counter()
+    _debug("compare_lanes started")
+
     source_path = resolve_source(base_request.source, base_request.workspace, base_request.task_name)
+    _debug(f"resolved source={source_path}")
+
     bundle = build_corpus_bundle(source_path)
+    _debug(
+        "built corpus "
+        f"docs={len(bundle.documents)} chars={bundle.total_chars} tokens_est={bundle.estimated_tokens}"
+    )
     _ensure_threshold(base_request, bundle.estimated_tokens)
 
     output_root = Path(base_request.output_dir).expanduser().resolve()
@@ -65,6 +106,8 @@ def compare_lanes(base_request: DistillRequest) -> dict[str, str]:
     lane_errors: dict[str, str] = {}
 
     for mode in ("ua_rom_baseline", "fast_rlm_adapter"):
+        lane_start = time.perf_counter()
+        _debug(f"lane start mode={mode}")
         request = DistillRequest(
             mode=mode,
             topic=base_request.topic,
@@ -80,6 +123,11 @@ def compare_lanes(base_request: DistillRequest) -> dict[str, str]:
         try:
             lane_result = _run_lane(request, run_dir, bundle)
             outputs = write_contract(request, bundle, lane_result, lane_result.lane_dir)
+            lane_elapsed = time.perf_counter() - lane_start
+            _debug(
+                f"lane success mode={mode} elapsed_s={lane_elapsed:.2f} "
+                f"evidence_count={len(lane_result.evidence_items)}"
+            )
             results[mode] = DistillResult(
                 request=request,
                 corpus=bundle,
@@ -88,7 +136,9 @@ def compare_lanes(base_request: DistillRequest) -> dict[str, str]:
                 lane_result=lane_result,
             )
         except Exception as exc:
+            lane_elapsed = time.perf_counter() - lane_start
             lane_errors[mode] = str(exc)
+            _debug(f"lane error mode={mode} elapsed_s={lane_elapsed:.2f} error={exc}")
 
     summary = {
         "source": str(bundle.source_path),
@@ -139,6 +189,12 @@ def compare_lanes(base_request: DistillRequest) -> dict[str, str]:
 
     summary_md = run_dir / "comparison_summary.md"
     summary_md.write_text("\n".join(lines), encoding="utf-8")
+
+    compare_elapsed = time.perf_counter() - compare_start
+    _debug(
+        f"compare_lanes finished elapsed_s={compare_elapsed:.2f} "
+        f"success_lanes={len(results)} failed_lanes={len(lane_errors)}"
+    )
 
     return {
         "comparison_dir": str(run_dir),
