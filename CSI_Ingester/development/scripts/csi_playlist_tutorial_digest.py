@@ -389,6 +389,54 @@ def _find_workspace_session_hints(
     return out
 
 
+def _build_ingest_retry_summary(workspace_root: Path, video_id: str) -> str:
+    if not video_id:
+        return ""
+    if not workspace_root.exists() or not workspace_root.is_dir():
+        return ""
+
+    pattern = f"session_hook_yt_*_{video_id}"
+    sessions: list[tuple[float, Path]] = []
+    for candidate in workspace_root.glob(pattern):
+        if not candidate.is_dir():
+            continue
+        try:
+            mtime = float(candidate.stat().st_mtime)
+        except Exception:
+            mtime = 0.0
+        sessions.append((mtime, candidate))
+    sessions.sort(key=lambda item: item[0], reverse=True)
+
+    for _, session_dir in sessions:
+        pending_path = session_dir / "pending_local_ingest.json"
+        if not pending_path.exists():
+            continue
+        payload = _safe_json(pending_path)
+        if not isinstance(payload, dict):
+            continue
+        status = str(payload.get("status") or "").strip()
+        attempts = payload.get("attempts")
+        attempts_count = len(attempts) if isinstance(attempts, list) else 0
+        max_attempts = int(payload.get("max_attempts") or 0) if str(payload.get("max_attempts") or "").strip() else 0
+        last_result = payload.get("last_result") if isinstance(payload.get("last_result"), dict) else {}
+        error = str(last_result.get("error") or "").strip()
+        failure_class = str(last_result.get("failure_class") or "").strip()
+        if not error:
+            error = "local_ingest_failed"
+        if attempts_count <= 0 and not failure_class and not error:
+            return ""
+        status_label = status or "ingest_issue"
+        tries_label = f"{attempts_count}/{max_attempts}" if max_attempts > 0 else str(attempts_count)
+        out = f"{status_label} tries={tries_label}"
+        if failure_class:
+            out += f" failure_class={failure_class}"
+        if error:
+            out += f" error={error}"
+        return out
+
+    return ""
+
+
 def _find_stalled_workspace_turns(
     *,
     workspace_root: Path,
@@ -466,6 +514,7 @@ def _item_from_row(
     row: sqlite3.Row,
     *,
     artifacts_root: Path,
+    workspace_root: Path,
     artifacts_base_url: str = "",
     dashboard_base_url: str = "",
 ) -> dict[str, Any]:
@@ -487,6 +536,10 @@ def _item_from_row(
         artifacts_base_url=artifacts_base_url,
         dashboard_base_url=dashboard_base_url,
     )
+    ingest_retry_summary = _build_ingest_retry_summary(
+        workspace_root=workspace_root,
+        video_id=video_id,
+    )
     return {
         "video_id": video_id,
         "title": str(subject.get("title") or "(untitled)").strip() or "(untitled)",
@@ -494,6 +547,7 @@ def _item_from_row(
         "playlist_id": str(subject.get("playlist_id") or "").strip(),
         "created_at": str(row["created_at"] or ""),
         "artifacts": artifacts,
+        "ingest_retry_summary": ingest_retry_summary,
     }
 
 
@@ -540,6 +594,9 @@ def _build_digest_from_items(
                         lines.append(f"    {label}: {viewer_url or url}")
         else:
             lines.append("  tutorial_artifacts: pending (no run artifact found yet)")
+            retry_summary = str(item.get("ingest_retry_summary") or "").strip()
+            if retry_summary:
+                lines.append(f"  ingest_retry_summary: {retry_summary}")
 
         emit += 1
 
@@ -579,6 +636,9 @@ def _build_followup_digest(
         if item.get("video_url"):
             lines.append(f"  watch={item['video_url']}")
         artifacts = item.get("artifacts") or []
+        retry_summary = str(item.get("ingest_retry_summary") or "").strip()
+        if retry_summary:
+            lines.append(f"  ingest_retry_summary: {retry_summary}")
         for artifact in artifacts[:2]:
             status = str(artifact.get("status") or "unknown")
             run_url = str(artifact.get("run_url") or "")
@@ -929,6 +989,7 @@ def main() -> int:
         _item_from_row(
             row,
             artifacts_root=artifacts_root,
+            workspace_root=workspace_root,
             artifacts_base_url=artifacts_base_url,
             dashboard_base_url=dashboard_base_url,
         )
@@ -982,6 +1043,7 @@ def main() -> int:
                 "playlist_id": str(item.get("playlist_id") or ""),
                 "created_at": str(item.get("created_at") or ""),
                 "pending_since": _now_iso_utc(),
+                "ingest_retry_summary": str(item.get("ingest_retry_summary") or "").strip(),
             }
 
     backfill_count = max(0, int(args.backfill_pending_count))
@@ -1001,6 +1063,7 @@ def main() -> int:
             item = _item_from_row(
                 row,
                 artifacts_root=artifacts_root,
+                workspace_root=workspace_root,
                 artifacts_base_url=artifacts_base_url,
                 dashboard_base_url=dashboard_base_url,
             )
@@ -1018,6 +1081,7 @@ def main() -> int:
                 "playlist_id": str(item.get("playlist_id") or ""),
                 "created_at": str(item.get("created_at") or ""),
                 "pending_since": _now_iso_utc(),
+                "ingest_retry_summary": str(item.get("ingest_retry_summary") or "").strip(),
             }
             backfilled += 1
     conn.close()
@@ -1026,6 +1090,12 @@ def main() -> int:
     ready_items: list[dict[str, Any]] = []
     remaining_pending: dict[str, dict[str, Any]] = {}
     for video_id, meta in next_pending_by_video.items():
+        ingest_retry_summary = _build_ingest_retry_summary(
+            workspace_root=workspace_root,
+            video_id=video_id,
+        )
+        if not ingest_retry_summary:
+            ingest_retry_summary = str(meta.get("ingest_retry_summary") or "").strip()
         artifacts = _find_tutorial_artifacts(
             artifacts_root=artifacts_root,
             video_id=video_id,
@@ -1041,11 +1111,13 @@ def main() -> int:
                     "playlist_id": str(meta.get("playlist_id") or ""),
                     "created_at": str(meta.get("created_at") or ""),
                     "artifacts": artifacts,
+                    "ingest_retry_summary": ingest_retry_summary,
                 }
             )
         else:
             updated = dict(meta)
             updated["last_checked_at"] = _now_iso_utc()
+            updated["ingest_retry_summary"] = ingest_retry_summary
             remaining_pending[video_id] = updated
 
     print(f"PLAYLIST_TUTORIAL_FOLLOWUP_READY_COUNT={len(ready_items)}")
