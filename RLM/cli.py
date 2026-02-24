@@ -8,9 +8,11 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.append(str(Path(__file__).resolve().parents[1]))
     from RLM.runner import compare_lanes, run_distillation  # type: ignore
+    from RLM.session_replay import stage_session_corpus  # type: ignore
     from RLM.types import DistillRequest  # type: ignore
 else:
     from .runner import compare_lanes, run_distillation
+    from .session_replay import stage_session_corpus
     from .types import DistillRequest
 
 
@@ -57,6 +59,17 @@ def _build_base_parser() -> argparse.ArgumentParser:
 
     compare = sub.add_parser("compare", help="Run both lanes and write comparison summaries")
     add_common_args(compare)
+
+    stage = sub.add_parser(
+        "stage-session",
+        help="Copy a completed AGENT_RUN_WORKSPACES session into RLM/corpora for replay",
+    )
+    stage.add_argument("--session-dir", required=True, help="Absolute path to the source session directory")
+    stage.add_argument(
+        "--target-root",
+        default="RLM/corpora",
+        help="Target root directory where the copied replay corpus will be created",
+    )
 
     return parser
 
@@ -111,6 +124,11 @@ def main() -> None:
             model=args.model,
         )
         payload = compare_lanes(base_request)
+        _print_json({"status": "ok", **payload})
+        return
+
+    if args.command == "stage-session":
+        payload = stage_session_corpus(args.session_dir, args.target_root)
         _print_json({"status": "ok", **payload})
         return
 

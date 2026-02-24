@@ -21,6 +21,7 @@ This directory is an **experimental, manual-only** module for evaluating large-c
   - single file
   - directory
   - UA task folders (e.g. `tasks/<task_name>/filtered_corpus`)
+- Supported source files currently include markdown/text plus JSON (`.md`, `.txt`, `.markdown`, `.json`).
 
 ## Provider compatibility
 
@@ -58,6 +59,17 @@ python RLM/cli.py compare \
   --topic "Your topic" \
   --report-title "Your report title"
 ```
+
+Stage a completed session workspace into `RLM/corpora` for replay experiments:
+
+```bash
+python RLM/cli.py stage-session \
+  --session-dir /absolute/path/to/AGENT_RUN_WORKSPACES/session_xxx \
+  --target-root /absolute/path/to/repo/RLM/corpora
+```
+
+This creates a copied corpus bundle (search results + work products + tasks when present)
+and writes `rlm_session_manifest.json` with document and token stats.
 
 ## Notes
 
