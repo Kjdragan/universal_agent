@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from contextlib import asynccontextmanager
+
+import pytest
+from fastapi.testclient import TestClient
 
 from universal_agent import gateway_server
 
@@ -28,6 +32,24 @@ class _ReconCronStub:
         )
         self._jobs[str(job_id)] = updated
         return updated
+
+
+@pytest.fixture
+def ops_client(tmp_path, monkeypatch):
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(gateway_server, "_gateway", None)
+    monkeypatch.setattr(gateway_server, "_ops_service", None)
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "")
+
+    @asynccontextmanager
+    async def _test_lifespan(app):
+        yield
+
+    monkeypatch.setattr(gateway_server.app.router, "lifespan_context", _test_lifespan)
+    with TestClient(gateway_server.app) as c:
+        yield c
 
 
 def test_reconcile_removes_stale_mapping(monkeypatch, tmp_path):
@@ -86,3 +108,35 @@ def test_reconcile_dry_run_does_not_mutate_store(monkeypatch, tmp_path):
     assert after is not None
     assert after["cron_job_id"] == "missing_job_2"
 
+
+def test_ops_reconcile_route_supports_remove_stale_false(ops_client, monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
+    monkeypatch.setattr(gateway_server, "_cron_service", _ReconCronStub([]))
+    gateway_server._todoist_chron_mapping_upsert(
+        "task_keep_1",
+        {"cron_job_id": "missing_keep", "schedule_text": "tomorrow at 9am"},
+    )
+
+    resp = ops_client.post("/api/v1/ops/reconcile/todoist-chron?dry_run=false&remove_stale=false")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["reconciliation"]["removed"] == 0
+    assert gateway_server._todoist_chron_mapping_get("task_keep_1") is not None
+
+
+def test_ops_reconcile_route_enforces_ops_auth_when_token_set(ops_client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "secret_ops_token")
+    monkeypatch.setattr(gateway_server, "_cron_service", _ReconCronStub([]))
+
+    denied = ops_client.post("/api/v1/ops/reconcile/todoist-chron?dry_run=true")
+    assert denied.status_code == 401
+
+    allowed = ops_client.post(
+        "/api/v1/ops/reconcile/todoist-chron?dry_run=true",
+        headers={"x-ua-ops-token": "secret_ops_token"},
+    )
+    assert allowed.status_code == 200
+    data = allowed.json()
+    assert data["status"] == "ok"
+    assert isinstance(data.get("metrics"), dict)

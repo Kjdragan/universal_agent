@@ -4,8 +4,8 @@ Last updated: 2026-02-25
 
 ## Progress Dot
 
-Current phase: Phase 5 (Daily briefing + guard hardening baseline complete)
-Overall completion: 75%
+Current phase: Phase 5 + optional enhancements
+Overall completion: 90%
 Health: On track
 
 ## Completed This Session
@@ -37,11 +37,15 @@ Health: On track
 17. Added heartbeat guard policy enforcement in code (autonomous enable/disable, actionable capacity cap, system-event cap, one-task-per-cycle shortlist).
 18. Added regression tests for idempotent mapping reuse, briefing link emission, and heartbeat guard policy.
 19. Validation run: targeted gateway + heartbeat/todoist related tests passing.
+20. Enriched heartbeat completion notifications with artifact link extraction (workspaces/artifacts paths).
+21. Enriched daily autonomous briefing with non-cron artifact section and deterministic artifact counts.
+22. Added route-level reconciliation endpoint tests (auth + remove_stale behavior).
+23. Added shared non-chat command input history UX (recent commands, reuse, clear).
 
 ## Next Actions
 
-1. Add richer briefing sections for non-cron autonomous artifacts outside `artifacts/cron/<job_id>`.
-2. Expand tests for end-to-end drift reconciliation behavior with live service wiring.
+1. Extend command history from browser-local to server-side audit trail (optional).
+2. Add optional notification deep-links directly into file preview when available.
 
 ## Risks / Decisions Needed
 

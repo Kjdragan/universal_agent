@@ -44,4 +44,10 @@ Last updated: 2026-02-25
 - [x] Implement deterministic briefing aggregator service
 - [x] Add 07:00 daily Chron job bootstrap/update
 - [x] Write report artifact + notification link
-- [ ] Validate previous-24h coverage and edge cases
+- [x] Validate previous-24h coverage and edge cases
+- [x] Include non-cron autonomous artifact links (heartbeat/workspace outputs)
+
+## Optional Enhancements
+
+- [x] Add route-level reconciliation endpoint tests (`/api/v1/ops/reconcile/todoist-chron`)
+- [x] Add shared command bar recent-history UX (reuse/clear) across non-chat tabs
