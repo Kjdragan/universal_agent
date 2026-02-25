@@ -114,19 +114,6 @@ export default function DashboardChatPage() {
           >
             {loading ? "Refreshing..." : "Refresh Sessions"}
           </button>
-          <button
-            type="button"
-            onClick={() =>
-              openOrFocusChatWindow({
-                role: "writer",
-                newSession: true,
-                focusInput: true,
-              })
-            }
-            className="rounded-md border border-cyan-700 bg-cyan-500/20 px-3 py-1.5 text-sm text-cyan-100 hover:bg-cyan-500/30"
-          >
-            New Session Chat
-          </button>
         </div>
 
         {error && (

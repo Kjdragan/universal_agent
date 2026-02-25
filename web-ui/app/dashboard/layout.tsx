@@ -10,7 +10,6 @@ const NAV_ITEMS: { href: string; label: string; external?: boolean; primary?: bo
   { href: "/", label: "← Back to Main App", primary: true },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/chat", label: "Chat Launch" },
-  { href: "/?new_session=1&focus_input=1", label: "New Session Chat" },
   { href: "/dashboard/sessions", label: "Sessions" },
   { href: "/dashboard/skills", label: "Skills" },
   { href: "/dashboard/calendar", label: "Calendar" },
