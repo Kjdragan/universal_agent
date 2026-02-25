@@ -21,6 +21,7 @@ type SessionSummary = {
   owner?: string;
   memory_mode?: string;
   last_activity?: string;
+  last_modified?: string;
   workspace_dir?: string;
   active_connections?: number;
   active_runs?: number;
