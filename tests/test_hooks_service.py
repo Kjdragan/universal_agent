@@ -1008,3 +1008,92 @@ async def test_recover_interrupted_youtube_sessions_queues_recovery(mock_gateway
     assert "km5fvKPRsJw" in (action.message or "")
     marker = session_dir / ".hook_startup_recovery.json"
     assert marker.exists()
+
+
+def test_validate_youtube_tutorial_artifacts_allows_concept_only_without_implementation(
+    mock_gateway,
+    tmp_path,
+):
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway)
+
+    run_dir = (
+        tmp_path
+        / "youtube-tutorial-learning"
+        / "2026-02-25"
+        / "concept-only-video__010101"
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "README.md").write_text("# Readme\n", encoding="utf-8")
+    (run_dir / "CONCEPT.md").write_text("# Concept\n", encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "video_id": "abc123",
+                "title": "Concept Only",
+                "mode": "explainer_only",
+                "learning_mode": "concept_only",
+                "status": "completed",
+                "artifacts": {
+                    "readme": "README.md",
+                    "concept": "CONCEPT.md",
+                    "implementation_dir": None,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("universal_agent.hooks_service.resolve_artifacts_dir", return_value=tmp_path):
+        result = service._validate_youtube_tutorial_artifacts(
+            video_id="abc123",
+            started_at_epoch=time.time(),
+        )
+
+    assert result["video_id"] == "abc123"
+    assert result["implementation_required"] is False
+    assert result["status"] == "completed"
+
+
+def test_validate_youtube_tutorial_artifacts_requires_implementation_for_code_mode(
+    mock_gateway,
+    tmp_path,
+):
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway)
+
+    run_dir = (
+        tmp_path
+        / "youtube-tutorial-learning"
+        / "2026-02-25"
+        / "code-video__020202"
+    )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "README.md").write_text("# Readme\n", encoding="utf-8")
+    (run_dir / "CONCEPT.md").write_text("# Concept\n", encoding="utf-8")
+    (run_dir / "IMPLEMENTATION.md").write_text("# Impl\n", encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "video_id": "code456",
+                "title": "Code Mode",
+                "mode": "explainer_plus_code",
+                "learning_mode": "concept_plus_implementation",
+                "status": "full",
+                "artifacts": {
+                    "readme": "README.md",
+                    "concept": "CONCEPT.md",
+                    "implementation": "IMPLEMENTATION.md",
+                    "implementation_dir": "implementation/",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("universal_agent.hooks_service.resolve_artifacts_dir", return_value=tmp_path):
+        with pytest.raises(RuntimeError, match="youtube_artifacts_incomplete:implementation/"):
+            service._validate_youtube_tutorial_artifacts(
+                video_id="code456",
+                started_at_epoch=time.time(),
+            )
