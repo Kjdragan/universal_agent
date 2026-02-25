@@ -131,10 +131,8 @@ function workspaceExplorerHref(path?: string | null): string {
   if (!relativePath) return "";
   if (!relativePath.includes("/")) return "";
   const params = new URLSearchParams({
-    tab: "explorer",
     scope: "workspaces",
     path: relativePath,
-    root_source: "local",
   });
   return `/storage?${params.toString()}`;
 }
@@ -143,10 +141,8 @@ function artifactExplorerHref(path?: string | null): string {
   const normalized = asText(path).replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
   if (!normalized) return "";
   const params = new URLSearchParams({
-    tab: "explorer",
     scope: "artifacts",
     path: normalized,
-    root_source: "local",
   });
   return `/storage?${params.toString()}`;
 }
@@ -279,8 +275,8 @@ export default function DashboardPage() {
       setNotifications(
         Array.isArray(notificationsData.notifications)
           ? notificationsData.notifications.filter(
-              (item: DashboardNotification) => item.status !== "dismissed",
-            )
+            (item: DashboardNotification) => item.status !== "dismissed",
+          )
           : [],
       );
       setVpSessions(Array.isArray(vpSessionsData.sessions) ? vpSessionsData.sessions : []);
@@ -1249,105 +1245,105 @@ export default function DashboardPage() {
             );
             return (
               <div key={item.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-semibold">{item.title}</p>
-                <span className="text-[11px] uppercase tracking-[0.14em] text-slate-500">{item.status}</span>
-              </div>
-              <p className="mt-1 text-sm text-slate-300">
-                <LinkifiedText text={item.message} />
-              </p>
-              <p className="mt-2 text-[11px] text-slate-500">
-                {item.kind} · {item.session_id || "global"} · {item.created_at}
-              </p>
-              {(tutorialHref || reviewHref || canDispatchTutorial) && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {tutorialHref && (
-                    <Link
-                      href={tutorialHref}
-                      className="rounded border border-cyan-800/70 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
-                    >
-                      View Tutorial Files
-                    </Link>
-                  )}
-                  {reviewHref && (
-                    <Link
-                      href={reviewHref}
-                      className="rounded border border-violet-800/70 bg-violet-900/20 px-2 py-1 text-[11px] text-violet-200 hover:bg-violet-900/35"
-                    >
-                      View Simone Review
-                    </Link>
-                  )}
-                  {chatHref && (
-                    <a
-                      href={chatHref}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="rounded border border-blue-800/70 bg-blue-900/20 px-2 py-1 text-[11px] text-blue-200 hover:bg-blue-900/35"
-                    >
-                      Open Session
-                    </a>
-                  )}
-                  {canDispatchTutorial && (
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold">{item.title}</p>
+                  <span className="text-[11px] uppercase tracking-[0.14em] text-slate-500">{item.status}</span>
+                </div>
+                <p className="mt-1 text-sm text-slate-300">
+                  <LinkifiedText text={item.message} />
+                </p>
+                <p className="mt-2 text-[11px] text-slate-500">
+                  {item.kind} · {item.session_id || "global"} · {item.created_at}
+                </p>
+                {(tutorialHref || reviewHref || canDispatchTutorial) && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {tutorialHref && (
+                      <Link
+                        href={tutorialHref}
+                        className="rounded border border-cyan-800/70 bg-cyan-900/20 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-900/35"
+                      >
+                        View Tutorial Files
+                      </Link>
+                    )}
+                    {reviewHref && (
+                      <Link
+                        href={reviewHref}
+                        className="rounded border border-violet-800/70 bg-violet-900/20 px-2 py-1 text-[11px] text-violet-200 hover:bg-violet-900/35"
+                      >
+                        View Simone Review
+                      </Link>
+                    )}
+                    {chatHref && (
+                      <a
+                        href={chatHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded border border-blue-800/70 bg-blue-900/20 px-2 py-1 text-[11px] text-blue-200 hover:bg-blue-900/35"
+                      >
+                        Open Session
+                      </a>
+                    )}
+                    {canDispatchTutorial && (
+                      <button
+                        type="button"
+                        className="rounded border border-emerald-800/70 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
+                        onClick={() => dispatchTutorialToSimone(item.id, tutorialRunPath)}
+                        disabled={tutorialDispatchingId === item.id}
+                      >
+                        {tutorialDispatchingId === item.id ? "Queueing..." : "Send to Simone"}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {item.kind === "continuity_alert" && (
+                  <div className="mt-2 flex flex-wrap gap-2">
                     <button
                       type="button"
                       className="rounded border border-emerald-800/70 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
-                      onClick={() => dispatchTutorialToSimone(item.id, tutorialRunPath)}
-                      disabled={tutorialDispatchingId === item.id}
+                      onClick={() => updateNotificationStatus(item.id, "acknowledged", "acknowledged in dashboard")}
+                      disabled={updatingId === item.id}
                     >
-                      {tutorialDispatchingId === item.id ? "Queueing..." : "Send to Simone"}
+                      Acknowledge
                     </button>
-                  )}
-                </div>
-              )}
-              {item.kind === "continuity_alert" && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="rounded border border-emerald-800/70 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-900/35 disabled:opacity-50"
-                    onClick={() => updateNotificationStatus(item.id, "acknowledged", "acknowledged in dashboard")}
-                    disabled={updatingId === item.id}
-                  >
-                    Acknowledge
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded border border-amber-800/70 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
-                    onClick={() => updateNotificationStatus(item.id, "snoozed", "snoozed in dashboard", 30)}
-                    disabled={updatingId === item.id}
-                  >
-                    Snooze 30m
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
-                    onClick={() => updateNotificationStatus(item.id, "dismissed", "dismissed in dashboard")}
-                    disabled={updatingId === item.id}
-                  >
-                    Dismiss
-                  </button>
-                </div>
-              )}
-              {item.kind !== "continuity_alert" && item.status === "new" && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
-                    onClick={() => updateNotificationStatus(item.id, "read", "read in dashboard")}
-                    disabled={updatingId === item.id}
-                  >
-                    Mark Read
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded border border-rose-800/70 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
-                    onClick={() => updateNotificationStatus(item.id, "dismissed", "deleted in dashboard")}
-                    disabled={updatingId === item.id}
-                  >
-                    Delete
-                  </button>
-                </div>
-              )}
-            </div>
+                    <button
+                      type="button"
+                      className="rounded border border-amber-800/70 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-900/35 disabled:opacity-50"
+                      onClick={() => updateNotificationStatus(item.id, "snoozed", "snoozed in dashboard", 30)}
+                      disabled={updatingId === item.id}
+                    >
+                      Snooze 30m
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
+                      onClick={() => updateNotificationStatus(item.id, "dismissed", "dismissed in dashboard")}
+                      disabled={updatingId === item.id}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+                {item.kind !== "continuity_alert" && item.status === "new" && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
+                      onClick={() => updateNotificationStatus(item.id, "read", "read in dashboard")}
+                      disabled={updatingId === item.id}
+                    >
+                      Mark Read
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border border-rose-800/70 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                      onClick={() => updateNotificationStatus(item.id, "dismissed", "deleted in dashboard")}
+                      disabled={updatingId === item.id}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>

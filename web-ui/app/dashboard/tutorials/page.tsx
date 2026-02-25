@@ -180,7 +180,7 @@ export default function DashboardTutorialsPage() {
             const sessionHref = chatSessionHref(asText(latestJob?.session_id));
             const viewHref =
               asText(run.run_storage_href) ||
-              `/storage?tab=explorer&scope=artifacts&root_source=local&path=${encodeURIComponent(runPath)}`;
+              `/storage?scope=artifacts&path=${encodeURIComponent(runPath)}`;
             return (
               <article key={runPath} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">

@@ -1,9 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { StorageRootSource } from "@/types/agent";
+import {
+  Folder,
+  FileText,
+  FileCode,
+  FileJson2,
+  Image as ImageIcon,
+  Terminal,
+  ChevronRight,
+  ArrowUp,
+  Trash2,
+  RefreshCw,
+  Globe,
+} from "lucide-react";
+import { FilePreview } from "./FilePreview";
+import { useFilePreview, detectFileType, type FileType } from "./useFilePreview";
 
 type VpsScope = "workspaces" | "artifacts";
 
@@ -17,7 +29,6 @@ type FileEntry = {
 type ExplorerPanelProps = {
   initialScope?: VpsScope;
   initialPath?: string;
-  initialRootSource?: StorageRootSource;
   initialPreviewPath?: string;
 };
 
@@ -36,71 +47,68 @@ function formatBytes(bytes?: number | null): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-function isMarkdownFilePath(path: string): boolean {
-  return /\.md(?:own)?$/i.test(path.trim());
-}
-
-function isImageFilePath(path: string): boolean {
-  return /\.(png|jpe?g|gif|webp|bmp|svg|avif|ico)$/i.test(path.trim());
-}
-
 function isProtectedRuntimeDbPath(path: string): boolean {
   return /\.(db|db-shm|db-wal)$/i.test(path.trim());
+}
+
+function fileIcon(entry: FileEntry) {
+  if (entry.is_dir) return <Folder className="h-4 w-4 text-cyan-400" />;
+  const ft = detectFileType(entry.name);
+  switch (ft) {
+    case "markdown": return <FileText className="h-4 w-4 text-blue-400" />;
+    case "json": return <FileJson2 className="h-4 w-4 text-yellow-400" />;
+    case "html": return <Globe className="h-4 w-4 text-orange-400" />;
+    case "code": return <FileCode className="h-4 w-4 text-emerald-400" />;
+    case "log": return <Terminal className="h-4 w-4 text-slate-400" />;
+    case "image": return <ImageIcon className="h-4 w-4 text-purple-400" />;
+    default: return <FileText className="h-4 w-4 text-slate-400" />;
+  }
 }
 
 export function ExplorerPanel({
   initialScope = "workspaces",
   initialPath = "",
-  initialRootSource = "local",
   initialPreviewPath = "",
 }: ExplorerPanelProps) {
   const [scope, setScope] = useState<VpsScope>(initialScope);
   const [path, setPath] = useState(initialPath);
-  const [rootSource, setRootSource] = useState<StorageRootSource>(initialRootSource);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [deleting, setDeleting] = useState(false);
-  const [previewTitle, setPreviewTitle] = useState("");
-  const [previewText, setPreviewText] = useState("");
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewIsMarkdown, setPreviewIsMarkdown] = useState(false);
-  const [previewImageUrl, setPreviewImageUrl] = useState("");
-  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
+  const preview = useFilePreview(scope);
 
-  useEffect(() => {
-    setScope(initialScope);
-  }, [initialScope]);
+  useEffect(() => { setScope(initialScope); }, [initialScope]);
+  useEffect(() => { setPath(initialPath); }, [initialPath]);
 
-  useEffect(() => {
-    setPath(initialPath);
-  }, [initialPath]);
+  // ── Breadcrumb segments ──────────────────────────────────────────────
+  const breadcrumbs = useMemo(() => {
+    const segments = path.split("/").filter(Boolean);
+    const crumbs: Array<{ label: string; path: string }> = [
+      { label: scope === "workspaces" ? "Workspaces" : "Artifacts", path: "" },
+    ];
+    let current = "";
+    for (const seg of segments) {
+      current = current ? `${current}/${seg}` : seg;
+      crumbs.push({ label: seg, path: current });
+    }
+    return crumbs;
+  }, [path, scope]);
 
-  useEffect(() => {
-    setRootSource(initialRootSource);
-  }, [initialRootSource]);
-
-  const locationLabel = useMemo(() => (path ? `/${path}` : "/"), [path]);
-  const selectedHasProtectedCandidates = useMemo(
-    () => Array.from(selectedPaths.values()).some((itemPath) => isProtectedRuntimeDbPath(itemPath)),
-    [selectedPaths],
-  );
-
+  // ── Load entries ─────────────────────────────────────────────────────
   const loadEntries = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
       const res = await fetch(
-        `/api/vps/files?scope=${scope}&root_source=${rootSource}&path=${encodeURIComponent(path)}`,
+        `/api/vps/files?scope=${scope}&path=${encodeURIComponent(path)}`,
       );
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data?.detail || `Failed (${res.status})`);
       }
-      // Recover from deep-links where "path" is accidentally a file.
       if (Boolean(data?.is_file) && path) {
         setPath(parentPath(path));
-        setSelectedPaths(new Set());
         return;
       }
       const rows = Array.isArray(data?.files) ? (data.files as FileEntry[]) : [];
@@ -109,339 +117,226 @@ export function ExplorerPanel({
         return a.is_dir ? -1 : 1;
       });
       setEntries(rows);
-      setSelectedPaths((previous) => {
-        const next = new Set<string>();
-        const valid = new Set(rows.map((entry) => entry.path));
-        previous.forEach((value) => {
-          if (valid.has(value)) next.add(value);
-        });
-        return next;
-      });
     } catch (err: any) {
       setEntries([]);
-      setSelectedPaths(new Set());
       setError(err?.message || "Failed to load entries");
     } finally {
       setLoading(false);
     }
-  }, [path, rootSource, scope]);
+  }, [path, scope]);
 
-  const openFileByPath = useCallback(async (filePath: string) => {
-    const normalizedPath = String(filePath || "").trim();
-    if (!normalizedPath) return;
-    const isImage = isImageFilePath(normalizedPath);
-    setPreviewTitle(normalizedPath);
-    setPreviewText("");
-    setPreviewIsMarkdown(isMarkdownFilePath(normalizedPath));
-    setPreviewImageUrl("");
-    setPreviewLoading(true);
-
-    if (isImage) {
-      setPreviewImageUrl(
-        `/api/vps/file?scope=${scope}&root_source=${rootSource}&path=${encodeURIComponent(normalizedPath)}`,
-      );
-      setPreviewLoading(false);
-      return;
-    }
-
-    try {
-      const res = await fetch(
-        `/api/vps/file?scope=${scope}&root_source=${rootSource}&path=${encodeURIComponent(normalizedPath)}`,
-      );
-      const text = await res.text();
-      if (!res.ok) {
-        throw new Error(text || `Failed (${res.status})`);
-      }
-      setPreviewText(text);
-    } catch (err: any) {
-      setPreviewText("");
-      setError(err?.message || "Failed to open file");
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, [rootSource, scope]);
-
-  useEffect(() => {
-    const run = async () => {
-      await loadEntries();
-    };
-    void run();
-  }, [loadEntries]);
+  useEffect(() => { void loadEntries(); }, [loadEntries]);
 
   useEffect(() => {
     const candidate = String(initialPreviewPath || "").trim();
     if (!candidate) return;
     if (parentPath(candidate) !== path) return;
-    void openFileByPath(candidate);
-  }, [initialPreviewPath, openFileByPath, path]);
+    void preview.previewFile(candidate);
+  }, [initialPreviewPath, path]);
 
+  // ── Navigate ─────────────────────────────────────────────────────────
   const openEntry = async (entry: FileEntry) => {
     if (entry.is_dir) {
       setPath(entry.path);
+      preview.clearPreview();
       return;
     }
-    await openFileByPath(entry.path);
+    await preview.previewFile(entry.path);
   };
 
-  const toggleSelected = (entryPath: string, checked: boolean) => {
-    setSelectedPaths((previous) => {
-      const next = new Set(previous);
-      if (checked) next.add(entryPath);
-      else next.delete(entryPath);
-      return next;
-    });
-  };
+  // ── Delete single item ──────────────────────────────────────────────
+  const deleteItem = async (entry: FileEntry) => {
+    const isProtected = isProtectedRuntimeDbPath(entry.path);
+    const label = entry.is_dir ? "directory" : "file";
+    const msg = isProtected
+      ? `Force-delete protected ${label} "${entry.name}"? This cannot be undone.`
+      : `Delete ${label} "${entry.name}"? This cannot be undone.`;
+    if (!window.confirm(msg)) return;
 
-  const selectAllVisible = () => {
-    setSelectedPaths(new Set(entries.map((entry) => entry.path)));
-  };
-
-  const clearSelection = () => {
-    setSelectedPaths(new Set());
-  };
-
-  const previewSelected = () => {
-    if (!selectedPaths.size) return;
-    const selectedFile = entries.find((entry) => selectedPaths.has(entry.path) && !entry.is_dir);
-    if (!selectedFile) return;
-    void openFileByPath(selectedFile.path);
-  };
-
-  const deleteSelected = async (forceProtected = false) => {
-    if (!selectedPaths.size || deleting) return;
-    const targets = Array.from(selectedPaths.values());
-    const confirmMessage = forceProtected
-      ? `Force-delete ${targets.length} selected item(s), including protected DB files? This cannot be undone.`
-      : `Delete ${targets.length} selected item(s)? This cannot be undone.`;
-    if (!window.confirm(confirmMessage)) return;
-
-    setDeleting(true);
+    setDeletingPaths((prev) => new Set(prev).add(entry.path));
     setError("");
     try {
-      const runDelete = async (allowProtected: boolean) => {
-        const res = await fetch("/api/vps/files/delete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scope,
-            root_source: rootSource,
-            paths: targets,
-            allow_protected: allowProtected,
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(data?.detail || `Failed (${res.status})`);
-        }
-        return data;
-      };
-
-      let data = await runDelete(forceProtected);
-      if (!forceProtected) {
-        const protectedBlocked = Array.isArray(data?.errors)
-          ? data.errors.filter((item: any) => item?.code === "protected_requires_override")
-          : [];
-        if (protectedBlocked.length > 0) {
-          const shouldForce = window.confirm(
-            `${protectedBlocked.length} selected path(s) are protected runtime DB files. Retry with force delete?`,
-          );
-          if (shouldForce) {
-            data = await runDelete(true);
-          }
-        }
+      const res = await fetch("/api/vps/files/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope,
+          paths: [entry.path],
+          allow_protected: isProtected,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.detail || `Failed (${res.status})`);
       }
-
-      const deleted = Number(data?.deleted_count || 0);
-      const failed = Number(data?.error_count || 0);
-      if (failed > 0) {
-        setError(`Deleted ${deleted} item(s), ${failed} failed. Retry with force for protected DB files if needed.`);
+      if (preview.title === entry.path || preview.title.startsWith(entry.path + "/")) {
+        preview.clearPreview();
       }
-      clearSelection();
-      setPreviewImageUrl("");
-      setPreviewText("");
-      setPreviewTitle("");
       await loadEntries();
     } catch (err: any) {
-      setError(err?.message || "Failed to delete selected entries");
+      setError(err?.message || "Failed to delete");
     } finally {
-      setDeleting(false);
+      setDeletingPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(entry.path);
+        return next;
+      });
     }
+  };
+
+  // ── Scope switch ─────────────────────────────────────────────────────
+  const switchScope = (newScope: VpsScope) => {
+    setScope(newScope);
+    setPath("");
+    preview.clearPreview();
   };
 
   return (
-    <div className="grid h-full min-h-0 gap-4 xl:grid-cols-2">
-      <section className="flex min-h-0 flex-col rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <h3 className="text-sm font-semibold">Explorer</h3>
-          <div className="ml-auto flex items-center gap-2">
+    <div className="grid h-full min-h-0 grid-cols-1 gap-4 xl:grid-cols-[minmax(320px,2fr)_3fr]">
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* LEFT PANEL — FILE TREE                                        */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      <section className="flex min-h-0 flex-col rounded-xl border border-slate-700/50 bg-slate-900/60 backdrop-blur-sm">
+        {/* ── Header ── */}
+        <div className="flex items-center gap-2 border-b border-slate-700/40 px-4 py-3">
+          <Folder className="h-4 w-4 text-cyan-400" />
+          <h3 className="text-sm font-semibold text-slate-200">Explorer</h3>
+          <div className="ml-auto flex items-center gap-1.5">
+            {(["workspaces", "artifacts"] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => switchScope(s)}
+                className={`rounded-md px-2.5 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors ${scope === s
+                    ? "bg-cyan-500/15 text-cyan-300 ring-1 ring-cyan-500/30"
+                    : "text-slate-400 hover:bg-slate-700/40 hover:text-slate-200"
+                  }`}
+              >
+                {s === "workspaces" ? "Sessions" : "Artifacts"}
+              </button>
+            ))}
             <button
               type="button"
-              onClick={() => setScope("workspaces")}
-              className={`rounded border px-2 py-1 text-xs uppercase tracking-wider ${scope === "workspaces" ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-900 text-slate-300"}`}
+              onClick={() => void loadEntries()}
+              className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-700/40 hover:text-slate-200"
+              title="Refresh"
             >
-              Sessions
-            </button>
-            <button
-              type="button"
-              onClick={() => setScope("artifacts")}
-              className={`rounded border px-2 py-1 text-xs uppercase tracking-wider ${scope === "artifacts" ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-900 text-slate-300"}`}
-            >
-              Artifacts
-            </button>
-            <button
-              type="button"
-              onClick={() => setPath(parentPath(path))}
-              disabled={!path}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-sm text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-40"
-              title="Go up one level"
-              aria-label="Go up one level"
-            >
-              ↑
+              <RefreshCw className="h-3.5 w-3.5" />
             </button>
           </div>
         </div>
 
-        <div className="mb-3 flex items-center gap-2">
-          {(["local", "mirror"] as const).map((option) => (
+        {/* ── Breadcrumbs ── */}
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-slate-700/30 px-4 py-2 text-[12px]">
+          {path && (
             <button
-              key={option}
               type="button"
-              onClick={() => setRootSource(option)}
-              className={`rounded border px-2 py-1 text-[10px] uppercase tracking-wider ${rootSource === option ? "border-cyan-700 bg-cyan-600/20 text-cyan-100" : "border-slate-700 bg-slate-900 text-slate-300"}`}
+              onClick={() => setPath(parentPath(path))}
+              className="mr-1 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-700/40 hover:text-slate-200"
+              title="Go up"
             >
-              {option}
+              <ArrowUp className="h-3.5 w-3.5" />
             </button>
+          )}
+          {breadcrumbs.map((crumb, i) => (
+            <span key={crumb.path + i} className="flex shrink-0 items-center gap-1">
+              {i > 0 && <ChevronRight className="h-3 w-3 text-slate-600" />}
+              <button
+                type="button"
+                onClick={() => setPath(crumb.path)}
+                className={`rounded px-1 py-0.5 transition-colors ${i === breadcrumbs.length - 1
+                    ? "font-medium text-cyan-300"
+                    : "text-slate-400 hover:text-slate-200"
+                  }`}
+              >
+                {crumb.label}
+              </button>
+            </span>
           ))}
-          <span className="ml-auto text-[10px] uppercase tracking-wider text-slate-500">
-            selected: {selectedPaths.size}
-          </span>
         </div>
 
-        <div className="mb-3 rounded border border-slate-700 bg-slate-950 px-2 py-2 text-xs font-mono text-slate-300">
-          {rootSource}/{scope}:{locationLabel}
-        </div>
+        {/* ── Error ── */}
+        {error && (
+          <div className="mx-3 mt-2 rounded-md border border-red-700/50 bg-red-600/10 px-3 py-2 text-[12px] text-red-300">
+            {error}
+          </div>
+        )}
 
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={selectAllVisible}
-            disabled={!entries.length}
-            className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] uppercase tracking-wider text-slate-300 hover:bg-slate-800 disabled:opacity-40"
-          >
-            Select All
-          </button>
-          <button
-            type="button"
-            onClick={clearSelection}
-            disabled={!selectedPaths.size}
-            className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] uppercase tracking-wider text-slate-300 hover:bg-slate-800 disabled:opacity-40"
-          >
-            Clear
-          </button>
-          <button
-            type="button"
-            onClick={previewSelected}
-            disabled={!selectedPaths.size}
-            className="rounded border border-cyan-700 bg-cyan-600/15 px-2 py-1 text-[10px] uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25 disabled:opacity-40"
-          >
-            Preview Selected
-          </button>
-          <button
-            type="button"
-            onClick={() => void deleteSelected(false)}
-            disabled={!selectedPaths.size || deleting}
-            className="rounded border border-red-700 bg-red-600/20 px-2 py-1 text-[10px] uppercase tracking-wider text-red-100 hover:bg-red-600/30 disabled:opacity-40"
-          >
-            {deleting ? "Deleting..." : "Delete Selected"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void deleteSelected(true)}
-            disabled={!selectedPaths.size || deleting || !selectedHasProtectedCandidates}
-            className="rounded border border-amber-700 bg-amber-600/20 px-2 py-1 text-[10px] uppercase tracking-wider text-amber-100 hover:bg-amber-600/30 disabled:opacity-40"
-            title="Required for runtime DB files (.db/.db-shm/.db-wal)"
-          >
-            Force Delete Protected
-          </button>
-        </div>
-
-        {error && <div className="mb-2 text-sm text-red-300">{error}</div>}
-
-        <div className="min-h-0 flex-1">
+        {/* ── File list ── */}
+        <div className="min-h-0 flex-1 overflow-auto">
           {loading ? (
-            <div className="text-sm text-slate-400">Loading...</div>
+            <div className="flex items-center justify-center py-12">
+              <div className="flex items-center gap-3 text-slate-400">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-cyan-500/30 border-t-cyan-500" />
+                <span className="text-sm">Loading...</span>
+              </div>
+            </div>
           ) : !entries.length ? (
-            <div className="text-sm text-slate-400">No files in this directory.</div>
+            <div className="flex items-center justify-center py-12 text-sm text-slate-500">
+              {path ? "Empty directory" : "No files found"}
+            </div>
           ) : (
-            <div className="h-full overflow-auto rounded border border-slate-800">
+            <div className="divide-y divide-slate-700/30">
               {entries.map((entry) => (
                 <div
                   key={`${scope}:${entry.path}`}
-                  className="flex items-center gap-2 border-b border-slate-800 px-3 py-2 text-left text-sm hover:bg-slate-800/60"
+                  className="group flex items-center gap-2 px-4 py-2 transition-colors hover:bg-slate-800/50"
                 >
-                  <input
-                    type="checkbox"
-                    checked={selectedPaths.has(entry.path)}
-                    onChange={(event) => toggleSelected(entry.path, event.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-900 text-cyan-500"
-                    aria-label={`select ${entry.path}`}
-                  />
                   <button
                     type="button"
                     onClick={() => void openEntry(entry)}
-                    className="flex flex-1 items-center gap-2 text-left"
+                    className="flex flex-1 items-center gap-2.5 text-left min-w-0"
                   >
-                    <span className="w-5">{entry.is_dir ? "📁" : "📄"}</span>
-                    <span className="flex-1 truncate font-mono">{entry.name}</span>
-                    <span className="text-[11px] text-slate-500">{entry.is_dir ? "" : formatBytes(entry.size)}</span>
+                    {fileIcon(entry)}
+                    <span className="flex-1 truncate font-mono text-[13px] text-slate-200 group-hover:text-white">
+                      {entry.name}
+                    </span>
+                    {!entry.is_dir && (
+                      <span className="shrink-0 text-[11px] text-slate-500">
+                        {formatBytes(entry.size)}
+                      </span>
+                    )}
                   </button>
-                  {!entry.is_dir && (
-                    <button
-                      type="button"
-                      onClick={() => void openFileByPath(entry.path)}
-                      className="rounded border border-cyan-700/70 bg-cyan-600/15 px-2 py-0.5 text-[10px] uppercase tracking-wider text-cyan-100 hover:bg-cyan-600/25"
-                    >
-                      Preview
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => void deleteItem(entry)}
+                    disabled={deletingPaths.has(entry.path)}
+                    className="shrink-0 rounded-md p-1 text-slate-600 opacity-0 transition-all group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
+                    title={`Delete ${entry.name}`}
+                  >
+                    {deletingPaths.has(entry.path) ? (
+                      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-red-500/30 border-t-red-500" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
+                  </button>
                 </div>
               ))}
             </div>
           )}
         </div>
+
+        {/* ── Footer ── */}
+        <div className="border-t border-slate-700/30 px-4 py-2">
+          <span className="text-[11px] text-slate-500">
+            {entries.length} item{entries.length !== 1 ? "s" : ""}
+          </span>
+        </div>
       </section>
 
-      <section className="flex min-h-0 flex-col rounded-xl border border-slate-800 bg-slate-900/60 p-3">
-        <h3 className="mb-2 text-sm font-semibold">Preview {previewTitle ? `- ${previewTitle}` : ""}</h3>
-        <div className="min-h-0 flex-1">
-          {previewLoading ? (
-            <div className="text-sm text-slate-400">Loading file...</div>
-          ) : previewImageUrl ? (
-            <div className="h-full overflow-auto rounded border border-slate-800 bg-slate-950/80 p-3">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={previewImageUrl}
-                alt={previewTitle || "preview image"}
-                className="max-h-full max-w-full object-contain"
-              />
-            </div>
-          ) : previewText && previewIsMarkdown ? (
-            <div className="h-full overflow-auto rounded border border-slate-800 bg-slate-950/80 p-3 text-[12px] leading-6 text-slate-200">
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                className="prose prose-sm max-w-none prose-invert"
-              >
-                {previewText}
-              </ReactMarkdown>
-            </div>
-          ) : previewText ? (
-            <pre className="h-full overflow-auto rounded border border-slate-800 bg-slate-950/80 p-3 text-[12px] leading-5 text-slate-200">
-              {previewText}
-            </pre>
-          ) : (
-            <div className="text-sm text-slate-400">Select a file to preview.</div>
-          )}
-        </div>
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* RIGHT PANEL — PREVIEW                                         */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      <section className="flex min-h-0 flex-col rounded-xl border border-slate-700/50 bg-slate-900/60 p-4 backdrop-blur-sm">
+        <FilePreview
+          title={preview.title}
+          content={preview.content}
+          fileType={preview.fileType}
+          isLoading={preview.isLoading}
+          imageUrl={preview.imageUrl}
+          error={preview.error}
+          filePath={preview.title}
+        />
       </section>
     </div>
   );

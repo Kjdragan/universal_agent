@@ -360,8 +360,7 @@ export interface SystemPresenceData {
 // Storage UX Types
 // =============================================================================
 
-export type StorageSyncState = "in_sync" | "behind" | "syncing" | "unknown" | "error";
-export type StorageRootSource = "local" | "mirror";
+
 
 export interface StorageSessionItem {
   session_id: string;
@@ -374,9 +373,6 @@ export interface StorageSessionItem {
   size_bytes?: number | null;
   root_path: string;
   run_log_path?: string | null;
-  marker_path?: string | null;
-  marker_exists?: boolean;
-  root_source?: StorageRootSource;
 }
 
 export interface StorageArtifactItem {
@@ -393,11 +389,7 @@ export interface StorageArtifactItem {
 }
 
 export interface StorageOverview {
-  sync_state: StorageSyncState;
   pending_ready_count: number;
-  latest_ready_remote_epoch?: number | null;
-  latest_ready_local_epoch?: number | null;
-  lag_seconds?: number | null;
   latest_sessions: {
     web: StorageSessionItem | null;
     hook: StorageSessionItem | null;
@@ -407,7 +399,4 @@ export interface StorageOverview {
   latest_artifact: StorageArtifactItem | null;
   workspace_root: string;
   artifacts_root: string;
-  root_source?: StorageRootSource;
-  probe_ok: boolean;
-  probe_error?: string | null;
 }
