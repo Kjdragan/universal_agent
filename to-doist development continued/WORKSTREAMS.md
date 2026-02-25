@@ -10,6 +10,7 @@ Last updated: 2026-02-25
 4. Show immediate interpreted action summary/result.
 
 Status: Baseline complete (context now includes route/query/selection/timezone/user-agent snapshot).
+Enhancement: Added local recent-command history with one-click reuse to improve multi-tab command ergonomics.
 
 ## Workstream B: Intent Interpreter and Routing
 
@@ -76,6 +77,7 @@ Status: Guard policy now enforced in runtime (`autonomous_enabled`, actionable c
 - failures/blocks needing user intervention
 
 Status: Deterministic artifact generator complete with report links in notification metadata.
+Enhancement: Added non-cron artifact extraction from heartbeat notifications and included links in the daily briefing report.
 
 ## Workstream F: Observability and Controls
 

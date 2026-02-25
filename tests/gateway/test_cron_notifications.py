@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from universal_agent import gateway_server
 from universal_agent.cron_service import CronService
+from universal_agent.gateway import GatewaySession
 
 
 class _StubGateway:
@@ -139,3 +140,80 @@ def test_emit_cron_event_daily_briefing_includes_report_links(tmp_path: Path, mo
     assert latest["title"] == "Daily Autonomous Briefing Ready"
     assert latest["metadata"]["report_api_url"].startswith("/api/artifacts/files/autonomous-briefings/")
     assert latest["metadata"]["report_relative_path"].endswith("/DAILY_BRIEFING.md")
+
+
+def test_emit_heartbeat_event_records_workspace_artifacts(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path / "workspaces")
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
+    monkeypatch.setattr(gateway_server, "_sessions", {})
+
+    workspace_root = gateway_server.WORKSPACES_DIR
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    session_ws = workspace_root / "session_abc"
+    session_ws.mkdir(parents=True, exist_ok=True)
+    output_file = session_ws / "work_products" / "summary.md"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    output_file.write_text("# output\n", encoding="utf-8")
+
+    session = GatewaySession(
+        session_id="session_abc",
+        user_id="tester",
+        workspace_dir=str(session_ws),
+        metadata={},
+    )
+    gateway_server._sessions[session.session_id] = session
+
+    gateway_server._emit_heartbeat_event(
+        {
+            "type": "heartbeat_completed",
+            "session_id": session.session_id,
+            "timestamp": time.time(),
+            "ok_only": False,
+            "suppressed_reason": None,
+            "sent": True,
+            "artifacts": {
+                "writes": [],
+                "work_products": [str(output_file)],
+                "bash_commands": [],
+            },
+        }
+    )
+
+    latest = gateway_server._notifications[-1]
+    assert latest["kind"] == "autonomous_heartbeat_completed"
+    links = latest["metadata"]["heartbeat_artifacts"]
+    assert isinstance(links, list) and links
+    assert links[0]["scope"] == "workspaces"
+    assert links[0]["relative_path"].endswith("session_abc/work_products/summary.md")
+    assert "scope=workspaces" in links[0]["storage_href"]
+
+
+def test_generate_daily_briefing_includes_non_cron_artifacts_section(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
+
+    gateway_server._add_notification(
+        kind="autonomous_heartbeat_completed",
+        title="Autonomous Heartbeat Activity Completed",
+        message="heartbeat completed independent work",
+        severity="info",
+        metadata={
+            "source": "heartbeat",
+            "heartbeat_artifacts": [
+                {
+                    "scope": "workspaces",
+                    "relative_path": "session_abc/work_products/summary.md",
+                    "storage_href": "/storage?tab=explorer&scope=workspaces&path=session_abc%2Fwork_products%2Fsummary.md",
+                    "api_url": "",
+                }
+            ],
+        },
+    )
+
+    payload = gateway_server._generate_autonomous_daily_briefing_artifact(now_ts=time.time())
+    markdown_path = gateway_server.ARTIFACTS_DIR / payload["markdown"]["relative_path"]
+    markdown = markdown_path.read_text(encoding="utf-8")
+    assert "## Non-Cron Autonomous Artifact Outputs" in markdown
+    assert "scope=workspaces" in markdown
+    assert payload["counts"]["non_cron_artifacts"] == 1

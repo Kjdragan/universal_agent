@@ -2706,6 +2706,7 @@ def _emit_heartbeat_event(payload: dict) -> None:
         ok_only = bool(payload.get("ok_only"))
         if not ok_only:
             session_id = str(payload.get("session_id") or "").strip() or None
+            heartbeat_artifact_links = _heartbeat_artifact_links_from_payload(payload)
             _add_notification(
                 kind="autonomous_heartbeat_completed",
                 title="Autonomous Heartbeat Activity Completed",
@@ -2720,6 +2721,8 @@ def _emit_heartbeat_event(payload: dict) -> None:
                     "sent": bool(payload.get("sent")),
                     "guard_reason": str(payload.get("guard_reason") or ""),
                     "guard": payload.get("guard") if isinstance(payload.get("guard"), dict) else {},
+                    "heartbeat_artifacts": heartbeat_artifact_links,
+                    "heartbeat_artifact_count": len(heartbeat_artifact_links),
                 },
             )
 
@@ -6191,6 +6194,95 @@ def _artifact_links_for_path(path: Path) -> dict[str, str]:
     }
 
 
+def _workspace_rel_path(path: Path) -> str:
+    try:
+        return path.resolve().relative_to(WORKSPACES_DIR.resolve()).as_posix()
+    except Exception:
+        return ""
+
+
+def _workspace_links_for_path(path: Path) -> dict[str, str]:
+    rel = _workspace_rel_path(path)
+    storage_href = _storage_explorer_href(scope="workspaces", path=rel, preview=rel) if rel else ""
+    return {
+        "relative_path": rel,
+        "api_url": "",
+        "storage_href": storage_href,
+    }
+
+
+def _heartbeat_artifact_links_from_payload(
+    payload: dict[str, Any],
+    *,
+    max_files: int = 20,
+) -> list[dict[str, str]]:
+    session_id = str(payload.get("session_id") or "").strip()
+    workspace_dir = _workspace_dir_for_session(session_id)
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return []
+
+    raw_paths: list[str] = []
+    for key in ("writes", "work_products"):
+        values = artifacts.get(key)
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            text = str(value or "").strip()
+            if text:
+                raw_paths.append(text)
+
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, str]] = []
+    for raw in raw_paths:
+        if len(out) >= max(1, max_files):
+            break
+        path_obj = Path(raw)
+        candidate = path_obj if path_obj.is_absolute() else ((workspace_dir / path_obj) if workspace_dir else path_obj)
+        try:
+            resolved = candidate.resolve()
+        except Exception:
+            resolved = candidate
+
+        artifact_rel = _artifact_rel_path(resolved)
+        if artifact_rel:
+            key = ("artifacts", artifact_rel)
+            if key in seen:
+                continue
+            seen.add(key)
+            link = _artifact_links_for_path(resolved)
+            if link.get("relative_path"):
+                out.append(
+                    {
+                        "scope": "artifacts",
+                        "relative_path": str(link.get("relative_path") or ""),
+                        "api_url": str(link.get("api_url") or ""),
+                        "storage_href": str(link.get("storage_href") or ""),
+                        "source_path": raw,
+                    }
+                )
+            continue
+
+        workspace_rel = _workspace_rel_path(resolved)
+        if workspace_rel:
+            key = ("workspaces", workspace_rel)
+            if key in seen:
+                continue
+            seen.add(key)
+            link = _workspace_links_for_path(resolved)
+            if link.get("relative_path"):
+                out.append(
+                    {
+                        "scope": "workspaces",
+                        "relative_path": str(link.get("relative_path") or ""),
+                        "api_url": "",
+                        "storage_href": str(link.get("storage_href") or ""),
+                        "source_path": raw,
+                    }
+                )
+    return out
+
+
 def _autonomous_job_artifact_links(job_id: str, *, max_files: int = 6) -> list[dict[str, str]]:
     clean_job_id = str(job_id or "").strip()
     if not clean_job_id:
@@ -6348,7 +6440,18 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
             "todoist_task_id": str(metadata.get("todoist_task_id") or ""),
             "error": str(metadata.get("error") or ""),
             "system_job": str(metadata.get("system_job") or ""),
+            "report_api_url": str(metadata.get("report_api_url") or ""),
+            "report_storage_href": str(metadata.get("report_storage_href") or ""),
         }
+        heartbeat_artifacts = metadata.get("heartbeat_artifacts")
+        if isinstance(heartbeat_artifacts, list):
+            row["heartbeat_artifacts"] = [
+                dict(link)
+                for link in heartbeat_artifacts
+                if isinstance(link, dict)
+            ][:50]
+        else:
+            row["heartbeat_artifacts"] = []
         if kind == "autonomous_run_completed":
             completed.append(row)
         elif kind == "autonomous_run_failed":
@@ -6382,6 +6485,31 @@ def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = No
     failed = list(rows.get("failed") or [])
     heartbeat_rows = list(rows.get("heartbeat") or [])
     requires_decision = [row for row in failed if row.get("error")]
+    non_cron_artifact_links: list[dict[str, str]] = []
+    seen_artifact_refs: set[tuple[str, str]] = set()
+    for row in heartbeat_rows:
+        raw_links = row.get("heartbeat_artifacts")
+        if not isinstance(raw_links, list):
+            continue
+        for raw in raw_links:
+            if not isinstance(raw, dict):
+                continue
+            scope = str(raw.get("scope") or "").strip() or "workspaces"
+            rel = str(raw.get("relative_path") or "").strip()
+            href = str(raw.get("storage_href") or "").strip() or str(raw.get("api_url") or "").strip()
+            if not rel or not href:
+                continue
+            key = (scope, rel)
+            if key in seen_artifact_refs:
+                continue
+            seen_artifact_refs.add(key)
+            non_cron_artifact_links.append(
+                {
+                    "scope": scope,
+                    "relative_path": rel,
+                    "storage_href": href,
+                }
+            )
 
     day_slug = _autonomous_briefing_day_slug(now_ts)
     out_dir = ARTIFACTS_DIR / "autonomous-briefings" / day_slug
@@ -6464,6 +6592,17 @@ def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = No
         lines.append("- None in the last window.")
     lines.append("")
 
+    lines.append("## Non-Cron Autonomous Artifact Outputs")
+    if non_cron_artifact_links:
+        for link in non_cron_artifact_links:
+            scope = str(link.get("scope") or "workspaces")
+            rel = str(link.get("relative_path") or "")
+            href = str(link.get("storage_href") or "")
+            lines.append(f"- [{scope}: {rel}]({href})")
+    else:
+        lines.append("- None discovered from heartbeat/autonomous workspace outputs.")
+    lines.append("")
+
     markdown = "\n".join(lines).strip() + "\n"
     md_path.write_text(markdown, encoding="utf-8")
 
@@ -6477,10 +6616,12 @@ def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = No
             "failed": len(failed),
             "heartbeat": len(heartbeat_rows),
             "requires_decision": len(requires_decision),
+            "non_cron_artifacts": len(non_cron_artifact_links),
         },
         "completed": completed,
         "failed": failed,
         "heartbeat": heartbeat_rows,
+        "non_cron_artifacts": non_cron_artifact_links,
     }
     json_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
 

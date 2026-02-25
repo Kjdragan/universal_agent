@@ -1608,6 +1608,11 @@ class HeartbeatService:
                     "sent": sent_any,
                     "guard_reason": str((metadata.get("heartbeat_guard") or {}).get("skip_reason") or ""),
                     "guard": metadata.get("heartbeat_guard") if isinstance(metadata.get("heartbeat_guard"), dict) else {},
+                    "artifacts": {
+                        "writes": write_paths[-50:],
+                        "work_products": work_product_paths[-50:],
+                        "bash_commands": bash_commands[-50:],
+                    },
                 }
             )
 

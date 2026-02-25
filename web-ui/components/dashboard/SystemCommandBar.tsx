@@ -1,9 +1,11 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 const API_BASE = "/api/dashboard/gateway";
+const COMMAND_HISTORY_KEY = "ua.system_command_history.v1";
+const COMMAND_HISTORY_MAX = 12;
 
 type SystemCommandResponse = {
   ok?: boolean;
@@ -13,6 +15,19 @@ type SystemCommandResponse = {
   todoist?: Record<string, unknown> | null;
   cron?: Record<string, unknown> | null;
   dry_run?: boolean;
+};
+
+type CommandHistoryEntry = {
+  id: string;
+  at: string;
+  source_page: string;
+  text: string;
+  ok: boolean;
+  intent?: string;
+  lane?: string;
+  todoist_task_id?: string;
+  cron_job_id?: string;
+  error?: string;
 };
 
 function asText(value: unknown): string {
@@ -29,6 +44,7 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<SystemCommandResponse | null>(null);
+  const [history, setHistory] = useState<CommandHistoryEntry[]>([]);
 
   const placeholder = useMemo(() => {
     if (sourcePage.includes("/tutorials")) {
@@ -65,6 +81,37 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
     };
   }, [searchParams, sourcePage]);
 
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      const raw = window.localStorage.getItem(COMMAND_HISTORY_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      const rows = parsed
+        .filter((row) => row && typeof row === "object")
+        .slice(0, COMMAND_HISTORY_MAX) as CommandHistoryEntry[];
+      setHistory(rows);
+    } catch {
+      // Ignore local history parse errors.
+    }
+  }, []);
+
+  const persistHistory = (next: CommandHistoryEntry[]) => {
+    setHistory(next);
+    try {
+      if (typeof window === "undefined") return;
+      window.localStorage.setItem(COMMAND_HISTORY_KEY, JSON.stringify(next.slice(0, COMMAND_HISTORY_MAX)));
+    } catch {
+      // Ignore persistence failures (private mode/storage quota).
+    }
+  };
+
+  const appendHistory = (entry: CommandHistoryEntry) => {
+    const next = [entry, ...history.filter((row) => row.id !== entry.id)].slice(0, COMMAND_HISTORY_MAX);
+    persistHistory(next);
+  };
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const value = asText(text);
@@ -86,10 +133,38 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
       if (!response.ok) {
         throw new Error(asText(payload.detail) || `Command failed (${response.status})`);
       }
+      const payloadTodoistTask =
+        payload.todoist && typeof payload.todoist === "object" && (payload.todoist as Record<string, unknown>).task
+          ? ((payload.todoist as Record<string, unknown>).task as Record<string, unknown>)
+          : undefined;
+      const payloadCronJob =
+        payload.cron && typeof payload.cron === "object" && (payload.cron as Record<string, unknown>).job
+          ? ((payload.cron as Record<string, unknown>).job as Record<string, unknown>)
+          : undefined;
       setResult(payload);
+      appendHistory({
+        id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+        at: new Date().toISOString(),
+        source_page: sourcePage,
+        text: value,
+        ok: true,
+        lane: asText(payload.lane),
+        intent: asText(payload.intent),
+        todoist_task_id: asText(payloadTodoistTask?.id),
+        cron_job_id: asText(payloadCronJob?.job_id),
+      });
       setText("");
     } catch (err: any) {
-      setError(err?.message || "Failed to submit system command.");
+      const errMsg = err?.message || "Failed to submit system command.";
+      setError(errMsg);
+      appendHistory({
+        id: `${Date.now()}_${Math.random().toString(16).slice(2, 8)}`,
+        at: new Date().toISOString(),
+        source_page: sourcePage,
+        text: value,
+        ok: false,
+        error: errMsg,
+      });
       setResult(null);
     } finally {
       setSubmitting(false);
@@ -117,12 +192,19 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
     : {};
   const todoistTaskId = asText(todoistTask.id);
   const cronJobId = asText(cronJob.job_id);
+  const historyRows = history.slice(0, 5);
 
   return (
     <section className="mb-4 rounded-xl border border-slate-800 bg-slate-900/70 p-3">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">System Command</h2>
         <span className="text-[11px] text-slate-500">Natural language · non-chat lane</span>
+      </div>
+      <div className="mb-2 text-[11px] text-slate-500">
+        route={sourcePage}
+        {Object.keys(sourceContext.selection || {}).length > 0
+          ? ` · selection_keys=${Object.keys(sourceContext.selection || {}).join(",")}`
+          : ""}
       </div>
       <form onSubmit={handleSubmit} className="flex flex-col gap-2">
         <textarea
@@ -158,6 +240,41 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
           {cronJobId && <div>cron_job_id={cronJobId}</div>}
         </div>
       )}
+      <div className="mt-3 rounded border border-slate-800 bg-slate-950/30 p-2">
+        <div className="mb-1 flex items-center justify-between">
+          <span className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Recent Commands</span>
+          <button
+            type="button"
+            onClick={() => persistHistory([])}
+            className="text-[11px] text-slate-500 hover:text-slate-300"
+          >
+            Clear
+          </button>
+        </div>
+        {historyRows.length === 0 && (
+          <div className="text-xs text-slate-500">No command history yet on this browser.</div>
+        )}
+        <div className="space-y-1">
+          {historyRows.map((row) => (
+            <div key={row.id} className="rounded border border-slate-800/80 bg-slate-900/50 px-2 py-1 text-xs text-slate-300">
+              <div className="flex items-center justify-between gap-2">
+                <span className={row.ok ? "text-emerald-300" : "text-rose-300"}>
+                  {row.ok ? "ok" : "error"} · {row.intent || "system_command"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setText(row.text)}
+                  className="text-[11px] text-cyan-300 hover:text-cyan-100"
+                >
+                  Reuse
+                </button>
+              </div>
+              <div className="truncate text-slate-200">{row.text}</div>
+              {!row.ok && row.error && <div className="truncate text-rose-300">{row.error}</div>}
+            </div>
+          ))}
+        </div>
+      </div>
     </section>
   );
 }
