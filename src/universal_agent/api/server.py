@@ -76,7 +76,7 @@ TEXT_EXTENSIONS = (
     ".csv",
 )
 _STORAGE_ROOT_SOURCES = {"local", "mirror"}
-_STORAGE_SCOPES = {"workspaces", "artifacts"}
+_STORAGE_SCOPES = {"workspaces", "artifacts", "vps"}
 _SESSION_PREFIXES = ("session_", "session-hook_", "session_hook_", "tg_", "api_", "vp_")
 _PROTECTED_STORAGE_DELETE_SUFFIXES = (".db", ".db-shm", ".db-wal")
 
@@ -481,7 +481,7 @@ class VpsStorageDeleteRequest(BaseModel):
 def _normalize_storage_scope(raw_scope: str) -> str:
     scope_clean = (raw_scope or "").strip().lower()
     if scope_clean not in _STORAGE_SCOPES:
-        raise HTTPException(status_code=400, detail="scope must be 'workspaces' or 'artifacts'")
+        raise HTTPException(status_code=400, detail="scope must be 'workspaces', 'artifacts', or 'vps'")
     return scope_clean
 
 
@@ -495,6 +495,8 @@ def _normalize_storage_root_source(raw_root_source: str) -> str:
 def _storage_root(scope: str, root_source: str) -> Path:
     scope_clean = _normalize_storage_scope(scope)
     source_clean = _normalize_storage_root_source(root_source)
+    if scope_clean == "vps":
+        return BASE_DIR
     if scope_clean == "workspaces":
         return WORKSPACES_DIR if source_clean == "local" else VPS_WORKSPACES_MIRROR_DIR
     return ARTIFACTS_DIR if source_clean == "local" else VPS_ARTIFACTS_MIRROR_DIR
