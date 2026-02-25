@@ -5,10 +5,11 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { FolderOpen, ArrowLeft } from "lucide-react";
 import { ExplorerPanel } from "@/components/storage/ExplorerPanel";
 
-type ExplorerScope = "workspaces" | "artifacts";
+type ExplorerScope = "workspaces" | "artifacts" | "vps";
 
 function normalizeScope(value: string | null): ExplorerScope {
   if (value === "artifacts") return "artifacts";
+  if (value === "vps") return "vps";
   return "workspaces";
 }
 

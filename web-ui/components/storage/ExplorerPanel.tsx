@@ -17,7 +17,7 @@ import {
 import { FilePreview } from "./FilePreview";
 import { useFilePreview, detectFileType, type FileType } from "./useFilePreview";
 
-type VpsScope = "workspaces" | "artifacts";
+type VpsScope = "workspaces" | "artifacts" | "vps";
 
 type FileEntry = {
   name: string;
@@ -85,7 +85,7 @@ export function ExplorerPanel({
   const breadcrumbs = useMemo(() => {
     const segments = path.split("/").filter(Boolean);
     const crumbs: Array<{ label: string; path: string }> = [
-      { label: scope === "workspaces" ? "Workspaces" : "Artifacts", path: "" },
+      { label: scope === "workspaces" ? "Workspaces" : scope === "artifacts" ? "Artifacts" : "VPS Root", path: "" },
     ];
     let current = "";
     for (const seg of segments) {
@@ -202,7 +202,7 @@ export function ExplorerPanel({
           <Folder className="h-4 w-4 text-cyan-400" />
           <h3 className="text-sm font-semibold text-slate-200">Explorer</h3>
           <div className="ml-auto flex items-center gap-1.5">
-            {(["workspaces", "artifacts"] as const).map((s) => (
+            {(["workspaces", "artifacts", "vps"] as const).map((s) => (
               <button
                 key={s}
                 type="button"
@@ -212,7 +212,7 @@ export function ExplorerPanel({
                   : "text-slate-400 hover:bg-slate-700/40 hover:text-slate-200"
                   }`}
               >
-                {s === "workspaces" ? "Sessions" : "Artifacts"}
+                {s === "workspaces" ? "Sessions" : s === "artifacts" ? "Artifacts" : "VPS"}
               </button>
             ))}
             <button
