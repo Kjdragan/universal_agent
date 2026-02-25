@@ -31,6 +31,7 @@ type TutorialReviewJob = {
   title?: string;
   tutorial_run_path?: string;
   review_run_path?: string;
+  session_id?: string;
 };
 
 function asText(value: unknown): string {
@@ -48,6 +49,17 @@ function formatDate(value?: string): string {
   const parsed = value ? new Date(value) : null;
   if (!parsed || Number.isNaN(parsed.getTime())) return value || "--";
   return parsed.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+function chatSessionHref(sessionId?: string): string {
+  const sid = asText(sessionId);
+  if (!sid) return "";
+  const params = new URLSearchParams({
+    session_id: sid,
+    attach: "tail",
+    role: "viewer",
+  });
+  return `/?${params.toString()}`;
 }
 
 export default function DashboardTutorialsPage() {
@@ -164,9 +176,11 @@ export default function DashboardTutorialsPage() {
             const runPath = asText(run.run_path);
             const files = Array.isArray(run.files) ? run.files : [];
             const latestJob = latestJobByRun.get(runPath);
+            const latestJobStatus = asText(latestJob?.status).toLowerCase();
+            const sessionHref = chatSessionHref(asText(latestJob?.session_id));
             const viewHref =
               asText(run.run_storage_href) ||
-              `/storage?tab=explorer&scope=artifacts&path=${encodeURIComponent(runPath)}`;
+              `/storage?tab=explorer&scope=artifacts&root_source=local&path=${encodeURIComponent(runPath)}`;
             return (
               <article key={runPath} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
@@ -193,6 +207,16 @@ export default function DashboardTutorialsPage() {
                     >
                       View Results
                     </Link>
+                    {sessionHref && (
+                      <a
+                        href={sessionHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rounded border border-violet-700/60 bg-violet-900/20 px-2 py-1 text-[11px] text-violet-100 hover:bg-violet-900/35"
+                      >
+                        {latestJobStatus === "running" ? "Watch Live" : "Rehydrate Session"}
+                      </a>
+                    )}
                     <button
                       type="button"
                       onClick={() => void dispatchToSimone(runPath)}

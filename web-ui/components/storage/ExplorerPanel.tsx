@@ -97,6 +97,12 @@ export function ExplorerPanel({
       if (!res.ok) {
         throw new Error(data?.detail || `Failed (${res.status})`);
       }
+      // Recover from deep-links where "path" is accidentally a file.
+      if (Boolean(data?.is_file) && path) {
+        setPath(parentPath(path));
+        setSelectedPaths(new Set());
+        return;
+      }
       const rows = Array.isArray(data?.files) ? (data.files as FileEntry[]) : [];
       rows.sort((a, b) => {
         if (a.is_dir === b.is_dir) return a.name.localeCompare(b.name);

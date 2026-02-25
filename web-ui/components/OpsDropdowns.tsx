@@ -857,17 +857,28 @@ export function SessionsSection({
     }
   };
 
-  const filteredSessions = useMemo(() => sessions.filter((s) => {
-    const statusMatch = statusFilter === "all" || (s.status || "").toLowerCase() === statusFilter;
-    const source = (s.source || s.channel || "local").toLowerCase();
-    const sourceMatch = sourceFilter === "all" || source === sourceFilter;
-    const memoryMode = (s.memory_mode || "direct_only").toLowerCase();
-    const filterValue = memoryModeFilter === "all_scope" ? "all" : memoryModeFilter;
-    const memoryModeMatch = memoryModeFilter === "all" || memoryMode === filterValue;
-    const owner = (s.owner || "").toLowerCase();
-    const ownerMatch = !ownerFilter.trim() || owner === ownerFilter.trim().toLowerCase();
-    return statusMatch && sourceMatch && memoryModeMatch && ownerMatch;
-  }), [sessions, statusFilter, sourceFilter, memoryModeFilter, ownerFilter]);
+  const filteredSessions = useMemo(() => {
+    const filtered = sessions.filter((s) => {
+      const statusMatch = statusFilter === "all" || (s.status || "").toLowerCase() === statusFilter;
+      const source = (s.source || s.channel || "local").toLowerCase();
+      const sourceMatch = sourceFilter === "all" || source === sourceFilter;
+      const memoryMode = (s.memory_mode || "direct_only").toLowerCase();
+      const filterValue = memoryModeFilter === "all_scope" ? "all" : memoryModeFilter;
+      const memoryModeMatch = memoryModeFilter === "all" || memoryMode === filterValue;
+      const owner = (s.owner || "").toLowerCase();
+      const ownerMatch = !ownerFilter.trim() || owner === ownerFilter.trim().toLowerCase();
+      return statusMatch && sourceMatch && memoryModeMatch && ownerMatch;
+    });
+
+    filtered.sort((a, b) => {
+      const aTs = Date.parse(a.last_activity || a.last_modified || "") || 0;
+      const bTs = Date.parse(b.last_activity || b.last_modified || "") || 0;
+      if (aTs !== bTs) return bTs - aTs;
+      return String(b.session_id || "").localeCompare(String(a.session_id || ""));
+    });
+
+    return filtered;
+  }, [sessions, statusFilter, sourceFilter, memoryModeFilter, ownerFilter]);
   const runningCount = useMemo(
     () =>
       sessions.filter((s) => {

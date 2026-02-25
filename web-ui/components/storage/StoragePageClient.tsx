@@ -46,12 +46,7 @@ function normalizeScope(value: string | null): ExplorerScope {
 }
 
 function defaultRootSource(): RootSourceFilter {
-  if (typeof window === "undefined") return "local";
-  const host = (window.location.hostname || "").toLowerCase();
-  if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
-    return "local";
-  }
-  return "mirror";
+  return "local";
 }
 
 function normalizeRootSource(value: string | null, fallback: RootSourceFilter): RootSourceFilter {
@@ -350,7 +345,7 @@ export function StoragePageClient() {
             <span className="text-xs text-slate-400">
               {loadingOverview
                 ? "Loading sync overview..."
-                : `Pending ready runs: ${overview?.pending_ready_count || 0}${typeof overview?.lag_seconds === "number" ? ` • Lag: ${Math.round(overview.lag_seconds)}s` : ""}${overview?.probe_error ? ` • Probe: ${overview.probe_error}` : ""}`}
+                : `Pending ready runs: ${overview?.pending_ready_count || 0}${typeof overview?.lag_seconds === "number" ? ` • Lag: ${Math.round(overview.lag_seconds)}s` : ""}${rootSource === "mirror" && overview?.probe_error ? ` • Probe: ${overview.probe_error}` : ""}`}
             </span>
             <span className="text-xs text-slate-400">
               Root: {rootSource} {overview?.workspace_root ? `• ${overview.workspace_root}` : ""}
