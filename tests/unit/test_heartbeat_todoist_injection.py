@@ -251,3 +251,29 @@ async def test_heartbeat_does_not_skip_when_only_brainstorm_candidates_exist(mon
     )
 
     assert gateway.execute_calls == 1
+
+
+def test_heartbeat_guard_policy_enforces_actionable_capacity(monkeypatch):
+    import universal_agent.heartbeat_service as hb
+
+    monkeypatch.setenv("UA_HEARTBEAT_MAX_ACTIONABLE", "1")
+    policy = hb._heartbeat_guard_policy(
+        actionable_count=3,
+        brainstorm_candidate_count=0,
+        system_event_count=0,
+        has_exec_completion=False,
+    )
+    assert policy["skip_reason"] == "actionable_over_capacity"
+
+
+def test_heartbeat_guard_policy_can_disable_proactive_runs(monkeypatch):
+    import universal_agent.heartbeat_service as hb
+
+    monkeypatch.setenv("UA_HEARTBEAT_AUTONOMOUS_ENABLED", "0")
+    policy = hb._heartbeat_guard_policy(
+        actionable_count=1,
+        brainstorm_candidate_count=0,
+        system_event_count=0,
+        has_exec_completion=False,
+    )
+    assert policy["skip_reason"] == "autonomous_disabled"

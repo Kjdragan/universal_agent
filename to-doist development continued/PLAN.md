@@ -1,8 +1,8 @@
 # Unified Todoist + System Command UI Implementation Plan
 
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 Owner: UA platform
-Status: Planning active
+Status: Phase implementation in progress (through Phase 5 baseline)
 
 ## 1) Objectives
 
@@ -12,6 +12,7 @@ Status: Planning active
 4. Let heartbeat proactively execute eligible Todoist work when idle.
 5. Produce a daily 7:00 AM briefing summarizing autonomous work completed without direct user prompting.
 6. Emit UI notifications whenever Simone/UA completes an independent task.
+7. Support multiple proactive drivers: user-issued system commands, Todoist due tasks, Chron schedules, and heartbeat opportunistic execution.
 
 ## 2) UX and Routing Contract
 
@@ -47,8 +48,14 @@ Status: Planning active
 - Every heartbeat tick checks idle state + Todoist backlog.
 - Picks one allowed task when safe and capacity exists.
 - Executes autonomously and writes status/results back to Todoist + notifications.
+- Heartbeat cadence remains independent of Todoist due-times. Heartbeat is a proactive evaluator, not a replacement scheduler.
 
-5. Notification/reporting:
+5. Scheduling model split (explicit):
+- Todoist scheduling: user/task-specific due intent (`run at 2am`, `in 1h`, recurring reminders).
+- Chron scheduling: execution engine for concrete run windows and recurring jobs.
+- Heartbeat scheduling: periodic health/proactivity cycle (e.g., every 30 minutes) that may opportunistically execute eligible Todoist work when no higher-priority activity is active.
+
+6. Notification/reporting:
 - Independent completion => dashboard notification with artifact links.
 - 7:00 AM daily autonomous briefing from prior 24h activity.
 
@@ -140,4 +147,3 @@ Acceptance:
 1. Voice transcription implementation (handled by external service).
 2. Fully unified single input across chat + system without lane safeguards.
 3. Advanced calendar UI forms.
-

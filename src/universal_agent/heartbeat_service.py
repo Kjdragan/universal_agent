@@ -58,6 +58,21 @@ DEFAULT_FOREGROUND_COOLDOWN_SECONDS = max(
     0,
     int(os.getenv("UA_HEARTBEAT_FOREGROUND_COOLDOWN_SECONDS", "1800") or 1800),
 )
+DEFAULT_HEARTBEAT_AUTONOMOUS_ENABLED = (
+    str(os.getenv("UA_HEARTBEAT_AUTONOMOUS_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"}
+)
+DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE = max(
+    1,
+    int(os.getenv("UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE", "1") or 1),
+)
+DEFAULT_HEARTBEAT_MAX_ACTIONABLE = max(
+    1,
+    int(os.getenv("UA_HEARTBEAT_MAX_ACTIONABLE", "50") or 50),
+)
+DEFAULT_HEARTBEAT_MAX_SYSTEM_EVENTS = max(
+    1,
+    int(os.getenv("UA_HEARTBEAT_MAX_SYSTEM_EVENTS", "25") or 25),
+)
 
 # Specialized prompt for exec completion events (Clawdbot parity)
 EXEC_EVENT_PROMPT = (
@@ -334,6 +349,62 @@ def _resolve_exec_timeout_seconds() -> int:
         )
         return MIN_HEARTBEAT_EXEC_TIMEOUT
     return timeout
+
+
+def _heartbeat_guard_policy(
+    *,
+    actionable_count: Optional[int],
+    brainstorm_candidate_count: int,
+    system_event_count: int,
+    has_exec_completion: bool,
+) -> dict[str, object]:
+    autonomous_enabled = _parse_bool(
+        os.getenv("UA_HEARTBEAT_AUTONOMOUS_ENABLED"),
+        default=DEFAULT_HEARTBEAT_AUTONOMOUS_ENABLED,
+    )
+    max_actionable = max(
+        1,
+        _parse_int(os.getenv("UA_HEARTBEAT_MAX_ACTIONABLE"), DEFAULT_HEARTBEAT_MAX_ACTIONABLE),
+    )
+    max_system_events = max(
+        1,
+        _parse_int(os.getenv("UA_HEARTBEAT_MAX_SYSTEM_EVENTS"), DEFAULT_HEARTBEAT_MAX_SYSTEM_EVENTS),
+    )
+    max_proactive_per_cycle = max(
+        1,
+        _parse_int(
+            os.getenv("UA_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE"),
+            DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE,
+        ),
+    )
+    actionable = int(actionable_count or 0)
+
+    skip_reason: Optional[str] = None
+    if actionable_count is not None and actionable > max_actionable:
+        skip_reason = "actionable_over_capacity"
+    elif (
+        not autonomous_enabled
+        and not has_exec_completion
+        and system_event_count <= 0
+        and (actionable > 0 or brainstorm_candidate_count > 0)
+    ):
+        skip_reason = "autonomous_disabled"
+    elif (
+        actionable_count is not None
+        and actionable <= 0
+        and brainstorm_candidate_count <= 0
+        and system_event_count <= 0
+        and not has_exec_completion
+    ):
+        skip_reason = "no_actionable_work"
+
+    return {
+        "autonomous_enabled": autonomous_enabled,
+        "max_actionable": max_actionable,
+        "max_system_events": max_system_events,
+        "max_proactive_per_cycle": max_proactive_per_cycle,
+        "skip_reason": skip_reason,
+    }
 
 
 def _coerce_bool(value: Optional[object], default: Optional[bool] = None) -> Optional[bool]:
@@ -1097,6 +1168,14 @@ class HeartbeatService:
 
             todoist_actionable_count: Optional[int] = None
             todoist_brainstorm_candidate_count: Optional[int] = None
+            guard_policy = _heartbeat_guard_policy(
+                actionable_count=None,
+                brainstorm_candidate_count=0,
+                system_event_count=len(system_events),
+                has_exec_completion=has_exec_completion,
+            )
+            max_proactive_per_cycle = int(guard_policy.get("max_proactive_per_cycle") or 1)
+            max_system_events = int(guard_policy.get("max_system_events") or 1)
 
             # Deterministic Todoist pre-step: inject actionable summary and/or
             # brainstorm candidates when present.
@@ -1109,24 +1188,38 @@ class HeartbeatService:
                 todoist_actionable_count = actionable
                 candidates = []
                 try:
-                    candidates = todoist.heartbeat_brainstorm_candidates(limit=3)
+                    candidates = todoist.heartbeat_brainstorm_candidates(
+                        limit=max(3, max_proactive_per_cycle),
+                    )
                 except Exception:
                     candidates = []
                 todoist_brainstorm_candidate_count = len(candidates)
+                selected_candidates = candidates[:max_proactive_per_cycle]
+                selected_tasks = []
+                if isinstance(summary.get("tasks"), list):
+                    selected_tasks = summary.get("tasks", [])[:max_proactive_per_cycle]
+                if actionable > 0:
+                    summary = {
+                        **summary,
+                        "selected_tasks": selected_tasks,
+                        "selected_count": len(selected_tasks),
+                        "actionable_count_total": actionable,
+                    }
 
-                if candidates:
+                if selected_candidates:
                     brainstorm_event = {
                         "type": "todoist_brainstorm_candidates",
                         "payload": {
                             "count": len(candidates),
-                            "candidates": candidates,
+                            "selected_count": len(selected_candidates),
+                            "candidates": selected_candidates,
                         },
                         "created_at": datetime.now().isoformat(),
                         "session_id": session.session_id,
                     }
                     system_events.append(brainstorm_event)
                     metadata["system_events"] = system_events
-                    metadata["todoist_brainstorm_candidates"] = candidates
+                    metadata["todoist_brainstorm_candidates"] = selected_candidates
 
                 if actionable > 0:
                     todoist_event = {
@@ -1143,29 +1236,46 @@ class HeartbeatService:
                         actionable,
                         session.session_id,
                     )
-                elif candidates:
+                elif selected_candidates:
                     logger.info(
                         "Injected Todoist brainstorm candidates (%d) into heartbeat for %s",
-                        len(candidates),
+                        len(selected_candidates),
                         session.session_id,
                     )
             except Exception as exc:
                 logger.info("Todoist heartbeat pre-step unavailable for %s: %s", session.session_id, exc)
+
+            if len(system_events) > max_system_events:
+                system_events = system_events[-max_system_events:]
+                metadata["system_events"] = system_events
+
+            guard_policy = _heartbeat_guard_policy(
+                actionable_count=todoist_actionable_count,
+                brainstorm_candidate_count=int(todoist_brainstorm_candidate_count or 0),
+                system_event_count=len(system_events),
+                has_exec_completion=has_exec_completion,
+            )
+            guard_skip_reason = str(guard_policy.get("skip_reason") or "").strip()
+            metadata["heartbeat_guard"] = {
+                "autonomous_enabled": bool(guard_policy.get("autonomous_enabled")),
+                "max_actionable": int(guard_policy.get("max_actionable") or DEFAULT_HEARTBEAT_MAX_ACTIONABLE),
+                "max_system_events": int(guard_policy.get("max_system_events") or DEFAULT_HEARTBEAT_MAX_SYSTEM_EVENTS),
+                "max_proactive_per_cycle": int(
+                    guard_policy.get("max_proactive_per_cycle") or DEFAULT_HEARTBEAT_MAX_PROACTIVE_PER_CYCLE
+                ),
+                "actionable_count": int(todoist_actionable_count or 0),
+                "brainstorm_candidate_count": int(todoist_brainstorm_candidate_count or 0),
+                "system_event_count": len(system_events),
+                "skip_reason": guard_skip_reason or None,
+            }
             
             full_response = ""
             streamed_chunks: list[str] = []
             final_text: Optional[str] = None
             saw_streaming_text = False
 
-            # If Todoist is available and there is no actionable work and no other system events,
-            # skip running an expensive LLM heartbeat turn.
-            should_skip_agent_run = (
-                todoist_actionable_count is not None
-                and todoist_actionable_count <= 0
-                and (todoist_brainstorm_candidate_count or 0) <= 0
-                and not system_events
-                and not has_exec_completion
-            )
+            # Enforce deterministic guard policy before expensive agent execution.
+            should_skip_agent_run = bool(guard_skip_reason)
 
             # Track artifacts/commands for UI + last_summary
             write_paths: list[str] = []
@@ -1496,6 +1606,8 @@ class HeartbeatService:
                     "ok_only": ok_only,
                     "suppressed_reason": suppressed_reason,
                     "sent": sent_any,
+                    "guard_reason": str((metadata.get("heartbeat_guard") or {}).get("skip_reason") or ""),
+                    "guard": metadata.get("heartbeat_guard") if isinstance(metadata.get("heartbeat_guard"), dict) else {},
                 }
             )
 

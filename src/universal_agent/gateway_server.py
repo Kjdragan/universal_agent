@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import sqlite3
+import threading
 import time
 import urllib.parse
 import uuid
@@ -172,6 +173,39 @@ TEXT_EXTENSIONS = (
 _DEPLOYMENT_PROFILE = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
 if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
     _DEPLOYMENT_PROFILE = "local_workstation"
+
+AUTONOMOUS_DAILY_BRIEFING_JOB_KEY = "autonomous_daily_briefing"
+AUTONOMOUS_DAILY_BRIEFING_DEFAULT_CRON = "0 7 * * *"
+AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE = (
+    (os.getenv("UA_AUTONOMOUS_BRIEFING_TIMEZONE") or "").strip()
+    or (os.getenv("UA_DEFAULT_TIMEZONE") or "").strip()
+    or "UTC"
+)
+TODOIST_CHRON_MAPPING_FILENAME = "todoist_chron_mappings.json"
+TODOIST_CHRON_MAPPING_STORE_VERSION = 1
+TODOIST_CHRON_MAPPING_MAX_ENTRIES = max(
+    100,
+    int(os.getenv("UA_TODOIST_CHRON_MAPPING_MAX_ENTRIES", "5000") or 5000),
+)
+TODOIST_CHRON_RECONCILE_ENABLED = (
+    str(os.getenv("UA_TODOIST_CHRON_RECONCILE_ENABLED", "1")).strip().lower() in {"1", "true", "yes", "on"}
+)
+TODOIST_CHRON_RECONCILE_REMOVE_STALE = (
+    str(os.getenv("UA_TODOIST_CHRON_RECONCILE_REMOVE_STALE", "1")).strip().lower() in {"1", "true", "yes", "on"}
+)
+TODOIST_CHRON_RECONCILE_INTERVAL_SECONDS = max(
+    60.0,
+    float(os.getenv("UA_TODOIST_CHRON_RECONCILE_INTERVAL_SECONDS", "600") or 600.0),
+)
+AUTONOMOUS_DAILY_BRIEFING_WINDOW_SECONDS = max(
+    3600,
+    int(os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_WINDOW_SECONDS", str(24 * 3600)) or (24 * 3600)),
+)
+AUTONOMOUS_DAILY_BRIEFING_MAX_ITEMS = max(
+    5,
+    int(os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_MAX_ITEMS", "200") or 200),
+)
+_todoist_chron_mapping_lock = threading.Lock()
 
 
 def _deployment_profile_defaults() -> dict:
@@ -857,6 +891,14 @@ class OpsNotificationCreateRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
+class DashboardSystemCommandRequest(BaseModel):
+    text: str
+    source_page: Optional[str] = None
+    source_context: Optional[dict] = None
+    timezone: Optional[str] = None
+    dry_run: bool = False
+
+
 class TutorialReviewDispatchRequest(BaseModel):
     run_path: str
     note: Optional[str] = None
@@ -903,6 +945,8 @@ _vp_event_bridge_interval_seconds = max(
 _vp_event_bridge_cursor_key = "gateway.session_feed"
 _vp_event_bridge_task: Optional[asyncio.Task[Any]] = None
 _vp_event_bridge_stop_event: Optional[asyncio.Event] = None
+_todoist_chron_reconcile_task: Optional[asyncio.Task[Any]] = None
+_todoist_chron_reconcile_stop_event: Optional[asyncio.Event] = None
 _vp_event_bridge_last_rowid = 0
 _vp_event_bridge_metrics: dict[str, Any] = {
     "cycles": 0,
@@ -999,6 +1043,13 @@ _scheduling_runtime_metrics: dict[str, Any] = {
         "due_lag_seconds_last": 0.0,
         "due_lag_seconds_max": 0.0,
         "due_lag_seconds_total": 0.0,
+    },
+    "todoist_chron_reconciliation": {
+        "runs": 0,
+        "last_run_at": None,
+        "last_duration_ms": 0.0,
+        "last_error": None,
+        "last_result": {},
     },
 }
 SCHED_PUSH_ENABLED = (
@@ -2557,29 +2608,56 @@ def _emit_cron_event(payload: dict) -> None:
             command = f"{command[:117]}..."
 
         session_id = ""
+        job_metadata: dict[str, Any] = {}
         if job:
             metadata = getattr(job, "metadata", {}) or {}
             if isinstance(metadata, dict):
+                job_metadata = dict(metadata)
                 session_id = str(
                     metadata.get("session_id")
                     or metadata.get("target_session_id")
                     or metadata.get("target_session")
                     or ""
                 ).strip()
+        is_autonomous = bool(job_metadata.get("autonomous"))
+        system_job = str(job_metadata.get("system_job") or "").strip()
+        is_daily_briefing_job = system_job == AUTONOMOUS_DAILY_BRIEFING_JOB_KEY
+        briefing_payload: dict[str, Any] = {}
+        if is_daily_briefing_job:
+            try:
+                briefing_payload = _generate_autonomous_daily_briefing_artifact(
+                    now_ts=float(run_data.get("finished_at") or time.time()),
+                )
+            except Exception:
+                logger.exception("Failed generating deterministic autonomous daily briefing artifact")
+                briefing_payload = {}
 
-        if run_status == "success":
-            title = "Chron Run Succeeded"
+        if run_status == "success" and is_daily_briefing_job and briefing_payload:
+            title = "Daily Autonomous Briefing Ready"
             severity = "info"
-            kind = "cron_run_success"
+            kind = "autonomous_daily_briefing_ready"
+            message = str(briefing_payload.get("summary_line") or command)
+        elif run_status == "success":
+            title = "Autonomous Task Completed" if is_autonomous else "Chron Run Succeeded"
+            severity = "info"
+            kind = "autonomous_run_completed" if is_autonomous else "cron_run_success"
             message = f"{command}"
         else:
-            title = "Chron Run Failed"
+            title = "Autonomous Task Failed" if is_autonomous else "Chron Run Failed"
             severity = "error"
-            kind = "cron_run_failed"
+            kind = "autonomous_run_failed" if is_autonomous else "cron_run_failed"
             error_text = str(run_data.get("error") or "").strip()
             message = f"{command}"
             if error_text:
                 message = f"{message} | {error_text[:240]}"
+            if is_daily_briefing_job and briefing_payload:
+                message = (
+                    f"{message} | fallback briefing summary: "
+                    f"{str(briefing_payload.get('summary_line') or '').strip()[:180]}"
+                )
+
+        markdown_payload = briefing_payload.get("markdown") if isinstance(briefing_payload, dict) else None
+        json_payload = briefing_payload.get("json") if isinstance(briefing_payload, dict) else None
 
         _add_notification(
             kind=kind,
@@ -2596,6 +2674,18 @@ def _emit_cron_event(payload: dict) -> None:
                 "finished_at": run_data.get("finished_at"),
                 "error": run_data.get("error"),
                 "source": "cron",
+                "autonomous": is_autonomous,
+                "system_job": system_job,
+                "todoist_task_id": str(job_metadata.get("todoist_task_id") or ""),
+                "report_api_url": str((markdown_payload or {}).get("api_url") or ""),
+                "report_storage_href": str((markdown_payload or {}).get("storage_href") or ""),
+                "report_json_api_url": str((json_payload or {}).get("api_url") or ""),
+                "report_relative_path": str((markdown_payload or {}).get("relative_path") or ""),
+                "report_counts": (
+                    dict(briefing_payload.get("counts") or {})
+                    if isinstance(briefing_payload.get("counts"), dict)
+                    else {}
+                ),
             },
         )
     event = {
@@ -2612,6 +2702,26 @@ def _emit_heartbeat_event(payload: dict) -> None:
     _scheduling_record_event("heartbeat", event_type)
     _scheduling_event_bus.publish("heartbeat", event_type, payload)
     _scheduling_counter_inc("event_bus_published")
+    if event_type == "heartbeat_completed":
+        ok_only = bool(payload.get("ok_only"))
+        if not ok_only:
+            session_id = str(payload.get("session_id") or "").strip() or None
+            _add_notification(
+                kind="autonomous_heartbeat_completed",
+                title="Autonomous Heartbeat Activity Completed",
+                message=f"Heartbeat completed independent work for {session_id or 'session'}.",
+                session_id=session_id,
+                severity="info",
+                metadata={
+                    "source": "heartbeat",
+                    "session_id": session_id,
+                    "timestamp": str(payload.get("timestamp") or ""),
+                    "suppressed_reason": str(payload.get("suppressed_reason") or ""),
+                    "sent": bool(payload.get("sent")),
+                    "guard_reason": str(payload.get("guard_reason") or ""),
+                    "guard": payload.get("guard") if isinstance(payload.get("guard"), dict) else {},
+                },
+            )
 
 
 def _cron_wake_callback(session_id: str, mode: str, reason: str) -> None:
@@ -4620,6 +4730,7 @@ async def lifespan(app: FastAPI):
     # Initialize Heartbeat Service
     global _heartbeat_service, _cron_service, _ops_service, _hooks_service
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
+    global _todoist_chron_reconcile_task, _todoist_chron_reconcile_stop_event
     if HEARTBEAT_ENABLED:
         logger.info("💓 Heartbeat System ENABLED")
         _heartbeat_service = HeartbeatService(
@@ -4642,6 +4753,34 @@ async def lifespan(app: FastAPI):
             system_event_callback=_enqueue_system_event,
         )
         await _cron_service.start()
+        try:
+            _ensure_autonomous_daily_briefing_job()
+        except Exception:
+            logger.exception("Failed ensuring autonomous daily briefing chron job")
+        if TODOIST_CHRON_RECONCILE_ENABLED:
+            try:
+                initial = _reconcile_todoist_chron_mappings(
+                    remove_stale=TODOIST_CHRON_RECONCILE_REMOVE_STALE,
+                    dry_run=False,
+                )
+                logger.info(
+                    "🔁 Todoist<->Chron reconciliation startup run: inspected=%s relinked=%s removed=%s ok=%s",
+                    initial.get("inspected"),
+                    initial.get("relinked"),
+                    initial.get("removed"),
+                    initial.get("ok"),
+                )
+            except Exception:
+                logger.exception("Failed Todoist<->Chron reconciliation startup run")
+            _todoist_chron_reconcile_stop_event = asyncio.Event()
+            _todoist_chron_reconcile_task = asyncio.create_task(_todoist_chron_reconcile_loop())
+            logger.info(
+                "🔁 Todoist<->Chron reconciliation loop enabled (interval=%.1fs, remove_stale=%s)",
+                TODOIST_CHRON_RECONCILE_INTERVAL_SECONDS,
+                TODOIST_CHRON_RECONCILE_REMOVE_STALE,
+            )
+        else:
+            logger.info("⏸️ Todoist<->Chron reconciliation loop disabled (UA_TODOIST_CHRON_RECONCILE_ENABLED)")
     else:
         logger.info("⏲️ Chron Service DISABLED (feature flag)")
     
@@ -4710,6 +4849,15 @@ async def lifespan(app: FastAPI):
             pass
         _vp_event_bridge_task = None
     _vp_event_bridge_stop_event = None
+    if _todoist_chron_reconcile_stop_event is not None:
+        _todoist_chron_reconcile_stop_event.set()
+    if _todoist_chron_reconcile_task is not None:
+        try:
+            await _todoist_chron_reconcile_task
+        except Exception:
+            pass
+        _todoist_chron_reconcile_task = None
+    _todoist_chron_reconcile_stop_event = None
     if _heartbeat_service:
         await _heartbeat_service.stop()
     if _cron_service:
@@ -5053,6 +5201,10 @@ async def dashboard_summary():
         jobs = _cron_service.list_jobs()
         cron_total = len(jobs)
         cron_enabled = sum(1 for job in jobs if bool(getattr(job, "enabled", False)))
+    reconcile_metrics = (
+        _scheduling_runtime_metrics_snapshot()
+        .get("todoist_chron_reconciliation", {})
+    )
 
     return {
         "sessions": {
@@ -5066,6 +5218,12 @@ async def dashboard_summary():
         "cron": {
             "total": cron_total,
             "enabled": cron_enabled,
+        },
+        "todoist_chron_reconciliation": {
+            "runs": int((reconcile_metrics or {}).get("runs", 0) or 0),
+            "last_run_at": (reconcile_metrics or {}).get("last_run_at"),
+            "last_error": (reconcile_metrics or {}).get("last_error"),
+            "last_result": (reconcile_metrics or {}).get("last_result") or {},
         },
         "notifications": {
             "unread": unread_notifications,
@@ -5141,6 +5299,263 @@ async def dashboard_notification_bulk_update(payload: NotificationBulkUpdateRequ
         "updated": len(updated),
         "status": status_value,
         "notifications": updated,
+    }
+
+
+@app.post("/api/v1/dashboard/system/commands")
+async def dashboard_system_command(payload: DashboardSystemCommandRequest):
+    text = str(payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    source_page = str(payload.source_page or "").strip()
+    source_context = _normalize_source_context(payload.source_context)
+    timezone_name = str(payload.timezone or "").strip() or "UTC"
+    dry_run = bool(payload.dry_run)
+    source_session_id = _system_context_session_id(source_context)
+    task_description = _build_system_command_task_description(
+        source_page=source_page,
+        source_context=source_context,
+    )
+
+    try:
+        from universal_agent.services.todoist_service import TodoService
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Todoist service unavailable: {exc}")
+
+    try:
+        todoist = TodoService()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Todoist not configured: {exc}")
+
+    if _system_command_is_status_query(text):
+        summary = todoist.heartbeat_summary()
+        pipeline = todoist.get_pipeline_summary()
+        return {
+            "ok": True,
+            "lane": "system",
+            "intent": "status_query",
+            "interpreted": {"query": text, "scope": "todoist"},
+            "todoist": {
+                "summary": summary,
+                "pipeline": pipeline,
+            },
+            "dry_run": dry_run,
+        }
+
+    if _system_command_is_brainstorm_capture(text):
+        content, schedule_text = _extract_system_command_content_and_schedule(text)
+        if not content:
+            content = text
+        interpreted = {
+            "content": content,
+            "schedule_text": schedule_text,
+            "priority": _system_command_priority_from_text(text),
+            "source_page": source_page,
+            "source_context": source_context,
+        }
+        if dry_run:
+            return {
+                "ok": True,
+                "lane": "system",
+                "intent": "capture_idea",
+                "interpreted": interpreted,
+                "dry_run": True,
+            }
+        task = todoist.record_idea(
+            content=content,
+            description=task_description,
+            source_session_id=source_session_id,
+            impact="M",
+            effort="M",
+        )
+        _add_notification(
+            kind="system_command_idea_recorded",
+            title="Idea Captured",
+            message=f"Todoist brainstorm idea captured: {content[:120]}",
+            severity="info",
+            metadata={
+                "source": "system_command",
+                "source_page": source_page,
+                "todoist_task_id": str(task.get("id") or ""),
+            },
+        )
+        return {
+            "ok": True,
+            "lane": "system",
+            "intent": "capture_idea",
+            "interpreted": interpreted,
+            "todoist": {"task": task},
+            "dry_run": False,
+        }
+
+    content, schedule_text = _extract_system_command_content_and_schedule(text)
+    if not content:
+        content = _strip_system_command_prefix(text) or text
+    priority = _system_command_priority_from_text(text)
+    section = "scheduled" if schedule_text else "background"
+    interpreted = {
+        "content": content,
+        "schedule_text": schedule_text,
+        "priority": priority,
+        "section": section,
+        "source_page": source_page,
+        "source_context": source_context,
+    }
+    if dry_run:
+        return {
+            "ok": True,
+            "lane": "system",
+            "intent": "schedule_task" if schedule_text else "capture_task",
+            "interpreted": interpreted,
+            "dry_run": True,
+        }
+
+    task = todoist.create_task(
+        content=content,
+        description=task_description,
+        priority=priority,
+        section=section,
+        due_string=schedule_text or None,
+        labels=["agent-ready", "system-lane"],
+    )
+
+    cron_job: Optional[dict[str, Any]] = None
+    cron_bridge_status: Optional[str] = None
+    enable_cron_bridge = (
+        os.getenv("UA_SYSTEM_COMMAND_ENABLE_CRON_BRIDGE", "1").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    if schedule_text and _cron_service and enable_cron_bridge:
+        try:
+            task_id = str(task.get("id") or "").strip()
+            repeat = _schedule_text_suggests_repeat(schedule_text)
+            every_raw, cron_expr, run_at_ts, delete_after_run = _resolve_simplified_schedule_fields(
+                schedule_time=schedule_text,
+                repeat=repeat,
+                timezone_name=timezone_name,
+            )
+            schedule_signature = _todoist_chron_schedule_signature(
+                schedule_text=schedule_text,
+                timezone_name=timezone_name,
+                every_raw=every_raw,
+                cron_expr=cron_expr,
+                run_at_ts=run_at_ts,
+                delete_after_run=delete_after_run,
+            )
+            run_command = _build_todoist_execution_cron_command(
+                task_id=task_id,
+                content=content,
+            )
+            job_metadata = {
+                "source": "system_command",
+                "autonomous": True,
+                "todoist_task_id": task_id,
+                "source_page": source_page,
+                "source_context": source_context,
+                "schedule_signature": schedule_signature,
+            }
+
+            existing_mapping = _todoist_chron_mapping_get(task_id) if task_id else None
+            existing_job_id = str((existing_mapping or {}).get("cron_job_id") or "").strip()
+            existing_job = _cron_service.get_job(existing_job_id) if existing_job_id else None
+
+            if existing_job is not None:
+                existing_signature = str((existing_mapping or {}).get("schedule_signature") or "").strip()
+                if existing_signature == schedule_signature:
+                    cron_bridge_status = "reused_existing"
+                    cron_job = {
+                        **existing_job.to_dict(),
+                        "running": existing_job.job_id in _cron_service.running_jobs,
+                    }
+                else:
+                    updated_job = _cron_service.update_job(
+                        existing_job.job_id,
+                        {
+                            "command": run_command,
+                            "enabled": True,
+                            "every_seconds": every_raw if every_raw is not None else 0,
+                            "cron_expr": cron_expr,
+                            "timezone": timezone_name,
+                            "run_at": run_at_ts,
+                            "delete_after_run": delete_after_run,
+                            "metadata": job_metadata,
+                        },
+                    )
+                    cron_bridge_status = "updated_existing"
+                    cron_job = {
+                        **updated_job.to_dict(),
+                        "running": updated_job.job_id in _cron_service.running_jobs,
+                    }
+                    todoist.add_comment(
+                        task_id,
+                        f"UA updated Chron job: {updated_job.job_id} ({schedule_text})",
+                    )
+            else:
+                job = _cron_service.add_job(
+                    user_id="cron_system",
+                    workspace_dir=str(
+                        WORKSPACES_DIR
+                        / f"cron_todoist_{str(task.get('id') or 'task')[:8]}_{int(time.time())}"
+                    ),
+                    command=run_command,
+                    every_raw=every_raw,
+                    cron_expr=cron_expr,
+                    timezone=timezone_name,
+                    run_at=run_at_ts,
+                    delete_after_run=delete_after_run,
+                    enabled=True,
+                    metadata=job_metadata,
+                )
+                cron_bridge_status = "created"
+                cron_job = {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
+                todoist.add_comment(
+                    task_id,
+                    f"UA scheduled Chron job: {job.job_id} ({schedule_text})",
+                )
+
+            if cron_job and task_id:
+                _todoist_chron_mapping_upsert(
+                    task_id,
+                    {
+                        "cron_job_id": str(cron_job.get("job_id") or ""),
+                        "schedule_text": schedule_text,
+                        "schedule_signature": schedule_signature,
+                        "timezone": timezone_name,
+                        "bridge_status": cron_bridge_status or "unknown",
+                        "source_page": source_page,
+                        "source_context": source_context,
+                    },
+                )
+        except Exception as exc:
+            cron_bridge_status = "failed"
+            todoist.add_comment(
+                str(task.get("id") or ""),
+                f"UA could not create Chron schedule automatically: {exc}",
+            )
+
+    _add_notification(
+        kind="system_command_routed",
+        title="System Command Captured",
+        message=f"{content[:120]}",
+        severity="info",
+        metadata={
+            "source": "system_command",
+            "source_page": source_page,
+            "todoist_task_id": str(task.get("id") or ""),
+            "schedule_text": schedule_text or "",
+            "cron_job_id": str((cron_job or {}).get("job_id") or ""),
+            "cron_bridge_status": cron_bridge_status or "",
+            "source_context": source_context,
+        },
+    )
+    return {
+        "ok": True,
+        "lane": "system",
+        "intent": "schedule_task" if schedule_text else "capture_task",
+        "interpreted": interpreted,
+        "todoist": {"task": task},
+        "cron": {"job": cron_job, "status": cron_bridge_status} if cron_job or cron_bridge_status else None,
+        "dry_run": False,
     }
 
 
@@ -5380,6 +5795,708 @@ _SIMPLE_INTERVAL_RE = re.compile(
     r"^(?:in\s+)?(\d+)\s*(second|seconds|sec|secs|s|minute|minutes|min|mins|m|hour|hours|hr|hrs|h|day|days|d)$",
     re.IGNORECASE,
 )
+
+_SYSTEM_COMMAND_SCHEDULE_MARKERS = (
+    " in ",
+    " at ",
+    " tomorrow",
+    " today",
+    " tonight",
+    " every ",
+    " daily",
+    " weekly",
+    " monthly",
+    " weekday",
+    " weekdays",
+)
+
+
+def _normalize_system_context_value(value: Any, *, depth: int = 0) -> Any:
+    if depth > 3:
+        return None
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        compact = value.strip()
+        if not compact:
+            return None
+        return compact[:500]
+    if isinstance(value, list):
+        out: list[Any] = []
+        for item in value[:25]:
+            normalized = _normalize_system_context_value(item, depth=depth + 1)
+            if normalized is not None:
+                out.append(normalized)
+        return out or None
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key in sorted(value.keys(), key=lambda k: str(k))[:40]:
+            key_text = str(key).strip()
+            if not key_text:
+                continue
+            normalized = _normalize_system_context_value(value.get(key), depth=depth + 1)
+            if normalized is not None:
+                out[key_text[:120]] = normalized
+        return out or None
+    return str(value)[:500]
+
+
+def _normalize_source_context(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    normalized = _normalize_system_context_value(payload, depth=0)
+    if isinstance(normalized, dict):
+        return normalized
+    return {}
+
+
+def _system_context_session_id(source_context: dict[str, Any]) -> Optional[str]:
+    for key in ("session_id", "active_session_id", "chat_session_id"):
+        value = source_context.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    selection = source_context.get("selection")
+    if isinstance(selection, dict):
+        for key in ("session_id", "active_session_id"):
+            value = selection.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _source_context_snippet(source_context: dict[str, Any], *, max_chars: int = 800) -> str:
+    if not source_context:
+        return ""
+    try:
+        snippet = json.dumps(source_context, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        return ""
+    if len(snippet) <= max_chars:
+        return snippet
+    return snippet[: max(0, max_chars - 3)] + "..."
+
+
+def _build_system_command_task_description(*, source_page: str, source_context: dict[str, Any]) -> str:
+    parts = [f"source_page: {source_page or 'unknown'}"]
+    context_snippet = _source_context_snippet(source_context)
+    if context_snippet:
+        parts.append(f"source_context: {context_snippet}")
+    return "\n".join(parts)
+
+
+def _todoist_chron_mapping_store_path() -> Path:
+    return WORKSPACES_DIR / TODOIST_CHRON_MAPPING_FILENAME
+
+
+def _load_todoist_chron_mapping_store() -> dict[str, Any]:
+    path = _todoist_chron_mapping_store_path()
+    default_store = {
+        "version": TODOIST_CHRON_MAPPING_STORE_VERSION,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "task_map": {},
+    }
+    if not path.exists():
+        return default_store
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default_store
+    if not isinstance(payload, dict):
+        return default_store
+    task_map = payload.get("task_map")
+    if not isinstance(task_map, dict):
+        task_map = {}
+    return {
+        "version": TODOIST_CHRON_MAPPING_STORE_VERSION,
+        "updated_at": str(payload.get("updated_at") or datetime.now(timezone.utc).isoformat()),
+        "task_map": task_map,
+    }
+
+
+def _save_todoist_chron_mapping_store(store: dict[str, Any]) -> None:
+    path = _todoist_chron_mapping_store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    task_map = store.get("task_map")
+    if not isinstance(task_map, dict):
+        task_map = {}
+    if len(task_map) > TODOIST_CHRON_MAPPING_MAX_ENTRIES:
+        entries = sorted(
+            (
+                str(task_id),
+                value if isinstance(value, dict) else {},
+            )
+            for task_id, value in task_map.items()
+        )
+        kept: dict[str, dict[str, Any]] = {}
+        for task_id, row in entries[-TODOIST_CHRON_MAPPING_MAX_ENTRIES:]:
+            kept[task_id] = row
+        task_map = kept
+    payload = {
+        "version": TODOIST_CHRON_MAPPING_STORE_VERSION,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "task_map": task_map,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def _todoist_chron_mapping_get(task_id: str) -> Optional[dict[str, Any]]:
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return None
+    with _todoist_chron_mapping_lock:
+        store = _load_todoist_chron_mapping_store()
+        task_map = store.get("task_map")
+        if not isinstance(task_map, dict):
+            return None
+        row = task_map.get(clean_task_id)
+        if not isinstance(row, dict):
+            return None
+        return dict(row)
+
+
+def _todoist_chron_mapping_upsert(task_id: str, entry: dict[str, Any]) -> dict[str, Any]:
+    clean_task_id = str(task_id or "").strip()
+    if not clean_task_id:
+        return {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _todoist_chron_mapping_lock:
+        store = _load_todoist_chron_mapping_store()
+        task_map = store.setdefault("task_map", {})
+        if not isinstance(task_map, dict):
+            task_map = {}
+            store["task_map"] = task_map
+        previous = task_map.get(clean_task_id)
+        created_at = now_iso
+        if isinstance(previous, dict) and str(previous.get("created_at") or "").strip():
+            created_at = str(previous.get("created_at")).strip()
+        merged = {
+            **(previous if isinstance(previous, dict) else {}),
+            **(entry if isinstance(entry, dict) else {}),
+            "task_id": clean_task_id,
+            "created_at": created_at,
+            "updated_at": now_iso,
+        }
+        task_map[clean_task_id] = merged
+        _save_todoist_chron_mapping_store(store)
+        return dict(merged)
+
+
+def _todoist_chron_mapping_reconciliation_metrics_update(
+    *,
+    result: dict[str, Any],
+    duration_ms: float,
+    error: Optional[str],
+) -> None:
+    bucket = _scheduling_runtime_metrics.setdefault("todoist_chron_reconciliation", {})
+    if not isinstance(bucket, dict):
+        bucket = {}
+        _scheduling_runtime_metrics["todoist_chron_reconciliation"] = bucket
+    bucket["runs"] = int(bucket.get("runs", 0) or 0) + 1
+    bucket["last_run_at"] = datetime.now(timezone.utc).isoformat()
+    bucket["last_duration_ms"] = round(max(0.0, duration_ms), 3)
+    bucket["last_error"] = str(error or "") or None
+    bucket["last_result"] = result if isinstance(result, dict) else {}
+
+
+def _todoist_chron_task_index() -> dict[str, Any]:
+    index: dict[str, Any] = {}
+    if not _cron_service:
+        return index
+    jobs = sorted(
+        list(_cron_service.list_jobs()),
+        key=lambda job: float(getattr(job, "created_at", 0.0) or 0.0),
+        reverse=True,
+    )
+    for job in jobs:
+        metadata = getattr(job, "metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            continue
+        task_id = str(metadata.get("todoist_task_id") or "").strip()
+        if not task_id or task_id in index:
+            continue
+        index[task_id] = job
+    return index
+
+
+def _reconcile_todoist_chron_mappings(*, remove_stale: bool = True, dry_run: bool = False) -> dict[str, Any]:
+    started = time.time()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    stats: dict[str, Any] = {
+        "ok": True,
+        "remove_stale": bool(remove_stale),
+        "dry_run": bool(dry_run),
+        "started_at": now_iso,
+        "inspected": 0,
+        "unchanged": 0,
+        "relinked": 0,
+        "removed": 0,
+        "stale_flagged": 0,
+        "metadata_repairs": 0,
+        "mapping_entries_before": 0,
+        "mapping_entries_after": 0,
+    }
+    error_text: Optional[str] = None
+    try:
+        task_index = _todoist_chron_task_index()
+        with _todoist_chron_mapping_lock:
+            store = _load_todoist_chron_mapping_store()
+            task_map = store.get("task_map")
+            if not isinstance(task_map, dict):
+                task_map = {}
+                store["task_map"] = task_map
+            stats["mapping_entries_before"] = len(task_map)
+            changed = False
+
+            for task_id in sorted(list(task_map.keys())):
+                row = task_map.get(task_id)
+                if not isinstance(row, dict):
+                    if not dry_run:
+                        task_map.pop(task_id, None)
+                        changed = True
+                    stats["removed"] = int(stats.get("removed", 0) or 0) + 1
+                    continue
+                stats["inspected"] = int(stats.get("inspected", 0) or 0) + 1
+                mapped_job_id = str(row.get("cron_job_id") or "").strip()
+                mapped_job = _cron_service.get_job(mapped_job_id) if _cron_service and mapped_job_id else None
+
+                if mapped_job is not None:
+                    metadata = getattr(mapped_job, "metadata", {}) or {}
+                    if isinstance(metadata, dict) and str(metadata.get("todoist_task_id") or "").strip() != task_id:
+                        if not dry_run and _cron_service:
+                            try:
+                                _cron_service.update_job(
+                                    mapped_job.job_id,
+                                    {"metadata": {"todoist_task_id": task_id}},
+                                )
+                                stats["metadata_repairs"] = int(stats.get("metadata_repairs", 0) or 0) + 1
+                            except Exception:
+                                logger.exception(
+                                    "Failed repairing todoist_task_id metadata for cron job %s",
+                                    mapped_job.job_id,
+                                )
+                    if row.get("stale"):
+                        if not dry_run:
+                            row.pop("stale", None)
+                            row.pop("stale_detected_at", None)
+                            row["updated_at"] = now_iso
+                            changed = True
+                    stats["unchanged"] = int(stats.get("unchanged", 0) or 0) + 1
+                    continue
+
+                candidate_job = task_index.get(task_id)
+                if candidate_job is not None:
+                    stats["relinked"] = int(stats.get("relinked", 0) or 0) + 1
+                    if not dry_run:
+                        row["cron_job_id"] = str(candidate_job.job_id)
+                        row["relinked_at"] = now_iso
+                        row["updated_at"] = now_iso
+                        row.pop("stale", None)
+                        row.pop("stale_detected_at", None)
+                        changed = True
+                    continue
+
+                if remove_stale:
+                    stats["removed"] = int(stats.get("removed", 0) or 0) + 1
+                    if not dry_run:
+                        task_map.pop(task_id, None)
+                        changed = True
+                else:
+                    stats["stale_flagged"] = int(stats.get("stale_flagged", 0) or 0) + 1
+                    if not dry_run and not row.get("stale"):
+                        row["stale"] = True
+                        row["stale_detected_at"] = now_iso
+                        row["updated_at"] = now_iso
+                        changed = True
+
+            if changed and not dry_run:
+                _save_todoist_chron_mapping_store(store)
+            stats["mapping_entries_after"] = len(task_map)
+    except Exception as exc:
+        error_text = str(exc)
+        stats["ok"] = False
+        stats["error"] = error_text
+        logger.exception("Todoist<->Chron mapping reconciliation failed")
+    finally:
+        duration_ms = (time.time() - started) * 1000.0
+        _todoist_chron_mapping_reconciliation_metrics_update(
+            result=stats,
+            duration_ms=duration_ms,
+            error=error_text,
+        )
+        stats["duration_ms"] = round(duration_ms, 3)
+    return stats
+
+
+async def _todoist_chron_reconcile_loop() -> None:
+    stop_event = _todoist_chron_reconcile_stop_event or asyncio.Event()
+    while not stop_event.is_set():
+        try:
+            _reconcile_todoist_chron_mappings(
+                remove_stale=TODOIST_CHRON_RECONCILE_REMOVE_STALE,
+                dry_run=False,
+            )
+        except Exception:
+            logger.exception("Todoist<->Chron periodic reconciliation loop iteration failed")
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=TODOIST_CHRON_RECONCILE_INTERVAL_SECONDS)
+        except asyncio.TimeoutError:
+            continue
+        except Exception:
+            await asyncio.sleep(1.0)
+
+
+def _todoist_chron_schedule_signature(
+    *,
+    schedule_text: str,
+    timezone_name: str,
+    every_raw: Optional[str],
+    cron_expr: Optional[str],
+    run_at_ts: Optional[float],
+    delete_after_run: bool,
+) -> str:
+    payload = {
+        "schedule_text": str(schedule_text or "").strip().lower(),
+        "timezone": str(timezone_name or "UTC").strip() or "UTC",
+        "every": str(every_raw or "").strip().lower(),
+        "cron_expr": str(cron_expr or "").strip(),
+        "run_at": round(float(run_at_ts), 3) if run_at_ts is not None else None,
+        "delete_after_run": bool(delete_after_run),
+    }
+    raw = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _autonomous_notification_timestamp(item: dict[str, Any]) -> Optional[float]:
+    created = _parse_iso_datetime(item.get("created_at"))
+    if created is not None:
+        return created.timestamp()
+    updated = _parse_iso_datetime(item.get("updated_at"))
+    if updated is not None:
+        return updated.timestamp()
+    return None
+
+
+def _artifact_links_for_path(path: Path) -> dict[str, str]:
+    rel = _artifact_rel_path(path)
+    api_url = _artifact_api_file_url(rel) if rel else ""
+    storage_href = _storage_explorer_href(scope="artifacts", path=rel, preview=rel) if rel else ""
+    return {
+        "relative_path": rel,
+        "api_url": api_url,
+        "storage_href": storage_href,
+    }
+
+
+def _autonomous_job_artifact_links(job_id: str, *, max_files: int = 6) -> list[dict[str, str]]:
+    clean_job_id = str(job_id or "").strip()
+    if not clean_job_id:
+        return []
+    job_root = ARTIFACTS_DIR / "cron" / clean_job_id
+    if not job_root.exists() or not job_root.is_dir():
+        return []
+    files = [path for path in job_root.rglob("*") if path.is_file()]
+    files.sort(key=lambda path: path.stat().st_mtime if path.exists() else 0.0, reverse=True)
+    links: list[dict[str, str]] = []
+    for path in files[: max(1, max_files)]:
+        link = _artifact_links_for_path(path)
+        if not link.get("relative_path"):
+            continue
+        links.append(link)
+    return links
+
+
+def _strip_system_command_prefix(text: str) -> str:
+    cleaned = (text or "").strip()
+    patterns = [
+        r"^(please\s+)?(add|schedule|queue|create|put)\s+",
+        r"^(please\s+)?(remind|remind me)\s+to\s+",
+    ]
+    for pattern in patterns:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(
+        r"\bto\s+(my\s+)?(todoist|to-?do\s+list|todo\s+list)\b",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned.strip(" \t\n\r:;,-")
+
+
+def _extract_system_command_content_and_schedule(text: str) -> tuple[str, Optional[str]]:
+    raw = _strip_system_command_prefix(text)
+    lowered = raw.lower()
+    start_index: Optional[int] = None
+    for marker in _SYSTEM_COMMAND_SCHEDULE_MARKERS:
+        idx = lowered.find(marker)
+        if idx <= 0:
+            continue
+        if start_index is None or idx < start_index:
+            start_index = idx
+    if start_index is None:
+        return raw.strip(), None
+    content = raw[:start_index].strip(" \t\n\r:;,-")
+    schedule_text = raw[start_index:].strip(" \t\n\r:;,-")
+    if not content:
+        return raw.strip(), None
+    if not schedule_text:
+        return raw.strip(), None
+    return content, schedule_text
+
+
+def _system_command_priority_from_text(text: str) -> str:
+    lowered = str(text or "").strip().lower()
+    if re.search(r"\b(urgent|asap|immediately|immediate|critical)\b", lowered):
+        return "urgent"
+    if re.search(r"\b(high priority|high-priority|important|soon)\b", lowered):
+        return "high"
+    if re.search(r"\b(low priority|low-priority|whenever|someday|later)\b", lowered):
+        return "low"
+    return "medium"
+
+
+def _system_command_is_status_query(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    if not lowered:
+        return False
+    has_query_verb = bool(re.search(r"\b(status|show|list|what|summary|summarize)\b", lowered))
+    return has_query_verb and bool(re.search(r"\b(todo|todoist|to-?do)\b", lowered))
+
+
+def _system_command_is_brainstorm_capture(text: str) -> bool:
+    lowered = str(text or "").strip().lower()
+    return bool(re.search(r"\b(idea|brainstorm|backlog|capture this)\b", lowered))
+
+
+def _build_todoist_execution_cron_command(*, task_id: str, content: str) -> str:
+    safe_content = str(content or "").strip()
+    if len(safe_content) > 200:
+        safe_content = safe_content[:197] + "..."
+    return "\n".join(
+        [
+            "Autonomous Todoist execution task.",
+            f"todoist_task_id: {task_id}",
+            f"todoist_task_content: {safe_content}",
+            "Run the task now using available UA tools and produce concrete outputs when relevant.",
+            "If completed, call internal Todoist task action to complete the task with a concise summary comment.",
+            "If blocked, add a Todoist comment describing exactly what is missing.",
+        ]
+    )
+
+
+def _build_autonomous_daily_briefing_command() -> str:
+    return "\n".join(
+        [
+            "Generate the daily autonomous operations briefing for the last 24 hours.",
+            "Focus only on work executed without direct user prompting (scheduled/proactive flows).",
+            "Include:",
+            "- tasks completed",
+            "- tasks attempted and failed",
+            "- links/paths to artifacts produced",
+            "- items requiring user decisions",
+            "Write a concise markdown report to UA_ARTIFACTS_DIR/autonomous-briefings/<today>/DAILY_BRIEFING.md.",
+            "Then provide a short summary suitable for dashboard notification text.",
+        ]
+    )
+
+
+def _autonomous_briefing_day_slug(now_ts: float) -> str:
+    tz_name = (
+        (os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_TIMEZONE") or "").strip()
+        or AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE
+    )
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = timezone.utc
+    dt = datetime.fromtimestamp(now_ts, tz)
+    return dt.date().isoformat()
+
+
+def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict[str, Any]:
+    if now_ts is None:
+        now_ts = time.time()
+    window_seconds = AUTONOMOUS_DAILY_BRIEFING_WINDOW_SECONDS
+    window_start = float(now_ts) - float(window_seconds)
+
+    completed: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    heartbeat_rows: list[dict[str, Any]] = []
+    for item in _notifications:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        if kind not in {"autonomous_run_completed", "autonomous_run_failed", "autonomous_heartbeat_completed"}:
+            continue
+        event_ts = _autonomous_notification_timestamp(item)
+        if event_ts is None or event_ts < window_start:
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        row = {
+            "id": str(item.get("id") or ""),
+            "kind": kind,
+            "title": str(item.get("title") or ""),
+            "message": str(item.get("message") or ""),
+            "created_at": str(item.get("created_at") or ""),
+            "job_id": str(metadata.get("job_id") or ""),
+            "run_id": str(metadata.get("run_id") or ""),
+            "todoist_task_id": str(metadata.get("todoist_task_id") or ""),
+            "error": str(metadata.get("error") or ""),
+            "system_job": str(metadata.get("system_job") or ""),
+        }
+        if kind == "autonomous_run_completed":
+            completed.append(row)
+        elif kind == "autonomous_run_failed":
+            failed.append(row)
+        else:
+            heartbeat_rows.append(row)
+
+    # Keep newest first, bounded for artifact size safety.
+    for bucket in (completed, failed, heartbeat_rows):
+        bucket.sort(
+            key=lambda row: _autonomous_notification_timestamp({"created_at": row.get("created_at")}) or 0.0,
+            reverse=True,
+        )
+        del bucket[AUTONOMOUS_DAILY_BRIEFING_MAX_ITEMS :]
+
+    return {
+        "window_seconds": window_seconds,
+        "window_started_at": datetime.fromtimestamp(window_start, timezone.utc).isoformat(),
+        "window_ended_at": datetime.fromtimestamp(now_ts, timezone.utc).isoformat(),
+        "completed": completed,
+        "failed": failed,
+        "heartbeat": heartbeat_rows,
+    }
+
+
+def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = None) -> dict[str, Any]:
+    if now_ts is None:
+        now_ts = time.time()
+    rows = _collect_autonomous_activity_rows(now_ts=now_ts)
+    completed = list(rows.get("completed") or [])
+    failed = list(rows.get("failed") or [])
+    heartbeat_rows = list(rows.get("heartbeat") or [])
+    requires_decision = [row for row in failed if row.get("error")]
+
+    day_slug = _autonomous_briefing_day_slug(now_ts)
+    out_dir = ARTIFACTS_DIR / "autonomous-briefings" / day_slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    md_path = out_dir / "DAILY_BRIEFING.md"
+    json_path = out_dir / "briefing.json"
+
+    lines: list[str] = []
+    lines.append("# Daily Autonomous Briefing")
+    lines.append("")
+    lines.append(f"- Generated: {datetime.fromtimestamp(now_ts, timezone.utc).isoformat()}")
+    lines.append(f"- Window start (UTC): {rows.get('window_started_at')}")
+    lines.append(f"- Window end (UTC): {rows.get('window_ended_at')}")
+    lines.append(
+        f"- Totals: completed={len(completed)}, failed={len(failed)}, heartbeat_events={len(heartbeat_rows)}"
+    )
+    lines.append("")
+
+    lines.append("## Completed Autonomous Tasks")
+    if completed:
+        for row in completed:
+            task_text = str(row.get("message") or "").strip() or str(row.get("title") or "Autonomous task")
+            lines.append(f"- {task_text}")
+            job_id = str(row.get("job_id") or "")
+            if job_id:
+                links = _autonomous_job_artifact_links(job_id)
+                if links:
+                    for link in links:
+                        rel = str(link.get("relative_path") or "")
+                        api_url = str(link.get("api_url") or "")
+                        if rel and api_url:
+                            lines.append(f"  - [Artifact: {rel}]({api_url})")
+                else:
+                    lines.append(f"  - No persisted artifact files found for job `{job_id}`.")
+    else:
+        lines.append("- None in the last window.")
+    lines.append("")
+
+    lines.append("## Attempted / Failed Autonomous Tasks")
+    if failed:
+        for row in failed:
+            task_text = str(row.get("message") or "").strip() or str(row.get("title") or "Autonomous task")
+            lines.append(f"- {task_text}")
+            error_text = str(row.get("error") or "").strip()
+            if error_text:
+                lines.append(f"  - Error: `{error_text[:400]}`")
+            job_id = str(row.get("job_id") or "")
+            if job_id:
+                links = _autonomous_job_artifact_links(job_id)
+                for link in links:
+                    rel = str(link.get("relative_path") or "")
+                    api_url = str(link.get("api_url") or "")
+                    if rel and api_url:
+                        lines.append(f"  - [Artifact: {rel}]({api_url})")
+    else:
+        lines.append("- None in the last window.")
+    lines.append("")
+
+    lines.append("## Items Requiring User Decision")
+    if requires_decision:
+        for row in requires_decision:
+            task_id = str(row.get("todoist_task_id") or "").strip()
+            error_text = str(row.get("error") or "").strip()
+            message = str(row.get("message") or "").strip()
+            if task_id:
+                lines.append(f"- Todoist task `{task_id}`: {message}")
+            else:
+                lines.append(f"- {message}")
+            if error_text:
+                lines.append(f"  - Reason: `{error_text[:400]}`")
+    else:
+        lines.append("- None.")
+    lines.append("")
+
+    lines.append("## Heartbeat Autonomous Activity")
+    if heartbeat_rows:
+        for row in heartbeat_rows:
+            lines.append(f"- {str(row.get('created_at') or '')}: {str(row.get('message') or '')}")
+    else:
+        lines.append("- None in the last window.")
+    lines.append("")
+
+    markdown = "\n".join(lines).strip() + "\n"
+    md_path.write_text(markdown, encoding="utf-8")
+
+    payload = {
+        "generated_at": datetime.fromtimestamp(now_ts, timezone.utc).isoformat(),
+        "window_seconds": rows.get("window_seconds"),
+        "window_started_at": rows.get("window_started_at"),
+        "window_ended_at": rows.get("window_ended_at"),
+        "counts": {
+            "completed": len(completed),
+            "failed": len(failed),
+            "heartbeat": len(heartbeat_rows),
+            "requires_decision": len(requires_decision),
+        },
+        "completed": completed,
+        "failed": failed,
+        "heartbeat": heartbeat_rows,
+    }
+    json_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+
+    md_links = _artifact_links_for_path(md_path)
+    json_links = _artifact_links_for_path(json_path)
+    summary_line = (
+        f"Daily autonomous briefing ready: {len(completed)} completed, {len(failed)} failed, "
+        f"{len(requires_decision)} need decisions."
+    )
+    return {
+        "summary_line": summary_line,
+        "markdown": md_links,
+        "json": json_links,
+        "counts": payload.get("counts", {}),
+        "day_slug": day_slug,
+    }
 
 
 def _normalize_interval_from_text(text: str) -> Optional[str]:
@@ -5698,6 +6815,74 @@ async def _resolve_simplified_schedule_update_fields_with_agent(
             timezone_name=timezone_name,
             job=job,
         )
+
+
+def _ensure_autonomous_daily_briefing_job() -> Optional[dict[str, Any]]:
+    if not _cron_service:
+        return None
+    enabled = (os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"})
+    cron_expr = (
+        (os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_CRON") or "").strip()
+        or AUTONOMOUS_DAILY_BRIEFING_DEFAULT_CRON
+    )
+    timezone_name = (
+        (os.getenv("UA_AUTONOMOUS_DAILY_BRIEFING_TIMEZONE") or "").strip()
+        or AUTONOMOUS_DAILY_BRIEFING_DEFAULT_TIMEZONE
+    )
+    command = _build_autonomous_daily_briefing_command()
+    metadata = {
+        "system_job": AUTONOMOUS_DAILY_BRIEFING_JOB_KEY,
+        "autonomous": True,
+        "briefing": True,
+        "source": "system",
+        "session_id": "autonomous_daily_briefing",
+    }
+
+    existing = None
+    for job in _cron_service.list_jobs():
+        job_metadata = getattr(job, "metadata", {}) or {}
+        if not isinstance(job_metadata, dict):
+            continue
+        if str(job_metadata.get("system_job") or "").strip() == AUTONOMOUS_DAILY_BRIEFING_JOB_KEY:
+            existing = job
+            break
+
+    if existing is None:
+        job = _cron_service.add_job(
+            user_id="cron_system",
+            workspace_dir=str(WORKSPACES_DIR / "cron_autonomous_daily_briefing"),
+            command=command,
+            cron_expr=cron_expr,
+            timezone=timezone_name,
+            delete_after_run=False,
+            enabled=enabled,
+            metadata=metadata,
+        )
+        logger.info(
+            "⏰ Created autonomous daily briefing chron job id=%s cron=%s tz=%s enabled=%s",
+            job.job_id,
+            cron_expr,
+            timezone_name,
+            enabled,
+        )
+        return {**job.to_dict(), "running": job.job_id in _cron_service.running_jobs}
+
+    updates: dict[str, Any] = {
+        "command": command,
+        "cron_expr": cron_expr,
+        "timezone": timezone_name,
+        "enabled": enabled,
+        "metadata": metadata,
+    }
+    updated = _cron_service.update_job(existing.job_id, updates)
+    logger.info(
+        "⏰ Updated autonomous daily briefing chron job id=%s cron=%s tz=%s enabled=%s",
+        updated.job_id,
+        cron_expr,
+        timezone_name,
+        enabled,
+    )
+    return {**updated.to_dict(), "running": updated.job_id in _cron_service.running_jobs}
 
 
 @app.get("/api/v1/cron/jobs")
@@ -6304,6 +7489,24 @@ async def ops_session_continuity_metrics(request: Request):
 async def ops_scheduling_runtime_metrics(request: Request):
     _require_ops_auth(request)
     return {"metrics": _scheduling_runtime_metrics_snapshot()}
+
+
+@app.post("/api/v1/ops/reconcile/todoist-chron")
+async def ops_reconcile_todoist_chron(
+    request: Request,
+    dry_run: bool = False,
+    remove_stale: Optional[bool] = None,
+):
+    _require_ops_auth(request)
+    effective_remove_stale = (
+        TODOIST_CHRON_RECONCILE_REMOVE_STALE if remove_stale is None else bool(remove_stale)
+    )
+    result = _reconcile_todoist_chron_mappings(
+        remove_stale=effective_remove_stale,
+        dry_run=bool(dry_run),
+    )
+    metrics = _scheduling_runtime_metrics_snapshot().get("todoist_chron_reconciliation", {})
+    return {"status": "ok", "reconciliation": result, "metrics": metrics}
 
 
 @app.get("/api/v1/ops/metrics/vp-bridge")

@@ -1,6 +1,6 @@
 # Workstreams and Technical Scope
 
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 
 ## Workstream A: System Command UX (Non-Chat Tabs)
 
@@ -8,6 +8,8 @@ Last updated: 2026-02-24
 2. Inject page context (`selected_run_path`, `selected_job_id`, etc.).
 3. POST to a single interpreter endpoint.
 4. Show immediate interpreted action summary/result.
+
+Status: Baseline complete (context now includes route/query/selection/timezone/user-agent snapshot).
 
 ## Workstream B: Intent Interpreter and Routing
 
@@ -43,6 +45,8 @@ Last updated: 2026-02-24
 - `ua_manual_gate`
 3. Update status/comments after run completion/failure.
 
+Status: Baseline complete for capture/routing with persisted mapping store and periodic reconciliation pass.
+
 ## Workstream D: Heartbeat Proactive Executor
 
 1. Add explicit backlog advancement objective into heartbeat mission guidance.
@@ -52,6 +56,12 @@ Last updated: 2026-02-24
 - select one by priority + mission fit
 - execute with safe guardrails
 3. Publish result notification for each independent run.
+4. Keep scheduling boundaries clear:
+- Heartbeat tick decides "whether to run something now".
+- Todoist due-time decides "what should be due/urgent".
+- Chron handles deterministic execution windows for scheduled tasks.
+
+Status: Guard policy now enforced in runtime (`autonomous_enabled`, actionable cap, event cap, single-task shortlist).
 
 ## Workstream E: Daily 7:00 AM Autonomous Briefing
 
@@ -65,9 +75,10 @@ Last updated: 2026-02-24
 - artifacts/links
 - failures/blocks needing user intervention
 
+Status: Deterministic artifact generator complete with report links in notification metadata.
+
 ## Workstream F: Observability and Controls
 
 1. Store command routing decisions in structured logs.
 2. Add dashboard view for system command history (phase 2+).
 3. Add feature flags for staged rollout and rapid disable.
-

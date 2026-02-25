@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
 
 const NAV_ITEMS: { href: string; label: string; external?: boolean; primary?: boolean }[] = [
   { href: "/", label: "← Back to Main App", primary: true },
@@ -94,6 +95,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     await fetch("/api/dashboard/auth/logout", { method: "POST" });
     await loadAuthSession();
   }, [loadAuthSession]);
+  const showSystemCommandBar = Boolean(pathname && !pathname.startsWith("/dashboard/chat"));
 
   if (loadingAuth) {
     return (
@@ -233,6 +235,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         </aside>
 
         <main className="flex h-full flex-1 flex-col overflow-y-auto overflow-x-hidden scrollbar-thin bg-slate-900/50 p-4 pr-2 backdrop-blur md:rounded-xl md:border md:border-slate-800/80 md:p-6 md:pr-4">
+          {showSystemCommandBar && <SystemCommandBar sourcePage={pathname || "/dashboard"} />}
           {children}
         </main>
       </div>
