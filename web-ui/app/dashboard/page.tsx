@@ -134,6 +134,7 @@ function workspaceExplorerHref(path?: string | null): string {
     tab: "explorer",
     scope: "workspaces",
     path: relativePath,
+    root_source: "local",
   });
   return `/storage?${params.toString()}`;
 }
@@ -145,8 +146,20 @@ function artifactExplorerHref(path?: string | null): string {
     tab: "explorer",
     scope: "artifacts",
     path: normalized,
+    root_source: "local",
   });
   return `/storage?${params.toString()}`;
+}
+
+function chatSessionHref(sessionId?: string | null): string {
+  const sid = asText(sessionId);
+  if (!sid) return "";
+  const params = new URLSearchParams({
+    session_id: sid,
+    attach: "tail",
+    role: "viewer",
+  });
+  return `/?${params.toString()}`;
 }
 
 function RefLine({
@@ -204,8 +217,6 @@ export default function DashboardPage() {
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
-  const [commandText, setCommandText] = useState("");
-  const [commandSending, setCommandSending] = useState(false);
   const [vpSessions, setVpSessions] = useState<VpSessionSnapshot[]>([]);
   const [vpMissions, setVpMissions] = useState<VpMissionSnapshot[]>([]);
   const [vpMetrics, setVpMetrics] = useState<Record<string, VpMetricsSnapshot>>({});
@@ -636,7 +647,14 @@ export default function DashboardPage() {
     if (sourceFilter !== "all") {
       list = list.filter((s) => inferSourceCategory(s) === sourceFilter);
     }
-    return list;
+    const sorted = [...list];
+    sorted.sort((a, b) => {
+      const aTs = Date.parse(a.last_activity || "") || 0;
+      const bTs = Date.parse(b.last_activity || "") || 0;
+      if (aTs !== bTs) return bTs - aTs;
+      return b.session_id.localeCompare(a.session_id);
+    });
+    return sorted;
   }, [sessionDirectory, sessionFilter, sourceFilter, inferSourceCategory]);
 
   const toggleSession = useCallback((id: string) => {
@@ -687,52 +705,6 @@ export default function DashboardPage() {
     setSelectedSessions(new Set());
     setDeletingIds(new Set());
   }, [selectedSessions]);
-
-  const sendQuickCommand = useCallback(async () => {
-    const text = commandText.trim();
-    if (!text) return;
-
-    const targetAgent = text.startsWith("@") ? text.split(" ")[0].substring(1) : "system-configuration-agent";
-    const prefixed = text.startsWith("@") ? text : `@system-configuration-agent ${text}`;
-
-    // Find existing session for this agent to resume context
-    // Ideally we look for a session named "session_{agent_name}"
-    // But failing that, we just open a fresh session.
-    // For system configuration, let's try to reuse if we see one in the directory.
-    let targetSessionId = "";
-    const agentSession = sessionDirectory.find(s =>
-      s.session_id.includes(targetAgent) ||
-      (s.owner === targetAgent)
-    );
-
-    if (agentSession) {
-      targetSessionId = agentSession.session_id;
-    }
-
-    // If we have a target session, reuse it. Otherwise let the chat window handle creation (default behavior)
-    // But passing ?message= will auto-send.
-    openOrFocusChatWindow({
-      sessionId: targetSessionId || undefined,
-      role: "writer",
-    });
-
-    // We need to wait a bit for the window to open/focus before clearing? 
-    // Actually the URL param handles the message passing.
-    // But wait - if we construct URL with message, openOrFocusChatWindow needs to support it.
-    // It currently takes options but buildChatUrl doesn't support 'message'. 
-    // We should fix openOrFocusChatWindow or just construct URL manually here for now to be safe.
-
-    const params = new URLSearchParams();
-    if (targetSessionId) params.set("session_id", targetSessionId);
-    params.set("role", "writer");
-    params.set("message", prefixed);
-
-    const chatUrl = `/?${params.toString()}`;
-    const w = window.open(chatUrl, "ua-chat-window");
-    if (w) w.focus();
-
-    setCommandText("");
-  }, [commandText, sessionDirectory]);
 
   return (
     <div className="space-y-6">
@@ -1013,30 +985,6 @@ export default function DashboardPage() {
         )}
       </section>
 
-      {/* Quick Command Input */}
-      <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-        <div className="flex items-center gap-3">
-          <span className="text-xs uppercase tracking-[0.16em] text-slate-400 shrink-0">Quick Command</span>
-          <input
-            type="text"
-            value={commandText}
-            onChange={(e) => setCommandText(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendQuickCommand(); } }}
-            placeholder="e.g. delete all sessions except the current one…"
-            className="flex-1 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder-slate-500 outline-none focus:border-cyan-700/60"
-          />
-          <button
-            type="button"
-            onClick={sendQuickCommand}
-            disabled={commandSending || !commandText.trim()}
-            className="rounded-lg border border-cyan-700 bg-cyan-900/25 px-4 py-2 text-sm text-cyan-200 hover:bg-cyan-900/40 disabled:opacity-40 transition"
-          >
-            Send →
-          </button>
-        </div>
-        <p className="mt-1.5 text-[10px] text-slate-500">Routes to the system-configuration-agent by default. Prefix with @agent-name to target a different agent.</p>
-      </section>
-
       <section ref={sessionSectionRef} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4">
         <div className="mb-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -1286,6 +1234,7 @@ export default function DashboardPage() {
             const metadata = asRecord(item.metadata);
             const tutorialRunPath = asText(metadata.tutorial_run_path);
             const reviewRunPath = asText(metadata.review_run_path);
+            const chatHref = chatSessionHref(item.session_id);
             const tutorialHref = artifactExplorerHref(tutorialRunPath);
             const reviewHref = artifactExplorerHref(reviewRunPath);
             const metadataRequiresAction =
@@ -1327,6 +1276,16 @@ export default function DashboardPage() {
                     >
                       View Simone Review
                     </Link>
+                  )}
+                  {chatHref && (
+                    <a
+                      href={chatHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded border border-blue-800/70 bg-blue-900/20 px-2 py-1 text-[11px] text-blue-200 hover:bg-blue-900/35"
+                    >
+                      Open Session
+                    </a>
                   )}
                   {canDispatchTutorial && (
                     <button

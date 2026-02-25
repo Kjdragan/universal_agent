@@ -1,4 +1,5 @@
 import time
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -217,3 +218,28 @@ def test_generate_daily_briefing_includes_non_cron_artifacts_section(tmp_path: P
     assert "## Non-Cron Autonomous Artifact Outputs" in markdown
     assert "scope=workspaces" in markdown
     assert payload["counts"]["non_cron_artifacts"] == 1
+
+
+def test_storage_explorer_href_normalizes_file_path_to_parent_for_preview():
+    file_rel = "youtube-tutorial-learning/2026-02-25/abc123/README.md"
+    href = gateway_server._storage_explorer_href(scope="artifacts", path=file_rel, preview=file_rel)
+    parsed = urllib.parse.urlparse(href)
+    params = urllib.parse.parse_qs(parsed.query)
+
+    assert params["tab"] == ["explorer"]
+    assert params["scope"] == ["artifacts"]
+    assert params["root_source"] == ["local"]
+    assert params["path"] == ["youtube-tutorial-learning/2026-02-25/abc123"]
+    assert params["preview"] == [file_rel]
+
+
+def test_storage_explorer_href_supports_root_file_preview_without_path():
+    href = gateway_server._storage_explorer_href(scope="workspaces", path="", preview="run.log")
+    parsed = urllib.parse.urlparse(href)
+    params = urllib.parse.parse_qs(parsed.query)
+
+    assert params["tab"] == ["explorer"]
+    assert params["scope"] == ["workspaces"]
+    assert params["root_source"] == ["local"]
+    assert "path" not in params
+    assert params["preview"] == ["run.log"]

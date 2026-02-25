@@ -315,10 +315,18 @@ def _safe_slug_component(value: str) -> str:
 
 def _storage_explorer_href(*, scope: str, path: str, preview: Optional[str] = None) -> str:
     normalized_path = str(path or "").strip().replace("\\", "/").strip("/")
-    if not normalized_path:
-        return "/storage?tab=explorer"
-    params: dict[str, str] = {"tab": "explorer", "scope": str(scope or "artifacts"), "path": normalized_path}
     normalized_preview = str(preview or "").strip().replace("\\", "/").strip("/")
+
+    # File deep-links should open the containing directory and preview the file.
+    if normalized_preview and (not normalized_path or normalized_path == normalized_preview):
+        normalized_path = normalized_preview.rsplit("/", 1)[0] if "/" in normalized_preview else ""
+
+    if not normalized_path and not normalized_preview:
+        return "/storage?tab=explorer"
+
+    params: dict[str, str] = {"tab": "explorer", "scope": str(scope or "artifacts"), "root_source": "local"}
+    if normalized_path:
+        params["path"] = normalized_path
     if normalized_preview:
         params["preview"] = normalized_preview
     return f"/storage?{urllib.parse.urlencode(params)}"
