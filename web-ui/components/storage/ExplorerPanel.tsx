@@ -169,6 +169,26 @@ export function ExplorerPanel({
       if (!res.ok) {
         throw new Error(data?.detail || `Failed (${res.status})`);
       }
+
+      if (data?.error_count > 0) {
+        const firstError = data.errors?.[0];
+        if (firstError?.code === "protected_requires_override") {
+          if (window.confirm(`This directory contains protected database files (e.g. SQLite). Force delete anyway? This cannot be undone.`)) {
+            const resRetry = await fetch("/api/vps/files/delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ scope, paths: [entry.path], allow_protected: true }),
+            });
+            const dataRetry = await resRetry.json().catch(() => ({}));
+            if (!resRetry.ok) throw new Error(dataRetry?.detail || `Failed (${resRetry.status})`);
+            if (dataRetry?.error_count > 0) throw new Error(dataRetry.errors?.[0]?.error || "Force deletion failed");
+          } else {
+            return; // Cancelled
+          }
+        } else {
+          throw new Error(firstError?.error || "Some items could not be deleted");
+        }
+      }
       if (preview.title === entry.path || preview.title.startsWith(entry.path + "/")) {
         preview.clearPreview();
       }
