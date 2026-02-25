@@ -1208,22 +1208,37 @@ class HooksService:
             raise RuntimeError("youtube_artifacts_missing_manifest")
 
         run_dir = manifest_path.parent
+        manifest_payload = self._safe_json(manifest_path)
+        learning_mode = str(manifest_payload.get("learning_mode") or "").strip().lower()
+        mode = str(manifest_payload.get("mode") or "").strip().lower()
+        artifacts = manifest_payload.get("artifacts") if isinstance(manifest_payload, dict) else None
+        artifacts_map = artifacts if isinstance(artifacts, dict) else {}
+        implementation_dir_hint = str(artifacts_map.get("implementation_dir") or "").strip()
+        implementation_required = bool(manifest_payload.get("implementation_required")) or (
+            learning_mode in {"concept_plus_implementation", "implementation", "code_only"}
+            or mode in {"explainer_plus_code", "implementation", "code_only"}
+            or bool(implementation_dir_hint)
+        )
+
         missing: list[str] = []
-        for required_name in ("README.md", "CONCEPT.md", "IMPLEMENTATION.md"):
+        required_files = ["README.md", "CONCEPT.md"]
+        if implementation_required:
+            required_files.append("IMPLEMENTATION.md")
+        for required_name in required_files:
             if not (run_dir / required_name).is_file():
                 missing.append(required_name)
-        implementation_dir = run_dir / "implementation"
-        if not implementation_dir.is_dir():
-            missing.append("implementation/")
-        else:
-            has_impl_file = any(node.is_file() for node in implementation_dir.rglob("*"))
-            if not has_impl_file:
-                missing.append("implementation/*")
+        if implementation_required:
+            implementation_dir = run_dir / "implementation"
+            if not implementation_dir.is_dir():
+                missing.append("implementation/")
+            else:
+                has_impl_file = any(node.is_file() for node in implementation_dir.rglob("*"))
+                if not has_impl_file:
+                    missing.append("implementation/*")
         if missing:
             raise RuntimeError(f"youtube_artifacts_incomplete:{','.join(missing)}")
 
         run_rel_path = self._tutorial_run_rel_path(run_dir)
-        manifest_payload = self._safe_json(manifest_path)
 
         return {
             "video_id": video_id,
@@ -1232,6 +1247,7 @@ class HooksService:
             "run_rel_path": run_rel_path,
             "title": str(manifest_payload.get("title") or run_dir.name),
             "status": str(manifest_payload.get("status") or "full"),
+            "implementation_required": implementation_required,
             "key_files": self._tutorial_key_files_for_notification(
                 run_dir=run_dir,
                 run_rel_path=run_rel_path,

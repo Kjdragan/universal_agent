@@ -64,14 +64,31 @@ class _TeeWriter:
         self._stream = stream
 
     def write(self, data: str) -> None:
-        self._stream.write(data)
-        self._stream.flush()
-        self._file.write(data)
-        self._file.flush()
+        # Process-wide stdio redirection can overlap across concurrent turns.
+        # If an older tee's file handle is already closed, never raise from here;
+        # keep best-effort writing to whatever stream/file is still valid.
+        try:
+            self._stream.write(data)
+            self._stream.flush()
+        except Exception:
+            pass
+        try:
+            if not getattr(self._file, "closed", False):
+                self._file.write(data)
+                self._file.flush()
+        except Exception:
+            pass
 
     def flush(self) -> None:
-        self._stream.flush()
-        self._file.flush()
+        try:
+            self._stream.flush()
+        except Exception:
+            pass
+        try:
+            if not getattr(self._file, "closed", False):
+                self._file.flush()
+        except Exception:
+            pass
 
     def isatty(self) -> bool:
         return bool(getattr(self._stream, "isatty", lambda: False)())
