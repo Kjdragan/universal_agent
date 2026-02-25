@@ -1,6 +1,6 @@
 # Task Board (Dynamic)
 
-Last updated: 2026-02-24
+Last updated: 2026-02-25
 
 ## Phase 0 - Planning
 
@@ -8,41 +8,40 @@ Last updated: 2026-02-24
 - [x] Confirm heartbeat/Chron integration surfaces
 - [x] Lock UX lane strategy (chat=session, non-chat=system)
 - [x] Add proactive heartbeat + 7:00 AM briefing requirements into plan
-- [ ] Finalize action envelope schema + validation rules
-- [ ] Finalize autonomous eligibility matrix
+- [x] Finalize action envelope schema + validation rules
+- [x] Finalize autonomous eligibility matrix
 
 ## Phase 1 - Shared System Command UI
 
-- [ ] Create reusable non-chat command component
-- [ ] Add to Dashboard/Cron/Tutorial/Storage tabs
-- [ ] Wire endpoint + success/error feedback
-- [ ] Add context injection by page
+- [x] Create reusable non-chat command component
+- [x] Add to dashboard layout (non-chat tabs)
+- [x] Wire endpoint + success/error feedback
+- [x] Add context injection by page
 
 ## Phase 2 - Interpreter + Todoist Routing
 
-- [ ] Implement interpreter endpoint
-- [ ] Add Todoist quick-add/structured routing
-- [ ] Add deterministic response summaries
-- [ ] Add tests for schedule parsing and intent mapping
+- [x] Implement interpreter endpoint
+- [x] Add Todoist structured routing
+- [x] Add deterministic response summaries
+- [x] Add tests for schedule parsing and intent mapping
 
 ## Phase 3 - Todoist <-> Chron Bridge
 
-- [ ] Add mapping persistence (`todoist_task_id` -> `cron_job_id`)
-- [ ] Add idempotent upsert behavior
-- [ ] Add run result write-back to Todoist
-- [ ] Add reconciliation pass for drift
+- [x] Add baseline mapping metadata (`todoist_task_id` in Chron metadata)
+- [x] Add persisted idempotent upsert mapping store
+- [x] Add run-result visibility for autonomous runs via notifications
+- [x] Add reconciliation pass for drift
 
 ## Phase 4 - Heartbeat Proactive Work
 
-- [ ] Add mission directive for Todoist backlog advancement
-- [ ] Add idle/capacity guard
-- [ ] Add single-task-per-cycle execution policy
-- [ ] Emit independent completion/failure notifications
+- [x] Add mission directive for Todoist backlog advancement
+- [x] Add idle/capacity guard
+- [x] Add single-task-per-cycle execution policy
+- [x] Emit independent completion/failure notifications (baseline)
 
 ## Phase 5 - Daily Autonomous Briefing
 
-- [ ] Implement briefing aggregator service
-- [ ] Add 07:00 daily Chron job bootstrap/update
-- [ ] Write report artifact + notification link
+- [x] Implement deterministic briefing aggregator service
+- [x] Add 07:00 daily Chron job bootstrap/update
+- [x] Write report artifact + notification link
 - [ ] Validate previous-24h coverage and edge cases
-
