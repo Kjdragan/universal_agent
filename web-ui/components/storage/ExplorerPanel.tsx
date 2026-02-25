@@ -208,8 +208,8 @@ export function ExplorerPanel({
                 type="button"
                 onClick={() => switchScope(s)}
                 className={`rounded-md px-2.5 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors ${scope === s
-                    ? "bg-cyan-500/15 text-cyan-300 ring-1 ring-cyan-500/30"
-                    : "text-slate-400 hover:bg-slate-700/40 hover:text-slate-200"
+                  ? "bg-cyan-500/15 text-cyan-300 ring-1 ring-cyan-500/30"
+                  : "text-slate-400 hover:bg-slate-700/40 hover:text-slate-200"
                   }`}
               >
                 {s === "workspaces" ? "Sessions" : "Artifacts"}
@@ -245,8 +245,8 @@ export function ExplorerPanel({
                 type="button"
                 onClick={() => setPath(crumb.path)}
                 className={`rounded px-1 py-0.5 transition-colors ${i === breadcrumbs.length - 1
-                    ? "font-medium text-cyan-300"
-                    : "text-slate-400 hover:text-slate-200"
+                  ? "font-medium text-cyan-300"
+                  : "text-slate-400 hover:text-slate-200"
                   }`}
               >
                 {crumb.label}
@@ -301,7 +301,7 @@ export function ExplorerPanel({
                     type="button"
                     onClick={() => void deleteItem(entry)}
                     disabled={deletingPaths.has(entry.path)}
-                    className="shrink-0 rounded-md p-1 text-slate-600 opacity-0 transition-all group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
+                    className="shrink-0 rounded-md p-1 text-slate-600 opacity-30 transition-all group-hover:opacity-100 hover:bg-red-500/15 hover:text-red-400 disabled:opacity-50"
                     title={`Delete ${entry.name}`}
                   >
                     {deletingPaths.has(entry.path) ? (
