@@ -26,16 +26,42 @@ DISPLAY_TO_API = {
 }
 
 
-AGENT_TASKS_PROJECT = "Agent Tasks"
-BRAINSTORM_PROJECT = "UA Brainstorm Pipeline"
+# ── 5-Project UA Taxonomy ──────────────────────────────────────────────────────
+# Each project has a distinct purpose. All human and agent tasks route here.
 
-AGENT_SECTIONS = {
+# Project 1: Core missions rooted in soul doc, identity, values, and long-horizon goals.
+UA_PROJECT_MISSION = "UA: Mission & Identity"
+# Project 2: Tasks surfaced from memory analysis, profile updates, or knowledge gaps.
+UA_PROJECT_MEMORY = "UA: Memory Insights"
+# Project 3: Heartbeat / cron-schedulable opportunities — Simone can self-dispatch.
+UA_PROJECT_PROACTIVE = "UA: Proactive Intelligence"
+# Project 4: CSI-surfaced reports or signals elevated to a task for review/investigation.
+UA_PROJECT_CSI = "UA: CSI Actions"
+# Project 5: 24-hour catch-all — user-created or agent-detected tasks to close quickly.
+UA_PROJECT_IMMEDIATE = "UA: Immediate Queue"
+
+# All project names in priority order.
+ALL_UA_PROJECTS = [
+    UA_PROJECT_MISSION,
+    UA_PROJECT_MEMORY,
+    UA_PROJECT_PROACTIVE,
+    UA_PROJECT_CSI,
+    UA_PROJECT_IMMEDIATE,
+]
+
+# Sections are shared across all 5 projects.
+UA_SECTIONS = {
     "immediate": "Immediate",
     "scheduled": "Scheduled",
     "background": "Background",
     "recurring": "Recurring",
 }
 
+# Legacy aliases for backward compat (old heartbeat references).
+AGENT_TASKS_PROJECT = UA_PROJECT_IMMEDIATE  # default for old callers
+BRAINSTORM_PROJECT = UA_PROJECT_PROACTIVE
+
+# Brainstorm pipeline sections (preserved on UA: Proactive Intelligence)
 BRAINSTORM_SECTIONS = {
     "inbox": "Inbox",
     "triaging": "Triaging",
@@ -44,6 +70,9 @@ BRAINSTORM_SECTIONS = {
     "in_implementation": "In Implementation",
     "parked": "Parked / Rejected",
 }
+
+# Keeping for legacy compat
+AGENT_SECTIONS = UA_SECTIONS
 
 DEFAULT_AGENT_LABELS = [
     "agent-ready",
@@ -61,7 +90,49 @@ DEFAULT_BRAINSTORM_LABELS = [
     "approved",
 ]
 
+# Maps friendly project key → constant name.
+PROJECT_KEY_MAP: dict[str, str] = {
+    "mission": UA_PROJECT_MISSION,
+    "identity": UA_PROJECT_MISSION,
+    "mission_identity": UA_PROJECT_MISSION,
+    "memory": UA_PROJECT_MEMORY,
+    "memory_insights": UA_PROJECT_MEMORY,
+    "proactive": UA_PROJECT_PROACTIVE,
+    "proactive_intelligence": UA_PROJECT_PROACTIVE,
+    "brainstorm": UA_PROJECT_PROACTIVE,
+    "heartbeat": UA_PROJECT_PROACTIVE,
+    "csi": UA_PROJECT_CSI,
+    "csi_actions": UA_PROJECT_CSI,
+    "immediate": UA_PROJECT_IMMEDIATE,
+    "immediate_queue": UA_PROJECT_IMMEDIATE,
+    "default": UA_PROJECT_IMMEDIATE,
+}
 
+
+@dataclass
+class UA5Taxonomy:
+    """Holds all 5 UA project IDs and their section mappings."""
+    project_ids: dict[str, str]   # project_name -> project_id
+    section_ids: dict[str, dict[str, str]]  # project_name -> {section_key -> section_id}
+    brainstorm_sections: dict[str, str]  # kept for proactive project brainstorm pipeline
+
+    @property
+    def agent_project_id(self) -> str:
+        """Legacy compat: returns Immediate Queue ID."""
+        return self.project_ids.get(UA_PROJECT_IMMEDIATE, "")
+
+    @property
+    def brainstorm_project_id(self) -> str:
+        """Legacy compat: returns Proactive Intelligence ID."""
+        return self.project_ids.get(UA_PROJECT_PROACTIVE, "")
+
+    @property
+    def agent_sections(self) -> dict[str, str]:
+        """Legacy compat: returns Immediate Queue section IDs."""
+        return self.section_ids.get(UA_PROJECT_IMMEDIATE, {})
+
+
+# Keep the old dataclass around for type-checking in legacy callers.
 @dataclass
 class TodoistTaxonomy:
     agent_project_id: str
@@ -91,43 +162,42 @@ class TodoService:
         else:
             self._api = api
 
-        self._taxonomy: Optional[TodoistTaxonomy] = None
+        self._taxonomy: Optional[UA5Taxonomy] = None
 
     @property
     def api(self):
         return self._api
 
     def ensure_taxonomy(self) -> dict:
-        """Idempotently create projects, sections, labels."""
+        """Idempotently create all 5 UA projects, sections, and labels."""
 
         try:
             projects = _collect_items(self.api.get_projects())
-            fallback_project = projects[0] if projects else None
-            agent_project = _find_by_name(projects, AGENT_TASKS_PROJECT)
-            if not agent_project:
-                try:
-                    agent_project = self.api.add_project(name=AGENT_TASKS_PROJECT)
-                except Exception:
-                    agent_project = fallback_project
+            project_ids: dict[str, str] = {}
+            section_ids: dict[str, dict[str, str]] = {}
 
-            brainstorm_project = _find_by_name(projects, BRAINSTORM_PROJECT)
-            if not brainstorm_project:
-                try:
-                    brainstorm_project = self.api.add_project(name=BRAINSTORM_PROJECT)
-                except Exception:
-                    brainstorm_project = agent_project or fallback_project
+            fallback = projects[0] if projects else None
 
-            if not agent_project or not brainstorm_project:
-                raise RuntimeError("Todoist projects unavailable")
+            for project_name in ALL_UA_PROJECTS:
+                found = _find_by_name(projects, project_name)
+                if not found:
+                    try:
+                        found = self.api.add_project(name=project_name)
+                    except Exception:
+                        found = fallback
+                pid = str(_get_field(found, "id", "") or "")
+                if not pid:
+                    raise RuntimeError(f"Could not obtain project ID for '{project_name}'")
+                project_ids[project_name] = pid
 
-            agent_project_id = str(_get_field(agent_project, "id", "") or "")
-            brainstorm_project_id = str(_get_field(brainstorm_project, "id", "") or "")
-            if not agent_project_id or not brainstorm_project_id:
-                raise RuntimeError("Todoist project ids unavailable")
+                # All projects share general UA_SECTIONS except the Proactive Intelligence one
+                # which additionally carries the brainstorm pipeline sections.
+                if project_name == UA_PROJECT_PROACTIVE:
+                    section_ids[project_name] = self._ensure_sections(pid, BRAINSTORM_SECTIONS)
+                else:
+                    section_ids[project_name] = self._ensure_sections(pid, UA_SECTIONS)
 
-            agent_sections = self._ensure_sections(agent_project_id, AGENT_SECTIONS)
-            brainstorm_sections = self._ensure_sections(brainstorm_project_id, BRAINSTORM_SECTIONS)
-
+            # Bootstrap labels
             labels_created: list[str] = []
             labels = _collect_items(self.api.get_labels())
             existing_labels = {
@@ -141,30 +211,24 @@ class TodoService:
                         self.api.add_label(name=name)
                         labels_created.append(name)
                     except Exception:
-                        # Another actor may have created it; treat as idempotent.
-                        pass
+                        pass  # idempotent
 
-            self._taxonomy = TodoistTaxonomy(
-                agent_project_id=agent_project_id,
-                brainstorm_project_id=brainstorm_project_id,
-                agent_sections=agent_sections,
-                brainstorm_sections=brainstorm_sections,
+            self._taxonomy = UA5Taxonomy(
+                project_ids=project_ids,
+                section_ids=section_ids,
+                brainstorm_sections=section_ids.get(UA_PROJECT_PROACTIVE, {}),
             )
 
             return {
-                "agent_project_id": agent_project_id,
-                "brainstorm_project_id": brainstorm_project_id,
-                "agent_sections": agent_sections,
-                "brainstorm_sections": brainstorm_sections,
+                "project_ids": project_ids,
+                "section_ids": section_ids,
                 "labels_created": labels_created,
             }
         except Exception:
             # Never crash callers (heartbeat). Surface empty-ish payload.
             return {
-                "agent_project_id": "",
-                "brainstorm_project_id": "",
-                "agent_sections": {},
-                "brainstorm_sections": {},
+                "project_ids": {},
+                "section_ids": {},
                 "labels_created": [],
             }
 
@@ -249,9 +313,22 @@ class TodoService:
         due_string: str | None = None,
         sub_agent: str | None = None,
         parent_id: str | None = None,
+        project_key: str = "default",
     ) -> dict[str, Any]:
+        """Create a task routed to the appropriate UA project.
+
+        project_key: one of the keys in PROJECT_KEY_MAP (e.g. 'csi', 'mission', 'memory',
+            'proactive', 'immediate'). Defaults to 'UA: Immediate Queue'.
+        """
         taxonomy = self._get_taxonomy_or_bootstrap()
-        section_id = taxonomy.agent_sections.get(section.lower())
+        project_name = PROJECT_KEY_MAP.get((project_key or "").strip().lower(), UA_PROJECT_IMMEDIATE)
+        project_id = taxonomy.project_ids.get(project_name, taxonomy.agent_project_id)
+        # For the proactive project use brainstorm sections; others use UA_SECTIONS.
+        if project_name == UA_PROJECT_PROACTIVE:
+            project_sections = taxonomy.brainstorm_sections
+        else:
+            project_sections = taxonomy.section_ids.get(project_name, {})
+        section_id = project_sections.get(section.lower()) or project_sections.get("background")
         task_labels = set(labels or [])
         task_labels.add("agent-ready")
         if sub_agent:
@@ -260,7 +337,7 @@ class TodoService:
         task = self.api.add_task(
             content=content,
             description=description,
-            project_id=taxonomy.agent_project_id,
+            project_id=project_id,
             section_id=section_id,
             labels=sorted(task_labels),
             priority=api_priority,
@@ -490,18 +567,27 @@ class TodoService:
             "already_candidate": previous_section == "heartbeat_candidate",
         }
 
-    def get_pipeline_summary(self) -> dict[str, int]:
+    def get_pipeline_summary(self) -> dict[str, Any]:
+        """Return per-project task counts across all 5 UA projects."""
         taxonomy = self._get_taxonomy_or_bootstrap()
-        reverse = {v: k for k, v in taxonomy.brainstorm_sections.items()}
-        tasks = self.get_all_tasks(project_id=taxonomy.brainstorm_project_id)
-        counts: dict[str, int] = {k: 0 for k in taxonomy.brainstorm_sections.keys()}
-        for task in tasks:
-            sid = str(task.get("section_id") or "")
-            key = reverse.get(sid)
-            if not key:
-                continue
-            counts[key] = int(counts.get(key) or 0) + 1
-        return counts
+        result: dict[str, Any] = {}
+        for project_name, project_id in taxonomy.project_ids.items():
+            all_tasks = self.get_all_tasks(project_id=project_id)
+            result[project_name] = len(all_tasks)
+        # Also include brainstorm section breakdown for the proactive project
+        proactive_id = taxonomy.project_ids.get(UA_PROJECT_PROACTIVE, "")
+        if proactive_id:
+            proactive_tasks = self.get_all_tasks(project_id=proactive_id)
+            reverse = {v: k for k, v in taxonomy.brainstorm_sections.items()}
+            section_counts: dict[str, int] = {k: 0 for k in taxonomy.brainstorm_sections}
+            for task in proactive_tasks:
+                sid = str(task.get("section_id") or "")
+                key = reverse.get(sid)
+                if key:
+                    section_counts[key] = section_counts.get(key, 0) + 1
+            result[f"{UA_PROJECT_PROACTIVE}__sections"] = section_counts
+        return result
+
 
     def heartbeat_brainstorm_candidates(
         self,
@@ -575,7 +661,7 @@ class TodoService:
         n = max(1, int(limit or 1))
         return candidates[:n]
 
-    def _get_taxonomy_or_bootstrap(self) -> TodoistTaxonomy:
+    def _get_taxonomy_or_bootstrap(self) -> UA5Taxonomy:
         if self._taxonomy is None:
             self.ensure_taxonomy()
         if self._taxonomy is None:

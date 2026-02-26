@@ -12,6 +12,8 @@ export type SessionDirectoryItem = {
   last_activity?: string;
   active_connections?: number;
   active_runs?: number;
+  last_run_source?: string;
+  heartbeat_last?: number;
 };
 
 function inferSource(sessionId: string): string {
@@ -49,6 +51,8 @@ export async function fetchSessionDirectory(limit = 200): Promise<SessionDirecto
           last_activity: row.last_activity ? String(row.last_activity) : undefined,
           active_connections: Number(row.active_connections || 0),
           active_runs: Number(row.active_runs || 0),
+          last_run_source: row.last_run_source ? String(row.last_run_source) : undefined,
+          heartbeat_last: row.heartbeat_last ? Number(row.heartbeat_last) : undefined,
         };
       });
     }

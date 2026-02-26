@@ -993,11 +993,12 @@ function ChatInterface() {
   const [pendingQuery, setPendingQuery] = useState<string | null>(null);
   const [chatRole, setChatRole] = useState<"writer" | "viewer">("writer");
   const [historyHydrationNotice, setHistoryHydrationNotice] = useState<string | null>(null);
+  const [hydrationError, setHydrationError] = useState<string | null>(null);
   const [requestedSessionIdFromUrl, setRequestedSessionIdFromUrl] = useState("");
   const connectionStatus = useAgentStore((s) => s.connectionStatus);
   const ws = getWebSocket();
   const inputRef = React.useRef<HTMLInputElement>(null);
-  const handleSendRef = React.useRef<(textOverride?: string) => Promise<void>>(async () => {});
+  const handleSendRef = React.useRef<(textOverride?: string) => Promise<void>>(async () => { });
   const hydratedSessionIdsRef = React.useRef<Set<string>>(new Set());
   const lastSessionIdRef = React.useRef<string>("");
   const effectiveSessionId = (currentSession?.session_id || requestedSessionIdFromUrl || "").trim();
@@ -1136,6 +1137,7 @@ function ChatInterface() {
     store.setCurrentThinking("");
     store.finishStream();
     setHistoryHydrationNotice(null);
+    setHydrationError(null);
     hydratedSessionIdsRef.current.clear();
     lastSessionIdRef.current = effectiveSessionId;
   }, [effectiveSessionId]);
@@ -1158,6 +1160,7 @@ function ChatInterface() {
     }
 
     let cancelled = false;
+    setHydrationError(null);
     (async () => {
       try {
         const store = useAgentStore.getState();
@@ -1181,6 +1184,11 @@ function ChatInterface() {
               });
             }
             hydratedMessageCount += history.length;
+          }
+        } else if (response.status !== 404) {
+          // Non-404 failures indicate a connectivity/proxy issue
+          if (!cancelled) {
+            setHydrationError(`Failed to load session history (HTTP ${response.status}). The gateway API may not be reachable.`);
           }
         }
 
@@ -1223,9 +1231,14 @@ function ChatInterface() {
             hydratedLogCount > 0 ? `${hydratedLogCount} activity events` : "",
           ].filter(Boolean);
           setHistoryHydrationNotice(`Hydrated ${fragments.join(" + ")} for ${sessionId}`);
+        } else if (!cancelled && store.messages.length === 0) {
+          setHistoryHydrationNotice(`No run history found for ${sessionId}`);
         }
       } catch (error) {
         console.warn("Failed to rehydrate session history", error);
+        if (!cancelled) {
+          setHydrationError(`Session history rehydration failed: ${(error as Error).message || "unknown error"}. Check gateway connectivity.`);
+        }
       } finally {
         hydratedSessionIdsRef.current.add(hydrationKey);
       }
@@ -1243,6 +1256,22 @@ function ChatInterface() {
         {historyHydrationNotice && (
           <div className="mb-3 rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-emerald-300">
             {historyHydrationNotice}
+          </div>
+        )}
+        {hydrationError && (
+          <div className="mb-3 rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-[10px] uppercase tracking-wider text-rose-300 flex items-center justify-between">
+            <span>{hydrationError}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setHydrationError(null);
+                setHistoryHydrationNotice(null);
+                hydratedSessionIdsRef.current.clear();
+              }}
+              className="ml-2 shrink-0 rounded border border-rose-500/40 px-2 py-0.5 text-[9px] text-rose-200 hover:bg-rose-500/20"
+            >
+              Retry
+            </button>
           </div>
         )}
         {chatRole === "viewer" && (

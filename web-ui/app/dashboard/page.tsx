@@ -623,9 +623,11 @@ export default function DashboardPage() {
     [load],
   );
 
-  const SOURCE_FILTERS = ["all", "chat", "cron", "telegram", "hook", "local", "api"] as const;
+  const SOURCE_FILTERS = ["all", "chat", "cron", "telegram", "hook", "local", "api", "heartbeat"] as const;
 
   const inferSourceCategory = useCallback((session: SessionDirectoryItem) => {
+    // Heartbeat runs on existing sessions; detect via last_run_source metadata
+    if (session.last_run_source === "heartbeat") return "heartbeat";
     const sid = session.session_id.toLowerCase();
     if (sid.startsWith("tg_")) return "telegram";
     if (sid.startsWith("session_hook_")) return "hook";
@@ -1106,6 +1108,9 @@ export default function DashboardPage() {
               </div>
               <p className="mt-1 text-[11px] text-slate-400">
                 {inferSourceCategory(session)} · {session.owner}
+                {session.last_run_source === "heartbeat" && (
+                  <span className="ml-1.5 inline-flex items-center gap-0.5 rounded-full border border-pink-800/50 bg-pink-900/20 px-1.5 py-0 text-[9px] text-pink-300">♥ heartbeat</span>
+                )}
               </p>
               {session.description ? (
                 <p
@@ -1325,14 +1330,6 @@ export default function DashboardPage() {
                 )}
                 {item.kind !== "continuity_alert" && item.status === "new" && (
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="rounded border border-slate-700 bg-slate-900/50 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60 disabled:opacity-50"
-                      onClick={() => updateNotificationStatus(item.id, "read", "read in dashboard")}
-                      disabled={updatingId === item.id}
-                    >
-                      Mark Read
-                    </button>
                     <button
                       type="button"
                       className="rounded border border-rose-800/70 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"

@@ -41,7 +41,7 @@ apply_xai_key_aliases()
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from universal_agent.gateway import (
     InProcessGateway,
@@ -371,7 +371,7 @@ def _tutorial_key_files(run_dir: Path, *, max_code_files: int = 4) -> list[dict[
     impl_dir = run_dir / "implementation"
     if impl_dir.exists() and impl_dir.is_dir():
         code: list[Path] = []
-        for pattern in ("*.py", "*.ts", "*.tsx", "*.js", "*.sh", "*.ipynb"):
+        for pattern in ("*.py", "*.ts", "*.tsx", "*.js", "*.sh", "*.ipynb", "*.gs", "*.html", "*.css", "*.jsx", "*.sql", "*.java", "*.go", "*.rs", "*.json"):
             code.extend(impl_dir.glob(pattern))
         code = [p for p in code if p.is_file()]
         code.sort(key=lambda p: p.name.lower())
@@ -404,11 +404,15 @@ def _tutorial_has_code_implementation(run_dir: Path, manifest: dict) -> bool:
     manifest_flag = manifest.get("implementation_required")
     if manifest_flag is not None:
         return bool(manifest_flag)
+        
+    if (run_dir / "IMPLEMENTATION.md").exists() and (run_dir / "IMPLEMENTATION.md").is_file():
+        return True
+
     # Fallback heuristic: check for code files in implementation/
     impl_dir = run_dir / "implementation"
     if not impl_dir.exists() or not impl_dir.is_dir():
         return False
-    code_extensions = {".py", ".ts", ".tsx", ".js", ".sh", ".ipynb"}
+    code_extensions = {".py", ".ts", ".tsx", ".js", ".sh", ".ipynb", ".gs", ".html", ".css", ".jsx", ".sql", ".java", ".go", ".rs", ".json"}
     for child in impl_dir.rglob("*"):
         if child.is_file() and child.suffix.lower() in code_extensions:
             return True
@@ -432,6 +436,8 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
             except Exception:
                 mtime = 0.0
             manifest = _tutorial_manifest(run_dir)
+            if not manifest:
+                continue
             run_rel = _artifact_rel_path(run_dir)
             if not run_rel:
                 continue
@@ -946,6 +952,11 @@ class ResumeRequest(BaseModel):
 class YouTubeIngestRequest(BaseModel):
     video_url: Optional[str] = None
     video_id: Optional[str] = None
+
+class VisionDescribeRequest(BaseModel):
+    image_base64: str = Field(..., description="Base64 encoded image string (e.g. data:image/png;base64,...)")
+    prompt: str = Field("Describe this image in detail.", description="Instructions for the vision model")
+
     language: str = "en"
     timeout_seconds: int = 120
     max_chars: int = 180_000
@@ -4549,6 +4560,19 @@ def is_user_allowed(user_id: str) -> bool:
         return True
     if user_id in ALLOWED_USERS:
         return True
+
+    # Always allow local system/service accounts so their sessions can be viewed in the UI
+    system_users = {
+        "webhook",
+        "user_ui",
+        "user_cli",
+        "ops_tutorial_review",
+        "cron_system",
+        "ops:system-configuration-agent",
+    }
+    if user_id in system_users or user_id.startswith("cron:") or user_id.startswith("worker_") or user_id.startswith("vp."):
+        return True
+
     # Support numeric Telegram IDs in allowlist (e.g., "7843395933")
     if user_id.startswith("telegram_"):
         telegram_id = user_id.split("telegram_", 1)[1]
@@ -5028,10 +5052,17 @@ async def signals_ingest_endpoint(request: Request):
                     content=title,
                     description=f"{message}\n\nReview in CSI Dashboard Tab.",
                     labels=["CSI"],
-                    priority="high"
+                    priority="high",
+                    project_key="csi",
                 )
             except Exception as exc:
                 logger.error(f"Failed to create Todoist task for CSI signal: {exc}")
+                _add_notification(
+                    kind="system_error",
+                    title="Todoist Sync Failed",
+                    message=f"Could not sync CSI task to Todoist. Check API token and taxonomy. Error: {exc}",
+                    severity="error",
+                )
 
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count
@@ -5329,6 +5360,43 @@ async def dashboard_csi_reports(limit: int = 15):
     finally:
         if 'conn' in locals() and conn:
             conn.close()
+
+
+@app.get("/api/v1/dashboard/todolist/pipeline")
+async def dashboard_todolist_pipeline():
+    from universal_agent.services.todoist_service import TodoService
+    try:
+        todoist = TodoService()
+        return {"status": "ok", "pipeline_summary": todoist.get_pipeline_summary()}
+    except Exception as exc:
+        logger.warning(f"Failed todolist pipeline summary: {exc}")
+        return {"status": "error", "detail": str(exc)}
+
+
+@app.get("/api/v1/dashboard/todolist/actionable")
+async def dashboard_todolist_actionable():
+    from universal_agent.services.todoist_service import TodoService
+    try:
+        todoist = TodoService()
+        return {"status": "ok", "actionable_tasks": todoist.get_actionable_tasks()}
+    except Exception as exc:
+        logger.warning(f"Failed todolist actionable tasks: {exc}")
+        return {"status": "error", "detail": str(exc)}
+
+
+@app.get("/api/v1/dashboard/todolist/heartbeat")
+async def dashboard_todolist_heartbeat():
+    from universal_agent.services.todoist_service import TodoService
+    try:
+        todoist = TodoService()
+        return {
+            "status": "ok",
+            "heartbeat_summary": todoist.heartbeat_summary(),
+            "heartbeat_candidates": todoist.heartbeat_brainstorm_candidates()
+        }
+    except Exception as exc:
+        logger.warning(f"Failed todolist heartbeat summary: {exc}")
+        return {"status": "error", "detail": str(exc)}
 
 
 @app.get("/api/v1/dashboard/notifications")
@@ -5663,6 +5731,32 @@ async def dashboard_tutorial_runs(limit: int = 100):
     return {"runs": _list_tutorial_runs(limit=clamped_limit)}
 
 
+@app.delete("/api/v1/dashboard/tutorials/runs")
+async def dashboard_tutorial_run_delete(run_path: str):
+    """Delete a tutorial run directory by its relative run_path."""
+    import shutil
+    run_path = run_path.strip().strip("/")
+    if not run_path:
+        raise HTTPException(status_code=400, detail="run_path is required")
+
+    run_dir = _resolve_path_under_root(ARTIFACTS_DIR, run_path)
+    rel = _artifact_rel_path(run_dir)
+    if not rel.startswith("youtube-tutorial-learning/"):
+        raise HTTPException(status_code=400, detail="run_path must be under youtube-tutorial-learning/")
+
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Tutorial run directory not found")
+
+    try:
+        shutil.rmtree(run_dir)
+        logger.info(f"Deleted tutorial run directory: {run_dir}")
+    except Exception as exc:
+        logger.error(f"Failed to delete tutorial run directory {run_dir}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete run: {exc}")
+
+    return {"deleted": True, "run_path": rel}
+
+
 _TUTORIAL_NOTIFICATION_KINDS = frozenset({
     "youtube_tutorial_started",
     "youtube_tutorial_ready",
@@ -5769,6 +5863,73 @@ async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequ
         "review_run_path": review_rel,
         "review_storage_href": _storage_explorer_href(scope="artifacts", path=review_rel),
     }
+
+
+@app.post("/api/v1/vision/describe")
+async def vision_describe(request: VisionDescribeRequest):
+    import httpx
+    
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not configured for vision tasks")
+
+    model = os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-3-5-sonnet-latest")
+
+    try:
+        base64_data = request.image_base64
+        media_type = "image/png"
+
+        if base64_data.startswith("data:"):
+            header, content = base64_data.split(",", 1)
+            media_type = header.split(";")[0].replace("data:", "")
+            base64_data = content
+
+        async with httpx.AsyncClient(timeout=request.timeout_seconds) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json={
+                    "model": model,
+                    "max_tokens": 1024,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": base64_data
+                                    }
+                                },
+                                {
+                                    "type": "text",
+                                    "text": request.prompt
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            description = data.get("content", [{}])[0].get("text", "No description provided.")
+
+            return {
+                "ok": True,
+                "description": description
+            }
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Vision API HTTP error: {e.response.text}")
+        raise HTTPException(status_code=502, detail=f"Vision API returned an error: {e.response.status_code}")
+    except Exception as e:
+        logger.exception("Vision API error")
+        raise HTTPException(status_code=502, detail=f"Vision API error: {str(e)}")
 
 
 @app.post("/api/v1/heartbeat/wake")

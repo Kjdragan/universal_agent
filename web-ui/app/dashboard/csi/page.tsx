@@ -20,7 +20,13 @@ type PipelineNotification = {
     message: string;
     severity: string;
     created_at: string;
+    metadata?: any;
 };
+
+type SelectedItem =
+    | { type: "report"; data: CSIReport }
+    | { type: "notification"; data: PipelineNotification }
+    | null;
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -51,6 +57,7 @@ export default function CSIDashboard() {
     const [notifications, setNotifications] = useState<PipelineNotification[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [selectedItem, setSelectedItem] = useState<SelectedItem>(null);
 
     useEffect(() => {
         async function loadData() {
@@ -70,7 +77,7 @@ export default function CSIDashboard() {
                 if (notifRes.ok) {
                     const ndata = await notifRes.json();
                     if (Array.isArray(ndata.notifications)) {
-                        // Filter for CSI-related notifications or just show all if none
+                        // Filter for CSI-related notifications
                         const csiNotifs = ndata.notifications.filter((n: PipelineNotification) => n.kind && n.kind.startsWith("csi"));
                         setNotifications(csiNotifs);
                     }
@@ -88,7 +95,7 @@ export default function CSIDashboard() {
     const lastReportTime = reports.length > 0 ? new Date(reports[0].created_at).toLocaleString() : "N/A";
 
     return (
-        <div className="space-y-6">
+        <div className="flex h-full flex-col gap-6">
             <div className="flex items-center justify-between">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight text-slate-100">Creator Signal Intelligence (CSI)</h1>
@@ -117,98 +124,171 @@ export default function CSIDashboard() {
                 </div>
             </div>
 
-            <div className="rounded-xl border border-slate-800 bg-slate-900/50 overflow-hidden shadow-sm backdrop-blur">
-                <div className="border-b border-slate-800 bg-slate-900/80 px-4 py-3">
-                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">Recent Insights & Trends</h2>
+            <div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-3 min-h-0">
+                {/* ── LEFT PANEL: Lists ── */}
+                <div className="flex flex-col gap-6 lg:col-span-1 overflow-y-auto pr-2 scrollbar-thin">
+
+                    {/* Pipeline Notifications List */}
+                    <div className="rounded-xl border border-slate-800 bg-slate-900/50 shadow-sm backdrop-blur shrink-0">
+                        <div className="border-b border-slate-800 bg-slate-900/80 px-4 py-3 sticky top-0 z-10">
+                            <h2 className="text-sm font-semibold tracking-wide text-slate-300">
+                                CSI Pipeline Notifications
+                            </h2>
+                        </div>
+                        {notifications.length === 0 && !loading ? (
+                            <div className="text-sm text-slate-400 py-4 px-4">No recent CSI notifications.</div>
+                        ) : (
+                            <div className="p-2 space-y-1">
+                                {notifications.map((n) => {
+                                    const style = SEVERITY_STYLES[n.severity] || SEVERITY_STYLES.info;
+                                    const dot = SEVERITY_DOTS[n.severity] || SEVERITY_DOTS.info;
+                                    const isSelected = selectedItem?.type === "notification" && selectedItem.data.id === n.id;
+                                    return (
+                                        <button
+                                            key={n.id}
+                                            onClick={() => setSelectedItem({ type: "notification", data: n })}
+                                            className={`w-full text-left flex items-start gap-2 rounded border px-3 py-2 text-sm transition-all focus:outline-none focus:ring-1 focus:ring-cyan-500 hover:brightness-110 ${style} ${isSelected ? 'ring-1 ring-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.2)]' : ''}`}
+                                        >
+                                            <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center justify-between">
+                                                    <span className="font-medium truncate pr-2">{n.title}</span>
+                                                    <span className="text-[10px] opacity-70 shrink-0">{timeAgo(n.created_at)}</span>
+                                                </div>
+                                                <p className="mt-0.5 truncate text-xs opacity-80">{n.message}</p>
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Reports List */}
+                    <div className="rounded-xl border border-slate-800 bg-slate-900/50 shadow-sm backdrop-blur flex-1 flex flex-col min-h-[300px]">
+                        <div className="border-b border-slate-800 bg-slate-900/80 px-4 py-3 sticky top-0 z-10">
+                            <h2 className="text-sm font-semibold tracking-wide text-slate-300">Recent Insights & Trends</h2>
+                        </div>
+
+                        {loading ? (
+                            <div className="p-8 text-center text-slate-400">Loading CSI feed...</div>
+                        ) : error ? (
+                            <div className="p-8 text-center text-rose-400">Error loading feed: {error}</div>
+                        ) : reports.length === 0 ? (
+                            <div className="p-8 text-center text-slate-400">No CSI reports found in the database.</div>
+                        ) : (
+                            <div className="divide-y divide-slate-800/60 overflow-y-auto">
+                                {reports.map((report) => {
+                                    const isSelected = selectedItem?.type === "report" && selectedItem.data.id === report.id;
+                                    return (
+                                        <button
+                                            key={report.id}
+                                            onClick={() => setSelectedItem({ type: "report", data: report })}
+                                            className={`w-full text-left p-4 hover:bg-slate-800/40 transition-colors focus:outline-none ${isSelected ? 'bg-slate-800/60 border-l-2 border-l-cyan-500' : 'border-l-2 border-l-transparent'}`}
+                                        >
+                                            <div className="flex items-center justify-between mb-2">
+                                                <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-medium lowercase tracking-wide">
+                                                    {report.report_type}
+                                                </span>
+                                                <span className="text-[10px] text-slate-500">
+                                                    {timeAgo(report.created_at)}
+                                                </span>
+                                            </div>
+                                            <div className="text-sm text-slate-300 line-clamp-2">
+                                                {report.report_data?.markdown_content || "Data payload (No markdown content)"}
+                                            </div>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
                 </div>
 
-                {loading ? (
-                    <div className="p-8 text-center text-slate-400">Loading CSI feed...</div>
-                ) : error ? (
-                    <div className="p-8 text-center text-rose-400">Error loading feed: {error}</div>
-                ) : reports.length === 0 ? (
-                    <div className="p-8 text-center text-slate-400">No CSI reports found in the database.</div>
-                ) : (
-                    <div className="divide-y divide-slate-800/60 max-h-[800px] overflow-y-auto scrollbar-thin">
-                        {reports.map((report) => (
-                            <div key={report.id} className="p-4 hover:bg-slate-800/30 transition-colors">
-                                <div className="flex items-center justify-between mb-3">
-                                    <div className="flex items-center gap-2">
-                                        <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-medium lowercase tracking-wide">
-                                            {report.report_type}
+                {/* ── RIGHT PANEL: Detail View ── */}
+                <div className="lg:col-span-2 flex flex-col rounded-xl border border-slate-800 bg-slate-950/80 shadow-inner overflow-hidden min-h-[500px]">
+                    {!selectedItem ? (
+                        <div className="flex-1 flex flex-col items-center justify-center p-8 text-slate-500">
+                            <svg className="w-12 h-12 mb-4 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <p>Select a notification or report from the left panel to view details.</p>
+                        </div>
+                    ) : selectedItem.type === "notification" ? (
+                        <div className="flex flex-col h-full">
+                            <div className="border-b border-slate-800 bg-slate-900 px-6 py-4 shrink-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${SEVERITY_STYLES[selectedItem.data.severity] || SEVERITY_STYLES.info}`}>
+                                        {selectedItem.data.severity}
+                                    </span>
+                                    <span className="text-xs text-slate-500">{new Date(selectedItem.data.created_at).toLocaleString()}</span>
+                                </div>
+                                <h2 className="text-lg font-semibold text-slate-100">{selectedItem.data.title}</h2>
+                                <p className="text-xs text-slate-400 font-mono mt-1">ID: {selectedItem.data.id} | Kind: {selectedItem.data.kind}</p>
+                            </div>
+                            <div className="p-6 overflow-y-auto flex-1 scrollbar-thin">
+                                <h3 className="text-sm font-medium text-slate-300 mb-2 uppercase tracking-wide">Message Content</h3>
+                                <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-4 mb-6 whitespace-pre-wrap text-sm text-slate-300">
+                                    {selectedItem.data.message}
+                                </div>
+
+                                {selectedItem.data.metadata && Object.keys(selectedItem.data.metadata).length > 0 && (
+                                    <>
+                                        <h3 className="text-sm font-medium text-slate-300 mb-2 uppercase tracking-wide">Metadata</h3>
+                                        <div className="bg-slate-950 border border-slate-800/80 rounded-lg p-4 overflow-x-auto">
+                                            <pre className="text-xs text-cyan-400 font-mono leading-relaxed">
+                                                {JSON.stringify(selectedItem.data.metadata, null, 2)}
+                                            </pre>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="flex flex-col h-full">
+                            <div className="border-b border-slate-800 bg-slate-900 px-6 py-4 shrink-0">
+                                <div className="flex flex-wrap items-center gap-4 justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <span className="px-2.5 py-1 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold uppercase tracking-wide">
+                                            {selectedItem.data.report_type}
                                         </span>
-                                        <span className="text-xs text-slate-500">
-                                            {formatDistanceToNow(new Date(report.created_at), { addSuffix: true })}
-                                        </span>
+                                        <span className="text-xs text-slate-400">{new Date(selectedItem.data.created_at).toLocaleString()}</span>
                                     </div>
+                                    <span className="text-xs text-slate-500 font-mono">Report #{selectedItem.data.id}</span>
                                 </div>
-
-                                <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-950 prose-pre:border prose-pre:border-slate-800 text-slate-300">
-                                    {report.report_data?.markdown_content ? (
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                            {report.report_data.markdown_content}
-                                        </ReactMarkdown>
-                                    ) : (
-                                        <pre className="text-xs text-slate-400 overflow-x-auto p-4 bg-slate-950 rounded-lg">
-                                            {JSON.stringify(report.report_data, null, 2)}
-                                        </pre>
-                                    )}
-                                </div>
-
-                                {report.usage && (
-                                    <div className="mt-4 flex items-center gap-4 text-xs text-slate-500">
+                                {selectedItem.data.usage && (
+                                    <div className="mt-3 flex items-center gap-3 text-xs text-slate-500">
                                         <div className="flex items-center gap-1.5" title="Prompt Tokens">
                                             <span className="w-2 h-2 rounded-full bg-slate-600"></span>
-                                            {report.usage.prompt_tokens} prompt
+                                            {selectedItem.data.usage.prompt_tokens} prompt
                                         </div>
                                         <div className="flex items-center gap-1.5" title="Completion Tokens">
                                             <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
-                                            {report.usage.completion_tokens} completion
+                                            {selectedItem.data.usage.completion_tokens} completion
                                         </div>
-                                        <div className="font-mono bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800 text-slate-400">
-                                            {(report.usage.completion_tokens || 0) + (report.usage.prompt_tokens || 0)} total tokens
+                                        <div className="font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-800 text-slate-400">
+                                            {(selectedItem.data.usage.completion_tokens || 0) + (selectedItem.data.usage.prompt_tokens || 0)} total
                                         </div>
                                     </div>
                                 )}
                             </div>
-                        ))}
-                    </div>
-                )}
-            </div>
-
-            {/* Notification Panel */}
-            <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm backdrop-blur">
-                <div className="mb-3 flex items-center justify-between">
-                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">
-                        CSI Pipeline Notifications
-                    </h2>
-                </div>
-                {notifications.length === 0 && !loading ? (
-                    <div className="text-sm text-slate-400 py-2">No recent CSI notifications.</div>
-                ) : (
-                    <div className="space-y-1.5 max-h-64 overflow-y-auto scrollbar-thin">
-                        {notifications.map((n) => {
-                            const style = SEVERITY_STYLES[n.severity] || SEVERITY_STYLES.info;
-                            const dot = SEVERITY_DOTS[n.severity] || SEVERITY_DOTS.info;
-                            return (
-                                <div
-                                    key={n.id}
-                                    className={`flex items-start gap-2 rounded border px-3 py-2 text-sm ${style}`}
-                                >
-                                    <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-                                    <div className="min-w-0 flex-1">
-                                        <span className="font-medium">{n.title}</span>
-                                        <span className="ml-2 text-xs opacity-70">{timeAgo(n.created_at)}</span>
-                                        {n.message && n.message !== n.title && (
-                                            <p className="mt-0.5 truncate text-xs opacity-80">{n.message}</p>
-                                        )}
-                                    </div>
+                            <div className="p-6 overflow-y-auto flex-1 scrollbar-thin">
+                                <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 prose-a:text-cyan-400 hover:prose-a:text-cyan-300 prose-headings:text-slate-200">
+                                    {selectedItem.data.report_data?.markdown_content ? (
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                            {selectedItem.data.report_data.markdown_content}
+                                        </ReactMarkdown>
+                                    ) : (
+                                        <pre className="text-xs text-amber-500/80 overflow-x-auto p-4 bg-slate-900 rounded-lg border border-slate-800">
+                                            {JSON.stringify(selectedItem.data.report_data, null, 2)}
+                                        </pre>
+                                    )}
                                 </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </section>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
         </div>
     );
 }

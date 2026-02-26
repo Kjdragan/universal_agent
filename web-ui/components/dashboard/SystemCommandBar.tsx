@@ -42,6 +42,7 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
   const searchParams = useSearchParams();
   const [text, setText] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<SystemCommandResponse | null>(null);
   const [history, setHistory] = useState<CommandHistoryEntry[]>([]);
@@ -111,6 +112,57 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
     const next = [entry, ...history.filter((row) => row.id !== entry.id)].slice(0, COMMAND_HISTORY_MAX);
     persistHistory(next);
   };
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf("image") !== -1) {
+        const file = items[i].getAsFile();
+        if (!file) continue;
+
+        e.preventDefault();
+        setUploadingImage(true);
+        setError("");
+
+        try {
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+
+          const response = await fetch(`${API_BASE}/api/v1/vision/describe`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              image_base64: base64,
+              prompt: "Describe this image in detail.",
+            }),
+          });
+
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload.detail || `Vision API failed (${response.status})`);
+          }
+
+          if (payload.ok && payload.description) {
+            setText((prev) => prev + (prev ? "\n\n" : "") + `[Attached Image Description: ${payload.description}]\n`);
+          } else {
+            throw new Error("Failed to get image description.");
+          }
+        } catch (err: any) {
+          setError(err?.message || "Failed to process pasted image.");
+        } finally {
+          setUploadingImage(false);
+        }
+        break; // Only process the first image
+      }
+    }
+  };
+
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -196,33 +248,41 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
 
   return (
     <section className="mb-4 rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">System Command</h2>
-        <span className="text-[11px] text-slate-500">Natural language · non-chat lane</span>
-      </div>
-      <div className="mb-2 text-[11px] text-slate-500">
-        route={sourcePage}
-        {Object.keys(sourceContext.selection || {}).length > 0
-          ? ` · selection_keys=${Object.keys(sourceContext.selection || {}).join(",")}`
-          : ""}
-      </div>
-      <form onSubmit={handleSubmit} className="flex flex-col gap-2">
+      <form onSubmit={handleSubmit} className="flex flex-col">
+        {/* Header Row */}
+        <div className="flex flex-row items-center justify-between mb-2">
+          <div className="flex flex-row items-center gap-3">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-300">System Command</h2>
+            <div className="flex flex-row items-center gap-2 text-[11px] text-slate-500 font-mono">
+              <span>Natural language · non-chat lane</span>
+              <span className="text-slate-600">|</span>
+              <span>route: {sourcePage}</span>
+              {Object.keys(sourceContext.selection || {}).length > 0 && (
+                <>
+                  <span className="text-slate-600">|</span>
+                  <span>keys: {Object.keys(sourceContext.selection || {}).join(", ")}</span>
+                </>
+              )}
+            </div>
+          </div>
+          <button
+            type="submit"
+            disabled={submitting || uploadingImage || (!asText(text))}
+            className="rounded-md border border-cyan-700/70 bg-cyan-900/30 px-3 py-1.5 text-[11px] font-medium text-cyan-100 hover:bg-cyan-900/45 disabled:opacity-50 transition-colors shrink-0"
+          >
+            {submitting ? "Submitting..." : uploadingImage ? "Analyzing Image..." : "Run Command"}
+          </button>
+        </div>
+
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
+          onPaste={handlePaste}
           placeholder={placeholder}
           rows={2}
-          className="w-full resize-y rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500"
+          className="w-full resize-y rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 outline-none focus:border-cyan-500 mb-0 block"
         />
-        <div className="flex items-center justify-end">
-          <button
-            type="submit"
-            disabled={submitting || !asText(text)}
-            className="rounded-md border border-cyan-700/70 bg-cyan-900/30 px-3 py-1.5 text-xs text-cyan-100 hover:bg-cyan-900/45 disabled:opacity-50"
-          >
-            {submitting ? "Submitting..." : "Run Command"}
-          </button>
-        </div>
+
       </form>
       {error && (
         <div className="mt-2 rounded border border-rose-700/70 bg-rose-900/20 px-2 py-1 text-xs text-rose-200">
@@ -240,7 +300,7 @@ export default function SystemCommandBar({ sourcePage }: SystemCommandBarProps) 
           {cronJobId && <div>cron_job_id={cronJobId}</div>}
         </div>
       )}
-      <div className="mt-3 rounded border border-slate-800 bg-slate-950/30 p-2">
+      <div className="mt-1 rounded border border-slate-800 bg-slate-950/30 p-2">
         <div className="mb-1 flex items-center justify-between">
           <span className="text-[11px] uppercase tracking-[0.14em] text-slate-400">Recent Commands</span>
           <button
