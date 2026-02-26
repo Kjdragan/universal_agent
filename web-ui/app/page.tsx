@@ -97,24 +97,41 @@ type VpHydrationSnapshot = {
 const RUN_LOG_USER_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+👤\s+USER:\s*(.+)$/;
 const RUN_LOG_ASSISTANT_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+🤖\s+ASSISTANT:\s*(.+)$/;
 
-function extractChatHistoryFromRunLog(raw: string): HydratedChatMessage[] {
-  const entries: HydratedChatMessage[] = [];
+const RUN_LOG_LEVEL_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+([A-Z]+)\s+([\s\S]+)$/;
+
+function extractHistoryFromRunLog(raw: string): { messages: HydratedChatMessage[], logs: HydratedActivityLog[] } {
+  const messages: HydratedChatMessage[] = [];
+  const logs: HydratedActivityLog[] = [];
   const lines = raw.split(/\r?\n/);
   for (const line of lines) {
     const userMatch = line.match(RUN_LOG_USER_LINE);
     if (userMatch?.[1]) {
       const content = userMatch[1].trim();
-      if (content) entries.push({ role: "user", content });
+      if (content) messages.push({ role: "user", content });
       continue;
     }
 
     const assistantMatch = line.match(RUN_LOG_ASSISTANT_LINE);
     if (assistantMatch?.[1]) {
       const content = assistantMatch[1].trim();
-      if (content) entries.push({ role: "assistant", content });
+      if (content) messages.push({ role: "assistant", content });
+      continue;
+    }
+
+    const levelMatch = line.match(RUN_LOG_LEVEL_LINE);
+    if (levelMatch?.[1] && levelMatch?.[2]) {
+      const level = levelMatch[1];
+      const message = levelMatch[2].trim();
+      if (message) {
+        logs.push({
+          message,
+          level,
+          prefix: "rehydrated",
+        });
+      }
     }
   }
-  return entries;
+  return { messages: messages.slice(-80), logs: logs.slice(-200) };
 }
 
 function vpIdFromObserverSession(sessionId: string): string {
@@ -1093,18 +1110,6 @@ function ChatInterface() {
   };
   handleSendRef.current = handleSend;
 
-  const handleUseBrainstormTonight = async () => {
-    if (chatRole === "viewer" || isVpObserverSession) return;
-    const target = prompt("Promote which brainstorm item for tonight? Enter task id or dedupe key.");
-    if (!target || !target.trim()) return;
-    const command = `/use-brainstorm-tonight ${target.trim()}`;
-    if (connectionStatus === "processing") {
-      setPendingQuery(command);
-      ws.sendCancel(`Interrupted by quick command: ${command}`);
-      return;
-    }
-    await handleSend(command);
-  };
 
   // Handle pending query after cancellation
   useEffect(() => {
@@ -1173,9 +1178,9 @@ function ChatInterface() {
         const response = await fetch(runLogUrl);
         if (response.ok) {
           const raw = await response.text();
-          const history = extractChatHistoryFromRunLog(raw).slice(-80);
-          if (!cancelled && history.length > 0 && store.messages.length === 0) {
-            for (const msg of history) {
+          const { messages, logs } = extractHistoryFromRunLog(raw);
+          if (!cancelled && messages.length > 0 && store.messages.length === 0) {
+            for (const msg of messages) {
               store.addMessage({
                 role: msg.role,
                 content: msg.content,
@@ -1183,7 +1188,13 @@ function ChatInterface() {
                 is_complete: true,
               });
             }
-            hydratedMessageCount += history.length;
+            hydratedMessageCount += messages.length;
+          }
+          if (!cancelled && logs.length > 0 && store.logs.length === 0) {
+            for (const log of logs) {
+              store.addLog(log);
+            }
+            hydratedLogCount += logs.length;
           }
         } else if (response.status !== 404) {
           // Non-404 failures indicate a connectivity/proxy issue
@@ -1409,21 +1420,6 @@ function ChatInterface() {
 
       {/* Input - Floating Bar Style */}
       <div className="p-4 bg-slate-900/60 border border-slate-800 backdrop-blur-md mb-20 md:mb-10 ml-4 md:ml-64 mr-4 md:mr-6 rounded-2xl shadow-xl transition-all duration-300">
-        <div className="mb-2 flex items-center gap-2">
-          <button
-            onClick={() => {
-              void handleUseBrainstormTonight();
-            }}
-            disabled={chatRole === "viewer" || isVpObserverSession || isSending}
-            className="bg-amber-500/15 hover:bg-amber-500/25 disabled:opacity-40 disabled:cursor-not-allowed border border-amber-400/40 text-amber-200 px-3 py-1 rounded-md transition-all text-[10px] font-bold uppercase tracking-wider"
-            title="Promote brainstorm item to Heartbeat Candidate for tonight"
-          >
-            Use Brainstorm Tonight
-          </button>
-          <span className="text-[10px] text-slate-400 font-mono">
-            Chat command also works: <code>/use-brainstorm-tonight &lt;task_id|dedupe_key&gt;</code>
-          </span>
-        </div>
         <div className="flex gap-3">
           <input
             ref={inputRef}

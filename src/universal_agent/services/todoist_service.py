@@ -507,65 +507,6 @@ class TodoService:
             self.add_comment(task_id, f"**Parked / Rejected:** {rationale}")
         return True
 
-    def promote_idea_to_heartbeat_candidate(self, target: str) -> dict[str, Any]:
-        """Promote a brainstorm idea to heartbeat_candidate via task id or dedupe key."""
-        token = str(target or "").strip()
-        if not token:
-            return {
-                "success": False,
-                "error": "target is required (task id or dedupe key)",
-            }
-
-        task_id_hint: Optional[str] = None
-        dedupe_hint: Optional[str] = None
-        if ":" in token:
-            prefix, value = token.split(":", 1)
-            key = prefix.strip().lower()
-            val = value.strip()
-            if key in {"id", "task", "task_id"}:
-                task_id_hint = val
-            elif key in {"dedupe", "key", "dedupe_key"}:
-                dedupe_hint = val
-
-        if not task_id_hint and not dedupe_hint:
-            task_id_hint = token
-
-        task: Optional[dict[str, Any]] = None
-        if task_id_hint:
-            task = self.get_task_detail(task_id_hint)
-
-        if task is None:
-            key = (dedupe_hint or token).strip()
-            if key:
-                task = self._find_existing_idea_by_dedupe_key(key)
-
-        if not task:
-            return {
-                "success": False,
-                "error": "idea not found",
-                "target": token,
-            }
-
-        task_id = str(task.get("id") or "")
-        if not task_id:
-            return {
-                "success": False,
-                "error": "resolved idea has no id",
-                "target": token,
-            }
-
-        taxonomy = self._get_taxonomy_or_bootstrap()
-        reverse = {v: k for k, v in taxonomy.brainstorm_sections.items()}
-        previous_section = reverse.get(str(task.get("section_id") or "")) or ""
-        ok = self.promote_idea(task_id, target_section="heartbeat_candidate")
-        return {
-            "success": bool(ok),
-            "task_id": task_id,
-            "content": str(task.get("content") or ""),
-            "previous_section": previous_section,
-            "target_section": "heartbeat_candidate",
-            "already_candidate": previous_section == "heartbeat_candidate",
-        }
 
     def get_pipeline_summary(self) -> dict[str, Any]:
         """Return per-project task counts across all 5 UA projects."""
