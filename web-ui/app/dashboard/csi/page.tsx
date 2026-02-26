@@ -13,30 +13,75 @@ type CSIReport = {
     created_at: string;
 };
 
+type PipelineNotification = {
+    id: string;
+    kind: string;
+    title: string;
+    message: string;
+    severity: string;
+    created_at: string;
+};
+
 const API_BASE = "/api/dashboard/gateway";
+
+const SEVERITY_STYLES: Record<string, string> = {
+    success: "border-emerald-600/50 bg-emerald-900/20 text-emerald-200",
+    error: "border-rose-600/50 bg-rose-900/20 text-rose-200",
+    warning: "border-amber-600/50 bg-amber-900/20 text-amber-200",
+    info: "border-sky-600/50 bg-sky-900/20 text-sky-200",
+};
+
+const SEVERITY_DOTS: Record<string, string> = {
+    success: "bg-emerald-400",
+    error: "bg-rose-400",
+    warning: "bg-amber-400",
+    info: "bg-sky-400",
+};
+
+function timeAgo(dateStr: string): string {
+    const delta = (Date.now() - new Date(dateStr).getTime()) / 1000;
+    if (delta < 60) return "just now";
+    if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
+    if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
+    return `${Math.floor(delta / 86400)}d ago`;
+}
 
 export default function CSIDashboard() {
     const [reports, setReports] = useState<CSIReport[]>([]);
+    const [notifications, setNotifications] = useState<PipelineNotification[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        async function loadReports() {
+        async function loadData() {
             try {
-                const res = await fetch(`${API_BASE}/api/v1/dashboard/csi/reports`);
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                const data = await res.json();
+                const [repRes, notifRes] = await Promise.all([
+                    fetch(`${API_BASE}/api/v1/dashboard/csi/reports`),
+                    fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=50`)
+                ]);
+
+                if (!repRes.ok) throw new Error(`HTTP ${repRes.status}`);
+                const data = await repRes.json();
                 if (data.status === "error" || data.status === "unavailable") {
                     throw new Error(data.detail || "CSI unavailable");
                 }
                 setReports(data.reports || []);
+
+                if (notifRes.ok) {
+                    const ndata = await notifRes.json();
+                    if (Array.isArray(ndata.notifications)) {
+                        // Filter for CSI-related notifications or just show all if none
+                        const csiNotifs = ndata.notifications.filter((n: PipelineNotification) => n.kind && n.kind.startsWith("csi"));
+                        setNotifications(csiNotifs);
+                    }
+                }
             } catch (err: any) {
                 setError(err.message);
             } finally {
                 setLoading(false);
             }
         }
-        loadReports();
+        loadData();
     }, []);
 
     const totalReports = reports.length;
@@ -45,7 +90,10 @@ export default function CSIDashboard() {
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold tracking-tight text-slate-100">Creator Signal Intelligence (CSI)</h1>
+                <div>
+                    <h1 className="text-2xl font-bold tracking-tight text-slate-100">Creator Signal Intelligence (CSI)</h1>
+                    <p className="text-sm text-slate-400">Automated insight and trend analysis across defined watchlists.</p>
+                </div>
                 <button
                     onClick={() => window.location.reload()}
                     className="rounded-md bg-cyan-600/20 px-3 py-1.5 text-sm font-medium text-cyan-300 hover:bg-cyan-600/30 transition-colors border border-cyan-500/30"
@@ -127,6 +175,40 @@ export default function CSIDashboard() {
                     </div>
                 )}
             </div>
+
+            {/* Notification Panel */}
+            <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 shadow-sm backdrop-blur">
+                <div className="mb-3 flex items-center justify-between">
+                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">
+                        CSI Pipeline Notifications
+                    </h2>
+                </div>
+                {notifications.length === 0 && !loading ? (
+                    <div className="text-sm text-slate-400 py-2">No recent CSI notifications.</div>
+                ) : (
+                    <div className="space-y-1.5 max-h-64 overflow-y-auto scrollbar-thin">
+                        {notifications.map((n) => {
+                            const style = SEVERITY_STYLES[n.severity] || SEVERITY_STYLES.info;
+                            const dot = SEVERITY_DOTS[n.severity] || SEVERITY_DOTS.info;
+                            return (
+                                <div
+                                    key={n.id}
+                                    className={`flex items-start gap-2 rounded border px-3 py-2 text-sm ${style}`}
+                                >
+                                    <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+                                    <div className="min-w-0 flex-1">
+                                        <span className="font-medium">{n.title}</span>
+                                        <span className="ml-2 text-xs opacity-70">{timeAgo(n.created_at)}</span>
+                                        {n.message && n.message !== n.title && (
+                                            <p className="mt-0.5 truncate text-xs opacity-80">{n.message}</p>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </section>
         </div>
     );
 }
