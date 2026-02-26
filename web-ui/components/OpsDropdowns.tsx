@@ -925,13 +925,12 @@ export function SessionsSection({
         </div>
       )}
       <div
-        className={`border rounded bg-background/40 p-2 ${
-          isFull
+        className={`border rounded bg-background/40 p-2 ${isFull
             ? hasSelectedSession
               ? "lg:row-span-5 lg:max-h-[78vh] lg:overflow-y-auto"
               : "lg:max-w-[860px]"
             : ""
-        }`}
+          }`}
       >
         <div className="font-semibold mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -1176,7 +1175,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
     setLoading(true);
     setError(null);
     try {
-      const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "America/Chicago";
+      const browserTz = "America/Chicago";
       const params = new URLSearchParams({
         view,
         start: range.start.toISOString(),
@@ -1856,70 +1855,70 @@ export function OpsConfigSection({ variant = "compact" }: { variant?: SectionVar
   return (
     <div className={`${isFull ? "p-4 text-sm space-y-4" : "p-3 text-xs space-y-3"}`}>
       <div className={`${isFull ? "grid gap-4 xl:grid-cols-2" : "space-y-3"}`}>
-      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
-        <div className="flex items-center justify-between mb-2">
-          <div className="font-semibold">Remote To Local Debug Sync</div>
-          <div className="text-[10px] text-muted-foreground">{remoteSyncStatus}</div>
-        </div>
-        <div className="text-[11px] text-muted-foreground mb-2">
-          Controls whether local debug mirror jobs should run when configured to respect the remote toggle.
-          Default is OFF when not set.
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className={`text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50 ${remoteSyncEnabled ? "bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"}`}
-            onClick={() => setRemoteSync(!remoteSyncEnabled)}
-            disabled={remoteSyncSaving}
-          >
-            {remoteSyncSaving ? "Saving..." : remoteSyncEnabled ? "Sync ON" : "Sync OFF"}
-          </button>
-          <button
-            type="button"
-            className="text-xs px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
-            onClick={loadRemoteSync}
-            disabled={remoteSyncSaving}
-          >
-            Refresh
-          </button>
-        </div>
-        {remoteSyncError && <div className="text-[10px] text-red-500 mt-2">{remoteSyncError}</div>}
-
-        <div className="mt-4 pt-3 border-t border-border/40">
-          <div className="font-semibold text-rose-400 mb-1">Danger Zone</div>
-          <div className="text-[10px] text-muted-foreground mb-2">
-            Permanently delete all session workspaces and artifacts on the remote server.
-            This does not affect your local files.
+        <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-semibold">Remote To Local Debug Sync</div>
+            <div className="text-[10px] text-muted-foreground">{remoteSyncStatus}</div>
           </div>
-          <button
-            type="button"
-            className="text-xs px-2 py-1 rounded border border-rose-500/50 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 transition-colors disabled:opacity-50"
-            onClick={purgeRemoteData}
-            disabled={remoteSyncSaving || purgeRemoteSaving}
-          >
-            {purgeRemoteSaving ? "Purging..." : "Purge All Remote Data"}
-          </button>
+          <div className="text-[11px] text-muted-foreground mb-2">
+            Controls whether local debug mirror jobs should run when configured to respect the remote toggle.
+            Default is OFF when not set.
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className={`text-xs px-2 py-1 rounded border transition-colors disabled:opacity-50 ${remoteSyncEnabled ? "bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"}`}
+              onClick={() => setRemoteSync(!remoteSyncEnabled)}
+              disabled={remoteSyncSaving}
+            >
+              {remoteSyncSaving ? "Saving..." : remoteSyncEnabled ? "Sync ON" : "Sync OFF"}
+            </button>
+            <button
+              type="button"
+              className="text-xs px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors"
+              onClick={loadRemoteSync}
+              disabled={remoteSyncSaving}
+            >
+              Refresh
+            </button>
+          </div>
+          {remoteSyncError && <div className="text-[10px] text-red-500 mt-2">{remoteSyncError}</div>}
+
+          <div className="mt-4 pt-3 border-t border-border/40">
+            <div className="font-semibold text-rose-400 mb-1">Danger Zone</div>
+            <div className="text-[10px] text-muted-foreground mb-2">
+              Permanently delete all session workspaces and artifacts on the remote server.
+              This does not affect your local files.
+            </div>
+            <button
+              type="button"
+              className="text-xs px-2 py-1 rounded border border-rose-500/50 bg-rose-500/10 text-rose-300 hover:bg-rose-500/20 transition-colors disabled:opacity-50"
+              onClick={purgeRemoteData}
+              disabled={remoteSyncSaving || purgeRemoteSaving}
+            >
+              {purgeRemoteSaving ? "Purging..." : "Purge All Remote Data"}
+            </button>
+          </div>
         </div>
-      </div>
-      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
-        <div className="flex items-center justify-between mb-2">
-          <div className="font-semibold">Ops config (ops_config.json)</div>
-          <div className="text-[10px] text-muted-foreground">{opsConfigStatus}</div>
+        <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-semibold">Ops config (ops_config.json)</div>
+            <div className="text-[10px] text-muted-foreground">{opsConfigStatus}</div>
+          </div>
+          <textarea className="w-full min-h-[140px] text-[11px] font-mono p-2 rounded border bg-background/60" value={opsConfigText} onChange={(e) => setOpsConfigText(e.target.value)} />
+          {opsConfigError && <div className="text-[10px] text-red-500 mt-2">{opsConfigError}</div>}
+          <div className="flex gap-2 mt-2">
+            <button type="button" className="text-xs px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors" onClick={loadOpsConfig}>Reload</button>
+            <button type="button" className="text-xs px-2 py-1 rounded border bg-primary/20 text-primary hover:bg-primary/30 transition-colors disabled:opacity-50" onClick={saveOpsConfig} disabled={opsConfigSaving}>{opsConfigSaving ? "Saving..." : "Save"}</button>
+          </div>
         </div>
-        <textarea className="w-full min-h-[140px] text-[11px] font-mono p-2 rounded border bg-background/60" value={opsConfigText} onChange={(e) => setOpsConfigText(e.target.value)} />
-        {opsConfigError && <div className="text-[10px] text-red-500 mt-2">{opsConfigError}</div>}
-        <div className="flex gap-2 mt-2">
-          <button type="button" className="text-xs px-2 py-1 rounded border bg-background/60 hover:bg-background transition-colors" onClick={loadOpsConfig}>Reload</button>
-          <button type="button" className="text-xs px-2 py-1 rounded border bg-primary/20 text-primary hover:bg-primary/30 transition-colors disabled:opacity-50" onClick={saveOpsConfig} disabled={opsConfigSaving}>{opsConfigSaving ? "Saving..." : "Save"}</button>
+        <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-semibold">Ops config schema</div>
+            <div className="text-[10px] text-muted-foreground">{opsSchemaStatus}</div>
+          </div>
+          <textarea className="w-full min-h-[100px] text-[11px] font-mono p-2 rounded border bg-background/60" value={opsSchemaText} readOnly />
         </div>
-      </div>
-      <div className={`border rounded bg-background/40 ${isFull ? "p-3" : "p-2"}`}>
-        <div className="flex items-center justify-between mb-2">
-          <div className="font-semibold">Ops config schema</div>
-          <div className="text-[10px] text-muted-foreground">{opsSchemaStatus}</div>
-        </div>
-        <textarea className="w-full min-h-[100px] text-[11px] font-mono p-2 rounded border bg-background/60" value={opsSchemaText} readOnly />
-      </div>
       </div>
     </div>
   );

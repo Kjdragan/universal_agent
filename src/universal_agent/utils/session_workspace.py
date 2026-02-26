@@ -89,7 +89,9 @@ def build_interim_work_product_paths(
         - result.json
         - manifest.json
     """
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    import pytz
+    houston_tz = pytz.timezone("America/Chicago")
+    ts = datetime.now(houston_tz).strftime("%Y%m%d_%H%M%S")
     root = Path(workspace_dir) / "work_products" / "social" / safe_slug(source) / safe_slug(domain)
     run_dir = root / f"{safe_slug(run_slug)}__{ts}"
     return InterimWorkProduct(
