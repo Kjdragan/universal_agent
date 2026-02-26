@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from universal_agent import gateway_server
-from universal_agent.cron_service import CronService
+from universal_agent.cron_service import CronRunRecord, CronService
 from universal_agent.gateway import GatewaySession
 
 
@@ -193,6 +193,7 @@ def test_emit_heartbeat_event_records_workspace_artifacts(tmp_path: Path, monkey
 def test_generate_daily_briefing_includes_non_cron_artifacts_section(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_notifications", [])
     monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
+    monkeypatch.setattr(gateway_server, "_cron_service", None)
 
     gateway_server._add_notification(
         kind="autonomous_heartbeat_completed",
@@ -220,8 +221,94 @@ def test_generate_daily_briefing_includes_non_cron_artifacts_section(tmp_path: P
     assert payload["counts"]["non_cron_artifacts"] == 1
 
 
+def test_generate_daily_briefing_backfills_from_persisted_cron_runs(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
+    cron = CronService(_StubGateway(), tmp_path / "workspaces")
+    monkeypatch.setattr(gateway_server, "_cron_service", cron)
+
+    cron_ws = tmp_path / "workspaces" / "cron_autonomous_backfill"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    job = cron.add_job(
+        user_id="cron_system",
+        workspace_dir=str(cron_ws),
+        command="sync Todoist backlog and publish summary",
+        every_raw="30m",
+        enabled=True,
+        metadata={"autonomous": True, "system_job": "todoist_sync"},
+    )
+
+    now_ts = time.time()
+    cron.store.append_run(
+        CronRunRecord(
+            run_id="run_backfill_1",
+            job_id=job.job_id,
+            status="success",
+            scheduled_at=now_ts - 5,
+            started_at=now_ts - 3,
+            finished_at=now_ts - 1,
+            error=None,
+            output_preview="sync complete",
+        )
+    )
+
+    payload = gateway_server._generate_autonomous_daily_briefing_artifact(now_ts=now_ts)
+    assert payload["counts"]["completed"] == 1
+    assert payload["counts"]["failed"] == 0
+
+    report_json = tmp_path / "artifacts" / "autonomous-briefings" / payload["day_slug"] / "briefing.json"
+    data = report_json.read_text(encoding="utf-8")
+    assert '"cron_backfill_applied": true' in data
+    assert '"sync Todoist backlog and publish summary"' in data
+
+
+def test_generate_daily_briefing_warns_when_only_self_run_exists(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", tmp_path / "artifacts")
+    cron = CronService(_StubGateway(), tmp_path / "workspaces")
+    monkeypatch.setattr(gateway_server, "_cron_service", cron)
+
+    cron_ws = tmp_path / "workspaces" / "cron_daily_briefing"
+    cron_ws.mkdir(parents=True, exist_ok=True)
+    job = cron.add_job(
+        user_id="cron_system",
+        workspace_dir=str(cron_ws),
+        command="daily briefing",
+        cron_expr="0 7 * * *",
+        timezone="UTC",
+        enabled=True,
+        metadata={
+            "autonomous": True,
+            "briefing": True,
+            "system_job": gateway_server.AUTONOMOUS_DAILY_BRIEFING_JOB_KEY,
+        },
+    )
+
+    now_ts = time.time()
+    cron.store.append_run(
+        CronRunRecord(
+            run_id="run_brief_self_1",
+            job_id=job.job_id,
+            status="success",
+            scheduled_at=now_ts - 5,
+            started_at=now_ts - 3,
+            finished_at=now_ts - 1,
+            error=None,
+            output_preview="briefing complete",
+        )
+    )
+
+    payload = gateway_server._generate_autonomous_daily_briefing_artifact(now_ts=now_ts)
+    assert payload["counts"]["completed"] == 0
+
+    report_md = tmp_path / "artifacts" / "autonomous-briefings" / payload["day_slug"] / "DAILY_BRIEFING.md"
+    markdown = report_md.read_text(encoding="utf-8")
+    assert "## Data Quality Warnings" in markdown
+    assert "Only the daily briefing cron job was observed in this window" in markdown
+
+
 def test_storage_explorer_href_normalizes_file_path_to_parent_for_preview():
-    file_rel = "youtube-tutorial-learning/2026-02-25/abc123/README.md"
+    file_rel = "youtube-tutorial-creation/2026-02-25/abc123/README.md"
     href = gateway_server._storage_explorer_href(scope="artifacts", path=file_rel, preview=file_rel)
     parsed = urllib.parse.urlparse(href)
     params = urllib.parse.parse_qs(parsed.query)
@@ -229,7 +316,7 @@ def test_storage_explorer_href_normalizes_file_path_to_parent_for_preview():
     assert params["tab"] == ["explorer"]
     assert params["scope"] == ["artifacts"]
     assert params["root_source"] == ["local"]
-    assert params["path"] == ["youtube-tutorial-learning/2026-02-25/abc123"]
+    assert params["path"] == ["youtube-tutorial-creation/2026-02-25/abc123"]
     assert params["preview"] == [file_rel]
 
 

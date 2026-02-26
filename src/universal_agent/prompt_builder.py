@@ -314,7 +314,7 @@ def build_system_prompt(
         "   - Image generation? -> `image-expert`\n"
         "   - Diagrams? -> `mermaid-expert`\n"
         "   - Browser automation/validation? -> Bowser lanes first (`claude-bowser-agent`, `playwright-bowser-agent`, `bowser-qa-agent`); `browserbase` only when Bowser is unavailable or cloud-browser behavior is explicitly required\n"
-        "   - YouTube tutorials? -> `youtube-explainer-expert`\n"
+        "   - YouTube transcript/metadata/tutorial tasks? -> `youtube-expert`\n"
         "   - Slack interactions? -> `slack-expert`\n"
         "   - System/cron config? -> `system-configuration-agent`\n"
         "   - IMPORTANT: Do NOT substitute Todoist capture flows for these specialist execution workflows.\n"

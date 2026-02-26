@@ -4,7 +4,7 @@
 
 Write durable outputs under:
 
-`<resolved_artifacts_root>/youtube-tutorial-learning/{YYYY-MM-DD}/{video-slug}__{HHMMSS}/`
+`<resolved_artifacts_root>/youtube-tutorial-creation/{YYYY-MM-DD}/{video-slug}__{HHMMSS}/`
 
 ## Required Files
 
@@ -18,8 +18,9 @@ Write durable outputs under:
 
 1. `transcript.txt`
 2. `transcript.clean.txt`
-3. `visuals/gemini_video_analysis.md`
-4. `research/*`
+3. `youtube_ingest.json`
+4. `visuals/gemini_video_analysis.md`
+5. `research/*`
 
 ## Status Values
 
@@ -42,20 +43,29 @@ Set `manifest.json.learning_mode` to one of:
 2. Invalid:
    1. `/opt/universal_agent/UA_ARTIFACTS_DIR/...`
    2. `UA_ARTIFACTS_DIR/...`
-3. Always resolve the absolute artifacts root first, then append `youtube-tutorial-learning/...`.
+3. Always resolve the absolute artifacts root first, then append `youtube-tutorial-creation/...`.
 
 ## Minimal Manifest Shape
 
 ```json
 {
-  "skill": "youtube-tutorial-learning",
+  "skill": "youtube-tutorial-creation",
   "status": "full",
   "learning_mode": "concept_plus_implementation",
   "video_url": "https://www.youtube.com/watch?v=<id>",
   "video_id": "<id>",
   "source": "manual|composio|direct",
+  "metadata": {
+    "title": "string|null",
+    "channel": "string|null",
+    "duration": "number|null",
+    "upload_date": "string|null",
+    "metadata_status": "attempted_succeeded|attempted_failed|not_attempted",
+    "metadata_source": "yt_dlp|other"
+  },
   "extraction": {
     "transcript": "attempted_succeeded|attempted_failed|not_attempted",
+    "metadata": "attempted_succeeded|attempted_failed|not_attempted",
     "visual": "attempted_succeeded|attempted_failed|not_attempted"
   },
   "notes": []

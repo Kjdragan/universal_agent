@@ -37,6 +37,8 @@ Welcome to the official technical documentation for the **Universal Agent**. Thi
 - **[Todoist Heartbeat and Triage Operational Runbook (2026-02-16)](03_Operations/41_Todoist_Heartbeat_And_Triage_Operational_Runbook_2026-02-16.md)**: Daily operating cadence for Todoist-backed heartbeat inputs, manual brainstorming triage, and guarded verification checks.
 - **[Hybrid Local+VPS YouTube Webhook Operations Source of Truth (2026-02-18)](03_Operations/42_Hybrid_Local_VPS_Webhook_Operations_Source_Of_Truth_2026-02-18.md)**: Canonical runbook for hybrid ingress architecture, readiness checks, failure signatures, and recovery procedures.
 - **[VPS WebUI Long-Running Query Evaluation (2026-02-18)](03_Operations/43_VPS_WebUI_Long_Running_Query_Evaluation_2026-02-18.md)**: End-to-end execution evidence, artifact inventory, transcript/log analysis, and reliability findings for a production-style long-running mission.
+- **[CSI Todoist Sync Debugging Lessons (2026-02-26)](03_Operations/77_CSI_Todoist_Sync_Debugging_Lessons_2026-02-26.md)**: Root-cause findings and hardening changes for CSI -> Todoist sync failures, including credential diagnostics and repeatable verification steps.
+- **[Daily Autonomous Briefing Reliability and Input Diagnostics (2026-02-26)](03_Operations/78_Daily_Autonomous_Briefing_Reliability_And_Input_Diagnostics_2026-02-26.md)**: Root-cause analysis and hardening changes that prevent empty/ambiguous briefings after resets and upstream ingest failures.
 
 ### 5. [API Reference](04_API_Reference)
 

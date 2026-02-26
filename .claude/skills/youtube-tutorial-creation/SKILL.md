@@ -1,11 +1,11 @@
 ---
-name: youtube-tutorial-learning
+name: youtube-tutorial-creation
 description: |
   Turn a YouTube tutorial into durable learning artifacts (concept doc + runnable implementation) stored under UA_ARTIFACTS_DIR.
   USE WHEN user provides a YouTube URL and wants to learn/implement from it.
 ---
 
-# YouTube Tutorial Learning Skill
+# YouTube Tutorial Creation Skill
 
 This skill converts a YouTube tutorial into durable, referenceable artifacts:
 - `CONCEPT.md` (educational tutorial-style writeup)
@@ -28,7 +28,7 @@ Use:
 ## Artifact Directory Convention
 
 Create a new run folder:
-`UA_ARTIFACTS_DIR/youtube-tutorial-learning/{YYYY-MM-DD}/{video-slug}__{HHMMSS}/`
+`UA_ARTIFACTS_DIR/youtube-tutorial-creation/{YYYY-MM-DD}/{video-slug}__{HHMMSS}/`
 
 Inside it, write at minimum:
 - `manifest.json`
@@ -43,9 +43,10 @@ Inside it, write at minimum:
 
 Use these companion docs for consistent ingress, tooling, and output quality:
 
-1. `references/ingestion_and_tooling.md`
-2. `references/composio_wiring_checklist.md`
-3. `references/output_contract.md`
+1. `../youtube-transcript-metadata/SKILL.md` (core transcript+metadata ingestion)
+2. `references/ingestion_and_tooling.md`
+3. `references/composio_wiring_checklist.md`
+4. `references/output_contract.md`
 
 ## Workflow
 
@@ -71,33 +72,35 @@ HARD RULE: Durable outputs must NOT be written under `CURRENT_SESSION_WORKSPACE/
 HARD RULE: Never treat `UA_ARTIFACTS_DIR` as a literal directory name in paths.
 - BAD: `/opt/universal_agent/UA_ARTIFACTS_DIR/...`
 - BAD: `UA_ARTIFACTS_DIR/...`
-- GOOD: `<resolved_artifacts_root>/youtube-tutorial-learning/...`
+- GOOD: `<resolved_artifacts_root>/youtube-tutorial-creation/...`
 
-3. Transcript extraction (best effort)
-Use `youtube-transcript-api` instance API as the transcript source of truth:
-- Scratch: `CURRENT_SESSION_WORKSPACE/downloads/`
-- Artifact: `<run_dir>/transcript.txt` (typically `retention: temp`)
+3. Transcript + metadata ingestion (MANDATORY)
+Use the core skill script so transcript and metadata are fetched in parallel:
+- Script: `.claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py`
+- Scratch outputs:
+  - `CURRENT_SESSION_WORKSPACE/downloads/youtube_ingest.json`
+  - `CURRENT_SESSION_WORKSPACE/downloads/transcript.txt`
 
 ```bash
-python3 - <<'PY'
-from youtube_transcript_api import YouTubeTranscriptApi
-
-video_id = "<VIDEO_ID>"
-api = YouTubeTranscriptApi()
-fetched = api.fetch(video_id)
-lines = [snippet.text.strip() for snippet in fetched if str(getattr(snippet, "text", "")).strip()]
-print("\n".join(lines))
-PY
+uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py \
+  --url "<YOUTUBE_URL>" \
+  --language en \
+  --json-out "$CURRENT_SESSION_WORKSPACE/downloads/youtube_ingest.json" \
+  --transcript-out "$CURRENT_SESSION_WORKSPACE/downloads/transcript.txt" \
+  --pretty
 ```
 
-Do NOT use `YouTubeTranscriptApi.get_transcript(...)` in this project.
-Do NOT use `yt-dlp` for transcript extraction in this workflow.
+Source-of-truth policy:
+- Transcript: `youtube-transcript-api` instance API (`YouTubeTranscriptApi().fetch(...)`)
+- Metadata: `yt-dlp` (allowed and expected)
+- Never use `yt-dlp` as transcript source.
+- Never use legacy `YouTubeTranscriptApi.get_transcript(...)`.
 
 Anti-blocking hygiene (mandatory):
-- Retries must use exponential backoff + jitter.
 - Keep transcript requests idempotent and dedupe by video id.
-- Classify failures (`request_blocked`, `api_unavailable`, `empty_or_low_quality_transcript`) and persist those classes in run metadata.
+- Persist failure classes (`request_blocked`, `api_unavailable`, `empty_or_low_quality_transcript`) in run metadata.
 - Enforce a minimum transcript character threshold before treating extraction as success.
+- If transcript fails but metadata succeeds, still preserve metadata in manifest and docs.
 
 3b. Transcript cleanup (HIGHLY RECOMMENDED)
 Caption transcripts often include heavy duplication. After creating `downloads/transcript.txt`, dedupe consecutive identical lines and write:
@@ -159,35 +162,33 @@ print(f"Wrote {dst} ({stats['lines']} lines)")
 PY
 ```
 
-4. Minimal metadata (avoid huge tool outputs)
-Avoid giant metadata payloads. Use URL parsing plus YouTube oEmbed for title/author when available.
+3d. Metadata handoff (MANDATORY)
+Read `downloads/youtube_ingest.json` and carry key metadata into:
+- `manifest.json` (`title`, `channel`, `duration`, `upload_date`, `metadata_status`, `metadata_source`)
+- `README.md` context block
 
-```bash
-curl -fsSL "https://www.youtube.com/oembed?url=<URL>&format=json"
-```
-
-5. Visual analysis (best effort)
+4. Visual analysis (best effort)
 Use Gemini multimodal understanding against the YouTube URL (preferred model: `gemini-3-pro-preview`):
-- Script path: `.claude/skills/youtube-tutorial-learning/scripts/gemini_video_analysis.py`
+- Script path: `.claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py`
 - Output target: `<run_dir>/visuals/gemini_video_analysis.md`
 - Include timestamped findings when possible and separate visual-only observations from transcript-derived claims.
 
 If vision tooling is unavailable OR fails, proceed transcript-only and record the limitation in the manifest + docs.
 Do NOT skip vision analysis just because you *assume* the transcript is sufficient.
 
-6. Synthesis
+5. Synthesis
 Merge “what they said” (transcript) and “what they showed” (visual findings):
 - Identify gaps/ambiguities
 - Do supplementary research as needed (prefer official docs, then reputable sources)
 - Record all gap-filling sources in `research/sources.md`
 
-7. Write durable artifacts
+6. Write durable artifacts
 - `CONCEPT.md`: standalone tutorial, includes diagrams/images (or references in `visuals/`) and carefully sourced code snippets.
 - `IMPLEMENTATION.md`: prerequisites, steps, expected outputs.
 - `implementation/`: runnable, cleaned code. Add comments with provenance + references to `visuals/code-extractions/` when relevant.
 - `visuals/code-extractions/`: store raw OCR extractions with confidence headers (high/medium/low) and "COMPLETE/VALIDATED" flags.
 
-8. Finish and finalize manifest
+7. Finish and finalize manifest
 Update `manifest.json` with:
 - inputs, extraction status, outputs map, tags
 - retention map (mark safe-to-delete items as `temp`)
@@ -196,7 +197,7 @@ For each extraction step (transcript, visual), set an explicit status:
 - `attempted_succeeded`
 - `attempted_failed` (include the error and fallback)
 
-9. Implementation validation (MANDATORY)
+8. Implementation validation (MANDATORY)
 When you generate a Python sample script in `implementation/`, it MUST be runnable without a separate venv/pyproject.
 Use uv inline scripting (PEP 723) and validate the script executes.
 
@@ -271,8 +272,8 @@ def analyze_video(url: str, prompt: str) -> str:
 ```
 
 Reference implementation to run directly:
-- `uv run .claude/skills/youtube-tutorial-learning/scripts/gemini_video_analysis.py --self-test`
-- `uv run .claude/skills/youtube-tutorial-learning/scripts/gemini_video_analysis.py --url "<youtube_url>" --out "<run_dir>/visuals/gemini_video_analysis.md"`
+- `uv run .claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py --self-test`
+- `uv run .claude/skills/youtube-tutorial-creation/scripts/gemini_video_analysis.py --url "<youtube_url>" --out "<run_dir>/visuals/gemini_video_analysis.md"`
 
 ## Retention (Recommended Defaults)
 

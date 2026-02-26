@@ -203,7 +203,7 @@ async def test_pre_bash_rewrites_literal_artifacts_dir_paths(tmp_path, monkeypat
     input_data = {
         "tool_name": "Bash",
         "tool_input": {
-            "command": "mkdir -p /opt/universal_agent/UA_ARTIFACTS_DIR/youtube-tutorial-learning/test",
+            "command": "mkdir -p /opt/universal_agent/UA_ARTIFACTS_DIR/youtube-tutorial-creation/test",
         },
     }
 
@@ -227,7 +227,7 @@ async def test_pre_bash_rewrites_literal_artifacts_dir_paths_top_level_command_s
     hooks = AgentHookSet(active_workspace=str(workspace))
     input_data = {
         "tool_name": "Bash",
-        "command": "mkdir -p /opt/universal_agent/UA_ARTIFACTS_DIR/youtube-tutorial-learning/test",
+        "command": "mkdir -p /opt/universal_agent/UA_ARTIFACTS_DIR/youtube-tutorial-creation/test",
     }
 
     with workspace_context(str(workspace)):

@@ -1258,7 +1258,7 @@ export default function DashboardPage() {
                   <LinkifiedText text={item.message} />
                 </p>
                 <p className="mt-2 text-[11px] text-slate-500">
-                  {item.kind} · {item.session_id || "global"} · {item.created_at}
+                  {item.kind} · {item.session_id || "global"} · {formatLocalDateTime(item.created_at)}
                 </p>
                 {(tutorialHref || reviewHref || canDispatchTutorial) && (
                   <div className="mt-2 flex flex-wrap gap-2">

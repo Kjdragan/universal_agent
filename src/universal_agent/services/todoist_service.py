@@ -155,7 +155,7 @@ class TodoService:
             token = str(api_token).strip()
         if api is None:
             if not token:
-                raise ValueError("TODOIST_API_TOKEN is required")
+                raise ValueError("TODOIST_API_TOKEN or TODOIST_API_KEY is required")
             if TodoistAPI is None:
                 raise RuntimeError("todoist-api-python is not installed")
             self._api = TodoistAPI(token)
