@@ -21,6 +21,7 @@ const NAV_ITEMS: { href: string; label: string; external?: boolean; primary?: bo
   { href: "/dashboard/channels", label: "Channels" },
   { href: "/dashboard/config", label: "Config" },
   { href: "/dashboard/continuity", label: "Continuity" },
+  { href: "/dashboard/todolist", label: "To Do List" },
   { href: "/dashboard/settings", label: "Settings" },
   { href: "/files", label: "File Browser", external: true },
 ];
@@ -95,7 +96,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     await fetch("/api/dashboard/auth/logout", { method: "POST" });
     await loadAuthSession();
   }, [loadAuthSession]);
-  const showSystemCommandBar = Boolean(pathname && !pathname.startsWith("/dashboard/chat"));
+  const showSystemCommandBar = Boolean(
+    pathname &&
+    !pathname.startsWith("/dashboard/chat") &&
+    !pathname.startsWith("/dashboard/csi")
+  );
 
   if (loadingAuth) {
     return (
