@@ -23,6 +23,7 @@ import { OpsProvider } from "@/components/OpsDropdowns";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { LinkifiedText, PathLink, linkify } from "@/components/LinkifiedText";
+import { formatTimeTz } from "@/lib/timezone";
 
 // Icons (using emoji for now - replace with lucide-react in production)
 const ICONS = {
@@ -906,7 +907,7 @@ function ChatMessage({ message }: { message: any }) {
     if (delta !== undefined) {
       return delta > 0 ? `+${delta.toFixed(1)}s` : `0s`;
     }
-    return new Date(message.timestamp).toLocaleTimeString();
+    return formatTimeTz(message.timestamp, { placeholder: "--:--:--" });
   }, [message.time_offset, message.timestamp]);
 
   if (isUser) {

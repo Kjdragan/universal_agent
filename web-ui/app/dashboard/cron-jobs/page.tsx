@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
+import { formatDateTimeTz } from "@/lib/timezone";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -32,14 +33,7 @@ type CronRun = {
 };
 
 function toLocalDateTime(value?: string | number | null): string {
-  if (value === null || value === undefined || value === "") return "n/a";
-  if (typeof value === "number") return new Date(value * 1000).toLocaleString();
-  const asNumber = Number(value);
-  if (Number.isFinite(asNumber) && value.trim() !== "") {
-    return new Date(asNumber * 1000).toLocaleString();
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+  return formatDateTimeTz(value, { placeholder: "n/a" });
 }
 
 function parseErrorDetail(raw: string): string {

@@ -1046,7 +1046,7 @@ _calendar_missed_notifications: set[str] = set()
 _calendar_change_proposals: dict[str, dict[str, Any]] = {}
 _SYSTEM_CONFIGURATION_AGENT_SESSION_ID = "session_system_configuration_agent"
 _observability_metrics: dict[str, Any] = {
-    "started_at": datetime.now().isoformat(),
+    "started_at": datetime.now(timezone.utc).isoformat(),
     "sessions_created": 0,
     "ws_attach_attempts": 0,
     "ws_attach_successes": 0,
@@ -1067,7 +1067,7 @@ _observability_metrics: dict[str, Any] = {
 }
 _scheduling_runtime_started_ts = time.time()
 _scheduling_runtime_metrics: dict[str, Any] = {
-    "started_at": datetime.now().isoformat(),
+    "started_at": datetime.now(timezone.utc).isoformat(),
     "counters": {
         "calendar_events_requests": 0,
         "calendar_action_requests": 0,
@@ -1147,7 +1147,7 @@ WS_SEND_TIMEOUT_SECONDS = gateway_ws_send_timeout_seconds()
 
 
 def _now_iso() -> str:
-    return datetime.now().isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _increment_metric(name: str, amount: int = 1) -> None:
@@ -1251,7 +1251,7 @@ class SchedulingEventBus:
             "seq": self._seq,
             "source": str(source or "unknown"),
             "type": str(event_type or "event"),
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "data": payload if isinstance(payload, dict) else {"value": payload},
         }
         self._events.append(envelope)
@@ -1324,7 +1324,7 @@ class SchedulingProjectionState:
         self.version += 1
         if seq is not None:
             self.last_event_seq = max(self.last_event_seq, int(seq))
-        self.last_updated_at = datetime.now().isoformat()
+        self.last_updated_at = datetime.now(timezone.utc).isoformat()
 
     def _upsert_cron_job(self, job: dict[str, Any]) -> bool:
         job_id = str(job.get("job_id") or "").strip()
@@ -1377,7 +1377,7 @@ class SchedulingProjectionState:
             if session_id not in self.heartbeat_last_by_session:
                 self.heartbeat_last_by_session[session_id] = {
                     "type": "heartbeat_session_seen",
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 changed = True
         self.seeded = True
@@ -1413,7 +1413,7 @@ class SchedulingProjectionState:
                 previous = self.heartbeat_last_by_session.get(session_id)
                 candidate = {
                     "type": event_type or "heartbeat_event",
-                    "timestamp": str(envelope.get("timestamp") or datetime.now().isoformat()),
+                    "timestamp": str(envelope.get("timestamp") or datetime.now(timezone.utc).isoformat()),
                 }
                 if previous != candidate:
                     self.heartbeat_last_by_session[session_id] = candidate
@@ -2813,7 +2813,7 @@ def _emit_cron_event(payload: dict) -> None:
     event = {
         "type": event_type,
         "data": payload,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     for session_id in list(manager.session_connections.keys()):
         asyncio.create_task(manager.broadcast(session_id, event))
@@ -2875,7 +2875,7 @@ def _broadcast_system_event(session_id: str, event: dict) -> None:
     payload = {
         "type": "system_event",
         "data": event,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     asyncio.create_task(manager.broadcast(session_id, payload))
 
@@ -3010,7 +3010,7 @@ def _vp_source_context(conn: Any, mission_id: str) -> dict[str, Any]:
 def _vp_bridge_event_record(*, event_row: Any, mission_context: dict[str, Any]) -> dict[str, Any]:
     raw_payload = _parse_json_text(event_row["payload_json"]) if "payload_json" in event_row.keys() else None
     payload = raw_payload if isinstance(raw_payload, dict) else {}
-    created_at = str(event_row["created_at"] or datetime.now().isoformat())
+    created_at = str(event_row["created_at"] or datetime.now(timezone.utc).isoformat())
     return {
         "event_id": f"evt_vp_{event_row['event_id']}",
         "type": "vp_mission_event",
@@ -3294,7 +3294,7 @@ def _broadcast_presence(payload: dict) -> None:
     event = {
         "type": "system_presence",
         "data": payload,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     for session_id in list(manager.session_connections.keys()):
         asyncio.create_task(manager.broadcast(session_id, event))
@@ -3558,7 +3558,7 @@ def _calendar_register_missed_event(event: dict[str, Any]) -> None:
             # Keep the newest pending missed item only.
             return
         existing_record["status"] = "skipped_superseded"
-        existing_record["updated_at"] = datetime.now().isoformat()
+        existing_record["updated_at"] = datetime.now(timezone.utc).isoformat()
         superseded_ids.append(existing_id)
 
     for superseded_id in superseded_ids:
@@ -3567,7 +3567,7 @@ def _calendar_register_missed_event(event: dict[str, Any]) -> None:
     record = {
         "event_id": event_id,
         "status": "pending",
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "event": event,
     }
     _calendar_missed_events[event_id] = record
@@ -3662,7 +3662,7 @@ def _calendar_cleanup_state() -> None:
         latest = latest_pending_by_key.get(key)
         if latest and latest[0] != event_id:
             record["status"] = "skipped_superseded"
-            record["updated_at"] = datetime.now().isoformat()
+            record["updated_at"] = datetime.now(timezone.utc).isoformat()
             _calendar_missed_notifications.discard(event_id)
 
     expired_proposals = [
@@ -4232,7 +4232,7 @@ def _calendar_create_change_proposal(
         "warnings": warnings,
         "confidence": confidence,
         "status": "pending_confirmation",
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "created_at_ts": time.time(),
     }
     _calendar_change_proposals[proposal_id] = proposal
@@ -4277,7 +4277,7 @@ async def _calendar_apply_event_action(
             queue_entry = _calendar_missed_events.get(event_id)
             if queue_entry:
                 queue_entry["status"] = "approved_and_run"
-                queue_entry["updated_at"] = datetime.now().isoformat()
+                queue_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
             return {"status": "ok", "action": action_norm, "run": record.to_dict()}
         if action_norm == "reschedule":
             run_at_ts = _calendar_parse_ts(run_at, timezone_name) if run_at else None
@@ -4297,14 +4297,14 @@ async def _calendar_apply_event_action(
             queue_entry = _calendar_missed_events.get(event_id)
             if queue_entry:
                 queue_entry["status"] = "rescheduled"
-                queue_entry["updated_at"] = datetime.now().isoformat()
+                queue_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
                 queue_entry["rescheduled_job_id"] = new_job.job_id
             return {"status": "ok", "action": action_norm, "job": new_job.to_dict()}
         if action_norm == "delete_missed":
             queue_entry = _calendar_missed_events.get(event_id)
             if queue_entry:
                 queue_entry["status"] = "deleted"
-                queue_entry["updated_at"] = datetime.now().isoformat()
+                queue_entry["updated_at"] = datetime.now(timezone.utc).isoformat()
             return {"status": "ok", "action": action_norm}
         if action_norm == "open_logs":
             return {
@@ -4462,7 +4462,7 @@ def _load_channel_status() -> list[dict]:
 
 async def _probe_channel(channel_id: str, timeout: float = 4.0) -> dict:
     normalized = channel_id.strip().lower()
-    checked_at = datetime.now().isoformat()
+    checked_at = datetime.now(timezone.utc).isoformat()
     base = {"id": normalized, "checked_at": checked_at}
 
     if normalized in {"gateway", "cli"}:
@@ -4614,7 +4614,7 @@ async def _cancel_session_execution(session_id: str, reason: str, run_id: Option
                 "run_id": marked_run_id,
                 "session_id": session_id,
             },
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         },
     )
 
@@ -5263,7 +5263,7 @@ async def health(response: Response):
 
     return {
         "status": "healthy" if is_healthy else "unhealthy",
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "version": "1.0.0",
         "db_status": db_status,
         "db_error": db_error,
@@ -6199,7 +6199,7 @@ async def post_system_event(request: SystemEventRequest):
         "event_id": f"evt_{int(time.time() * 1000)}",
         "type": event_type,
         "payload": request.payload or {},
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
     target_sessions: list[str]
@@ -6255,7 +6255,7 @@ async def set_system_presence(request: SystemPresenceRequest):
         "status": request.status or "online",
         "reason": request.reason,
         "metadata": request.metadata or {},
-        "updated_at": datetime.now().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     _system_presence[node_id] = presence
     _broadcast_presence(presence)
@@ -8001,11 +8001,11 @@ async def resume_gated_request(session_id: str, payload: ResumeRequest, request:
             {
                 "status": "approved",
                 "notes": payload.reason or "Approved via resume endpoint",
-                "metadata": {"resumed_at": datetime.now().isoformat()},
+                "metadata": {"resumed_at": datetime.now(timezone.utc).isoformat()},
             },
         )
     pending["status"] = "approved"
-    pending["updated_at"] = datetime.now().isoformat()
+    pending["updated_at"] = datetime.now(timezone.utc).isoformat()
     return {"session_id": session_id, "pending": pending, "approval": approval_record}
 
 
@@ -8248,7 +8248,7 @@ async def ops_calendar_event_change_confirm(
         raise HTTPException(status_code=400, detail="Proposal does not match event")
     if not payload.approve:
         proposal["status"] = "rejected"
-        proposal["resolved_at"] = datetime.now().isoformat()
+        proposal["resolved_at"] = datetime.now(timezone.utc).isoformat()
         return {"status": "rejected", "proposal": proposal}
 
     operation = proposal.get("operation") or {}
@@ -8333,7 +8333,7 @@ async def ops_calendar_event_change_confirm(
         raise HTTPException(status_code=400, detail="Proposal operation cannot be applied")
 
     proposal["status"] = "applied"
-    proposal["resolved_at"] = datetime.now().isoformat()
+    proposal["resolved_at"] = datetime.now(timezone.utc).isoformat()
     proposal["result"] = result
     return {
         "status": "applied",
@@ -9039,7 +9039,7 @@ async def ops_approvals_update(
     for pending in _pending_gated_requests.values():
         if pending.get("approval_id") == approval_id:
             pending["status"] = record.get("status")
-            pending["updated_at"] = datetime.now().isoformat()
+            pending["updated_at"] = datetime.now(timezone.utc).isoformat()
     return {"approval": record}
 
 
@@ -9118,7 +9118,7 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
     return {
         "type": event.type.value if hasattr(event.type, "value") else str(event.type),
         "data": event.data,
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "time_offset": event.data.get("time_offset") if isinstance(event.data, dict) else None,
     }
 
@@ -9189,7 +9189,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                 "session_id": session.session_id,
                 "workspace_dir": session.workspace_dir,
             },
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         },
         session_id=session_id,
     )
@@ -9211,7 +9211,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             {
                                 "type": "error",
                                 "data": {"message": "Empty user_input"},
-                                "timestamp": datetime.now().isoformat(),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
                             session_id=session_id,
                         )
@@ -9240,7 +9240,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "data": {
                                         "message": "Pending request is not approved yet. Approve it first, then resume."
                                     },
-                                    "timestamp": datetime.now().isoformat(),
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
                                 },
                                 session_id=session_id,
                             )
@@ -9301,7 +9301,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 {
                                     "type": "error",
                                     "data": {"message": reason_text, "categories": categories},
-                                    "timestamp": datetime.now().isoformat(),
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
                                 },
                                 session_id=session_id,
                             )
@@ -9328,7 +9328,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 "status": "pending",
                                 "categories": categories,
                                 "reasons": reasons,
-                                "created_at": datetime.now().isoformat(),
+                                "created_at": datetime.now(timezone.utc).isoformat(),
                                 "request": {
                                     "user_input": user_input,
                                     "force_complex": raw_data.get("force_complex", False),
@@ -9358,7 +9358,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                         "categories": categories,
                                         "reasons": reasons,
                                     },
-                                    "timestamp": datetime.now().isoformat(),
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
                                 },
                                 session_id=session_id,
                             )
@@ -9389,7 +9389,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "active_turn_id": admitted_turn_id,
                                     "message": "Another turn is currently running for this session.",
                                 },
-                                "timestamp": datetime.now().isoformat(),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
                             session_id=session_id,
                         )
@@ -9405,7 +9405,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "turn_id": admitted_turn_id,
                                     "message": "This turn is already in progress.",
                                 },
-                                "timestamp": datetime.now().isoformat(),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
                             session_id=session_id,
                         )
@@ -9421,7 +9421,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     "turn_id": admitted_turn_id,
                                     "message": "Duplicate turn ignored; request already processed.",
                                 },
-                                "timestamp": datetime.now().isoformat(),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
                             session_id=session_id,
                         )
@@ -9430,7 +9430,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                             {
                                 "type": "query_complete",
                                 "data": {"turn_id": admitted_turn_id},
-                                "timestamp": datetime.now().isoformat(),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
                             session_id=session_id,
                         )
@@ -9573,7 +9573,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                             "turn_id": turn_id,
                                             "goal_satisfaction": goal_satisfaction,
                                         },
-                                        "timestamp": datetime.now().isoformat(),
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
                                     },
                                 )
                                 await manager.broadcast(
@@ -9584,7 +9584,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                             "message": goal_message,
                                             "goal_satisfaction": goal_satisfaction,
                                         },
-                                        "timestamp": datetime.now().isoformat(),
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
                                     },
                                 )
                                 await manager.broadcast(
@@ -9596,7 +9596,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                             "goal_satisfaction": goal_satisfaction,
                                             "completed": False,
                                         },
-                                        "timestamp": datetime.now().isoformat(),
+                                        "timestamp": datetime.now(timezone.utc).isoformat(),
                                     },
                                 )
                                 async with _session_turn_lock(session_id):
@@ -9631,13 +9631,13 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                         "goal_satisfaction": goal_satisfaction,
                                         "completed": True,
                                     },
-                                    "timestamp": datetime.now().isoformat(),
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
                                 },
                             )
 
                             await manager.broadcast(
                                 session_id,
-                                {"type": "pong", "data": {}, "timestamp": datetime.now().isoformat()},
+                                {"type": "pong", "data": {}, "timestamp": datetime.now(timezone.utc).isoformat()},
                             )
                             logger.info("WS execute complete (session=%s)", session_id)
                             if clear_pending_gate_on_success:
@@ -9660,7 +9660,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                         "turn_id": turn_id,
                                         "message": "Execution cancelled.",
                                     },
-                                    "timestamp": datetime.now().isoformat(),
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
                                 },
                             )
                             await manager.broadcast(
@@ -9668,7 +9668,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 {
                                     "type": "query_complete",
                                     "data": {"turn_id": turn_id, "cancelled": True},
-                                    "timestamp": datetime.now().isoformat(),
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
                                 },
                             )
                             async with _session_turn_lock(session_id):
@@ -9698,7 +9698,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                 {
                                     "type": "error",
                                     "data": {"message": str(e)},
-                                    "timestamp": datetime.now().isoformat(),
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
                                 },
                             )
                             async with _session_turn_lock(session_id):
@@ -9746,7 +9746,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                      payload = {
                          "type": "server_notice", 
                          "data": {"message": "Broadcast test received"},
-                         "timestamp": datetime.now().isoformat()
+                         "timestamp": datetime.now(timezone.utc).isoformat()
                      }
                      # Broadcast to ALL connections for this session
                      await manager.broadcast(session_id, payload)
@@ -9764,7 +9764,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         {
                             "type": "error",
                             "data": {"message": f"Unknown message type: {msg_type}"},
-                            "timestamp": datetime.now().isoformat(),
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
                         },
                         session_id=session_id,
                     )
@@ -9775,7 +9775,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     {
                         "type": "error",
                         "data": {"message": "Invalid JSON"},
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     },
                     session_id=session_id,
                 )
@@ -9786,7 +9786,7 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                     {
                         "type": "error",
                         "data": {"message": str(e)},
-                        "timestamp": datetime.now().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                     },
                     session_id=session_id,
                 )

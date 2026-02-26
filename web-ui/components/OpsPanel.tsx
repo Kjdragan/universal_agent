@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAgentStore } from "@/lib/store";
+import { formatDateTimeTz, formatTimeTz } from "@/lib/timezone";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -598,7 +599,7 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                     <div className="flex justify-between">
                       <span>{session.status}</span>
                       <span className="opacity-60">
-                        {session.last_activity?.slice(11, 19) ?? "--:--:--"}
+                        {formatTimeTz(session.last_activity, { placeholder: "--:--:--" })}
                       </span>
                     </div>
                   </button>
@@ -747,7 +748,7 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                   <div key={event.id} className="border rounded px-2 py-1 bg-background/50">
                     <div className="flex justify-between text-[10px] text-muted-foreground">
                       <span>{event.event_type}</span>
-                      <span>{event.created_at?.slice(11, 19) ?? "--:--:--"}</span>
+                      <span>{formatTimeTz(event.created_at, { placeholder: "--:--:--" })}</span>
                     </div>
                     <div className="font-mono text-[11px] truncate">
                       {Object.keys(event.payload || {}).join(", ") || "(no payload)"}
@@ -772,9 +773,9 @@ export function OpsPanel({ panelOpen: panelOpenProp, onTogglePanel, showPanelTog
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Last run</span>
                     <span className="font-mono text-[11px]">
-                      {typeof heartbeatState.last_run === "number"
-                        ? new Date(heartbeatState.last_run * 1000).toLocaleString()
-                        : heartbeatState.last_run ?? "--"}
+                      {heartbeatState.last_run
+                        ? formatDateTimeTz(heartbeatState.last_run)
+                        : "--"}
                     </span>
                   </div>
                   <div className="flex justify-between">

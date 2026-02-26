@@ -1,6 +1,6 @@
 <!-- Runtime Capabilities Snapshot (Auto) -->
 
-<!-- Generated: 2026-02-26 09:06:52 -->
+<!-- Generated: 2026-02-26 16:13:29 -->
 
 ### Capability Routing Doctrine
 - Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.
@@ -53,8 +53,10 @@
   -> Delegate: `Task(subagent_type='video-creation-expert', ...)`
 - **video-remotion-expert**: 🎥 SPECIALIZED AGENT for programmatic video generation using Remotion. **WHEN TO DELEGATE:** - User asks to generate videos using code/React/Remotion - User wants to create data-driven videos (dynamic text, images, products) - User needs to render compositions locally or via AWS Lambda - User asks to specific Remotion tasks (scaffold, render, deploy) **THIS SUB-AGENT:** - Scaffolds Remotion projects with Zod schemas - Generates JSON props for video compositions - Renders videos using local CLI (subprocess) or Lambda - Manages "Hybrid Architecture" (Lambda primary, CLI fallback) **CAPABILITIES:** - Create React-based video compositions - Programmatic rendering with dynamic props - Cloud rendering (AWS Lambda) setup and execution
   -> Delegate: `Task(subagent_type='video-remotion-expert', ...)`
-- **youtube-expert**: MANDATORY delegation target for YouTube-focused tasks, including webhook-triggered playlist events. Use when: - User provides a YouTube URL/video ID and needs transcript + metadata. - A webhook event contains a YouTube video URL/video ID. - The task asks for tutorial docs and optional implementation code. This sub-agent: - Uses `youtube-transcript-metadata` for core transcript+metadata ingestion. - Applies `youtube-tutorial-creation` for durable learning artifacts (`CONCEPT.md`, `IMPLEMENTATION.md`, `implementation/`, `manifest.json`). - Includes runnable implementation code when requested via `learning_mode=concept_plus_implementation`. - Supports degraded transcript-only completion when video/vision fails. - Legacy alias `youtube-explainer-expert` remains accepted during migration.
+- **youtube-expert**: MANDATORY delegation target for YouTube-focused tasks. Use when: - User provides a YouTube URL/video ID and needs transcript + metadata. - A webhook/manual trigger contains YouTube payloads. - The task asks for tutorial creation artifacts (concept docs and optional implementation). This sub-agent: - Uses `youtube-transcript-metadata` as the core ingestion capability. - Uses `youtube-tutorial-creation` for durable tutorial artifacts. - Supports degraded transcript-only completion when visual analysis fails.
   -> Delegate: `Task(subagent_type='youtube-expert', ...)`
+- **youtube-explainer-expert**: LEGACY compatibility alias for `youtube-expert`. Do not use this name for new delegation targets. Existing webhook mappings and historical prompts may still route here during migration. Canonical target for all new YouTube tasks: `youtube-expert`.
+  -> Delegate: `Task(subagent_type='youtube-explainer-expert', ...)`
 
 #### 📣 Communication & Operations
 - **action-coordinator**: **Sub-Agent Purpose:** Multi-channel delivery and real-world side effects. **WHEN TO USE:** - Task requires delivering work products via email, Slack, Discord, or other channels - Task requires scheduling calendar events or follow-up reminders - Task requires multi-channel notification (email + Slack + calendar in one flow) - Task requires setting up monitoring or recurring actions via Cron
@@ -148,5 +150,6 @@
 - **vp-orchestration**: Operate external primary VP agents through tool-first mission control (`vp_*` tools) with deterministic lifecycle handling and artifact handoff. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/vp-orchestration/SKILL.md`)
 - **weather**: Get current weather and forecasts (no API key required). (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/weather/SKILL.md`)
 - **webapp-testing**: Toolkit for interacting with and testing local web applications using Playwright. Supports verifying frontend functionality, debugging UI behavior, capturing browser screenshots, and viewing browser logs. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/webapp-testing/SKILL.md`)
+- **youtube-transcript-metadata**: Fetch YouTube transcript text and video metadata together in one step (parallel extraction), with optional Webshare residential proxy support and quality/error classification. Use when any agent needs reliable YouTube transcript + metadata retrieval, either as a standalone task or as the ingestion stage for larger YouTube workflows. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/youtube-transcript-metadata/SKILL.md`)
 - **youtube-tutorial-creation**: Turn a YouTube tutorial into durable learning artifacts (concept doc + runnable implementation) stored under UA_ARTIFACTS_DIR. USE WHEN user provides a YouTube URL and wants to learn/implement from it. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/youtube-tutorial-creation/SKILL.md`)
 - **zread-dependency-docs**: Read documentation and code from open source GitHub repositories using the ZRead MCP server (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/zread-dependency-docs/SKILL.md`)

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { formatDistanceToNow } from "date-fns";
+import { formatDateTimeTz, toEpochMs } from "@/lib/timezone";
 
 type CSIReport = {
     id: number;
@@ -45,7 +45,9 @@ const SEVERITY_DOTS: Record<string, string> = {
 };
 
 function timeAgo(dateStr: string): string {
-    const delta = (Date.now() - new Date(dateStr).getTime()) / 1000;
+    const ts = toEpochMs(dateStr);
+    if (ts === null) return "--";
+    const delta = Math.max(0, (Date.now() - ts) / 1000);
     if (delta < 60) return "just now";
     if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
     if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;
@@ -92,7 +94,7 @@ export default function CSIDashboard() {
     }, []);
 
     const totalReports = reports.length;
-    const lastReportTime = reports.length > 0 ? new Date(reports[0].created_at).toLocaleString() : "N/A";
+    const lastReportTime = reports.length > 0 ? formatDateTimeTz(reports[0].created_at, { placeholder: "N/A" }) : "N/A";
 
     return (
         <div className="flex h-full flex-col gap-6">
@@ -221,7 +223,7 @@ export default function CSIDashboard() {
                                     <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${SEVERITY_STYLES[selectedItem.data.severity] || SEVERITY_STYLES.info}`}>
                                         {selectedItem.data.severity}
                                     </span>
-                                    <span className="text-xs text-slate-500">{new Date(selectedItem.data.created_at).toLocaleString()}</span>
+                                    <span className="text-xs text-slate-500">{formatDateTimeTz(selectedItem.data.created_at, { placeholder: "--" })}</span>
                                 </div>
                                 <h2 className="text-lg font-semibold text-slate-100">{selectedItem.data.title}</h2>
                                 <p className="text-xs text-slate-400 font-mono mt-1">ID: {selectedItem.data.id} | Kind: {selectedItem.data.kind}</p>
@@ -272,7 +274,7 @@ export default function CSIDashboard() {
                                         <span className="px-2.5 py-1 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold uppercase tracking-wide">
                                             {selectedItem.data.report_type}
                                         </span>
-                                        <span className="text-xs text-slate-400">{new Date(selectedItem.data.created_at).toLocaleString()}</span>
+                                        <span className="text-xs text-slate-400">{formatDateTimeTz(selectedItem.data.created_at, { placeholder: "--" })}</span>
                                     </div>
                                     <span className="text-xs text-slate-500 font-mono">Report #{selectedItem.data.id}</span>
                                 </div>

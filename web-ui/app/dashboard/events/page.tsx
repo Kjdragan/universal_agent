@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatTimeTz } from "@/lib/timezone";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -152,7 +153,7 @@ export default function DashboardEventsPage() {
                 >
                   <div className="flex items-center justify-between text-[11px] text-slate-400">
                     <span>{ev.type || "system_event"}</span>
-                    <span>{ev.created_at ? new Date(ev.created_at).toLocaleTimeString() : "--:--:--"}</span>
+                    <span>{formatTimeTz(ev.created_at, { placeholder: "--:--:--" })}</span>
                   </div>
                   <div className="mt-1 text-[11px] font-mono text-slate-300 truncate">
                     {Object.keys(ev.payload || {}).join(", ") || "(no payload fields)"}
