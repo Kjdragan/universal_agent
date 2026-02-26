@@ -394,6 +394,27 @@ def _tutorial_key_files(run_dir: Path, *, max_code_files: int = 4) -> list[dict[
     return files
 
 
+def _tutorial_has_code_implementation(run_dir: Path, manifest: dict) -> bool:
+    """Determine whether a tutorial run involves code implementation.
+
+    Checks manifest field first (set by agent), falls back to heuristic
+    checking for actual code files in implementation/ directory.
+    """
+    # Prefer explicit manifest field if the agent set it
+    manifest_flag = manifest.get("implementation_required")
+    if manifest_flag is not None:
+        return bool(manifest_flag)
+    # Fallback heuristic: check for code files in implementation/
+    impl_dir = run_dir / "implementation"
+    if not impl_dir.exists() or not impl_dir.is_dir():
+        return False
+    code_extensions = {".py", ".ts", ".tsx", ".js", ".sh", ".ipynb"}
+    for child in impl_dir.rglob("*"):
+        if child.is_file() and child.suffix.lower() in code_extensions:
+            return True
+    return False
+
+
 def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
     root = ARTIFACTS_DIR / "youtube-tutorial-learning"
     if not root.exists() or not root.is_dir():
@@ -434,6 +455,7 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
                 "run_api_url": f"/api/artifacts?path={urllib.parse.quote(run_rel, safe='/')}",
                 "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
                 "files": files,
+                "implementation_required": _tutorial_has_code_implementation(run_dir, manifest),
             }
             runs.append((mtime, run_item))
 
@@ -4983,9 +5005,34 @@ async def signals_ingest_endpoint(request: Request):
             analytics_action = to_csi_analytics_action(event)
             if not analytics_action:
                 continue
-            ok, _reason = await _hooks_service.dispatch_internal_action(analytics_action)
-            if ok:
-                analytics_dispatch_count += 1
+                
+            analytics_dispatch_count += 1
+            
+            # Send Notification
+            title = f"CSI Insight: {event.event_type or 'Report'} from {event.source or 'Unknown'}"
+            message = analytics_action.get("message", "No content")
+            
+            _add_notification(
+                kind="csi_insight",
+                title=title,
+                message=f"Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n{message[:150]}...",
+                severity="info",
+                requires_action=True,
+            )
+            
+            # Create Todoist task
+            try:
+                from universal_agent.services.todoist_service import TodoService
+                todoist = TodoService()
+                todoist.create_task(
+                    content=title,
+                    description=f"{message}\n\nReview in CSI Dashboard Tab.",
+                    labels=["CSI"],
+                    priority="high"
+                )
+            except Exception as exc:
+                logger.error(f"Failed to create Todoist task for CSI signal: {exc}")
+
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count
         if analytics_dispatch_count > 0:
@@ -5242,6 +5289,46 @@ async def dashboard_summary():
         },
         "deployment_profile": _deployment_profile_defaults(),
     }
+
+
+@app.get("/api/v1/dashboard/csi/reports")
+async def dashboard_csi_reports(limit: int = 15):
+    from pathlib import Path
+    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    if not db_path.exists():
+        return {"status": "unavailable", "detail": "CSI Database not found", "reports": []}
+    
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='insight_reports'")
+        if not cur.fetchone():
+            return {"status": "unavailable", "detail": "Table insight_reports missing", "reports": []}
+
+        clamped_limit = max(1, min(int(limit), 50))
+        cur.execute("SELECT * FROM insight_reports ORDER BY created_at DESC LIMIT ?", (clamped_limit,))
+        
+        reports = []
+        for row in cur.fetchall():
+            row_dict = dict(row)
+            try:
+                row_dict["report_data"] = json.loads(row_dict.get("report_data") or "null")
+            except Exception:
+                pass
+            try:
+                row_dict["usage"] = json.loads(row_dict.get("usage") or "null")
+            except Exception:
+                pass
+            reports.append(row_dict)
+            
+        return {"status": "ok", "reports": reports}
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc), "reports": []}
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
 
 
 @app.get("/api/v1/dashboard/notifications")
@@ -5574,6 +5661,26 @@ async def dashboard_system_command(payload: DashboardSystemCommandRequest):
 async def dashboard_tutorial_runs(limit: int = 100):
     clamped_limit = max(1, min(int(limit), 500))
     return {"runs": _list_tutorial_runs(limit=clamped_limit)}
+
+
+_TUTORIAL_NOTIFICATION_KINDS = frozenset({
+    "youtube_tutorial_started",
+    "youtube_tutorial_ready",
+    "youtube_tutorial_failed",
+    "youtube_ingest_failed",
+    "youtube_hook_recovery_queued",
+})
+
+
+@app.get("/api/v1/dashboard/tutorials/notifications")
+async def dashboard_tutorial_notifications(limit: int = 50):
+    """Return recent notifications relevant to the YouTube tutorial pipeline."""
+    clamped = max(1, min(int(limit), 200))
+    matching = [
+        n for n in reversed(_notifications)
+        if n.get("kind") in _TUTORIAL_NOTIFICATION_KINDS
+    ][:clamped]
+    return {"notifications": matching}
 
 
 @app.get("/api/v1/dashboard/tutorials/review-jobs")
