@@ -1891,6 +1891,21 @@ class HooksService:
                     run_source=run_source,
                     started_at_epoch=start_ts,
                 )
+            if is_youtube_tutorial:
+                tutorial_title = str(metadata.get("tutorial_title") or expected_video_id or session_key)
+                self._emit_notification(
+                    kind="youtube_tutorial_started",
+                    title="YouTube Tutorial Pipeline Started",
+                    message=f"Processing: {tutorial_title}",
+                    session_id=session_id,
+                    severity="info",
+                    metadata={
+                        "source": "hooks",
+                        "hook_name": hook_name,
+                        "hook_session_key": session_key,
+                        "video_id": expected_video_id or "",
+                    },
+                )
             execution_summary: dict[str, Any] = {}
             idle_timeout_seconds = (
                 int(self._youtube_hook_idle_timeout_seconds)

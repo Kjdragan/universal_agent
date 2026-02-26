@@ -269,6 +269,7 @@ class OpsService:
             "has_run_log": run_log_path.exists(),
             "has_activity_journal": journal_path.exists(),
             "has_memory": (session_path / "MEMORY.md").exists() or (session_path / "memory").exists(),
+            "last_run_source": str(runtime.get("last_run_source") or ""),
         }
         
         heartbeat_state = self._read_heartbeat_state(session_path)
