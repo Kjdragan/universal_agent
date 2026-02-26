@@ -24,7 +24,7 @@ def test_composio_transform_youtube_event():
     assert out["name"] == "ComposioYouTubeTrigger"
     assert "abc123xyz00" in out["message"]
     assert out["session_key"].startswith("yt_")
-    assert out["to"] == "youtube-explainer-expert"
+    assert out["to"] == "youtube-expert"
     assert "learning_mode: concept_plus_implementation" in out["message"]
     assert "resolved_artifacts_root:" in out["message"]
     assert "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/..." in out["message"]
@@ -65,7 +65,7 @@ def test_composio_transform_direct_new_playlist_item_payload():
     assert out["kind"] == "agent"
     assert "video_id: dQw4w9WgXcQ" in out["message"]
     assert "video_url: https://www.youtube.com/watch?v=dQw4w9WgXcQ" in out["message"]
-    assert out["to"] == "youtube-explainer-expert"
+    assert out["to"] == "youtube-expert"
 
 
 def test_composio_transform_new_playlist_item_under_body_dict_payload():
@@ -159,7 +159,7 @@ def test_manual_transform_from_video_url():
     assert out["kind"] == "agent"
     assert out["name"] == "ManualYouTubeWebhook"
     assert "xyz987abc12" in out["message"]
-    assert out["to"] == "youtube-explainer-expert"
+    assert out["to"] == "youtube-expert"
     assert "mode: explainer_plus_code" in out["message"]
     assert "learning_mode: concept_plus_implementation" in out["message"]
     assert "resolved_artifacts_root:" in out["message"]

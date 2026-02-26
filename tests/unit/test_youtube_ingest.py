@@ -82,6 +82,70 @@ def test_ingest_youtube_transcript_failure_class_passthrough(monkeypatch) -> Non
     assert out["failure_class"] == "request_blocked"
 
 
+def test_ingest_youtube_transcript_includes_metadata(monkeypatch) -> None:
+    monkeypatch.setattr(
+        youtube_ingest,
+        "_run_youtube_transcript_api_extract",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "source": "youtube_transcript_api",
+            "transcript_text": "line 1\nline 2\nline 3\nline 4\nline 5\nline 6",
+        },
+    )
+    monkeypatch.setattr(
+        youtube_ingest,
+        "_run_youtube_metadata_extract",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "source": "yt_dlp",
+            "metadata": {"title": "Demo Title", "channel": "Demo Channel"},
+        },
+    )
+
+    out = youtube_ingest.ingest_youtube_transcript(
+        video_url="https://www.youtube.com/watch?v=dxlyCPGCvy8",
+        video_id=None,
+        max_chars=1000,
+        min_chars=20,
+    )
+
+    assert out["ok"] is True
+    assert out["metadata_status"] == "attempted_succeeded"
+    assert out["metadata_source"] == "yt_dlp"
+    assert out["metadata"]["title"] == "Demo Title"
+
+
+def test_ingest_youtube_transcript_failure_still_includes_metadata(monkeypatch) -> None:
+    monkeypatch.setattr(
+        youtube_ingest,
+        "_run_youtube_transcript_api_extract",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "error": "youtube_transcript_api_failed",
+            "failure_class": "request_blocked",
+        },
+    )
+    monkeypatch.setattr(
+        youtube_ingest,
+        "_run_youtube_metadata_extract",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "source": "yt_dlp",
+            "metadata": {"title": "Still Useful"},
+        },
+    )
+
+    out = youtube_ingest.ingest_youtube_transcript(
+        video_url="https://www.youtube.com/watch?v=dxlyCPGCvy8",
+        video_id=None,
+    )
+
+    assert out["ok"] is False
+    assert out["failure_class"] == "request_blocked"
+    assert out["metadata_status"] == "attempted_succeeded"
+    assert out["metadata"]["title"] == "Still Useful"
+
+
 def test_run_extract_enforces_english_without_proxy(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -121,6 +185,7 @@ def test_run_extract_uses_webshare_proxy_when_env_present(monkeypatch) -> None:
     class FakeProxyConfig:
         def __init__(self, **kwargs):
             captured["proxy_kwargs"] = kwargs
+            self.url = "http://proxy.example"
 
     class FakeApi:
         def __init__(self, **kwargs):
@@ -141,7 +206,12 @@ def test_run_extract_uses_webshare_proxy_when_env_present(monkeypatch) -> None:
         types.SimpleNamespace(WebshareProxyConfig=FakeProxyConfig),
     )
 
-    out = youtube_ingest._run_youtube_transcript_api_extract("dxlyCPGCvy8")
+    proxy_config, proxy_mode = youtube_ingest._build_webshare_proxy_config()
+    out = youtube_ingest._run_youtube_transcript_api_extract(
+        "dxlyCPGCvy8",
+        proxy_config=proxy_config,
+        proxy_mode=proxy_mode,
+    )
 
     assert out["ok"] is True
     assert out["proxy_mode"] == "webshare"

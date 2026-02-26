@@ -10,7 +10,7 @@ import re
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-YOUTUBE_LEARNING_SUBAGENT = "youtube-explainer-expert"
+YOUTUBE_LEARNING_SUBAGENT = "youtube-expert"
 MODE_EXPLAINER_ONLY = "explainer_only"
 MODE_EXPLAINER_PLUS_CODE = "explainer_plus_code"
 LEARNING_MODE_CONCEPT_ONLY = "concept_only"
@@ -149,14 +149,15 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
 
     lines = [
         "Manual YouTube URL ingestion event received.",
-        "Route this run to the YouTube learning specialist.",
+        "Route this run to the YouTube specialist.",
         f"target_subagent: {YOUTUBE_LEARNING_SUBAGENT}",
-        "Use the youtube-tutorial-learning skill workflow.",
+        "Ingestion first: use youtube-transcript-metadata skill for transcript+metadata.",
+        "Then use youtube-tutorial-creation for durable tutorial artifacts.",
         "Produce durable learning artifacts in UA_ARTIFACTS_DIR.",
         f"resolved_artifacts_root: {artifacts_root}",
         "Path rule: do not use a literal UA_ARTIFACTS_DIR folder segment in file paths.",
         "Invalid paths: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
-        f"Use this absolute durable base path: {artifacts_root}/youtube-tutorial-learning/...",
+        f"Use this absolute durable base path: {artifacts_root}/youtube-tutorial-creation/...",
         "Required artifacts: README.md, CONCEPT.md, IMPLEMENTATION.md, implementation/, manifest.json.",
         "Create required artifacts first and keep them even if extraction fails.",
         "On extraction failure, set manifest status to degraded_transcript_only or failed (never leave empty run dirs).",
@@ -168,7 +169,7 @@ def transform(ctx: dict[str, Any]) -> dict[str, Any] | None:
         f"learning_mode: {learning_mode}",
         f"allow_degraded_transcript_only: {str(allow_degraded).lower()}",
         "If learning_mode is concept_plus_implementation, include runnable code in implementation/ and explain how to run it.",
-        "Transcript path: use youtube-transcript-api instance API as the single transcript source (no yt-dlp transcript fallback).",
+        "Transcript path: youtube-transcript-api is source of truth. yt-dlp is metadata-only.",
         "Video analysis path: use Gemini multimodal video understanding with the YouTube URL directly when available.",
         "Use visual analysis when possible. Continue with transcript-only mode when visual processing is unavailable.",
     ]

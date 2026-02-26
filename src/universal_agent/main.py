@@ -2993,6 +2993,8 @@ SUBAGENT_EXPECTED_SKILLS = {
     "data-analyst": [],  # Uses Composio CodeInterpreter + local Python
     "action-coordinator": ["gmail"],  # Uses Composio delivery tools
     "banana-squad-expert": ["banana-squad", "image-generation"],
+    "youtube-expert": ["youtube-transcript-metadata", "youtube-tutorial-creation"],
+    "youtube-explainer-expert": ["youtube-transcript-metadata", "youtube-tutorial-creation"],  # legacy alias
 }
 
 

@@ -34,6 +34,10 @@ MAX_SESSION_ID_LEN = 128
 SESSION_ID_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 DEFAULT_SYNC_READY_MARKER_FILENAME = "sync_ready.json"
 SYNC_READY_MARKER_VERSION = 1
+YOUTUBE_AGENT_CANONICAL = "youtube-expert"
+YOUTUBE_AGENT_LEGACY_ALIAS = "youtube-explainer-expert"
+YOUTUBE_AGENT_ROUTE_ALIASES = {YOUTUBE_AGENT_CANONICAL, YOUTUBE_AGENT_LEGACY_ALIAS}
+YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
 
 
 class HookReportedTimeout(RuntimeError):
@@ -98,6 +102,10 @@ class HookAction(BaseModel):
     model: Optional[str] = None
     thinking: Optional[str] = None
     timeout_seconds: Optional[int] = None
+
+
+def _is_youtube_agent_route(route: str | None) -> bool:
+    return (route or "").strip().lower() in YOUTUBE_AGENT_ROUTE_ALIASES
 
 
 class HooksService:
@@ -464,7 +472,7 @@ class HooksService:
             kind="agent",
             name="RecoveredYouTubeWebhook",
             session_key=session_key,
-            to="youtube-explainer-expert",
+            to=YOUTUBE_AGENT_CANONICAL,
             message=recovery_message,
             deliver=True,
         )
@@ -983,7 +991,7 @@ class HooksService:
     def _is_youtube_local_ingest_target(self, action: HookAction) -> bool:
         return (
             (action.kind or "").strip().lower() == "agent"
-            and (action.to or "").strip().lower() == "youtube-explainer-expert"
+            and _is_youtube_agent_route(action.to)
             and bool((action.message or "").strip())
             and self._youtube_ingest_mode == "local_worker"
         )
@@ -1168,14 +1176,14 @@ class HooksService:
         started_at_epoch: float,
     ) -> Optional[Path]:
         artifacts_root = Path(str(resolve_artifacts_dir())).resolve()
-        tutorials_root = artifacts_root / "youtube-tutorial-learning"
-        if not tutorials_root.exists():
-            return None
 
         best_path: Optional[Path] = None
         best_mtime = 0.0
         threshold = float(started_at_epoch or 0.0) - 60.0
 
+        tutorials_root = artifacts_root / YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL
+        if not tutorials_root.exists():
+            return None
         for manifest_path in tutorials_root.rglob("manifest.json"):
             try:
                 payload = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1401,6 +1409,8 @@ class HooksService:
                 f"local_youtube_ingest_transcript_chars: {int(ingest_result.get('transcript_chars') or 0)}",
                 f"local_youtube_ingest_transcript_file: {transcript_path}",
                 f"local_youtube_ingest_metadata_file: {meta_path}",
+                f"local_youtube_ingest_metadata_status: {str(ingest_result.get('metadata_status') or '')}",
+                f"local_youtube_ingest_metadata_source: {str(ingest_result.get('metadata_source') or '')}",
                 "Use the local_youtube_ingest_transcript_file as primary transcript input for this run.",
             ]
             action = action.model_copy(
@@ -1412,6 +1422,11 @@ class HooksService:
                 "hook_youtube_ingest_source": str(ingest_result.get("source") or "unknown"),
                 "hook_youtube_ingest_endpoint": str(ingest_result.get("ingest_endpoint") or ""),
                 "hook_youtube_ingest_transcript_file": str(transcript_path),
+                "hook_youtube_ingest_metadata_file": str(meta_path),
+                "hook_youtube_ingest_metadata_status": str(ingest_result.get("metadata_status") or ""),
+                "hook_youtube_ingest_metadata_source": str(ingest_result.get("metadata_source") or ""),
+                "hook_youtube_ingest_metadata_error": str(ingest_result.get("metadata_error") or ""),
+                "hook_youtube_ingest_metadata_failure_class": str(ingest_result.get("metadata_failure_class") or ""),
                 "hook_youtube_ingest_video_key": video_key,
             }
             return action, metadata, False
@@ -1710,7 +1725,7 @@ class HooksService:
             if action.timeout_seconds is not None
             else (self._default_hook_timeout_seconds or None)
         )
-        is_youtube_tutorial = (action.to or "").strip().lower() == "youtube-explainer-expert"
+        is_youtube_tutorial = _is_youtube_agent_route(action.to)
         expected_video_id = self._extract_action_field(action.message or "", "video_id")
         if is_youtube_tutorial:
             if timeout_seconds is None:
@@ -2377,7 +2392,7 @@ class HooksService:
 
         route = (action.to or "").strip().lower()
         extra_lines: list[str] = []
-        if route == "youtube-explainer-expert":
+        if _is_youtube_agent_route(route):
             try:
                 artifacts_root = str(resolve_artifacts_dir())
             except Exception:
@@ -2388,7 +2403,7 @@ class HooksService:
                 f"Resolved artifacts root (absolute): {artifacts_root}",
                 "Path rule: never use a literal UA_ARTIFACTS_DIR folder name in paths.",
                 "Invalid examples: /opt/universal_agent/UA_ARTIFACTS_DIR/... and UA_ARTIFACTS_DIR/...",
-                f"Durable writes must use this root: {artifacts_root}/youtube-tutorial-learning/...",
+                f"Durable writes must use this root: {artifacts_root}/youtube-tutorial-creation/...",
                 "Create required artifacts first (manifest.json, README.md, CONCEPT.md, IMPLEMENTATION.md, implementation/) before retrieval.",
                 "If transcript/video extraction fails, keep those files and set manifest status to degraded_transcript_only or failed.",
             ]

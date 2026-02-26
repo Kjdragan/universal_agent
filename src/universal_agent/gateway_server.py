@@ -154,6 +154,7 @@ else:
     WORKSPACES_DIR = _default_ws_dir
 
 ARTIFACTS_DIR = resolve_artifacts_dir()
+YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
 
 TEXT_EXTENSIONS = (
     ".txt",
@@ -339,6 +340,20 @@ def _artifact_rel_path(path: Path) -> str:
         return ""
 
 
+def _tutorial_root_dirs() -> list[Path]:
+    return [ARTIFACTS_DIR / YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL]
+
+
+def _is_tutorial_run_rel_path(rel_path: str) -> bool:
+    normalized = str(rel_path or "").strip().strip("/")
+    if not normalized:
+        return False
+    root_name = YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL
+    return (
+        normalized == root_name or normalized.startswith(f"{root_name}/")
+    )
+
+
 def _artifact_api_file_url(rel_path: str) -> str:
     normalized = str(rel_path or "").strip().strip("/")
     if not normalized:
@@ -420,50 +435,51 @@ def _tutorial_has_code_implementation(run_dir: Path, manifest: dict) -> bool:
 
 
 def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
-    root = ARTIFACTS_DIR / "youtube-tutorial-learning"
-    if not root.exists() or not root.is_dir():
+    roots = [root for root in _tutorial_root_dirs() if root.exists() and root.is_dir()]
+    if not roots:
         return []
 
     runs: list[tuple[float, dict[str, Any]]] = []
-    day_dirs = [d for d in root.iterdir() if d.is_dir()]
-    day_dirs.sort(key=lambda p: p.name, reverse=True)
-    for day_dir in day_dirs:
-        for run_dir in day_dir.iterdir():
-            if not run_dir.is_dir():
-                continue
-            try:
-                mtime = float(run_dir.stat().st_mtime)
-            except Exception:
-                mtime = 0.0
-            manifest = _tutorial_manifest(run_dir)
-            if not manifest:
-                continue
-            run_rel = _artifact_rel_path(run_dir)
-            if not run_rel:
-                continue
-            files = _tutorial_key_files(run_dir)
-            title = str(manifest.get("title") or "").strip() or run_dir.name
-            video_id = str(manifest.get("video_id") or "").strip()
-            video_url = str(manifest.get("video_url") or "").strip()
-            if not video_url and video_id:
-                video_url = f"https://www.youtube.com/watch?v={video_id}"
-            run_item = {
-                "run_path": run_rel,
-                "run_dir": str(run_dir),
-                "run_name": run_dir.name,
-                "created_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
-                "status": str(manifest.get("status") or "").strip() or "unknown",
-                "title": title,
-                "video_id": video_id,
-                "video_url": video_url,
-                "channel_id": str(manifest.get("channel_id") or "").strip(),
-                "manifest_path": _artifact_rel_path(run_dir / "manifest.json"),
-                "run_api_url": f"/api/artifacts?path={urllib.parse.quote(run_rel, safe='/')}",
-                "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
-                "files": files,
-                "implementation_required": _tutorial_has_code_implementation(run_dir, manifest),
-            }
-            runs.append((mtime, run_item))
+    for root in roots:
+        day_dirs = [d for d in root.iterdir() if d.is_dir()]
+        day_dirs.sort(key=lambda p: p.name, reverse=True)
+        for day_dir in day_dirs:
+            for run_dir in day_dir.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                try:
+                    mtime = float(run_dir.stat().st_mtime)
+                except Exception:
+                    mtime = 0.0
+                manifest = _tutorial_manifest(run_dir)
+                if not manifest:
+                    continue
+                run_rel = _artifact_rel_path(run_dir)
+                if not run_rel:
+                    continue
+                files = _tutorial_key_files(run_dir)
+                title = str(manifest.get("title") or "").strip() or run_dir.name
+                video_id = str(manifest.get("video_id") or "").strip()
+                video_url = str(manifest.get("video_url") or "").strip()
+                if not video_url and video_id:
+                    video_url = f"https://www.youtube.com/watch?v={video_id}"
+                run_item = {
+                    "run_path": run_rel,
+                    "run_dir": str(run_dir),
+                    "run_name": run_dir.name,
+                    "created_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+                    "status": str(manifest.get("status") or "").strip() or "unknown",
+                    "title": title,
+                    "video_id": video_id,
+                    "video_url": video_url,
+                    "channel_id": str(manifest.get("channel_id") or "").strip(),
+                    "manifest_path": _artifact_rel_path(run_dir / "manifest.json"),
+                    "run_api_url": f"/api/artifacts?path={urllib.parse.quote(run_rel, safe='/')}",
+                    "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
+                    "files": files,
+                    "implementation_required": _tutorial_has_code_implementation(run_dir, manifest),
+                }
+                runs.append((mtime, run_item))
 
     runs.sort(key=lambda item: item[0], reverse=True)
     return [item for _, item in runs[: max(1, min(limit, 1000))]]
@@ -917,6 +933,13 @@ class NotificationBulkUpdateRequest(BaseModel):
     limit: int = 200
 
 
+class NotificationPurgeRequest(BaseModel):
+    clear_all: bool = False
+    kind: Optional[str] = None
+    current_status: Optional[str] = None
+    older_than_hours: Optional[int] = None
+
+
 class OpsNotificationCreateRequest(BaseModel):
     kind: str
     title: str
@@ -952,16 +975,15 @@ class ResumeRequest(BaseModel):
 class YouTubeIngestRequest(BaseModel):
     video_url: Optional[str] = None
     video_id: Optional[str] = None
-
-class VisionDescribeRequest(BaseModel):
-    image_base64: str = Field(..., description="Base64 encoded image string (e.g. data:image/png;base64,...)")
-    prompt: str = Field("Describe this image in detail.", description="Instructions for the vision model")
-
     language: str = "en"
     timeout_seconds: int = 120
     max_chars: int = 180_000
     min_chars: int = 160
     request_id: Optional[str] = None
+
+class VisionDescribeRequest(BaseModel):
+    image_base64: str = Field(..., description="Base64 encoded image string (e.g. data:image/png;base64,...)")
+    prompt: str = Field("Describe this image in detail.", description="Instructions for the vision model")
 
 
 # =============================================================================
@@ -2387,6 +2409,65 @@ def _parse_iso_timestamp(value: Any) -> Optional[datetime]:
         return None
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_notification_timestamp(value: Optional[str]) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return _utc_now_iso()
+    parsed = _parse_iso_timestamp(raw)
+    if parsed is None:
+        return raw
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.isoformat()
+
+
+def _notification_created_epoch(item: dict[str, Any]) -> Optional[float]:
+    raw = item.get("created_at")
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    parsed = _parse_iso_timestamp(raw)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _has_recent_notification(
+    *,
+    kind: str,
+    metadata_match: Optional[dict[str, str]] = None,
+    within_seconds: int = 3600,
+) -> bool:
+    kind_norm = str(kind or "").strip().lower()
+    now_ts = time.time()
+    for item in reversed(_notifications):
+        if str(item.get("kind") or "").strip().lower() != kind_norm:
+            continue
+        created_ts = _notification_created_epoch(item)
+        if created_ts is None:
+            continue
+        if created_ts < (now_ts - max(1, int(within_seconds))):
+            return False
+        if metadata_match:
+            metadata = item.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            matched = True
+            for key, expected in metadata_match.items():
+                if str(metadata.get(key) or "").strip().lower() != str(expected).strip().lower():
+                    matched = False
+                    break
+            if not matched:
+                continue
+        return True
+    return False
+
+
 def _trim_turn_history(state: dict[str, Any]) -> None:
     turns = state.get("turns", {})
     if not isinstance(turns, dict):
@@ -3061,10 +3142,11 @@ def _add_notification(
     severity: str = "info",
     requires_action: bool = False,
     metadata: Optional[dict] = None,
+    created_at: Optional[str] = None,
 ) -> dict:
     notification_id = f"ntf_{int(time.time() * 1000)}_{len(_notifications) + 1}"
     targets = _notification_targets()
-    timestamp = datetime.now().isoformat()
+    timestamp = _normalize_notification_timestamp(created_at)
     record = {
         "id": notification_id,
         "kind": kind,
@@ -3147,7 +3229,7 @@ def _apply_notification_status(
 ) -> dict[str, Any]:
     normalized = _normalize_notification_status(status_value)
     item["status"] = normalized
-    item["updated_at"] = datetime.now().isoformat()
+    item["updated_at"] = _utc_now_iso()
     metadata = item.setdefault("metadata", {})
     if not isinstance(metadata, dict):
         metadata = {}
@@ -3159,7 +3241,7 @@ def _apply_notification_status(
         until_ts = time.time() + (minutes * 60)
         metadata["snooze_minutes"] = minutes
         metadata["snooze_until_ts"] = until_ts
-        metadata["snooze_until"] = datetime.fromtimestamp(until_ts).isoformat()
+        metadata["snooze_until"] = datetime.fromtimestamp(until_ts, tz=timezone.utc).isoformat()
     else:
         metadata.pop("snooze_until_ts", None)
         metadata.pop("snooze_until", None)
@@ -3180,7 +3262,7 @@ def _apply_notification_snooze_expiry() -> int:
         if until_ts is None or until_ts > now_ts:
             continue
         item["status"] = "new"
-        item["updated_at"] = datetime.now().isoformat()
+        item["updated_at"] = _utc_now_iso()
         metadata["snooze_expired_at"] = item["updated_at"]
         metadata.pop("snooze_until_ts", None)
         metadata.pop("snooze_until", None)
@@ -5029,40 +5111,91 @@ async def signals_ingest_endpoint(request: Request):
             analytics_action = to_csi_analytics_action(event)
             if not analytics_action:
                 continue
-                
+
+            ok, _reason = await _hooks_service.dispatch_internal_action(analytics_action)
+            if not ok:
+                continue
             analytics_dispatch_count += 1
             
-            # Send Notification
             title = f"CSI Insight: {event.event_type or 'Report'} from {event.source or 'Unknown'}"
             message = analytics_action.get("message", "No content")
             
+            metadata = {
+                "event_type": event.event_type,
+                "event_id": event.event_id,
+            }
+            if isinstance(event.subject, dict):
+                artifact_paths = event.subject.get("artifact_paths")
+                if artifact_paths:
+                    metadata["artifact_paths"] = artifact_paths
+                    # Include the markdown path in the notification message explicitly for easy access
+                    md_path = artifact_paths.get("markdown")
+                    if md_path:
+                        message += f"\n\nReport Artifact: {md_path}"
+
             _add_notification(
                 kind="csi_insight",
                 title=title,
-                message=f"Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n{message[:150]}...",
+                message=f"Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n{message[:300]}...",
                 severity="info",
                 requires_action=True,
+                metadata=metadata,
+                created_at=event.occurred_at or event.received_at,
             )
             
-            # Create Todoist task
-            try:
-                from universal_agent.services.todoist_service import TodoService
-                todoist = TodoService()
-                todoist.create_task(
-                    content=title,
-                    description=f"{message}\n\nReview in CSI Dashboard Tab.",
-                    labels=["CSI"],
-                    priority="high",
-                    project_key="csi",
+            # Create Todoist task when credentials are configured. Missing credentials
+            # are treated as a sync skip, not a system error.
+            has_api_key = bool((os.getenv("TODOIST_API_KEY") or "").strip())
+            has_api_token = bool((os.getenv("TODOIST_API_TOKEN") or "").strip())
+            if not (has_api_key or has_api_token):
+                logger.info(
+                    "Skipping CSI Todoist sync because credentials are not configured "
+                    "(TODOIST_API_TOKEN/TODOIST_API_KEY missing)."
                 )
-            except Exception as exc:
-                logger.error(f"Failed to create Todoist task for CSI signal: {exc}")
-                _add_notification(
-                    kind="system_error",
-                    title="Todoist Sync Failed",
-                    message=f"Could not sync CSI task to Todoist. Check API token and taxonomy. Error: {exc}",
-                    severity="error",
-                )
+                if not _has_recent_notification(
+                    kind="system_notice",
+                    metadata_match={"integration": "todoist", "reason": "credentials_missing"},
+                    within_seconds=1800,
+                ):
+                    _add_notification(
+                        kind="system_notice",
+                        title="Todoist Sync Skipped",
+                        message=(
+                            "CSI signal received, but Todoist sync is disabled because "
+                            "TODOIST_API_TOKEN/TODOIST_API_KEY is not configured."
+                        ),
+                        severity="info",
+                        metadata={"integration": "todoist", "reason": "credentials_missing"},
+                    )
+            else:
+                try:
+                    from universal_agent.services.todoist_service import TodoService
+
+                    todoist = TodoService()
+                    todoist.create_task(
+                        content=title,
+                        description=f"{message}\n\nReview in CSI Dashboard Tab.",
+                        labels=["CSI"],
+                        priority="high",
+                        project_key="csi",
+                    )
+                except Exception as exc:
+                    logger.exception("Failed to create Todoist task for CSI signal")
+                    debug_info = (
+                        f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
+                        f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
+                    )
+                    _add_notification(
+                        kind="system_error",
+                        title="Todoist Sync Failed",
+                        message=(
+                            "Could not sync CSI task to Todoist. "
+                            "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
+                            f"and taxonomy. Error: {exc}. Debug: {debug_info}"
+                        ),
+                        severity="error",
+                        metadata={"integration": "todoist", "reason": "task_sync_failed"},
+                    )
 
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count
@@ -5344,10 +5477,18 @@ async def dashboard_csi_reports(limit: int = 15):
         reports = []
         for row in cur.fetchall():
             row_dict = dict(row)
+            report_data = {}
             try:
-                row_dict["report_data"] = json.loads(row_dict.get("report_data") or "null")
+                report_data = json.loads(row_dict.get("report_json") or "{}")
             except Exception:
                 pass
+            report_data["markdown_content"] = row_dict.get("report_markdown") or ""
+            row_dict["report_data"] = report_data
+            
+            # Remove raw json/markdown to reduce payload size
+            row_dict.pop("report_json", None)
+            row_dict.pop("report_markdown", None)
+            
             try:
                 row_dict["usage"] = json.loads(row_dict.get("usage") or "null")
             except Exception:
@@ -5465,6 +5606,56 @@ async def dashboard_notification_bulk_update(payload: NotificationBulkUpdateRequ
         "updated": len(updated),
         "status": status_value,
         "notifications": updated,
+    }
+
+
+@app.post("/api/v1/dashboard/notifications/purge")
+async def dashboard_notification_purge(payload: NotificationPurgeRequest):
+    _apply_notification_snooze_expiry()
+    kind_filter = str(payload.kind or "").strip().lower()
+    status_filter = _normalize_notification_status(payload.current_status or "")
+    older_than_hours = payload.older_than_hours
+    if older_than_hours is not None:
+        older_than_hours = max(1, min(int(older_than_hours), 24 * 365))
+    apply_age_filter = older_than_hours is not None
+
+    if not payload.clear_all and not kind_filter and not status_filter and not apply_age_filter:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a purge filter (kind/current_status/older_than_hours) or set clear_all=true",
+        )
+
+    cutoff_ts = None
+    if apply_age_filter and older_than_hours is not None:
+        cutoff_ts = time.time() - (older_than_hours * 3600)
+
+    deleted: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    for item in _notifications:
+        matches = True
+        if kind_filter and str(item.get("kind") or "").strip().lower() != kind_filter:
+            matches = False
+        if status_filter and _normalize_notification_status(item.get("status")) != status_filter:
+            matches = False
+        if cutoff_ts is not None:
+            created_ts = _notification_created_epoch(item)
+            if created_ts is None or created_ts > cutoff_ts:
+                matches = False
+        if matches:
+            deleted.append(item)
+        else:
+            kept.append(item)
+
+    _notifications[:] = kept
+    return {
+        "deleted": len(deleted),
+        "remaining": len(_notifications),
+        "filters": {
+            "clear_all": bool(payload.clear_all),
+            "kind": kind_filter or None,
+            "current_status": status_filter or None,
+            "older_than_hours": older_than_hours,
+        },
     }
 
 
@@ -5741,8 +5932,11 @@ async def dashboard_tutorial_run_delete(run_path: str):
 
     run_dir = _resolve_path_under_root(ARTIFACTS_DIR, run_path)
     rel = _artifact_rel_path(run_dir)
-    if not rel.startswith("youtube-tutorial-learning/"):
-        raise HTTPException(status_code=400, detail="run_path must be under youtube-tutorial-learning/")
+    if not _is_tutorial_run_rel_path(rel):
+        raise HTTPException(
+            status_code=400,
+            detail="run_path must be under youtube-tutorial-creation/",
+        )
 
     if not run_dir.exists() or not run_dir.is_dir():
         raise HTTPException(status_code=404, detail="Tutorial run directory not found")
@@ -5799,8 +5993,11 @@ async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequ
         raise HTTPException(status_code=404, detail="Tutorial run directory not found")
 
     run_rel = _artifact_rel_path(run_dir)
-    if not run_rel.startswith("youtube-tutorial-learning/"):
-        raise HTTPException(status_code=400, detail="run_path must be under youtube-tutorial-learning/")
+    if not _is_tutorial_run_rel_path(run_rel):
+        raise HTTPException(
+            status_code=400,
+            detail="run_path must be under youtube-tutorial-creation/",
+        )
 
     manifest = _tutorial_manifest(run_dir)
     run_snapshot = {
@@ -6684,6 +6881,148 @@ def _autonomous_briefing_day_slug(now_ts: float) -> str:
     return dt.date().isoformat()
 
 
+def _collect_autonomous_runs_from_cron(
+    *,
+    window_start: float,
+    window_end: float,
+) -> dict[str, Any]:
+    completed: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    diagnostics: dict[str, Any] = {
+        "cron_runs_in_buffer": 0,
+        "cron_runs_in_window": 0,
+        "cron_runs_missing_job_metadata": 0,
+        "cron_runs_non_autonomous": 0,
+        "cron_runs_daily_briefing_excluded": 0,
+        "cron_autonomous_runs_in_window": 0,
+        "cron_autonomous_completed": 0,
+        "cron_autonomous_failed": 0,
+    }
+    if not _cron_service:
+        return {"completed": completed, "failed": failed, "diagnostics": diagnostics}
+
+    try:
+        runs = _cron_service.list_runs(limit=5000)
+    except Exception:
+        logger.exception("Failed loading cron runs for autonomous daily briefing backfill")
+        return {"completed": completed, "failed": failed, "diagnostics": diagnostics}
+
+    diagnostics["cron_runs_in_buffer"] = len(runs)
+    if not runs:
+        return {"completed": completed, "failed": failed, "diagnostics": diagnostics}
+
+    jobs_by_id: dict[str, Any] = {}
+    try:
+        jobs_by_id = {
+            str(job.job_id): job
+            for job in _cron_service.list_jobs()
+            if getattr(job, "job_id", None)
+        }
+    except Exception:
+        logger.exception("Failed loading cron jobs for autonomous daily briefing backfill")
+
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        raw_ts = run.get("finished_at") or run.get("started_at") or run.get("scheduled_at")
+        try:
+            event_ts = float(raw_ts)
+        except Exception:
+            event_ts = 0.0
+        if event_ts <= 0.0 or event_ts < window_start or event_ts > (window_end + 5):
+            continue
+        diagnostics["cron_runs_in_window"] = int(diagnostics.get("cron_runs_in_window", 0) or 0) + 1
+
+        job_id = str(run.get("job_id") or "").strip()
+        job = jobs_by_id.get(job_id)
+        if job is None:
+            diagnostics["cron_runs_missing_job_metadata"] = (
+                int(diagnostics.get("cron_runs_missing_job_metadata", 0) or 0) + 1
+            )
+            continue
+
+        metadata = getattr(job, "metadata", None)
+        if not isinstance(metadata, dict):
+            metadata = {}
+        system_job = str(metadata.get("system_job") or "").strip()
+        is_autonomous = bool(metadata.get("autonomous")) or bool(metadata.get("briefing"))
+        if not is_autonomous:
+            diagnostics["cron_runs_non_autonomous"] = int(diagnostics.get("cron_runs_non_autonomous", 0) or 0) + 1
+            continue
+        if system_job == AUTONOMOUS_DAILY_BRIEFING_JOB_KEY:
+            diagnostics["cron_runs_daily_briefing_excluded"] = (
+                int(diagnostics.get("cron_runs_daily_briefing_excluded", 0) or 0) + 1
+            )
+            continue
+
+        diagnostics["cron_autonomous_runs_in_window"] = (
+            int(diagnostics.get("cron_autonomous_runs_in_window", 0) or 0) + 1
+        )
+        created_at = datetime.fromtimestamp(event_ts, timezone.utc).isoformat()
+        status = str(run.get("status") or "").strip().lower()
+        command = str(getattr(job, "command", "") or "").strip()
+        if command and len(command) > 240:
+            command = f"{command[:237]}..."
+        output_preview = str(run.get("output_preview") or "").strip()
+        error_text = str(run.get("error") or "").strip()
+        if status in {"success"}:
+            diagnostics["cron_autonomous_completed"] = int(diagnostics.get("cron_autonomous_completed", 0) or 0) + 1
+            message = command or output_preview or f"Cron job {job_id} completed."
+            completed.append(
+                {
+                    "id": "",
+                    "kind": "autonomous_run_completed",
+                    "title": "Autonomous Task Completed",
+                    "message": message,
+                    "created_at": created_at,
+                    "job_id": job_id,
+                    "run_id": str(run.get("run_id") or ""),
+                    "todoist_task_id": str(metadata.get("todoist_task_id") or ""),
+                    "error": "",
+                    "system_job": system_job,
+                    "report_api_url": "",
+                    "report_storage_href": "",
+                    "source": "cron_runs_backfill",
+                }
+            )
+            continue
+
+        diagnostics["cron_autonomous_failed"] = int(diagnostics.get("cron_autonomous_failed", 0) or 0) + 1
+        if not error_text:
+            error_text = f"Chron run status={status or 'unknown'}"
+        message = command or output_preview or f"Cron job {job_id} failed."
+        failed.append(
+            {
+                "id": "",
+                "kind": "autonomous_run_failed",
+                "title": "Autonomous Task Failed",
+                "message": message,
+                "created_at": created_at,
+                "job_id": job_id,
+                "run_id": str(run.get("run_id") or ""),
+                "todoist_task_id": str(metadata.get("todoist_task_id") or ""),
+                "error": error_text,
+                "system_job": system_job,
+                "report_api_url": "",
+                "report_storage_href": "",
+                "source": "cron_runs_backfill",
+            }
+        )
+
+    for bucket in (completed, failed):
+        bucket.sort(
+            key=lambda row: _autonomous_notification_timestamp({"created_at": row.get("created_at")}) or 0.0,
+            reverse=True,
+        )
+        del bucket[AUTONOMOUS_DAILY_BRIEFING_MAX_ITEMS :]
+
+    return {
+        "completed": completed,
+        "failed": failed,
+        "diagnostics": diagnostics,
+    }
+
+
 def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict[str, Any]:
     if now_ts is None:
         now_ts = time.time()
@@ -6693,6 +7032,20 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
     completed: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     heartbeat_rows: list[dict[str, Any]] = []
+    diagnostics: dict[str, Any] = {
+        "notification_buffer_size": len(_notifications),
+        "notification_events_in_window": 0,
+        "notification_completed_in_window": 0,
+        "notification_failed_in_window": 0,
+        "notification_heartbeat_in_window": 0,
+        "cron_backfill_applied": False,
+        "signals_ingest_enabled": (
+            str(os.getenv("UA_SIGNALS_INGEST_ENABLED", "0")).strip().lower() in {"1", "true", "yes", "on"}
+        ),
+        "todoist_credentials_present": bool(
+            (os.getenv("TODOIST_API_TOKEN") or "").strip() or (os.getenv("TODOIST_API_KEY") or "").strip()
+        ),
+    }
     for item in _notifications:
         if not isinstance(item, dict):
             continue
@@ -6702,6 +7055,7 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
         event_ts = _autonomous_notification_timestamp(item)
         if event_ts is None or event_ts < window_start:
             continue
+        diagnostics["notification_events_in_window"] = int(diagnostics.get("notification_events_in_window", 0) or 0) + 1
         metadata = item.get("metadata")
         if not isinstance(metadata, dict):
             metadata = {}
@@ -6730,10 +7084,19 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
             row["heartbeat_artifacts"] = []
         if kind == "autonomous_run_completed":
             completed.append(row)
+            diagnostics["notification_completed_in_window"] = (
+                int(diagnostics.get("notification_completed_in_window", 0) or 0) + 1
+            )
         elif kind == "autonomous_run_failed":
             failed.append(row)
+            diagnostics["notification_failed_in_window"] = (
+                int(diagnostics.get("notification_failed_in_window", 0) or 0) + 1
+            )
         else:
             heartbeat_rows.append(row)
+            diagnostics["notification_heartbeat_in_window"] = (
+                int(diagnostics.get("notification_heartbeat_in_window", 0) or 0) + 1
+            )
 
     # Keep newest first, bounded for artifact size safety.
     for bucket in (completed, failed, heartbeat_rows):
@@ -6743,6 +7106,46 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
         )
         del bucket[AUTONOMOUS_DAILY_BRIEFING_MAX_ITEMS :]
 
+    cron_backfill = _collect_autonomous_runs_from_cron(window_start=window_start, window_end=float(now_ts))
+    cron_diagnostics = cron_backfill.get("diagnostics")
+    if isinstance(cron_diagnostics, dict):
+        diagnostics.update(cron_diagnostics)
+
+    if not completed and not failed:
+        backfill_completed = list(cron_backfill.get("completed") or [])
+        backfill_failed = list(cron_backfill.get("failed") or [])
+        if backfill_completed or backfill_failed:
+            completed = backfill_completed
+            failed = backfill_failed
+            diagnostics["cron_backfill_applied"] = True
+
+    warnings: list[str] = []
+    if diagnostics.get("cron_backfill_applied"):
+        warnings.append(
+            "Autonomous run events were backfilled from persisted cron runs because in-memory notifications were empty."
+        )
+    if int(diagnostics.get("cron_runs_daily_briefing_excluded", 0) or 0) > 0 and not completed and not failed:
+        warnings.append(
+            "Only the daily briefing cron job was observed in this window; no other autonomous cron tasks were recorded."
+        )
+    if not completed and not failed and not heartbeat_rows:
+        warnings.append(
+            "No autonomous activity events were available for this window. This usually indicates a runtime reset, "
+            "upstream ingest being disabled, or no autonomous tasks being scheduled."
+        )
+    if int(diagnostics.get("cron_runs_missing_job_metadata", 0) or 0) > 0:
+        warnings.append(
+            "Some persisted cron runs could not be classified as autonomous because their job metadata was unavailable."
+        )
+    if not bool(diagnostics.get("signals_ingest_enabled")):
+        warnings.append(
+            "CSI signals ingest is disabled (`UA_SIGNALS_INGEST_ENABLED` is not enabled), so CSI-driven autonomous work may be absent."
+        )
+    if not bool(diagnostics.get("todoist_credentials_present")):
+        warnings.append(
+            "Todoist credentials are not configured in this runtime (`TODOIST_API_TOKEN`/`TODOIST_API_KEY`), so sync-backed task flows may fail."
+        )
+
     return {
         "window_seconds": window_seconds,
         "window_started_at": datetime.fromtimestamp(window_start, timezone.utc).isoformat(),
@@ -6750,6 +7153,8 @@ def _collect_autonomous_activity_rows(*, now_ts: Optional[float] = None) -> dict
         "completed": completed,
         "failed": failed,
         "heartbeat": heartbeat_rows,
+        "source_diagnostics": diagnostics,
+        "warnings": warnings,
     }
 
 
@@ -6760,6 +7165,10 @@ def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = No
     completed = list(rows.get("completed") or [])
     failed = list(rows.get("failed") or [])
     heartbeat_rows = list(rows.get("heartbeat") or [])
+    source_diagnostics = rows.get("source_diagnostics")
+    if not isinstance(source_diagnostics, dict):
+        source_diagnostics = {}
+    warnings = [str(item).strip() for item in (rows.get("warnings") or []) if str(item).strip()]
     requires_decision = [row for row in failed if row.get("error")]
     non_cron_artifact_links: list[dict[str, str]] = []
     seen_artifact_refs: set[tuple[str, str]] = set()
@@ -6802,6 +7211,44 @@ def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = No
     lines.append(
         f"- Totals: completed={len(completed)}, failed={len(failed)}, heartbeat_events={len(heartbeat_rows)}"
     )
+    lines.append(
+        f"- Input health: notif_window={int(source_diagnostics.get('notification_events_in_window', 0) or 0)}, "
+        f"cron_window={int(source_diagnostics.get('cron_runs_in_window', 0) or 0)}, "
+        f"backfill_applied={'yes' if bool(source_diagnostics.get('cron_backfill_applied')) else 'no'}"
+    )
+    lines.append("")
+
+    lines.append("## Briefing Input Diagnostics")
+    lines.append(
+        f"- Notification buffer size: {int(source_diagnostics.get('notification_buffer_size', 0) or 0)}"
+    )
+    lines.append(
+        f"- Autonomous notifications in window: {int(source_diagnostics.get('notification_events_in_window', 0) or 0)}"
+    )
+    lines.append(f"- Persisted cron runs in window: {int(source_diagnostics.get('cron_runs_in_window', 0) or 0)}")
+    lines.append(
+        f"- Classified autonomous cron runs in window: {int(source_diagnostics.get('cron_autonomous_runs_in_window', 0) or 0)}"
+    )
+    lines.append(
+        f"- Daily briefing self-runs excluded: {int(source_diagnostics.get('cron_runs_daily_briefing_excluded', 0) or 0)}"
+    )
+    lines.append(
+        f"- CSI signals ingest enabled: {'yes' if bool(source_diagnostics.get('signals_ingest_enabled')) else 'no'}"
+    )
+    lines.append(
+        f"- Todoist credentials present: {'yes' if bool(source_diagnostics.get('todoist_credentials_present')) else 'no'}"
+    )
+    lines.append(
+        f"- Cron backfill applied: {'yes' if bool(source_diagnostics.get('cron_backfill_applied')) else 'no'}"
+    )
+    lines.append("")
+
+    lines.append("## Data Quality Warnings")
+    if warnings:
+        for warning in warnings:
+            lines.append(f"- {warning}")
+    else:
+        lines.append("- None.")
     lines.append("")
 
     lines.append("## Completed Autonomous Tasks")
@@ -6887,6 +7334,8 @@ def _generate_autonomous_daily_briefing_artifact(*, now_ts: Optional[float] = No
         "window_seconds": rows.get("window_seconds"),
         "window_started_at": rows.get("window_started_at"),
         "window_ended_at": rows.get("window_ended_at"),
+        "source_diagnostics": source_diagnostics,
+        "warnings": warnings,
         "counts": {
             "completed": len(completed),
             "failed": len(failed),

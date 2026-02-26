@@ -156,9 +156,14 @@ export class AgentWebSocket {
   }
 
   connect(): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      console.log("WebSocket already connected");
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      console.log("WebSocket already connected or connecting");
       return;
+    }
+
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
 
     this.isManualClose = false;
@@ -402,10 +407,12 @@ export class AgentWebSocket {
     const current = this.getStoredSessionId();
     this.setStoredSessionId(normalized);
 
+    const isConnectedOrConnecting =
+      this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING);
+
     const shouldReconnect =
       current !== normalized
-      || !this.ws
-      || this.ws.readyState !== WebSocket.OPEN;
+      || !isConnectedOrConnecting;
 
     if (!shouldReconnect) return;
 

@@ -46,14 +46,14 @@ Expected:
 
 1. Confirm Composio trigger and webhook subscription are active.
 2. Confirm `POST /api/v1/hooks/composio` receives events.
-3. Confirm transformed action routes to `youtube-explainer-expert`.
+3. Confirm transformed action routes to `youtube-expert` (legacy alias `youtube-explainer-expert` remains accepted during migration).
 
 ## 5) Artifact Persistence Validation
 
 After a trigger, verify both:
 
 1. Session evidence under `AGENT_RUN_WORKSPACES/session_hook_*`.
-2. Durable artifacts under resolved artifacts root (typically `/opt/universal_agent/artifacts/youtube-tutorial-learning/...`).
+2. Durable artifacts under resolved artifacts root (typically `/opt/universal_agent/artifacts/youtube-tutorial-creation/...`).
 
 ## 6) Path Hygiene Guardrail
 

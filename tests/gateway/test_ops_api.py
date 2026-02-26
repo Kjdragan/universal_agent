@@ -579,6 +579,60 @@ def test_dashboard_notification_bulk_update(client):
         assert item["metadata"]["note"] == "bulk snoozed"
         assert item["metadata"]["snooze_minutes"] == 30
 
+
+def test_dashboard_notification_purge(client):
+    from universal_agent import gateway_server
+
+    gateway_server._notifications.extend(  # type: ignore[attr-defined]
+        [
+            {
+                "id": "ntf_purge_1",
+                "kind": "system_error",
+                "title": "Old Error",
+                "message": "old",
+                "session_id": None,
+                "severity": "error",
+                "requires_action": False,
+                "status": "new",
+                "created_at": "2026-02-07T00:00:00+00:00",
+                "updated_at": "2026-02-07T00:00:00+00:00",
+                "channels": ["dashboard"],
+                "email_targets": [],
+                "metadata": {},
+            },
+            {
+                "id": "ntf_purge_2",
+                "kind": "csi_insight",
+                "title": "Recent",
+                "message": "recent",
+                "session_id": None,
+                "severity": "info",
+                "requires_action": False,
+                "status": "new",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "channels": ["dashboard"],
+                "email_targets": [],
+                "metadata": {},
+            },
+        ]
+    )
+
+    missing_filter_resp = client.post("/api/v1/dashboard/notifications/purge", json={})
+    assert missing_filter_resp.status_code == 400
+
+    purge_resp = client.post(
+        "/api/v1/dashboard/notifications/purge",
+        json={"kind": "system_error", "older_than_hours": 24},
+    )
+    assert purge_resp.status_code == 200
+    payload = purge_resp.json()
+    assert payload["deleted"] == 1
+    assert payload["remaining"] >= 1
+    remaining_ids = {item["id"] for item in gateway_server._notifications}
+    assert "ntf_purge_1" not in remaining_ids
+    assert "ntf_purge_2" in remaining_ids
+
 def test_ops_session_continuity_metrics_endpoint(client):
     from universal_agent import gateway_server
 

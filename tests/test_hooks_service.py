@@ -183,7 +183,7 @@ async def test_action_to_injects_routing_prompt_and_metadata(hooks_service, mock
             message_template="video_url: https://www.youtube.com/watch?v=abc",
             name="RouteHook",
             session_key="yt_route_abc",
-            to="youtube-explainer-expert",
+            to="youtube-expert",
         )
     ]
     request = MagicMock(spec=Request)
@@ -199,13 +199,67 @@ async def test_action_to_injects_routing_prompt_and_metadata(hooks_service, mock
 
     await asyncio.sleep(0.1)
     gateway_request = mock_gateway.execute.call_args[0][1]
-    assert "Task(subagent_type='youtube-explainer-expert'" in gateway_request.user_input
+    assert "Task(subagent_type='youtube-expert'" in gateway_request.user_input
     assert "Resolved artifacts root (absolute):" in gateway_request.user_input
     assert "never use a literal UA_ARTIFACTS_DIR folder name" in gateway_request.user_input
     assert "degraded_transcript_only or failed" in gateway_request.user_input
     assert "Webhook payload values below are authoritative for this run." in gateway_request.user_input
     assert "authoritative_video_url: https://www.youtube.com/watch?v=abc" in gateway_request.user_input
+    assert gateway_request.metadata["hook_route_to"] == "youtube-expert"
+
+
+@pytest.mark.asyncio
+async def test_action_to_legacy_alias_still_injects_youtube_routing(hooks_service, mock_gateway):
+    hooks_service.config.mappings = [
+        HookMappingConfig(
+            id="route-hook-legacy",
+            match=HookMatchConfig(path="test"),
+            action="agent",
+            message_template="video_url: https://www.youtube.com/watch?v=def",
+            name="RouteHookLegacy",
+            session_key="yt_route_def",
+            to="youtube-explainer-expert",
+        )
+    ]
+    request = MagicMock(spec=Request)
+    request.headers = {"Authorization": "Bearer secret-token"}
+    request.body = AsyncMock(return_value=b"{}")
+    request.query_params = {}
+
+    mock_session = GatewaySession(session_id="session_hook_yt_route_def", user_id="webhook", workspace_dir="/tmp")
+    mock_gateway.resume_session = AsyncMock(return_value=mock_session)
+
+    response = await hooks_service.handle_request(request, "test")
+    assert response.status_code == 200
+
+    await asyncio.sleep(0.1)
+    gateway_request = mock_gateway.execute.call_args[0][1]
+    assert "Task(subagent_type='youtube-explainer-expert'" in gateway_request.user_input
+    assert "Resolved artifacts root (absolute):" in gateway_request.user_input
+    assert "authoritative_video_url: https://www.youtube.com/watch?v=def" in gateway_request.user_input
     assert gateway_request.metadata["hook_route_to"] == "youtube-explainer-expert"
+
+
+def test_is_youtube_local_ingest_target_accepts_canonical_and_alias(mock_gateway):
+    with (
+        patch("universal_agent.hooks_service.load_ops_config", return_value={}),
+        patch.dict("os.environ", {"UA_HOOKS_YOUTUBE_INGEST_MODE": "local_worker"}, clear=False),
+    ):
+        service = HooksService(mock_gateway)
+
+    canonical_action = HookAction(
+        kind="agent",
+        to="youtube-expert",
+        message="video_url: https://www.youtube.com/watch?v=abc123xyz00",
+    )
+    alias_action = HookAction(
+        kind="agent",
+        to="youtube-explainer-expert",
+        message="video_url: https://www.youtube.com/watch?v=abc123xyz00",
+    )
+
+    assert service._is_youtube_local_ingest_target(canonical_action) is True
+    assert service._is_youtube_local_ingest_target(alias_action) is True
 
 @pytest.mark.asyncio
 async def test_no_match(hooks_service):
@@ -630,7 +684,7 @@ async def test_local_ingest_success_injects_transcript_metadata(mock_gateway, tm
                 message_template="video_url: https://www.youtube.com/watch?v=dxlyCPGCvy8\nvideo_id: dxlyCPGCvy8",
                 name="RouteHook",
                 session_key="yt_route_dxlyCPGCvy8",
-                to="youtube-explainer-expert",
+                to="youtube-expert",
             )
         ],
     )
@@ -666,6 +720,10 @@ async def test_local_ingest_success_injects_transcript_metadata(mock_gateway, tm
                 "source": "youtube_transcript_api",
                 "transcript_text": "hello world transcript",
                 "transcript_chars": 22,
+                "metadata_status": "attempted_failed",
+                "metadata_source": "yt_dlp",
+                "metadata_error": "yt_dlp_metadata_failed",
+                "metadata_failure_class": "request_blocked",
             }
         )
 
@@ -680,7 +738,12 @@ async def test_local_ingest_success_injects_transcript_metadata(mock_gateway, tm
 
     gateway_request = mock_gateway.execute.call_args[0][1]
     assert "local_youtube_ingest_status: succeeded" in gateway_request.user_input
+    assert "local_youtube_ingest_metadata_status: attempted_failed" in gateway_request.user_input
     assert gateway_request.metadata["hook_youtube_ingest_status"] == "succeeded"
+    assert gateway_request.metadata["hook_youtube_ingest_metadata_status"] == "attempted_failed"
+    assert gateway_request.metadata["hook_youtube_ingest_metadata_source"] == "yt_dlp"
+    assert gateway_request.metadata["hook_youtube_ingest_metadata_error"] == "yt_dlp_metadata_failed"
+    assert gateway_request.metadata["hook_youtube_ingest_metadata_failure_class"] == "request_blocked"
     transcript_file = Path(gateway_request.metadata["hook_youtube_ingest_transcript_file"])
     assert transcript_file.exists()
     assert transcript_file.read_text(encoding="utf-8") == "hello world transcript"
@@ -700,7 +763,7 @@ async def test_local_ingest_fail_closed_defers_dispatch(mock_gateway, tmp_path):
                 message_template="video_url: https://www.youtube.com/watch?v=dxlyCPGCvy8\nvideo_id: dxlyCPGCvy8",
                 name="RouteHook",
                 session_key="yt_route_dxlyCPGCvy8_fail",
-                to="youtube-explainer-expert",
+                to="youtube-expert",
             )
         ],
     )
@@ -767,7 +830,7 @@ async def test_local_ingest_cooldown_defers_dispatch(mock_gateway, tmp_path):
                 message_template="video_url: https://www.youtube.com/watch?v=dxlyCPGCvy8\nvideo_id: dxlyCPGCvy8",
                 name="RouteHook",
                 session_key="yt_route_dxlyCPGCvy8_cooldown",
-                to="youtube-explainer-expert",
+                to="youtube-expert",
             )
         ],
     )
@@ -832,7 +895,7 @@ async def test_local_ingest_failure_emits_notification(mock_gateway, tmp_path):
                 message_template="video_url: https://www.youtube.com/watch?v=dxlyCPGCvy8\nvideo_id: dxlyCPGCvy8",
                 name="RouteHook",
                 session_key="yt_route_dxlyCPGCvy8_notify",
-                to="youtube-explainer-expert",
+                to="youtube-expert",
             )
         ],
     )
@@ -1004,7 +1067,7 @@ async def test_recover_interrupted_youtube_sessions_queues_recovery(mock_gateway
     await asyncio.sleep(0.05)
     service._dispatch_action.assert_called_once()
     action = service._dispatch_action.call_args.args[0]
-    assert action.to == "youtube-explainer-expert"
+    assert action.to == "youtube-expert"
     assert "km5fvKPRsJw" in (action.message or "")
     marker = session_dir / ".hook_startup_recovery.json"
     assert marker.exists()
@@ -1019,7 +1082,7 @@ def test_validate_youtube_tutorial_artifacts_allows_concept_only_without_impleme
 
     run_dir = (
         tmp_path
-        / "youtube-tutorial-learning"
+        / "youtube-tutorial-creation"
         / "2026-02-25"
         / "concept-only-video__010101"
     )
@@ -1064,7 +1127,7 @@ def test_validate_youtube_tutorial_artifacts_requires_implementation_for_code_mo
 
     run_dir = (
         tmp_path
-        / "youtube-tutorial-learning"
+        / "youtube-tutorial-creation"
         / "2026-02-25"
         / "code-video__020202"
     )

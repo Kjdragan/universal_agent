@@ -189,7 +189,7 @@ Notes:
 | `bowser-qa-agent` | Structured user-story UI validation with step screenshots and pass/fail reporting | Playwright CLI + QA workflow |
 | `browserbase` | Cloud browser fallback for automation/scraping when Bowser is unavailable or explicitly not suitable | Composio Browserbase |
 | `slack-expert` | Slack workspace interactions | Composio Slack tools |
-| `youtube-explainer-expert` | YouTube tutorial learning artifacts | Composio YouTube + local processing |
+| `youtube-expert` | YouTube transcript+metadata intake and tutorial creation artifacts | Core skill scripts + local processing (legacy alias: `youtube-explainer-expert`) |
 | `system-configuration-agent` | Cron jobs, heartbeat, runtime config | Internal APIs |
 | `data-analyst` | Statistical analysis, data processing, visualization | Local Python (preferred) + CodeInterpreter fallback |
 | `code-writer` | Implement repo code changes (features, refactors, tests) | Local Bash + Read/Write (uv/pytest loop) |

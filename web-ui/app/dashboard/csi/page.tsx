@@ -235,10 +235,30 @@ export default function CSIDashboard() {
                                 {selectedItem.data.metadata && Object.keys(selectedItem.data.metadata).length > 0 && (
                                     <>
                                         <h3 className="text-sm font-medium text-slate-300 mb-2 uppercase tracking-wide">Metadata</h3>
-                                        <div className="bg-slate-950 border border-slate-800/80 rounded-lg p-4 overflow-x-auto">
-                                            <pre className="text-xs text-cyan-400 font-mono leading-relaxed">
-                                                {JSON.stringify(selectedItem.data.metadata, null, 2)}
-                                            </pre>
+                                        <div className="bg-slate-950 border border-slate-800/80 rounded-lg p-4 flex flex-col gap-4">
+                                            {selectedItem.data.metadata.artifact_paths && (
+                                                <div className="space-y-1">
+                                                    <h4 className="text-xs font-semibold text-slate-400">ARTIFACT FILES</h4>
+                                                    {selectedItem.data.metadata.artifact_paths.markdown && (
+                                                        <div className="flex flex-col gap-1">
+                                                            <span className="text-[10px] text-slate-500">MARKDOWN</span>
+                                                            <div className="text-xs text-cyan-400 border border-slate-800 bg-slate-900/50 rounded px-2 py-1 font-mono break-all select-all">{selectedItem.data.metadata.artifact_paths.markdown}</div>
+                                                        </div>
+                                                    )}
+                                                    {selectedItem.data.metadata.artifact_paths.json && (
+                                                        <div className="flex flex-col gap-1">
+                                                            <span className="text-[10px] text-slate-500">JSON</span>
+                                                            <div className="text-xs text-cyan-400 border border-slate-800 bg-slate-900/50 rounded px-2 py-1 font-mono break-all select-all">{selectedItem.data.metadata.artifact_paths.json}</div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )}
+                                            <div className="overflow-x-auto pt-2 border-t border-slate-800/50">
+                                                <h4 className="text-xs font-semibold text-slate-400 mb-1">RAW JSON</h4>
+                                                <pre className="text-[10px] text-slate-500 font-mono leading-relaxed">
+                                                    {JSON.stringify(selectedItem.data.metadata, null, 2)}
+                                                </pre>
+                                            </div>
                                         </div>
                                     </>
                                 )}

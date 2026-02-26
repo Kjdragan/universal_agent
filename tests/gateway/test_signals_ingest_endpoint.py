@@ -6,6 +6,7 @@ import time
 from fastapi.testclient import TestClient
 import pytest
 
+from universal_agent import gateway_server
 from universal_agent.gateway_server import app
 
 
@@ -173,3 +174,41 @@ def test_signals_ingest_csi_analytics_dispatches_internal_action(client, monkeyp
     assert hook_stub.calls == []
     assert len(hook_stub.action_calls) == 1
     assert hook_stub.action_calls[0]["to"] == "trend-specialist"
+
+
+def test_signals_ingest_missing_todoist_credentials_is_notice_not_error(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.delenv("TODOIST_API_TOKEN", raising=False)
+    monkeypatch.delenv("TODOIST_API_KEY", raising=False)
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "rss_trend_report"
+    payload["events"][0]["subject"] = {
+        "window_start_utc": "2026-02-22T00:00:00Z",
+        "window_end_utc": "2026-02-22T01:00:00Z",
+        "totals": {"items": 2, "by_category": {"ai": 2}},
+    }
+    request_id = "req-5"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] == 1
+    assert body["analytics_internal_dispatches"] == 1
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "system_error" not in kinds
+    assert "system_notice" in kinds
+    notice = next(item for item in gateway_server._notifications if item.get("kind") == "system_notice")
+    assert notice.get("title") == "Todoist Sync Skipped"
