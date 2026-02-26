@@ -7,11 +7,13 @@ import remarkGfm from "remark-gfm";
 import { useAgentStore } from "@/lib/store";
 import { getWebSocket } from "@/lib/websocket";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
+import { formatDateKeyTz, formatDateTimeTz, formatTimeTz, getDisplayTimezone } from "@/lib/timezone";
 
 const API_BASE = "/api/dashboard/gateway";
 const VPS_API_BASE = "";
 const SCHED_PUSH_ENABLED = (process.env.NEXT_PUBLIC_UA_SCHED_PUSH_ENABLED ?? "1").trim().toLowerCase() !== "0";
 const RESULT_STATUSES = new Set(["success", "failed", "missed"]);
+const DISPLAY_TIMEZONE = getDisplayTimezone();
 
 type SessionSummary = {
   session_id: string;
@@ -935,6 +937,7 @@ export function SessionsSection({
         <div className="font-semibold mb-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span>{isFull ? "Session List" : "Sessions"}</span>
+            <span className="text-[10px] text-slate-500">tz: {DISPLAY_TIMEZONE}</span>
             {!isFull && (
               <>
                 <button onClick={() => setShowList(!showList)} className="text-[10px] px-1.5 py-0.5 rounded border border-border/60 bg-card/40 hover:bg-card/60 transition-all" title={showList ? "Collapse List" : "Expand List"}>
@@ -995,7 +998,10 @@ export function SessionsSection({
               {filteredSessions.map((s) => (
                 <button key={s.session_id} onClick={() => { setSelected(s.session_id); if (!isFull) setShowList(false); }} className={`w-full text-left px-2 py-1 rounded border text-xs ${selected === s.session_id ? "border-primary text-primary" : "border-border/50 text-muted-foreground"}`}>
                   <div className="font-mono truncate">{s.session_id}</div>
-                  <div className="flex justify-between"><span>{s.status}</span><span className="opacity-60">{s.last_activity?.slice(11, 19) ?? "--:--:--"}</span></div>
+                  <div className="flex justify-between">
+                    <span>{s.status}</span>
+                    <span className="opacity-60">{formatTimeTz(s.last_activity, { placeholder: "--:--:--" })}</span>
+                  </div>
                   <div className="flex justify-between opacity-70">
                     <span>{s.source || s.channel || "local"}</span>
                     <span>{s.owner || "unknown"}</span>
@@ -1068,7 +1074,7 @@ export function SessionsSection({
               <div className="rounded border border-cyan-700/40 bg-cyan-900/10 px-2 py-1 text-[10px] text-cyan-200">
                 Current: <span className="font-semibold uppercase">{selectedDecision.decision || "pending"}</span>
                 {" · "}
-                {selectedDecision.updated_at ? new Date(selectedDecision.updated_at * 1000).toLocaleString() : "recent"}
+                {selectedDecision.updated_at ? formatDateTimeTz(selectedDecision.updated_at) : "recent"}
                 {selectedDecision.patch_version ? ` · v${selectedDecision.patch_version}` : ""}
               </div>
             )}
@@ -1295,11 +1301,12 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
     const sMap = new Map<string, CalendarEventItem[]>();
     const rMap = new Map<string, CalendarEventItem[]>();
     for (const day of weekDays) {
-      sMap.set(day.toDateString(), []);
-      rMap.set(day.toDateString(), []);
+      const dayKey = formatDateKeyTz(day, tz);
+      sMap.set(dayKey, []);
+      rMap.set(dayKey, []);
     }
     for (const event of events) {
-      const key = new Date(event.scheduled_at_local).toDateString();
+      const key = formatDateKeyTz(event.scheduled_at_local, tz);
       const isResult = RESULT_STATUSES.has(event.status);
       const target = isResult ? rMap : sMap;
       if (!target.has(key)) target.set(key, []);
@@ -1308,7 +1315,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
     for (const [, bucket] of sMap) bucket.sort((a, b) => a.scheduled_at_epoch - b.scheduled_at_epoch);
     for (const [, bucket] of rMap) bucket.sort((a, b) => a.scheduled_at_epoch - b.scheduled_at_epoch);
     return { scheduledByDay: sMap, resultsByDay: rMap };
-  }, [events, weekDays]);
+  }, [events, weekDays, tz]);
 
   const hasAnyResults = useMemo(() => {
     for (const [, bucket] of resultsByDay) {
@@ -1399,7 +1406,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
               <div key={entry.event_id || ev.event_id} className="rounded border border-amber-500/40 bg-amber-500/10 p-2">
                 <div className="font-semibold text-amber-200">{ev.title}</div>
                 <div className="text-[10px] text-amber-100/90">
-                  missed at {new Date(ev.scheduled_at_local).toLocaleString()} • status: {entry.status || "pending"}
+                  missed at {formatDateTimeTz(ev.scheduled_at_local, { timeZone: tz })} • status: {entry.status || "pending"}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1">
                   <button onClick={() => performAction(ev, "approve_backfill_run")} className="px-1.5 py-0.5 rounded border border-border/60 bg-background/40 hover:bg-background/60 text-[9px]">Approve & Run</button>
@@ -1417,7 +1424,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
         <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">Scheduled</div>
         <div className="grid grid-cols-7 gap-2">
           {weekDays.map((day) => {
-            const key = day.toDateString();
+            const key = formatDateKeyTz(day, tz);
             const bucket = scheduledByDay.get(key) || [];
             return (
               <div key={key} className="border rounded bg-background/40 p-2 min-h-[180px]">
@@ -1427,7 +1434,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
                   {bucket.map((event) => (
                     <div key={event.event_id} className={`rounded border px-2 py-1 ${statusBadge(event)}`}>
                       <div className="font-semibold truncate">{event.title}</div>
-                      <div className="text-[10px] opacity-90">{new Date(event.scheduled_at_local).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} • {event.status}</div>
+                      <div className="text-[10px] opacity-90">{formatTimeTz(event.scheduled_at_local, { timeZone: tz, includeSeconds: false })} • {event.status}</div>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {event.source === "heartbeat" ? (
                           <button
@@ -1463,7 +1470,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
           <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider px-1">Results</div>
           <div className="grid grid-cols-7 gap-2">
             {weekDays.map((day) => {
-              const key = day.toDateString();
+              const key = formatDateKeyTz(day, tz);
               const bucket = resultsByDay.get(key) || [];
               return (
                 <div key={`result-${key}`} className="border rounded bg-background/40 p-2 min-h-[80px]">
@@ -1473,7 +1480,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
                     {bucket.map((event) => (
                       <div key={event.event_id} className={`rounded border px-2 py-1 ${statusBadge(event)} cursor-pointer hover:opacity-80`} onClick={() => event.session_id && attachToChat(event.session_id)} title={event.session_id ? `Open session ${event.session_id}` : undefined}>
                         <div className="font-semibold truncate">{event.title}</div>
-                        <div className="text-[10px] opacity-90">{new Date(event.scheduled_at_local).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} • {event.status}</div>
+                        <div className="text-[10px] opacity-90">{formatTimeTz(event.scheduled_at_local, { timeZone: tz, includeSeconds: false })} • {event.status}</div>
                         {event.session_id && <div className="text-[9px] opacity-70 truncate mt-0.5">📎 {event.session_id.slice(0, 24)}…</div>}
                       </div>
                     ))}
@@ -1493,7 +1500,7 @@ export function CalendarSection({ variant = "compact" }: { variant?: SectionVari
             <div key={event.event_id} className={`rounded border px-2 py-1 ${statusBadge(event)}`}>
               <div className="font-semibold">{event.title}</div>
               <div className="text-[10px] opacity-90">
-                {new Date(event.scheduled_at_local).toLocaleString()} • {event.status}
+                {formatDateTimeTz(event.scheduled_at_local, { timeZone: tz })} • {event.status}
               </div>
               <div className="mt-1 flex flex-wrap gap-1">
                 {event.source === "heartbeat" ? (
@@ -1787,7 +1794,10 @@ export function SystemEventsSection({ variant = "compact" }: { variant?: Section
                 onClick={() => setSelectedEventId(ev.id)}
                 className={`w-full border rounded px-2 py-1 bg-background/50 text-left ${selectedEventId === ev.id ? "border-cyan-500/60" : "border-border/50"}`}
               >
-                <div className="flex justify-between text-[10px] text-muted-foreground"><span>{ev.event_type}</span><span>{ev.created_at?.slice(11, 19) ?? "--:--:--"}</span></div>
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>{ev.event_type}</span>
+                  <span>{formatTimeTz(ev.created_at, { placeholder: "--:--:--" })}</span>
+                </div>
                 <div className="font-mono text-[11px] truncate">{Object.keys(ev.payload || {}).join(", ") || "(no payload)"}</div>
               </button>
             ))}
@@ -2005,7 +2015,7 @@ export function SessionContinuityWidget({ variant = "compact" }: { variant?: Sec
           )}
           {continuityState.updated_at && (
             <div className="text-[10px] text-muted-foreground/70 pt-1">
-              Updated: {new Date(continuityState.updated_at).toLocaleTimeString()}
+              Updated: {formatTimeTz(continuityState.updated_at, { includeSeconds: false, placeholder: "--:--" })}
             </div>
           )}
           {continuityState.error && (
@@ -2037,7 +2047,12 @@ export function HeartbeatWidget() {
           {heartbeatSessionId && (
             <>
               <div className="flex justify-between"><span className="text-muted-foreground">Session</span><span className="font-mono text-[11px] truncate max-w-[180px]" title={heartbeatSessionId}>{heartbeatSessionId}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Last run</span><span className="font-mono text-[11px]">{typeof heartbeatState.last_run === "number" ? new Date(heartbeatState.last_run * 1000).toLocaleString() : heartbeatState.last_run ?? "--"}</span></div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Last run</span>
+                <span className="font-mono text-[11px]">
+                  {heartbeatState.last_run ? formatDateTimeTz(heartbeatState.last_run) : "--"}
+                </span>
+              </div>
               <div className="flex justify-between"><span className="text-muted-foreground">Running</span><span className="font-mono text-[11px]">{heartbeatState.busy ? "yes" : "no"}</span></div>
               {(() => {
                 const raw = heartbeatState.last_summary_raw;

@@ -1,10 +1,10 @@
 "use client";
 
 import { StorageArtifactItem } from "@/types/agent";
+import { formatDateTimeTz } from "@/lib/timezone";
 
 function formatEpoch(value?: number | null): string {
-  if (!value || !Number.isFinite(value)) return "-";
-  return new Date(value * 1000).toLocaleString();
+  return formatDateTimeTz(value, { placeholder: "-" });
 }
 
 type ArtifactsTableProps = {

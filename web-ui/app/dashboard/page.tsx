@@ -6,6 +6,7 @@ import Link from "next/link";
 import { openOrFocusChatWindow } from "@/lib/chatWindow";
 import { fetchSessionDirectory, deleteSessionDirectoryEntry, SessionDirectoryItem } from "@/lib/sessionDirectory";
 import { LinkifiedText } from "@/components/LinkifiedText";
+import { formatDateTimeTz } from "@/lib/timezone";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -189,13 +190,7 @@ function RefLine({
 }
 
 function formatLocalDateTime(value?: string | number | null): string {
-  if (!value) return "--";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return String(value);
-  return parsed.toLocaleString([], {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
+  return formatDateTimeTz(value, { placeholder: "--" });
 }
 
 export default function DashboardPage() {

@@ -264,6 +264,9 @@ def test_ops_list_sessions(client, tmp_path):
     # Session description should be surfaced when a checkpoint exists.
     row_a = next(s for s in data["sessions"] if s["session_id"] == "session_A")
     assert row_a.get("description") == "Do the thing about the widgets"
+    # Session timestamps must be timezone-aware UTC to avoid client-side timezone drift.
+    assert str(row_a.get("last_modified", "")).endswith("+00:00")
+    assert str(row_a.get("last_activity", "")).endswith("+00:00")
 
 def test_ops_get_session(client, tmp_path):
     _create_dummy_session(tmp_path, "session_details", ["foo"])

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { formatDateTimeTz, toEpochMs } from "@/lib/timezone";
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -58,9 +59,7 @@ function encodePath(path: string): string {
 }
 
 function formatDate(value?: string): string {
-  const parsed = value ? new Date(value) : null;
-  if (!parsed || Number.isNaN(parsed.getTime())) return value || "--";
-  return parsed.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  return formatDateTimeTz(value, { placeholder: value || "--" });
 }
 
 function chatSessionHref(sessionId?: string): string {
@@ -75,7 +74,9 @@ function chatSessionHref(sessionId?: string): string {
 }
 
 function timeAgo(dateStr: string): string {
-  const delta = (Date.now() - new Date(dateStr).getTime()) / 1000;
+  const ts = toEpochMs(dateStr);
+  if (ts === null) return "--";
+  const delta = Math.max(0, (Date.now() - ts) / 1000);
   if (delta < 60) return "just now";
   if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
   if (delta < 86400) return `${Math.floor(delta / 3600)}h ago`;

@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -180,6 +180,23 @@ class OpsService:
         normalized = self._normalize_session_description(raw)
         return normalized or None
 
+    def _parse_iso_utc(self, value: Any) -> Optional[datetime]:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        normalized = text
+        if normalized.endswith("Z"):
+            normalized = f"{normalized[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except Exception:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
     def list_sessions(
         self,
         status_filter: str = "all",
@@ -237,18 +254,21 @@ class OpsService:
 
         source = self._infer_source(session_id, owner)
         status = str(runtime.get("lifecycle_state") or ("active" if active_session else "idle"))
-        last_modified = datetime.fromtimestamp(session_path.stat().st_mtime).isoformat()
+        last_modified_dt = datetime.fromtimestamp(session_path.stat().st_mtime, tz=timezone.utc)
+        last_modified = last_modified_dt.isoformat()
         
         journal_path = session_path / "activity_journal.log"
         run_log_path = session_path / "run.log"
-        last_activity = last_modified
+        last_activity_dt = last_modified_dt
         runtime_last_activity = runtime.get("last_activity_at")
-        if isinstance(runtime_last_activity, str) and runtime_last_activity:
-            last_activity = runtime_last_activity
+        parsed_runtime_last_activity = self._parse_iso_utc(runtime_last_activity)
+        if parsed_runtime_last_activity is not None:
+            last_activity_dt = parsed_runtime_last_activity
         if journal_path.exists():
-            log_activity = datetime.fromtimestamp(journal_path.stat().st_mtime).isoformat()
-            if log_activity > last_activity:
-                last_activity = log_activity
+            log_activity_dt = datetime.fromtimestamp(journal_path.stat().st_mtime, tz=timezone.utc)
+            if log_activity_dt > last_activity_dt:
+                last_activity_dt = log_activity_dt
+        last_activity = last_activity_dt.isoformat()
             
         description = self._derive_session_description(session_path)
         summary = {
