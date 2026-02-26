@@ -128,6 +128,9 @@ rsync -az \
   --exclude "AGENT_RUN_WORKSPACES/" \
   --exclude "artifacts/" \
   --exclude "tmp/" \
+  --exclude "web-ui/.next/" \
+  --exclude "web-ui/node_modules/" \
+  --exclude "test-remotion-project/node_modules/" \
   --exclude "__pycache__/" \
   --exclude "*.pyc" \
   -e "$RSYNC_RSH" \
