@@ -13,6 +13,8 @@ type CSIReport = {
     created_at: string;
 };
 
+const API_BASE = "/api/dashboard/gateway";
+
 export default function CSIDashboard() {
     const [reports, setReports] = useState<CSIReport[]>([]);
     const [loading, setLoading] = useState(true);
@@ -21,7 +23,7 @@ export default function CSIDashboard() {
     useEffect(() => {
         async function loadReports() {
             try {
-                const res = await fetch("/api/v1/dashboard/csi/reports");
+                const res = await fetch(`${API_BASE}/api/v1/dashboard/csi/reports`);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const data = await res.json();
                 if (data.status === "error" || data.status === "unavailable") {
