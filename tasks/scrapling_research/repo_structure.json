@@ -1,0 +1,130 @@
+[
+  {
+    "name": "__init__.py",
+    "path": "scrapling/__init__.py",
+    "sha": "1b35dbe014732c5b36b23a2f0ed05018b2b49b67",
+    "size": 1522,
+    "url": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/__init__.py?ref=main",
+    "html_url": "https://github.com/D4Vinci/Scrapling/blob/main/scrapling/__init__.py",
+    "git_url": "https://api.github.com/repos/D4Vinci/Scrapling/git/blobs/1b35dbe014732c5b36b23a2f0ed05018b2b49b67",
+    "download_url": "https://raw.githubusercontent.com/D4Vinci/Scrapling/main/scrapling/__init__.py",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/__init__.py?ref=main",
+      "git": "https://api.github.com/repos/D4Vinci/Scrapling/git/blobs/1b35dbe014732c5b36b23a2f0ed05018b2b49b67",
+      "html": "https://github.com/D4Vinci/Scrapling/blob/main/scrapling/__init__.py"
+    }
+  },
+  {
+    "name": "cli.py",
+    "path": "scrapling/cli.py",
+    "sha": "59f017efcc5bf56e21e7505ea863482b776ba355",
+    "size": 27037,
+    "url": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/cli.py?ref=main",
+    "html_url": "https://github.com/D4Vinci/Scrapling/blob/main/scrapling/cli.py",
+    "git_url": "https://api.github.com/repos/D4Vinci/Scrapling/git/blobs/59f017efcc5bf56e21e7505ea863482b776ba355",
+    "download_url": "https://raw.githubusercontent.com/D4Vinci/Scrapling/main/scrapling/cli.py",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/cli.py?ref=main",
+      "git": "https://api.github.com/repos/D4Vinci/Scrapling/git/blobs/59f017efcc5bf56e21e7505ea863482b776ba355",
+      "html": "https://github.com/D4Vinci/Scrapling/blob/main/scrapling/cli.py"
+    }
+  },
+  {
+    "name": "core",
+    "path": "scrapling/core",
+    "sha": "091cb6c88c71697b2f42c29e303ecdf047b1479b",
+    "size": 0,
+    "url": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/core?ref=main",
+    "html_url": "https://github.com/D4Vinci/Scrapling/tree/main/scrapling/core",
+    "git_url": "https://api.github.com/repos/D4Vinci/Scrapling/git/trees/091cb6c88c71697b2f42c29e303ecdf047b1479b",
+    "download_url": null,
+    "type": "dir",
+    "_links": {
+      "self": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/core?ref=main",
+      "git": "https://api.github.com/repos/D4Vinci/Scrapling/git/trees/091cb6c88c71697b2f42c29e303ecdf047b1479b",
+      "html": "https://github.com/D4Vinci/Scrapling/tree/main/scrapling/core"
+    }
+  },
+  {
+    "name": "engines",
+    "path": "scrapling/engines",
+    "sha": "f7296f7862e677f3a83e9089db9254330529d9cc",
+    "size": 0,
+    "url": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/engines?ref=main",
+    "html_url": "https://github.com/D4Vinci/Scrapling/tree/main/scrapling/engines",
+    "git_url": "https://api.github.com/repos/D4Vinci/Scrapling/git/trees/f7296f7862e677f3a83e9089db9254330529d9cc",
+    "download_url": null,
+    "type": "dir",
+    "_links": {
+      "self": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/engines?ref=main",
+      "git": "https://api.github.com/repos/D4Vinci/Scrapling/git/trees/f7296f7862e677f3a83e9089db9254330529d9cc",
+      "html": "https://github.com/D4Vinci/Scrapling/tree/main/scrapling/engines"
+    }
+  },
+  {
+    "name": "fetchers",
+    "path": "scrapling/fetchers",
+    "sha": "c60b8bdffd5caaac23cedd56881155e2833b9fe7",
+    "size": 0,
+    "url": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/fetchers?ref=main",
+    "html_url": "https://github.com/D4Vinci/Scrapling/tree/main/scrapling/fetchers",
+    "git_url": "https://api.github.com/repos/D4Vinci/Scrapling/git/trees/c60b8bdffd5caaac23cedd56881155e2833b9fe7",
+    "download_url": null,
+    "type": "dir",
+    "_links": {
+      "self": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/fetchers?ref=main",
+      "git": "https://api.github.com/repos/D4Vinci/Scrapling/git/trees/c60b8bdffd5caaac23cedd56881155e2833b9fe7",
+      "html": "https://github.com/D4Vinci/Scrapling/tree/main/scrapling/fetchers"
+    }
+  },
+  {
+    "name": "parser.py",
+    "path": "scrapling/parser.py",
+    "sha": "166e6ea66fefa395f9bbc016f87cda14236c6c3f",
+    "size": 57241,
+    "url": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/parser.py?ref=main",
+    "html_url": "https://github.com/D4Vinci/Scrapling/blob/main/scrapling/parser.py",
+    "git_url": "https://api.github.com/repos/D4Vinci/Scrapling/git/blobs/166e6ea66fefa395f9bbc016f87cda14236c6c3f",
+    "download_url": "https://raw.githubusercontent.com/D4Vinci/Scrapling/main/scrapling/parser.py",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/parser.py?ref=main",
+      "git": "https://api.github.com/repos/D4Vinci/Scrapling/git/blobs/166e6ea66fefa395f9bbc016f87cda14236c6c3f",
+      "html": "https://github.com/D4Vinci/Scrapling/blob/main/scrapling/parser.py"
+    }
+  },
+  {
+    "name": "py.typed",
+    "path": "scrapling/py.typed",
+    "sha": "d3f5a12faa99758192ecc4ed3fc22c9249232e86",
+    "size": 2,
+    "url": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/py.typed?ref=main",
+    "html_url": "https://github.com/D4Vinci/Scrapling/blob/main/scrapling/py.typed",
+    "git_url": "https://api.github.com/repos/D4Vinci/Scrapling/git/blobs/d3f5a12faa99758192ecc4ed3fc22c9249232e86",
+    "download_url": "https://raw.githubusercontent.com/D4Vinci/Scrapling/main/scrapling/py.typed",
+    "type": "file",
+    "_links": {
+      "self": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/py.typed?ref=main",
+      "git": "https://api.github.com/repos/D4Vinci/Scrapling/git/blobs/d3f5a12faa99758192ecc4ed3fc22c9249232e86",
+      "html": "https://github.com/D4Vinci/Scrapling/blob/main/scrapling/py.typed"
+    }
+  },
+  {
+    "name": "spiders",
+    "path": "scrapling/spiders",
+    "sha": "59780b996d7b76104eec53df68ffcd8950e0acb1",
+    "size": 0,
+    "url": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/spiders?ref=main",
+    "html_url": "https://github.com/D4Vinci/Scrapling/tree/main/scrapling/spiders",
+    "git_url": "https://api.github.com/repos/D4Vinci/Scrapling/git/trees/59780b996d7b76104eec53df68ffcd8950e0acb1",
+    "download_url": null,
+    "type": "dir",
+    "_links": {
+      "self": "https://api.github.com/repos/D4Vinci/Scrapling/contents/scrapling/spiders?ref=main",
+      "git": "https://api.github.com/repos/D4Vinci/Scrapling/git/trees/59780b996d7b76104eec53df68ffcd8950e0acb1",
+      "html": "https://github.com/D4Vinci/Scrapling/tree/main/scrapling/spiders"
+    }
+  }
+]
