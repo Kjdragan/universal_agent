@@ -28,7 +28,19 @@ install -m 0644 "$TIMER_SRC" "$SYSTEMD_DIR/$TIMER_NAME"
 
 systemctl daemon-reload
 systemctl enable --now "$TIMER_NAME"
-systemctl start "$SERVICE_NAME" || true
+
+# Run a one-shot validation only when gateway health is reachable; otherwise
+# the timer will execute shortly after deploy and validate then.
+gateway_health_url="${UA_OOM_ALERT_GATEWAY_HEALTH_URL:-http://127.0.0.1:8002/api/v1/health}"
+if command -v curl >/dev/null 2>&1; then
+  if curl --silent --show-error --fail --max-time 3 "$gateway_health_url" >/dev/null; then
+    systemctl start "$SERVICE_NAME" || true
+  else
+    echo "Skipping immediate ${SERVICE_NAME} run: gateway health check unavailable at ${gateway_health_url}."
+  fi
+else
+  echo "Skipping immediate ${SERVICE_NAME} run: curl not installed."
+fi
 
 echo "== $TIMER_NAME =="
 systemctl status "$TIMER_NAME" --no-pager -n 20 || true
