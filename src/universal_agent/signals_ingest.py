@@ -235,7 +235,9 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
         maximum=3_600,
     )
 
-    session_key = f"csi_{source}_{event_type or 'event'}"
+    # Keep CSI analytics context concentrated in a small number of durable lanes
+    # so dashboard/session lists do not explode into one lane per event type.
+    session_key = f"csi_{route.replace('-', '_')}"
     return {
         "kind": "agent",
         "name": "CSIAnalyticsEvent",

@@ -173,6 +173,7 @@ def test_to_csi_analytics_action_maps_trend_report():
     action = to_csi_analytics_action(event)
     assert action is not None
     assert action["to"] == "trend-specialist"
+    assert action["session_key"] == "csi_trend_specialist"
     assert "rss_trend_report" in action["message"]
 
 

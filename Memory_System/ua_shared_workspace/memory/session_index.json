@@ -669,5 +669,37 @@
     "preview": "Skill` (+158.059s)\n<details>\n<summary><b>Input Parameters</b></summary>\n\n```json\n{\n  \"skill\": \"summarize\",\n  \"args\": \"https://www.youtube.com/watch?v=SpReZZk_13w\"\n}\n```\n</details>\n\n**Result Output:**\n```text\nLaunching skill: summarize\n```\n\n#### \ud83c\udfed Tool Call: `Bash` (+199.166s)\n<de",
     "file_path": "memory/sessions/abb264e7-8a81-48d0-a8f9-5384b3b051f7_2026-02-26.md",
     "content_hash": "a5f99bb2ba8a327ea93c5c5d39a60018e1d90d939c000e11b101538f21b7e262"
+  },
+  {
+    "entry_id": "6038f897-88ed-4e2b-9789-092d220b72e8",
+    "timestamp": "2026-02-27T01:39:04.779303+00:00",
+    "source": "session_transition:ops_delete",
+    "session_id": "session_hook_csi_bravo",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_delete",
+      "session:session_hook_csi_bravo"
+    ],
+    "summary": "Session rollover capture (ops_delete)",
+    "preview": "Session rollover capture (ops_delete)",
+    "file_path": "memory/sessions/session_hook_csi_bravo_2026-02-27_bravo.md",
+    "content_hash": "bfc29cd2b529ffd09b9dbab55065410deaee98fed289fb7fcd52fae27390a7f5"
+  },
+  {
+    "entry_id": "8962bf67-aca5-4b6c-95b1-d500c321c5b1",
+    "timestamp": "2026-02-27T01:39:04.797673+00:00",
+    "source": "session_transition:ops_delete",
+    "session_id": "session_hook_csi_alpha",
+    "tags": [
+      "memory_class:session",
+      "session_transition",
+      "trigger:ops_delete",
+      "session:session_hook_csi_alpha"
+    ],
+    "summary": "Session rollover capture (ops_delete)",
+    "preview": "Session rollover capture (ops_delete)",
+    "file_path": "memory/sessions/session_hook_csi_alpha_2026-02-27_alpha.md",
+    "content_hash": "316540554121eaff852310a8fa28663fb9f84f412096e4e05e9b6bd8c5d8bcf0"
   }
 ]

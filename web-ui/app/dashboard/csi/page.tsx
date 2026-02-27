@@ -60,6 +60,8 @@ export default function CSIDashboard() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [selectedItem, setSelectedItem] = useState<SelectedItem>(null);
+    const [purgeBusy, setPurgeBusy] = useState(false);
+    const [purgeStatus, setPurgeStatus] = useState<string | null>(null);
 
     useEffect(() => {
         async function loadData() {
@@ -96,6 +98,36 @@ export default function CSIDashboard() {
     const totalReports = reports.length;
     const lastReportTime = reports.length > 0 ? formatDateTimeTz(reports[0].created_at, { placeholder: "N/A" }) : "N/A";
 
+    async function purgeCsiSessions() {
+        if (!confirm("Purge older CSI hook sessions and keep only the latest 2?")) return;
+        setPurgeBusy(true);
+        setPurgeStatus(null);
+        try {
+            const resp = await fetch(`${API_BASE}/api/v1/ops/sessions/csi/purge`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    dry_run: false,
+                    keep_latest: 2,
+                    older_than_minutes: 30,
+                    include_active: false,
+                }),
+            });
+            const payload = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                const detail = (payload && payload.detail) ? String(payload.detail) : `HTTP ${resp.status}`;
+                throw new Error(detail);
+            }
+            const deletedCount = Array.isArray(payload.deleted) ? payload.deleted.length : 0;
+            setPurgeStatus(`CSI session cleanup complete. Deleted ${deletedCount} session(s).`);
+            window.setTimeout(() => window.location.reload(), 900);
+        } catch (err: any) {
+            setPurgeStatus(`CSI session cleanup failed: ${err.message || "unknown error"}`);
+        } finally {
+            setPurgeBusy(false);
+        }
+    }
+
     return (
         <div className="flex h-full flex-col gap-6">
             <div className="flex items-center justify-between">
@@ -103,13 +135,27 @@ export default function CSIDashboard() {
                     <h1 className="text-2xl font-bold tracking-tight text-slate-100">Creator Signal Intelligence (CSI)</h1>
                     <p className="text-sm text-slate-400">Automated insight and trend analysis across defined watchlists.</p>
                 </div>
-                <button
-                    onClick={() => window.location.reload()}
-                    className="rounded-md bg-cyan-600/20 px-3 py-1.5 text-sm font-medium text-cyan-300 hover:bg-cyan-600/30 transition-colors border border-cyan-500/30"
-                >
-                    Refresh Feed
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={purgeCsiSessions}
+                        disabled={purgeBusy}
+                        className="rounded-md bg-amber-600/20 px-3 py-1.5 text-sm font-medium text-amber-200 hover:bg-amber-600/30 transition-colors border border-amber-500/30 disabled:opacity-60"
+                    >
+                        {purgeBusy ? "Cleaning..." : "Clean CSI Sessions"}
+                    </button>
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="rounded-md bg-cyan-600/20 px-3 py-1.5 text-sm font-medium text-cyan-300 hover:bg-cyan-600/30 transition-colors border border-cyan-500/30"
+                    >
+                        Refresh Feed
+                    </button>
+                </div>
             </div>
+            {purgeStatus && (
+                <div className="rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+                    {purgeStatus}
+                </div>
+            )}
 
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">

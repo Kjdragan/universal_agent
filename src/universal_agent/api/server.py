@@ -79,6 +79,14 @@ _STORAGE_ROOT_SOURCES = {"local", "mirror"}
 _STORAGE_SCOPES = {"workspaces", "artifacts", "vps"}
 _SESSION_PREFIXES = ("session_", "session-hook_", "session_hook_", "tg_", "api_", "vp_")
 _PROTECTED_STORAGE_DELETE_SUFFIXES = (".db", ".db-shm", ".db-wal")
+_SYSTEM_SESSION_OWNERS = {
+    "webhook",
+    "user_ui",
+    "user_cli",
+    "ops_tutorial_review",
+    "cron_system",
+    "ops:system-configuration-agent",
+}
 
 # Import agent bridge
 from universal_agent.api.agent_bridge import get_agent_bridge
@@ -284,6 +292,19 @@ def _request_auth_owner(request: Request) -> str:
     return _normalize_owner_id(None)
 
 
+def _is_system_session_owner(owner_id: str) -> bool:
+    normalized_owner = str(owner_id or "").strip().lower()
+    if not normalized_owner:
+        return False
+    if normalized_owner in _SYSTEM_SESSION_OWNERS:
+        return True
+    return (
+        normalized_owner.startswith("cron:")
+        or normalized_owner.startswith("worker_")
+        or normalized_owner.startswith("vp.")
+    )
+
+
 def _gateway_url() -> str:
     return (os.getenv("UA_GATEWAY_URL") or "").strip().rstrip("/")
 
@@ -325,6 +346,9 @@ async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: 
     if session_owner and hmac.compare_digest(session_owner, owner_id):
         return
     if session_owner and not hmac.compare_digest(session_owner, owner_id):
+        if _is_system_session_owner(session_owner):
+            # System-owned sessions are observable from the dashboard owner lane.
+            return
         raise HTTPException(status_code=403, detail="Access denied: session owner mismatch.")
     if auth_required:
         raise HTTPException(status_code=403, detail="Access denied: unable to verify session owner.")

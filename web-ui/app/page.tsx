@@ -1173,12 +1173,26 @@ function ChatInterface() {
         let hydratedMessageCount = 0;
         let hydratedLogCount = 0;
 
-        const runLogUrl = isVpObserverSession && vpWorkspaceRel
-          ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/run.log`)}`
-          : `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`;
-        const response = await fetch(runLogUrl);
+        const useOpsTailHydration = sessionAttachMode === "tail" && !isVpObserverSession;
+        const runLogUrl = useOpsTailHydration
+          ? `${API_BASE}/api/v1/ops/logs/tail?session_id=${encodeURIComponent(sessionId)}&limit=2000`
+          : (isVpObserverSession && vpWorkspaceRel
+            ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/run.log`)}`
+            : `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`);
+        const response = await fetch(runLogUrl, { cache: "no-store" });
         if (response.ok) {
-          const raw = await response.text();
+          let raw = "";
+          if (useOpsTailHydration) {
+            const payload = await response.json() as { lines?: unknown; content?: unknown };
+            if (Array.isArray(payload.lines)) {
+              raw = payload.lines.map((line) => String(line)).join("\n");
+              if (raw.length > 0) raw += "\n";
+            } else if (typeof payload.content === "string") {
+              raw = payload.content;
+            }
+          } else {
+            raw = await response.text();
+          }
           const { messages, logs } = extractHistoryFromRunLog(raw);
           if (!cancelled && messages.length > 0 && store.messages.length === 0) {
             for (const msg of messages) {
@@ -1259,7 +1273,7 @@ function ChatInterface() {
     return () => {
       cancelled = true;
     };
-  }, [effectiveSessionId, isVpObserverSession, currentSession?.workspace]);
+  }, [effectiveSessionId, isVpObserverSession, currentSession?.workspace, sessionAttachMode]);
 
   return (
     <div className="flex flex-col h-full">

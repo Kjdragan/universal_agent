@@ -174,6 +174,53 @@ def test_signals_ingest_csi_analytics_dispatches_internal_action(client, monkeyp
     assert hook_stub.calls == []
     assert len(hook_stub.action_calls) == 1
     assert hook_stub.action_calls[0]["to"] == "trend-specialist"
+    assert hook_stub.action_calls[0]["session_key"] == "csi_trend_specialist"
+
+
+def test_signals_ingest_csi_analytics_throttles_noisy_events(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setenv("UA_CSI_RSS_INSIGHT_EMERGING_COOLDOWN_SECONDS", "3600")
+    monkeypatch.setattr(gateway_server, "_csi_dispatch_recent", {})
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "rss_insight_emerging"
+    payload["events"][0]["subject"] = {
+        "report_key": "rss:emerging:hourly",
+        "total_items": 4,
+    }
+
+    request_id_1 = "req-throttle-1"
+    timestamp_1 = str(int(time.time()))
+    headers_1 = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id_1,
+        "X-CSI-Timestamp": timestamp_1,
+        "X-CSI-Signature": _sign("secret", request_id_1, timestamp_1, payload),
+    }
+    response_1 = client.post("/api/v1/signals/ingest", json=payload, headers=headers_1)
+    assert response_1.status_code == 200
+    body_1 = response_1.json()
+    assert body_1["analytics_internal_dispatches"] == 1
+
+    request_id_2 = "req-throttle-2"
+    timestamp_2 = str(int(time.time()))
+    headers_2 = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id_2,
+        "X-CSI-Timestamp": timestamp_2,
+        "X-CSI-Signature": _sign("secret", request_id_2, timestamp_2, payload),
+    }
+    response_2 = client.post("/api/v1/signals/ingest", json=payload, headers=headers_2)
+    assert response_2.status_code == 200
+    body_2 = response_2.json()
+    assert body_2["accepted"] == 1
+    assert body_2.get("analytics_internal_dispatches", 0) == 0
+    assert body_2["analytics_throttled"] == 1
+    assert len(hook_stub.action_calls) == 1
 
 
 def test_signals_ingest_missing_todoist_credentials_is_notice_not_error(client, monkeypatch):
