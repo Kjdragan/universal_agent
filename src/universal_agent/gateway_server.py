@@ -331,8 +331,8 @@ def _tutorial_bootstrap_target_root_default() -> str:
     if configured:
         return configured
     if _DEPLOYMENT_PROFILE == "vps":
-        return "/opt/universal_agent/generated_repos"
-    return "/home/kjdragan/lrepos"
+        return "/home/kjdragan/YoutubeCodeExamples"
+    return "/home/kjdragan/YoutubeCodeExamples"
 
 
 def _storage_explorer_href(*, scope: str, path: str, preview: Optional[str] = None) -> str:
