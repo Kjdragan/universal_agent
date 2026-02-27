@@ -460,5 +460,19 @@
     "preview": "ut:** ```text 1\u2192--- 2\u2192name: youtube-tutorial-learning 3\u2192description: | 4\u2192 Turn a YouTube tutorial into durable learning artifacts (concept doc + runnable implementation) stored under UA_ARTIFACTS_DIR. 5\u2192 USE WHEN user provides a YouTube ...",
     "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-26.md",
     "content_hash": "d1ac665e1ad0f2358f5abc0f52cc3340f27f4db04a90e7c3cd76c5b9144040f1"
+  },
+  {
+    "entry_id": "ed2511b7-f994-4469-b5d9-2a4d5502170f",
+    "timestamp": "2026-02-27T07:06:31.307513+00:00",
+    "source": "pre_compact",
+    "session_id": "1b8f4998-5aad-449a-a94c-ad57be6e73a8",
+    "tags": [
+      "pre_compact",
+      "trigger:exit"
+    ],
+    "summary": "\\n|-------|--------|-------|\\n| `vp.general.primary` | Idle | No missions processed |\\n| `vp.coder.primary` | Idle | No missions processed |\\n\\n**VP Missions:** 0 completed, 0 failed, 0 pending\\n\\n---\\n\\n## System Events\\n\\n### 2026-02-2...",
+    "preview": "\\n|-------|--------|-------|\\n| `vp.general.primary` | Idle | No missions processed |\\n| `vp.coder.primary` | Idle | No missions processed |\\n\\n**VP Missions:** 0 completed, 0 failed, 0 pending\\n\\n---\\n\\n## System Events\\n\\n### 2026-02-2...",
+    "file_path": "/home/kjdragan/lrepos/universal_agent/Memory_System/ua_shared_workspace/memory/2026-02-27.md",
+    "content_hash": "120a6df0eb8fbfe95f0e6b848aec1d5404c8c9e0d3e6048d3e91c0194b3ee72a"
   }
 ]
