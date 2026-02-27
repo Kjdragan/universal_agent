@@ -126,6 +126,7 @@ export default function DashboardTutorialsPage() {
   const [dispatchingRunPath, setDispatchingRunPath] = useState<string>("");
   const [dispatchStatus, setDispatchStatus] = useState<string>("");
   const [deletingRunPath, setDeletingRunPath] = useState<string>("");
+  const [bootstrappingRunPath, setBootstrappingRunPath] = useState<string>("");
   const [seenRuns, setSeenRuns] = useState<Set<string>>(new Set());
   const [showNotifications, setShowNotifications] = useState(true);
 
@@ -274,6 +275,34 @@ export default function DashboardTutorialsPage() {
     [load],
   );
 
+  const bootstrapRunRepo = useCallback(
+    async (runPath: string) => {
+      const normalized = asText(runPath);
+      if (!normalized) return;
+      setBootstrappingRunPath(normalized);
+      setDispatchStatus("");
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-repo`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_path: normalized }),
+        });
+        const payload = await res.json().catch(() => ({} as Record<string, unknown>));
+        if (!res.ok) {
+          const detail = asText((payload as Record<string, unknown>).detail) || `Create repo failed (${res.status})`;
+          throw new Error(detail);
+        }
+        const repoDir = asText((payload as Record<string, unknown>).repo_dir);
+        setDispatchStatus(repoDir ? `Repo created and synced: ${repoDir}` : "Repo created and synced.");
+      } catch (err: any) {
+        setDispatchStatus(err?.message || "Failed to create repo");
+      } finally {
+        setBootstrappingRunPath("");
+      }
+    },
+    [],
+  );
+
   return (
     <div className="flex h-full flex-col gap-4">
       <div className="flex items-start justify-between">
@@ -365,6 +394,7 @@ export default function DashboardTutorialsPage() {
               `/storage?scope=artifacts&path=${encodeURIComponent(runPath)}`;
             const isNew = !seenRuns.has(runPath);
             const implRequired = run.implementation_required;
+            const hasCreateRepoScript = files.some((file) => asText(file.name).toLowerCase() === "create_new_repo.sh");
             return (
               <article key={runPath} className="rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2">
                 <div className="flex flex-wrap items-start justify-between gap-2">
@@ -425,15 +455,26 @@ export default function DashboardTutorialsPage() {
                     <button
                       type="button"
                       onClick={() => void dispatchToSimone(runPath)}
-                      disabled={dispatchingRunPath === runPath || deletingRunPath === runPath}
+                      disabled={dispatchingRunPath === runPath || deletingRunPath === runPath || bootstrappingRunPath === runPath}
                       className="rounded border border-emerald-700/60 bg-emerald-900/20 px-2 py-1 text-[11px] text-emerald-100 hover:bg-emerald-900/35 disabled:opacity-50"
                     >
                       {dispatchingRunPath === runPath ? "Queueing..." : "Send to Simone"}
                     </button>
+                    {hasCreateRepoScript && (
+                      <button
+                        type="button"
+                        onClick={() => void bootstrapRunRepo(runPath)}
+                        disabled={bootstrappingRunPath === runPath || deletingRunPath === runPath || dispatchingRunPath === runPath}
+                        className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-100 hover:bg-amber-900/35 disabled:opacity-50"
+                        title="Create a ready-to-run repo by executing create_new_repo.sh on the server"
+                      >
+                        {bootstrappingRunPath === runPath ? "Creating Repo..." : "Create Repo"}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => void deleteRun(runPath)}
-                      disabled={deletingRunPath === runPath || dispatchingRunPath === runPath}
+                      disabled={deletingRunPath === runPath || dispatchingRunPath === runPath || bootstrappingRunPath === runPath}
                       title="Delete this tutorial run"
                       className="rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
                     >

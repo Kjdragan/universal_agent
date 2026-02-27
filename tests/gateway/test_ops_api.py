@@ -562,6 +562,52 @@ def test_ops_purge_csi_sessions_dry_run_and_delete(client, tmp_path):
     assert len(remaining) == 1
 
 
+def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "demo-run"
+    impl_dir = run_dir / "implementation"
+    impl_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "title": "Demo Run",
+                "video_id": "demo123",
+                "status": "full",
+            }
+        ),
+        encoding="utf-8",
+    )
+    script = impl_dir / "create_new_repo.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "TARGET_ROOT=\"${1:?}\"\n"
+        "REPO_NAME=\"${2:?}\"\n"
+        "mkdir -p \"$TARGET_ROOT/$REPO_NAME\"\n"
+        "echo \"Repo ready: $TARGET_ROOT/$REPO_NAME\"\n",
+        encoding="utf-8",
+    )
+
+    target_root = tmp_path / "generated_repos"
+    resp = client.post(
+        "/api/v1/dashboard/tutorials/bootstrap-repo",
+        json={
+            "run_path": "youtube-tutorial-creation/demo-run",
+            "target_root": str(target_root),
+            "repo_name": "demo_repo",
+            "timeout_seconds": 120,
+        },
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["ok"] is True
+    assert payload["repo_name"] == "demo_repo"
+    assert "Repo ready:" in str(payload.get("stdout") or "")
+    assert (target_root / "demo_repo").is_dir()
+
+
 def test_dashboard_coder_vp_metrics_endpoint(client, tmp_path):
     gateway = gateway_server.get_gateway()
     conn = gateway.get_coder_vp_db_conn()
