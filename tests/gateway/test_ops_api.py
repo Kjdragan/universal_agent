@@ -427,6 +427,95 @@ def test_dashboard_summary_and_notifications(client, tmp_path):
     assert snoozed["metadata"]["note"] == "snooze continuity alert"
 
 
+def test_dashboard_csi_reports_fallbacks_to_notifications(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("CSI_DB_PATH", str((tmp_path / "missing_csi.db").resolve()))
+
+    from universal_agent import gateway_server
+
+    gateway_server._notifications.append(  # type: ignore[attr-defined]
+        {
+            "id": "ntf_csi_1",
+            "kind": "csi_insight",
+            "title": "CSI Insight: rss_trend_report",
+            "message": "CSI analytics signal received.",
+            "session_id": "session_hook_csi_csi_analytics_rss_trend_report",
+            "severity": "info",
+            "requires_action": True,
+            "status": "new",
+            "created_at": "2026-02-07T10:00:00+00:00",
+            "updated_at": "2026-02-07T10:00:00+00:00",
+            "channels": ["dashboard"],
+            "email_targets": [],
+            "metadata": {"event_type": "rss_trend_report", "event_id": "evt-1"},
+        }
+    )
+
+    resp = client.get("/api/v1/dashboard/csi/reports?limit=5")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["source"] == "notification_fallback"
+    assert len(payload["reports"]) >= 1
+    assert payload["reports"][0]["report_type"] == "rss_trend_report"
+
+
+def test_dashboard_csi_reports_fallbacks_to_sessions_when_notifications_empty(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("CSI_DB_PATH", str((tmp_path / "missing_csi.db").resolve()))
+    _create_dummy_session(
+        tmp_path,
+        "session_hook_csi_csi_analytics_rss_insight_emerging",
+        ["[00:00:00] INFO CSI trend run"],
+    )
+
+    resp = client.get("/api/v1/dashboard/csi/reports?limit=5")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert payload["source"] == "session_fallback"
+    assert len(payload["reports"]) >= 1
+    assert payload["reports"][0]["session_id"].startswith("session_hook_csi_")
+
+
+def test_ops_purge_csi_sessions_dry_run_and_delete(client, tmp_path):
+    _create_dummy_session(tmp_path, "session_hook_csi_alpha", ["alpha"])
+    _create_dummy_session(tmp_path, "session_hook_csi_bravo", ["bravo"])
+    _create_dummy_session(tmp_path, "session_hook_csi_charlie", ["charlie"])
+
+    dry_run = client.post(
+        "/api/v1/ops/sessions/csi/purge",
+        json={
+            "dry_run": True,
+            "keep_latest": 1,
+            "older_than_minutes": 0,
+            "include_active": False,
+        },
+    )
+    assert dry_run.status_code == 200
+    dry_payload = dry_run.json()
+    assert dry_payload["status"] == "dry_run"
+    assert dry_payload["total_csi_sessions"] == 3
+    assert len(dry_payload["candidates"]) == 2
+    assert len(dry_payload["skipped"]["protected"]) == 1
+
+    purge = client.post(
+        "/api/v1/ops/sessions/csi/purge",
+        json={
+            "dry_run": False,
+            "keep_latest": 1,
+            "older_than_minutes": 0,
+            "include_active": False,
+        },
+    )
+    assert purge.status_code == 200
+    payload = purge.json()
+    assert payload["status"] == "ok"
+    assert len(payload["deleted"]) == 2
+    assert len(payload["skipped"]["protected"]) == 1
+
+    remaining = [p.name for p in tmp_path.iterdir() if p.is_dir() and p.name.startswith("session_hook_csi_")]
+    assert len(remaining) == 1
+
+
 def test_dashboard_coder_vp_metrics_endpoint(client, tmp_path):
     gateway = gateway_server.get_gateway()
     conn = gateway.get_coder_vp_db_conn()

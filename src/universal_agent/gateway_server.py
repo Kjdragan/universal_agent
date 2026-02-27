@@ -901,6 +901,13 @@ class OpsSessionCancelRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class OpsCsiSessionPurgeRequest(BaseModel):
+    dry_run: bool = False
+    keep_latest: int = 2
+    older_than_minutes: int = 30
+    include_active: bool = False
+
+
 class CalendarEventActionRequest(BaseModel):
     action: str
     run_at: Optional[str] = None
@@ -1031,6 +1038,8 @@ _vp_stale_reconcile_seconds = max(
 _channel_probe_results: dict[str, dict] = {}
 _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
+_csi_dispatch_recent: dict[str, float] = {}
+_csi_dispatch_lock = threading.Lock()
 _tutorial_review_jobs: dict[str, dict[str, Any]] = {}
 _tutorial_review_jobs_max = int(os.getenv("UA_TUTORIAL_REVIEW_JOBS_MAX", "300") or 300)
 _continuity_active_alerts: set[str] = set()
@@ -2466,6 +2475,63 @@ def _has_recent_notification(
                 continue
         return True
     return False
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return max(0, int(default))
+    try:
+        return max(0, int(raw))
+    except Exception:
+        return max(0, int(default))
+
+
+def _csi_dispatch_cooldown_seconds(event_type: str) -> int:
+    event = str(event_type or "").strip().lower()
+    default_seconds = _env_int("UA_CSI_ANALYTICS_DEFAULT_COOLDOWN_SECONDS", 0)
+    per_event_env = {
+        "analysis_task_completed": "UA_CSI_ANALYSIS_TASK_COMPLETED_COOLDOWN_SECONDS",
+        "rss_insight_emerging": "UA_CSI_RSS_INSIGHT_EMERGING_COOLDOWN_SECONDS",
+        "category_quality_report": "UA_CSI_CATEGORY_QUALITY_REPORT_COOLDOWN_SECONDS",
+    }
+    env_name = per_event_env.get(event)
+    if env_name:
+        fallback = {
+            "analysis_task_completed": 1800,
+            "rss_insight_emerging": 900,
+            "category_quality_report": 1800,
+        }.get(event, default_seconds)
+        return _env_int(env_name, fallback)
+    return default_seconds
+
+
+def _csi_dispatch_is_throttled(source: str, event_type: str) -> tuple[bool, int]:
+    cooldown = _csi_dispatch_cooldown_seconds(event_type)
+    if cooldown <= 0:
+        return False, 0
+    key = f"{str(source or '').strip().lower()}:{str(event_type or '').strip().lower()}"
+    now_ts = time.time()
+    with _csi_dispatch_lock:
+        last_ts = _csi_dispatch_recent.get(key)
+    if last_ts is None:
+        return False, 0
+    remaining = cooldown - int(now_ts - float(last_ts))
+    if remaining > 0:
+        return True, remaining
+    return False, 0
+
+
+def _csi_record_dispatch(source: str, event_type: str) -> None:
+    key = f"{str(source or '').strip().lower()}:{str(event_type or '').strip().lower()}"
+    now_ts = time.time()
+    with _csi_dispatch_lock:
+        _csi_dispatch_recent[key] = now_ts
+        if len(_csi_dispatch_recent) > 512:
+            stale_before = now_ts - 24 * 3600
+            stale_keys = [k for k, ts in _csi_dispatch_recent.items() if float(ts) < stale_before]
+            for stale_key in stale_keys:
+                _csi_dispatch_recent.pop(stale_key, None)
 
 
 def _trim_turn_history(state: dict[str, Any]) -> None:
@@ -5096,6 +5162,7 @@ async def signals_ingest_endpoint(request: Request):
     if status_code in {200, 207} and _hooks_service:
         dispatch_count = 0
         analytics_dispatch_count = 0
+        analytics_throttled_count = 0
         for event in extract_valid_events(payload):
             manual_payload = to_manual_youtube_payload(event)
             if manual_payload:
@@ -5112,9 +5179,15 @@ async def signals_ingest_endpoint(request: Request):
             if not analytics_action:
                 continue
 
+            is_throttled, _remaining = _csi_dispatch_is_throttled(event.source, event.event_type)
+            if is_throttled:
+                analytics_throttled_count += 1
+                continue
+
             ok, _reason = await _hooks_service.dispatch_internal_action(analytics_action)
             if not ok:
                 continue
+            _csi_record_dispatch(event.source, event.event_type)
             analytics_dispatch_count += 1
             
             title = f"CSI Insight: {event.event_type or 'Report'} from {event.source or 'Unknown'}"
@@ -5201,6 +5274,8 @@ async def signals_ingest_endpoint(request: Request):
             body["internal_dispatches"] = dispatch_count
         if analytics_dispatch_count > 0:
             body["analytics_internal_dispatches"] = analytics_dispatch_count
+        if analytics_throttled_count > 0:
+            body["analytics_throttled"] = analytics_throttled_count
     return JSONResponse(status_code=status_code, content=body)
 
 
@@ -5457,50 +5532,135 @@ async def dashboard_summary():
 
 @app.get("/api/v1/dashboard/csi/reports")
 async def dashboard_csi_reports(limit: int = 15):
-    from pathlib import Path
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
-    if not db_path.exists():
-        return {"status": "unavailable", "detail": "CSI Database not found", "reports": []}
-    
-    try:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='insight_reports'")
-        if not cur.fetchone():
-            return {"status": "unavailable", "detail": "Table insight_reports missing", "reports": []}
+    def _reports_from_notifications(max_items: int) -> list[dict[str, Any]]:
+        reports: list[dict[str, Any]] = []
+        for item in reversed(_notifications):
+            kind = str(item.get("kind") or "").strip().lower()
+            if not kind.startswith("csi"):
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            event_type = str(metadata.get("event_type") or kind).strip() or kind
+            title = str(item.get("title") or "CSI Signal").strip()
+            message = str(item.get("message") or "").strip()
+            created_at = _normalize_notification_timestamp(item.get("created_at"))
+            markdown = f"### {title}\n\n{message}" if message else f"### {title}"
+            reports.append(
+                {
+                    "id": str(item.get("id") or f"ntf_{len(reports)+1}"),
+                    "report_type": event_type,
+                    "report_data": {"markdown_content": markdown},
+                    "usage": None,
+                    "created_at": created_at,
+                    "source": "notification_fallback",
+                }
+            )
+            if len(reports) >= max_items:
+                break
+        return reports
 
-        clamped_limit = max(1, min(int(limit), 50))
-        cur.execute("SELECT * FROM insight_reports ORDER BY created_at DESC LIMIT ?", (clamped_limit,))
-        
-        reports = []
-        for row in cur.fetchall():
-            row_dict = dict(row)
-            report_data = {}
-            try:
-                report_data = json.loads(row_dict.get("report_json") or "{}")
-            except Exception:
-                pass
-            report_data["markdown_content"] = row_dict.get("report_markdown") or ""
-            row_dict["report_data"] = report_data
-            
-            # Remove raw json/markdown to reduce payload size
-            row_dict.pop("report_json", None)
-            row_dict.pop("report_markdown", None)
-            
-            try:
-                row_dict["usage"] = json.loads(row_dict.get("usage") or "null")
-            except Exception:
-                pass
-            reports.append(row_dict)
-            
-        return {"status": "ok", "reports": reports}
-    except Exception as exc:
-        return {"status": "error", "detail": str(exc), "reports": []}
-    finally:
-        if 'conn' in locals() and conn:
-            conn.close()
+    def _reports_from_hook_sessions(max_items: int) -> list[dict[str, Any]]:
+        if not _ops_service:
+            return []
+        try:
+            summaries = _ops_service.list_sessions(status_filter="all")
+        except Exception:
+            return []
+        csi_rows: list[dict[str, Any]] = []
+        for row in summaries:
+            session_id = str(row.get("session_id") or "").strip()
+            if not session_id.lower().startswith("session_hook_csi_"):
+                continue
+            csi_rows.append(row)
+
+        def _sort_key(row: dict[str, Any]) -> tuple[float, str]:
+            ts = _parse_iso_timestamp(row.get("last_activity"))
+            if ts is None:
+                ts = _parse_iso_timestamp(row.get("last_modified"))
+            epoch = ts.timestamp() if ts else 0.0
+            return (epoch, str(row.get("session_id") or ""))
+
+        csi_rows.sort(key=_sort_key, reverse=True)
+        reports: list[dict[str, Any]] = []
+        for row in csi_rows[:max_items]:
+            session_id = str(row.get("session_id") or "").strip()
+            suffix = session_id.removeprefix("session_hook_csi_")
+            report_type = suffix or "csi_event"
+            description = str(row.get("description") or "").strip()
+            owner = str(row.get("owner") or "unknown").strip()
+            created_at = _normalize_notification_timestamp(
+                str(row.get("last_activity") or row.get("last_modified") or _utc_now_iso())
+            )
+            markdown_lines = [
+                f"### CSI Session: {session_id}",
+                f"- event: `{report_type}`",
+                f"- owner: `{owner}`",
+            ]
+            if description:
+                markdown_lines.extend(["", description])
+            reports.append(
+                {
+                    "id": f"session:{session_id}",
+                    "report_type": report_type,
+                    "report_data": {"markdown_content": "\n".join(markdown_lines)},
+                    "usage": None,
+                    "created_at": created_at,
+                    "source": "session_fallback",
+                    "session_id": session_id,
+                }
+            )
+        return reports
+
+    clamped_limit = max(1, min(int(limit), 50))
+    db_detail: Optional[str] = None
+    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    if db_path.exists():
+        conn = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='insight_reports'")
+            if cur.fetchone():
+                cur.execute("SELECT * FROM insight_reports ORDER BY created_at DESC LIMIT ?", (clamped_limit,))
+                reports = []
+                for row in cur.fetchall():
+                    row_dict = dict(row)
+                    report_data = {}
+                    try:
+                        report_data = json.loads(row_dict.get("report_json") or "{}")
+                    except Exception:
+                        pass
+                    report_data["markdown_content"] = row_dict.get("report_markdown") or ""
+                    row_dict["report_data"] = report_data
+                    row_dict.pop("report_json", None)
+                    row_dict.pop("report_markdown", None)
+                    try:
+                        row_dict["usage"] = json.loads(row_dict.get("usage") or "null")
+                    except Exception:
+                        pass
+                    reports.append(row_dict)
+                if reports:
+                    return {"status": "ok", "source": "csi_db", "reports": reports}
+                db_detail = "CSI database is reachable but insight_reports has no rows."
+            else:
+                db_detail = "Table insight_reports is missing from CSI database."
+        except Exception as exc:
+            db_detail = f"CSI database read failed: {exc}"
+        finally:
+            if conn is not None:
+                conn.close()
+    else:
+        db_detail = f"CSI database not found at {db_path}."
+
+    notification_reports = _reports_from_notifications(clamped_limit)
+    if notification_reports:
+        return {"status": "ok", "source": "notification_fallback", "detail": db_detail, "reports": notification_reports}
+
+    session_reports = _reports_from_hook_sessions(clamped_limit)
+    if session_reports:
+        return {"status": "ok", "source": "session_fallback", "detail": db_detail, "reports": session_reports}
+
+    return {"status": "ok", "source": "empty", "detail": db_detail, "reports": []}
 
 
 @app.get("/api/v1/dashboard/todolist/pipeline")
@@ -8130,6 +8290,123 @@ async def ops_cancel_outstanding_sessions(request: Request, payload: OpsSessionC
         "reason": reason,
         "sessions_considered": len(candidates),
         "sessions_cancelled": cancelled,
+    }
+
+
+@app.post("/api/v1/ops/sessions/csi/purge")
+async def ops_purge_csi_sessions(request: Request, payload: OpsCsiSessionPurgeRequest):
+    _require_ops_auth(request)
+    if not _ops_service:
+        raise HTTPException(status_code=503, detail="Ops service not initialized")
+
+    keep_latest = max(0, min(int(payload.keep_latest or 0), 200))
+    older_than_minutes = max(0, min(int(payload.older_than_minutes or 0), 60 * 24 * 30))
+    older_than_seconds = older_than_minutes * 60
+    include_active = bool(payload.include_active)
+
+    sessions = _ops_service.list_sessions(status_filter="all")
+    csi_sessions = [
+        item
+        for item in sessions
+        if str(item.get("session_id") or "").strip().lower().startswith("session_hook_csi_")
+    ]
+
+    def _activity_epoch(item: dict[str, Any]) -> Optional[float]:
+        dt = _parse_iso_timestamp(item.get("last_activity")) or _parse_iso_timestamp(item.get("last_modified"))
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+
+    csi_sessions.sort(
+        key=lambda item: (_activity_epoch(item) or 0.0, str(item.get("session_id") or "")),
+        reverse=True,
+    )
+
+    protected_ids = {
+        str(item.get("session_id") or "").strip()
+        for item in csi_sessions[:keep_latest]
+        if str(item.get("session_id") or "").strip()
+    }
+
+    now_ts = time.time()
+    candidates: list[str] = []
+    skipped_recent: list[str] = []
+    skipped_active: list[str] = []
+    skipped_protected: list[str] = []
+
+    for item in csi_sessions:
+        session_id = str(item.get("session_id") or "").strip()
+        if not session_id:
+            continue
+        if session_id in protected_ids:
+            skipped_protected.append(session_id)
+            continue
+
+        status = str(item.get("status") or "").strip().lower()
+        active_runs = int(item.get("active_runs") or 0)
+        is_active = status in {"running", "active"} or active_runs > 0
+        if is_active and not include_active:
+            skipped_active.append(session_id)
+            continue
+
+        if older_than_seconds > 0:
+            activity_ts = _activity_epoch(item)
+            if activity_ts is None:
+                skipped_recent.append(session_id)
+                continue
+            if (now_ts - activity_ts) < older_than_seconds:
+                skipped_recent.append(session_id)
+                continue
+
+        candidates.append(session_id)
+
+    if payload.dry_run:
+        return {
+            "status": "dry_run",
+            "total_csi_sessions": len(csi_sessions),
+            "keep_latest": keep_latest,
+            "older_than_minutes": older_than_minutes,
+            "include_active": include_active,
+            "candidates": candidates,
+            "skipped": {
+                "protected": skipped_protected,
+                "active": skipped_active,
+                "recent": skipped_recent,
+            },
+        }
+
+    deleted: list[str] = []
+    failed: dict[str, str] = {}
+    for session_id in candidates:
+        try:
+            if include_active:
+                try:
+                    await _cancel_session_execution(session_id, "CSI session purge requested")
+                except Exception:
+                    logger.debug("CSI purge cancel skipped for session=%s", session_id, exc_info=True)
+            removed = await _ops_service.delete_session(session_id)
+            if removed:
+                deleted.append(session_id)
+            else:
+                failed[session_id] = "not_found_or_not_deleted"
+        except Exception as exc:
+            failed[session_id] = str(exc)
+
+    return {
+        "status": "ok",
+        "total_csi_sessions": len(csi_sessions),
+        "keep_latest": keep_latest,
+        "older_than_minutes": older_than_minutes,
+        "include_active": include_active,
+        "deleted": deleted,
+        "failed": failed,
+        "skipped": {
+            "protected": skipped_protected,
+            "active": skipped_active,
+            "recent": skipped_recent,
+        },
     }
 
 

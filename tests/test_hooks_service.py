@@ -240,6 +240,52 @@ async def test_action_to_legacy_alias_still_injects_youtube_routing(hooks_servic
     assert gateway_request.metadata["hook_route_to"] == "youtube-explainer-expert"
 
 
+@pytest.mark.asyncio
+async def test_youtube_started_notification_includes_title_and_video_id(hooks_service, mock_gateway):
+    hooks_service._youtube_ingest_mode = ""
+    notifications = []
+    hooks_service._notification_sink = notifications.append
+    hooks_service._run_gateway_execute_with_watchdogs = AsyncMock(return_value={})
+    hooks_service._validate_youtube_tutorial_artifacts = MagicMock(
+        return_value={
+            "title": "Demo Tutorial",
+            "status": "full",
+            "run_rel_path": "",
+            "key_files": [],
+        }
+    )
+
+    mock_session = GatewaySession(
+        session_id="session_hook_yt_demo123abc",
+        user_id="webhook",
+        workspace_dir="/tmp",
+    )
+    mock_gateway.resume_session = AsyncMock(return_value=mock_session)
+
+    action = HookAction(
+        kind="agent",
+        name="ComposioYouTubeTrigger",
+        session_key="yt_demo123abc",
+        to="youtube-expert",
+        message="\n".join(
+            [
+                "video_url: https://www.youtube.com/watch?v=demo123abc4",
+                "video_id: demo123abc4",
+                "title: Building Better Pipelines",
+                "mode: explainer_plus_code",
+            ]
+        ),
+    )
+
+    await hooks_service._dispatch_action(action)
+
+    started = next((n for n in notifications if n.get("kind") == "youtube_tutorial_started"), None)
+    assert started is not None
+    assert started["message"] == "Processing: Building Better Pipelines (demo123abc4)"
+    assert started["metadata"]["video_id"] == "demo123abc4"
+    assert started["metadata"]["tutorial_title"] == "Building Better Pipelines"
+
+
 def test_is_youtube_local_ingest_target_accepts_canonical_and_alias(mock_gateway):
     with (
         patch("universal_agent.hooks_service.load_ops_config", return_value={}),
@@ -1160,3 +1206,73 @@ def test_validate_youtube_tutorial_artifacts_requires_implementation_for_code_mo
                 video_id="code456",
                 started_at_epoch=time.time(),
             )
+
+
+def test_validate_youtube_tutorial_artifacts_generates_repo_scripts_for_implementation(
+    mock_gateway,
+    tmp_path,
+):
+    with patch("universal_agent.hooks_service.load_ops_config", return_value={}):
+        service = HooksService(mock_gateway)
+
+    run_dir = (
+        tmp_path
+        / "youtube-tutorial-creation"
+        / "2026-02-25"
+        / "code-video__030303"
+    )
+    implementation_dir = run_dir / "implementation"
+    implementation_dir.mkdir(parents=True, exist_ok=True)
+    (implementation_dir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (run_dir / "README.md").write_text("# Readme\n", encoding="utf-8")
+    (run_dir / "CONCEPT.md").write_text("# Concept\n", encoding="utf-8")
+    (run_dir / "IMPLEMENTATION.md").write_text("# Impl\n", encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "video_id": "code789",
+                "title": "Code Mode Scripts",
+                "mode": "explainer_plus_code",
+                "learning_mode": "concept_plus_implementation",
+                "status": "full",
+                "artifacts": {
+                    "readme": "README.md",
+                    "concept": "CONCEPT.md",
+                    "implementation": "IMPLEMENTATION.md",
+                    "implementation_dir": "implementation/",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with patch("universal_agent.hooks_service.resolve_artifacts_dir", return_value=tmp_path):
+        result = service._validate_youtube_tutorial_artifacts(
+            video_id="code789",
+            started_at_epoch=time.time(),
+        )
+
+    create_script = implementation_dir / "create_new_repo.sh"
+    delete_script = implementation_dir / "deletethisrepo.sh"
+    assert create_script.exists()
+    assert delete_script.exists()
+    assert create_script.stat().st_mode & 0o111
+    assert delete_script.stat().st_mode & 0o111
+
+    create_content = create_script.read_text(encoding="utf-8")
+    assert "uv init" in create_content
+    assert "uv add -r requirements.txt" in create_content
+    assert "uv sync" in create_content
+    assert "uv run app.py" in create_content
+    assert "/home/kjdragan/lrepos" in create_content
+    assert "deletethisrepo.sh" in create_content
+
+    delete_content = delete_script.read_text(encoding="utf-8")
+    assert "rm -rf \"$THIS_DIR\"" in delete_content
+
+    bootstrap_scripts = result.get("bootstrap_scripts") or []
+    assert str(create_script) in bootstrap_scripts
+    assert str(delete_script) in bootstrap_scripts
+    key_file_names = {entry.get("name") for entry in result.get("key_files", [])}
+    assert "create_new_repo.sh" in key_file_names
+    assert "deletethisrepo.sh" in key_file_names

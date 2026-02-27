@@ -842,11 +842,17 @@ export function SessionsSection({
     try {
       const dashboardRoute =
         typeof window !== "undefined" && window.location.pathname.startsWith("/dashboard");
+      const sid = String(sessionId || "").trim();
+      const forceViewer =
+        /^vp_/i.test(sid)
+        || /^session[_-]hook_/i.test(sid)
+        || /^cron_/i.test(sid)
+        || /^worker_/i.test(sid);
       if (dashboardRoute) {
         openOrFocusChatWindow({
-          sessionId,
+          sessionId: sid,
           attachMode: "tail",
-          role: /^vp_/i.test((sessionId || "").trim()) ? "viewer" : "writer",
+          role: forceViewer ? "viewer" : "writer",
         });
         return;
       }

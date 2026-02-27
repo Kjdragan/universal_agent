@@ -25,7 +25,7 @@ KERNEL_OOM_PATTERN = re.compile(
     re.IGNORECASE,
 )
 SERVICE_OOM_PATTERN = re.compile(
-    r"(A process of this unit has been killed by the OOM killer|Main process exited, code=killed, status=9/KILL)",
+    r"(A process of this unit has been killed by the OOM killer)",
     re.IGNORECASE,
 )
 

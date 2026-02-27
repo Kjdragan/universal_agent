@@ -9,6 +9,7 @@ import logging
 import os
 import random
 import re
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -38,6 +39,7 @@ YOUTUBE_AGENT_CANONICAL = "youtube-expert"
 YOUTUBE_AGENT_LEGACY_ALIAS = "youtube-explainer-expert"
 YOUTUBE_AGENT_ROUTE_ALIASES = {YOUTUBE_AGENT_CANONICAL, YOUTUBE_AGENT_LEGACY_ALIAS}
 YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
+DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT = "/home/kjdragan/lrepos"
 
 
 class HookReportedTimeout(RuntimeError):
@@ -178,6 +180,10 @@ class HooksService:
         self._youtube_ingest_retries = min(10, max(1, configured_retries))
         self._youtube_ingest_retry_delay_seconds = max(
             0.0, self._safe_float_env("UA_HOOKS_YOUTUBE_INGEST_RETRY_DELAY_SECONDS", 20.0)
+        )
+        self._tutorial_bootstrap_repo_root = (
+            (os.getenv("UA_TUTORIAL_BOOTSTRAP_REPO_ROOT") or "").strip()
+            or DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT
         )
         self._youtube_ingest_retry_max_delay_seconds = max(
             self._youtube_ingest_retry_delay_seconds,
@@ -605,7 +611,7 @@ class HooksService:
                 [
                     node
                     for node in implementation_dir.rglob("*")
-                    if node.is_file() and node.suffix.lower() in {".py", ".ts", ".tsx", ".js", ".jsx", ".md"}
+                    if node.is_file() and node.suffix.lower() in {".py", ".ts", ".tsx", ".js", ".jsx", ".md", ".sh"}
                 ]
             )[:8]
             for node in implementation_files:
@@ -620,6 +626,101 @@ class HooksService:
                     }
                 )
         return files
+
+    def _tutorial_repo_bootstrap_script(self) -> str:
+        repo_root = self._tutorial_bootstrap_repo_root
+        repo_root_quoted = shlex.quote(repo_root)
+        return (
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n\n"
+            "SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\n"
+            f"TARGET_ROOT=\"${{1:-{repo_root_quoted}}}\"\n"
+            "REPO_NAME=\"${2:-yt_tutorial_impl_$(date +%Y%m%d_%H%M%S)}\"\n"
+            "PYTHON_VERSION=\"${3:-}\"\n\n"
+            "if ! command -v uv >/dev/null 2>&1; then\n"
+            "  echo \"uv is required but not found on PATH.\" >&2\n"
+            "  exit 1\n"
+            "fi\n\n"
+            "mkdir -p \"$TARGET_ROOT\"\n"
+            "TARGET_DIR=\"$TARGET_ROOT/$REPO_NAME\"\n"
+            "if [[ -e \"$TARGET_DIR\" ]]; then\n"
+            "  echo \"Target repo already exists: $TARGET_DIR\" >&2\n"
+            "  exit 1\n"
+            "fi\n"
+            "mkdir -p \"$TARGET_DIR\"\n\n"
+            "cd \"$TARGET_DIR\"\n"
+            "if [[ -n \"$PYTHON_VERSION\" ]]; then\n"
+            "  uv init --python \"$PYTHON_VERSION\"\n"
+            "else\n"
+            "  uv init\n"
+            "fi\n\n"
+            "shopt -s dotglob nullglob\n"
+            "for item in \"$SCRIPT_DIR\"/*; do\n"
+            "  base=\"$(basename \"$item\")\"\n"
+            "  if [[ \"$base\" == \"create_new_repo.sh\" || \"$base\" == \"deletethisrepo.sh\" ]]; then\n"
+            "    continue\n"
+            "  fi\n"
+            "  cp -a \"$item\" \"$TARGET_DIR/\"\n"
+            "done\n"
+            "shopt -u dotglob nullglob\n\n"
+            "cat > \"$TARGET_DIR/deletethisrepo.sh\" <<'EOF'\n"
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n"
+            "THIS_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\n"
+            "PARENT_DIR=\"$(dirname \"$THIS_DIR\")\"\n"
+            "read -r -p \"Delete repo at $THIS_DIR ? [y/N] \" REPLY\n"
+            "if [[ ! \"$REPLY\" =~ ^[Yy]$ ]]; then\n"
+            "  echo \"Cancelled\"\n"
+            "  exit 0\n"
+            "fi\n"
+            "cd \"$PARENT_DIR\"\n"
+            "rm -rf \"$THIS_DIR\"\n"
+            "echo \"Deleted $THIS_DIR\"\n"
+            "EOF\n"
+            "chmod +x \"$TARGET_DIR/deletethisrepo.sh\"\n\n"
+            "cd \"$TARGET_DIR\"\n"
+            "if [[ -f \"requirements.txt\" ]]; then\n"
+            "  uv add -r requirements.txt\n"
+            "else\n"
+            "  echo \"requirements.txt not found; skipping uv add -r requirements.txt.\"\n"
+            "fi\n\n"
+            "uv sync\n\n"
+            "echo \"Repo ready: $TARGET_DIR\"\n"
+            "echo \"Use 'uv run app.py' (or your entrypoint) to run inside the managed env.\"\n"
+            "echo \"Run ./deletethisrepo.sh inside that repo to remove it.\"\n"
+        )
+
+    @staticmethod
+    def _tutorial_repo_delete_script() -> str:
+        return (
+            "#!/usr/bin/env bash\n"
+            "set -euo pipefail\n\n"
+            "THIS_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd)\"\n"
+            "PARENT_DIR=\"$(dirname \"$THIS_DIR\")\"\n"
+            "read -r -p \"Delete repo at $THIS_DIR ? [y/N] \" REPLY\n"
+            "if [[ ! \"$REPLY\" =~ ^[Yy]$ ]]; then\n"
+            "  echo \"Cancelled\"\n"
+            "  exit 0\n"
+            "fi\n"
+            "cd \"$PARENT_DIR\"\n"
+            "rm -rf \"$THIS_DIR\"\n"
+            "echo \"Deleted $THIS_DIR\"\n"
+        )
+
+    def _ensure_tutorial_bootstrap_scripts(self, implementation_dir: Path) -> list[str]:
+        scripts: list[str] = []
+        create_script = implementation_dir / "create_new_repo.sh"
+        delete_script = implementation_dir / "deletethisrepo.sh"
+        self._write_text_file(create_script, self._tutorial_repo_bootstrap_script())
+        self._write_text_file(delete_script, self._tutorial_repo_delete_script())
+        try:
+            os.chmod(create_script, 0o755)
+            os.chmod(delete_script, 0o755)
+        except Exception:
+            logger.warning("Failed to set executable bit on tutorial bootstrap scripts in %s", implementation_dir)
+        scripts.append(str(create_script))
+        scripts.append(str(delete_script))
+        return scripts
 
     def _emit_youtube_tutorial_failure_notification(
         self,
@@ -1246,6 +1347,13 @@ class HooksService:
         if missing:
             raise RuntimeError(f"youtube_artifacts_incomplete:{','.join(missing)}")
 
+        bootstrap_scripts: list[str] = []
+        implementation_dir = run_dir / "implementation"
+        if implementation_dir.is_dir():
+            has_impl_file = any(node.is_file() for node in implementation_dir.rglob("*"))
+            if has_impl_file:
+                bootstrap_scripts = self._ensure_tutorial_bootstrap_scripts(implementation_dir)
+
         run_rel_path = self._tutorial_run_rel_path(run_dir)
 
         return {
@@ -1256,6 +1364,7 @@ class HooksService:
             "title": str(manifest_payload.get("title") or run_dir.name),
             "status": str(manifest_payload.get("status") or "full"),
             "implementation_required": implementation_required,
+            "bootstrap_scripts": bootstrap_scripts,
             "key_files": self._tutorial_key_files_for_notification(
                 run_dir=run_dir,
                 run_rel_path=run_rel_path,
@@ -1727,6 +1836,7 @@ class HooksService:
         )
         is_youtube_tutorial = _is_youtube_agent_route(action.to)
         expected_video_id = self._extract_action_field(action.message or "", "video_id")
+        expected_video_title = self._extract_action_field(action.message or "", "title")
         if is_youtube_tutorial:
             if timeout_seconds is None:
                 timeout_seconds = self._youtube_hook_timeout_seconds
@@ -1745,6 +1855,8 @@ class HooksService:
             metadata["hook_route_to"] = action.to
         if action.model:
             metadata["hook_model"] = action.model
+        if expected_video_title:
+            metadata["tutorial_title"] = expected_video_title
         if action.thinking:
             metadata["hook_thinking"] = action.thinking
         if timeout_seconds is not None:
@@ -1907,11 +2019,17 @@ class HooksService:
                     started_at_epoch=start_ts,
                 )
             if is_youtube_tutorial:
-                tutorial_title = str(metadata.get("tutorial_title") or expected_video_id or session_key)
+                tutorial_title = str(metadata.get("tutorial_title") or "").strip()
+                if tutorial_title and expected_video_id:
+                    processing_label = f"{tutorial_title} ({expected_video_id})"
+                elif tutorial_title:
+                    processing_label = tutorial_title
+                else:
+                    processing_label = expected_video_id or session_key
                 self._emit_notification(
                     kind="youtube_tutorial_started",
                     title="YouTube Tutorial Pipeline Started",
-                    message=f"Processing: {tutorial_title}",
+                    message=f"Processing: {processing_label}",
                     session_id=session_id,
                     severity="info",
                     metadata={
@@ -1919,6 +2037,7 @@ class HooksService:
                         "hook_name": hook_name,
                         "hook_session_key": session_key,
                         "video_id": expected_video_id or "",
+                        "tutorial_title": tutorial_title,
                     },
                 )
             execution_summary: dict[str, Any] = {}
