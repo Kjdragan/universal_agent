@@ -133,3 +133,19 @@ async def test_enforce_session_owner_blocks_non_system_owner_mismatch(monkeypatc
     with pytest.raises(HTTPException) as exc:
         await api_server._enforce_session_owner("session_custom", "owner_primary", True)
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_enforce_session_owner_allows_hook_session_for_primary_owner(monkeypatch):
+    monkeypatch.setattr(api_server, "_gateway_url", lambda: "http://gateway.local")
+    monkeypatch.setattr(api_server, "_normalize_owner_id", lambda _value=None: "owner_primary")
+
+    async def _fake_fetch_owner(_session_id: str) -> str:
+        return "pg-test-8c18facc-7f25-4693-918c-7252c15d36b2"
+
+    monkeypatch.setattr(api_server, "_fetch_gateway_session_owner", _fake_fetch_owner)
+    await api_server._enforce_session_owner(
+        "session_hook_yt_UCc98QQw1D-y38wg6mO3w4MQ_NAWKFRaR0Sk",
+        "owner_primary",
+        True,
+    )

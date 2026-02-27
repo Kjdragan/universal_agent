@@ -476,6 +476,52 @@ def test_dashboard_csi_reports_fallbacks_to_sessions_when_notifications_empty(cl
     assert payload["reports"][0]["session_id"].startswith("session_hook_csi_")
 
 
+def test_dashboard_tutorial_runs_lists_flat_and_dated_layouts(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+    tutorial_root = artifacts_root / "youtube-tutorial-creation"
+
+    dated_run = tutorial_root / "2026-02-27" / "compounding-units-of-work__102742"
+    dated_run.mkdir(parents=True, exist_ok=True)
+    (dated_run / "manifest.json").write_text(
+        json.dumps(
+            {
+                "video_id": "5LgRgqimy80",
+                "title": "How to Build Compounding Units of Work",
+                "status": "full",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (dated_run / "README.md").write_text("# dated\n", encoding="utf-8")
+
+    flat_run = tutorial_root / "NAWKFRaR0Sk__claude-code-tasks"
+    flat_run.mkdir(parents=True, exist_ok=True)
+    (flat_run / "manifest.json").write_text(
+        json.dumps(
+            {
+                "video_id": "NAWKFRaR0Sk",
+                "title": "Claude Code Tasks: Stop Babysitting Your AI Agent",
+                "status": "full",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (flat_run / "README.md").write_text("# flat\n", encoding="utf-8")
+
+    resp = client.get("/api/v1/dashboard/tutorials/runs?limit=20")
+    assert resp.status_code == 200
+    payload = resp.json()
+    runs = payload["runs"]
+    run_paths = {row["run_path"] for row in runs}
+    video_ids = {row["video_id"] for row in runs}
+
+    assert "youtube-tutorial-creation/2026-02-27/compounding-units-of-work__102742" in run_paths
+    assert "youtube-tutorial-creation/NAWKFRaR0Sk__claude-code-tasks" in run_paths
+    assert "5LgRgqimy80" in video_ids
+    assert "NAWKFRaR0Sk" in video_ids
+
+
 def test_ops_purge_csi_sessions_dry_run_and_delete(client, tmp_path):
     _create_dummy_session(tmp_path, "session_hook_csi_alpha", ["alpha"])
     _create_dummy_session(tmp_path, "session_hook_csi_bravo", ["bravo"])

@@ -441,45 +441,55 @@ def _list_tutorial_runs(limit: int = 100) -> list[dict[str, Any]]:
 
     runs: list[tuple[float, dict[str, Any]]] = []
     for root in roots:
-        day_dirs = [d for d in root.iterdir() if d.is_dir()]
-        day_dirs.sort(key=lambda p: p.name, reverse=True)
-        for day_dir in day_dirs:
-            for run_dir in day_dir.iterdir():
-                if not run_dir.is_dir():
-                    continue
+        # Support both legacy date-based layout and flat run folders by indexing
+        # actual manifest files recursively under the tutorial root.
+        seen_run_dirs: set[Path] = set()
+        manifest_paths = sorted(
+            root.rglob("manifest.json"),
+            key=lambda path: path.stat().st_mtime if path.exists() else 0.0,
+            reverse=True,
+        )
+        for manifest_path in manifest_paths:
+            run_dir = manifest_path.parent
+            if run_dir in seen_run_dirs:
+                continue
+            seen_run_dirs.add(run_dir)
+            try:
+                mtime = float(manifest_path.stat().st_mtime)
+            except Exception:
                 try:
                     mtime = float(run_dir.stat().st_mtime)
                 except Exception:
                     mtime = 0.0
-                manifest = _tutorial_manifest(run_dir)
-                if not manifest:
-                    continue
-                run_rel = _artifact_rel_path(run_dir)
-                if not run_rel:
-                    continue
-                files = _tutorial_key_files(run_dir)
-                title = str(manifest.get("title") or "").strip() or run_dir.name
-                video_id = str(manifest.get("video_id") or "").strip()
-                video_url = str(manifest.get("video_url") or "").strip()
-                if not video_url and video_id:
-                    video_url = f"https://www.youtube.com/watch?v={video_id}"
-                run_item = {
-                    "run_path": run_rel,
-                    "run_dir": str(run_dir),
-                    "run_name": run_dir.name,
-                    "created_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
-                    "status": str(manifest.get("status") or "").strip() or "unknown",
-                    "title": title,
-                    "video_id": video_id,
-                    "video_url": video_url,
-                    "channel_id": str(manifest.get("channel_id") or "").strip(),
-                    "manifest_path": _artifact_rel_path(run_dir / "manifest.json"),
-                    "run_api_url": f"/api/artifacts?path={urllib.parse.quote(run_rel, safe='/')}",
-                    "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
-                    "files": files,
-                    "implementation_required": _tutorial_has_code_implementation(run_dir, manifest),
-                }
-                runs.append((mtime, run_item))
+            manifest = _tutorial_manifest(run_dir)
+            if not manifest:
+                continue
+            run_rel = _artifact_rel_path(run_dir)
+            if not run_rel:
+                continue
+            files = _tutorial_key_files(run_dir)
+            title = str(manifest.get("title") or "").strip() or run_dir.name
+            video_id = str(manifest.get("video_id") or "").strip()
+            video_url = str(manifest.get("video_url") or "").strip()
+            if not video_url and video_id:
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+            run_item = {
+                "run_path": run_rel,
+                "run_dir": str(run_dir),
+                "run_name": run_dir.name,
+                "created_at": datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat(),
+                "status": str(manifest.get("status") or "").strip() or "unknown",
+                "title": title,
+                "video_id": video_id,
+                "video_url": video_url,
+                "channel_id": str(manifest.get("channel_id") or "").strip(),
+                "manifest_path": _artifact_rel_path(run_dir / "manifest.json"),
+                "run_api_url": f"/api/artifacts?path={urllib.parse.quote(run_rel, safe='/')}",
+                "run_storage_href": _storage_explorer_href(scope="artifacts", path=run_rel),
+                "files": files,
+                "implementation_required": _tutorial_has_code_implementation(run_dir, manifest),
+            }
+            runs.append((mtime, run_item))
 
     runs.sort(key=lambda item: item[0], reverse=True)
     return [item for _, item in runs[: max(1, min(limit, 1000))]]
