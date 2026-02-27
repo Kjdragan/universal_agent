@@ -395,6 +395,7 @@ export default function DashboardTutorialsPage() {
             const isNew = !seenRuns.has(runPath);
             const implRequired = run.implementation_required;
             const hasCreateRepoScript = files.some((file) => asText(file.name).toLowerCase() === "create_new_repo.sh");
+            const showCreateRepoAction = Boolean(implRequired || hasCreateRepoScript);
             return (
               <article key={runPath} className="rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2">
                 <div className="flex flex-wrap items-start justify-between gap-2">
@@ -460,13 +461,17 @@ export default function DashboardTutorialsPage() {
                     >
                       {dispatchingRunPath === runPath ? "Queueing..." : "Send to Simone"}
                     </button>
-                    {hasCreateRepoScript && (
+                    {showCreateRepoAction && (
                       <button
                         type="button"
                         onClick={() => void bootstrapRunRepo(runPath)}
                         disabled={bootstrappingRunPath === runPath || deletingRunPath === runPath || dispatchingRunPath === runPath}
                         className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-100 hover:bg-amber-900/35 disabled:opacity-50"
-                        title="Create a ready-to-run repo by executing create_new_repo.sh on the server"
+                        title={
+                          hasCreateRepoScript
+                            ? "Create a ready-to-run repo by executing create_new_repo.sh on the server"
+                            : "Create repo action (run may need bootstrap script regeneration first)"
+                        }
                       >
                         {bootstrappingRunPath === runPath ? "Creating Repo..." : "Create Repo"}
                       </button>
