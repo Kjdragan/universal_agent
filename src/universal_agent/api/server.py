@@ -349,6 +349,11 @@ async def _enforce_session_owner(session_id: str, owner_id: str, auth_required: 
         if _is_system_session_owner(session_owner):
             # System-owned sessions are observable from the dashboard owner lane.
             return
+        # Hook sessions are automation/system workflows and may be resumed with a
+        # runtime identity that differs from the dashboard owner lane. Allow the
+        # primary dashboard owner to inspect these sessions.
+        if session_id.startswith("session_hook_") and hmac.compare_digest(owner_id, _normalize_owner_id(None)):
+            return
         raise HTTPException(status_code=403, detail="Access denied: session owner mismatch.")
     if auth_required:
         raise HTTPException(status_code=403, detail="Access denied: unable to verify session owner.")
