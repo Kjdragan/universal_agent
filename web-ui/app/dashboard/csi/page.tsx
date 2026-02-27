@@ -62,6 +62,54 @@ export default function CSIDashboard() {
     const [selectedItem, setSelectedItem] = useState<SelectedItem>(null);
     const [purgeBusy, setPurgeBusy] = useState(false);
     const [purgeStatus, setPurgeStatus] = useState<string | null>(null);
+    const [previewPath, setPreviewPath] = useState<string | null>(null);
+    const [previewLabel, setPreviewLabel] = useState<string | null>(null);
+    const [previewContent, setPreviewContent] = useState<string>("");
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [previewError, setPreviewError] = useState<string | null>(null);
+
+    function normalizeArtifactPath(rawPath: string): string {
+        const cleaned = String(rawPath || "").trim().replace(/\\/g, "/");
+        if (!cleaned) return "";
+        if (cleaned.startsWith("/")) {
+            const marker = "/artifacts/";
+            const idx = cleaned.indexOf(marker);
+            if (idx >= 0) return cleaned.slice(idx + marker.length).replace(/^\/+/, "");
+            return cleaned.replace(/^\/+/, "");
+        }
+        if (cleaned.startsWith("artifacts/")) return cleaned.slice("artifacts/".length);
+        return cleaned;
+    }
+
+    async function openArtifactPreview(path: string, label: string) {
+        const normalized = normalizeArtifactPath(path);
+        if (!normalized) {
+            setPreviewError("Invalid artifact path.");
+            return;
+        }
+        setPreviewPath(normalized);
+        setPreviewLabel(label);
+        setPreviewLoading(true);
+        setPreviewError(null);
+        setPreviewContent("");
+        try {
+            const resp = await fetch(`${API_BASE}/api/vps/file?scope=artifacts&path=${encodeURIComponent(normalized)}`);
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            let text = await resp.text();
+            if (normalized.toLowerCase().endsWith(".json")) {
+                try {
+                    text = JSON.stringify(JSON.parse(text), null, 2);
+                } catch {
+                    // Keep raw text if payload is not valid JSON.
+                }
+            }
+            setPreviewContent(text);
+        } catch (err: any) {
+            setPreviewError(err?.message || "Failed to load artifact preview.");
+        } finally {
+            setPreviewLoading(false);
+        }
+    }
 
     useEffect(() => {
         async function loadData() {
@@ -94,6 +142,14 @@ export default function CSIDashboard() {
         }
         loadData();
     }, []);
+
+    useEffect(() => {
+        setPreviewPath(null);
+        setPreviewLabel(null);
+        setPreviewContent("");
+        setPreviewError(null);
+        setPreviewLoading(false);
+    }, [selectedItem?.type, selectedItem?.data?.id]);
 
     const totalReports = reports.length;
     const lastReportTime = reports.length > 0 ? formatDateTimeTz(reports[0].created_at, { placeholder: "N/A" }) : "N/A";
@@ -290,15 +346,54 @@ export default function CSIDashboard() {
                                                     {selectedItem.data.metadata.artifact_paths.markdown && (
                                                         <div className="flex flex-col gap-1">
                                                             <span className="text-[10px] text-slate-500">MARKDOWN</span>
-                                                            <div className="text-xs text-cyan-400 border border-slate-800 bg-slate-900/50 rounded px-2 py-1 font-mono break-all select-all">{selectedItem.data.metadata.artifact_paths.markdown}</div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openArtifactPreview(selectedItem.data.metadata.artifact_paths.markdown, "Markdown")}
+                                                                className="text-left text-xs text-cyan-400 border border-slate-800 bg-slate-900/50 rounded px-2 py-1 font-mono break-all hover:border-cyan-500/40 hover:bg-cyan-950/10 transition-colors"
+                                                                title="Preview markdown artifact"
+                                                            >
+                                                                {selectedItem.data.metadata.artifact_paths.markdown}
+                                                            </button>
                                                         </div>
                                                     )}
                                                     {selectedItem.data.metadata.artifact_paths.json && (
                                                         <div className="flex flex-col gap-1">
                                                             <span className="text-[10px] text-slate-500">JSON</span>
-                                                            <div className="text-xs text-cyan-400 border border-slate-800 bg-slate-900/50 rounded px-2 py-1 font-mono break-all select-all">{selectedItem.data.metadata.artifact_paths.json}</div>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openArtifactPreview(selectedItem.data.metadata.artifact_paths.json, "JSON")}
+                                                                className="text-left text-xs text-cyan-400 border border-slate-800 bg-slate-900/50 rounded px-2 py-1 font-mono break-all hover:border-cyan-500/40 hover:bg-cyan-950/10 transition-colors"
+                                                                title="Preview JSON artifact"
+                                                            >
+                                                                {selectedItem.data.metadata.artifact_paths.json}
+                                                            </button>
                                                         </div>
                                                     )}
+                                                </div>
+                                            )}
+                                            {previewPath && (
+                                                <div className="space-y-2 pt-2 border-t border-slate-800/50">
+                                                    <h4 className="text-xs font-semibold text-slate-400">
+                                                        ARTIFACT PREVIEW {previewLabel ? `(${previewLabel})` : ""}
+                                                    </h4>
+                                                    <div className="text-[10px] text-slate-500 font-mono break-all">{previewPath}</div>
+                                                    <div className="max-h-80 overflow-auto rounded border border-slate-800 bg-slate-900/60 p-3">
+                                                        {previewLoading ? (
+                                                            <div className="text-xs text-slate-400">Loading preview...</div>
+                                                        ) : previewError ? (
+                                                            <div className="text-xs text-rose-400">Preview error: {previewError}</div>
+                                                        ) : previewPath.toLowerCase().endsWith(".md") ? (
+                                                            <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 prose-a:text-cyan-400">
+                                                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                                    {previewContent || "_Empty file_"}
+                                                                </ReactMarkdown>
+                                                            </div>
+                                                        ) : (
+                                                            <pre className="text-[11px] text-slate-300 whitespace-pre-wrap break-words font-mono">
+                                                                {previewContent || "Empty file"}
+                                                            </pre>
+                                                        )}
+                                                    </div>
                                                 </div>
                                             )}
                                             <div className="overflow-x-auto pt-2 border-t border-slate-800/50">
