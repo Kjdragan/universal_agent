@@ -1,0 +1,29 @@
+Subprocessors
+Effective date: February 13, 2026
+
+This page lists third-party subprocessors Polsia may use to deliver the service. Actual usage depends on enabled product features, account settings, and environment configuration.
+
+Vendor	Primary purpose	Typical data categories
+Stripe	Payments, subscriptions, billing portal, checkout	Billing identifiers, transaction metadata, subscription status
+Postmark	Transactional and operational email delivery/inbound processing	Email addresses, message content, delivery metadata
+Meta (Pixel/CAPI)	Marketing attribution and ad conversion measurement	Hashed identifiers, event metadata, _fbp/_fbc, IP/UA
+Google (OAuth/Gmail APIs)	Authentication and optional connected account functionality	OAuth profile fields, authorized account metadata, tokens
+GitHub	Optional repository integration and automation tasks	OAuth tokens, repo metadata, action logs
+Slack	Optional workspace integrations and notifications	OAuth tokens, channel metadata, message metadata
+Sentry	Error monitoring and diagnostics	Application errors, stack traces, technical telemetry
+Render	Application and infrastructure hosting	Service/runtime metadata, operational logs
+Neon (PostgreSQL)	Managed database hosting	Application-stored customer/account and product data
+Redis provider	Queueing, pub/sub, short-term operational state	Transient job and session-related operational metadata
+Cloudflare R2	Object storage for uploaded/generated assets	Files, media assets, related metadata
+Anthropic / AWS Bedrock / OpenAI	LLM and AI model execution (as configured)	Prompts, tool context, generated outputs, model telemetry
+Late.dev	Social account posting/integration workflows	Social account IDs, post metadata, OAuth credentials
+Hunter.io	Email verification and lookup (optional features)	Email addresses and verification metadata
+IPinfo	IP geolocation (optional enrichment)	IP address, coarse location metadata
+Fal.ai	AI media generation features	Generation prompts and generated media metadata
+ScreenshotOne	Automated screenshot generation	Requested URLs/pages and generated image metadata
+Updates to This List
+We may update this list as vendors or service architecture changes. Material updates are reflected by updating the effective date on this page.
+
+Related Notices
+See our Privacy Policy and Terms of Service for details about how personal data is handled.
+
