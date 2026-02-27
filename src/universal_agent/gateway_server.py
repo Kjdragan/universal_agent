@@ -9,6 +9,7 @@ Usage:
 """
 
 import asyncio
+import contextlib
 from collections import deque
 import hashlib
 import json
@@ -312,6 +313,26 @@ def _safe_slug_component(value: str) -> str:
             prev_sep = True
     slug = "".join(out).strip("-")
     return slug or "item"
+
+
+_TUTORIAL_REPO_NAME_SANITIZE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_tutorial_repo_name(value: str) -> str:
+    cleaned = _TUTORIAL_REPO_NAME_SANITIZE_RE.sub("-", str(value or "").strip()).strip("._-")
+    return cleaned[:120] if cleaned else ""
+
+
+def _tutorial_bootstrap_target_root_default() -> str:
+    configured = (
+        (os.getenv("UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT") or "").strip()
+        or (os.getenv("UA_TUTORIAL_BOOTSTRAP_REPO_ROOT") or "").strip()
+    )
+    if configured:
+        return configured
+    if _DEPLOYMENT_PROFILE == "vps":
+        return "/opt/universal_agent/generated_repos"
+    return "/home/kjdragan/lrepos"
 
 
 def _storage_explorer_href(*, scope: str, path: str, preview: Optional[str] = None) -> str:
@@ -978,6 +999,14 @@ class DashboardSystemCommandRequest(BaseModel):
 class TutorialReviewDispatchRequest(BaseModel):
     run_path: str
     note: Optional[str] = None
+
+
+class TutorialBootstrapRepoRequest(BaseModel):
+    run_path: str
+    repo_name: Optional[str] = None
+    target_root: Optional[str] = None
+    python_version: Optional[str] = None
+    timeout_seconds: int = 900
 
 
 class SessionPolicyPatchRequest(BaseModel):
@@ -6229,6 +6258,90 @@ async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequ
         "tutorial_run_path": run_rel,
         "review_run_path": review_rel,
         "review_storage_href": _storage_explorer_href(scope="artifacts", path=review_rel),
+    }
+
+
+@app.post("/api/v1/dashboard/tutorials/bootstrap-repo")
+async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoRequest):
+    run_path = str(payload.run_path or "").strip().strip("/")
+    if not run_path:
+        raise HTTPException(status_code=400, detail="run_path is required")
+
+    run_dir = _resolve_path_under_root(ARTIFACTS_DIR, run_path)
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Tutorial run directory not found")
+
+    run_rel = _artifact_rel_path(run_dir)
+    if not _is_tutorial_run_rel_path(run_rel):
+        raise HTTPException(
+            status_code=400,
+            detail="run_path must be under youtube-tutorial-creation/",
+        )
+
+    implementation_dir = run_dir / "implementation"
+    script_path = implementation_dir / "create_new_repo.sh"
+    if not implementation_dir.exists() or not implementation_dir.is_dir():
+        raise HTTPException(status_code=400, detail="implementation directory not found for tutorial run")
+    if not script_path.exists() or not script_path.is_file():
+        raise HTTPException(status_code=400, detail="create_new_repo.sh not found for tutorial run")
+
+    manifest = _tutorial_manifest(run_dir)
+    title = str(manifest.get("title") or run_dir.name).strip() or run_dir.name
+    auto_repo_name = f"{_safe_slug_component(title)}__{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+    repo_name = _sanitize_tutorial_repo_name(str(payload.repo_name or "").strip()) or auto_repo_name
+    target_root = str(payload.target_root or "").strip() or _tutorial_bootstrap_target_root_default()
+    python_version = str(payload.python_version or "").strip()
+    timeout_seconds = max(30, min(int(payload.timeout_seconds or 900), 3600))
+
+    args = ["bash", str(script_path), target_root, repo_name]
+    if python_version:
+        args.append(python_version)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=str(implementation_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to launch bootstrap script: {exc}")
+
+    try:
+        stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.communicate()
+        raise HTTPException(status_code=504, detail=f"Bootstrap script timed out after {timeout_seconds}s")
+
+    stdout = stdout_bytes.decode("utf-8", errors="replace")
+    stderr = stderr_bytes.decode("utf-8", errors="replace")
+    merged = "\n".join([stdout, stderr]).strip()
+    repo_match = re.search(r"Repo ready:\s*(.+)", merged)
+    repo_dir = repo_match.group(1).strip() if repo_match else str((Path(target_root) / repo_name).resolve())
+
+    if proc.returncode != 0:
+        detail = stderr.strip() or stdout.strip() or f"Bootstrap script failed with exit code {proc.returncode}"
+        raise HTTPException(
+            status_code=500,
+            detail=detail[-1200:],
+        )
+
+    logger.info(
+        "Tutorial repo bootstrap succeeded run_path=%s repo_dir=%s",
+        run_rel,
+        repo_dir,
+    )
+    return {
+        "ok": True,
+        "run_path": run_rel,
+        "repo_name": repo_name,
+        "target_root": target_root,
+        "repo_dir": repo_dir,
+        "stdout": stdout[-4000:],
+        "stderr": stderr[-2000:],
     }
 
 

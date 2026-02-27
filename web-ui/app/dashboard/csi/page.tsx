@@ -54,6 +54,46 @@ function timeAgo(dateStr: string): string {
     return `${Math.floor(delta / 86400)}d ago`;
 }
 
+function normalizeArtifactPath(rawPath: string): string {
+    const cleaned = String(rawPath || "").trim().replace(/\\/g, "/");
+    if (!cleaned) return "";
+    if (cleaned.startsWith("/")) {
+        const marker = "/artifacts/";
+        const idx = cleaned.indexOf(marker);
+        if (idx >= 0) return cleaned.slice(idx + marker.length).replace(/^\/+/, "");
+        return cleaned.replace(/^\/+/, "");
+    }
+    if (cleaned.startsWith("artifacts/")) return cleaned.slice("artifacts/".length);
+    return cleaned;
+}
+
+function artifactPathFromHref(href: string): string {
+    const raw = String(href || "").trim();
+    if (!raw) return "";
+    if (raw.startsWith("/opt/universal_agent/artifacts/")) {
+        return normalizeArtifactPath(raw);
+    }
+    if (raw.startsWith("artifacts/")) {
+        return normalizeArtifactPath(raw);
+    }
+    try {
+        const parsed = new URL(raw, "http://local");
+        if (parsed.pathname.includes("/storage")) {
+            const fromPreview = parsed.searchParams.get("preview");
+            if (fromPreview) return normalizeArtifactPath(fromPreview);
+            const fromPath = parsed.searchParams.get("path");
+            if (fromPath) return normalizeArtifactPath(fromPath);
+        }
+        if (parsed.pathname.includes("/artifacts/files/")) {
+            const rel = parsed.pathname.split("/artifacts/files/")[1] || "";
+            return normalizeArtifactPath(decodeURIComponent(rel));
+        }
+    } catch {
+        // Not a parseable URL; ignore.
+    }
+    return "";
+}
+
 export default function CSIDashboard() {
     const [reports, setReports] = useState<CSIReport[]>([]);
     const [notifications, setNotifications] = useState<PipelineNotification[]>([]);
@@ -67,19 +107,6 @@ export default function CSIDashboard() {
     const [previewContent, setPreviewContent] = useState<string>("");
     const [previewLoading, setPreviewLoading] = useState(false);
     const [previewError, setPreviewError] = useState<string | null>(null);
-
-    function normalizeArtifactPath(rawPath: string): string {
-        const cleaned = String(rawPath || "").trim().replace(/\\/g, "/");
-        if (!cleaned) return "";
-        if (cleaned.startsWith("/")) {
-            const marker = "/artifacts/";
-            const idx = cleaned.indexOf(marker);
-            if (idx >= 0) return cleaned.slice(idx + marker.length).replace(/^\/+/, "");
-            return cleaned.replace(/^\/+/, "");
-        }
-        if (cleaned.startsWith("artifacts/")) return cleaned.slice("artifacts/".length);
-        return cleaned;
-    }
 
     async function openArtifactPreview(path: string, label: string) {
         const normalized = normalizeArtifactPath(path);
@@ -384,10 +411,38 @@ export default function CSIDashboard() {
                                                             <div className="text-xs text-rose-400">Preview error: {previewError}</div>
                                                         ) : previewPath.toLowerCase().endsWith(".md") ? (
                                                             <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 prose-a:text-cyan-400">
-                                                                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                                    {previewContent || "_Empty file_"}
-                                                                </ReactMarkdown>
-                                                            </div>
+                                                            <ReactMarkdown
+                                                                remarkPlugins={[remarkGfm]}
+                                                                components={{
+                                                                    a: ({ href = "", children }) => {
+                                                                        const artifactPath = artifactPathFromHref(String(href));
+                                                                        if (artifactPath) {
+                                                                            return (
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => openArtifactPreview(artifactPath, "Markdown Link")}
+                                                                                    className="text-cyan-400 underline underline-offset-2 hover:text-cyan-300"
+                                                                                >
+                                                                                    {children}
+                                                                                </button>
+                                                                            );
+                                                                        }
+                                                                        return (
+                                                                            <a
+                                                                                href={href}
+                                                                                target="_blank"
+                                                                                rel="noopener noreferrer"
+                                                                                className="text-cyan-400 underline underline-offset-2 hover:text-cyan-300"
+                                                                            >
+                                                                                {children}
+                                                                            </a>
+                                                                        );
+                                                                    },
+                                                                }}
+                                                            >
+                                                                {previewContent || "_Empty file_"}
+                                                            </ReactMarkdown>
+                                                        </div>
                                                         ) : (
                                                             <pre className="text-[11px] text-slate-300 whitespace-pre-wrap break-words font-mono">
                                                                 {previewContent || "Empty file"}
@@ -438,7 +493,35 @@ export default function CSIDashboard() {
                             <div className="p-6 overflow-y-auto flex-1 scrollbar-thin">
                                 <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 prose-a:text-cyan-400 hover:prose-a:text-cyan-300 prose-headings:text-slate-200">
                                     {selectedItem.data.report_data?.markdown_content ? (
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                        <ReactMarkdown
+                                            remarkPlugins={[remarkGfm]}
+                                            components={{
+                                                a: ({ href = "", children }) => {
+                                                    const artifactPath = artifactPathFromHref(String(href));
+                                                    if (artifactPath) {
+                                                        return (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openArtifactPreview(artifactPath, "Report Link")}
+                                                                className="text-cyan-400 underline underline-offset-2 hover:text-cyan-300"
+                                                            >
+                                                                {children}
+                                                            </button>
+                                                        );
+                                                    }
+                                                    return (
+                                                        <a
+                                                            href={href}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="text-cyan-400 underline underline-offset-2 hover:text-cyan-300"
+                                                        >
+                                                            {children}
+                                                        </a>
+                                                    );
+                                                },
+                                            }}
+                                        >
                                             {selectedItem.data.report_data.markdown_content}
                                         </ReactMarkdown>
                                     ) : (
@@ -447,6 +530,31 @@ export default function CSIDashboard() {
                                         </pre>
                                     )}
                                 </div>
+                                {previewPath && (
+                                    <div className="mt-6 space-y-2 border-t border-slate-800/50 pt-4">
+                                        <h4 className="text-xs font-semibold text-slate-400">
+                                            ARTIFACT PREVIEW {previewLabel ? `(${previewLabel})` : ""}
+                                        </h4>
+                                        <div className="text-[10px] text-slate-500 font-mono break-all">{previewPath}</div>
+                                        <div className="max-h-80 overflow-auto rounded border border-slate-800 bg-slate-900/60 p-3">
+                                            {previewLoading ? (
+                                                <div className="text-xs text-slate-400">Loading preview...</div>
+                                            ) : previewError ? (
+                                                <div className="text-xs text-rose-400">Preview error: {previewError}</div>
+                                            ) : previewPath.toLowerCase().endsWith(".md") ? (
+                                                <div className="prose prose-invert prose-sm max-w-none prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 prose-a:text-cyan-400">
+                                                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                        {previewContent || "_Empty file_"}
+                                                    </ReactMarkdown>
+                                                </div>
+                                            ) : (
+                                                <pre className="text-[11px] text-slate-300 whitespace-pre-wrap break-words font-mono">
+                                                    {previewContent || "Empty file"}
+                                                </pre>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
