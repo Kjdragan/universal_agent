@@ -15,6 +15,7 @@ TAILNET_STAGING_MODE="${UA_TAILNET_STAGING_MODE:-auto}"
 DEPLOY_CONFIGURE_SWAP="${UA_DEPLOY_CONFIGURE_SWAP:-true}"
 DEPLOY_MEMORY_GUARDRAILS="${UA_DEPLOY_MEMORY_GUARDRAILS:-true}"
 DEPLOY_OOM_ALERT_TIMER="${UA_DEPLOY_OOM_ALERT_TIMER:-true}"
+DEPLOY_TUTORIAL_REPO_ROOT="${UA_TUTORIAL_BOOTSTRAP_TARGET_ROOT:-/home/kjdragan/YoutubeCodeExamples}"
 
 if ! command -v rsync >/dev/null 2>&1; then
   echo "ERROR: rsync is required for deployment."
@@ -156,6 +157,9 @@ rsync -az \
   # Runtime roots must be writable by service user for memory/session capture.
   mkdir -p Memory_System AGENT_RUN_WORKSPACES artifacts logs
   chown -R ua:ua Memory_System AGENT_RUN_WORKSPACES artifacts logs 2>/dev/null || true
+  # Tutorial bootstrap target root (used by dashboard "Create Repo" action).
+  mkdir -p '${DEPLOY_TUTORIAL_REPO_ROOT}'
+  chown -R ua:ua '${DEPLOY_TUTORIAL_REPO_ROOT}' 2>/dev/null || true
 
   if [ ! -f .env ]; then
     echo 'ERROR: .env is required on VPS for runtime + VP worker configuration.' >&2
