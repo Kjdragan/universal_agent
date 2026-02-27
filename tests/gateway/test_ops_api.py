@@ -1,9 +1,11 @@
 import os
 import json
+import io
 import shutil
 import time
 import asyncio
 import sqlite3
+import tarfile
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -49,6 +51,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_session_turn_state", {})
     monkeypatch.setattr(gateway_server, "_session_turn_locks", {})
     monkeypatch.setattr(gateway_server, "_notifications", [])
+    monkeypatch.setattr(gateway_server, "_tutorial_bootstrap_jobs", {})
+    monkeypatch.setattr(gateway_server, "_tutorial_bootstrap_queue", deque())
     monkeypatch.setattr(gateway_server, "_continuity_active_alerts", set())
     monkeypatch.setattr(gateway_server, "_continuity_metric_events", deque(maxlen=5000))
     monkeypatch.setattr(gateway_server, "_calendar_missed_events", {})
@@ -598,14 +602,111 @@ def test_dashboard_tutorial_bootstrap_repo_runs_create_script(client, tmp_path, 
             "target_root": str(target_root),
             "repo_name": "demo_repo",
             "timeout_seconds": 120,
+            "execution_target": "server",
         },
     )
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["ok"] is True
+    assert payload["execution_target"] == "server"
     assert payload["repo_name"] == "demo_repo"
     assert "Repo ready:" in str(payload.get("stdout") or "")
     assert (target_root / "demo_repo").is_dir()
+
+
+def test_dashboard_tutorial_bootstrap_repo_local_queue_and_worker_flow(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "ops_test_token")
+
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "demo-run"
+    impl_dir = run_dir / "implementation"
+    impl_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "title": "Demo Run",
+                "video_id": "demo123",
+                "status": "full",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (impl_dir / "create_new_repo.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "TARGET_ROOT=\"${1:?}\"\n"
+        "REPO_NAME=\"${2:?}\"\n"
+        "mkdir -p \"$TARGET_ROOT/$REPO_NAME\"\n"
+        "echo \"Repo ready: $TARGET_ROOT/$REPO_NAME\"\n",
+        encoding="utf-8",
+    )
+    (impl_dir / "requirements.txt").write_text("requests\n", encoding="utf-8")
+
+    create_resp = client.post(
+        "/api/v1/dashboard/tutorials/bootstrap-repo",
+        json={
+            "run_path": "youtube-tutorial-creation/demo-run",
+            "target_root": "/home/kjdragan/YoutubeCodeExamples",
+            "repo_name": "demo_repo",
+            "execution_target": "local",
+        },
+    )
+    assert create_resp.status_code == 200
+    created = create_resp.json()
+    assert created["queued"] is True
+    assert created["execution_target"] == "local"
+    job_id = str(created["job_id"])
+
+    listed = client.get("/api/v1/dashboard/tutorials/bootstrap-jobs?limit=20").json()["jobs"]
+    selected = next(item for item in listed if str(item.get("job_id")) == job_id)
+    assert selected["status"] == "queued"
+    assert selected["repo_name"] == "demo_repo"
+
+    headers = {"x-ua-ops-token": "ops_test_token"}
+    claim_resp = client.post(
+        "/api/v1/ops/tutorials/bootstrap-jobs/claim",
+        headers=headers,
+        json={"worker_id": "local-desktop-worker"},
+    )
+    assert claim_resp.status_code == 200
+    claim_payload = claim_resp.json()
+    job = claim_payload["job"]
+    assert job["job_id"] == job_id
+    assert job["status"] == "running"
+    assert job["worker_id"] == "local-desktop-worker"
+
+    bundle_resp = client.get(
+        f"/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/bundle",
+        headers=headers,
+    )
+    assert bundle_resp.status_code == 200
+    tar_data = io.BytesIO(bundle_resp.content)
+    with tarfile.open(fileobj=tar_data, mode="r:gz") as archive:
+        names = set(archive.getnames())
+    assert "implementation/create_new_repo.sh" in names
+    assert "implementation/requirements.txt" in names
+
+    result_resp = client.post(
+        f"/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/result",
+        headers=headers,
+        json={
+            "worker_id": "local-desktop-worker",
+            "status": "completed",
+            "repo_dir": "/home/kjdragan/YoutubeCodeExamples/demo_repo",
+            "stdout": "Repo ready: /home/kjdragan/YoutubeCodeExamples/demo_repo",
+            "stderr": "",
+        },
+    )
+    assert result_resp.status_code == 200
+    result_job = result_resp.json()["job"]
+    assert result_job["status"] == "completed"
+    assert result_job["repo_dir"] == "/home/kjdragan/YoutubeCodeExamples/demo_repo"
+
+    latest = client.get(f"/api/v1/dashboard/tutorials/bootstrap-jobs?run_path=youtube-tutorial-creation/demo-run").json()["jobs"]
+    assert len(latest) == 1
+    assert latest[0]["job_id"] == job_id
+    assert latest[0]["status"] == "completed"
 
 
 def test_dashboard_coder_vp_metrics_endpoint(client, tmp_path):
