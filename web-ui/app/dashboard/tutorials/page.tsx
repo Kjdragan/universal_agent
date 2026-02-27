@@ -37,6 +37,20 @@ type TutorialReviewJob = {
   session_id?: string;
 };
 
+type TutorialBootstrapJob = {
+  job_id: string;
+  status?: string;
+  queued_at?: string;
+  claimed_at?: string;
+  completed_at?: string;
+  tutorial_run_path?: string;
+  repo_name?: string;
+  target_root?: string;
+  repo_dir?: string;
+  worker_id?: string;
+  error?: string;
+};
+
 type PipelineNotification = {
   id: string;
   kind: string;
@@ -120,6 +134,7 @@ function markRunsSeen(runPaths: string[]) {
 export default function DashboardTutorialsPage() {
   const [runs, setRuns] = useState<TutorialRun[]>([]);
   const [jobs, setJobs] = useState<TutorialReviewJob[]>([]);
+  const [bootstrapJobs, setBootstrapJobs] = useState<TutorialBootstrapJob[]>([]);
   const [notifications, setNotifications] = useState<PipelineNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -139,16 +154,23 @@ export default function DashboardTutorialsPage() {
     setLoading(true);
     setError("");
     try {
-      const [runsRes, jobsRes, notifRes] = await Promise.all([
+      const [runsRes, jobsRes, bootstrapRes, notifRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/runs?limit=120`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/review-jobs?limit=120`),
+        fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-jobs?limit=120`),
         fetch(`${API_BASE}/api/v1/dashboard/tutorials/notifications?limit=20`),
       ]);
       const runsPayload = runsRes.ok ? await runsRes.json() : { runs: [] };
       const jobsPayload = jobsRes.ok ? await jobsRes.json() : { jobs: [] };
+      const bootstrapPayload = bootstrapRes.ok ? await bootstrapRes.json() : { jobs: [] };
       const notifPayload = notifRes.ok ? await notifRes.json() : { notifications: [] };
       setRuns(Array.isArray(runsPayload.runs) ? (runsPayload.runs as TutorialRun[]) : []);
       setJobs(Array.isArray(jobsPayload.jobs) ? (jobsPayload.jobs as TutorialReviewJob[]) : []);
+      setBootstrapJobs(
+        Array.isArray(bootstrapPayload.jobs)
+          ? (bootstrapPayload.jobs as TutorialBootstrapJob[])
+          : [],
+      );
       setNotifications(
         Array.isArray(notifPayload.notifications)
           ? (notifPayload.notifications as PipelineNotification[])
@@ -158,6 +180,7 @@ export default function DashboardTutorialsPage() {
       setError(err?.message || "Failed to load tutorial backlog");
       setRuns([]);
       setJobs([]);
+      setBootstrapJobs([]);
       setNotifications([]);
     } finally {
       setLoading(false);
@@ -172,11 +195,20 @@ export default function DashboardTutorialsPage() {
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${API_BASE}/api/v1/dashboard/tutorials/notifications?limit=20`);
-        if (res.ok) {
-          const data = await res.json();
+        const [notifRes, bootstrapRes] = await Promise.all([
+          fetch(`${API_BASE}/api/v1/dashboard/tutorials/notifications?limit=20`),
+          fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-jobs?limit=120`),
+        ]);
+        if (notifRes.ok) {
+          const data = await notifRes.json();
           if (Array.isArray(data.notifications)) {
             setNotifications(data.notifications as PipelineNotification[]);
+          }
+        }
+        if (bootstrapRes.ok) {
+          const data = await bootstrapRes.json();
+          if (Array.isArray(data.jobs)) {
+            setBootstrapJobs(data.jobs as TutorialBootstrapJob[]);
           }
         }
       } catch { }
@@ -205,6 +237,16 @@ export default function DashboardTutorialsPage() {
     }
     return map;
   }, [jobs]);
+
+  const latestBootstrapByRun = useMemo(() => {
+    const map = new Map<string, TutorialBootstrapJob>();
+    for (const job of bootstrapJobs) {
+      const runPath = asText(job.tutorial_run_path);
+      if (!runPath || map.has(runPath)) continue;
+      map.set(runPath, job);
+    }
+    return map;
+  }, [bootstrapJobs]);
 
   // Hides notifications for videos that have successfully completed processing
   // (so they don't clog up the notification area once the artifact is visible)
@@ -285,12 +327,23 @@ export default function DashboardTutorialsPage() {
         const res = await fetch(`${API_BASE}/api/v1/dashboard/tutorials/bootstrap-repo`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ run_path: normalized }),
+          body: JSON.stringify({ run_path: normalized, execution_target: "local" }),
         });
         const payload = await res.json().catch(() => ({} as Record<string, unknown>));
         if (!res.ok) {
           const detail = asText((payload as Record<string, unknown>).detail) || `Create repo failed (${res.status})`;
           throw new Error(detail);
+        }
+        const queued = Boolean((payload as Record<string, unknown>).queued);
+        if (queued) {
+          const jobId = asText((payload as Record<string, unknown>).job_id);
+          setDispatchStatus(
+            jobId
+              ? `Queued local repo creation job ${jobId}. Run the local bootstrap worker to execute it.`
+              : "Queued local repo creation job.",
+          );
+          await load();
+          return;
         }
         const repoDir = asText((payload as Record<string, unknown>).repo_dir);
         setDispatchStatus(repoDir ? `Repo created and synced: ${repoDir}` : "Repo created and synced.");
@@ -300,7 +353,7 @@ export default function DashboardTutorialsPage() {
         setBootstrappingRunPath("");
       }
     },
-    [],
+    [load],
   );
 
   return (
@@ -388,6 +441,9 @@ export default function DashboardTutorialsPage() {
             const files = Array.isArray(run.files) ? run.files : [];
             const latestJob = latestJobByRun.get(runPath);
             const latestJobStatus = asText(latestJob?.status).toLowerCase();
+            const latestBootstrapJob = latestBootstrapByRun.get(runPath);
+            const latestBootstrapStatus = asText(latestBootstrapJob?.status).toLowerCase();
+            const bootstrapPending = latestBootstrapStatus === "queued" || latestBootstrapStatus === "running";
             const sessionHref = chatSessionHref(asText(latestJob?.session_id));
             const viewHref =
               asText(run.run_storage_href) ||
@@ -465,15 +521,24 @@ export default function DashboardTutorialsPage() {
                       <button
                         type="button"
                         onClick={() => void bootstrapRunRepo(runPath)}
-                        disabled={bootstrappingRunPath === runPath || deletingRunPath === runPath || dispatchingRunPath === runPath}
+                        disabled={
+                          bootstrappingRunPath === runPath
+                          || deletingRunPath === runPath
+                          || dispatchingRunPath === runPath
+                          || bootstrapPending
+                        }
                         className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-100 hover:bg-amber-900/35 disabled:opacity-50"
                         title={
                           hasCreateRepoScript
-                            ? "Create a ready-to-run repo by executing create_new_repo.sh on the server"
+                            ? "Queue local repo creation using implementation/create_new_repo.sh via desktop worker"
                             : "Create repo action (run may need bootstrap script regeneration first)"
                         }
                       >
-                        {bootstrappingRunPath === runPath ? "Creating Repo..." : "Create Repo"}
+                        {bootstrappingRunPath === runPath
+                          ? "Queueing..."
+                          : bootstrapPending
+                            ? (latestBootstrapStatus === "running" ? "Creating (Local Worker)..." : "Queued")
+                            : "Create Repo"}
                       </button>
                     )}
                     <button
@@ -514,6 +579,28 @@ export default function DashboardTutorialsPage() {
                 {latestJob && (
                   <p className="mt-1.5 text-[11px] text-slate-400">
                     Latest Simone review job: {asText(latestJob.status) || "unknown"} ({formatDate(latestJob.queued_at)})
+                  </p>
+                )}
+                {latestBootstrapJob && (
+                  <p
+                    className={`mt-1 text-[11px] ${
+                      asText(latestBootstrapJob.error) ? "text-rose-300" : "text-slate-400"
+                    }`}
+                    title={asText(latestBootstrapJob.error)}
+                  >
+                    Local repo bootstrap: {asText(latestBootstrapJob.status) || "unknown"} (
+                    {formatDate(
+                      asText(latestBootstrapJob.completed_at)
+                      || asText(latestBootstrapJob.claimed_at)
+                      || asText(latestBootstrapJob.queued_at),
+                    )}
+                    )
+                    {asText(latestBootstrapJob.repo_dir) && (
+                      <> · {asText(latestBootstrapJob.repo_dir)}</>
+                    )}
+                    {asText(latestBootstrapJob.error) && (
+                      <> · {asText(latestBootstrapJob.error)}</>
+                    )}
                   </p>
                 )}
               </article>

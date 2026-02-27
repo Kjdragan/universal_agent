@@ -23,6 +23,8 @@ import threading
 import time
 import urllib.parse
 import uuid
+import io
+import tarfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -335,6 +337,15 @@ def _tutorial_bootstrap_target_root_default() -> str:
     return "/home/kjdragan/YoutubeCodeExamples"
 
 
+def _normalize_tutorial_bootstrap_execution_target(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"", "local", "desktop", "local_desktop"}:
+        return "local"
+    if normalized in {"server", "vps"}:
+        return "server"
+    return ""
+
+
 def _storage_explorer_href(*, scope: str, path: str, preview: Optional[str] = None) -> str:
     normalized_path = str(path or "").strip().replace("\\", "/").strip("/")
     normalized_preview = str(preview or "").strip().replace("\\", "/").strip("/")
@@ -532,6 +543,131 @@ def _remember_tutorial_review_job(job: dict[str, Any]) -> None:
     for existing in list(_tutorial_review_jobs.keys()):
         if existing not in keep:
             _tutorial_review_jobs.pop(existing, None)
+
+
+def _tutorial_bootstrap_prune_locked() -> None:
+    if len(_tutorial_bootstrap_jobs) <= _tutorial_bootstrap_jobs_max:
+        return
+    ordered = sorted(
+        _tutorial_bootstrap_jobs.values(),
+        key=lambda row: float(row.get("queued_at_epoch") or 0.0),
+        reverse=True,
+    )
+    keep = {str(row.get("job_id") or "") for row in ordered[:_tutorial_bootstrap_jobs_max]}
+    for existing in list(_tutorial_bootstrap_jobs.keys()):
+        if existing not in keep:
+            _tutorial_bootstrap_jobs.pop(existing, None)
+    _tutorial_bootstrap_queue_copy = [job_id for job_id in _tutorial_bootstrap_queue if job_id in keep]
+    _tutorial_bootstrap_queue.clear()
+    _tutorial_bootstrap_queue.extend(_tutorial_bootstrap_queue_copy)
+
+
+def _remember_tutorial_bootstrap_job(job: dict[str, Any]) -> dict[str, Any]:
+    job_id = str(job.get("job_id") or "").strip()
+    if not job_id:
+        return {}
+    record = dict(job)
+    with _tutorial_bootstrap_jobs_lock:
+        _tutorial_bootstrap_jobs[job_id] = record
+        status = str(record.get("status") or "").strip().lower()
+        if status == "queued":
+            if job_id not in _tutorial_bootstrap_queue:
+                _tutorial_bootstrap_queue.append(job_id)
+        else:
+            _tutorial_bootstrap_queue_copy = [queued_id for queued_id in _tutorial_bootstrap_queue if queued_id != job_id]
+            _tutorial_bootstrap_queue.clear()
+            _tutorial_bootstrap_queue.extend(_tutorial_bootstrap_queue_copy)
+        _tutorial_bootstrap_prune_locked()
+        return dict(_tutorial_bootstrap_jobs.get(job_id) or record)
+
+
+def _tutorial_bootstrap_list_jobs(*, limit: int = 100, run_path: str = "") -> list[dict[str, Any]]:
+    with _tutorial_bootstrap_jobs_lock:
+        rows = list(_tutorial_bootstrap_jobs.values())
+    normalized_run_path = str(run_path or "").strip().strip("/")
+    if normalized_run_path:
+        rows = [
+            row
+            for row in rows
+            if str(row.get("tutorial_run_path") or "").strip().strip("/") == normalized_run_path
+        ]
+    rows.sort(key=lambda row: float(row.get("queued_at_epoch") or 0.0), reverse=True)
+    clamped = max(1, min(int(limit), 1000))
+    return [dict(row) for row in rows[:clamped]]
+
+
+def _tutorial_bootstrap_claim_next(*, worker_id: str) -> Optional[dict[str, Any]]:
+    worker = str(worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
+    now_ts = time.time()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _tutorial_bootstrap_jobs_lock:
+        # Recover stale running jobs so they can be retried.
+        for job in _tutorial_bootstrap_jobs.values():
+            status = str(job.get("status") or "").strip().lower()
+            claimed_ts = float(job.get("claimed_at_epoch") or 0.0)
+            if status == "running" and claimed_ts > 0 and (now_ts - claimed_ts) > _tutorial_bootstrap_claim_ttl_seconds:
+                job["status"] = "queued"
+                job["error"] = f"Requeued after stale claim timeout ({_tutorial_bootstrap_claim_ttl_seconds}s)"
+                job["requeued_at"] = now_iso
+                if str(job.get("job_id") or "") not in _tutorial_bootstrap_queue:
+                    _tutorial_bootstrap_queue.append(str(job.get("job_id") or ""))
+
+        while _tutorial_bootstrap_queue:
+            job_id = str(_tutorial_bootstrap_queue.popleft() or "").strip()
+            if not job_id:
+                continue
+            job = _tutorial_bootstrap_jobs.get(job_id)
+            if not isinstance(job, dict):
+                continue
+            status = str(job.get("status") or "").strip().lower()
+            if status != "queued":
+                continue
+            claims = int(job.get("claim_attempts") or 0) + 1
+            job["status"] = "running"
+            job["worker_id"] = worker
+            job["claim_attempts"] = claims
+            job["claimed_at"] = now_iso
+            job["claimed_at_epoch"] = now_ts
+            job["started_at"] = now_iso
+            _tutorial_bootstrap_jobs[job_id] = job
+            return dict(job)
+    return None
+
+
+def _tutorial_bootstrap_update_result(
+    *,
+    job_id: str,
+    worker_id: str,
+    status: str,
+    repo_dir: str,
+    stdout: str,
+    stderr: str,
+    error: str,
+) -> dict[str, Any]:
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id:
+        raise HTTPException(status_code=400, detail="job_id is required")
+    status_normalized = str(status or "").strip().lower()
+    if status_normalized not in {"completed", "failed"}:
+        raise HTTPException(status_code=400, detail="status must be completed or failed")
+    finished_at = datetime.now(timezone.utc).isoformat()
+    with _tutorial_bootstrap_jobs_lock:
+        job = _tutorial_bootstrap_jobs.get(normalized_job_id)
+        if not isinstance(job, dict):
+            raise HTTPException(status_code=404, detail="Bootstrap job not found")
+        assigned_worker = str(job.get("worker_id") or "").strip()
+        provided_worker = str(worker_id or "").strip()
+        if assigned_worker and provided_worker and assigned_worker != provided_worker:
+            raise HTTPException(status_code=409, detail="Job is assigned to a different worker")
+        job["status"] = status_normalized
+        job["completed_at"] = finished_at
+        job["finished_at"] = finished_at
+        job["repo_dir"] = str(repo_dir or "").strip()
+        job["stdout"] = str(stdout or "")[-6000:]
+        job["stderr"] = str(stderr or "")[-4000:]
+        job["error"] = str(error or "")[-1200:]
+        _tutorial_bootstrap_jobs[normalized_job_id] = job
+        return dict(job)
 
 
 def _tutorial_review_prompt(
@@ -1007,6 +1143,20 @@ class TutorialBootstrapRepoRequest(BaseModel):
     target_root: Optional[str] = None
     python_version: Optional[str] = None
     timeout_seconds: int = 900
+    execution_target: str = "local"
+
+
+class TutorialBootstrapJobClaimRequest(BaseModel):
+    worker_id: Optional[str] = None
+
+
+class TutorialBootstrapJobResultRequest(BaseModel):
+    worker_id: Optional[str] = None
+    status: str
+    repo_dir: Optional[str] = None
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+    error: Optional[str] = None
 
 
 class SessionPolicyPatchRequest(BaseModel):
@@ -1081,6 +1231,14 @@ _csi_dispatch_recent: dict[str, float] = {}
 _csi_dispatch_lock = threading.Lock()
 _tutorial_review_jobs: dict[str, dict[str, Any]] = {}
 _tutorial_review_jobs_max = int(os.getenv("UA_TUTORIAL_REVIEW_JOBS_MAX", "300") or 300)
+_tutorial_bootstrap_jobs: dict[str, dict[str, Any]] = {}
+_tutorial_bootstrap_queue: deque[str] = deque()
+_tutorial_bootstrap_jobs_lock = threading.Lock()
+_tutorial_bootstrap_jobs_max = int(os.getenv("UA_TUTORIAL_BOOTSTRAP_JOBS_MAX", "300") or 300)
+_tutorial_bootstrap_claim_ttl_seconds = max(
+    60,
+    int(os.getenv("UA_TUTORIAL_BOOTSTRAP_CLAIM_TTL_SECONDS", "1800") or 1800),
+)
 _continuity_active_alerts: set[str] = set()
 _continuity_metric_events: deque[dict[str, Any]] = deque(
     maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
@@ -6181,6 +6339,13 @@ async def dashboard_tutorial_review_jobs(limit: int = 50):
     return {"jobs": jobs[:clamped_limit]}
 
 
+@app.get("/api/v1/dashboard/tutorials/bootstrap-jobs")
+async def dashboard_tutorial_bootstrap_jobs(limit: int = 100, run_path: str = ""):
+    clamped_limit = max(1, min(int(limit), 500))
+    jobs = _tutorial_bootstrap_list_jobs(limit=clamped_limit, run_path=run_path)
+    return {"jobs": jobs}
+
+
 @app.post("/api/v1/dashboard/tutorials/review")
 async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequest):
     run_path = str(payload.run_path or "").strip().strip("/")
@@ -6292,6 +6457,57 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
     target_root = str(payload.target_root or "").strip() or _tutorial_bootstrap_target_root_default()
     python_version = str(payload.python_version or "").strip()
     timeout_seconds = max(30, min(int(payload.timeout_seconds or 900), 3600))
+    execution_target = _normalize_tutorial_bootstrap_execution_target(payload.execution_target)
+    if not execution_target:
+        raise HTTPException(status_code=400, detail="execution_target must be local or server")
+
+    if execution_target == "local":
+        now = datetime.now(timezone.utc)
+        job_id = f"tbj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+        job = {
+            "job_id": job_id,
+            "status": "queued",
+            "queued_at": now.isoformat(),
+            "queued_at_epoch": time.time(),
+            "execution_target": "local",
+            "tutorial_run_path": run_rel,
+            "tutorial_title": title,
+            "video_id": str(manifest.get("video_id") or ""),
+            "video_url": str(manifest.get("video_url") or ""),
+            "repo_name": repo_name,
+            "target_root": target_root,
+            "python_version": python_version,
+            "timeout_seconds": timeout_seconds,
+        }
+        saved = _remember_tutorial_bootstrap_job(job)
+        _add_notification(
+            kind="tutorial_repo_bootstrap_queued",
+            title="Tutorial Repo Bootstrap Queued",
+            message=f"Queued local repo creation for: {title}",
+            severity="info",
+            metadata={
+                "job_id": job_id,
+                "tutorial_run_path": run_rel,
+                "repo_name": repo_name,
+                "target_root": target_root,
+                "execution_target": "local",
+                "source": "dashboard_tutorial_bootstrap",
+            },
+        )
+        return {
+            "queued": True,
+            "job_id": job_id,
+            "status": "queued",
+            "execution_target": "local",
+            "run_path": run_rel,
+            "repo_name": repo_name,
+            "target_root": target_root,
+            "job": saved,
+            "worker_hint": (
+                "Run scripts/tutorial_local_bootstrap_worker.py on your local desktop "
+                "with --gateway-url and --ops-token to process queued jobs."
+            ),
+        }
 
     args = ["bash", str(script_path), target_root, repo_name]
     if python_version:
@@ -6336,6 +6552,7 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
     )
     return {
         "ok": True,
+        "execution_target": "server",
         "run_path": run_rel,
         "repo_name": repo_name,
         "target_root": target_root,
@@ -6343,6 +6560,102 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
         "stdout": stdout[-4000:],
         "stderr": stderr[-2000:],
     }
+
+
+@app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")
+async def ops_tutorial_bootstrap_claim(request: Request, payload: TutorialBootstrapJobClaimRequest):
+    _require_ops_auth(request)
+    worker_id = str(payload.worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
+    job = _tutorial_bootstrap_claim_next(worker_id=worker_id)
+    return {"worker_id": worker_id, "job": job}
+
+
+@app.get("/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/bundle")
+async def ops_tutorial_bootstrap_bundle(request: Request, job_id: str):
+    _require_ops_auth(request)
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id:
+        raise HTTPException(status_code=400, detail="job_id is required")
+
+    with _tutorial_bootstrap_jobs_lock:
+        job = dict(_tutorial_bootstrap_jobs.get(normalized_job_id) or {})
+    if not job:
+        raise HTTPException(status_code=404, detail="Bootstrap job not found")
+
+    run_path = str(job.get("tutorial_run_path") or "").strip().strip("/")
+    if not run_path:
+        raise HTTPException(status_code=400, detail="Bootstrap job is missing tutorial_run_path")
+
+    run_dir = _resolve_path_under_root(ARTIFACTS_DIR, run_path)
+    run_rel = _artifact_rel_path(run_dir)
+    if not _is_tutorial_run_rel_path(run_rel):
+        raise HTTPException(status_code=400, detail="tutorial_run_path must be under youtube-tutorial-creation/")
+    if not run_dir.exists() or not run_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Tutorial run directory not found")
+
+    implementation_dir = run_dir / "implementation"
+    script_path = implementation_dir / "create_new_repo.sh"
+    if not implementation_dir.exists() or not implementation_dir.is_dir():
+        raise HTTPException(status_code=400, detail="implementation directory not found for tutorial run")
+    if not script_path.exists() or not script_path.is_file():
+        raise HTTPException(status_code=400, detail="create_new_repo.sh not found for tutorial run")
+
+    tar_buffer = io.BytesIO()
+    try:
+        with tarfile.open(fileobj=tar_buffer, mode="w:gz") as archive:
+            archive.add(implementation_dir, arcname="implementation")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to package bootstrap bundle: {exc}")
+    tar_buffer.seek(0)
+    filename = f"{normalized_job_id}_implementation.tgz"
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "X-Tutorial-Run-Path": run_rel,
+    }
+    return StreamingResponse(tar_buffer, media_type="application/gzip", headers=headers)
+
+
+@app.post("/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/result")
+async def ops_tutorial_bootstrap_result(
+    request: Request,
+    job_id: str,
+    payload: TutorialBootstrapJobResultRequest,
+):
+    _require_ops_auth(request)
+    updated = _tutorial_bootstrap_update_result(
+        job_id=job_id,
+        worker_id=str(payload.worker_id or "").strip(),
+        status=str(payload.status or ""),
+        repo_dir=str(payload.repo_dir or ""),
+        stdout=str(payload.stdout or ""),
+        stderr=str(payload.stderr or ""),
+        error=str(payload.error or ""),
+    )
+
+    is_success = str(updated.get("status") or "") == "completed"
+    title = str(updated.get("tutorial_title") or updated.get("tutorial_run_path") or "tutorial")
+    _add_notification(
+        kind="tutorial_repo_bootstrap_ready" if is_success else "tutorial_repo_bootstrap_failed",
+        title="Tutorial Repo Created" if is_success else "Tutorial Repo Bootstrap Failed",
+        message=(
+            f"Local repo created for: {title}"
+            if is_success
+            else f"Local repo bootstrap failed for: {title}"
+        ),
+        severity="success" if is_success else "error",
+        requires_action=not is_success,
+        metadata={
+            "job_id": str(updated.get("job_id") or ""),
+            "tutorial_run_path": str(updated.get("tutorial_run_path") or ""),
+            "repo_name": str(updated.get("repo_name") or ""),
+            "repo_dir": str(updated.get("repo_dir") or ""),
+            "status": str(updated.get("status") or ""),
+            "error": str(updated.get("error") or ""),
+            "execution_target": "local",
+            "source": "tutorial_bootstrap_worker",
+        },
+    )
+    return {"job": updated}
 
 
 @app.post("/api/v1/vision/describe")
