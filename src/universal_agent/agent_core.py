@@ -20,10 +20,10 @@ from typing import AsyncGenerator, Any, Callable, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.utils.env_aliases import apply_xai_key_aliases
+
+initialize_runtime_secrets()
 apply_xai_key_aliases()
 
 import logfire

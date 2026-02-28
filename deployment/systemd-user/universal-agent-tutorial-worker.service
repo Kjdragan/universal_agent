@@ -1,0 +1,14 @@
+[Unit]
+Description=Universal Agent local tutorial bootstrap worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO_ROOT__
+ExecStart=__REPO_ROOT__/scripts/start_tutorial_local_worker.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

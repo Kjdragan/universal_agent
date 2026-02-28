@@ -35,10 +35,12 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Callable
-from dotenv import load_dotenv
-# Ensure direct `python -m universal_agent.main` runs load repo-level .env.
-# Some launch paths (IDE/gateway) do not source `.env` in the shell first.
-load_dotenv(dotenv_path=os.path.join(src_dir, ".env"), override=False)
+from universal_agent.infisical_loader import initialize_runtime_secrets
+from universal_agent.utils.env_aliases import apply_xai_key_aliases
+
+initialize_runtime_secrets()
+apply_xai_key_aliases()
+
 from universal_agent.utils.message_history import (
     TRUNCATION_THRESHOLD,
     CONTEXT_WINDOW_TOKENS,

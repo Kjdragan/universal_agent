@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import Any, Optional
 import yaml
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from universal_agent.infisical_loader import initialize_runtime_secrets
 from universal_agent.utils.env_aliases import apply_xai_key_aliases
+
+initialize_runtime_secrets()
 apply_xai_key_aliases()
 
 from composio import Composio
@@ -102,6 +102,10 @@ class AgentSetup:
         self.enable_memory = resolved_enable_memory
         self.memory_max_tokens = memory_max_tokens()
         self.verbose = verbose
+        
+        # Factory Role assignment (defaults to HEADQUARTERS for unconfigured local instances)
+        self.factory_role = os.environ.get("FACTORY_ROLE", "HEADQUARTERS").upper()
+        self.enable_vp_coder = str(os.environ.get("ENABLE_VP_CODER", "true")).lower() == "true"
         
         self.run_id = str(uuid.uuid4())
         self.src_dir = _get_src_dir()
@@ -532,6 +536,10 @@ class AgentSetup:
         try:
             lines = ["<!-- Agent Capabilities Registry -->", "", f"<!-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} -->", ""]
             
+            lines.append(f"### 🏭 Local Factory Role: {self.factory_role}")
+            lines.append(f"You are operating under the **{self.factory_role}** role. You must act strictly within the boundaries of this assignment.")
+            lines.append("")
+            
             # --- DOMAIN DEFINITIONS ---
             domains = {
                 "🌐 Browser Operations": [
@@ -573,6 +581,12 @@ class AgentSetup:
             lines.append("")
             lines.append("Browser lane policy: Bowser-first (`claude-bowser-agent`, `playwright-bowser-agent`, `bowser-qa-agent`).")
             lines.append("Use Browserbase when Bowser is unavailable or cloud-browser behavior is explicitly required.")
+            
+            if self.enable_vp_coder:
+                lines.append("\n#### 👑 VP Orchestration (Code & Engineering)")
+                lines.append("- **vp_coder**: The VP Coder is a powerful sub-agent running its own isolated environment, capable of planning and executing comprehensive codebase tasks.")
+                lines.append("  -> **CRITICAL**: Use the `vp_orchestration` skill to interact with the VP Coder using the `vp_*` specialized tools. Do NOT use standard `Task()` routing.")
+                lines.append("")
             
             agent_dirs = [
                 os.path.join(self.src_dir, ".claude", "agents"),

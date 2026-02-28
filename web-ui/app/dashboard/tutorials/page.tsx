@@ -47,6 +47,8 @@ type TutorialBootstrapJob = {
   repo_name?: string;
   target_root?: string;
   repo_dir?: string;
+  repo_open_uri?: string;
+  repo_open_hint?: string;
   worker_id?: string;
   error?: string;
 };
@@ -70,6 +72,13 @@ function encodePath(path: string): string {
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
+}
+
+function toFileUri(path: string): string {
+  const normalized = asText(path);
+  if (!normalized) return "";
+  if (normalized.startsWith("file://")) return normalized;
+  return `file://${encodeURI(normalized)}`;
 }
 
 function formatDate(value?: string): string {
@@ -193,6 +202,11 @@ export default function DashboardTutorialsPage() {
 
   // Auto-refresh notifications every 30s
   useEffect(() => {
+    const hasActiveBootstrapJobs = bootstrapJobs.some((job) => {
+      const status = asText(job.status).toLowerCase();
+      return status === "queued" || status === "running";
+    });
+    const refreshMs = hasActiveBootstrapJobs ? 5_000 : 30_000;
     const interval = setInterval(async () => {
       try {
         const [notifRes, bootstrapRes] = await Promise.all([
@@ -212,9 +226,9 @@ export default function DashboardTutorialsPage() {
           }
         }
       } catch { }
-    }, 30_000);
+    }, refreshMs);
     return () => clearInterval(interval);
-  }, []);
+  }, [bootstrapJobs]);
 
   // Mark currently visible runs as seen after initial load
   useEffect(() => {
@@ -337,10 +351,15 @@ export default function DashboardTutorialsPage() {
         const queued = Boolean((payload as Record<string, unknown>).queued);
         if (queued) {
           const jobId = asText((payload as Record<string, unknown>).job_id);
+          const reused = Boolean((payload as Record<string, unknown>).existing_job_reused);
           setDispatchStatus(
-            jobId
-              ? `Queued local repo creation job ${jobId}. Run the local bootstrap worker to execute it.`
-              : "Queued local repo creation job.",
+            reused
+              ? (jobId
+                ? `Job ${jobId} is already in progress. Local worker will continue execution.`
+                : "A repo creation job is already in progress.")
+              : (jobId
+                ? `Queued local repo creation job ${jobId}. Run the local bootstrap worker to execute it.`
+                : "Queued local repo creation job."),
           );
           await load();
           return;
@@ -517,7 +536,34 @@ export default function DashboardTutorialsPage() {
                     >
                       {dispatchingRunPath === runPath ? "Queueing..." : "Send to Simone"}
                     </button>
-                    {showCreateRepoAction && (
+                    {latestBootstrapStatus === "completed" || latestBootstrapStatus === "success" ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="rounded border border-emerald-700/60 bg-emerald-900/40 px-2 py-1 text-[11px] text-emerald-100">
+                          Repo Ready
+                        </span>
+                        {toFileUri(asText(latestBootstrapJob?.repo_open_uri) || asText(latestBootstrapJob?.repo_dir)) && (
+                          <a
+                            href={toFileUri(asText(latestBootstrapJob?.repo_open_uri) || asText(latestBootstrapJob?.repo_dir))}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="rounded border border-cyan-700/60 bg-cyan-900/25 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-900/40"
+                            title={asText(latestBootstrapJob?.repo_open_hint) || "Open local repository folder"}
+                          >
+                            Open Folder
+                          </a>
+                        )}
+                        {asText(latestBootstrapJob?.repo_dir) && (
+                          <div className="group relative flex items-center">
+                            <span
+                              className="cursor-text select-all rounded bg-slate-800/80 border border-slate-700/50 px-1.5 py-0.5 text-[10px] font-mono text-slate-300"
+                              title="Copy this path to your terminal"
+                            >
+                              {asText(latestBootstrapJob!.repo_dir)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ) : showCreateRepoAction && (
                       <button
                         type="button"
                         onClick={() => void bootstrapRunRepo(runPath)}
@@ -527,7 +573,10 @@ export default function DashboardTutorialsPage() {
                           || dispatchingRunPath === runPath
                           || bootstrapPending
                         }
-                        className="rounded border border-amber-700/60 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-100 hover:bg-amber-900/35 disabled:opacity-50"
+                        className={`rounded border px-2 py-1 text-[11px] transition-colors disabled:opacity-50 ${bootstrapPending
+                            ? "border-amber-500 bg-amber-900/60 text-amber-200 animate-pulse shadow-[0_0_10px_rgba(245,158,11,0.2)]"
+                            : "border-amber-700/60 bg-amber-900/20 text-amber-100 hover:bg-amber-900/35"
+                          }`}
                         title={
                           hasCreateRepoScript
                             ? "Queue local repo creation using implementation/create_new_repo.sh via desktop worker"
@@ -537,7 +586,7 @@ export default function DashboardTutorialsPage() {
                         {bootstrappingRunPath === runPath
                           ? "Queueing..."
                           : bootstrapPending
-                            ? (latestBootstrapStatus === "running" ? "Creating (Local Worker)..." : "Queued")
+                            ? (latestBootstrapStatus === "running" ? "Creating (Local Worker)..." : "Queued (Waiting on Worker)")
                             : "Create Repo"}
                       </button>
                     )}
@@ -583,9 +632,8 @@ export default function DashboardTutorialsPage() {
                 )}
                 {latestBootstrapJob && (
                   <p
-                    className={`mt-1 text-[11px] ${
-                      asText(latestBootstrapJob.error) ? "text-rose-300" : "text-slate-400"
-                    }`}
+                    className={`mt-1 text-[11px] ${asText(latestBootstrapJob.error) ? "text-rose-300" : "text-slate-400"
+                      }`}
                     title={asText(latestBootstrapJob.error)}
                   >
                     Local repo bootstrap: {asText(latestBootstrapJob.status) || "unknown"} (

@@ -1,0 +1,16 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: universal_agent_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    # Note: Ensure you configure a strong requirepass in redis.conf 
+    # and restrict port 6379 via UFW firewall on the VPS to only allow known Factory IPs.
+
+volumes:
+  redis_data:
