@@ -22,6 +22,7 @@ from src.universal_agent.tools.scrapling_scraper import (
     page_to_markdown,
 )
 from src.universal_agent.tools.scrapling_scraper.fetcher_strategy import (
+    FetcherStrategy,
     ScrapeRequest,
     _is_bot_blocked,
 )
@@ -193,6 +194,62 @@ class TestPageToMarkdown:
         )
         assert "project" in md
         assert "test-run" in md
+
+
+class TestFetcherStrategy:
+    def test_blocked_partial_result_preserves_original_page_tier(self):
+        strategy = FetcherStrategy(escalation_delay=0)
+        blocked_page = _make_page("<html>access denied</html>", status=403)
+
+        with patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy._safe_fetch_basic",
+            return_value=blocked_page,
+        ) as mock_basic, patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy._safe_fetch_dynamic",
+            side_effect=RuntimeError("dynamic failed"),
+        ), patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy._safe_fetch_stealthy",
+            side_effect=RuntimeError("stealthy failed"),
+        ), patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy._is_bot_blocked",
+            return_value=True,
+        ), patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy.time.sleep",
+            return_value=None,
+        ):
+            page, level = strategy.fetch(ScrapeRequest(url="https://example.com"))
+
+        assert mock_basic.called
+        assert page is blocked_page
+        assert level == FetcherLevel.BASIC
+
+    def test_blocked_force_level_prefers_forced_tier(self):
+        strategy = FetcherStrategy(escalation_delay=0)
+        blocked_page = _make_page("<html>blocked</html>", status=403)
+
+        with patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy._safe_fetch_basic"
+        ) as mock_basic, patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy._safe_fetch_dynamic",
+            return_value=blocked_page,
+        ) as mock_dynamic, patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy._safe_fetch_stealthy"
+        ) as mock_stealth, patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy._is_bot_blocked",
+            return_value=True,
+        ), patch(
+            "src.universal_agent.tools.scrapling_scraper.fetcher_strategy.time.sleep",
+            return_value=None,
+        ):
+            page, level = strategy.fetch(
+                ScrapeRequest(url="https://example.com", force_level=FetcherLevel.DYNAMIC)
+            )
+
+        assert not mock_basic.called
+        assert mock_dynamic.called
+        assert not mock_stealth.called
+        assert page is blocked_page
+        assert level == FetcherLevel.DYNAMIC
 
 
 # ---------------------------------------------------------------------------
