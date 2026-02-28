@@ -87,7 +87,7 @@ class _DailyBudget:
 
     def __init__(self, limit: float | None):
         self.limit = limit
-        self._date: object = None
+        self._date: datetime.date | None = None
         self._spent: float = 0.0
 
     def _maybe_reset(self) -> None:
