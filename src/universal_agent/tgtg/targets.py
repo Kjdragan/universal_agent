@@ -76,12 +76,11 @@ class Target:
 
         def _hhmm(s: str):
             try:
-                h, m = int(s[:2]), int(s[3:5])
-                # Build an aware datetime for today at HH:MM in local tz
-                return datetime.combine(today, time(h, m), tzinfo=now_local.tzinfo)
+                t = datetime.strptime(s, "%H:%M").time()
             except (ValueError, TypeError):
-                log.warning("Invalid time format for availability window: '%s'. Expected HH:MM.", s)
+                log.warning("Invalid time format for availability window: %r. Expected HH:MM.", s)
                 return None
+            return datetime.combine(today, t, tzinfo=now_local.tzinfo)
 
         avail_start = _hhmm(self.available_from) if self.available_from else None
         avail_end = _hhmm(self.available_to) if self.available_to else None
