@@ -72,6 +72,29 @@ def _build_proxy_list() -> list[str]:
 
 TGTG_PROXIES: list[str] = _build_proxy_list()
 
+# ── Payment reminder ──────────────────────────────────────────────────────────
+# Minutes before the pickup window CLOSES to send a "don't forget to pay" reminder.
+# Set to 0 to disable reminders.
+TGTG_PAYMENT_REMINDER_MINUTES: int = int(os.getenv("TGTG_PAYMENT_REMINDER_MINUTES", "15"))
+
+# ── Auto-scan ─────────────────────────────────────────────────────────────────
+# How often (hours) to automatically re-scan the region catalog while running.
+# Set to 0 to disable auto-scanning.
+TGTG_SCAN_INTERVAL_HOURS: float = float(os.getenv("TGTG_SCAN_INTERVAL_HOURS", "24"))
+
+# ── Daily spend cap ───────────────────────────────────────────────────────────
+# Maximum spend per calendar day across auto-purchases (in the bag's currency).
+# Leave blank / unset to disable the cap.
+_daily_budget_raw: str = os.getenv("TGTG_DAILY_BUDGET", "")
+TGTG_DAILY_BUDGET: float | None = float(_daily_budget_raw) if _daily_budget_raw else None
+
+# ── Webhook ───────────────────────────────────────────────────────────────────
+# HTTP POST target for stock / order / dead-item events.
+# Defaults to api.clearspringcg.com endpoint; leave blank to disable.
+TGTG_WEBHOOK_URL: str = os.getenv(
+    "TGTG_WEBHOOK_URL", "https://api.clearspringcg.com/tgtg/webhook"
+)
+
 # ── Telegram ──────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")

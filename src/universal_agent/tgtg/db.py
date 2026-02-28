@@ -119,6 +119,18 @@ class ItemDB:
                     longitude     REAL,
                     radius        INTEGER
                 );
+
+                CREATE TABLE IF NOT EXISTS stock_events (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    item_id        TEXT NOT NULL,
+                    appeared_at    TEXT NOT NULL,
+                    bags_count     INTEGER NOT NULL DEFAULT 0,
+                    sold_out_at    TEXT,
+                    duration_secs  INTEGER
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_stock_events_item
+                    ON stock_events (item_id, appeared_at DESC);
             """)
 
     # ── writes ────────────────────────────────────────────────────────────────
@@ -288,6 +300,72 @@ class ItemDB:
                 f"SELECT * FROM items {active_clause} ORDER BY store_name LIMIT ?",
                 (limit,),
             ).fetchall()
+
+    # ── stock-event tracking (sold-out speed) ─────────────────────────────────
+
+    def record_stock_appeared(self, item_id: str, bags_count: int) -> int:
+        """
+        Log a new stock appearance event.
+        Returns the row id so the caller can later close it via record_stock_sold_out.
+        """
+        now = _now_iso()
+        with self._conn() as con:
+            cur = con.execute(
+                "INSERT INTO stock_events (item_id, appeared_at, bags_count) VALUES (?, ?, ?)",
+                (str(item_id), now, bags_count),
+            )
+            return cur.lastrowid
+
+    def record_stock_sold_out(self, item_id: str) -> None:
+        """
+        Close the most recent open stock_events row for item_id by setting
+        sold_out_at and computing duration_secs.
+        """
+        now = _now_iso()
+        with self._conn() as con:
+            row = con.execute(
+                """
+                SELECT id, appeared_at FROM stock_events
+                WHERE item_id = ? AND sold_out_at IS NULL
+                ORDER BY id DESC LIMIT 1
+                """,
+                (str(item_id),),
+            ).fetchone()
+            if not row:
+                return
+            appeared = datetime.fromisoformat(row["appeared_at"])
+            sold = datetime.fromisoformat(now)
+            duration = int((sold - appeared).total_seconds())
+            con.execute(
+                "UPDATE stock_events SET sold_out_at = ?, duration_secs = ? WHERE id = ?",
+                (now, duration, row["id"]),
+            )
+
+    def speed_stats(self, limit: int = 20) -> list[dict]:
+        """
+        Return per-item sold-out speed stats (only for events that have both
+        appeared_at and sold_out_at).  Sorted by fastest average sell-through.
+        """
+        with self._conn() as con:
+            rows = con.execute(
+                """
+                SELECT
+                    se.item_id,
+                    i.store_name,
+                    COUNT(*) AS events,
+                    AVG(se.duration_secs) AS avg_secs,
+                    MIN(se.duration_secs) AS min_secs,
+                    MAX(se.duration_secs) AS max_secs
+                FROM stock_events se
+                LEFT JOIN items i ON i.item_id = se.item_id
+                WHERE se.duration_secs IS NOT NULL
+                GROUP BY se.item_id
+                ORDER BY avg_secs ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def stats(self) -> dict:
         with self._conn() as con:
