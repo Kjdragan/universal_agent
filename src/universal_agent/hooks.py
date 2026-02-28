@@ -68,6 +68,35 @@ _VP_EXPLICIT_INTENT_PATTERNS = (
     re.compile(r"\bdelegate\s+to\s+(?:the\s+)?vp\s+(?:general(?:ist)?|coder)\b", re.IGNORECASE),
 )
 
+_RESEARCH_PIPELINE_SEARCH_MARKERS = (
+    "search for",
+    "latest information",
+    "latest developments",
+    "recent developments",
+    "find information",
+    "gather information",
+    "what happened",
+    "news on",
+    "research",
+    "look up",
+)
+
+_RESEARCH_PIPELINE_REPORT_MARKERS = (
+    "create a report",
+    "generate a report",
+    "write a report",
+    "research report",
+    "report",
+)
+
+_RESEARCH_PIPELINE_DELIVERY_MARKERS = (
+    "pdf",
+    "email",
+    "gmail",
+    "send it",
+    "send to me",
+)
+
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
     """Set the context-local callback for tool events."""
@@ -255,6 +284,18 @@ def _looks_like_explicit_vp_intent(text: Any) -> bool:
     if not candidate:
         return False
     return any(pattern.search(candidate) for pattern in _VP_EXPLICIT_INTENT_PATTERNS)
+
+
+def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
+    candidate = str(text or "").strip().lower()
+    if not candidate:
+        return False
+    has_search = any(marker in candidate for marker in _RESEARCH_PIPELINE_SEARCH_MARKERS)
+    has_report = any(marker in candidate for marker in _RESEARCH_PIPELINE_REPORT_MARKERS)
+    has_delivery = any(marker in candidate for marker in _RESEARCH_PIPELINE_DELIVERY_MARKERS)
+    # Information-gathering requests should route through specialists, with
+    # report/delivery requests treated as a stronger signal.
+    return has_search or has_report or has_delivery
 
 
 def _is_subagent_context_for_tool(input_data: dict, primary_transcript_path: Optional[str]) -> bool:
@@ -472,6 +513,8 @@ class AgentHookSet:
         self._current_turn_prompt = ""
         self._requires_vp_tool_path = False
         self._vp_dispatch_seen_this_turn = False
+        self._requires_research_delegate_first = False
+        self._research_delegate_seen_this_turn = False
         workspace_norm = str(active_workspace or "").replace("\\", "/").lower()
         self._is_vp_worker_lane = (
             "/agent_run_workspaces/vp_" in workspace_norm
@@ -776,6 +819,51 @@ class AgentHookSet:
                     },
                 }
 
+        if (
+            self._requires_research_delegate_first
+            and not self._research_delegate_seen_this_turn
+            and not is_subagent_context
+            and not self._is_vp_worker_lane
+        ):
+            if normalized_tool_name == "task":
+                delegated = str(tool_input.get("subagent_type", "") or "").strip().lower()
+                if delegated == "research-specialist":
+                    self._research_delegate_seen_this_turn = True
+                else:
+                    return {
+                        "systemMessage": (
+                            "⚠️ Report-style research workflow detected.\n\n"
+                            "First tool call in this turn must be "
+                            "`Task(subagent_type='research-specialist', ...)`.\n"
+                            "Do not delegate to another specialist before the research handoff."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": (
+                                "Report-style research turns must delegate to research-specialist first."
+                            ),
+                        },
+                    }
+            else:
+                return {
+                    "systemMessage": (
+                        "⚠️ Report-style research workflow detected.\n\n"
+                        "First tool call in this turn must be "
+                        "`Task(subagent_type='research-specialist', ...)`.\n"
+                        "Direct search/tool execution is blocked until that delegation occurs."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "Report-style research turns must delegate to research-specialist first."
+                        ),
+                    },
+                }
+
         if _is_heartbeat_investigation_mode():
             upper_name = tool_name.upper()
             if upper_name in {"BASH"} or upper_name.endswith("__COMPOSIO_MULTI_EXECUTE_TOOL"):
@@ -1068,6 +1156,12 @@ class AgentHookSet:
             and not self._is_vp_worker_lane
         )
         self._vp_dispatch_seen_this_turn = False
+        self._requires_research_delegate_first = (
+            _looks_like_research_report_pipeline_intent(prompt_text)
+            and not self._requires_vp_tool_path
+            and not self._is_vp_worker_lane
+        )
+        self._research_delegate_seen_this_turn = False
 
         # Reset counters for the new user turn
         self._current_turn_tool_count = 0

@@ -1,4 +1,5 @@
 from universal_agent import prompt_assets
+from universal_agent.prompt_builder import build_system_prompt
 
 
 def test_live_capabilities_snapshot_includes_bowser_policy(monkeypatch):
@@ -106,6 +107,37 @@ def test_load_capabilities_registry_persists_live_snapshot(tmp_path, monkeypatch
         (assets_dir / "capabilities.last_good.md").read_text(encoding="utf-8").strip()
         == "LIVE SNAPSHOT"
     )
+
+
+def test_load_capabilities_registry_prefers_workspace_snapshot(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    assets_dir = project / "src" / "universal_agent" / "prompt_assets"
+    assets_dir.mkdir(parents=True)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "capabilities.md").write_text("WORKSPACE SNAPSHOT\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        prompt_assets, "build_live_capabilities_snapshot", lambda _root: "LIVE SNAPSHOT"
+    )
+    content, source = prompt_assets.load_capabilities_registry(
+        str(project),
+        workspace_dir=str(workspace),
+    )
+    assert source == "workspace"
+    assert content == "WORKSPACE SNAPSHOT"
+
+
+def test_build_system_prompt_includes_capabilities_content():
+    prompt = build_system_prompt(
+        workspace_path="/tmp/workspace",
+        soul_context="SOUL BLOCK",
+        memory_context="",
+        capabilities_content="### CAPABILITIES LIVE\n- **research-specialist**: test agent",
+        skills_xml="",
+    )
+    assert "### CAPABILITIES LIVE" in prompt
+    assert "**research-specialist**: test agent" in prompt
 
 
 def test_build_live_capabilities_snapshot_parses_agent_frontmatter(tmp_path):

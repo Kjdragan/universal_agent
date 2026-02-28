@@ -391,14 +391,51 @@ def validate_session_workspace(session_dir: Path) -> list[str]:
         if not html_files:
             issues.append("work_products/ has no HTML report")
 
-    # No files at repo root (drift detection)
+    # No leaked runtime artifacts at repo root (drift detection)
+    # Note: some repositories may intentionally contain a tracked `tasks/` tree.
+    # Only flag directories that carry known runtime leak signatures.
     repo_root = Path(".")
-    stale_dirs = []
-    for name in ["search_results", "tasks", "CURRENT_SESSION_WORKSPACE"]:
-        if (repo_root / name).exists() and not str(repo_root / name).startswith(str(session_dir)):
-            stale_dirs.append(name)
+    stale_dirs: list[str] = []
+    stale_details: list[str] = []
+
+    search_root = repo_root / "search_results"
+    if search_root.exists():
+        has_search_leak = bool(list(search_root.glob("crawl_*.md")))
+        has_search_leak = has_search_leak or bool(list(search_root.glob("COMPOSIO_SEARCH_*.json")))
+        processed_json = search_root / "processed_json"
+        has_search_leak = has_search_leak or (
+            processed_json.exists() and bool(list(processed_json.glob("*.json")))
+        )
+        if has_search_leak:
+            stale_dirs.append("search_results")
+            stale_details.append("search_results contains crawl/search artifacts")
+
+    tasks_root = repo_root / "tasks"
+    if tasks_root.exists():
+        leaked_corpus = list(tasks_root.glob("*/refined_corpus.md"))
+        if leaked_corpus:
+            stale_dirs.append("tasks")
+            sample = ", ".join(str(path.parent.name) for path in leaked_corpus[:3])
+            stale_details.append(
+                f"tasks contains runtime refined_corpus outputs (sample task dirs: {sample})"
+            )
+
+    current_ws_root = repo_root / "CURRENT_SESSION_WORKSPACE"
+    if current_ws_root.exists():
+        stale_dirs.append("CURRENT_SESSION_WORKSPACE")
+        stale_details.append("CURRENT_SESSION_WORKSPACE directory exists at repo root")
+
     if stale_dirs:
-        issues.append(f"Stale directories at repo root (workspace leak): {stale_dirs}")
+        unique_dirs = list(dict.fromkeys(stale_dirs))
+        cleanup_cmd = "rm -rf " + " ".join(unique_dirs)
+        details = "; ".join(stale_details)
+        issues.append(
+            "Stale runtime directories at repo root (workspace leak): "
+            f"{unique_dirs}. Details: {details}. "
+            "Expected location: inside CURRENT_SESSION_WORKSPACE only. "
+            f"Remediation: from repo root run `{cleanup_cmd}` "
+            "(only for leaked runtime artifacts), or `./start_gateway.sh --clean`."
+        )
 
     return issues
 
@@ -454,6 +491,43 @@ class TestSessionWorkspaceStructure:
 
         issues = validate_session_workspace(session)
         assert any("HTML report" in i for i in issues)
+
+    def test_repo_root_tasks_without_runtime_signature_not_flagged(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "tasks" / "docs_archive").mkdir(parents=True)
+        (tmp_path / "tasks" / "docs_archive" / "notes.md").write_text("reference")
+
+        session = tmp_path / "session_test"
+        (session / "search_results").mkdir(parents=True)
+        (session / "search_results" / "crawl_abc.md").write_text("data")
+        td = session / "tasks" / "my_task"
+        td.mkdir(parents=True)
+        (td / "refined_corpus.md").write_text("# refined")
+        (session / "work_products").mkdir(parents=True)
+        (session / "work_products" / "report.html").write_text("<html>")
+
+        issues = validate_session_workspace(session)
+        assert not any("workspace leak" in i.lower() for i in issues)
+
+    def test_repo_root_tasks_runtime_signature_includes_remediation(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        leaked = tmp_path / "tasks" / "leaked_task"
+        leaked.mkdir(parents=True)
+        (leaked / "refined_corpus.md").write_text("# leaked")
+
+        session = tmp_path / "session_test"
+        (session / "search_results").mkdir(parents=True)
+        (session / "search_results" / "crawl_abc.md").write_text("data")
+        td = session / "tasks" / "my_task"
+        td.mkdir(parents=True)
+        (td / "refined_corpus.md").write_text("# refined")
+        (session / "work_products").mkdir(parents=True)
+        (session / "work_products" / "report.html").write_text("<html>")
+
+        issues = validate_session_workspace(session)
+        leak_msgs = [m for m in issues if "workspace leak" in m.lower()]
+        assert leak_msgs, f"Expected leak message, got: {issues}"
+        assert "rm -rf tasks" in leak_msgs[0]
 
 
 # ---------------------------------------------------------------------------

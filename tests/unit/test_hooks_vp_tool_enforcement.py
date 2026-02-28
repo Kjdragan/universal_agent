@@ -235,3 +235,140 @@ def test_vp_worker_lane_does_not_require_nested_vp_dispatch():
         )
     )
     assert result == {}
+
+
+def test_blocks_primary_search_before_research_specialist_for_report_intent():
+    hooks = AgentHookSet(run_id="unit-research-delegation-block-search")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {
+                "prompt": (
+                    "Search for the latest information from the Russia-Ukraine war, "
+                    "create a report, save as PDF, and email it to me."
+                )
+            }
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "mcp__composio__COMPOSIO_SEARCH_NEWS",
+                "tool_input": {"query": "Russia Ukraine latest developments"},
+            },
+            "tool-search-before-task",
+            {},
+        )
+    )
+
+    assert result.get("decision") == "block"
+    assert "research-specialist" in str(result.get("systemMessage", ""))
+
+
+def test_blocks_wrong_first_task_for_report_intent():
+    hooks = AgentHookSet(run_id="unit-research-delegation-block-wrong-task")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {"prompt": "Research latest AI developments and create a report in PDF format."}
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "subagent_type": "report-writer",
+                    "prompt": "Write the report now.",
+                },
+            },
+            "tool-wrong-task",
+            {},
+        )
+    )
+
+    assert result.get("decision") == "block"
+    assert "research-specialist" in str(result.get("systemMessage", ""))
+
+
+def test_allows_research_specialist_as_first_task_for_report_intent():
+    hooks = AgentHookSet(run_id="unit-research-delegation-allow-task")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {"prompt": "Search recent cybersecurity news and create a report."}
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "subagent_type": "research-specialist",
+                    "prompt": "Collect and refine sources.",
+                },
+            },
+            "tool-research-task",
+            {},
+        )
+    )
+
+    assert result == {}
+
+
+def test_allows_followup_tools_after_research_specialist_delegation():
+    hooks = AgentHookSet(run_id="unit-research-delegation-followup")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {"prompt": "Search market updates and write a report with a PDF."}
+        )
+    )
+
+    first = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "Task",
+                "tool_input": {
+                    "subagent_type": "research-specialist",
+                    "prompt": "Gather sources.",
+                },
+            },
+            "tool-task-first",
+            {},
+        )
+    )
+    assert first == {}
+
+    second = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "mcp__composio__COMPOSIO_SEARCH_NEWS",
+                "tool_input": {"query": "market updates"},
+            },
+            "tool-search-after-task",
+            {},
+        )
+    )
+    assert second == {}
+
+
+def test_information_prompt_enforces_research_delegate_first_even_without_report():
+    hooks = AgentHookSet(run_id="unit-research-delegation-info-only")
+    _run(
+        hooks.on_user_prompt_skill_awareness(
+            {"prompt": "Search for the latest weather forecast in New York."}
+        )
+    )
+
+    result = _run(
+        hooks.on_pre_tool_use_ledger(
+            {
+                "tool_name": "mcp__composio__COMPOSIO_SEARCH_NEWS",
+                "tool_input": {"query": "weather forecast NYC"},
+            },
+            "tool-search-non-report",
+            {},
+        )
+    )
+    assert result.get("decision") == "block"
+    assert "research-specialist" in str(result.get("systemMessage", ""))
