@@ -97,3 +97,9 @@ def test_local_worker_blocks_websocket_surface(client, monkeypatch):
     with pytest.raises(WebSocketDisconnect):
         with client.websocket_connect("/api/v1/sessions/session_test/stream"):
             pass
+
+
+def test_standalone_node_blocks_factory_registration_surface(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_FACTORY_POLICY", build_factory_runtime_policy("STANDALONE_NODE"))
+    resp = client.get("/api/v1/factory/registrations")
+    assert resp.status_code == 403
