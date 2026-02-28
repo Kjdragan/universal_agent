@@ -204,6 +204,43 @@ class FetcherStrategy:
         """
         self.escalation_delay = escalation_delay
 
+    @staticmethod
+    def _coerce_level(value: Any) -> Optional[FetcherLevel]:
+        if isinstance(value, FetcherLevel):
+            return value
+        if isinstance(value, IntEnum):
+            try:
+                return FetcherLevel(int(value))
+            except Exception:
+                return None
+        if isinstance(value, int):
+            try:
+                return FetcherLevel(value)
+            except Exception:
+                return None
+        if isinstance(value, str):
+            candidate = value.strip().upper()
+            if not candidate:
+                return None
+            try:
+                return FetcherLevel[candidate]
+            except Exception:
+                try:
+                    return FetcherLevel(int(candidate))
+                except Exception:
+                    return None
+        return None
+
+    @classmethod
+    def _extract_level(cls, obj: Any) -> Optional[FetcherLevel]:
+        if obj is None:
+            return None
+        for attr in ("fetcher_level", "level", "tier", "fetcher_tier"):
+            coerced = cls._coerce_level(getattr(obj, attr, None))
+            if coerced is not None:
+                return coerced
+        return None
+
     def fetch(self, req: ScrapeRequest) -> tuple[Any, FetcherLevel]:
         """
         Fetch *req.url* using the appropriate fetcher tier.
@@ -223,6 +260,7 @@ class FetcherStrategy:
 
         last_exc: Optional[Exception] = None
         last_page: Any = None
+        last_page_level: Optional[FetcherLevel] = None
 
         for level, fetch_fn in tiers:
             if level < start_level:
@@ -238,6 +276,7 @@ class FetcherStrategy:
                         level.name, req.url,
                     )
                     last_page = page
+                    last_page_level = level
                     time.sleep(self.escalation_delay)
                     continue
                 logger.info("[%s] Successfully fetched %s", level.name, req.url)
@@ -252,8 +291,15 @@ class FetcherStrategy:
 
         # All tiers exhausted — return best partial result or raise
         if last_page is not None:
+            level_used = (
+                req.force_level
+                or self._extract_level(last_page)
+                or last_page_level
+                or self._extract_level(last_exc)
+                or FetcherLevel.STEALTHY
+            )
             logger.warning("All tiers blocked for %s; returning partial result", req.url)
-            return last_page, FetcherLevel.STEALTHY
+            return last_page, level_used
         raise RuntimeError(
             f"All fetcher tiers failed for {req.url}"
         ) from last_exc
