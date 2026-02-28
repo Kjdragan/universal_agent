@@ -1,0 +1,99 @@
+{
+  "strategy_probe_force_basic": {
+    "duration_seconds_total": 17.739,
+    "urls_scraped": 18,
+    "fetcher_tier_counts": {
+      "BASIC": 18
+    },
+    "http_status_counts": {
+      "200": 18
+    },
+    "queue_latency_seconds": {
+      "count": 18,
+      "min": 0.198,
+      "mean": 0.985,
+      "p50": 0.96,
+      "p90": 1.462,
+      "p95": 1.954,
+      "max": 2.803
+    },
+    "blocked_marker_files_count": 2,
+    "blocked_marker_files": [
+      "kten.com_news_zelensky-says-ukraine-unbroken-after-4-years-but-russia-vows-to-fight-on_article_091ef9ed-fe2a-580d-9c1d-e.md",
+      "united24media.com_latest-news_vatican-issued-special-stamp-marking-anniversary-of-war-in-ukraine-16323.md"
+    ]
+  },
+  "strategy_probe_adaptive_basic": {
+    "duration_seconds_total": 894.195,
+    "urls_scraped": 18,
+    "fetcher_tier_counts": {
+      "BASIC": 7,
+      "STEALTHY": 11
+    },
+    "http_status_counts": {
+      "200": 18
+    },
+    "queue_latency_seconds": {
+      "count": 18,
+      "min": 0.183,
+      "mean": 49.677,
+      "p50": 20.588,
+      "p90": 182.825,
+      "p95": 194.854,
+      "max": 251.286
+    },
+    "blocked_marker_files_count": 2,
+    "blocked_marker_files": [
+      "kten.com_news_zelensky-says-ukraine-unbroken-after-4-years-but-russia-vows-to-fight-on_article_091ef9ed-fe2a-580d-9c1d-e.md",
+      "united24media.com_latest-news_vatican-issued-special-stamp-marking-anniversary-of-war-in-ukraine-16323.md"
+    ]
+  },
+  "strategy_probe_force_dynamic": {
+    "duration_seconds_total": 374.999,
+    "urls_scraped": 18,
+    "fetcher_tier_counts": {
+      "DYNAMIC": 18
+    },
+    "http_status_counts": {
+      "200": 18
+    },
+    "queue_latency_seconds": {
+      "count": 18,
+      "min": 6.082,
+      "mean": 20.833,
+      "p50": 9.186,
+      "p90": 52.467,
+      "p95": 53.213,
+      "max": 55.713
+    },
+    "blocked_marker_files_count": 2,
+    "blocked_marker_files": [
+      "kten.com_news_zelensky-says-ukraine-unbroken-after-4-years-but-russia-vows-to-fight-on_article_091ef9ed-fe2a-580d-9c1d-e.md",
+      "united24media.com_latest-news_vatican-issued-special-stamp-marking-anniversary-of-war-in-ukraine-16323.md"
+    ]
+  },
+  "strategy_probe_force_stealthy": {
+    "duration_seconds_total": 953.885,
+    "urls_scraped": 18,
+    "fetcher_tier_counts": {
+      "STEALTHY": 18
+    },
+    "http_status_counts": {
+      "200": 18
+    },
+    "queue_latency_seconds": {
+      "count": 18,
+      "min": 6.124,
+      "mean": 52.993,
+      "p50": 9.649,
+      "p90": 134.183,
+      "p95": 144.001,
+      "max": 196.432
+    },
+    "blocked_marker_files_count": 2,
+    "blocked_marker_files": [
+      "kten.com_news_zelensky-says-ukraine-unbroken-after-4-years-but-russia-vows-to-fight-on_article_091ef9ed-fe2a-580d-9c1d-e.md",
+      "united24media.com_latest-news_vatican-issued-special-stamp-marking-anniversary-of-war-in-ukraine-16323.md"
+    ]
+  }
+}
