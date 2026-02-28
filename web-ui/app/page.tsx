@@ -1860,7 +1860,7 @@ export default function HomePage() {
               { key: "skills", label: "Skills", icon: "🧩", href: "/dashboard/skills", iconOnly: false },
               { key: "channels", label: "Channels", icon: "📡", href: "/dashboard/channels", iconOnly: false },
               { key: "approvals", label: "Approvals", icon: "✅", href: "/dashboard/approvals", iconOnly: false },
-              { key: "events", label: "Events", icon: "⚡", href: "/dashboard/events", iconOnly: false },
+              { key: "events", label: "Notifications & Events", icon: "⚡", href: "/dashboard/events", iconOnly: false },
               { key: "config", label: "Config", icon: "⚙️", href: "/dashboard/config", iconOnly: false },
               { key: "continuity", label: "Continuity", icon: "📈", href: "/dashboard/continuity", iconOnly: false },
             ] as const).map((item) => (
@@ -1985,7 +1985,7 @@ export default function HomePage() {
                 { key: "calendar", label: "Calendar", icon: "🗓️", href: "/dashboard/calendar" },
                 { key: "channels", label: "Channels", icon: "📡", href: "/dashboard/channels" },
                 { key: "approvals", label: "Approvals", icon: "✅", href: "/dashboard/approvals" },
-                { key: "events", label: "Events", icon: "⚡", href: "/dashboard/events" },
+                { key: "events", label: "Notifications & Events", icon: "⚡", href: "/dashboard/events" },
                 { key: "config", label: "Config", icon: "⚙️", href: "/dashboard/config" },
                 { key: "continuity", label: "Continuity", icon: "📈", href: "/dashboard/continuity" },
               ].map((item) => (

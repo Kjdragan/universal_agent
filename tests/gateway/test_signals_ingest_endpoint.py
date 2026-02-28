@@ -172,7 +172,7 @@ def test_signals_ingest_csi_analytics_dispatches_internal_action(client, monkeyp
     assert body["accepted"] == 1
     assert body["analytics_internal_dispatches"] == 1
     assert hook_stub.calls == []
-    assert len(hook_stub.action_calls) == 1
+    assert len(hook_stub.action_calls) >= 1
     assert hook_stub.action_calls[0]["to"] == "trend-specialist"
     assert hook_stub.action_calls[0]["session_key"] == "csi_trend_specialist"
 
@@ -220,7 +220,8 @@ def test_signals_ingest_csi_analytics_throttles_noisy_events(client, monkeypatch
     assert body_2["accepted"] == 1
     assert body_2.get("analytics_internal_dispatches", 0) == 0
     assert body_2["analytics_throttled"] == 1
-    assert len(hook_stub.action_calls) == 1
+    primary_actions = [call for call in hook_stub.action_calls if str(call.get("name") or "") == "CSIAnalyticsEvent"]
+    assert len(primary_actions) == 1
 
 
 def test_signals_ingest_missing_todoist_credentials_is_notice_not_error(client, monkeypatch):
@@ -259,3 +260,170 @@ def test_signals_ingest_missing_todoist_credentials_is_notice_not_error(client, 
     assert "system_notice" in kinds
     notice = next(item for item in gateway_server._notifications if item.get("kind") == "system_notice")
     assert notice.get("title") == "Todoist Sync Skipped"
+
+
+def test_signals_ingest_keeps_full_csi_notification_message(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "rss_trend_report"
+    payload["events"][0]["subject"] = {
+        "window_start_utc": "2026-02-22T00:00:00Z",
+        "window_end_utc": "2026-02-22T01:00:00Z",
+        "totals": {"items": 2, "by_category": {"ai": 2}},
+    }
+    request_id = "req-full-message"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    csi_notice = next(item for item in gateway_server._notifications if item.get("kind") == "csi_insight")
+    assert "subject_json:" in str(csi_notice.get("message") or "")
+    assert not str(csi_notice.get("message") or "").endswith("...")
+
+
+def test_signals_ingest_noisy_events_emit_hourly_digest(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "category_quality_report"
+    payload["events"][0]["subject"] = {
+        "action": "no_change",
+        "metrics": {"total_items": 5, "other_interest_ratio": 0.2, "uncategorized_items": 0},
+    }
+    request_id = "req-digest"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "csi_pipeline_digest" in kinds
+    assert "csi_insight" not in kinds
+
+
+def test_signals_ingest_emits_specialist_hourly_and_daily_synthesis(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "rss_insight_daily"
+    payload["events"][0]["subject"] = {
+        "report_type": "rss_insight_daily",
+        "report_key": "rss_insight:daily:test",
+        "window_start_utc": "2026-02-22T00:00:00Z",
+        "window_end_utc": "2026-02-23T00:00:00Z",
+        "total_items": 12,
+    }
+    request_id = "req-specialist"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "csi_insight" in kinds
+    assert "csi_specialist_hourly_synthesis" in kinds
+    assert "csi_specialist_daily_rollup" in kinds
+
+
+def test_signals_ingest_digest_event_skips_todoist_notice(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.delenv("TODOIST_API_TOKEN", raising=False)
+    monkeypatch.delenv("TODOIST_API_KEY", raising=False)
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "hourly_token_usage_report"
+    payload["events"][0]["subject"] = {"totals": {"total_tokens": 12345}}
+    request_id = "req-digest-skip-todoist"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "csi_pipeline_digest" in kinds
+    assert "system_notice" not in kinds
+
+
+def test_signals_ingest_emerging_requests_followup_and_records_loop(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    unique_suffix = str(int(time.time()))
+    payload["events"][0]["event_type"] = "rss_insight_emerging"
+    payload["events"][0]["subject"] = {
+        "report_type": "rss_insight_emerging",
+        "report_key": f"rss_insight:emerging:test:{unique_suffix}",
+        "window_start_utc": "2026-02-22T00:00:00Z",
+        "window_end_utc": "2026-02-22T06:00:00Z",
+        "total_items": 6,
+    }
+    request_id = "req-loop-followup"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    assert len(hook_stub.action_calls) >= 1
+    followup_calls = [call for call in hook_stub.action_calls if str(call.get("name") or "") == "CSITrendFollowUpRequest"]
+    assert followup_calls
+
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "csi_specialist_followup_requested" in kinds or "csi_specialist_confidence_reached" in kinds
+
+    loops_resp = client.get("/api/v1/dashboard/csi/specialist-loops?limit=10")
+    assert loops_resp.status_code == 200
+    loops = loops_resp.json().get("loops") or []
+    assert loops
+    assert int(loops[0].get("follow_up_budget_remaining") or 0) <= 2

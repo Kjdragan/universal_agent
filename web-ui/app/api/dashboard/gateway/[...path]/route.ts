@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDashboardSessionFromCookies } from "@/lib/dashboardAuth";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 const HOP_BY_HOP = new Set([
   "connection",
   "keep-alive",

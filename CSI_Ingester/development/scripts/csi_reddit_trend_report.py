@@ -22,6 +22,7 @@ if str(SCRIPT_ROOT) not in sys.path:
 from csi_ingester.analytics.emission import emit_and_track
 from csi_ingester.config import load_config
 from csi_ingester.contract import CreatorSignalEvent
+from csi_ingester.llm_auth import resolve_csi_llm_auth
 from csi_ingester.store import token_usage as token_usage_store
 from csi_ingester.store.sqlite import connect, ensure_schema
 
@@ -635,9 +636,10 @@ def main() -> int:
         "yes",
         "on",
     }
-    api_key = _resolve_setting(["ANTHROPIC_API_KEY"], env_file_values)
+    auth = resolve_csi_llm_auth(env_file_values, default_base_url="https://api.anthropic.com")
+    api_key = auth.api_key
     model = _resolve_setting(["CSI_REDDIT_TREND_CLAUDE_MODEL"], env_file_values) or "claude-3-5-haiku-latest"
-    base_url = (_resolve_setting(["ANTHROPIC_BASE_URL"], env_file_values) or "https://api.anthropic.com").rstrip("/")
+    base_url = auth.base_url
     endpoint = f"{base_url}/v1/messages" if not base_url.endswith("/v1/messages") else base_url
 
     markdown = _fallback_markdown(report_data, start_iso, end_iso)

@@ -24,6 +24,7 @@ from csi_ingester.analytics.categories import (
     classify_and_update_category,
     normalize_existing_analysis_categories,
 )
+from csi_ingester.llm_auth import resolve_csi_llm_auth
 from csi_ingester.store import token_usage as token_usage_store
 from csi_ingester.net import parse_endpoint_list, post_json_with_failover
 from csi_ingester.store.sqlite import connect, ensure_schema
@@ -338,8 +339,9 @@ def main() -> int:
         "yes",
         "on",
     }
-    api_key = _resolve_setting(["ANTHROPIC_API_KEY"], merged_env_values)
-    base_url = (_resolve_setting(["ANTHROPIC_BASE_URL"], merged_env_values) or "https://api.anthropic.com").rstrip("/")
+    auth = resolve_csi_llm_auth(merged_env_values, default_base_url="https://api.anthropic.com")
+    api_key = auth.api_key
+    base_url = auth.base_url
     claude_endpoint = f"{base_url}/v1/messages" if not base_url.endswith("/v1/messages") else base_url
     model = (
         args.claude_model.strip()

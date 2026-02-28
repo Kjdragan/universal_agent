@@ -431,6 +431,410 @@ def test_dashboard_summary_and_notifications(client, tmp_path):
     assert snoozed["metadata"]["note"] == "snooze continuity alert"
 
 
+def test_dashboard_summary_counts_use_activity_store(client):
+    gateway_server._add_notification(
+        kind="summary_store_test",
+        title="Persisted Summary Event",
+        message="Persist me in activity store",
+        severity="info",
+        requires_action=False,
+        metadata={},
+    )
+    gateway_server._notifications.clear()
+
+    summary = client.get("/api/v1/dashboard/summary")
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert int(payload["notifications"]["total"]) >= 1
+    assert int(payload["notifications"]["unread"]) >= 1
+
+
+def test_dashboard_events_returns_unified_activity_feed(client):
+    gateway_server._add_notification(
+        kind="csi_insight",
+        title="CSI Insight Event",
+        message="A full CSI signal payload",
+        severity="info",
+        requires_action=True,
+        metadata={"event_type": "rss_trend_report", "report_key": "rss_trend_report:test"},
+    )
+
+    resp = client.get("/api/v1/dashboard/events?limit=20")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["events"]
+    first = payload["events"][0]
+    assert first["source_domain"] == "csi"
+    assert first["kind"] == "csi_insight"
+    assert "send_to_simone" in {str(item.get("id")) for item in first.get("actions", [])}
+
+
+def _first_sse_payload(response) -> dict:
+    lines = [line for line in response.text.splitlines() if line.startswith("data:")]
+    assert lines
+    return json.loads(lines[0][len("data:"):].strip())
+
+
+def test_dashboard_events_stream_snapshot_and_incremental(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_dashboard_events_sse_enabled", True)
+    first = gateway_server._add_notification(
+        kind="csi_insight",
+        title="Stream Snapshot",
+        message="Snapshot item",
+        severity="info",
+        requires_action=False,
+        metadata={"event_type": "rss_trend_report"},
+    )
+
+    snapshot_resp = client.get("/api/v1/dashboard/events/stream?since_seq=0&once=1&limit=20")
+    assert snapshot_resp.status_code == 200
+    assert snapshot_resp.headers["content-type"].startswith("text/event-stream")
+    snapshot_payload = _first_sse_payload(snapshot_resp)
+    assert snapshot_payload["kind"] == "snapshot"
+    assert any(str(item.get("id") or "") == first["id"] for item in snapshot_payload.get("events", []))
+    seq = int(snapshot_payload.get("seq") or 0)
+
+    second = gateway_server._add_notification(
+        kind="csi_insight",
+        title="Stream Incremental",
+        message="Incremental item",
+        severity="info",
+        requires_action=False,
+        metadata={"event_type": "rss_trend_report"},
+    )
+    event_resp = client.get(f"/api/v1/dashboard/events/stream?since_seq={seq}&once=1&limit=20")
+    assert event_resp.status_code == 200
+    event_payload = _first_sse_payload(event_resp)
+    assert event_payload["kind"] == "event"
+    assert str(event_payload.get("op") or "") == "upsert"
+    assert str((event_payload.get("event") or {}).get("id") or "") == second["id"]
+
+
+def test_dashboard_events_counters_endpoint(client):
+    first = gateway_server._add_notification(
+        kind="csi_insight",
+        title="Counter CSI",
+        message="Actionable counter",
+        severity="info",
+        requires_action=True,
+        metadata={"event_type": "rss_insight_daily"},
+    )
+    second = gateway_server._add_notification(
+        kind="tutorial_review_ready",
+        title="Counter Tutorial",
+        message="Tutorial counter",
+        severity="info",
+        requires_action=False,
+        metadata={},
+    )
+
+    read_resp = client.post(
+        f"/api/v1/dashboard/activity/{second['id']}/action",
+        json={"action": "mark_read"},
+    )
+    assert read_resp.status_code == 200
+
+    counters = client.get("/api/v1/dashboard/events/counters?since=2000-01-01T00:00:00Z")
+    assert counters.status_code == 200
+    payload = counters.json()
+    assert int(payload["totals"]["total"]) >= 2
+    assert int(payload["totals"]["actionable"]) >= 1
+    assert int(payload["by_source"]["csi"]["total"]) >= 1
+    assert int(payload["by_source"]["tutorial"]["total"]) >= 1
+    assert str(first["id"])
+
+
+def test_dashboard_events_presets_owner_scoping(client):
+    created = client.post(
+        "/api/v1/dashboard/events/presets",
+        json={
+            "name": "CSI Actionable",
+            "filters": {"source_domain": "csi", "actionable_only": True, "time_window": "24h"},
+            "is_default": True,
+        },
+        headers={"x-ua-dashboard-owner": "owner_a"},
+    )
+    assert created.status_code == 200
+    preset = created.json()["preset"]
+
+    list_a = client.get(
+        "/api/v1/dashboard/events/presets",
+        headers={"x-ua-dashboard-owner": "owner_a"},
+    )
+    assert list_a.status_code == 200
+    assert any(str(item.get("id") or "") == preset["id"] for item in list_a.json()["presets"])
+
+    list_b = client.get(
+        "/api/v1/dashboard/events/presets",
+        headers={"x-ua-dashboard-owner": "owner_b"},
+    )
+    assert list_b.status_code == 200
+    assert all(str(item.get("id") or "") != preset["id"] for item in list_b.json()["presets"])
+
+    blocked = client.patch(
+        f"/api/v1/dashboard/events/presets/{preset['id']}",
+        json={"name": "Blocked rename"},
+        headers={"x-ua-dashboard-owner": "owner_b"},
+    )
+    assert blocked.status_code == 404
+
+    deleted = client.delete(
+        f"/api/v1/dashboard/events/presets/{preset['id']}",
+        headers={"x-ua-dashboard-owner": "owner_a"},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+
+
+def test_dashboard_digest_compaction_for_routine_notifications(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_activity_digest_enabled", True)
+    before = len(gateway_server._notifications)
+    first = gateway_server._add_notification(
+        kind="cron_job_finished",
+        title="Cron Finished",
+        message="Routine completion 1",
+        severity="info",
+        requires_action=False,
+        metadata={"job_id": "job_1"},
+    )
+    second = gateway_server._add_notification(
+        kind="cron_job_finished",
+        title="Cron Finished",
+        message="Routine completion 2",
+        severity="info",
+        requires_action=False,
+        metadata={"job_id": "job_2"},
+    )
+    after = len(gateway_server._notifications)
+    assert after == before + 1
+    assert first["id"] == second["id"]
+    metadata = second.get("metadata") if isinstance(second.get("metadata"), dict) else {}
+    assert bool(metadata.get("digest_compacted")) is True
+    assert int(metadata.get("digest_event_count") or 0) >= 2
+
+
+def test_ops_activity_events_metrics_endpoint(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_dashboard_events_sse_enabled", True)
+    monkeypatch.setattr(gateway_server, "_activity_digest_enabled", True)
+    gateway_server._add_notification(
+        kind="cron_job_finished",
+        title="Metrics Digest 1",
+        message="metrics sample one",
+        severity="info",
+        requires_action=False,
+        metadata={"job_id": "metrics_1"},
+    )
+    gateway_server._add_notification(
+        kind="cron_job_finished",
+        title="Metrics Digest 2",
+        message="metrics sample two",
+        severity="info",
+        requires_action=False,
+        metadata={"job_id": "metrics_2"},
+    )
+    stream_resp = client.get("/api/v1/dashboard/events/stream?since_seq=0&once=1&limit=20")
+    assert stream_resp.status_code == 200
+
+    metrics_resp = client.get("/api/v1/ops/metrics/activity-events")
+    assert metrics_resp.status_code == 200
+    metrics = metrics_resp.json().get("metrics", {})
+    counters = metrics.get("counters", {})
+    assert int(counters.get("events_sse_connects", 0) or 0) >= 1
+    assert int(counters.get("events_sse_disconnects", 0) or 0) >= 1
+    assert int(counters.get("events_sse_payloads", 0) or 0) >= 1
+    assert int(counters.get("digest_compacted_total", 0) or 0) >= 2
+    assert "digest_buckets_open" in counters
+
+
+def test_dashboard_events_cursor_pagination(client):
+    created_ids: list[str] = []
+    for idx in range(5):
+        record = gateway_server._add_notification(
+            kind="cursor_test",
+            title=f"Cursor Event {idx}",
+            message=f"Cursor payload {idx}",
+            severity="info",
+            requires_action=False,
+            metadata={"cursor_index": idx},
+        )
+        created_ids.append(str(record["id"]))
+
+    collected_ids: list[str] = []
+    cursor: str | None = None
+    has_more = True
+    for _ in range(10):
+        if not has_more:
+            break
+        query = "/api/v1/dashboard/events?limit=2&kind=cursor_test&since=2000-01-01T00:00:00Z"
+        if cursor:
+            query += f"&cursor={cursor}"
+        resp = client.get(query)
+        assert resp.status_code == 200
+        payload = resp.json()
+        rows = payload.get("events", [])
+        assert len(rows) <= 2
+        collected_ids.extend(str(row.get("id") or "") for row in rows)
+        cursor = payload.get("next_cursor")
+        has_more = bool(payload.get("has_more"))
+        if has_more:
+            assert isinstance(cursor, str) and cursor
+
+    assert set(created_ids).issubset(set(collected_ids))
+
+
+def test_dashboard_activity_send_to_simone_dispatches_hook_action(client, monkeypatch):
+    class _HookDispatchStub:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def dispatch_internal_action(self, action_payload: dict):
+            self.calls.append(action_payload)
+            return True, "agent"
+
+    hook_stub = _HookDispatchStub()
+    monkeypatch.setattr(gateway_server, "_hooks_service", hook_stub)
+    record = gateway_server._add_notification(
+        kind="csi_insight",
+        title="CSI Insight Ready",
+        message="Insight content for manual handoff",
+        severity="info",
+        requires_action=True,
+        metadata={"event_type": "rss_insight_daily"},
+    )
+
+    resp = client.post(
+        f"/api/v1/dashboard/activity/{record['id']}/send-to-simone",
+        json={"instruction": "Please investigate and propose actions."},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["ok"] is True
+    assert hook_stub.calls
+    assert "Please investigate and propose actions." in str(hook_stub.calls[0].get("message") or "")
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "simone_handoff_requested" in kinds
+    assert "simone_handoff_completed" in kinds
+
+
+def test_dashboard_activity_actions_are_audited(client, monkeypatch):
+    class _HookDispatchStub:
+        async def dispatch_internal_action(self, action_payload: dict):
+            return True, "agent"
+
+    monkeypatch.setattr(gateway_server, "_hooks_service", _HookDispatchStub())
+    record = gateway_server._add_notification(
+        kind="csi_insight",
+        title="Audit Me",
+        message="Audit trail payload",
+        severity="info",
+        requires_action=True,
+        metadata={"event_type": "rss_trend_report"},
+    )
+
+    mark_read = client.post(
+        f"/api/v1/dashboard/activity/{record['id']}/action",
+        json={"action": "mark_read", "note": "handled"},
+        headers={"x-user-id": "ops_owner"},
+    )
+    assert mark_read.status_code == 200
+
+    handoff = client.post(
+        f"/api/v1/dashboard/activity/{record['id']}/send-to-simone",
+        json={"instruction": "Investigate trend implications."},
+        headers={"x-user-id": "ops_owner"},
+    )
+    assert handoff.status_code == 200
+    assert handoff.json().get("ok") is True
+
+    audit_resp = client.get(f"/api/v1/dashboard/activity/{record['id']}/audit?limit=20")
+    assert audit_resp.status_code == 200
+    audit_rows = audit_resp.json().get("audit", [])
+    assert any(
+        str(row.get("action") or "") == "mark_read"
+        and str(row.get("actor") or "") == "ops_owner"
+        and str(row.get("outcome") or "") == "ok"
+        for row in audit_rows
+    )
+    assert any(
+        str(row.get("action") or "") == "send_to_simone"
+        and str(row.get("actor") or "") == "ops_owner"
+        and str(row.get("outcome") or "") == "completed"
+        for row in audit_rows
+    )
+
+
+def test_dashboard_activity_action_updates_notification_status_and_pin(client):
+    record = gateway_server._add_notification(
+        kind="csi_insight",
+        title="CSI Insight Actionable",
+        message="Action me",
+        severity="info",
+        requires_action=True,
+        metadata={"event_type": "rss_trend_report"},
+    )
+
+    mark_read = client.post(
+        f"/api/v1/dashboard/activity/{record['id']}/action",
+        json={"action": "mark_read"},
+    )
+    assert mark_read.status_code == 200
+    mark_payload = mark_read.json()
+    assert mark_payload["ok"] is True
+    assert mark_payload["event"]["status"] == "read"
+
+    pin = client.post(
+        f"/api/v1/dashboard/activity/{record['id']}/action",
+        json={"action": "pin"},
+    )
+    assert pin.status_code == 200
+    pin_payload = pin.json()
+    assert pin_payload["ok"] is True
+    assert bool(pin_payload["event"]["metadata"].get("pinned")) is True
+
+    pinned_feed = client.get("/api/v1/dashboard/events?limit=20&pinned=true")
+    assert pinned_feed.status_code == 200
+    rows = pinned_feed.json().get("events", [])
+    assert any(str(item.get("id") or "") == record["id"] for item in rows)
+
+
+def test_dashboard_notification_bulk_and_purge_use_activity_store(client):
+    record = gateway_server._add_notification(
+        kind="csi_insight",
+        title="CSI Persisted",
+        message="Persisted into activity DB",
+        severity="info",
+        requires_action=False,
+        metadata={"event_type": "rss_trend_report"},
+    )
+
+    gateway_server._notifications.clear()
+
+    bulk = client.post(
+        "/api/v1/dashboard/notifications/bulk",
+        json={"status": "read", "kind": "csi_insight", "limit": 50},
+    )
+    assert bulk.status_code == 200
+    bulk_payload = bulk.json()
+    assert bulk_payload["updated"] >= 1
+
+    after_bulk = client.get("/api/v1/dashboard/events?kind=csi_insight&status=read&limit=20")
+    assert after_bulk.status_code == 200
+    read_rows = after_bulk.json().get("events", [])
+    assert any(str(item.get("id") or "") == record["id"] for item in read_rows)
+
+    purge = client.post(
+        "/api/v1/dashboard/notifications/purge",
+        json={"kind": "csi_insight", "current_status": "read"},
+    )
+    assert purge.status_code == 200
+    assert purge.json()["deleted"] >= 1
+
+    after_purge = client.get("/api/v1/dashboard/events?kind=csi_insight&limit=20")
+    assert after_purge.status_code == 200
+    remaining_rows = after_purge.json().get("events", [])
+    assert all(str(item.get("id") or "") != record["id"] for item in remaining_rows)
+
+
 def test_dashboard_csi_reports_fallbacks_to_notifications(client, tmp_path, monkeypatch):
     monkeypatch.setenv("CSI_DB_PATH", str((tmp_path / "missing_csi.db").resolve()))
 
@@ -478,6 +882,179 @@ def test_dashboard_csi_reports_fallbacks_to_sessions_when_notifications_empty(cl
     assert payload["source"] == "session_fallback"
     assert len(payload["reports"]) >= 1
     assert payload["reports"][0]["session_id"].startswith("session_hook_csi_")
+
+
+def test_dashboard_csi_reports_include_specialist_synthesis_notifications(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("CSI_DB_PATH", str((tmp_path / "missing_csi.db").resolve()))
+    gateway_server._add_notification(
+        kind="csi_specialist_hourly_synthesis",
+        title="CSI Specialist Hourly Synthesis",
+        message="Hourly synthesis content",
+        severity="info",
+        requires_action=False,
+        metadata={
+            "report_key": "csi_specialist_hourly_synthesis:2026-02-27T14:00:00Z",
+            "report_class": "specialist_hourly",
+            "window_hours": 1,
+            "source_mix": {"rss": 3, "reddit": 1},
+        },
+    )
+
+    resp = client.get("/api/v1/dashboard/csi/reports?limit=20")
+    assert resp.status_code == 200
+    payload = resp.json()
+    reports = payload.get("reports") or []
+    assert any(str(item.get("report_class") or "") == "specialist_hourly" for item in reports)
+
+
+def test_dashboard_csi_health_includes_overnight_and_source_health(client, tmp_path, monkeypatch):
+    db_path = tmp_path / "csi_health.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT,
+                source TEXT,
+                event_type TEXT,
+                occurred_at TEXT,
+                delivered INTEGER DEFAULT 1
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE dead_letter (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT
+            )
+            """
+        )
+        now = datetime.now(timezone.utc)
+        recent = now.isoformat()
+        conn.execute(
+            "INSERT INTO events (event_id, source, event_type, occurred_at, delivered) VALUES (?, ?, ?, ?, ?)",
+            ("evt-1", "csi_analytics", "rss_trend_report", recent, 1),
+        )
+        conn.execute(
+            "INSERT INTO events (event_id, source, event_type, occurred_at, delivered) VALUES (?, ?, ?, ?, ?)",
+            ("evt-2", "reddit_discovery", "reddit_trend_report", recent, 1),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    resp = client.get("/api/v1/dashboard/csi/health")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["status"] == "ok"
+    assert isinstance(payload.get("source_health"), list)
+    assert isinstance((payload.get("overnight_continuity") or {}).get("checks"), list)
+
+
+def test_dashboard_csi_reports_quality_gate_suppresses_near_duplicate_emerging(client, tmp_path, monkeypatch):
+    db_path = tmp_path / "csi_quality.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE insight_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_key TEXT UNIQUE NOT NULL,
+                report_type TEXT NOT NULL,
+                window_start_utc TEXT NOT NULL,
+                window_end_utc TEXT NOT NULL,
+                model_name TEXT,
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                report_markdown TEXT NOT NULL,
+                report_json TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE trend_reports (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                report_key TEXT UNIQUE NOT NULL,
+                window_start_utc TEXT NOT NULL,
+                window_end_utc TEXT NOT NULL,
+                model_name TEXT,
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                report_markdown TEXT NOT NULL,
+                report_json TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT,
+                event_type TEXT,
+                occurred_at TEXT,
+                subject_json TEXT
+            );
+            """
+        )
+        now = datetime.now(timezone.utc)
+        daily_json = json.dumps({"top_themes": [{"theme": "agentic ai"}, {"theme": "autonomous agents"}]})
+        emerging_json = json.dumps({"top_themes": [{"theme": "agentic ai"}, {"theme": "autonomous agents"}]})
+        conn.execute(
+            """
+            INSERT INTO insight_reports (
+                report_key, report_type, window_start_utc, window_end_utc, model_name,
+                report_markdown, report_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "daily:test",
+                "daily",
+                (now - timedelta(hours=24)).isoformat(),
+                now.isoformat(),
+                "claude",
+                "daily report content",
+                daily_json,
+                now.isoformat(),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO insight_reports (
+                report_key, report_type, window_start_utc, window_end_utc, model_name,
+                report_markdown, report_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "emerging:test",
+                "emerging",
+                (now - timedelta(hours=6)).isoformat(),
+                now.isoformat(),
+                "claude",
+                "emerging report content",
+                emerging_json,
+                now.isoformat(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    default_resp = client.get("/api/v1/dashboard/csi/reports?limit=10")
+    assert default_resp.status_code == 200
+    default_reports = default_resp.json().get("reports") or []
+    assert not any(str(item.get("report_class") or "") == "emerging" for item in default_reports)
+    assert any(
+        str((item.get("quality_gate") or {}).get("status") or "") == "near_duplicate"
+        for item in default_reports
+    )
+
+    include_resp = client.get("/api/v1/dashboard/csi/reports?limit=10&include_suppressed=true")
+    assert include_resp.status_code == 200
+    include_reports = include_resp.json().get("reports") or []
+    emerging = next((item for item in include_reports if str(item.get("report_class") or "") == "emerging"), None)
+    assert emerging is not None
+    assert bool(emerging.get("suppressed")) is True
 
 
 def test_dashboard_tutorial_runs_lists_flat_and_dated_layouts(client, tmp_path, monkeypatch):

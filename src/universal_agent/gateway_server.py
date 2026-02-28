@@ -11,6 +11,7 @@ Usage:
 import asyncio
 import contextlib
 from collections import deque
+import base64
 import hashlib
 import json
 import logging
@@ -1114,6 +1115,31 @@ class NotificationPurgeRequest(BaseModel):
     older_than_hours: Optional[int] = None
 
 
+class ActivitySendToSimoneRequest(BaseModel):
+    instruction: str
+    priority: Optional[str] = None
+    extra_context: Optional[dict] = None
+
+
+class ActivityEventActionRequest(BaseModel):
+    action: str
+    note: Optional[str] = None
+    snooze_minutes: Optional[int] = None
+
+
+class DashboardEventPresetCreateRequest(BaseModel):
+    name: str
+    filters: dict[str, Any] = Field(default_factory=dict)
+    is_default: bool = False
+
+
+class DashboardEventPresetUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    filters: Optional[dict[str, Any]] = None
+    is_default: Optional[bool] = None
+    mark_used: bool = False
+
+
 class OpsNotificationCreateRequest(BaseModel):
     kind: str
     title: str
@@ -1227,8 +1253,49 @@ _vp_stale_reconcile_seconds = max(
 _channel_probe_results: dict[str, dict] = {}
 _notifications: list[dict] = []
 _notifications_max = int(os.getenv("UA_NOTIFICATIONS_MAX", "500"))
+_activity_events_retention_days = max(
+    7,
+    int(os.getenv("UA_ACTIVITY_EVENTS_RETENTION_DAYS", "90") or 90),
+)
+_activity_events_default_window_days = max(
+    1,
+    int(os.getenv("UA_ACTIVITY_DEFAULT_WINDOW_DAYS", "7") or 7),
+)
+_activity_stream_retention_days = max(
+    1,
+    int(os.getenv("UA_ACTIVITY_STREAM_RETENTION_DAYS", "14") or 14),
+)
+_dashboard_events_sse_enabled = (
+    os.getenv("UA_DASHBOARD_EVENTS_SSE_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+)
+_activity_digest_enabled = (
+    os.getenv("UA_ACTIVITY_DIGEST_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+)
+_activity_digest_exclude_kinds = {
+    token.strip().lower()
+    for token in (os.getenv("UA_ACTIVITY_DIGEST_EXCLUDE_KINDS", "") or "").split(",")
+    if token.strip()
+}
+_activity_digest_max_sample_ids = max(
+    1,
+    min(100, int(os.getenv("UA_ACTIVITY_DIGEST_MAX_SAMPLE_IDS", "20") or 20)),
+)
+_activity_store_lock = threading.Lock()
 _csi_dispatch_recent: dict[str, float] = {}
 _csi_dispatch_lock = threading.Lock()
+_csi_specialist_loop_lock = threading.Lock()
+_csi_specialist_followup_budget = max(
+    1,
+    int(os.getenv("UA_CSI_SPECIALIST_FOLLOWUP_BUDGET", "3") or 3),
+)
+_csi_specialist_confidence_target = max(
+    0.5,
+    min(0.95, float(os.getenv("UA_CSI_SPECIALIST_CONFIDENCE_TARGET", "0.72") or 0.72)),
+)
+_csi_specialist_followup_cooldown_minutes = max(
+    5,
+    int(os.getenv("UA_CSI_SPECIALIST_FOLLOWUP_COOLDOWN_MINUTES", "45") or 45),
+)
 _tutorial_review_jobs: dict[str, dict[str, Any]] = {}
 _tutorial_review_jobs_max = int(os.getenv("UA_TUTORIAL_REVIEW_JOBS_MAX", "300") or 300)
 _tutorial_bootstrap_jobs: dict[str, dict[str, Any]] = {}
@@ -1319,6 +1386,19 @@ _scheduling_runtime_metrics: dict[str, Any] = {
         "last_duration_ms": 0.0,
         "last_error": None,
         "last_result": {},
+    },
+}
+_activity_runtime_started_ts = time.time()
+_activity_runtime_metrics: dict[str, Any] = {
+    "started_at": datetime.now(timezone.utc).isoformat(),
+    "counters": {
+        "events_sse_connects": 0,
+        "events_sse_disconnects": 0,
+        "events_sse_payloads": 0,
+        "events_sse_heartbeats": 0,
+        "events_sse_errors": 0,
+        "digest_compacted_total": 0,
+        "digest_immediate_bypass_total": 0,
     },
 }
 SCHED_PUSH_ENABLED = (
@@ -1436,6 +1516,56 @@ def _scheduling_counter_inc(name: str, amount: int = 1) -> None:
     counters = _scheduling_runtime_metrics.setdefault("counters", {})
     current = int(counters.get(name, 0) or 0)
     counters[name] = current + max(0, int(amount))
+
+
+def _activity_counter_inc(name: str, amount: int = 1) -> None:
+    counters = _activity_runtime_metrics.setdefault("counters", {})
+    current = int(counters.get(name, 0) or 0)
+    counters[name] = current + max(0, int(amount))
+
+
+def _activity_runtime_metrics_snapshot() -> dict[str, Any]:
+    data = json.loads(json.dumps(_activity_runtime_metrics))
+    counters = data.setdefault("counters", {})
+    digest_keys: set[str] = set()
+    try:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT metadata_json
+                FROM activity_events
+                WHERE event_class = 'notification'
+                  AND created_at >= datetime('now', ?)
+                LIMIT 5000
+                """,
+                (f"-{max(1, int(_activity_events_default_window_days))} days",),
+            ).fetchall()
+            for row in rows:
+                metadata = _activity_json_loads_obj(row["metadata_json"], default={})
+                if not isinstance(metadata, dict):
+                    continue
+                if not bool(metadata.get("digest_compacted")):
+                    continue
+                key = str(metadata.get("digest_key") or "").strip()
+                if key:
+                    digest_keys.add(key)
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    counters["digest_buckets_open"] = len(digest_keys)
+    data["uptime_seconds"] = round(max(0.0, time.time() - _activity_runtime_started_ts), 3)
+    data["retention_days"] = {
+        "activity_events": int(_activity_events_retention_days),
+        "activity_stream": int(_activity_stream_retention_days),
+    }
+    data["feature_flags"] = {
+        "dashboard_events_sse_enabled": bool(_dashboard_events_sse_enabled),
+        "activity_digest_enabled": bool(_activity_digest_enabled),
+    }
+    return data
 
 
 class SchedulingEventBus:
@@ -2731,6 +2861,443 @@ def _csi_record_dispatch(source: str, event_type: str) -> None:
                 _csi_dispatch_recent.pop(stale_key, None)
 
 
+def _csi_should_digest_event(event_type: str) -> bool:
+    lowered = str(event_type or "").strip().lower()
+    return lowered in {
+        "analysis_task_completed",
+        "hourly_token_usage_report",
+        "category_quality_report",
+    }
+
+
+def _csi_emit_digest_notification(event: Any, detail: str) -> None:
+    occurred = _parse_iso_timestamp(getattr(event, "occurred_at", None)) or datetime.now(timezone.utc)
+    hour_key = occurred.strftime("%Y-%m-%dT%H:00:00Z")
+    metadata_match = {
+        "digest_bucket": "csi_hourly_pipeline",
+        "hour_key": hour_key,
+    }
+    event_type = str(getattr(event, "event_type", "") or "unknown")
+    event_id = str(getattr(event, "event_id", "") or "")
+    for item in reversed(_notifications):
+        if str(item.get("kind") or "") != "csi_pipeline_digest":
+            continue
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        if str(metadata.get("digest_bucket") or "") != metadata_match["digest_bucket"]:
+            continue
+        if str(metadata.get("hour_key") or "") != metadata_match["hour_key"]:
+            continue
+        counts = metadata.get("event_counts")
+        if not isinstance(counts, dict):
+            counts = {}
+            metadata["event_counts"] = counts
+        counts[event_type] = int(counts.get(event_type) or 0) + 1
+        metadata["last_event_type"] = event_type
+        metadata["last_event_id"] = event_id
+        metadata["last_detail"] = detail[:1200]
+        total = sum(int(v or 0) for v in counts.values())
+        parts = [f"{k}:{int(v)}" for k, v in sorted(counts.items(), key=lambda kv: kv[0])]
+        item["summary"] = f"Hourly pipeline digest ({hour_key}) — {total} events ({', '.join(parts)})"
+        item["full_message"] = (
+            f"CSI hourly pipeline digest for {hour_key}\n"
+            f"Total digested events: {total}\n"
+            f"Breakdown: {', '.join(parts)}\n\n"
+            f"Most recent event detail:\n{detail[:4000]}"
+        )
+        item["message"] = item["full_message"]
+        item["updated_at"] = _utc_now_iso()
+        _persist_notification_activity(item)
+        return
+
+    _add_notification(
+        kind="csi_pipeline_digest",
+        title="CSI Pipeline Hourly Digest",
+        message=f"CSI hourly pipeline digest started for {hour_key}.",
+        summary=f"Hourly pipeline digest ({hour_key}) — 1 event ({event_type}:1)",
+        full_message=(
+            f"CSI hourly pipeline digest for {hour_key}\n"
+            f"Total digested events: 1\n"
+            f"Breakdown: {event_type}:1\n\n"
+            f"Most recent event detail:\n{detail[:4000]}"
+        ),
+        severity="info",
+        requires_action=False,
+        metadata={
+            **metadata_match,
+            "event_counts": {event_type: 1},
+            "last_event_type": event_type,
+            "last_event_id": event_id,
+            "last_detail": detail[:1200],
+        },
+        created_at=getattr(event, "occurred_at", None) or getattr(event, "received_at", None),
+    )
+
+
+def _csi_is_high_value_event(event_type: str) -> bool:
+    lowered = str(event_type or "").strip().lower()
+    return lowered in {
+        "rss_trend_report",
+        "reddit_trend_report",
+        "rss_insight_emerging",
+        "rss_insight_daily",
+        "report_product_ready",
+    }
+
+
+def _csi_event_has_anomaly(event_type: str, subject: Any) -> bool:
+    lowered = str(event_type or "").strip().lower()
+    if "failed" in lowered or "error" in lowered:
+        return True
+    subject_obj = subject if isinstance(subject, dict) else {}
+    if lowered == "category_quality_report":
+        action = str(subject_obj.get("action") or "").strip().lower()
+        if action and action not in {"no_change", "ok", "healthy"}:
+            return True
+    return False
+
+
+def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
+    event_type = str(getattr(event, "event_type", "") or "").strip().lower()
+    subject = getattr(event, "subject", None)
+    is_digest = _csi_should_digest_event(event_type)
+    has_anomaly = _csi_event_has_anomaly(event_type, subject)
+    high_value = _csi_is_high_value_event(event_type)
+    severity = "info"
+    if has_anomaly:
+        severity = "error"
+    elif "quality" in event_type and not is_digest:
+        severity = "warning"
+    requires_action = bool(has_anomaly or high_value)
+    todoist_sync = bool(
+        has_anomaly
+        or event_type in {"rss_insight_daily", "report_product_ready", "rss_trend_report", "reddit_trend_report"}
+    )
+    return {
+        "event_type": event_type,
+        "is_digest": is_digest,
+        "high_value": high_value,
+        "has_anomaly": has_anomaly,
+        "severity": severity,
+        "requires_action": requires_action,
+        "todoist_sync": todoist_sync,
+    }
+
+
+def _csi_source_bucket(event: Any) -> str:
+    event_type = str(getattr(event, "event_type", "") or "").strip().lower()
+    source = str(getattr(event, "source", "") or "").strip().lower()
+    subject = getattr(event, "subject", None)
+    subject_obj = subject if isinstance(subject, dict) else {}
+    report_type = str(subject_obj.get("report_type") or event_type).strip().lower()
+    text = " ".join([event_type, source, report_type])
+    if "reddit" in text:
+        return "reddit"
+    if "rss" in text:
+        return "rss"
+    if "youtube" in text:
+        return "youtube"
+    if "analysis_task" in text:
+        return "analysis_task"
+    return source or "csi"
+
+
+def _csi_specialist_topic_key(event: Any) -> tuple[str, str]:
+    subject = getattr(event, "subject", None)
+    subject_obj = subject if isinstance(subject, dict) else {}
+    report_key = str(subject_obj.get("report_key") or "").strip()
+    source_bucket = _csi_source_bucket(event)
+    event_type = str(getattr(event, "event_type", "") or "").strip().lower() or "unknown"
+    if report_key:
+        key = f"{source_bucket}:{report_key}"
+        return key[:280], f"{source_bucket} :: {report_key}"
+    occurred = _parse_iso_timestamp(getattr(event, "occurred_at", None)) or datetime.now(timezone.utc)
+    day_key = occurred.strftime("%Y-%m-%d")
+    key = f"{source_bucket}:{event_type}:{day_key}"
+    return key[:280], f"{source_bucket} :: {event_type} ({day_key})"
+
+
+def _csi_confidence_baseline(event_type: str) -> float:
+    lowered = str(event_type or "").strip().lower()
+    if lowered == "report_product_ready":
+        return 0.82
+    if lowered == "rss_insight_daily":
+        return 0.76
+    if lowered in {"rss_trend_report", "reddit_trend_report"}:
+        return 0.64
+    if lowered == "rss_insight_emerging":
+        return 0.58
+    return 0.6
+
+
+def _csi_parse_mix_json(raw: Any) -> dict[str, int]:
+    parsed = _activity_json_loads_obj(raw, default={})
+    if not isinstance(parsed, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, value in parsed.items():
+        try:
+            out[str(key)] = int(value or 0)
+        except Exception:
+            continue
+    return out
+
+
+def _csi_estimate_confidence(*, event_type: str, events_count: int, source_mix: dict[str, int]) -> float:
+    baseline = _csi_confidence_baseline(event_type)
+    diversity = len([k for k, v in source_mix.items() if int(v or 0) > 0])
+    diversity_bonus = min(0.18, max(0, diversity - 1) * 0.07)
+    volume_bonus = min(0.1, max(0, events_count - 1) * 0.02)
+    return round(min(0.95, baseline + diversity_bonus + volume_bonus), 3)
+
+
+def _csi_should_request_followup(last_followup_requested_at: Optional[str]) -> bool:
+    if not last_followup_requested_at:
+        return True
+    parsed = _parse_iso_timestamp(last_followup_requested_at)
+    if parsed is None:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    cooldown_seconds = int(_csi_specialist_followup_cooldown_minutes) * 60
+    return (time.time() - parsed.timestamp()) >= max(60, cooldown_seconds)
+
+
+def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
+    event_type = str(getattr(event, "event_type", "") or "").strip().lower()
+    if not _csi_is_high_value_event(event_type):
+        return {"updated": False, "request_followup": False}
+    topic_key, topic_label = _csi_specialist_topic_key(event)
+    source_bucket = _csi_source_bucket(event)
+    event_id = str(getattr(event, "event_id", "") or "")
+    event_at = _normalize_notification_timestamp(getattr(event, "occurred_at", None) or getattr(event, "received_at", None))
+    now_iso = _utc_now_iso()
+
+    with _csi_specialist_loop_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            row = conn.execute(
+                "SELECT * FROM csi_specialist_loops WHERE topic_key = ? LIMIT 1",
+                (topic_key,),
+            ).fetchone()
+            if row is None:
+                source_mix = {source_bucket: 1}
+                events_count = 1
+                followup_remaining = int(_csi_specialist_followup_budget)
+                confidence_target = float(_csi_specialist_confidence_target)
+                last_followup_requested_at = None
+                created_at = now_iso
+            else:
+                source_mix = _csi_parse_mix_json(row["source_mix_json"])
+                source_mix[source_bucket] = int(source_mix.get(source_bucket) or 0) + 1
+                events_count = int(row["events_count"] or 0) + 1
+                followup_remaining = int(row["follow_up_budget_remaining"] or 0)
+                confidence_target = float(row["confidence_target"] or _csi_specialist_confidence_target)
+                last_followup_requested_at = str(row["last_followup_requested_at"] or "") or None
+                created_at = str(row["created_at"] or now_iso)
+
+            confidence_score = _csi_estimate_confidence(
+                event_type=event_type,
+                events_count=events_count,
+                source_mix=source_mix,
+            )
+            request_followup = False
+            status_value = "open"
+            closed_at = None
+            followup_note = ""
+            if confidence_score >= confidence_target:
+                status_value = "closed"
+                closed_at = now_iso
+                followup_note = "confidence_target_reached"
+            elif followup_remaining <= 0:
+                status_value = "budget_exhausted"
+                followup_note = "followup_budget_exhausted"
+            elif _csi_should_request_followup(last_followup_requested_at):
+                request_followup = True
+                followup_remaining -= 1
+                followup_note = "followup_requested"
+            else:
+                followup_note = "cooldown_active"
+
+            last_followup_requested = now_iso if request_followup else last_followup_requested_at
+            conn.execute(
+                """
+                INSERT INTO csi_specialist_loops (
+                    topic_key, topic_label, status, confidence_target, confidence_score,
+                    follow_up_budget_total, follow_up_budget_remaining, events_count, source_mix_json,
+                    last_event_type, last_event_id, last_event_at, last_followup_requested_at,
+                    created_at, updated_at, closed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(topic_key) DO UPDATE SET
+                    topic_label=excluded.topic_label,
+                    status=excluded.status,
+                    confidence_target=excluded.confidence_target,
+                    confidence_score=excluded.confidence_score,
+                    follow_up_budget_total=excluded.follow_up_budget_total,
+                    follow_up_budget_remaining=excluded.follow_up_budget_remaining,
+                    events_count=excluded.events_count,
+                    source_mix_json=excluded.source_mix_json,
+                    last_event_type=excluded.last_event_type,
+                    last_event_id=excluded.last_event_id,
+                    last_event_at=excluded.last_event_at,
+                    last_followup_requested_at=excluded.last_followup_requested_at,
+                    updated_at=excluded.updated_at,
+                    closed_at=excluded.closed_at
+                """,
+                (
+                    topic_key,
+                    topic_label,
+                    status_value,
+                    confidence_target,
+                    confidence_score,
+                    int(_csi_specialist_followup_budget),
+                    max(0, followup_remaining),
+                    events_count,
+                    _activity_json_dumps(source_mix, fallback="{}"),
+                    event_type,
+                    event_id,
+                    event_at,
+                    last_followup_requested,
+                    created_at,
+                    now_iso,
+                    closed_at,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    followup_message = (
+        "CSI specialist follow-up request.\n"
+        f"topic_key: {topic_key}\n"
+        f"topic_label: {topic_label}\n"
+        f"event_type: {event_type}\n"
+        f"event_id: {event_id}\n"
+        f"confidence_score: {confidence_score}\n"
+        f"confidence_target: {confidence_target}\n"
+        f"follow_up_budget_remaining: {max(0, followup_remaining)}\n"
+        "Request one focused follow-up CSI analysis task and summarize confidence deltas."
+    )
+
+    return {
+        "updated": True,
+        "topic_key": topic_key,
+        "topic_label": topic_label,
+        "status": status_value,
+        "confidence_score": confidence_score,
+        "confidence_target": confidence_target,
+        "events_count": events_count,
+        "follow_up_budget_remaining": max(0, followup_remaining),
+        "request_followup": request_followup,
+        "followup_message": followup_message,
+        "source_mix": source_mix,
+        "note": followup_note,
+    }
+
+
+def _csi_emit_specialist_synthesis(event: Any, detail: str) -> None:
+    event_type = str(getattr(event, "event_type", "") or "").strip().lower()
+    if not _csi_is_high_value_event(event_type):
+        return
+    occurred = _parse_iso_timestamp(getattr(event, "occurred_at", None)) or datetime.now(timezone.utc)
+    source_bucket = _csi_source_bucket(event)
+    event_id = str(getattr(event, "event_id", "") or "")
+
+    def _upsert_bucket(*, kind: str, bucket_key: str, title: str, report_class: str, window_hours: int) -> None:
+        metadata_match = {"digest_bucket": kind, "bucket_key": bucket_key}
+        report_key = f"{kind}:{bucket_key}"
+        for item in reversed(_notifications):
+            if str(item.get("kind") or "") != kind:
+                continue
+            metadata = item.get("metadata")
+            if not isinstance(metadata, dict):
+                continue
+            if str(metadata.get("digest_bucket") or "") != metadata_match["digest_bucket"]:
+                continue
+            if str(metadata.get("bucket_key") or "") != metadata_match["bucket_key"]:
+                continue
+            counts = metadata.get("event_counts")
+            if not isinstance(counts, dict):
+                counts = {}
+                metadata["event_counts"] = counts
+            source_mix = metadata.get("source_mix")
+            if not isinstance(source_mix, dict):
+                source_mix = {}
+                metadata["source_mix"] = source_mix
+            counts[event_type] = int(counts.get(event_type) or 0) + 1
+            source_mix[source_bucket] = int(source_mix.get(source_bucket) or 0) + 1
+            metadata["last_event_type"] = event_type
+            metadata["last_event_id"] = event_id
+            metadata["last_detail"] = detail[:1500]
+            metadata["window_hours"] = window_hours
+            metadata["report_class"] = report_class
+            metadata["report_key"] = report_key
+            total = sum(int(v or 0) for v in counts.values())
+            parts = [f"{k}:{int(v)}" for k, v in sorted(counts.items(), key=lambda kv: kv[0])]
+            source_parts = [f"{k}:{int(v)}" for k, v in sorted(source_mix.items(), key=lambda kv: kv[0])]
+            item["summary"] = f"{title} ({bucket_key}) — {total} signals ({', '.join(parts)})"
+            item["full_message"] = (
+                f"{title} ({bucket_key})\n"
+                f"Total signals reviewed: {total}\n"
+                f"Signal mix: {', '.join(parts)}\n"
+                f"Source mix: {', '.join(source_parts)}\n"
+                f"Follow-up policy: bounded to {_csi_specialist_followup_budget} targeted CSI follow-up loops unless confidence is high.\n\n"
+                f"Most recent signal detail:\n{detail[:4500]}"
+            )
+            item["message"] = item["full_message"]
+            item["updated_at"] = _utc_now_iso()
+            _persist_notification_activity(item)
+            return
+
+        _add_notification(
+            kind=kind,
+            title=title,
+            message=f"{title} initialized for {bucket_key}.",
+            summary=f"{title} ({bucket_key}) — 1 signal ({event_type}:1)",
+            full_message=(
+                f"{title} ({bucket_key})\n"
+                "Total signals reviewed: 1\n"
+                f"Signal mix: {event_type}:1\n"
+                f"Source mix: {source_bucket}:1\n"
+                f"Follow-up policy: bounded to {_csi_specialist_followup_budget} targeted CSI follow-up loops unless confidence is high.\n\n"
+                f"Most recent signal detail:\n{detail[:4500]}"
+            ),
+            severity="info",
+            requires_action=(report_class == "specialist_daily"),
+            metadata={
+                **metadata_match,
+                "report_key": report_key,
+                "report_class": report_class,
+                "window_hours": window_hours,
+                "event_counts": {event_type: 1},
+                "source_mix": {source_bucket: 1},
+                "last_event_type": event_type,
+                "last_event_id": event_id,
+                "last_detail": detail[:1500],
+            },
+            created_at=getattr(event, "occurred_at", None) or getattr(event, "received_at", None),
+        )
+
+    hour_key = occurred.strftime("%Y-%m-%dT%H:00:00Z")
+    day_key = occurred.strftime("%Y-%m-%d")
+    _upsert_bucket(
+        kind="csi_specialist_hourly_synthesis",
+        bucket_key=hour_key,
+        title="CSI Specialist Hourly Synthesis",
+        report_class="specialist_hourly",
+        window_hours=1,
+    )
+    _upsert_bucket(
+        kind="csi_specialist_daily_rollup",
+        bucket_key=day_key,
+        title="CSI Specialist Daily Rollup",
+        report_class="specialist_daily",
+        window_hours=24,
+    )
+
+
 def _trim_turn_history(state: dict[str, Any]) -> None:
     turns = state.get("turns", {})
     if not isinstance(turns, dict):
@@ -3370,6 +3937,1398 @@ async def _vp_event_bridge_loop() -> None:
             continue
 
 
+def _activity_json_dumps(value: Any, *, fallback: str = "{}") -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except Exception:
+        return fallback
+
+
+def _activity_json_loads_obj(raw: Any, *, default: Any) -> Any:
+    if isinstance(raw, (dict, list)):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return default
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return default
+    if isinstance(default, dict) and isinstance(parsed, dict):
+        return parsed
+    if isinstance(default, list) and isinstance(parsed, list):
+        return parsed
+    return default
+
+
+def _activity_summary_text(text: str, *, max_chars: int = 240) -> str:
+    compact = " ".join(str(text or "").split())
+    if len(compact) <= max_chars:
+        return compact
+    return f"{compact[: max_chars - 3]}..."
+
+
+def _activity_source_domain(kind: str, metadata: Optional[dict[str, Any]] = None) -> str:
+    lowered = str(kind or "").strip().lower()
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if lowered.startswith("csi"):
+        return "csi"
+    if lowered.startswith("youtube") or "tutorial" in lowered:
+        return "tutorial"
+    if lowered.startswith("autonomous") or lowered.startswith("cron"):
+        return "cron"
+    if lowered.startswith("heartbeat"):
+        return "heartbeat"
+    if lowered.startswith("continuity"):
+        return "continuity"
+    if lowered.startswith("system"):
+        return "system"
+    if str(metadata.get("pipeline") or "").strip().startswith("csi_"):
+        return "csi"
+    return "system"
+
+
+def _activity_entity_ref(
+    *,
+    source_domain: str,
+    session_id: Optional[str],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    ref: dict[str, Any] = {}
+    if session_id:
+        ref["session_id"] = session_id
+        ref["session_href"] = f"/dashboard/sessions?session_id={urllib.parse.quote(session_id)}"
+    if source_domain == "csi":
+        ref["tab"] = "csi"
+        ref["route"] = "/dashboard/csi"
+        report_key = str(metadata.get("report_key") or "").strip()
+        if report_key:
+            ref["report_key"] = report_key
+            ref["report_href"] = f"/dashboard/csi?report_key={urllib.parse.quote(report_key)}"
+        artifact_paths = metadata.get("artifact_paths")
+        if isinstance(artifact_paths, dict):
+            ref["artifact_paths"] = artifact_paths
+            preferred_artifact = str(artifact_paths.get("markdown") or artifact_paths.get("json") or "").strip()
+            if preferred_artifact:
+                ref["artifact_href"] = f"/dashboard/csi?artifact_path={urllib.parse.quote(preferred_artifact)}"
+    elif source_domain == "tutorial":
+        ref["tab"] = "tutorials"
+        ref["route"] = "/dashboard/tutorials"
+    elif source_domain == "cron":
+        ref["tab"] = "cron-jobs"
+        ref["route"] = "/dashboard/cron-jobs"
+    else:
+        ref["tab"] = "events"
+        ref["route"] = "/dashboard/events"
+    return ref
+
+
+def _activity_actions(
+    *,
+    source_domain: str,
+    entity_ref: dict[str, Any],
+    requires_action: bool,
+    event_class: str = "notification",
+    status: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> list[dict[str, Any]]:
+    metadata = metadata if isinstance(metadata, dict) else {}
+    status_norm = str(status or "new").strip().lower()
+    is_notification = str(event_class or "").strip().lower() == "notification"
+    pinned = bool(metadata.get("pinned"))
+    actions: list[dict[str, Any]] = []
+    route = str(entity_ref.get("route") or "")
+    if route:
+        actions.append({"id": "view", "label": "View", "type": "link", "href": route})
+    if entity_ref.get("session_href"):
+        actions.append({"id": "open_session", "label": "Open Session", "type": "link", "href": entity_ref["session_href"]})
+    if source_domain == "csi":
+        actions.append({"id": "view_csi", "label": "View in CSI", "type": "link", "href": "/dashboard/csi"})
+        report_href = str(entity_ref.get("report_href") or "").strip()
+        if report_href:
+            actions.append({"id": "open_report", "label": "Open Report", "type": "link", "href": report_href})
+        artifact_href = str(entity_ref.get("artifact_href") or "").strip()
+        if artifact_href:
+            actions.append({"id": "open_artifact", "label": "Open Artifact", "type": "link", "href": artifact_href})
+    if requires_action:
+        actions.append({"id": "send_to_simone", "label": "Send to Simone", "type": "action"})
+    if is_notification:
+        if status_norm not in {"read", "acknowledged", "dismissed"}:
+            actions.append({"id": "mark_read", "label": "Mark Read", "type": "action"})
+        if status_norm == "snoozed":
+            actions.append({"id": "unsnooze", "label": "Unsnooze", "type": "action"})
+        else:
+            actions.append({"id": "snooze", "label": "Snooze 60m", "type": "action"})
+    if pinned:
+        actions.append({"id": "unpin", "label": "Unpin", "type": "action"})
+    else:
+        actions.append({"id": "pin", "label": "Pin", "type": "action"})
+    return actions
+
+
+def _merge_activity_actions(*action_sets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for action_list in action_sets:
+        for action in action_list:
+            if not isinstance(action, dict):
+                continue
+            action_id = str(action.get("id") or "").strip().lower()
+            if not action_id or action_id in seen:
+                continue
+            seen.add(action_id)
+            merged.append(action)
+    return merged
+
+
+def _activity_connect() -> sqlite3.Connection:
+    conn = connect_runtime_db(get_runtime_db_path())
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _ensure_activity_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS activity_events (
+            id TEXT PRIMARY KEY,
+            event_class TEXT NOT NULL DEFAULT 'notification',
+            source_domain TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            full_message TEXT NOT NULL,
+            severity TEXT NOT NULL DEFAULT 'info',
+            status TEXT NOT NULL DEFAULT 'new',
+            requires_action INTEGER NOT NULL DEFAULT 0,
+            session_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            entity_ref_json TEXT NOT NULL DEFAULT '{}',
+            actions_json TEXT NOT NULL DEFAULT '[]',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            channels_json TEXT NOT NULL DEFAULT '[]',
+            email_targets_json TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_events_created_at ON activity_events(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_activity_events_source_domain ON activity_events(source_domain, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_activity_events_kind ON activity_events(kind, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_activity_events_status ON activity_events(status, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_activity_events_requires_action ON activity_events(requires_action, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS activity_event_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            outcome TEXT NOT NULL DEFAULT 'ok',
+            note TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_event_audit_event_id ON activity_event_audit(event_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_activity_event_audit_action ON activity_event_audit(action, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS activity_event_stream (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL,
+            op TEXT NOT NULL,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_activity_event_stream_created_at ON activity_event_stream(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS dashboard_event_filter_presets (
+            id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            filters_json TEXT NOT NULL DEFAULT '{}',
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_used_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_dashboard_event_filter_presets_owner ON dashboard_event_filter_presets(owner_id, updated_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_dashboard_event_filter_presets_owner_name
+            ON dashboard_event_filter_presets(owner_id, name);
+
+        CREATE TABLE IF NOT EXISTS csi_specialist_loops (
+            topic_key TEXT PRIMARY KEY,
+            topic_label TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            confidence_target REAL NOT NULL DEFAULT 0.72,
+            confidence_score REAL NOT NULL DEFAULT 0.0,
+            follow_up_budget_total INTEGER NOT NULL DEFAULT 3,
+            follow_up_budget_remaining INTEGER NOT NULL DEFAULT 3,
+            events_count INTEGER NOT NULL DEFAULT 0,
+            source_mix_json TEXT NOT NULL DEFAULT '{}',
+            last_event_type TEXT,
+            last_event_id TEXT,
+            last_event_at TEXT,
+            last_followup_requested_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            closed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_csi_specialist_loops_status ON csi_specialist_loops(status, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_csi_specialist_loops_updated_at ON csi_specialist_loops(updated_at DESC);
+        """
+    )
+    conn.commit()
+
+
+def _activity_actor_from_request(request: Optional[Request]) -> str:
+    if request is None:
+        return "dashboard_user"
+    for header in ("x-user-id", "x-actor-id", "x-user", "x-forwarded-user"):
+        value = str(request.headers.get(header) or "").strip()
+        if value:
+            return value[:128]
+    return "dashboard_user"
+
+
+def _activity_cursor_encode(created_at_utc: str, event_id: str) -> str:
+    payload = {"created_at_utc": str(created_at_utc or ""), "id": str(event_id or "")}
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _activity_cursor_decode(cursor: Optional[str]) -> Optional[tuple[str, str]]:
+    value = str(cursor or "").strip()
+    if not value:
+        return None
+    padded = value + "=" * (-len(value) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        payload = json.loads(decoded)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    created = str(payload.get("created_at_utc") or "").strip()
+    event_id = str(payload.get("id") or "").strip()
+    if not created or not event_id:
+        return None
+    return created, event_id
+
+
+def _activity_stream_append(
+    conn: sqlite3.Connection,
+    *,
+    event_id: str,
+    op: str,
+    payload: dict[str, Any],
+) -> int:
+    row = conn.execute(
+        """
+        INSERT INTO activity_event_stream (event_id, op, payload_json, created_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            str(event_id or "").strip(),
+            str(op or "").strip().lower() or "upsert",
+            _activity_json_dumps(payload, fallback="{}"),
+            _utc_now_iso(),
+        ),
+    )
+    return int(row.lastrowid or 0)
+
+
+def _activity_stream_latest_seq(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT MAX(seq) AS max_seq FROM activity_event_stream").fetchone()
+    if row is None:
+        return 0
+    return int(row["max_seq"] or 0)
+
+
+def _activity_stream_event_matches_filters(
+    event: dict[str, Any],
+    *,
+    source_domain: Optional[str] = None,
+    kind: Optional[str] = None,
+    severity: Optional[str] = None,
+    status_value: Optional[str] = None,
+    requires_action: Optional[bool] = None,
+    pinned: Optional[bool] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> bool:
+    if not isinstance(event, dict):
+        return False
+    if source_domain and str(event.get("source_domain") or "").strip().lower() != str(source_domain).strip().lower():
+        return False
+    if kind and str(event.get("kind") or "").strip().lower() != str(kind).strip().lower():
+        return False
+    if severity and str(event.get("severity") or "").strip().lower() != str(severity).strip().lower():
+        return False
+    if status_value and str(event.get("status") or "").strip().lower() != str(status_value).strip().lower():
+        return False
+    if requires_action is not None and bool(event.get("requires_action")) != bool(requires_action):
+        return False
+    if pinned is not None:
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        if bool(metadata.get("pinned")) != bool(pinned):
+            return False
+    event_created = _normalize_notification_timestamp(event.get("created_at_utc") or event.get("created_at"))
+    if since and event_created < _normalize_notification_timestamp(since):
+        return False
+    if until and event_created > _normalize_notification_timestamp(until):
+        return False
+    return True
+
+
+def _activity_stream_read(
+    *,
+    since_seq: int,
+    limit: int,
+    source_domain: Optional[str] = None,
+    kind: Optional[str] = None,
+    severity: Optional[str] = None,
+    status_value: Optional[str] = None,
+    requires_action: Optional[bool] = None,
+    pinned: Optional[bool] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> tuple[list[dict[str, Any]], int]:
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT seq, event_id, op, payload_json, created_at
+            FROM activity_event_stream
+            WHERE seq > ?
+            ORDER BY seq ASC
+            LIMIT ?
+            """,
+            (max(0, int(since_seq)), max(1, min(int(limit), 5000))),
+        ).fetchall()
+        events: list[dict[str, Any]] = []
+        max_seq_seen = max(0, int(since_seq))
+        for row in rows:
+            seq = int(row["seq"] or 0)
+            if seq > max_seq_seen:
+                max_seq_seen = seq
+            op = str(row["op"] or "upsert").strip().lower() or "upsert"
+            payload = _activity_json_loads_obj(row["payload_json"], default={})
+            if not isinstance(payload, dict):
+                payload = {}
+            event_data = payload.get("event") if isinstance(payload.get("event"), dict) else payload
+            if op == "upsert" and not _activity_stream_event_matches_filters(
+                event_data,
+                source_domain=source_domain,
+                kind=kind,
+                severity=severity,
+                status_value=status_value,
+                requires_action=requires_action,
+                pinned=pinned,
+                since=since,
+                until=until,
+            ):
+                continue
+            events.append(
+                {
+                    "seq": seq,
+                    "event_id": str(row["event_id"] or ""),
+                    "op": op,
+                    "event": event_data,
+                    "created_at_utc": _normalize_notification_timestamp(row["created_at"]),
+                }
+            )
+        return events, max_seq_seen
+    finally:
+        conn.close()
+
+
+def _dashboard_owner_from_request(request: Optional[Request]) -> str:
+    if request is None:
+        return "owner_primary"
+    for header in ("x-ua-dashboard-owner", "x-user-id", "x-actor-id", "x-user"):
+        value = str(request.headers.get(header) or "").strip()
+        if value:
+            return value[:128]
+    return "owner_primary"
+
+
+def _normalize_event_preset_filters(filters: Optional[dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(filters, dict):
+        return {}
+    allowed = {
+        "source_domain",
+        "severity",
+        "status",
+        "kind",
+        "time_window",
+        "actionable_only",
+        "pinned_only",
+        "since",
+        "until",
+    }
+    out: dict[str, Any] = {}
+    for key, value in filters.items():
+        normalized_key = str(key or "").strip()
+        if normalized_key not in allowed:
+            continue
+        if isinstance(value, bool):
+            out[normalized_key] = value
+        elif value is None:
+            out[normalized_key] = None
+        else:
+            out[normalized_key] = str(value)
+    return out
+
+
+def _list_event_filter_presets(owner_id: str) -> list[dict[str, Any]]:
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT id, owner_id, name, filters_json, is_default, created_at, updated_at, last_used_at
+            FROM dashboard_event_filter_presets
+            WHERE owner_id = ?
+            ORDER BY is_default DESC, updated_at DESC, name ASC
+            """,
+            (str(owner_id or "").strip(),),
+        ).fetchall()
+        presets: list[dict[str, Any]] = []
+        for row in rows:
+            presets.append(
+                {
+                    "id": str(row["id"] or ""),
+                    "owner_id": str(row["owner_id"] or ""),
+                    "name": str(row["name"] or ""),
+                    "filters": _activity_json_loads_obj(row["filters_json"], default={}),
+                    "is_default": bool(int(row["is_default"] or 0)),
+                    "created_at_utc": _normalize_notification_timestamp(row["created_at"]),
+                    "updated_at_utc": _normalize_notification_timestamp(row["updated_at"]),
+                    "last_used_at_utc": _normalize_notification_timestamp(row["last_used_at"]) if row["last_used_at"] else None,
+                }
+            )
+        return presets
+    finally:
+        conn.close()
+
+
+def _create_event_filter_preset(
+    *,
+    owner_id: str,
+    name: str,
+    filters: dict[str, Any],
+    is_default: bool,
+) -> dict[str, Any]:
+    owner = str(owner_id or "").strip() or "owner_primary"
+    preset_name = str(name or "").strip()
+    if not preset_name:
+        raise ValueError("name is required")
+    normalized_filters = _normalize_event_preset_filters(filters)
+    now_iso = _utc_now_iso()
+    preset_id = f"evt_preset_{uuid.uuid4().hex}"
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            if is_default:
+                conn.execute(
+                    "UPDATE dashboard_event_filter_presets SET is_default = 0 WHERE owner_id = ?",
+                    (owner,),
+                )
+            conn.execute(
+                """
+                INSERT INTO dashboard_event_filter_presets (
+                    id, owner_id, name, filters_json, is_default, created_at, updated_at, last_used_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    preset_id,
+                    owner,
+                    preset_name,
+                    _activity_json_dumps(normalized_filters, fallback="{}"),
+                    1 if is_default else 0,
+                    now_iso,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            if "uq_dashboard_event_filter_presets_owner_name" in str(exc).lower():
+                raise ValueError(f"Preset '{preset_name}' already exists") from exc
+            raise
+        finally:
+            conn.close()
+    rows = _list_event_filter_presets(owner)
+    for row in rows:
+        if str(row.get("id") or "") == preset_id:
+            return row
+    return {
+        "id": preset_id,
+        "owner_id": owner,
+        "name": preset_name,
+        "filters": normalized_filters,
+        "is_default": bool(is_default),
+        "created_at_utc": now_iso,
+        "updated_at_utc": now_iso,
+        "last_used_at_utc": now_iso,
+    }
+
+
+def _update_event_filter_preset(
+    *,
+    owner_id: str,
+    preset_id: str,
+    name: Optional[str],
+    filters: Optional[dict[str, Any]],
+    is_default: Optional[bool],
+    mark_used: bool = False,
+) -> Optional[dict[str, Any]]:
+    owner = str(owner_id or "").strip() or "owner_primary"
+    target_id = str(preset_id or "").strip()
+    if not target_id:
+        return None
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            row = conn.execute(
+                """
+                SELECT id, owner_id, name, filters_json, is_default, created_at, updated_at, last_used_at
+                FROM dashboard_event_filter_presets
+                WHERE id = ? AND owner_id = ?
+                LIMIT 1
+                """,
+                (target_id, owner),
+            ).fetchone()
+            if row is None:
+                return None
+            next_name = str(name).strip() if name is not None else str(row["name"] or "")
+            if not next_name:
+                raise ValueError("name cannot be empty")
+            current_filters = _activity_json_loads_obj(row["filters_json"], default={})
+            next_filters = _normalize_event_preset_filters(filters if filters is not None else current_filters)
+            next_default = bool(is_default) if is_default is not None else bool(int(row["is_default"] or 0))
+            now_iso = _utc_now_iso()
+            if next_default:
+                conn.execute(
+                    "UPDATE dashboard_event_filter_presets SET is_default = 0 WHERE owner_id = ? AND id != ?",
+                    (owner, target_id),
+                )
+            conn.execute(
+                """
+                UPDATE dashboard_event_filter_presets
+                SET name = ?, filters_json = ?, is_default = ?, updated_at = ?, last_used_at = ?
+                WHERE id = ? AND owner_id = ?
+                """,
+                (
+                    next_name,
+                    _activity_json_dumps(next_filters, fallback="{}"),
+                    1 if next_default else 0,
+                    now_iso,
+                    now_iso if mark_used else row["last_used_at"],
+                    target_id,
+                    owner,
+                ),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError as exc:
+            if "uq_dashboard_event_filter_presets_owner_name" in str(exc).lower():
+                raise ValueError(f"Preset '{str(name or '').strip()}' already exists") from exc
+            raise
+        finally:
+            conn.close()
+    rows = _list_event_filter_presets(owner)
+    for item in rows:
+        if str(item.get("id") or "") == target_id:
+            return item
+    return None
+
+
+def _delete_event_filter_preset(*, owner_id: str, preset_id: str) -> bool:
+    owner = str(owner_id or "").strip() or "owner_primary"
+    target_id = str(preset_id or "").strip()
+    if not target_id:
+        return False
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            result = conn.execute(
+                "DELETE FROM dashboard_event_filter_presets WHERE id = ? AND owner_id = ?",
+                (target_id, owner),
+            )
+            conn.commit()
+            return int(result.rowcount or 0) > 0
+        finally:
+            conn.close()
+
+
+def _activity_prune_old(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "DELETE FROM activity_events WHERE created_at < datetime('now', ?)",
+        (f"-{int(_activity_events_retention_days)} days",),
+    )
+    conn.execute(
+        "DELETE FROM activity_event_stream WHERE created_at < datetime('now', ?)",
+        (f"-{int(_activity_stream_retention_days)} days",),
+    )
+    conn.commit()
+
+
+def _activity_upsert_record(record: dict[str, Any]) -> None:
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO activity_events (
+                    id, event_class, source_domain, kind, title, summary, full_message, severity,
+                    status, requires_action, session_id, created_at, updated_at, entity_ref_json,
+                    actions_json, metadata_json, channels_json, email_targets_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    event_class=excluded.event_class,
+                    source_domain=excluded.source_domain,
+                    kind=excluded.kind,
+                    title=excluded.title,
+                    summary=excluded.summary,
+                    full_message=excluded.full_message,
+                    severity=excluded.severity,
+                    status=excluded.status,
+                    requires_action=excluded.requires_action,
+                    session_id=excluded.session_id,
+                    created_at=excluded.created_at,
+                    updated_at=excluded.updated_at,
+                    entity_ref_json=excluded.entity_ref_json,
+                    actions_json=excluded.actions_json,
+                    metadata_json=excluded.metadata_json,
+                    channels_json=excluded.channels_json,
+                    email_targets_json=excluded.email_targets_json
+                """,
+                (
+                    str(record.get("id") or ""),
+                    str(record.get("event_class") or "notification"),
+                    str(record.get("source_domain") or "system"),
+                    str(record.get("kind") or "event"),
+                    str(record.get("title") or "Event"),
+                    str(record.get("summary") or ""),
+                    str(record.get("full_message") or ""),
+                    str(record.get("severity") or "info"),
+                    str(record.get("status") or "new"),
+                    1 if bool(record.get("requires_action")) else 0,
+                    str(record.get("session_id") or "") or None,
+                    _normalize_notification_timestamp(record.get("created_at")),
+                    _normalize_notification_timestamp(record.get("updated_at")),
+                    _activity_json_dumps(record.get("entity_ref") or {}, fallback="{}"),
+                    _activity_json_dumps(record.get("actions") or [], fallback="[]"),
+                    _activity_json_dumps(record.get("metadata") or {}, fallback="{}"),
+                    _activity_json_dumps(record.get("channels") or [], fallback="[]"),
+                    _activity_json_dumps(record.get("email_targets") or [], fallback="[]"),
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM activity_events WHERE id = ? LIMIT 1",
+                (str(record.get("id") or ""),),
+            ).fetchone()
+            if row is not None:
+                _activity_stream_append(
+                    conn,
+                    event_id=str(row["id"] or ""),
+                    op="upsert",
+                    payload={"event": _activity_row_to_dashboard_event(row)},
+                )
+            _activity_prune_old(conn)
+        finally:
+            conn.close()
+
+
+def _activity_record_from_notification(record: dict[str, Any]) -> dict[str, Any]:
+    metadata = record.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    created_at = _normalize_notification_timestamp(record.get("created_at"))
+    updated_at = _normalize_notification_timestamp(record.get("updated_at") or created_at)
+    summary = str(record.get("summary") or "").strip() or _activity_summary_text(str(record.get("message") or ""))
+    full_message = str(record.get("full_message") or record.get("message") or "")
+    source_domain = _activity_source_domain(str(record.get("kind") or ""), metadata)
+    entity_ref = _activity_entity_ref(
+        source_domain=source_domain,
+        session_id=str(record.get("session_id") or "").strip() or None,
+        metadata=metadata,
+    )
+    actions = _activity_actions(
+        source_domain=source_domain,
+        entity_ref=entity_ref,
+        requires_action=bool(record.get("requires_action")),
+        event_class="notification",
+        status=str(record.get("status") or "new"),
+        metadata=metadata,
+    )
+    return {
+        "id": str(record.get("id") or ""),
+        "event_class": "notification",
+        "source_domain": source_domain,
+        "kind": str(record.get("kind") or "notification"),
+        "title": str(record.get("title") or "Notification"),
+        "summary": summary,
+        "full_message": full_message,
+        "severity": str(record.get("severity") or "info"),
+        "status": str(record.get("status") or "new"),
+        "requires_action": bool(record.get("requires_action")),
+        "session_id": str(record.get("session_id") or "") or None,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "entity_ref": entity_ref,
+        "actions": actions,
+        "metadata": metadata,
+        "channels": list(record.get("channels") or []),
+        "email_targets": list(record.get("email_targets") or []),
+    }
+
+
+def _persist_notification_activity(record: dict[str, Any]) -> None:
+    try:
+        _activity_upsert_record(_activity_record_from_notification(record))
+    except Exception as exc:
+        logger.debug("Failed persisting notification activity record: %s", exc)
+
+
+def _activity_row_to_notification(row: sqlite3.Row) -> dict[str, Any]:
+    metadata = _activity_json_loads_obj(row["metadata_json"], default={})
+    return {
+        "id": str(row["id"] or ""),
+        "kind": str(row["kind"] or ""),
+        "title": str(row["title"] or ""),
+        "message": str(row["full_message"] or ""),
+        "summary": str(row["summary"] or ""),
+        "full_message": str(row["full_message"] or ""),
+        "session_id": str(row["session_id"] or "") or None,
+        "severity": str(row["severity"] or "info"),
+        "requires_action": bool(int(row["requires_action"] or 0)),
+        "status": str(row["status"] or "new"),
+        "created_at": _normalize_notification_timestamp(row["created_at"]),
+        "updated_at": _normalize_notification_timestamp(row["updated_at"]),
+        "channels": _activity_json_loads_obj(row["channels_json"], default=[]),
+        "email_targets": _activity_json_loads_obj(row["email_targets_json"], default=[]),
+        "metadata": metadata if isinstance(metadata, dict) else {},
+    }
+
+
+def _load_notifications_from_activity_store(limit: int) -> list[dict[str, Any]]:
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM activity_events
+            WHERE event_class = 'notification'
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max(1, int(limit)),),
+        ).fetchall()
+        return [_activity_row_to_notification(row) for row in rows]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
+def _activity_row_to_dashboard_event(row: sqlite3.Row) -> dict[str, Any]:
+    event_class = str(row["event_class"] or "notification")
+    metadata = _activity_json_loads_obj(row["metadata_json"], default={})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    entity_ref = _activity_json_loads_obj(row["entity_ref_json"], default={})
+    if not isinstance(entity_ref, dict):
+        entity_ref = {}
+    stored_actions = _activity_json_loads_obj(row["actions_json"], default=[])
+    if not isinstance(stored_actions, list):
+        stored_actions = []
+    computed_actions = _activity_actions(
+        source_domain=str(row["source_domain"] or "system"),
+        entity_ref=entity_ref,
+        requires_action=bool(int(row["requires_action"] or 0)),
+        event_class=event_class,
+        status=str(row["status"] or "new"),
+        metadata=metadata,
+    )
+    return {
+        "id": str(row["id"] or ""),
+        "event_class": event_class,
+        "source_domain": str(row["source_domain"] or "system"),
+        "kind": str(row["kind"] or ""),
+        "title": str(row["title"] or ""),
+        "summary": str(row["summary"] or ""),
+        "full_message": str(row["full_message"] or ""),
+        "severity": str(row["severity"] or "info"),
+        "status": str(row["status"] or "new"),
+        "requires_action": bool(int(row["requires_action"] or 0)),
+        "session_id": str(row["session_id"] or "") or None,
+        "created_at_utc": _normalize_notification_timestamp(row["created_at"]),
+        "updated_at_utc": _normalize_notification_timestamp(row["updated_at"]),
+        "entity_ref": entity_ref,
+        "actions": _merge_activity_actions(stored_actions, computed_actions),
+        "metadata": metadata,
+    }
+
+
+def _persist_system_activity_event(event: dict[str, Any], *, session_id: Optional[str]) -> None:
+    metadata = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    created_at = _normalize_notification_timestamp(event.get("created_at"))
+    source_domain = "system"
+    kind = str(event.get("type") or "system_event")
+    title = f"System Event: {kind}"
+    summary = _activity_summary_text(_activity_json_dumps(metadata, fallback="{}"), max_chars=220)
+    event_id = str(event.get("event_id") or f"evt_{int(time.time() * 1000)}")
+    record = {
+        "id": f"activity_{event_id}_{session_id or 'all'}",
+        "event_class": "system_event",
+        "source_domain": source_domain,
+        "kind": kind,
+        "title": title,
+        "summary": summary,
+        "full_message": _activity_json_dumps(metadata, fallback="{}"),
+        "severity": "info",
+        "status": "new",
+        "requires_action": False,
+        "session_id": session_id,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "entity_ref": _activity_entity_ref(
+            source_domain=source_domain,
+            session_id=session_id,
+            metadata=metadata if isinstance(metadata, dict) else {},
+        ),
+        "actions": _activity_actions(
+            source_domain=source_domain,
+            entity_ref=_activity_entity_ref(
+                source_domain=source_domain,
+                session_id=session_id,
+                metadata=metadata if isinstance(metadata, dict) else {},
+            ),
+            requires_action=False,
+            event_class="system_event",
+            status="new",
+            metadata=metadata if isinstance(metadata, dict) else {},
+        ),
+        "metadata": metadata if isinstance(metadata, dict) else {},
+        "channels": ["dashboard"],
+        "email_targets": [],
+    }
+    try:
+        _activity_upsert_record(record)
+    except Exception as exc:
+        logger.debug("Failed persisting system activity event: %s", exc)
+
+
+def _query_activity_events(
+    *,
+    limit: int,
+    source_domain: Optional[str] = None,
+    kind: Optional[str] = None,
+    severity: Optional[str] = None,
+    status_value: Optional[str] = None,
+    requires_action: Optional[bool] = None,
+    pinned: Optional[bool] = None,
+    cursor: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    apply_default_window: bool = True,
+) -> list[dict[str, Any]]:
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        where: list[str] = []
+        params: list[Any] = []
+        if source_domain:
+            where.append("LOWER(source_domain) = ?")
+            params.append(source_domain.strip().lower())
+        if kind:
+            where.append("LOWER(kind) = ?")
+            params.append(kind.strip().lower())
+        if severity:
+            where.append("LOWER(severity) = ?")
+            params.append(severity.strip().lower())
+        if status_value:
+            where.append("LOWER(status) = ?")
+            params.append(status_value.strip().lower())
+        if requires_action is not None:
+            where.append("requires_action = ?")
+            params.append(1 if requires_action else 0)
+        cursor_parts = _activity_cursor_decode(cursor)
+        if cursor_parts is not None:
+            cursor_created, cursor_id = cursor_parts
+            where.append("(created_at < ? OR (created_at = ? AND id < ?))")
+            params.extend([cursor_created, cursor_created, cursor_id])
+        if since:
+            where.append("created_at >= ?")
+            params.append(_normalize_notification_timestamp(since))
+        if until:
+            where.append("created_at <= ?")
+            params.append(_normalize_notification_timestamp(until))
+        if apply_default_window and since is None and until is None:
+            where.append("created_at >= datetime('now', ?)")
+            params.append(f"-{int(_activity_events_default_window_days)} days")
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM activity_events
+            {where_sql}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, max(1, min(int(limit), 1000))),
+        ).fetchall()
+        items = [_activity_row_to_dashboard_event(row) for row in rows]
+        if pinned is not None:
+            items = [
+                item for item in items
+                if bool((item.get("metadata") or {}).get("pinned")) == bool(pinned)
+            ]
+        return items
+    finally:
+        conn.close()
+
+
+def _query_activity_event_counters(
+    *,
+    event_class: Optional[str] = None,
+    source_domain: Optional[str] = None,
+    kind: Optional[str] = None,
+    severity: Optional[str] = None,
+    status_value: Optional[str] = None,
+    pinned: Optional[bool] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    apply_default_window: bool = True,
+) -> dict[str, Any]:
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        where: list[str] = []
+        params: list[Any] = []
+        if source_domain:
+            where.append("LOWER(source_domain) = ?")
+            params.append(source_domain.strip().lower())
+        if event_class:
+            where.append("LOWER(event_class) = ?")
+            params.append(event_class.strip().lower())
+        if kind:
+            where.append("LOWER(kind) = ?")
+            params.append(kind.strip().lower())
+        if severity:
+            where.append("LOWER(severity) = ?")
+            params.append(severity.strip().lower())
+        if status_value:
+            where.append("LOWER(status) = ?")
+            params.append(status_value.strip().lower())
+        if since:
+            where.append("created_at >= ?")
+            params.append(_normalize_notification_timestamp(since))
+        if until:
+            where.append("created_at <= ?")
+            params.append(_normalize_notification_timestamp(until))
+        if apply_default_window and since is None and until is None:
+            where.append("created_at >= datetime('now', ?)")
+            params.append(f"-{int(_activity_events_default_window_days)} days")
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = conn.execute(
+            f"""
+            SELECT source_domain, status, requires_action, metadata_json
+            FROM activity_events
+            {where_sql}
+            """,
+            tuple(params),
+        ).fetchall()
+        known_sources = ["csi", "tutorial", "cron", "continuity", "heartbeat", "system"]
+        by_source: dict[str, dict[str, int]] = {
+            key: {"unread": 0, "actionable": 0, "total": 0}
+            for key in known_sources
+        }
+        totals = {"unread": 0, "actionable": 0, "total": 0}
+        for row in rows:
+            metadata = _activity_json_loads_obj(row["metadata_json"], default={})
+            if not isinstance(metadata, dict):
+                metadata = {}
+            if pinned is not None and bool(metadata.get("pinned")) != bool(pinned):
+                continue
+            source_key = str(row["source_domain"] or "system").strip().lower() or "system"
+            if source_key not in by_source:
+                by_source[source_key] = {"unread": 0, "actionable": 0, "total": 0}
+            status_norm = str(row["status"] or "new").strip().lower()
+            actionable = bool(int(row["requires_action"] or 0))
+            unread = status_norm in {"new", "pending"}
+            by_source[source_key]["total"] += 1
+            totals["total"] += 1
+            if actionable:
+                by_source[source_key]["actionable"] += 1
+                totals["actionable"] += 1
+            if unread:
+                by_source[source_key]["unread"] += 1
+                totals["unread"] += 1
+        return {"totals": totals, "by_source": by_source}
+    finally:
+        conn.close()
+
+
+def _get_activity_event(activity_id: str) -> Optional[dict[str, Any]]:
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        row = conn.execute(
+            "SELECT * FROM activity_events WHERE id = ? LIMIT 1",
+            (str(activity_id),),
+        ).fetchone()
+        if row is None:
+            return None
+        return _activity_row_to_dashboard_event(row)
+    finally:
+        conn.close()
+
+
+def _list_csi_specialist_loops(limit: int = 50, status_filter: Optional[str] = None) -> list[dict[str, Any]]:
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        where = ""
+        params: list[Any] = []
+        if status_filter:
+            where = "WHERE LOWER(status) = ?"
+            params.append(str(status_filter).strip().lower())
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM csi_specialist_loops
+            {where}
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            (*params, max(1, min(int(limit), 500))),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            out.append(
+                {
+                    "topic_key": str(row["topic_key"] or ""),
+                    "topic_label": str(row["topic_label"] or ""),
+                    "status": str(row["status"] or "open"),
+                    "confidence_target": float(row["confidence_target"] or 0.0),
+                    "confidence_score": float(row["confidence_score"] or 0.0),
+                    "follow_up_budget_total": int(row["follow_up_budget_total"] or 0),
+                    "follow_up_budget_remaining": int(row["follow_up_budget_remaining"] or 0),
+                    "events_count": int(row["events_count"] or 0),
+                    "source_mix": _csi_parse_mix_json(row["source_mix_json"]),
+                    "last_event_type": str(row["last_event_type"] or ""),
+                    "last_event_id": str(row["last_event_id"] or ""),
+                    "last_event_at": str(row["last_event_at"] or "") or None,
+                    "last_followup_requested_at": str(row["last_followup_requested_at"] or "") or None,
+                    "created_at": str(row["created_at"] or _utc_now_iso()),
+                    "updated_at": str(row["updated_at"] or _utc_now_iso()),
+                    "closed_at": str(row["closed_at"] or "") or None,
+                }
+            )
+        return out
+    finally:
+        conn.close()
+
+
+def _record_activity_audit(
+    *,
+    event_id: str,
+    action: str,
+    actor: str,
+    outcome: str = "ok",
+    note: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    cleaned_event_id = str(event_id or "").strip()
+    cleaned_action = str(action or "").strip().lower()
+    if not cleaned_event_id or not cleaned_action:
+        return
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO activity_event_audit (
+                    event_id, action, actor, outcome, note, metadata_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cleaned_event_id,
+                    cleaned_action,
+                    str(actor or "dashboard_user")[:128],
+                    str(outcome or "ok").strip().lower() or "ok",
+                    str(note or "").strip() or None,
+                    _activity_json_dumps(metadata or {}, fallback="{}"),
+                    _utc_now_iso(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _list_activity_audit(
+    *,
+    event_id: Optional[str] = None,
+    action: Optional[str] = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        where: list[str] = []
+        params: list[Any] = []
+        if event_id:
+            where.append("event_id = ?")
+            params.append(str(event_id).strip())
+        if action:
+            where.append("LOWER(action) = ?")
+            params.append(str(action).strip().lower())
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = conn.execute(
+            f"""
+            SELECT id, event_id, action, actor, outcome, note, metadata_json, created_at
+            FROM activity_event_audit
+            {where_sql}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, max(1, min(int(limit), 1000))),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            out.append(
+                {
+                    "id": int(row["id"] or 0),
+                    "event_id": str(row["event_id"] or ""),
+                    "action": str(row["action"] or ""),
+                    "actor": str(row["actor"] or ""),
+                    "outcome": str(row["outcome"] or "ok"),
+                    "note": str(row["note"] or "") or None,
+                    "metadata": _activity_json_loads_obj(row["metadata_json"], default={}),
+                    "created_at_utc": _normalize_notification_timestamp(row["created_at"]),
+                }
+            )
+        return out
+    finally:
+        conn.close()
+
+
+def _delete_activity_events(ids: list[str]) -> None:
+    cleaned = [str(item).strip() for item in ids if str(item).strip()]
+    if not cleaned:
+        return
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            placeholders = ",".join(["?"] * len(cleaned))
+            existing_rows = conn.execute(
+                f"SELECT id FROM activity_events WHERE id IN ({placeholders})",
+                cleaned,
+            ).fetchall()
+            existing_ids = [str(row["id"] or "").strip() for row in existing_rows if str(row["id"] or "").strip()]
+            conn.execute(f"DELETE FROM activity_events WHERE id IN ({placeholders})", cleaned)
+            for event_id in existing_ids:
+                _activity_stream_append(
+                    conn,
+                    event_id=event_id,
+                    op="delete",
+                    payload={"id": event_id},
+                )
+            _activity_prune_old(conn)
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def _replace_notification_cache_record(updated: dict[str, Any]) -> None:
+    notification_id = str(updated.get("id") or "").strip()
+    if not notification_id:
+        return
+    for idx, existing in enumerate(_notifications):
+        if str(existing.get("id") or "") == notification_id:
+            _notifications[idx] = updated
+            return
+    _notifications.append(updated)
+    if len(_notifications) > _notifications_max:
+        del _notifications[: len(_notifications) - _notifications_max]
+
+
+def _query_notification_activity_rows(
+    *,
+    kind: Optional[str] = None,
+    status_value: Optional[str] = None,
+    older_than_hours: Optional[int] = None,
+    limit: int = 200,
+    apply_default_window: bool = False,
+) -> list[dict[str, Any]]:
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        where = ["event_class = 'notification'"]
+        params: list[Any] = []
+        if kind:
+            where.append("LOWER(kind) = ?")
+            params.append(kind.strip().lower())
+        if status_value:
+            where.append("LOWER(status) = ?")
+            params.append(status_value.strip().lower())
+        if older_than_hours is not None:
+            clamped = max(1, min(int(older_than_hours), 24 * 365))
+            where.append("created_at <= datetime('now', ?)")
+            params.append(f"-{clamped} hours")
+        if apply_default_window:
+            where.append("created_at >= datetime('now', ?)")
+            params.append(f"-{int(_activity_events_default_window_days)} days")
+        where_sql = f"WHERE {' AND '.join(where)}"
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM activity_events
+            {where_sql}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (*params, max(1, min(int(limit), 5000))),
+        ).fetchall()
+        return [_activity_row_to_notification(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def _apply_activity_snooze_expiry() -> int:
+    changed = 0
+    items = _query_notification_activity_rows(status_value="snoozed", limit=5000, apply_default_window=False)
+    now_ts = time.time()
+    for item in items:
+        metadata = item.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        until_ts = _parse_snooze_until(metadata)
+        if until_ts is None or until_ts > now_ts:
+            continue
+        item["status"] = "new"
+        item["updated_at"] = _utc_now_iso()
+        metadata["snooze_expired_at"] = item["updated_at"]
+        metadata.pop("snooze_until_ts", None)
+        metadata.pop("snooze_until", None)
+        metadata.pop("snooze_minutes", None)
+        _persist_notification_activity(item)
+        _replace_notification_cache_record(item)
+        changed += 1
+    return changed
+
+
+def _bulk_update_activity_notifications(
+    *,
+    status_value: str,
+    note: Optional[str] = None,
+    kind: Optional[str] = None,
+    current_status: Optional[str] = None,
+    snooze_minutes: Optional[int] = None,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    candidates = _query_notification_activity_rows(
+        kind=kind,
+        status_value=current_status,
+        limit=limit,
+        apply_default_window=False,
+    )
+    if not candidates:
+        updated_in_memory: list[dict[str, Any]] = []
+        for item in reversed(_notifications):
+            if len(updated_in_memory) >= limit:
+                break
+            if kind and str(item.get("kind") or "").strip().lower() != kind:
+                continue
+            if current_status and _normalize_notification_status(item.get("status")) != current_status:
+                continue
+            _apply_notification_status(
+                item,
+                status_value=status_value,
+                note=note,
+                snooze_minutes=snooze_minutes,
+            )
+            updated_in_memory.append(item)
+        return updated_in_memory
+
+    updated: list[dict[str, Any]] = []
+    for item in candidates:
+        _apply_notification_status(
+            item,
+            status_value=status_value,
+            note=note,
+            snooze_minutes=snooze_minutes,
+        )
+        _replace_notification_cache_record(item)
+        updated.append(item)
+    return updated
+
+
+def _purge_activity_notifications(
+    *,
+    clear_all: bool,
+    kind: Optional[str] = None,
+    current_status: Optional[str] = None,
+    older_than_hours: Optional[int] = None,
+) -> int:
+    deleted_ids: list[str] = []
+    if clear_all and not kind and not current_status and older_than_hours is None:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            rows = conn.execute("SELECT id FROM activity_events WHERE event_class = 'notification'").fetchall()
+            deleted_ids = [str(row["id"] or "") for row in rows if str(row["id"] or "").strip()]
+        finally:
+            conn.close()
+        if deleted_ids:
+            _delete_activity_events(deleted_ids)
+    else:
+        rows = _query_notification_activity_rows(
+            kind=kind,
+            status_value=current_status,
+            older_than_hours=older_than_hours,
+            limit=5000,
+            apply_default_window=False,
+        )
+        deleted_ids = [str(item.get("id") or "") for item in rows if str(item.get("id") or "").strip()]
+        if deleted_ids:
+            _delete_activity_events(deleted_ids)
+    if not deleted_ids:
+        cutoff_ts = None
+        if older_than_hours is not None:
+            cutoff_ts = time.time() - (max(1, min(int(older_than_hours), 24 * 365)) * 3600)
+        deleted_memory: list[str] = []
+        kept_memory: list[dict[str, Any]] = []
+        for item in _notifications:
+            matches = True
+            if kind and str(item.get("kind") or "").strip().lower() != kind:
+                matches = False
+            if current_status and _normalize_notification_status(item.get("status")) != current_status:
+                matches = False
+            if cutoff_ts is not None:
+                created_ts = _notification_created_epoch(item)
+                if created_ts is None or created_ts > cutoff_ts:
+                    matches = False
+            if matches:
+                deleted_memory.append(str(item.get("id") or "").strip())
+            else:
+                kept_memory.append(item)
+        if deleted_memory:
+            _notifications[:] = kept_memory
+            deleted_ids = [item for item in deleted_memory if item]
+    if deleted_ids:
+        deleted_set = set(deleted_ids)
+        _notifications[:] = [item for item in _notifications if str(item.get("id") or "") not in deleted_set]
+    return len(deleted_ids)
+
+
 def _notification_targets() -> dict:
     config = load_ops_config()
     notifications = config.get("notifications", {})
@@ -3396,25 +5355,216 @@ def _notification_targets() -> dict:
     }
 
 
+def _activity_digest_should_compact(
+    *,
+    kind: str,
+    severity: str,
+    requires_action: bool,
+    metadata: Optional[dict[str, Any]],
+) -> bool:
+    if not _activity_digest_enabled:
+        return False
+    kind_norm = str(kind or "").strip().lower()
+    severity_norm = str(severity or "info").strip().lower()
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if severity_norm in {"warning", "error", "critical"}:
+        return False
+    if bool(requires_action):
+        return False
+    if bool(metadata.get("pinned")):
+        return False
+    if bool(metadata.get("digest_compacted")):
+        return False
+    if kind_norm in _activity_digest_exclude_kinds:
+        return False
+    bypass_prefixes = (
+        "simone_handoff_",
+        "csi_pipeline_digest",
+        "continuity_",
+    )
+    if kind_norm.startswith(bypass_prefixes):
+        return False
+    high_value_csi = {
+        "csi_insight",
+        "csi_specialist_daily_rollup",
+        "csi_specialist_hourly_synthesis",
+    }
+    if kind_norm in high_value_csi:
+        return False
+    event_type = str(metadata.get("event_type") or "").strip().lower()
+    if event_type in {
+        "rss_trend_report",
+        "reddit_trend_report",
+        "rss_insight_daily",
+        "rss_insight_emerging",
+        "report_product_ready",
+    }:
+        return False
+    return True
+
+
+def _activity_digest_bucket_key(
+    *,
+    kind: str,
+    severity: str,
+    source_domain: str,
+    created_at: str,
+) -> tuple[str, str]:
+    parsed = _parse_iso_timestamp(created_at) or datetime.now(timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    hour_key = parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:00:00Z")
+    digest_key = f"{source_domain}:{str(kind or '').strip().lower()}:{str(severity or 'info').strip().lower()}:{hour_key}"
+    return digest_key, hour_key
+
+
+def _activity_upsert_digest_notification(
+    *,
+    digest_key: str,
+    hour_key: str,
+    source_domain: str,
+    kind: str,
+    title: str,
+    message: str,
+    session_id: Optional[str],
+    severity: str,
+    metadata: Optional[dict[str, Any]],
+    created_at: str,
+) -> Optional[dict[str, Any]]:
+    metadata_obj = dict(metadata) if isinstance(metadata, dict) else {}
+    sample_ref = str(metadata_obj.get("event_id") or metadata_obj.get("report_key") or "").strip()
+    for item in reversed(_notifications):
+        if str(item.get("kind") or "").strip().lower() != str(kind or "").strip().lower():
+            continue
+        existing_meta = item.get("metadata")
+        if not isinstance(existing_meta, dict):
+            continue
+        if str(existing_meta.get("digest_key") or "").strip() != digest_key:
+            continue
+        sample_ids = existing_meta.get("sample_ids")
+        if not isinstance(sample_ids, list):
+            sample_ids = []
+        if sample_ref:
+            sample_ids.append(sample_ref)
+        sample_ids = [str(v).strip() for v in sample_ids if str(v).strip()][-_activity_digest_max_sample_ids:]
+        event_count = int(existing_meta.get("digest_event_count") or 1) + 1
+        existing_meta.update(
+            {
+                "digest_compacted": True,
+                "digest_key": digest_key,
+                "digest_hour": hour_key,
+                "digest_event_count": event_count,
+                "digest_last_sample_at": created_at,
+                "sample_ids": sample_ids,
+                "source_domain": source_domain,
+                "event_type": str(metadata_obj.get("event_type") or existing_meta.get("event_type") or ""),
+            }
+        )
+        item["title"] = title
+        item["summary"] = f"{title} ({hour_key}) — {event_count} events"
+        item["full_message"] = (
+            f"{title} ({hour_key})\n"
+            f"Compacted events: {event_count}\n"
+            f"Source: {source_domain}\n"
+            f"Latest sample:\n{message[:8000]}"
+        )
+        item["message"] = item["full_message"]
+        item["updated_at"] = _utc_now_iso()
+        item["created_at"] = _normalize_notification_timestamp(item.get("created_at") or created_at)
+        item["status"] = "new"
+        _replace_notification_cache_record(item)
+        _persist_notification_activity(item)
+        return item
+
+    return None
+
+
 def _add_notification(
     *,
     kind: str,
     title: str,
     message: str,
+    summary: Optional[str] = None,
+    full_message: Optional[str] = None,
     session_id: Optional[str] = None,
     severity: str = "info",
     requires_action: bool = False,
     metadata: Optional[dict] = None,
     created_at: Optional[str] = None,
 ) -> dict:
+    metadata_obj = dict(metadata) if isinstance(metadata, dict) else {}
+    summary_text = summary
+    full_message_text = full_message if full_message is not None else message
+    timestamp = _normalize_notification_timestamp(created_at)
+    source_domain = _activity_source_domain(str(kind or ""), metadata_obj)
+    should_compact = _activity_digest_should_compact(
+        kind=str(kind or ""),
+        severity=str(severity or "info"),
+        requires_action=bool(requires_action),
+        metadata=metadata_obj,
+    )
+    if _activity_digest_enabled and not should_compact:
+        _activity_counter_inc("digest_immediate_bypass_total")
+    if should_compact:
+        digest_key, hour_key = _activity_digest_bucket_key(
+            kind=str(kind or ""),
+            severity=str(severity or "info"),
+            source_domain=source_domain,
+            created_at=timestamp,
+        )
+        compacted = _activity_upsert_digest_notification(
+            digest_key=digest_key,
+            hour_key=hour_key,
+            source_domain=source_domain,
+            kind=str(kind or ""),
+            title=str(title or "Notification Digest"),
+            message=str(full_message_text),
+            session_id=session_id,
+            severity=str(severity or "info"),
+            metadata={
+                **metadata_obj,
+                "digest_compacted": True,
+                "digest_key": digest_key,
+                "digest_hour": hour_key,
+                "digest_event_count": 1,
+                "digest_last_sample_at": timestamp,
+                "sample_ids": [str(metadata_obj.get("event_id") or "").strip()] if str(metadata_obj.get("event_id") or "").strip() else [],
+                "source_domain": source_domain,
+            },
+            created_at=timestamp,
+        )
+        if compacted is not None:
+            _activity_counter_inc("digest_compacted_total")
+            return compacted
+        _activity_counter_inc("digest_compacted_total")
+        metadata_obj = {
+            **metadata_obj,
+            "digest_compacted": True,
+            "digest_key": digest_key,
+            "digest_hour": hour_key,
+            "digest_event_count": 1,
+            "digest_last_sample_at": timestamp,
+            "sample_ids": [str(metadata_obj.get("event_id") or "").strip()] if str(metadata_obj.get("event_id") or "").strip() else [],
+            "source_domain": source_domain,
+        }
+        if summary_text is None:
+            summary_text = f"{title} ({hour_key}) — 1 event"
+        full_message_text = (
+            f"{title} ({hour_key})\\n"
+            "Compacted events: 1\\n"
+            f"Source: {source_domain}\\n"
+            f"Latest sample:\\n{str(full_message_text)[:8000]}"
+        )
+
     notification_id = f"ntf_{int(time.time() * 1000)}_{len(_notifications) + 1}"
     targets = _notification_targets()
-    timestamp = _normalize_notification_timestamp(created_at)
     record = {
         "id": notification_id,
         "kind": kind,
         "title": title,
-        "message": message,
+        "message": full_message_text,
+        "summary": summary_text if summary_text is not None else _activity_summary_text(message),
+        "full_message": full_message_text,
         "session_id": session_id,
         "severity": severity,
         "requires_action": requires_action,
@@ -3423,7 +5573,10 @@ def _add_notification(
         "updated_at": timestamp,
         "channels": targets["channels"],
         "email_targets": targets["email_targets"],
-        "metadata": metadata or {},
+        "metadata": {
+            **metadata_obj,
+            "source_domain": source_domain,
+        },
     }
     _notifications.append(record)
     if len(_notifications) > _notifications_max:
@@ -3439,6 +5592,7 @@ def _add_notification(
         _enqueue_system_event(session_id, event)
         if session_id in manager.session_connections:
             _broadcast_system_event(session_id, event)
+    _persist_notification_activity(record)
     return record
 
 
@@ -3509,6 +5663,7 @@ def _apply_notification_status(
         metadata.pop("snooze_until_ts", None)
         metadata.pop("snooze_until", None)
         metadata.pop("snooze_minutes", None)
+    _persist_notification_activity(item)
     return item
 
 
@@ -3531,6 +5686,7 @@ def _apply_notification_snooze_expiry() -> int:
         metadata.pop("snooze_until", None)
         metadata.pop("snooze_minutes", None)
         changed += 1
+        _persist_notification_activity(item)
     return changed
 
 
@@ -5125,6 +7281,11 @@ async def lifespan(app: FastAPI):
     # transient lock errors during concurrent cron + VP runtime activity.
     main_module.runtime_db_conn.execute("PRAGMA busy_timeout=60000")
     ensure_schema(main_module.runtime_db_conn)
+    _ensure_activity_schema(main_module.runtime_db_conn)
+    _activity_prune_old(main_module.runtime_db_conn)
+    persisted_notifications = _load_notifications_from_activity_store(_notifications_max)
+    if persisted_notifications:
+        _notifications[:] = list(reversed(persisted_notifications))
     
     # Load budget config (defined in main.py)
     main_module.budget_config = main_module.load_budget_config()
@@ -5386,15 +7547,23 @@ async def signals_ingest_endpoint(request: Request):
                 continue
             _csi_record_dispatch(event.source, event.event_type)
             analytics_dispatch_count += 1
-            
+
+            policy = _csi_event_notification_policy(event)
             title = f"CSI Insight: {event.event_type or 'Report'} from {event.source or 'Unknown'}"
             message = analytics_action.get("message", "No content")
-            
+
             metadata = {
                 "event_type": event.event_type,
                 "event_id": event.event_id,
+                "notification_policy": {
+                    "high_value": bool(policy.get("high_value")),
+                    "has_anomaly": bool(policy.get("has_anomaly")),
+                },
             }
             if isinstance(event.subject, dict):
+                report_key = str(event.subject.get("report_key") or "").strip()
+                if report_key:
+                    metadata["report_key"] = report_key
                 artifact_paths = event.subject.get("artifact_paths")
                 if artifact_paths:
                     metadata["artifact_paths"] = artifact_paths
@@ -5403,18 +7572,100 @@ async def signals_ingest_endpoint(request: Request):
                     if md_path:
                         message += f"\n\nReport Artifact: {md_path}"
 
-            _add_notification(
-                kind="csi_insight",
-                title=title,
-                message=f"Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n{message[:300]}...",
-                severity="info",
-                requires_action=True,
-                metadata=metadata,
-                created_at=event.occurred_at or event.received_at,
+            full_signal_message = (
+                "Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n"
+                f"{message}"
             )
-            
+            if bool(policy.get("is_digest")):
+                _csi_emit_digest_notification(event, full_signal_message)
+            else:
+                _add_notification(
+                    kind="csi_insight",
+                    title=title,
+                    message=full_signal_message,
+                    summary=_activity_summary_text(message, max_chars=260),
+                    full_message=full_signal_message,
+                    severity=str(policy.get("severity") or "info"),
+                    requires_action=bool(policy.get("requires_action")),
+                    metadata=metadata,
+                    created_at=event.occurred_at or event.received_at,
+                )
+            _csi_emit_specialist_synthesis(event, full_signal_message)
+            loop_state = _csi_update_specialist_loop(event, full_signal_message)
+            if loop_state.get("updated"):
+                loop_status = str(loop_state.get("status") or "")
+                if loop_status == "closed":
+                    _add_notification(
+                        kind="csi_specialist_confidence_reached",
+                        title="CSI Specialist Confidence Reached",
+                        message=(
+                            f"Loop {loop_state.get('topic_label')} reached confidence "
+                            f"{loop_state.get('confidence_score')} (target {loop_state.get('confidence_target')})."
+                        ),
+                        severity="success",
+                        requires_action=False,
+                        metadata={
+                            "topic_key": loop_state.get("topic_key"),
+                            "confidence_score": loop_state.get("confidence_score"),
+                            "confidence_target": loop_state.get("confidence_target"),
+                            "events_count": loop_state.get("events_count"),
+                        },
+                        created_at=event.occurred_at or event.received_at,
+                    )
+                elif loop_status == "budget_exhausted":
+                    _add_notification(
+                        kind="csi_specialist_followup_budget_exhausted",
+                        title="CSI Specialist Follow-up Budget Exhausted",
+                        message=(
+                            f"Loop {loop_state.get('topic_label')} exhausted follow-up budget "
+                            f"before reaching target confidence."
+                        ),
+                        severity="warning",
+                        requires_action=True,
+                        metadata={
+                            "topic_key": loop_state.get("topic_key"),
+                            "confidence_score": loop_state.get("confidence_score"),
+                            "confidence_target": loop_state.get("confidence_target"),
+                            "events_count": loop_state.get("events_count"),
+                        },
+                        created_at=event.occurred_at or event.received_at,
+                    )
+                elif bool(loop_state.get("request_followup")) and _hooks_service:
+                    followup_payload = {
+                        "kind": "agent",
+                        "name": "CSITrendFollowUpRequest",
+                        "session_key": "csi_trend_specialist",
+                        "to": "trend-specialist",
+                        "message": str(loop_state.get("followup_message") or ""),
+                        "timeout_seconds": int(
+                            max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))
+                        ),
+                    }
+                    follow_ok, follow_reason = await _hooks_service.dispatch_internal_action(followup_payload)
+                    _add_notification(
+                        kind="csi_specialist_followup_requested" if follow_ok else "csi_specialist_followup_request_failed",
+                        title="CSI Specialist Follow-up Requested" if follow_ok else "CSI Specialist Follow-up Request Failed",
+                        message=(
+                            f"Loop {loop_state.get('topic_label')} follow-up dispatch "
+                            f"{'succeeded' if follow_ok else f'failed: {follow_reason}'}."
+                        ),
+                        severity="info" if follow_ok else "warning",
+                        requires_action=not follow_ok,
+                        metadata={
+                            "topic_key": loop_state.get("topic_key"),
+                            "confidence_score": loop_state.get("confidence_score"),
+                            "confidence_target": loop_state.get("confidence_target"),
+                            "follow_up_budget_remaining": loop_state.get("follow_up_budget_remaining"),
+                            "source_mix": loop_state.get("source_mix"),
+                            "dispatch_reason": follow_reason,
+                        },
+                        created_at=event.occurred_at or event.received_at,
+                    )
+
             # Create Todoist task when credentials are configured. Missing credentials
             # are treated as a sync skip, not a system error.
+            if not bool(policy.get("todoist_sync")):
+                continue
             has_api_key = bool((os.getenv("TODOIST_API_KEY") or "").strip())
             has_api_token = bool((os.getenv("TODOIST_API_TOKEN") or "").strip())
             if not (has_api_key or has_api_token):
@@ -5667,6 +7918,7 @@ async def list_sessions(request: Request):
 @app.get("/api/v1/dashboard/summary")
 async def dashboard_summary():
     _apply_notification_snooze_expiry()
+    _apply_activity_snooze_expiry()
     sessions_total = 0
     if _ops_service:
         try:
@@ -5686,9 +7938,21 @@ async def dashboard_summary():
     else:
         active_sessions = sum(1 for s in _sessions.values() if s)
     pending_approvals = len(list_approvals(status="pending"))
-    unread_notifications = sum(
-        1 for item in _notifications if str(item.get("status", "new")).lower() in {"new", "pending"}
-    )
+    unread_notifications = 0
+    total_notifications = 0
+    try:
+        counters = _query_activity_event_counters(
+            event_class="notification",
+            status_value=None,
+            apply_default_window=False,
+        )
+        unread_notifications = int(((counters.get("totals") or {}).get("unread") or 0))
+        total_notifications = int(((counters.get("totals") or {}).get("total") or 0))
+    except Exception:
+        unread_notifications = sum(
+            1 for item in _notifications if str(item.get("status", "new")).lower() in {"new", "pending"}
+        )
+        total_notifications = len(_notifications)
     cron_total = 0
     cron_enabled = 0
     if _cron_service:
@@ -5721,14 +7985,14 @@ async def dashboard_summary():
         },
         "notifications": {
             "unread": unread_notifications,
-            "total": len(_notifications),
+            "total": total_notifications,
         },
         "deployment_profile": _deployment_profile_defaults(),
     }
 
 
 @app.get("/api/v1/dashboard/csi/reports")
-async def dashboard_csi_reports(limit: int = 15):
+async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = False):
     def _reports_from_notifications(max_items: int) -> list[dict[str, Any]]:
         reports: list[dict[str, Any]] = []
         for item in reversed(_notifications):
@@ -5807,6 +8071,229 @@ async def dashboard_csi_reports(limit: int = 15):
             )
         return reports
 
+    def _reports_from_specialist_activity(max_items: int) -> list[dict[str, Any]]:
+        try:
+            rows = _query_activity_events(
+                limit=max(max_items * 5, 60),
+                source_domain="csi",
+                apply_default_window=False,
+            )
+        except Exception:
+            return []
+        wanted_kinds = {"csi_specialist_hourly_synthesis", "csi_specialist_daily_rollup"}
+        out: list[dict[str, Any]] = []
+        for item in rows:
+            kind = str(item.get("kind") or "").strip().lower()
+            if kind not in wanted_kinds:
+                continue
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            report_class = str(metadata.get("report_class") or "").strip() or (
+                "specialist_daily" if kind.endswith("daily_rollup") else "specialist_hourly"
+            )
+            full_message = str(item.get("full_message") or item.get("summary") or "").strip()
+            if not full_message:
+                full_message = f"CSI specialist report ({kind})"
+            out.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "report_type": kind,
+                    "report_class": report_class,
+                    "window_hours": float(metadata.get("window_hours") or (24 if report_class == "specialist_daily" else 1)),
+                    "source_mix": metadata.get("source_mix") if isinstance(metadata.get("source_mix"), dict) else {},
+                    "report_data": {"markdown_content": full_message},
+                    "usage": None,
+                    "created_at": str(item.get("created_at_utc") or _utc_now_iso()),
+                    "window_start_utc": None,
+                    "window_end_utc": None,
+                    "model_name": "trend-specialist",
+                    "metadata": {
+                        "report_key": str(metadata.get("report_key") or ""),
+                        "kind": kind,
+                    },
+                }
+            )
+            if len(out) >= max_items:
+                break
+        return out
+
+    def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def _parse_usage(*, prompt: Any, completion: Any, total: Any) -> dict[str, int] | None:
+        if prompt is None and completion is None and total is None:
+            return None
+        prompt_tokens = int(prompt or 0)
+        completion_tokens = int(completion or 0)
+        total_tokens = int(total or (prompt_tokens + completion_tokens))
+        return {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+    def _window_hours(start_raw: Any, end_raw: Any) -> Optional[float]:
+        start = _parse_iso_timestamp(start_raw)
+        end = _parse_iso_timestamp(end_raw)
+        if not start or not end:
+            return None
+        seconds = max(0.0, end.timestamp() - start.timestamp())
+        return round(seconds / 3600.0, 2)
+
+    def _source_mix_for_report(report_type: str, report_data: dict[str, Any]) -> dict[str, int]:
+        totals = report_data.get("totals") if isinstance(report_data.get("totals"), dict) else {}
+        total_items = int(
+            report_data.get("total_items")
+            or totals.get("items")
+            or report_data.get("items")
+            or 0
+        )
+        lowered = report_type.lower()
+        if "reddit" in lowered:
+            return {"reddit": total_items}
+        if "rss" in lowered or lowered in {"daily", "emerging", "trend"}:
+            return {"rss": total_items}
+        if lowered == "hourly_report_product":
+            return {
+                "insight_reports": int(report_data.get("insight_report_count") or 0),
+                "trend_report": 1 if bool(report_data.get("has_trend_report")) else 0,
+            }
+        return {"items": total_items}
+
+    def _theme_set(report_data: dict[str, Any]) -> set[str]:
+        raw_themes = report_data.get("top_themes")
+        if not isinstance(raw_themes, list):
+            return set()
+        out: set[str] = set()
+        for item in raw_themes[:20]:
+            if isinstance(item, dict):
+                label = str(item.get("theme") or item.get("label") or item.get("name") or "").strip().lower()
+            else:
+                label = str(item or "").strip().lower()
+            if label:
+                out.add(label)
+        return out
+
+    def _report_class(report_type: str) -> str:
+        lowered = report_type.lower()
+        if "daily" in lowered:
+            return "daily"
+        if "emerging" in lowered:
+            return "emerging"
+        if "product" in lowered:
+            return "product"
+        if "trend" in lowered:
+            return "trend"
+        return "insight"
+
+    def _token_set(report_data: dict[str, Any]) -> set[str]:
+        tokens: set[str] = set()
+        tokens |= _theme_set(report_data)
+        markdown = str(report_data.get("markdown_content") or "")
+        for word in re.findall(r"[a-zA-Z][a-zA-Z0-9_+-]{2,}", markdown.lower()):
+            if word in {"the", "and", "for", "with", "that", "this", "from", "report", "insight", "daily", "emerging"}:
+                continue
+            tokens.add(word)
+            if len(tokens) >= 300:
+                break
+        return tokens
+
+    def _entity_set(report_data: dict[str, Any]) -> set[str]:
+        entities: set[str] = set()
+        for key in ("top_channels", "top_subreddits", "top_sources", "top_themes"):
+            value = report_data.get(key)
+            if not isinstance(value, list):
+                continue
+            for item in value[:20]:
+                if isinstance(item, dict):
+                    label = str(
+                        item.get("name")
+                        or item.get("theme")
+                        or item.get("channel")
+                        or item.get("subreddit")
+                        or item.get("label")
+                        or ""
+                    ).strip().lower()
+                else:
+                    label = str(item or "").strip().lower()
+                if label:
+                    entities.add(label)
+        return entities
+
+    def _apply_quality_gates(in_reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not in_reports:
+            return in_reports
+        ordered = sorted(
+            in_reports,
+            key=lambda item: (_parse_iso_timestamp(item.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+            reverse=True,
+        )
+        daily = next((item for item in ordered if str(item.get("report_class") or "") == "daily"), None)
+        emerging = next((item for item in ordered if str(item.get("report_class") or "") == "emerging"), None)
+        if not daily or not emerging:
+            for report in ordered:
+                report.setdefault("quality_gate", {"status": "not_applicable"})
+            return ordered
+        daily_data = daily.get("report_data") if isinstance(daily.get("report_data"), dict) else {}
+        emerging_data = emerging.get("report_data") if isinstance(emerging.get("report_data"), dict) else {}
+        daily_tokens = _token_set(daily_data)
+        emerging_tokens = _token_set(emerging_data)
+        token_union = daily_tokens | emerging_tokens
+        token_overlap = len(daily_tokens & emerging_tokens) / len(token_union) if token_union else 1.0
+        divergence = round(1.0 - token_overlap, 3)
+        novelty_ratio = round(
+            (len(emerging_tokens - daily_tokens) / max(1, len(emerging_tokens))) if emerging_tokens else 0.0,
+            3,
+        )
+        daily_entities = _entity_set(daily_data)
+        emerging_entities = _entity_set(emerging_data)
+        entity_union = daily_entities | emerging_entities
+        entity_overlap = round(
+            (len(daily_entities & emerging_entities) / len(entity_union)) if entity_union else 0.0,
+            3,
+        )
+
+        status_value = "divergent"
+        recommendation = "publish_both"
+        if divergence < 0.12 and novelty_ratio < 0.2 and entity_overlap >= 0.65:
+            status_value = "near_duplicate"
+            recommendation = "suppress_emerging"
+        elif divergence < 0.2:
+            status_value = "high_overlap"
+            recommendation = "review_overlap_note"
+        elif len(token_union) < 8:
+            status_value = "sparse_signal"
+            recommendation = "collect_more_data"
+
+        quality_gate = {
+            "status": status_value,
+            "recommendation": recommendation,
+            "token_overlap_jaccard": round(token_overlap, 3),
+            "novelty_ratio": novelty_ratio,
+            "entity_overlap_ratio": entity_overlap,
+        }
+        daily["divergence_score"] = divergence
+        daily["divergence_note"] = (
+            "Low divergence: windows overlap heavily or signal volume is sparse."
+            if divergence < 0.2
+            else "Daily and emerging windows show meaningful divergence."
+        )
+        daily["quality_gate"] = quality_gate
+        emerging["divergence_score"] = divergence
+        emerging["divergence_note"] = daily["divergence_note"]
+        emerging["quality_gate"] = quality_gate
+        if status_value == "near_duplicate":
+            emerging["suppressed"] = True
+
+        for report in ordered:
+            report.setdefault("quality_gate", {"status": "not_applicable"})
+        if include_suppressed:
+            return ordered
+        return [item for item in ordered if not bool(item.get("suppressed"))]
+
     clamped_limit = max(1, min(int(limit), 50))
     db_detail: Optional[str] = None
     db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
@@ -5815,32 +8302,128 @@ async def dashboard_csi_reports(limit: int = 15):
         try:
             conn = sqlite3.connect(str(db_path))
             conn.row_factory = sqlite3.Row
-            cur = conn.cursor()
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='insight_reports'")
-            if cur.fetchone():
-                cur.execute("SELECT * FROM insight_reports ORDER BY created_at DESC LIMIT ?", (clamped_limit,))
-                reports = []
-                for row in cur.fetchall():
-                    row_dict = dict(row)
-                    report_data = {}
-                    try:
-                        report_data = json.loads(row_dict.get("report_json") or "{}")
-                    except Exception:
-                        pass
-                    report_data["markdown_content"] = row_dict.get("report_markdown") or ""
-                    row_dict["report_data"] = report_data
-                    row_dict.pop("report_json", None)
-                    row_dict.pop("report_markdown", None)
-                    try:
-                        row_dict["usage"] = json.loads(row_dict.get("usage") or "null")
-                    except Exception:
-                        pass
-                    reports.append(row_dict)
-                if reports:
-                    return {"status": "ok", "source": "csi_db", "reports": reports}
-                db_detail = "CSI database is reachable but insight_reports has no rows."
-            else:
-                db_detail = "Table insight_reports is missing from CSI database."
+            reports: list[dict[str, Any]] = []
+
+            if _table_exists(conn, "insight_reports"):
+                for row in conn.execute(
+                    "SELECT * FROM insight_reports ORDER BY created_at DESC LIMIT ?",
+                    (max(clamped_limit * 3, 40),),
+                ).fetchall():
+                    report_json = _activity_json_loads_obj(row["report_json"], default={})
+                    report_data = report_json if isinstance(report_json, dict) else {}
+                    report_data["markdown_content"] = str(row["report_markdown"] or "")
+                    report_type = str(row["report_type"] or "insight")
+                    reports.append(
+                        {
+                            "id": int(row["id"]),
+                            "report_type": report_type,
+                            "report_class": _report_class(report_type),
+                            "window_hours": _window_hours(row["window_start_utc"], row["window_end_utc"]),
+                            "source_mix": _source_mix_for_report(report_type, report_data),
+                            "report_data": report_data,
+                            "usage": _parse_usage(
+                                prompt=row["prompt_tokens"],
+                                completion=row["completion_tokens"],
+                                total=row["total_tokens"],
+                            ),
+                            "created_at": _normalize_notification_timestamp(row["created_at"]),
+                            "window_start_utc": row["window_start_utc"],
+                            "window_end_utc": row["window_end_utc"],
+                            "model_name": row["model_name"],
+                            "metadata": {"report_key": row["report_key"]},
+                        }
+                    )
+
+            if _table_exists(conn, "trend_reports"):
+                for row in conn.execute(
+                    "SELECT * FROM trend_reports ORDER BY created_at DESC LIMIT ?",
+                    (max(clamped_limit * 3, 40),),
+                ).fetchall():
+                    report_json = _activity_json_loads_obj(row["report_json"], default={})
+                    report_data = report_json if isinstance(report_json, dict) else {}
+                    report_data["markdown_content"] = str(row["report_markdown"] or "")
+                    report_type = "rss_trend_report"
+                    reports.append(
+                        {
+                            "id": int(row["id"]),
+                            "report_type": report_type,
+                            "report_class": "trend",
+                            "window_hours": _window_hours(row["window_start_utc"], row["window_end_utc"]),
+                            "source_mix": _source_mix_for_report(report_type, report_data),
+                            "report_data": report_data,
+                            "usage": _parse_usage(
+                                prompt=row["prompt_tokens"],
+                                completion=row["completion_tokens"],
+                                total=row["total_tokens"],
+                            ),
+                            "created_at": _normalize_notification_timestamp(row["created_at"]),
+                            "window_start_utc": row["window_start_utc"],
+                            "window_end_utc": row["window_end_utc"],
+                            "model_name": row["model_name"],
+                            "metadata": {"report_key": row["report_key"]},
+                        }
+                    )
+
+            if _table_exists(conn, "events"):
+                for row in conn.execute(
+                    """
+                    SELECT event_id, occurred_at, subject_json
+                    FROM events
+                    WHERE event_type = 'report_product_ready'
+                    ORDER BY occurred_at DESC
+                    LIMIT ?
+                    """,
+                    (max(clamped_limit * 2, 20),),
+                ).fetchall():
+                    subject = _activity_json_loads_obj(row["subject_json"], default={})
+                    if not isinstance(subject, dict):
+                        subject = {}
+                    artifact_paths = subject.get("artifact_paths") if isinstance(subject.get("artifact_paths"), dict) else {}
+                    markdown = (
+                        "## CSI Report Product\n\n"
+                        f"- generated_at_utc: `{subject.get('generated_at_utc')}`\n"
+                        f"- window_hours: `{subject.get('window_hours')}`\n"
+                        f"- has_trend_report: `{subject.get('has_trend_report')}`\n"
+                        f"- insight_report_count: `{subject.get('insight_report_count')}`\n"
+                    )
+                    if artifact_paths:
+                        markdown += (
+                            "\n### Artifacts\n"
+                            f"- markdown: `{artifact_paths.get('markdown')}`\n"
+                            f"- json: `{artifact_paths.get('json')}`\n"
+                        )
+                    reports.append(
+                        {
+                            "id": f"evt:{row['event_id']}",
+                            "report_type": str(subject.get("report_type") or "hourly_report_product"),
+                            "report_class": "product",
+                            "window_hours": float(subject.get("window_hours") or 0),
+                            "source_mix": _source_mix_for_report(
+                                str(subject.get("report_type") or "hourly_report_product"),
+                                subject,
+                            ),
+                            "report_data": {
+                                "markdown_content": markdown,
+                                "artifact_paths": artifact_paths,
+                                "subject": subject,
+                            },
+                            "usage": None,
+                            "created_at": _normalize_notification_timestamp(row["occurred_at"]),
+                            "window_start_utc": None,
+                            "window_end_utc": None,
+                            "model_name": None,
+                            "metadata": {"event_id": row["event_id"]},
+                        }
+                    )
+
+            specialist_reports = _reports_from_specialist_activity(max(clamped_limit, 10))
+            if specialist_reports:
+                reports.extend(specialist_reports)
+
+            if reports:
+                reports = _apply_quality_gates(reports)
+                return {"status": "ok", "source": "csi_db_aggregated", "reports": reports[:clamped_limit]}
+            db_detail = "CSI database is reachable but no report rows were found."
         except Exception as exc:
             db_detail = f"CSI database read failed: {exc}"
         finally:
@@ -5850,7 +8433,15 @@ async def dashboard_csi_reports(limit: int = 15):
         db_detail = f"CSI database not found at {db_path}."
 
     notification_reports = _reports_from_notifications(clamped_limit)
+    specialist_reports = _reports_from_specialist_activity(clamped_limit)
+    if specialist_reports:
+        notification_reports = sorted(
+            [*specialist_reports, *notification_reports],
+            key=lambda item: (_parse_iso_timestamp(item.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+            reverse=True,
+        )[:clamped_limit]
     if notification_reports:
+        notification_reports = _apply_quality_gates(notification_reports)
         return {"status": "ok", "source": "notification_fallback", "detail": db_detail, "reports": notification_reports}
 
     session_reports = _reports_from_hook_sessions(clamped_limit)
@@ -5858,6 +8449,205 @@ async def dashboard_csi_reports(limit: int = 15):
         return {"status": "ok", "source": "session_fallback", "detail": db_detail, "reports": session_reports}
 
     return {"status": "ok", "source": "empty", "detail": db_detail, "reports": []}
+
+
+@app.get("/api/v1/dashboard/csi/health")
+async def dashboard_csi_health():
+    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    if not db_path.exists():
+        return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        timezone_name = str(
+            (os.getenv("UA_DEFAULT_TIMEZONE") or os.getenv("USER_TIMEZONE") or "America/Chicago")
+        ).strip() or "America/Chicago"
+        try:
+            local_tz = ZoneInfo(timezone_name)
+        except Exception:
+            local_tz = timezone.utc
+            timezone_name = "UTC"
+
+        def _as_utc_dt(raw: Any) -> Optional[datetime]:
+            parsed = _parse_iso_timestamp(raw)
+            if parsed is None:
+                return None
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+
+        last_event_row = conn.execute(
+            "SELECT occurred_at, event_type, source FROM events ORDER BY occurred_at DESC LIMIT 1"
+        ).fetchone()
+        undelivered = int(
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM events WHERE delivered = 0 AND occurred_at >= datetime('now', '-24 hours')"
+            ).fetchone()["c"]
+            or 0
+        )
+        dlq_count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS c FROM dead_letter WHERE created_at >= datetime('now', '-24 hours')"
+            ).fetchone()["c"]
+            or 0
+        )
+        source_rows = conn.execute(
+            """
+            SELECT source, MAX(occurred_at) AS last_seen, COUNT(*) AS total
+            FROM events
+            WHERE occurred_at >= datetime('now', '-48 hours')
+            GROUP BY source
+            ORDER BY source ASC
+            """
+        ).fetchall()
+        source_last6_rows = conn.execute(
+            """
+            SELECT source, COUNT(*) AS total
+            FROM events
+            WHERE occurred_at >= datetime('now', '-6 hours')
+            GROUP BY source
+            """
+        ).fetchall()
+        source_fail_rows = conn.execute(
+            """
+            SELECT source, COUNT(*) AS total
+            FROM events
+            WHERE occurred_at >= datetime('now', '-24 hours')
+              AND (LOWER(event_type) LIKE '%fail%' OR LOWER(event_type) LIKE '%error%')
+            GROUP BY source
+            """
+        ).fetchall()
+        event_rows = conn.execute(
+            """
+            SELECT event_type, MAX(occurred_at) AS last_seen, COUNT(*) AS total
+            FROM events
+            WHERE occurred_at >= datetime('now', '-48 hours')
+            GROUP BY event_type
+            ORDER BY event_type ASC
+            """
+        ).fetchall()
+        tracked_types = {
+            "rss_trend_report": 180,
+            "reddit_trend_report": 180,
+            "rss_insight_emerging": 180,
+            "report_product_ready": 180,
+            "hourly_token_usage_report": 180,
+            "category_quality_report": 240,
+            "analysis_task_completed": 480,
+        }
+        event_last_seen = {str(row["event_type"]): str(row["last_seen"] or "") for row in event_rows}
+        now_utc = datetime.now(timezone.utc)
+        now_ts = now_utc.timestamp()
+        stale: list[dict[str, Any]] = []
+        for event_type, max_minutes in tracked_types.items():
+            seen = event_last_seen.get(event_type)
+            seen_dt = _as_utc_dt(seen) if seen else None
+            seen_ts = seen_dt.timestamp() if seen_dt else None
+            lag_minutes = None
+            if seen_ts is not None:
+                lag_minutes = round((now_ts - seen_ts) / 60.0, 2)
+            if seen_ts is None or (lag_minutes is not None and lag_minutes > max_minutes):
+                stale.append(
+                    {
+                        "event_type": event_type,
+                        "last_seen": seen,
+                        "lag_minutes": lag_minutes,
+                        "expected_max_lag_minutes": max_minutes,
+                    }
+                )
+
+        overnight_end_local = now_utc.astimezone(local_tz).replace(hour=8, minute=0, second=0, microsecond=0)
+        if now_utc.astimezone(local_tz) < overnight_end_local:
+            overnight_end_local -= timedelta(days=1)
+        overnight_start_local = overnight_end_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        overnight_start_utc = overnight_start_local.astimezone(timezone.utc)
+        overnight_end_utc = overnight_end_local.astimezone(timezone.utc)
+        overnight_hours = max(1.0, (overnight_end_utc.timestamp() - overnight_start_utc.timestamp()) / 3600.0)
+
+        overnight_rows = conn.execute(
+            """
+            SELECT event_type, COUNT(*) AS total
+            FROM events
+            WHERE occurred_at >= ? AND occurred_at < ?
+            GROUP BY event_type
+            """,
+            (overnight_start_utc.isoformat(), overnight_end_utc.isoformat()),
+        ).fetchall()
+        overnight_counts = {str(row["event_type"]): int(row["total"] or 0) for row in overnight_rows}
+        overnight_continuity: list[dict[str, Any]] = []
+        for event_type, max_lag_minutes in tracked_types.items():
+            expected = max(1, int(round((overnight_hours * 60.0) / float(max_lag_minutes))))
+            observed = int(overnight_counts.get(event_type) or 0)
+            missing = max(0, expected - observed)
+            overnight_continuity.append(
+                {
+                    "event_type": event_type,
+                    "expected_runs": expected,
+                    "observed_runs": observed,
+                    "missing_runs": missing,
+                    "status": "ok" if missing == 0 else "missing",
+                    "expected_max_lag_minutes": max_lag_minutes,
+                }
+            )
+
+        source_last6 = {str(row["source"] or ""): int(row["total"] or 0) for row in source_last6_rows}
+        source_failures = {str(row["source"] or ""): int(row["total"] or 0) for row in source_fail_rows}
+        source_health: list[dict[str, Any]] = []
+        for row in source_rows:
+            source_name = str(row["source"] or "unknown")
+            last_seen_raw = str(row["last_seen"] or "")
+            last_seen_dt = _as_utc_dt(last_seen_raw)
+            lag_minutes = round((now_ts - last_seen_dt.timestamp()) / 60.0, 2) if last_seen_dt else None
+            last6 = int(source_last6.get(source_name) or 0)
+            failures = int(source_failures.get(source_name) or 0)
+            status_value = "ok"
+            if failures > 0:
+                status_value = "degraded"
+            if lag_minutes is not None and lag_minutes > 360:
+                status_value = "stale"
+            source_health.append(
+                {
+                    "source": source_name,
+                    "last_seen": last_seen_raw or None,
+                    "lag_minutes": lag_minutes,
+                    "events_last_48h": int(row["total"] or 0),
+                    "events_last_6h": last6,
+                    "throughput_per_hour_6h": round(float(last6) / 6.0, 2),
+                    "failures_last_24h": failures,
+                    "status": status_value,
+                }
+            )
+        return {
+            "status": "ok",
+            "db_path": str(db_path),
+            "timezone": timezone_name,
+            "last_event": dict(last_event_row) if last_event_row else None,
+            "undelivered_last_24h": undelivered,
+            "dead_letter_last_24h": dlq_count,
+            "sources": [dict(row) for row in source_rows],
+            "source_health": source_health,
+            "event_types": [dict(row) for row in event_rows],
+            "stale_pipelines": stale,
+            "overnight_continuity": {
+                "window_start_utc": overnight_start_utc.isoformat(),
+                "window_end_utc": overnight_end_utc.isoformat(),
+                "window_start_local": overnight_start_local.isoformat(),
+                "window_end_local": overnight_end_local.isoformat(),
+                "checks": overnight_continuity,
+            },
+        }
+    except Exception as exc:
+        return {"status": "error", "detail": f"Failed loading CSI health: {exc}"}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/csi/specialist-loops")
+async def dashboard_csi_specialist_loops(limit: int = 50, status: Optional[str] = None):
+    loops = _list_csi_specialist_loops(limit=limit, status_filter=status)
+    return {"status": "ok", "loops": loops}
 
 
 @app.get("/api/v1/dashboard/todolist/pipeline")
@@ -5902,21 +8692,627 @@ async def dashboard_notifications(
     limit: int = 100,
     status: Optional[str] = None,
     session_id: Optional[str] = None,
+    kind: Optional[str] = None,
+    source_domain: Optional[str] = None,
+    pinned: Optional[bool] = None,
 ):
     _apply_notification_snooze_expiry()
+    _apply_activity_snooze_expiry()
+    limit = max(1, min(limit, 500))
+    safe_session_id = None
+    if session_id:
+        safe_session_id = _sanitize_session_id_or_400(session_id)
+
+    try:
+        items = _query_activity_events(
+            limit=limit,
+            source_domain=source_domain,
+            kind=kind,
+            status_value=status,
+            pinned=pinned,
+            apply_default_window=False,
+        )
+        notifications: list[dict[str, Any]] = []
+        for item in items:
+            if str(item.get("event_class") or "") != "notification":
+                continue
+            if safe_session_id and str(item.get("session_id") or "") != safe_session_id:
+                continue
+            notifications.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "kind": str(item.get("kind") or ""),
+                    "title": str(item.get("title") or ""),
+                    "message": str(item.get("full_message") or ""),
+                    "summary": str(item.get("summary") or ""),
+                    "full_message": str(item.get("full_message") or ""),
+                    "session_id": item.get("session_id"),
+                    "severity": str(item.get("severity") or "info"),
+                    "requires_action": bool(item.get("requires_action")),
+                    "status": str(item.get("status") or "new"),
+                    "created_at": str(item.get("created_at_utc") or _utc_now_iso()),
+                    "updated_at": str(item.get("updated_at_utc") or _utc_now_iso()),
+                    "channels": ["dashboard"],
+                    "email_targets": [],
+                    "metadata": item.get("metadata") if isinstance(item.get("metadata"), dict) else {},
+                }
+            )
+        if notifications:
+            return {"notifications": notifications}
+    except Exception as exc:
+        logger.debug("Falling back to in-memory notifications: %s", exc)
+
     items = list(_notifications)
     if status:
         status_norm = status.strip().lower()
         items = [item for item in items if str(item.get("status", "")).lower() == status_norm]
-    if session_id:
-        safe_session_id = _sanitize_session_id_or_400(session_id)
+    if safe_session_id:
         items = [item for item in items if item.get("session_id") == safe_session_id]
-    limit = max(1, min(limit, 500))
+    if kind:
+        kind_norm = kind.strip().lower()
+        items = [item for item in items if str(item.get("kind") or "").strip().lower() == kind_norm]
+    if source_domain:
+        domain_norm = source_domain.strip().lower()
+        items = [
+            item
+            for item in items
+            if _activity_source_domain(str(item.get("kind") or ""), item.get("metadata") if isinstance(item.get("metadata"), dict) else {})
+            == domain_norm
+        ]
+    if pinned is not None:
+        items = [item for item in items if bool((item.get("metadata") or {}).get("pinned")) == bool(pinned)]
     return {"notifications": items[-limit:][::-1]}
 
 
+@app.get("/api/v1/dashboard/events")
+async def dashboard_events(
+    limit: int = 200,
+    source_domain: Optional[str] = None,
+    kind: Optional[str] = None,
+    severity: Optional[str] = None,
+    status: Optional[str] = None,
+    requires_action: Optional[bool] = None,
+    pinned: Optional[bool] = None,
+    cursor: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+):
+    limit = max(1, min(int(limit), 1000))
+    events = _query_activity_events(
+        limit=limit + 1,
+        source_domain=source_domain,
+        kind=kind,
+        severity=severity,
+        status_value=status,
+        requires_action=requires_action,
+        pinned=pinned,
+        cursor=cursor,
+        since=since,
+        until=until,
+    )
+    has_more = len(events) > limit
+    if has_more:
+        events = events[:limit]
+    next_cursor = None
+    if has_more and events:
+        tail = events[-1]
+        next_cursor = _activity_cursor_encode(
+            str(tail.get("created_at_utc") or ""),
+            str(tail.get("id") or ""),
+        )
+    if events:
+        return {
+            "events": events,
+            "source": "activity_store",
+            "window_days_default": _activity_events_default_window_days,
+            "next_cursor": next_cursor,
+            "has_more": has_more,
+        }
+
+    fallback: list[dict[str, Any]] = []
+    for item in reversed(_notifications):
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        if pinned is not None and bool(metadata.get("pinned")) != bool(pinned):
+            continue
+        source = _activity_source_domain(str(item.get("kind") or ""), metadata)
+        entity_ref = _activity_entity_ref(
+            source_domain=source,
+            session_id=str(item.get("session_id") or "") or None,
+            metadata=metadata,
+        )
+        fallback.append(
+            {
+                "id": str(item.get("id") or ""),
+                "event_class": "notification",
+                "source_domain": source,
+                "kind": str(item.get("kind") or ""),
+                "title": str(item.get("title") or ""),
+                "summary": str(item.get("summary") or _activity_summary_text(str(item.get("message") or ""))),
+                "full_message": str(item.get("full_message") or item.get("message") or ""),
+                "severity": str(item.get("severity") or "info"),
+                "status": str(item.get("status") or "new"),
+                "requires_action": bool(item.get("requires_action")),
+                "session_id": str(item.get("session_id") or "") or None,
+                "created_at_utc": _normalize_notification_timestamp(item.get("created_at")),
+                "updated_at_utc": _normalize_notification_timestamp(item.get("updated_at")),
+                "entity_ref": entity_ref,
+                "actions": _activity_actions(
+                    source_domain=source,
+                    entity_ref=entity_ref,
+                    requires_action=bool(item.get("requires_action")),
+                    event_class="notification",
+                    status=str(item.get("status") or "new"),
+                    metadata=metadata,
+                ),
+                "metadata": metadata,
+            }
+        )
+        if len(fallback) >= limit:
+            break
+    return {"events": fallback, "source": "in_memory", "next_cursor": None, "has_more": False}
+
+
+@app.get("/api/v1/dashboard/events/stream")
+async def dashboard_events_stream(
+    request: Request,
+    since_seq: int = 0,
+    limit: int = 500,
+    source_domain: Optional[str] = None,
+    kind: Optional[str] = None,
+    severity: Optional[str] = None,
+    status: Optional[str] = None,
+    requires_action: Optional[bool] = None,
+    pinned: Optional[bool] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    heartbeat_seconds: int = 20,
+    once: bool = False,
+):
+    if not _dashboard_events_sse_enabled:
+        raise HTTPException(status_code=503, detail="Dashboard events SSE stream is disabled.")
+
+    since_cursor = max(0, int(since_seq))
+    max_items = max(1, min(int(limit), 5000))
+    heartbeat_wait = max(2, min(int(heartbeat_seconds), 60))
+
+    async def event_gen():
+        nonlocal since_cursor
+        _activity_counter_inc("events_sse_connects")
+        emitted = 0
+        try:
+            if since_cursor <= 0:
+                snapshot = _query_activity_events(
+                    limit=max_items,
+                    source_domain=source_domain,
+                    kind=kind,
+                    severity=severity,
+                    status_value=status,
+                    requires_action=requires_action,
+                    pinned=pinned,
+                    since=since,
+                    until=until,
+                )
+                conn = _activity_connect()
+                try:
+                    _ensure_activity_schema(conn)
+                    latest_seq = _activity_stream_latest_seq(conn)
+                finally:
+                    conn.close()
+                since_cursor = max(0, int(latest_seq))
+                payload = {
+                    "kind": "snapshot",
+                    "seq": since_cursor,
+                    "events": snapshot,
+                    "generated_at_utc": _utc_now_iso(),
+                }
+                _activity_counter_inc("events_sse_payloads")
+                yield f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                emitted += 1
+                if once and emitted >= 1:
+                    return
+
+            last_heartbeat = time.time()
+            while True:
+                if await request.is_disconnected():
+                    break
+                rows, max_seq_seen = _activity_stream_read(
+                    since_seq=since_cursor,
+                    limit=max_items,
+                    source_domain=source_domain,
+                    kind=kind,
+                    severity=severity,
+                    status_value=status,
+                    requires_action=requires_action,
+                    pinned=pinned,
+                    since=since,
+                    until=until,
+                )
+                if max_seq_seen > since_cursor:
+                    since_cursor = max_seq_seen
+                if rows:
+                    for row in rows:
+                        seq = int(row.get("seq") or 0)
+                        if seq > since_cursor:
+                            since_cursor = seq
+                        payload = {
+                            "kind": "event",
+                            "seq": since_cursor,
+                            "op": str(row.get("op") or "upsert"),
+                            "event": row.get("event") if isinstance(row.get("event"), dict) else {},
+                            "generated_at_utc": _utc_now_iso(),
+                        }
+                        _activity_counter_inc("events_sse_payloads")
+                        yield f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+                        emitted += 1
+                        if once and emitted >= 1:
+                            return
+                    last_heartbeat = time.time()
+                    continue
+
+                now = time.time()
+                if (now - last_heartbeat) >= heartbeat_wait:
+                    heartbeat_payload = {
+                        "kind": "heartbeat",
+                        "seq": since_cursor,
+                        "generated_at_utc": _utc_now_iso(),
+                    }
+                    _activity_counter_inc("events_sse_heartbeats")
+                    yield f"data: {json.dumps(heartbeat_payload, separators=(',', ':'))}\n\n"
+                    emitted += 1
+                    last_heartbeat = now
+                    if once and emitted >= 1:
+                        return
+                await asyncio.sleep(1.0)
+        except Exception:
+            _activity_counter_inc("events_sse_errors")
+            raise
+        finally:
+            _activity_counter_inc("events_sse_disconnects")
+
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
+
+
+@app.get("/api/v1/dashboard/events/counters")
+async def dashboard_events_counters(
+    source_domain: Optional[str] = None,
+    kind: Optional[str] = None,
+    severity: Optional[str] = None,
+    status: Optional[str] = None,
+    pinned: Optional[bool] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+):
+    counters = _query_activity_event_counters(
+        source_domain=source_domain,
+        kind=kind,
+        severity=severity,
+        status_value=status,
+        pinned=pinned,
+        since=since,
+        until=until,
+    )
+    return {
+        "generated_at_utc": _utc_now_iso(),
+        "window_days_default": _activity_events_default_window_days,
+        "totals": counters.get("totals") if isinstance(counters, dict) else {"unread": 0, "actionable": 0, "total": 0},
+        "by_source": counters.get("by_source") if isinstance(counters, dict) else {},
+    }
+
+
+@app.get("/api/v1/dashboard/events/presets")
+async def dashboard_events_presets(request: Request):
+    owner = _dashboard_owner_from_request(request)
+    return {"owner_id": owner, "presets": _list_event_filter_presets(owner)}
+
+
+@app.post("/api/v1/dashboard/events/presets")
+async def dashboard_events_presets_create(request: Request, payload: DashboardEventPresetCreateRequest):
+    owner = _dashboard_owner_from_request(request)
+    try:
+        preset = _create_event_filter_preset(
+            owner_id=owner,
+            name=payload.name,
+            filters=payload.filters,
+            is_default=bool(payload.is_default),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"owner_id": owner, "preset": preset}
+
+
+@app.patch("/api/v1/dashboard/events/presets/{preset_id}")
+async def dashboard_events_presets_update(
+    request: Request,
+    preset_id: str,
+    payload: DashboardEventPresetUpdateRequest,
+):
+    owner = _dashboard_owner_from_request(request)
+    try:
+        preset = _update_event_filter_preset(
+            owner_id=owner,
+            preset_id=preset_id,
+            name=payload.name,
+            filters=payload.filters,
+            is_default=payload.is_default,
+            mark_used=bool(payload.mark_used),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if preset is None:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return {"owner_id": owner, "preset": preset}
+
+
+@app.delete("/api/v1/dashboard/events/presets/{preset_id}")
+async def dashboard_events_presets_delete(request: Request, preset_id: str):
+    owner = _dashboard_owner_from_request(request)
+    deleted = _delete_event_filter_preset(owner_id=owner, preset_id=preset_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return {"owner_id": owner, "deleted": True}
+
+
+@app.get("/api/v1/dashboard/activity/{activity_id}/audit")
+async def dashboard_activity_audit(activity_id: str, limit: int = 50):
+    return {
+        "event_id": activity_id,
+        "audit": _list_activity_audit(event_id=activity_id, limit=max(1, min(int(limit), 200))),
+    }
+
+
+@app.post("/api/v1/dashboard/activity/{activity_id}/send-to-simone")
+async def dashboard_activity_send_to_simone(activity_id: str, payload: ActivitySendToSimoneRequest, request: Request):
+    instruction = str(payload.instruction or "").strip()
+    if not instruction:
+        raise HTTPException(status_code=400, detail="instruction is required")
+    activity = _get_activity_event(activity_id)
+    if activity is None:
+        raise HTTPException(status_code=404, detail="Activity event not found")
+    actor = _activity_actor_from_request(request)
+    priority = str(payload.priority or "").strip()
+    extra_context = payload.extra_context if isinstance(payload.extra_context, dict) else {}
+    _record_activity_audit(
+        event_id=activity_id,
+        action="send_to_simone",
+        actor=actor,
+        outcome="requested",
+        note=instruction[:500],
+        metadata={
+            "priority": priority or "normal",
+            "extra_context": extra_context,
+        },
+    )
+    if not _hooks_service:
+        _record_activity_audit(
+            event_id=activity_id,
+            action="send_to_simone",
+            actor=actor,
+            outcome="failed",
+            note="hooks service not initialized",
+            metadata={},
+        )
+        raise HTTPException(status_code=503, detail="Hooks service not initialized")
+
+    session_suffix = re.sub(r"[^A-Za-z0-9_.-]+", "_", activity_id).strip("._-")[-48:] or "activity"
+    session_key = f"simone_handoff_{session_suffix}"
+    metadata = activity.get("metadata") if isinstance(activity.get("metadata"), dict) else {}
+
+    handoff_message = (
+        "Manual handoff to Simone from Notifications & Events.\n"
+        f"activity_id: {activity_id}\n"
+        f"source_domain: {activity.get('source_domain')}\n"
+        f"kind: {activity.get('kind')}\n"
+        f"title: {activity.get('title')}\n"
+        f"created_at_utc: {activity.get('created_at_utc')}\n"
+        f"priority: {priority or 'normal'}\n"
+        "instruction:\n"
+        f"{instruction}\n\n"
+        "activity_summary:\n"
+        f"{activity.get('summary')}\n\n"
+        "activity_full_message:\n"
+        f"{activity.get('full_message')}\n\n"
+        "activity_metadata_json:\n"
+        f"{json.dumps(metadata, ensure_ascii=False, indent=2)[:12000]}"
+    )
+
+    requested = _add_notification(
+        kind="simone_handoff_requested",
+        title="Simone Handoff Requested",
+        message=f"Manual handoff requested for activity {activity_id}.",
+        severity="info",
+        requires_action=False,
+        metadata={
+            "activity_id": activity_id,
+            "session_key": session_key,
+            "instruction": instruction,
+            "priority": priority or "normal",
+            "extra_context": extra_context,
+        },
+    )
+
+    ok, reason = await _hooks_service.dispatch_internal_action(
+        {
+            "kind": "agent",
+            "name": "ManualSimoneHandoff",
+            "session_key": session_key,
+            "message": handoff_message,
+            "deliver": True,
+            "timeout_seconds": 900,
+        }
+    )
+    if not ok:
+        _record_activity_audit(
+            event_id=activity_id,
+            action="send_to_simone",
+            actor=actor,
+            outcome="failed",
+            note=str(reason or "dispatch failed"),
+            metadata={"session_key": session_key},
+        )
+        failed = _add_notification(
+            kind="simone_handoff_failed",
+            title="Simone Handoff Failed",
+            message=f"Handoff dispatch failed for activity {activity_id}: {reason}",
+            severity="error",
+            requires_action=True,
+            metadata={"activity_id": activity_id, "session_key": session_key, "reason": reason},
+        )
+        return JSONResponse(
+            status_code=502,
+            content={
+                "ok": False,
+                "reason": reason,
+                "requested_notification": requested,
+                "failed_notification": failed,
+            },
+        )
+
+    _record_activity_audit(
+        event_id=activity_id,
+        action="send_to_simone",
+        actor=actor,
+        outcome="completed",
+        note=str(reason or "dispatched"),
+        metadata={"session_key": session_key},
+    )
+    completed = _add_notification(
+        kind="simone_handoff_completed",
+        title="Simone Handoff Dispatched",
+        message=f"Handoff dispatched to Simone session {session_key}.",
+        severity="success",
+        requires_action=False,
+        metadata={"activity_id": activity_id, "session_key": session_key, "reason": reason},
+    )
+    return {"ok": True, "session_key": session_key, "requested_notification": requested, "completed_notification": completed}
+
+
+@app.post("/api/v1/dashboard/activity/{activity_id}/action")
+async def dashboard_activity_action(activity_id: str, payload: ActivityEventActionRequest, request: Request):
+    action = str(payload.action or "").strip().lower()
+    if not action:
+        raise HTTPException(status_code=400, detail="action is required")
+    event = _get_activity_event(activity_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Activity event not found")
+    actor = _activity_actor_from_request(request)
+
+    event_class = str(event.get("event_class") or "").strip().lower()
+    if event_class != "notification" and action in {"mark_read", "snooze", "unsnooze"}:
+        raise HTTPException(status_code=400, detail=f"Action '{action}' requires a notification event")
+
+    updated_notification: Optional[dict[str, Any]] = None
+    if event_class == "notification":
+        record = {
+            "id": str(event.get("id") or activity_id),
+            "kind": str(event.get("kind") or ""),
+            "title": str(event.get("title") or ""),
+            "message": str(event.get("full_message") or ""),
+            "summary": str(event.get("summary") or ""),
+            "full_message": str(event.get("full_message") or ""),
+            "session_id": event.get("session_id"),
+            "severity": str(event.get("severity") or "info"),
+            "requires_action": bool(event.get("requires_action")),
+            "status": str(event.get("status") or "new"),
+            "created_at": str(event.get("created_at_utc") or _utc_now_iso()),
+            "updated_at": str(event.get("updated_at_utc") or _utc_now_iso()),
+            "channels": ["dashboard"],
+            "email_targets": [],
+            "metadata": dict(event.get("metadata") if isinstance(event.get("metadata"), dict) else {}),
+        }
+        if action == "mark_read":
+            _apply_notification_status(record, status_value="read", note=payload.note)
+            updated_notification = record
+        elif action == "snooze":
+            _apply_notification_status(
+                record,
+                status_value="snoozed",
+                note=payload.note,
+                snooze_minutes=payload.snooze_minutes,
+            )
+            updated_notification = record
+        elif action == "unsnooze":
+            _apply_notification_status(record, status_value="new", note=payload.note)
+            updated_notification = record
+        elif action in {"pin", "unpin"}:
+            metadata = record.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+                record["metadata"] = metadata
+            metadata["pinned"] = action == "pin"
+            metadata["pinned_at"] = _utc_now_iso() if action == "pin" else None
+            if action != "pin":
+                metadata.pop("pinned_at", None)
+            record["updated_at"] = _utc_now_iso()
+            _persist_notification_activity(record)
+            updated_notification = record
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported action '{action}'")
+        _replace_notification_cache_record(updated_notification)
+        refreshed = _get_activity_event(activity_id)
+        _record_activity_audit(
+            event_id=activity_id,
+            action=action,
+            actor=actor,
+            outcome="ok",
+            note=payload.note,
+            metadata={"event_class": event_class, "snooze_minutes": payload.snooze_minutes},
+        )
+        return {"ok": True, "action": action, "event": refreshed or event}
+
+    if action not in {"pin", "unpin"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported action '{action}' for event class '{event_class}'")
+
+    metadata = event.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    if action == "pin":
+        metadata["pinned"] = True
+        metadata["pinned_at"] = _utc_now_iso()
+    else:
+        metadata["pinned"] = False
+        metadata.pop("pinned_at", None)
+    record = {
+        "id": str(event.get("id") or ""),
+        "event_class": str(event.get("event_class") or "event"),
+        "source_domain": str(event.get("source_domain") or "system"),
+        "kind": str(event.get("kind") or "event"),
+        "title": str(event.get("title") or "Event"),
+        "summary": str(event.get("summary") or ""),
+        "full_message": str(event.get("full_message") or ""),
+        "severity": str(event.get("severity") or "info"),
+        "status": str(event.get("status") or "new"),
+        "requires_action": bool(event.get("requires_action")),
+        "session_id": str(event.get("session_id") or "") or None,
+        "created_at": str(event.get("created_at_utc") or _utc_now_iso()),
+        "updated_at": _utc_now_iso(),
+        "entity_ref": event.get("entity_ref") if isinstance(event.get("entity_ref"), dict) else {},
+        "actions": event.get("actions") if isinstance(event.get("actions"), list) else [],
+        "metadata": metadata,
+        "channels": ["dashboard"],
+        "email_targets": [],
+    }
+    _activity_upsert_record(record)
+    refreshed = _get_activity_event(activity_id)
+    _record_activity_audit(
+        event_id=activity_id,
+        action=action,
+        actor=actor,
+        outcome="ok",
+        note=payload.note,
+        metadata={"event_class": event_class},
+    )
+    return {"ok": True, "action": action, "event": refreshed or event}
+
+
 @app.patch("/api/v1/dashboard/notifications/{notification_id}")
-async def dashboard_notification_update(notification_id: str, payload: NotificationUpdateRequest):
+async def dashboard_notification_update(notification_id: str, payload: NotificationUpdateRequest, request: Request):
+    _apply_notification_snooze_expiry()
+    _apply_activity_snooze_expiry()
     status_value = _normalize_notification_status(payload.status)
     if status_value not in {"new", "read", "acknowledged", "snoozed", "dismissed"}:
         raise HTTPException(status_code=400, detail="Invalid status")
@@ -5928,7 +9324,50 @@ async def dashboard_notification_update(notification_id: str, payload: Notificat
                 note=payload.note,
                 snooze_minutes=payload.snooze_minutes,
             )
+            _record_activity_audit(
+                event_id=notification_id,
+                action="set_status",
+                actor=_activity_actor_from_request(request),
+                outcome="ok",
+                note=payload.note,
+                metadata={"status": status_value, "snooze_minutes": payload.snooze_minutes},
+            )
             return {"notification": item}
+    event = _get_activity_event(notification_id)
+    if event and str(event.get("event_class") or "") == "notification":
+        reconstructed = {
+            "id": str(event.get("id") or notification_id),
+            "kind": str(event.get("kind") or ""),
+            "title": str(event.get("title") or ""),
+            "message": str(event.get("full_message") or ""),
+            "summary": str(event.get("summary") or ""),
+            "full_message": str(event.get("full_message") or ""),
+            "session_id": event.get("session_id"),
+            "severity": str(event.get("severity") or "info"),
+            "requires_action": bool(event.get("requires_action")),
+            "status": str(event.get("status") or "new"),
+            "created_at": str(event.get("created_at_utc") or _utc_now_iso()),
+            "updated_at": str(event.get("updated_at_utc") or _utc_now_iso()),
+            "channels": ["dashboard"],
+            "email_targets": [],
+            "metadata": event.get("metadata") if isinstance(event.get("metadata"), dict) else {},
+        }
+        _apply_notification_status(
+            reconstructed,
+            status_value=status_value,
+            note=payload.note,
+            snooze_minutes=payload.snooze_minutes,
+        )
+        _record_activity_audit(
+            event_id=notification_id,
+            action="set_status",
+            actor=_activity_actor_from_request(request),
+            outcome="ok",
+            note=payload.note,
+            metadata={"status": status_value, "snooze_minutes": payload.snooze_minutes},
+        )
+        _replace_notification_cache_record(reconstructed)
+        return {"notification": reconstructed}
     raise HTTPException(status_code=404, detail="Notification not found")
 
 
@@ -5939,25 +9378,18 @@ async def dashboard_notification_bulk_update(payload: NotificationBulkUpdateRequ
         raise HTTPException(status_code=400, detail="Invalid status")
 
     _apply_notification_snooze_expiry()
+    _apply_activity_snooze_expiry()
     kind_filter = str(payload.kind or "").strip().lower()
     current_status_filter = _normalize_notification_status(payload.current_status or "")
     limit = max(1, min(int(payload.limit or 200), 1000))
-    updated: list[dict[str, Any]] = []
-
-    for item in reversed(_notifications):
-        if len(updated) >= limit:
-            break
-        if kind_filter and str(item.get("kind", "")).strip().lower() != kind_filter:
-            continue
-        if current_status_filter and _normalize_notification_status(item.get("status")) != current_status_filter:
-            continue
-        _apply_notification_status(
-            item,
-            status_value=status_value,
-            note=payload.note,
-            snooze_minutes=payload.snooze_minutes,
-        )
-        updated.append(item)
+    updated = _bulk_update_activity_notifications(
+        status_value=status_value,
+        note=payload.note,
+        kind=kind_filter or None,
+        current_status=current_status_filter or None,
+        snooze_minutes=payload.snooze_minutes,
+        limit=limit,
+    )
 
     return {
         "updated": len(updated),
@@ -5969,6 +9401,7 @@ async def dashboard_notification_bulk_update(payload: NotificationBulkUpdateRequ
 @app.post("/api/v1/dashboard/notifications/purge")
 async def dashboard_notification_purge(payload: NotificationPurgeRequest):
     _apply_notification_snooze_expiry()
+    _apply_activity_snooze_expiry()
     kind_filter = str(payload.kind or "").strip().lower()
     status_filter = _normalize_notification_status(payload.current_status or "")
     older_than_hours = payload.older_than_hours
@@ -5982,30 +9415,14 @@ async def dashboard_notification_purge(payload: NotificationPurgeRequest):
             detail="Provide a purge filter (kind/current_status/older_than_hours) or set clear_all=true",
         )
 
-    cutoff_ts = None
-    if apply_age_filter and older_than_hours is not None:
-        cutoff_ts = time.time() - (older_than_hours * 3600)
-
-    deleted: list[dict[str, Any]] = []
-    kept: list[dict[str, Any]] = []
-    for item in _notifications:
-        matches = True
-        if kind_filter and str(item.get("kind") or "").strip().lower() != kind_filter:
-            matches = False
-        if status_filter and _normalize_notification_status(item.get("status")) != status_filter:
-            matches = False
-        if cutoff_ts is not None:
-            created_ts = _notification_created_epoch(item)
-            if created_ts is None or created_ts > cutoff_ts:
-                matches = False
-        if matches:
-            deleted.append(item)
-        else:
-            kept.append(item)
-
-    _notifications[:] = kept
+    deleted_count = _purge_activity_notifications(
+        clear_all=bool(payload.clear_all),
+        kind=kind_filter or None,
+        current_status=status_filter or None,
+        older_than_hours=older_than_hours if apply_age_filter else None,
+    )
     return {
-        "deleted": len(deleted),
+        "deleted": deleted_count,
         "remaining": len(_notifications),
         "filters": {
             "clear_all": bool(payload.clear_all),
@@ -6811,6 +10228,7 @@ async def post_system_event(request: SystemEventRequest):
         _enqueue_system_event(sid, event)
         if sid in manager.session_connections:
             _broadcast_system_event(sid, event)
+        _persist_system_activity_event(event, session_id=sid)
 
     wake_flag = request.wake_heartbeat or request.wake_mode
     if wake_flag and _heartbeat_service and target_sessions:
@@ -9068,6 +12486,12 @@ async def ops_session_continuity_metrics(request: Request):
 async def ops_scheduling_runtime_metrics(request: Request):
     _require_ops_auth(request)
     return {"metrics": _scheduling_runtime_metrics_snapshot()}
+
+
+@app.get("/api/v1/ops/metrics/activity-events")
+async def ops_activity_events_metrics(request: Request):
+    _require_ops_auth(request)
+    return {"metrics": _activity_runtime_metrics_snapshot()}
 
 
 @app.post("/api/v1/ops/reconcile/todoist-chron")
