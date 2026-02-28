@@ -175,6 +175,7 @@ def run_monitor(
     client: TgtgClient,
     on_stock: Callable[[dict, Target | None], None],
     on_dead_item: Callable[[str, str], None] | None = None,
+    on_sold_out: Callable[[str, str], None] | None = None,
     stop_event=None,
 ) -> None:
     """
@@ -184,6 +185,8 @@ def run_monitor(
         client:       Authenticated TgtgClient.
         on_stock:     Callback(item_dict, target_or_None) fired when stock appears.
         on_dead_item: Callback(item_id, label) fired when an item 404s (store gone).
+        on_sold_out:  Callback(item_id, store_name) fired when a previously in-stock
+                      item drops back to zero (sold out).
         stop_event:   threading.Event to signal shutdown.
     """
     proxy_cycle = itertools.cycle(TGTG_PROXIES) if TGTG_PROXIES else itertools.cycle([None])
@@ -231,6 +234,8 @@ def run_monitor(
                 if item_id in seen_in_stock:
                     log.info("Sold out: %s", store)
                     seen_in_stock.discard(item_id)
+                    if on_sold_out:
+                        on_sold_out(item_id, store)
 
         interval = _determine_interval(items_only)
         log.debug(

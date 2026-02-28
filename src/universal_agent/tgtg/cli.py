@@ -32,21 +32,33 @@ import argparse
 import logging
 import sys
 import threading
+import time
+from collections import deque
+from datetime import datetime, timezone
 
 from .config import (
     TGTG_AUTO_PURCHASE,
+    TGTG_DAILY_BUDGET,
     TGTG_EMAIL,
     TGTG_LATITUDE,
     TGTG_LONGITUDE,
     TGTG_ORDER_COUNT,
+    TGTG_PAYMENT_REMINDER_MINUTES,
     TGTG_RADIUS,
+    TGTG_SCAN_INTERVAL_HOURS,
     DASHBOARD_PORT,
     load_saved_credentials,
 )
 from .dashboard import push_item_update, push_log, push_order, start_dashboard
 from .db import get_db
 from .monitor import build_client, fetch_watched_items, run_monitor
-from .notifier import send_dead_item_alert, send_stock_alert
+from .notifier import (
+    send_dead_item_alert,
+    send_new_store_alert,
+    send_payment_reminder,
+    send_stock_alert,
+    send_webhook,
+)
 from .purchaser import purchase_item
 from .scanner import scan_and_store
 from .targets import (
@@ -66,6 +78,69 @@ logging.basicConfig(
 log = logging.getLogger("tgtg.cli")
 
 _DESIRE_ICONS = {"high": "🔥", "watch": "👁 "}
+
+
+# ── Daily spend cap ───────────────────────────────────────────────────────────
+
+class _DailyBudget:
+    """In-memory daily spend tracker; resets at midnight."""
+
+    def __init__(self, limit: float | None):
+        self.limit = limit
+        self._date: object = None
+        self._spent: float = 0.0
+
+    def _maybe_reset(self) -> None:
+        today = datetime.now().date()
+        if self._date != today:
+            self._date = today
+            self._spent = 0.0
+
+    def can_spend(self, amount: float) -> bool:
+        if self.limit is None:
+            return True
+        self._maybe_reset()
+        return self._spent + amount <= self.limit
+
+    def record(self, amount: float) -> None:
+        self._maybe_reset()
+        self._spent += amount
+
+    @property
+    def remaining(self) -> float | None:
+        if self.limit is None:
+            return None
+        self._maybe_reset()
+        return self.limit - self._spent
+
+
+# ── Payment reminder scheduler ────────────────────────────────────────────────
+
+class _ReminderScheduler:
+    """Background thread that fires callbacks at scheduled datetimes."""
+
+    def __init__(self):
+        self._pending: deque = deque()
+        self._lock = threading.Lock()
+        t = threading.Thread(target=self._run, daemon=True, name="reminder-scheduler")
+        t.start()
+
+    def schedule(self, fire_at: datetime, callback) -> None:
+        with self._lock:
+            self._pending.append((fire_at, callback))
+
+    def _run(self) -> None:
+        while True:
+            time.sleep(30)
+            now = datetime.now(timezone.utc)
+            with self._lock:
+                due = [(t, cb) for t, cb in self._pending if t <= now]
+                self._pending = deque((t, cb) for t, cb in self._pending if t > now)
+            for _, cb in due:
+                try:
+                    cb()
+                except Exception as exc:
+                    log.error("Reminder callback error: %s", exc)
 
 
 # ── login ─────────────────────────────────────────────────────────────────────
@@ -148,6 +223,82 @@ def cmd_buy(args):
 
 # ── run ───────────────────────────────────────────────────────────────────────
 
+def _item_price_value(item: dict) -> float:
+    """Extract the numeric price from an item dict (returns 0.0 on failure)."""
+    try:
+        p = item["item"]["price_including_taxes"]
+        return p["minor_units"] / 10 ** p["decimals"]
+    except (KeyError, TypeError, ZeroDivisionError):
+        return 0.0
+
+
+def _schedule_payment_reminder(
+    scheduler: _ReminderScheduler,
+    order: dict,
+    item: dict,
+    store: str,
+) -> None:
+    """Queue a Telegram reminder N minutes before pickup closes."""
+    if TGTG_PAYMENT_REMINDER_MINUTES <= 0:
+        return
+    try:
+        window = item["item"]["pickup_interval"]
+        pickup_end = datetime.fromisoformat(
+            window["end"].replace("Z", "+00:00")
+        ).astimezone(timezone.utc)
+    except (KeyError, TypeError, ValueError):
+        return
+
+    from datetime import timedelta
+    fire_at = pickup_end - timedelta(minutes=TGTG_PAYMENT_REMINDER_MINUTES)
+    if fire_at <= datetime.now(timezone.utc):
+        # Window too close — fire immediately
+        fire_at = datetime.now(timezone.utc)
+
+    order_id = str(order.get("id", "?"))
+    scheduler.schedule(
+        fire_at,
+        lambda: send_payment_reminder(order_id, store, pickup_end),
+    )
+    log.info(
+        "Payment reminder scheduled at %s for order %s",
+        fire_at.astimezone().strftime("%H:%M"),
+        order_id,
+    )
+
+
+def _start_scan_scheduler(client, stop_event: threading.Event) -> None:
+    """Background thread: re-scan the region every TGTG_SCAN_INTERVAL_HOURS hours."""
+    if TGTG_SCAN_INTERVAL_HOURS <= 0:
+        return
+
+    def _loop():
+        interval_secs = TGTG_SCAN_INTERVAL_HOURS * 3600
+        time.sleep(interval_secs)  # first scan is manual; subsequent are auto
+        while not stop_event.is_set():
+            log.info("Auto-scan: starting scheduled region rescan …")
+            try:
+                report = scan_and_store(client, TGTG_LATITUDE, TGTG_LONGITUDE, TGTG_RADIUS)
+                push_log(f"🔄 Auto-scan: {report.items_found} items, {report.items_new} new")
+                if report.new_item_ids:
+                    db = get_db()
+                    new_pairs = [
+                        (iid, (db.get(iid) or {}).get("store_name", iid))
+                        for iid in report.new_item_ids
+                    ]
+                    send_new_store_alert(new_pairs)
+                    send_webhook("scan_new_stores", {
+                        "new_count": len(report.new_item_ids),
+                        "new_items": [{"item_id": i, "store_name": n} for i, n in new_pairs],
+                    })
+            except Exception as exc:
+                log.error("Auto-scan failed: %s", exc)
+            time.sleep(interval_secs)
+
+    t = threading.Thread(target=_loop, daemon=True, name="scan-scheduler")
+    t.start()
+
+
 def cmd_run(args):
     client = build_client(email=TGTG_EMAIL or None)
     stop_event = threading.Event()
@@ -155,33 +306,86 @@ def cmd_run(args):
     targets = load_targets()
     high_targets = [t for t in targets if t.desire == "high"]
 
+    budget = _DailyBudget(TGTG_DAILY_BUDGET)
+    reminders = _ReminderScheduler()
+
     start_dashboard()
+    _start_scan_scheduler(client, stop_event)
+
     print(f"🌐 Dashboard → http://localhost:{DASHBOARD_PORT}")
     print(f"🔥 High-desire (auto-buy): {len(high_targets)} target(s)")
     print(f"👁  Watch-only (notify):   {len(targets) - len(high_targets)} target(s)")
     if TGTG_AUTO_PURCHASE:
         print("⚡ Global TGTG_AUTO_PURCHASE=true (all items auto-buy regardless of desire level)")
+    if TGTG_DAILY_BUDGET:
+        print(f"💰 Daily budget cap: {TGTG_DAILY_BUDGET}")
+    if TGTG_SCAN_INTERVAL_HOURS > 0:
+        print(f"🔄 Auto-scan every {TGTG_SCAN_INTERVAL_HOURS}h")
     print("Press Ctrl+C to stop.\n")
 
     def on_stock(item: dict, target: Target | None):
         store = item.get("store", {}).get("store_name", "?")
+        item_id = str(item.get("item", {}).get("item_id", ""))
         desire = target.desire if target else "watch"
         icon = _DESIRE_ICONS.get(desire, "")
 
         push_log(f"{icon} STOCK [{desire.upper()}]: {store} — {item.get('items_available')} bag(s)")
         push_item_update(item, target)
 
+        # Record stock appearance for sell-through speed tracking
+        get_db().record_stock_appeared(item_id, item.get("items_available", 0))
+
+        # Fire webhook for every stock event
+        send_webhook("stock_available", {
+            "item_id": item_id,
+            "store": store,
+            "bags_available": item.get("items_available", 0),
+            "desire": desire,
+        })
+
         # Decide whether to auto-buy:
         #   1. Global override (TGTG_AUTO_PURCHASE=true), or
         #   2. This specific target has desire="high"
         should_buy = TGTG_AUTO_PURCHASE or (target is not None and target.auto_buy)
 
+        # Pickup window availability filter (feature 1)
+        if should_buy and target is not None and not target.pickup_ok(item):
+            log.info("SKIPPED (outside available hours): %s", store)
+            push_log(f"⏳ SKIPPED (outside your hours): {store}", level="warning")
+            should_buy = False
+
+        # Daily budget cap (feature 6)
+        if should_buy:
+            price = _item_price_value(item)
+            if not budget.can_spend(price):
+                log.info(
+                    "SKIPPED (daily budget cap %.2f reached, remaining %.2f): %s",
+                    budget.limit,
+                    budget.remaining or 0,
+                    store,
+                )
+                push_log(
+                    f"💸 SKIPPED (budget cap reached, {budget.remaining:.2f} left): {store}",
+                    level="warning",
+                )
+                should_buy = False
+
         order = None
         if should_buy:
             order = purchase_item(client, item, target=target)
             if order:
+                price = _item_price_value(item)
+                budget.record(price)
                 push_order(order, item)
                 push_log(f"✅ ORDERED: {store} | id={order.get('id')}")
+                _schedule_payment_reminder(reminders, order, item, store)
+                send_webhook("order_placed", {
+                    "order_id": order.get("id"),
+                    "store": store,
+                    "item_id": item_id,
+                    "price": price,
+                    "daily_spent": budget._spent,
+                })
             else:
                 push_log(f"❌ Purchase failed or price guard: {store}", level="warning")
 
@@ -192,9 +396,20 @@ def cmd_run(args):
         log.warning(msg)
         push_log(msg, level="warning")
         send_dead_item_alert(item_id, label)
+        send_webhook("store_gone", {"item_id": item_id, "label": label})
+
+    def on_sold_out(item_id: str, store: str):
+        get_db().record_stock_sold_out(item_id)
+        send_webhook("stock_sold_out", {"item_id": item_id, "store": store})
 
     try:
-        run_monitor(client, on_stock=on_stock, on_dead_item=on_dead_item, stop_event=stop_event)
+        run_monitor(
+            client,
+            on_stock=on_stock,
+            on_dead_item=on_dead_item,
+            on_sold_out=on_sold_out,
+            stop_event=stop_event,
+        )
     except KeyboardInterrupt:
         stop_event.set()
         print("\nStopped.")
@@ -289,6 +504,26 @@ def cmd_db_search(args):
         print(f"{row['item_id']:<12} {status:<6} {price:<10} {row['store_name']}")
 
 
+def cmd_db_speed(args):
+    """Show sold-out speed stats per store (how fast bags disappear)."""
+    rows = get_db().speed_stats(limit=args.limit)
+    if not rows:
+        print("No sold-out speed data yet. Bags need to appear and sell out at least once.")
+        return
+    print(f"── Sold-out Speed (top {len(rows)}) ────────────────────────────────────────────────")
+    print(f"{'ID':<12} {'Events':<8} {'Avg (min)':<12} {'Min (min)':<12} {'Max (min)':<12} {'Store'}")
+    print("─" * 80)
+    for r in rows:
+        avg = r["avg_secs"] / 60 if r["avg_secs"] else 0
+        mn  = r["min_secs"] / 60 if r["min_secs"] else 0
+        mx  = r["max_secs"] / 60 if r["max_secs"] else 0
+        print(
+            f"{r['item_id']:<12} {r['events']:<8} {avg:<12.1f} {mn:<12.1f} {mx:<12.1f} "
+            f"{r['store_name'] or '?'}"
+        )
+    print("\nFastest stores sell out quickest — consider sniping poll interval.")
+
+
 # ── target subcommands ────────────────────────────────────────────────────────
 
 def cmd_target_list(args):
@@ -296,12 +531,13 @@ def cmd_target_list(args):
     if not targets:
         print("No targets registered. Add one with: target add <item_id>")
         return
-    print(f"{'ID':<12} {'Desire':<8} {'Count':<6} {'MaxPrice':<10} {'Label'}")
-    print("─" * 60)
+    print(f"{'ID':<12} {'Desire':<8} {'Count':<6} {'MaxPrice':<10} {'Available':<15} {'Label'}")
+    print("─" * 75)
     for t in targets:
         icon = _DESIRE_ICONS.get(t.desire, "")
         price = f"{t.max_price:.2f}" if t.max_price else "—"
-        print(f"{t.item_id:<12} {icon}{t.desire:<7} {t.order_count:<6} {price:<10} {t.label}")
+        avail = f"{t.available_from or '?'}–{t.available_to or '?'}" if (t.available_from or t.available_to) else "any time"
+        print(f"{t.item_id:<12} {icon}{t.desire:<7} {t.order_count:<6} {price:<10} {avail:<15} {t.label}")
     print(f"\n{len(targets)} target(s) — 🔥 = auto-buy on stock, 👁  = notify only")
 
 
@@ -324,11 +560,16 @@ def cmd_target_add(args):
         order_count=args.count,
         max_price=args.max_price,
         notes=args.notes or "",
+        available_from=args.available_from or None,
+        available_to=args.available_to or None,
     )
     upsert_target(target)
     icon = _DESIRE_ICONS.get(desire, "")
     price_info = f" (max price: {args.max_price})" if args.max_price else ""
-    print(f"✅ {icon} [{args.item_id}] '{label or args.item_id}' registered as {desire.upper()}{price_info} × {args.count}")
+    hours_info = ""
+    if target.available_from or target.available_to:
+        hours_info = f" [available {target.available_from or '?'}–{target.available_to or '?'}]"
+    print(f"✅ {icon} [{args.item_id}] '{label or args.item_id}' registered as {desire.upper()}{price_info} × {args.count}{hours_info}")
     if desire == "high":
         print("   ⚡ This item will be auto-purchased immediately when stock is detected.")
     else:
@@ -356,9 +597,18 @@ def cmd_target_set(args):
         target.max_price = args.max_price
     if args.label:
         target.label = args.label
+    if args.available_from is not None:
+        target.available_from = args.available_from or None
+    if args.available_to is not None:
+        target.available_to = args.available_to or None
     upsert_target(target)
     icon = _DESIRE_ICONS.get(target.desire, "")
-    print(f"✅ {icon} [{args.item_id}] updated → desire={target.desire}, count={target.order_count}, max_price={target.max_price}")
+    hours = (
+        f", available {target.available_from}–{target.available_to}"
+        if target.available_from or target.available_to
+        else ""
+    )
+    print(f"✅ {icon} [{args.item_id}] updated → desire={target.desire}, count={target.order_count}, max_price={target.max_price}{hours}")
 
 
 # ── argument parser ───────────────────────────────────────────────────────────
@@ -399,6 +649,9 @@ def main():
     p_db_search.add_argument("query", help="Substring to search for")
     p_db_search.add_argument("--all", action="store_true", help="Include inactive items")
 
+    p_db_speed = dbsub.add_parser("speed", help="Show sold-out speed stats per store")
+    p_db_speed.add_argument("--limit", type=int, default=20, help="Number of stores to show")
+
     # target
     p_target = sub.add_parser("target", help="Manage snipe targets")
     tsub = p_target.add_subparsers(dest="target_cmd")
@@ -418,6 +671,14 @@ def main():
                        help="Skip auto-buy if bag costs more than this amount")
     p_add.add_argument("--label", default="", help="Friendly name (auto-fetched if omitted)")
     p_add.add_argument("--notes", default="", help="Personal notes")
+    p_add.add_argument(
+        "--available-from", default="", metavar="HH:MM",
+        help="Earliest local time you can collect (e.g. 17:00). Skips auto-buy outside window.",
+    )
+    p_add.add_argument(
+        "--available-to", default="", metavar="HH:MM",
+        help="Latest local time you can collect (e.g. 20:00).",
+    )
 
     p_remove = tsub.add_parser("remove", help="Unregister a target")
     p_remove.add_argument("item_id")
@@ -428,6 +689,10 @@ def main():
     p_set.add_argument("--count", type=int, default=None)
     p_set.add_argument("--max-price", type=float, default=None, metavar="PRICE")
     p_set.add_argument("--label", default=None)
+    p_set.add_argument("--available-from", default=None, metavar="HH:MM",
+                       help="Set collection start time (empty string to clear)")
+    p_set.add_argument("--available-to", default=None, metavar="HH:MM",
+                       help="Set collection end time (empty string to clear)")
 
     args = parser.parse_args()
 
@@ -464,6 +729,7 @@ def main():
             "stats": cmd_db_stats,
             "list": cmd_db_list,
             "search": cmd_db_search,
+            "speed": cmd_db_speed,
         }
         if getattr(args, "db_cmd", None) in db_cmds:
             db_cmds[args.db_cmd](args)

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from .config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+from .config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TGTG_WEBHOOK_URL
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,101 @@ def _format_price(item: dict) -> str:
 def _tgtg_deep_link(item_id: str) -> str:
     """Deep link opens the TGTG app directly to the store."""
     return f"https://share.toogoodtogo.com/item/{item_id}"
+
+
+def send_webhook(event_type: str, payload: dict) -> bool:
+    """
+    Fire an HTTP POST to TGTG_WEBHOOK_URL with a JSON body.
+
+    Body shape:
+      { "event": "<event_type>", "timestamp": "<iso>", ...payload }
+
+    Returns True if the server responded with 2xx.
+    """
+    if not TGTG_WEBHOOK_URL:
+        return False
+
+    body = {
+        "event": event_type,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **payload,
+    }
+    try:
+        resp = httpx.post(TGTG_WEBHOOK_URL, json=body, timeout=10)
+        resp.raise_for_status()
+        log.debug("Webhook %s → %s", event_type, resp.status_code)
+        return True
+    except Exception as exc:
+        log.warning("Webhook delivery failed (%s): %s", event_type, exc)
+        return False
+
+
+def send_payment_reminder(order_id: str, store: str, pickup_end: datetime) -> bool:
+    """
+    Send a Telegram reminder to pay for a reserved bag before pickup closes.
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+
+    closes_at = pickup_end.astimezone().strftime("%H:%M")
+    text = (
+        f"⏰ *Pay now!* Bag reserved at *{store}*\n\n"
+        f"Pickup closes at *{closes_at}* — don't forget to pay in the app!\n"
+        f"🧾 Order: `{order_id}`"
+    )
+    try:
+        resp = httpx.post(
+            _BASE.format(token=TELEGRAM_BOT_TOKEN, method="sendMessage"),
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text,
+                "parse_mode": "Markdown",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        log.info("Payment reminder sent for order %s (%s)", order_id, store)
+        return True
+    except Exception as exc:
+        log.error("Failed to send payment reminder: %s", exc)
+        return False
+
+
+def send_new_store_alert(new_items: list[tuple[str, str]]) -> bool:
+    """
+    Notify via Telegram when a scheduled region rescan finds brand-new stores.
+
+    Args:
+        new_items: list of (item_id, store_name) tuples
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+    if not new_items:
+        return False
+
+    lines = "\n".join(f"  • `{iid}` — {name}" for iid, name in new_items[:20])
+    overflow = f"\n  …and {len(new_items) - 20} more" if len(new_items) > 20 else ""
+    text = (
+        f"🆕 *New stores in your area!* ({len(new_items)} found)\n\n"
+        f"{lines}{overflow}\n\n"
+        f"_Use `target add <id>` to start watching any of these._"
+    )
+    try:
+        resp = httpx.post(
+            _BASE.format(token=TELEGRAM_BOT_TOKEN, method="sendMessage"),
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text,
+                "parse_mode": "Markdown",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        log.info("New-store alert sent (%d item(s))", len(new_items))
+        return True
+    except Exception as exc:
+        log.error("Failed to send new-store alert: %s", exc)
+        return False
 
 
 def send_dead_item_alert(item_id: str, label: str) -> bool:
