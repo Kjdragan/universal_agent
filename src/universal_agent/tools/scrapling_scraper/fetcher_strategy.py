@@ -11,6 +11,7 @@ bot-detection signals are detected in the response.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import logging
 import time
 from dataclasses import dataclass, field
@@ -207,6 +208,12 @@ class FetcherStrategy:
             escalation_delay: Seconds to wait before retrying at a higher tier.
         """
         self.escalation_delay = escalation_delay
+        self._last_fetch_trace: dict[str, Any] = {}
+
+    @property
+    def last_fetch_trace(self) -> dict[str, Any]:
+        """Telemetry for the most recent `fetch` call."""
+        return deepcopy(self._last_fetch_trace)
 
     @staticmethod
     def _coerce_level(value: Any) -> Optional[FetcherLevel]:
@@ -256,41 +263,103 @@ class FetcherStrategy:
             RuntimeError: if all tiers fail.
         """
         start_level = req.force_level or req.min_level
-        tiers = [
+        tiers: list[tuple[FetcherLevel, Any]] = [
             (FetcherLevel.BASIC, _safe_fetch_basic),
             (FetcherLevel.DYNAMIC, _safe_fetch_dynamic),
             (FetcherLevel.STEALTHY, _safe_fetch_stealthy),
+        ]
+        allowed_tiers = [
+            (level, fetch_fn)
+            for level, fetch_fn in tiers
+            if level >= start_level and (req.force_level is None or level == req.force_level)
         ]
 
         last_exc: Optional[Exception] = None
         last_page: Any = None
         last_page_level: Optional[FetcherLevel] = None
+        trace: dict[str, Any] = {
+            "url": req.url,
+            "requested_min_level": req.min_level.name,
+            "forced_level": req.force_level.name if req.force_level else None,
+            "attempts": [],
+            "escalations": [],
+            "result": "unknown",
+            "final_level": None,
+            "total_fetch_ms": 0.0,
+        }
+        fetch_started = time.perf_counter()
 
-        for level, fetch_fn in tiers:
-            if level < start_level:
-                continue
-            if req.force_level is not None and level != req.force_level:
-                continue
-
+        for idx, (level, fetch_fn) in enumerate(allowed_tiers):
+            attempt_started = time.perf_counter()
+            attempt: dict[str, Any] = {
+                "tier": level.name,
+                "status_code": None,
+                "outcome": "unknown",
+                "duration_ms": 0.0,
+                "error_type": None,
+                "error_message": None,
+            }
             try:
                 page = fetch_fn(req)
+                attempt["status_code"] = getattr(page, "status", None)
                 if _is_bot_blocked(page):
+                    attempt["outcome"] = "blocked"
                     logger.info(
                         "[%s] Bot-detection detected for %s — escalating",
                         level.name, req.url,
                     )
                     last_page = page
                     last_page_level = level
-                    time.sleep(self.escalation_delay)
+                    if idx < len(allowed_tiers) - 1:
+                        next_level = allowed_tiers[idx + 1][0]
+                        trace["escalations"].append(
+                            {
+                                "from_tier": level.name,
+                                "to_tier": next_level.name,
+                                "reason": "bot_blocked",
+                                "delay_s": self.escalation_delay,
+                            }
+                        )
+                        attempt["duration_ms"] = round((time.perf_counter() - attempt_started) * 1000, 3)
+                        trace["attempts"].append(attempt)
+                        time.sleep(self.escalation_delay)
+                    else:
+                        attempt["duration_ms"] = round((time.perf_counter() - attempt_started) * 1000, 3)
+                        trace["attempts"].append(attempt)
                     continue
             except Exception as exc:
+                attempt["outcome"] = "error"
+                attempt["error_type"] = exc.__class__.__name__
+                attempt["error_message"] = str(exc)
                 logger.warning(
                     "[%s] Error fetching %s: %s — escalating",
                     level.name, req.url, exc,
                 )
                 last_exc = exc
-                time.sleep(self.escalation_delay)
+                if idx < len(allowed_tiers) - 1:
+                    next_level = allowed_tiers[idx + 1][0]
+                    trace["escalations"].append(
+                        {
+                            "from_tier": level.name,
+                            "to_tier": next_level.name,
+                            "reason": "fetch_error",
+                            "delay_s": self.escalation_delay,
+                        }
+                    )
+                    attempt["duration_ms"] = round((time.perf_counter() - attempt_started) * 1000, 3)
+                    trace["attempts"].append(attempt)
+                    time.sleep(self.escalation_delay)
+                else:
+                    attempt["duration_ms"] = round((time.perf_counter() - attempt_started) * 1000, 3)
+                    trace["attempts"].append(attempt)
             else:
+                attempt["outcome"] = "success"
+                attempt["duration_ms"] = round((time.perf_counter() - attempt_started) * 1000, 3)
+                trace["attempts"].append(attempt)
+                trace["result"] = "success"
+                trace["final_level"] = level.name
+                trace["total_fetch_ms"] = round((time.perf_counter() - fetch_started) * 1000, 3)
+                self._last_fetch_trace = trace
                 logger.info("[%s] Successfully fetched %s", level.name, req.url)
                 return page, level
 
@@ -303,8 +372,19 @@ class FetcherStrategy:
                 or self._extract_level(last_exc)
                 or FetcherLevel.STEALTHY
             )
+            trace["result"] = "partial_blocked"
+            trace["final_level"] = level_used.name
+            trace["total_fetch_ms"] = round((time.perf_counter() - fetch_started) * 1000, 3)
+            self._last_fetch_trace = trace
             logger.warning("All tiers blocked for %s; returning partial result", req.url)
             return last_page, level_used
+        trace["result"] = "failed"
+        trace["final_level"] = None
+        trace["total_fetch_ms"] = round((time.perf_counter() - fetch_started) * 1000, 3)
+        if last_exc is not None:
+            trace["final_error_type"] = last_exc.__class__.__name__
+            trace["final_error_message"] = str(last_exc)
+        self._last_fetch_trace = trace
         raise RuntimeError(
             f"All fetcher tiers failed for {req.url}"
         ) from last_exc

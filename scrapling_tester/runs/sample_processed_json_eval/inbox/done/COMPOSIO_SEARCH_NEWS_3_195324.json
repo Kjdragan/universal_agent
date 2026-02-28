@@ -1,0 +1,28 @@
+{
+  "type": "news",
+  "timestamp": "2026-02-27T19:53:24.080656",
+  "tool": "COMPOSIO_SEARCH_NEWS",
+  "articles": [
+    {
+      "position": 1,
+      "title": "Russian Offensive Campaign Assessment, February 26, 2026",
+      "url": "https://understandingwar.org/research/russia-ukraine/russian-offensive-campaign-assessment-february-26-2026/",
+      "source": "Institute for the Study of War",
+      "snippet": "Russia launched another massive missile and drone strike against Ukraine on the night of February 25 to 26, targeting energy infrastructure."
+    },
+    {
+      "position": 2,
+      "title": "ukraine frontline update february 27 2026 120 engagements and russian assaults across fronts",
+      "url": "https://mezha.net/eng/bukvy/ukraine-frontline-update-february-27-2026-120-engagements-and-russian-assaults-across-fronts/",
+      "source": "mezha.net",
+      "snippet": "Daily Ukrainian frontline briefing for February 27 2026 summarizes 120 engagements across multiple fronts with Russian attacks on Donetsk and Zaporizhzhia..."
+    },
+    {
+      "position": 3,
+      "title": "Ukraine frontline update February 26 2026",
+      "url": "https://mezha.net/eng/bukvy/ukraine-frontline-update-february-26-2026/",
+      "source": "mezha.net",
+      "snippet": "Frontline updates from Ukraine on February 26 show sustained hostilities across multiple sectors, with 57 enemy attacks this morning."
+    }
+  ]
+}

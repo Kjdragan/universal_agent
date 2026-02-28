@@ -1,0 +1,56 @@
+{
+  "type": "web_answer",
+  "timestamp": "2026-02-27T19:53:06.878943",
+  "tool": "COMPOSIO_SEARCH_WEB",
+  "answer": "As of February 24, 2026, the humanitarian situation in Ukraine remains dire, with over 13 million people displaced since the invasion, including more than five million internally displaced and over eight million refugees in neighboring countries, amid ongoing hostilities and suffering ([CFR](https://www.cfr.org/articles/ukraine-humanitarian-crisis-refugees-aid), [UNHCR](https://www.unhcr.org/us/emergencies/ukraine-emergency), [UNHCR](https://www.unrefugees.org/emergencies/ukraine), [CARE](https://www.care.org/our-work/disaster-response/emergencies/ukraine-humanitarian-crisis)). The conflict continues to cause significant civilian casualties and widespread hardship.",
+  "results": [
+    {
+      "position": 1,
+      "title": "https://cfr.org/articles/ukraine-humanitarian-crisis-refugees-aid",
+      "url": "https://cfr.org/articles/ukraine-humanitarian-crisis-refugees-aid",
+      "snippet": "According to the UN refugee agency, more than thirteen million people, or nearly a third of Ukraine's prewar population, have been displaced since the invasion ."
+    },
+    {
+      "position": 2,
+      "title": "https://unhcr.org/us/emergencies/ukraine-emergency",
+      "url": "https://unhcr.org/us/emergencies/ukraine-emergency",
+      "snippet": "Over 12.7 million people inside Ukraine required humanitarian assistance , many of whom have been displaced multiple times. Hostilities intensified in 2025, with\u00a0..."
+    },
+    {
+      "position": 3,
+      "title": "https://unrefugees.org/emergencies/ukraine",
+      "url": "https://unrefugees.org/emergencies/ukraine",
+      "snippet": "In the first year of the war, UNHCR provided 4.32 million people inside Ukraine with humanitarian assistance . In 2026, UNHCR aims to reach 2.1 million people in\u00a0..."
+    },
+    {
+      "position": 4,
+      "title": "https://care.org/our-work/disaster-response/emergencies/ukraine-humanitarian-crisis",
+      "url": "https://care.org/our-work/disaster-response/emergencies/ukraine-humanitarian-crisis",
+      "snippet": "5 days ago \u2014 Over 12,000 people have lost their lives , while over 3.7 million are registered as internally displaced. Another 6 million people have had to\u00a0..."
+    },
+    {
+      "position": 5,
+      "title": "https://womensrefugeecommission.org/crisis-response/ukraine",
+      "url": "https://womensrefugeecommission.org/crisis-response/ukraine",
+      "snippet": "The current crisis in Ukraine, which began with the Russian invasion in February 2022 has left more than 6 million Ukrainians as refugees in neighboring\u00a0..."
+    },
+    {
+      "position": 6,
+      "title": "https://civil-protection-humanitarian-aid.ec.europa.eu/where/europe/ukraine_en",
+      "url": "https://civil-protection-humanitarian-aid.ec.europa.eu/where/europe/ukraine_en",
+      "snippet": "While Russia's war of aggression continues to devastate Ukraine , the Commission is announcing \u20ac148 million in new humanitarian aid to support those affected by\u00a0..."
+    },
+    {
+      "position": 7,
+      "title": "https://unocha.org/publications/report/ukraine/ukraine-humanitarian-needs-and-response-plan-2026-january-2026-enuk",
+      "url": "https://unocha.org/publications/report/ukraine/ukraine-humanitarian-needs-and-response-plan-2026-january-2026-enuk",
+      "snippet": ""
+    },
+    {
+      "position": 8,
+      "title": "https://ukraine.ohchr.org/en/node/540",
+      "url": "https://ukraine.ohchr.org/en/node/540",
+      "snippet": ""
+    }
+  ]
+}

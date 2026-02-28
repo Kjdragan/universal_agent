@@ -175,6 +175,63 @@ class TestLoadJob:
         job = _load_job(p)
         assert job.urls == []
 
+    def test_auto_extracts_urls_from_search_payload(self, tmp_path):
+        p = tmp_path / "search_payload.json"
+        data = {
+            "type": "news",
+            "tool": "COMPOSIO_SEARCH_NEWS",
+            "timestamp": "2026-02-27T19:53:06Z",
+            "articles": [
+                {"title": "A", "url": "https://example.com/a"},
+                {"title": "B", "link": "https://example.com/b"},
+                {"title": "C", "url": "https://example.com/a"},
+            ],
+            "nested": {"items": [{"href": "https://example.com/c"}]},
+        }
+        p.write_text(json.dumps(data))
+        job = _load_job(p)
+        assert job.urls == [
+            "https://example.com/a",
+            "https://example.com/b",
+            "https://example.com/c",
+        ]
+        assert job.metadata["tool"] == "COMPOSIO_SEARCH_NEWS"
+        assert job.metadata["url_extraction_mode"] == "recursive_fields"
+        assert "articles" not in job.metadata
+
+    def test_invalid_options_type_falls_back_to_defaults(self, tmp_path):
+        p = tmp_path / "job_bad_opts.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "urls": ["https://example.com"],
+                    "options": ["not", "a", "dict"],
+                }
+            )
+        )
+        job = _load_job(p)
+        assert job.options.timeout == 30.0
+        assert job.options.clean_markdown is True
+
+    def test_markdown_cleanup_options_parse(self, tmp_path):
+        p = tmp_path / "job_clean.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "urls": ["https://example.com"],
+                    "options": {
+                        "clean_markdown": False,
+                        "include_structure": True,
+                        "include_links": True,
+                    },
+                }
+            )
+        )
+        job = _load_job(p)
+        assert job.options.clean_markdown is False
+        assert job.options.include_structure is True
+        assert job.options.include_links is True
+
     def test_invalid_json_raises(self, tmp_path):
         p = tmp_path / "bad.json"
         p.write_text("not json")
@@ -209,6 +266,21 @@ class TestPageToMarkdown:
         )
         assert "project" in md
         assert "test-run" in md
+
+    def test_clean_markdown_removes_boilerplate_lines(self):
+        page = _make_page()
+        page.get_all_text.return_value = (
+            "Home\n"
+            "Privacy Policy\n"
+            "Real paragraph one with meaningful content.\n"
+            "Subscribe\n"
+            "Real paragraph two with more details."
+        )
+        md = page_to_markdown(page, "https://example.com", clean_markdown=True)
+        assert "Real paragraph one with meaningful content." in md
+        assert "Real paragraph two with more details." in md
+        assert "Privacy Policy" not in md
+        assert "Subscribe" not in md
 
 
 class TestFetcherStrategy:
