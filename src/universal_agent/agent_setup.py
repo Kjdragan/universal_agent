@@ -14,11 +14,8 @@ from pathlib import Path
 from typing import Any, Optional
 import yaml
 
-from universal_agent.infisical_loader import initialize_runtime_secrets
-from universal_agent.utils.env_aliases import apply_xai_key_aliases
-
-initialize_runtime_secrets()
-apply_xai_key_aliases()
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.runtime_role import resolve_factory_role
 
 from composio import Composio
 from claude_agent_sdk.types import ClaudeAgentOptions, HookMatcher
@@ -103,8 +100,8 @@ class AgentSetup:
         self.memory_max_tokens = memory_max_tokens()
         self.verbose = verbose
         
-        # Factory Role assignment (defaults to HEADQUARTERS for unconfigured local instances)
-        self.factory_role = os.environ.get("FACTORY_ROLE", "HEADQUARTERS").upper()
+        # Factory Role assignment (finalized fallback policy lives in runtime_role)
+        self.factory_role = resolve_factory_role().value
         self.enable_vp_coder = str(os.environ.get("ENABLE_VP_CODER", "true")).lower() == "true"
         
         self.run_id = str(uuid.uuid4())
@@ -164,6 +161,10 @@ class AgentSetup:
         """
         if self._initialized:
             return
+
+        bootstrap_state = bootstrap_runtime_environment()
+        self.factory_role = bootstrap_state.policy.role
+        self.enable_vp_coder = str(os.environ.get("ENABLE_VP_CODER", "true")).lower() == "true"
 
         # Ensure workspace directories exist
         self._setup_workspace_dirs()
