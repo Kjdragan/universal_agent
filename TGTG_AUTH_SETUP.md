@@ -11,7 +11,7 @@
 
 - A desktop or laptop computer (Windows/Mac/Linux — doesn't matter)
 - Python 3.9+ installed (`python3 --version` to check)
-- Your TGTG account email: **kevinjdragan@gmail.com**
+- Your TGTG account email: **your@email.com**
 - Access to that Gmail inbox in a **desktop browser** (Chrome/Firefox/Edge)
 - The server `.env` file open and ready to edit (see Step 3)
 
