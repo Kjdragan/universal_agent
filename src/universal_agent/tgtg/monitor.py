@@ -30,6 +30,7 @@ from .config import (
     load_saved_credentials,
     save_credentials,
 )
+from .db import get_db
 from .targets import Target, all_watched_ids, get_target
 
 log = logging.getLogger(__name__)
@@ -94,15 +95,29 @@ def build_client(email: str | None = None) -> TgtgClient:
     return client
 
 
-def fetch_watched_items(client: TgtgClient) -> list[tuple[dict, Target | None]]:
+def fetch_watched_items(
+    client: TgtgClient,
+    on_dead_item: Callable[[str, str], None] | None = None,
+) -> list[tuple[dict, Target | None]]:
     """
-    Fetch item data for all registered targets (or all favourites if none defined).
+    Fetch item data for all registered targets, falling back to the catalog DB,
+    then to TGTG favourites if neither has entries.
 
-    Returns a list of (item_dict, target_or_None) pairs so callers can make
-    per-item decisions without a second lookup.
+    Priority:
+      1. Registered targets (targets.json) — explicit intent, checked individually
+      2. Catalog DB items (scan-populated) — all active items in the region
+      3. TGTG favourites — raw API fallback with no local state
+
+    When an individual item_id fetch fails with a 404-like error, the item is
+    marked dead in the catalog and on_dead_item(item_id, label) is called so
+    the caller can send a notification.
+
+    Returns a list of (item_dict, target_or_None) pairs.
     """
     watched_ids = all_watched_ids()
+    db = get_db()
 
+    # ── mode 1: explicit targets ──────────────────────────────────────────────
     if watched_ids:
         results = []
         for item_id in watched_ids:
@@ -112,30 +127,64 @@ def fetch_watched_items(client: TgtgClient) -> list[tuple[dict, Target | None]]:
                 results.append((item, target))
             except TgtgAPIError as exc:
                 log.warning("Could not fetch item %s: %s", item_id, exc)
+                # Mark dead if this looks like a permanent failure (404 / gone)
+                status = getattr(exc, "status", None)
+                if status in (404, 400):
+                    should_notify = db.mark_dead(item_id)
+                    if should_notify and on_dead_item:
+                        catalog_row = db.get(item_id)
+                        label = catalog_row["store_name"] if catalog_row else item_id
+                        on_dead_item(item_id, label)
+                        db.mark_dead_notified(item_id)
         return results
-    else:
-        # No targets defined yet — fall back to all favourites (watch-only)
-        items = client.get_items(
-            latitude=TGTG_LATITUDE,
-            longitude=TGTG_LONGITUDE,
-            radius=TGTG_RADIUS,
-            favorites_only=True,
-        )
-        return [(item, None) for item in items]
+
+    # ── mode 2: catalog DB fallback ───────────────────────────────────────────
+    db_ids = db.get_active_ids()
+    if db_ids:
+        log.debug("No targets registered — polling %d catalog item(s).", len(db_ids))
+        results = []
+        for item_id in db_ids:
+            try:
+                item = client.get_item(item_id)
+                target = get_target(item_id)  # may be None if not explicitly targeted
+                results.append((item, target))
+            except TgtgAPIError as exc:
+                status = getattr(exc, "status", None)
+                log.warning("Catalog item %s fetch failed (%s): %s", item_id, status, exc)
+                if status in (404, 400):
+                    should_notify = db.mark_dead(item_id)
+                    if should_notify and on_dead_item:
+                        catalog_row = db.get(item_id)
+                        label = catalog_row["store_name"] if catalog_row else item_id
+                        on_dead_item(item_id, label)
+                        db.mark_dead_notified(item_id)
+        return results
+
+    # ── mode 3: TGTG favourites raw fallback ─────────────────────────────────
+    log.debug("No targets or catalog entries — falling back to TGTG favourites.")
+    items = client.get_items(
+        latitude=TGTG_LATITUDE,
+        longitude=TGTG_LONGITUDE,
+        radius=TGTG_RADIUS,
+        favorites_only=True,
+    )
+    return [(item, None) for item in items]
 
 
 def run_monitor(
     client: TgtgClient,
     on_stock: Callable[[dict, Target | None], None],
+    on_dead_item: Callable[[str, str], None] | None = None,
     stop_event=None,
 ) -> None:
     """
     Main polling loop.
 
     Args:
-        client:     Authenticated TgtgClient.
-        on_stock:   Callback(item_dict, target_or_None) fired when stock appears.
-        stop_event: threading.Event to signal shutdown.
+        client:       Authenticated TgtgClient.
+        on_stock:     Callback(item_dict, target_or_None) fired when stock appears.
+        on_dead_item: Callback(item_id, label) fired when an item 404s (store gone).
+        stop_event:   threading.Event to signal shutdown.
     """
     proxy_cycle = itertools.cycle(TGTG_PROXIES) if TGTG_PROXIES else itertools.cycle([None])
     seen_in_stock: set[str] = set()
@@ -150,7 +199,7 @@ def run_monitor(
             client.proxies = {"http": proxy_url, "https": proxy_url}
 
         try:
-            pairs = fetch_watched_items(client)
+            pairs = fetch_watched_items(client, on_dead_item=on_dead_item)
         except TgtgAPIError as exc:
             log.error("API error during fetch: %s — backing off 60s", exc)
             time.sleep(60)

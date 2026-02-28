@@ -44,6 +44,40 @@ def _tgtg_deep_link(item_id: str) -> str:
     return f"https://share.toogoodtogo.com/item/{item_id}"
 
 
+def send_dead_item_alert(item_id: str, label: str) -> bool:
+    """
+    Notify when a previously known item is no longer returned by the TGTG API.
+    The store may have closed or removed their listing.
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return False
+
+    text = (
+        f"⚰️ *Store listing removed*\n\n"
+        f"*{label}* (ID: `{item_id}`) no longer appears in the TGTG API.\n"
+        f"The store may have closed or removed their listing.\n\n"
+        f"_This item has been marked inactive in the catalog. "
+        f"No further alerts will be sent for it._"
+    )
+
+    try:
+        resp = httpx.post(
+            _BASE.format(token=TELEGRAM_BOT_TOKEN, method="sendMessage"),
+            json={
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text,
+                "parse_mode": "Markdown",
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        log.info("Dead-item alert sent for %s (%s)", label, item_id)
+        return True
+    except Exception as exc:
+        log.error("Failed to send dead-item alert: %s", exc)
+        return False
+
+
 def send_stock_alert(item: dict, order: dict | None = None, target=None) -> bool:
     """
     Send a Telegram message for a newly available item.

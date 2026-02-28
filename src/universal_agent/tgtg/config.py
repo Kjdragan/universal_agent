@@ -83,6 +83,9 @@ DASHBOARD_PORT: int = int(os.getenv("TGTG_DASHBOARD_PORT", "8765"))
 # ── Token persistence ─────────────────────────────────────────────────────────
 CREDENTIALS_FILE: Path = Path(os.getenv("TGTG_CREDENTIALS_FILE", ".tgtg_credentials.json"))
 
+# ── Item catalog (SQLite) ─────────────────────────────────────────────────────
+TGTG_DB_FILE: Path = Path(os.getenv("TGTG_DB_FILE", ".tgtg_catalog.db"))
+
 
 def load_saved_credentials() -> dict:
     """Load previously saved auth tokens from disk."""
