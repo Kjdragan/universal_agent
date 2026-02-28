@@ -122,9 +122,14 @@ def _load_job(path: Path) -> ScrapingJob:
     metadata: dict[str, Any] = {}
 
     if isinstance(raw, list):
-        urls = [str(u) for u in raw if u]
+        urls = [u.strip() for u in raw if isinstance(u, str) and u.strip()]
     elif isinstance(raw, dict):
-        urls = [str(u) for u in raw.get("urls", []) if u]
+        raw_urls = raw.get("urls", [])
+        if isinstance(raw_urls, str):
+            raw_urls = [raw_urls]
+        if not isinstance(raw_urls, list):
+            raise TypeError(f"'urls' must be a list of strings in {path}")
+        urls = [u.strip() for u in raw_urls if isinstance(u, str) and u.strip()]
         raw_options = raw.get("options", {}) or {}
         metadata = {k: v for k, v in raw.items() if k not in ("urls", "options")}
     else:
