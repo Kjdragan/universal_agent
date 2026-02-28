@@ -40,6 +40,7 @@ Markdown metadata block.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -108,8 +109,13 @@ def _url_to_filename(url: str) -> str:
     parsed = urlparse(url)
     domain = parsed.netloc.replace("www.", "")
     path = parsed.path.strip("/").replace("/", "_") or "index"
+    query_fragment = f"{parsed.query}#{parsed.fragment}".strip("#")
+    suffix = ""
+    if query_fragment:
+        digest = hashlib.blake2b(query_fragment.encode("utf-8"), digest_size=6).hexdigest()
+        suffix = f"_{digest}"
     # Remove unsafe chars
-    safe = re.sub(r"[^\w\-.]", "_", f"{domain}_{path}")
+    safe = re.sub(r"[^\w\-.]", "_", f"{domain}_{path}{suffix}")
     return safe[:120]  # cap length
 
 
