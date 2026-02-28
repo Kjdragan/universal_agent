@@ -7627,7 +7627,10 @@ async def enforce_factory_role_http_surface(request: Request, call_next):
 @app.middleware("http")
 async def enforce_ops_auth_http_surface(request: Request, call_next):
     if request.url.path.startswith("/api/v1/ops/"):
-        _require_ops_auth(request)
+        try:
+            _require_ops_auth(request)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     return await call_next(request)
 
 
