@@ -8,6 +8,16 @@ Usage:
   python -m src.universal_agent.tgtg.cli list                     # Live stock check on all targets
   python -m src.universal_agent.tgtg.cli buy <item_id>            # One-shot manual purchase
 
+  # Region scan — populate/refresh the item catalog:
+  python -m src.universal_agent.tgtg.cli scan                     # Scan area, save to catalog DB
+  python -m src.universal_agent.tgtg.cli scan --radius 10         # Wider search
+
+  # Catalog DB queries:
+  python -m src.universal_agent.tgtg.cli db stats                 # Catalog statistics
+  python -m src.universal_agent.tgtg.cli db list                  # All active items in catalog
+  python -m src.universal_agent.tgtg.cli db list --all            # Include inactive/dead items
+  python -m src.universal_agent.tgtg.cli db search pret           # Search by store name
+
   # Target management:
   python -m src.universal_agent.tgtg.cli target list              # Show all registered targets
   python -m src.universal_agent.tgtg.cli target add <item_id>     # Register a watch target
@@ -26,14 +36,19 @@ import threading
 from .config import (
     TGTG_AUTO_PURCHASE,
     TGTG_EMAIL,
+    TGTG_LATITUDE,
+    TGTG_LONGITUDE,
     TGTG_ORDER_COUNT,
+    TGTG_RADIUS,
     DASHBOARD_PORT,
     load_saved_credentials,
 )
 from .dashboard import push_item_update, push_log, push_order, start_dashboard
+from .db import get_db
 from .monitor import build_client, fetch_watched_items, run_monitor
-from .notifier import send_stock_alert
+from .notifier import send_dead_item_alert, send_stock_alert
 from .purchaser import purchase_item
+from .scanner import scan_and_store
 from .targets import (
     Target,
     all_watched_ids,
@@ -172,11 +187,106 @@ def cmd_run(args):
 
         send_stock_alert(item, order=order, target=target)
 
+    def on_dead_item(item_id: str, label: str):
+        msg = f"⚰️ GONE: {label} [{item_id}] — no longer in TGTG API"
+        log.warning(msg)
+        push_log(msg, level="warning")
+        send_dead_item_alert(item_id, label)
+
     try:
-        run_monitor(client, on_stock=on_stock, stop_event=stop_event)
+        run_monitor(client, on_stock=on_stock, on_dead_item=on_dead_item, stop_event=stop_event)
     except KeyboardInterrupt:
         stop_event.set()
         print("\nStopped.")
+
+
+# ── scan ──────────────────────────────────────────────────────────────────────
+
+def cmd_scan(args):
+    """Run a region scan to populate / refresh the item catalog."""
+    lat = args.lat or TGTG_LATITUDE
+    lon = args.lon or TGTG_LONGITUDE
+    radius = args.radius or TGTG_RADIUS
+
+    print(f"Scanning area: lat={lat}, lon={lon}, radius={radius}km …")
+    client = build_client(email=TGTG_EMAIL or None)
+    report = scan_and_store(client, lat, lon, radius)
+    print(report)
+
+    if report.new_item_ids:
+        print(f"\n🆕 New stores found:")
+        db = get_db()
+        for iid in report.new_item_ids:
+            row = db.get(iid)
+            name = row["store_name"] if row else iid
+            print(f"   [{iid}] {name}")
+
+    if report.dead_item_ids:
+        print(f"\n⚠️  Stores gone from API (marked inactive):")
+        db = get_db()
+        for iid in report.dead_item_ids:
+            row = db.get(iid)
+            name = row["store_name"] if row else iid
+            print(f"   [{iid}] {name}")
+
+    total = get_db().stats()["active"]
+    print(f"\nCatalog now has {total} active item(s). Use 'db list' to browse.")
+
+
+# ── db subcommands ────────────────────────────────────────────────────────────
+
+def _fmt_price(row) -> str:
+    if row["price_minor"] is None:
+        return "?"
+    val = row["price_minor"] / (10 ** row["price_decimals"])
+    return f"{val:.2f} {row['price_currency']}"
+
+
+def cmd_db_stats(args):
+    stats = get_db().stats()
+    print("── TGTG Catalog Stats ─────────────────────────────────")
+    print(f"  Total items ever seen: {stats['total']}")
+    print(f"  Currently active:      {stats['active']}")
+    print(f"  Gone / inactive:       {stats['dead']}")
+    print(f"  Scans run:             {stats['scans_run']}")
+    if stats["last_scan_at"]:
+        print(f"  Last scan:             {stats['last_scan_at'][:19].replace('T', ' ')} UTC")
+        print(f"  Items found in scan:   {stats['last_scan_found']}")
+    else:
+        print("  Last scan:             (never — run 'scan' first)")
+
+
+def cmd_db_list(args):
+    active_only = not args.all
+    rows = get_db().all_items(active_only=active_only, limit=500)
+    if not rows:
+        label = "active " if active_only else ""
+        print(f"No {label}items in catalog. Run 'scan' first.")
+        return
+
+    status_label = "ACTIVE" if active_only else "ALL"
+    print(f"── Catalog ({status_label}: {len(rows)} item(s)) ─────────────────────────────────────")
+    print(f"{'ID':<12} {'Status':<8} {'Price':<10} {'Store name'}")
+    print("─" * 70)
+    for row in rows:
+        status = "✅ live" if row["is_active"] else "⚰️  dead"
+        price = _fmt_price(row)
+        print(f"{row['item_id']:<12} {status:<10} {price:<10} {row['store_name']}")
+    print(f"\n{len(rows)} item(s). Use 'target add <item_id>' to start watching one.")
+
+
+def cmd_db_search(args):
+    rows = get_db().search(query=args.query, active_only=not args.all, limit=100)
+    if not rows:
+        print(f"No matches for '{args.query}'.")
+        return
+    print(f"── Search: '{args.query}' ({len(rows)} result(s)) ───────────────────────────────────")
+    print(f"{'ID':<12} {'Status':<8} {'Price':<10} {'Store name'}")
+    print("─" * 70)
+    for row in rows:
+        status = "✅" if row["is_active"] else "⚰️ "
+        price = _fmt_price(row)
+        print(f"{row['item_id']:<12} {status:<6} {price:<10} {row['store_name']}")
 
 
 # ── target subcommands ────────────────────────────────────────────────────────
@@ -270,6 +380,25 @@ def main():
     p_buy = sub.add_parser("buy", help="Manually purchase a specific item ID now")
     p_buy.add_argument("item_id")
 
+    # scan
+    p_scan = sub.add_parser("scan", help="Scan region and populate item catalog DB")
+    p_scan.add_argument("--lat", type=float, default=None, help="Override latitude")
+    p_scan.add_argument("--lon", type=float, default=None, help="Override longitude")
+    p_scan.add_argument("--radius", type=int, default=None, help="Search radius in km")
+
+    # db
+    p_db = sub.add_parser("db", help="Query the item catalog database")
+    dbsub = p_db.add_subparsers(dest="db_cmd")
+
+    dbsub.add_parser("stats", help="Show catalog statistics")
+
+    p_db_list = dbsub.add_parser("list", help="List items in catalog")
+    p_db_list.add_argument("--all", action="store_true", help="Include inactive/dead items")
+
+    p_db_search = dbsub.add_parser("search", help="Search catalog by store name")
+    p_db_search.add_argument("query", help="Substring to search for")
+    p_db_search.add_argument("--all", action="store_true", help="Include inactive items")
+
     # target
     p_target = sub.add_parser("target", help="Manage snipe targets")
     tsub = p_target.add_subparsers(dest="target_cmd")
@@ -309,6 +438,7 @@ def main():
         "list": cmd_list,
         "buy": cmd_buy,
         "run": cmd_run,
+        "scan": cmd_scan,
     }
     if args.cmd in top_cmds:
         top_cmds[args.cmd](args)
@@ -326,6 +456,19 @@ def main():
             target_cmds[args.target_cmd](args)
             return
         p_target.print_help()
+        return
+
+    # db subcommands
+    if args.cmd == "db":
+        db_cmds = {
+            "stats": cmd_db_stats,
+            "list": cmd_db_list,
+            "search": cmd_db_search,
+        }
+        if getattr(args, "db_cmd", None) in db_cmds:
+            db_cmds[args.db_cmd](args)
+            return
+        p_db.print_help()
         return
 
     parser.print_help()
