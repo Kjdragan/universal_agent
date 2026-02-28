@@ -129,6 +129,15 @@ class TestUrlToFilename:
         name = _url_to_filename(long_url)
         assert len(name) <= 120
 
+    def test_query_and_fragment_affect_filename(self):
+        from src.universal_agent.tools.scrapling_scraper.inbox_processor import _url_to_filename
+        a = _url_to_filename("https://example.com/search?q=a#top")
+        b = _url_to_filename("https://example.com/search?q=b#top")
+        c = _url_to_filename("https://example.com/search")
+        assert a != b
+        assert a != c
+        assert b != c
+
 
 # ---------------------------------------------------------------------------
 # _load_job
