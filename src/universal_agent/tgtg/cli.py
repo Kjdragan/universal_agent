@@ -34,7 +34,7 @@ import sys
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .config import (
     TGTG_AUTO_PURCHASE,
@@ -107,6 +107,11 @@ class _DailyBudget:
         self._spent += amount
 
     @property
+    def spent(self) -> float:
+        self._maybe_reset()
+        return self._spent
+
+    @property
     def remaining(self) -> float | None:
         if self.limit is None:
             return None
@@ -168,18 +173,18 @@ def cmd_status(args):
     print("── TGTG Sniper Status ──────────────────────────────")
     print(f"Email:            {TGTG_EMAIL or '(not set)'}")
     print(f"Saved tokens:     {'yes' if creds.get('access_token') else 'NO — run login first'}")
-    print(f"")
+    print("")
     print(f"🔥 High-desire targets ({len(high)}) — auto-buy on stock:")
     for t in high:
         price_cap = f"  max {t.max_price}" if t.max_price else ""
         print(f"   [{t.item_id}] {t.label or '(unlabelled)'} × {t.order_count}{price_cap}")
-    print(f"")
+    print("")
     print(f"👁  Watch-only targets ({len(watch)}) — notify on stock:")
     for t in watch:
         print(f"   [{t.item_id}] {t.label or '(unlabelled)'}")
     if not targets:
         print("   (none — add targets with: target add <item_id>)")
-    print(f"")
+    print("")
     print(f"Dashboard:        http://localhost:{DASHBOARD_PORT}")
 
 
@@ -249,7 +254,6 @@ def _schedule_payment_reminder(
     except (KeyError, TypeError, ValueError):
         return
 
-    from datetime import timedelta
     fire_at = pickup_end - timedelta(minutes=TGTG_PAYMENT_REMINDER_MINUTES)
     if fire_at <= datetime.now(timezone.utc):
         # Window too close — fire immediately
@@ -384,7 +388,7 @@ def cmd_run(args):
                     "store": store,
                     "item_id": item_id,
                     "price": price,
-                    "daily_spent": budget._spent,
+                    "daily_spent": budget.spent,
                 })
             else:
                 push_log(f"❌ Purchase failed or price guard: {store}", level="warning")

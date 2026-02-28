@@ -92,18 +92,18 @@ except ValueError:
     TGTG_DAILY_BUDGET: float | None = None
 
 # ── Webhook ───────────────────────────────────────────────────────────────────
-# HTTP POST target for stock / order / dead-item events.
-# Defaults to api.clearspringcg.com endpoint; leave blank to disable.
-TGTG_WEBHOOK_URL: str = os.getenv(
-    "TGTG_WEBHOOK_URL", "https://api.clearspringcg.com/tgtg/webhook"
-)
+# HTTP POST target for stock / order / dead-item events (JSON body).
+# Disabled by default (empty string) — set TGTG_WEBHOOK_URL in .env to enable.
+# Example payload: {"event": "stock_available", "timestamp": "…", "store": "…", …}
+TGTG_WEBHOOK_URL: str = os.getenv("TGTG_WEBHOOK_URL", "")
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
-DASHBOARD_HOST: str = os.getenv("TGTG_DASHBOARD_HOST", "0.0.0.0")
+# Binds to localhost by default; set TGTG_DASHBOARD_HOST=0.0.0.0 for network access.
+DASHBOARD_HOST: str = os.getenv("TGTG_DASHBOARD_HOST", "127.0.0.1")
 DASHBOARD_PORT: int = int(os.getenv("TGTG_DASHBOARD_PORT", "8765"))
 
 # ── Token persistence ─────────────────────────────────────────────────────────
