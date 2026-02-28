@@ -92,11 +92,14 @@ _LEVEL_MAP: dict[str, FetcherLevel] = {
 }
 
 
-def _parse_level(value: Any, default: FetcherLevel) -> FetcherLevel:
+def _parse_level(value: Any, default: Optional[FetcherLevel]) -> Optional[FetcherLevel]:
     if value is None:
         return default
     if isinstance(value, int):
-        return FetcherLevel(value)
+        try:
+            return FetcherLevel(value)
+        except ValueError:
+            return default
     return _LEVEL_MAP.get(str(value).lower(), default)
 
 
