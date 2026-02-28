@@ -27,16 +27,15 @@ from .config import (
     TGTG_LONGITUDE,
     TGTG_PROXIES,
     TGTG_RADIUS,
-    TGTG_WATCHED_ITEMS,
     load_saved_credentials,
     save_credentials,
 )
+from .targets import Target, all_watched_ids, get_target
 
 log = logging.getLogger(__name__)
 
 
 def _pick_proxy(proxy_cycle) -> dict | None:
-    """Return the next proxy dict or None if no proxies configured."""
     url = next(proxy_cycle, None)
     if not url:
         return None
@@ -44,7 +43,6 @@ def _pick_proxy(proxy_cycle) -> dict | None:
 
 
 def _minutes_to_pickup(item: dict) -> float | None:
-    """Return minutes until earliest pickup, or None if no window set."""
     try:
         window = item["item"]["pickup_interval"]["start"]
         start = datetime.fromisoformat(window.replace("Z", "+00:00"))
@@ -55,7 +53,6 @@ def _minutes_to_pickup(item: dict) -> float | None:
 
 
 def _determine_interval(items: list[dict]) -> int:
-    """Compute next poll interval based on current item states."""
     has_stock = any(i.get("items_available", 0) > 0 for i in items)
     if has_stock:
         return POLL_SNIPING
@@ -97,28 +94,39 @@ def build_client(email: str | None = None) -> TgtgClient:
     return client
 
 
-def fetch_watched_items(client: TgtgClient) -> list[dict]:
-    """Fetch item data for watched items (or all favourites if none specified)."""
-    if TGTG_WATCHED_ITEMS:
-        items = []
-        for item_id in TGTG_WATCHED_ITEMS:
+def fetch_watched_items(client: TgtgClient) -> list[tuple[dict, Target | None]]:
+    """
+    Fetch item data for all registered targets (or all favourites if none defined).
+
+    Returns a list of (item_dict, target_or_None) pairs so callers can make
+    per-item decisions without a second lookup.
+    """
+    watched_ids = all_watched_ids()
+
+    if watched_ids:
+        results = []
+        for item_id in watched_ids:
             try:
-                items.append(client.get_item(item_id))
+                item = client.get_item(item_id)
+                target = get_target(item_id)
+                results.append((item, target))
             except TgtgAPIError as exc:
                 log.warning("Could not fetch item %s: %s", item_id, exc)
-        return items
+        return results
     else:
-        return client.get_items(
+        # No targets defined yet — fall back to all favourites (watch-only)
+        items = client.get_items(
             latitude=TGTG_LATITUDE,
             longitude=TGTG_LONGITUDE,
             radius=TGTG_RADIUS,
             favorites_only=True,
         )
+        return [(item, None) for item in items]
 
 
 def run_monitor(
     client: TgtgClient,
-    on_stock: Callable[[dict], None],
+    on_stock: Callable[[dict, Target | None], None],
     stop_event=None,
 ) -> None:
     """
@@ -126,7 +134,7 @@ def run_monitor(
 
     Args:
         client:     Authenticated TgtgClient.
-        on_stock:   Callback invoked with each in-stock item dict.
+        on_stock:   Callback(item_dict, target_or_None) fired when stock appears.
         stop_event: threading.Event to signal shutdown.
     """
     proxy_cycle = itertools.cycle(TGTG_PROXIES) if TGTG_PROXIES else itertools.cycle([None])
@@ -137,13 +145,12 @@ def run_monitor(
             log.info("Monitor stopped.")
             break
 
-        # Rotate proxy on each request batch
         proxy_url = next(proxy_cycle)
         if proxy_url:
             client.proxies = {"http": proxy_url, "https": proxy_url}
 
         try:
-            items = fetch_watched_items(client)
+            pairs = fetch_watched_items(client)
         except TgtgAPIError as exc:
             log.error("API error during fetch: %s — backing off 60s", exc)
             time.sleep(60)
@@ -153,25 +160,33 @@ def run_monitor(
             time.sleep(30)
             continue
 
-        for item in items:
+        items_only = [item for item, _ in pairs]
+
+        for item, target in pairs:
             item_id = str(item.get("item", {}).get("item_id", ""))
             available = item.get("items_available", 0)
             store = item.get("store", {}).get("store_name", item_id)
 
             if available > 0:
-                log.info("STOCK DETECTED: %s — %d bag(s)", store, available)
+                desire = target.desire if target else "watch"
+                log.info(
+                    "STOCK [%s]: %s — %d bag(s)",
+                    desire.upper(),
+                    store,
+                    available,
+                )
                 if item_id not in seen_in_stock:
                     seen_in_stock.add(item_id)
-                    on_stock(item)
+                    on_stock(item, target)
             else:
                 if item_id in seen_in_stock:
                     log.info("Sold out: %s", store)
                     seen_in_stock.discard(item_id)
 
-        interval = _determine_interval(items)
-        log.debug("Next poll in %ds (%s mode)", interval, {
-            POLL_IDLE: "IDLE",
-            POLL_ACTIVE: "ACTIVE",
-            POLL_SNIPING: "SNIPING",
-        }.get(interval, "?"))
+        interval = _determine_interval(items_only)
+        log.debug(
+            "Next poll in %ds (%s mode)",
+            interval,
+            {POLL_IDLE: "IDLE", POLL_ACTIVE: "ACTIVE", POLL_SNIPING: "SNIPING"}.get(interval, "?"),
+        )
         time.sleep(interval)

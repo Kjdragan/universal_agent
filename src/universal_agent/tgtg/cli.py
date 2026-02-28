@@ -2,11 +2,18 @@
 TGTG Sniper CLI
 
 Usage:
-  python -m src.universal_agent.tgtg.cli login          # Authenticate (saves tokens)
-  python -m src.universal_agent.tgtg.cli run            # Start monitor (daemon mode)
-  python -m src.universal_agent.tgtg.cli status         # Show configured items + credentials
-  python -m src.universal_agent.tgtg.cli list           # List available favourites right now
-  python -m src.universal_agent.tgtg.cli buy <item_id>  # One-shot manual purchase
+  python -m src.universal_agent.tgtg.cli login                    # Authenticate (saves tokens)
+  python -m src.universal_agent.tgtg.cli run                      # Start monitor + dashboard
+  python -m src.universal_agent.tgtg.cli status                   # Show configuration
+  python -m src.universal_agent.tgtg.cli list                     # Live stock check on all targets
+  python -m src.universal_agent.tgtg.cli buy <item_id>            # One-shot manual purchase
+
+  # Target management:
+  python -m src.universal_agent.tgtg.cli target list              # Show all registered targets
+  python -m src.universal_agent.tgtg.cli target add <item_id>     # Register a watch target
+  python -m src.universal_agent.tgtg.cli target add <item_id> --desire high --count 2 --max-price 5.00
+  python -m src.universal_agent.tgtg.cli target remove <item_id>  # Unregister a target
+  python -m src.universal_agent.tgtg.cli target set <item_id> --desire high  # Change desire level
 """
 
 from __future__ import annotations
@@ -19,7 +26,7 @@ import threading
 from .config import (
     TGTG_AUTO_PURCHASE,
     TGTG_EMAIL,
-    TGTG_WATCHED_ITEMS,
+    TGTG_ORDER_COUNT,
     DASHBOARD_PORT,
     load_saved_credentials,
 )
@@ -27,6 +34,14 @@ from .dashboard import push_item_update, push_log, push_order, start_dashboard
 from .monitor import build_client, fetch_watched_items, run_monitor
 from .notifier import send_stock_alert
 from .purchaser import purchase_item
+from .targets import (
+    Target,
+    all_watched_ids,
+    get_target,
+    load_targets,
+    remove_target,
+    upsert_target,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +50,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("tgtg.cli")
 
+_DESIRE_ICONS = {"high": "🔥", "watch": "👁 "}
+
+
+# ── login ─────────────────────────────────────────────────────────────────────
 
 def cmd_login(args):
     email = args.email or TGTG_EMAIL
@@ -42,119 +61,274 @@ def cmd_login(args):
         print("Error: provide --email or set TGTG_EMAIL in .env")
         sys.exit(1)
     print(f"Requesting magic link for {email} …")
-    client = build_client(email=email)
+    build_client(email=email)
     creds = load_saved_credentials()
     print("✅ Logged in. Tokens saved to disk.")
     print(f"   access_token:  {creds.get('access_token', '')[:20]}…")
 
 
+# ── status ────────────────────────────────────────────────────────────────────
+
 def cmd_status(args):
     creds = load_saved_credentials()
-    print("── TGTG Sniper Status ──────────────────────────────")
-    print(f"Email:          {TGTG_EMAIL or '(not set)'}")
-    print(f"Saved tokens:   {'yes' if creds.get('access_token') else 'NO — run login first'}")
-    print(f"Auto-purchase:  {'ENABLED ⚡' if TGTG_AUTO_PURCHASE else 'disabled (notify only)'}")
-    print(f"Watched items:  {', '.join(TGTG_WATCHED_ITEMS) if TGTG_WATCHED_ITEMS else 'all favourites'}")
-    print(f"Dashboard:      http://localhost:{DASHBOARD_PORT}")
+    targets = load_targets()
+    high = [t for t in targets if t.desire == "high"]
+    watch = [t for t in targets if t.desire == "watch"]
 
+    print("── TGTG Sniper Status ──────────────────────────────")
+    print(f"Email:            {TGTG_EMAIL or '(not set)'}")
+    print(f"Saved tokens:     {'yes' if creds.get('access_token') else 'NO — run login first'}")
+    print(f"")
+    print(f"🔥 High-desire targets ({len(high)}) — auto-buy on stock:")
+    for t in high:
+        price_cap = f"  max {t.max_price}" if t.max_price else ""
+        print(f"   [{t.item_id}] {t.label or '(unlabelled)'} × {t.order_count}{price_cap}")
+    print(f"")
+    print(f"👁  Watch-only targets ({len(watch)}) — notify on stock:")
+    for t in watch:
+        print(f"   [{t.item_id}] {t.label or '(unlabelled)'}")
+    if not targets:
+        print("   (none — add targets with: target add <item_id>)")
+    print(f"")
+    print(f"Dashboard:        http://localhost:{DASHBOARD_PORT}")
+
+
+# ── list ──────────────────────────────────────────────────────────────────────
 
 def cmd_list(args):
     client = build_client(email=TGTG_EMAIL or None)
-    items = fetch_watched_items(client)
-    if not items:
-        print("No items found.")
+    pairs = fetch_watched_items(client)
+    if not pairs:
+        print("No items found. Add targets with: target add <item_id>")
         return
-    for item in items:
+    for item, target in pairs:
         store = item.get("store", {}).get("store_name", "?")
         avail = item.get("items_available", 0)
         item_id = item.get("item", {}).get("item_id", "?")
-        status = f"{'✅ ' + str(avail) + ' bag(s)' if avail > 0 else '❌ sold out'}"
-        print(f"  [{item_id}] {store} — {status}")
+        desire = target.desire if target else "watch"
+        icon = _DESIRE_ICONS.get(desire, "")
+        stock = f"✅ {avail} bag(s)" if avail > 0 else "❌ sold out"
+        print(f"  {icon} [{item_id}] {store} — {stock}")
 
+
+# ── buy ───────────────────────────────────────────────────────────────────────
 
 def cmd_buy(args):
     client = build_client(email=TGTG_EMAIL or None)
     item = client.get_item(args.item_id)
+    target = get_target(args.item_id)
     store = item.get("store", {}).get("store_name", args.item_id)
     avail = item.get("items_available", 0)
     print(f"Item: {store} | {avail} bag(s) available")
     if avail == 0:
         print("No stock available right now.")
         sys.exit(1)
-    order = purchase_item(client, item)
+    order = purchase_item(client, item, target=target)
     if order:
         print(f"✅ Order created: {order.get('id')} | state={order.get('state')}")
     else:
-        print("❌ Purchase failed — check logs.")
+        print("❌ Purchase failed (price guard hit or API error) — check logs.")
         sys.exit(1)
 
+
+# ── run ───────────────────────────────────────────────────────────────────────
 
 def cmd_run(args):
     client = build_client(email=TGTG_EMAIL or None)
     stop_event = threading.Event()
 
-    # Start web dashboard
+    targets = load_targets()
+    high_targets = [t for t in targets if t.desire == "high"]
+
     start_dashboard()
     print(f"🌐 Dashboard → http://localhost:{DASHBOARD_PORT}")
-    print(f"⚡ Auto-purchase: {'ENABLED' if TGTG_AUTO_PURCHASE else 'disabled'}")
-    print(f"👀 Watching: {', '.join(TGTG_WATCHED_ITEMS) if TGTG_WATCHED_ITEMS else 'all favourites'}")
+    print(f"🔥 High-desire (auto-buy): {len(high_targets)} target(s)")
+    print(f"👁  Watch-only (notify):   {len(targets) - len(high_targets)} target(s)")
+    if TGTG_AUTO_PURCHASE:
+        print("⚡ Global TGTG_AUTO_PURCHASE=true (all items auto-buy regardless of desire level)")
     print("Press Ctrl+C to stop.\n")
 
-    def on_stock(item: dict):
+    def on_stock(item: dict, target: Target | None):
         store = item.get("store", {}).get("store_name", "?")
-        push_log(f"STOCK: {store} — {item.get('items_available')} bag(s)")
-        push_item_update(item)
+        desire = target.desire if target else "watch"
+        icon = _DESIRE_ICONS.get(desire, "")
+
+        push_log(f"{icon} STOCK [{desire.upper()}]: {store} — {item.get('items_available')} bag(s)")
+        push_item_update(item, target)
+
+        # Decide whether to auto-buy:
+        #   1. Global override (TGTG_AUTO_PURCHASE=true), or
+        #   2. This specific target has desire="high"
+        should_buy = TGTG_AUTO_PURCHASE or (target is not None and target.auto_buy)
 
         order = None
-        if TGTG_AUTO_PURCHASE:
-            order = purchase_item(client, item)
+        if should_buy:
+            order = purchase_item(client, item, target=target)
             if order:
                 push_order(order, item)
-                push_log(f"ORDERED: {store} | id={order.get('id')}")
+                push_log(f"✅ ORDERED: {store} | id={order.get('id')}")
+            else:
+                push_log(f"❌ Purchase failed or price guard: {store}", level="warning")
 
-        send_stock_alert(item, order=order)
-
-    # Also push all item states to dashboard on each poll
-    def on_stock_with_refresh(item: dict):
-        on_stock(item)
+        send_stock_alert(item, order=order, target=target)
 
     try:
-        run_monitor(client, on_stock=on_stock_with_refresh, stop_event=stop_event)
+        run_monitor(client, on_stock=on_stock, stop_event=stop_event)
     except KeyboardInterrupt:
         stop_event.set()
         print("\nStopped.")
 
 
+# ── target subcommands ────────────────────────────────────────────────────────
+
+def cmd_target_list(args):
+    targets = load_targets()
+    if not targets:
+        print("No targets registered. Add one with: target add <item_id>")
+        return
+    print(f"{'ID':<12} {'Desire':<8} {'Count':<6} {'MaxPrice':<10} {'Label'}")
+    print("─" * 60)
+    for t in targets:
+        icon = _DESIRE_ICONS.get(t.desire, "")
+        price = f"{t.max_price:.2f}" if t.max_price else "—"
+        print(f"{t.item_id:<12} {icon}{t.desire:<7} {t.order_count:<6} {price:<10} {t.label}")
+    print(f"\n{len(targets)} target(s) — 🔥 = auto-buy on stock, 👁  = notify only")
+
+
+def cmd_target_add(args):
+    # Auto-populate label from live API if possible
+    label = args.label or ""
+    if not label:
+        try:
+            client = build_client(email=TGTG_EMAIL or None)
+            item = client.get_item(args.item_id)
+            label = item.get("store", {}).get("store_name", "")
+        except Exception:
+            pass  # label stays empty — that's fine
+
+    desire = args.desire
+    target = Target(
+        item_id=str(args.item_id),
+        label=label,
+        desire=desire,
+        order_count=args.count,
+        max_price=args.max_price,
+        notes=args.notes or "",
+    )
+    upsert_target(target)
+    icon = _DESIRE_ICONS.get(desire, "")
+    price_info = f" (max price: {args.max_price})" if args.max_price else ""
+    print(f"✅ {icon} [{args.item_id}] '{label or args.item_id}' registered as {desire.upper()}{price_info} × {args.count}")
+    if desire == "high":
+        print("   ⚡ This item will be auto-purchased immediately when stock is detected.")
+    else:
+        print("   🔔 You will be notified when stock appears (no auto-buy).")
+
+
+def cmd_target_remove(args):
+    removed = remove_target(args.item_id)
+    if removed:
+        print(f"✅ Target [{args.item_id}] removed.")
+    else:
+        print(f"Target [{args.item_id}] not found.")
+
+
+def cmd_target_set(args):
+    target = get_target(args.item_id)
+    if not target:
+        print(f"Target [{args.item_id}] not found. Add it first with: target add {args.item_id}")
+        sys.exit(1)
+    if args.desire:
+        target.desire = args.desire
+    if args.count is not None:
+        target.order_count = args.count
+    if args.max_price is not None:
+        target.max_price = args.max_price
+    if args.label:
+        target.label = args.label
+    upsert_target(target)
+    icon = _DESIRE_ICONS.get(target.desire, "")
+    print(f"✅ {icon} [{args.item_id}] updated → desire={target.desire}, count={target.order_count}, max_price={target.max_price}")
+
+
+# ── argument parser ───────────────────────────────────────────────────────────
+
 def main():
     parser = argparse.ArgumentParser(description="TGTG Sniper — deal monitoring & auto-purchase")
     sub = parser.add_subparsers(dest="cmd")
 
+    # login
     p_login = sub.add_parser("login", help="Authenticate with TGTG (saves tokens)")
     p_login.add_argument("--email", default=None)
 
-    sub.add_parser("status", help="Show configuration and credential status")
-    sub.add_parser("list", help="List current favourite items and stock levels")
+    # status / list / run
+    sub.add_parser("status", help="Show configuration and targets")
+    sub.add_parser("list", help="Check current stock on all registered targets")
+    sub.add_parser("run", help="Start monitor daemon + dashboard")
 
-    p_buy = sub.add_parser("buy", help="Manually purchase a specific item ID")
-    p_buy.add_argument("item_id", help="TGTG item ID")
+    # buy
+    p_buy = sub.add_parser("buy", help="Manually purchase a specific item ID now")
+    p_buy.add_argument("item_id")
 
-    p_run = sub.add_parser("run", help="Start the monitor daemon + dashboard")
+    # target
+    p_target = sub.add_parser("target", help="Manage snipe targets")
+    tsub = p_target.add_subparsers(dest="target_cmd")
+
+    tsub.add_parser("list", help="List all registered targets")
+
+    p_add = tsub.add_parser("add", help="Register a target item")
+    p_add.add_argument("item_id", help="TGTG item ID (get from 'list' command)")
+    p_add.add_argument(
+        "--desire",
+        choices=["high", "watch"],
+        default="watch",
+        help="'high' = auto-buy immediately; 'watch' = notify only (default: watch)",
+    )
+    p_add.add_argument("--count", type=int, default=1, help="Bags to reserve per trigger (default: 1)")
+    p_add.add_argument("--max-price", type=float, default=None, metavar="PRICE",
+                       help="Skip auto-buy if bag costs more than this amount")
+    p_add.add_argument("--label", default="", help="Friendly name (auto-fetched if omitted)")
+    p_add.add_argument("--notes", default="", help="Personal notes")
+
+    p_remove = tsub.add_parser("remove", help="Unregister a target")
+    p_remove.add_argument("item_id")
+
+    p_set = tsub.add_parser("set", help="Update desire level or settings on an existing target")
+    p_set.add_argument("item_id")
+    p_set.add_argument("--desire", choices=["high", "watch"], default=None)
+    p_set.add_argument("--count", type=int, default=None)
+    p_set.add_argument("--max-price", type=float, default=None, metavar="PRICE")
+    p_set.add_argument("--label", default=None)
 
     args = parser.parse_args()
 
-    cmds = {
+    # Top-level commands
+    top_cmds = {
         "login": cmd_login,
         "status": cmd_status,
         "list": cmd_list,
         "buy": cmd_buy,
         "run": cmd_run,
     }
+    if args.cmd in top_cmds:
+        top_cmds[args.cmd](args)
+        return
 
-    if args.cmd not in cmds:
-        parser.print_help()
-        sys.exit(0)
+    # target subcommands
+    if args.cmd == "target":
+        target_cmds = {
+            "list": cmd_target_list,
+            "add": cmd_target_add,
+            "remove": cmd_target_remove,
+            "set": cmd_target_set,
+        }
+        if getattr(args, "target_cmd", None) in target_cmds:
+            target_cmds[args.target_cmd](args)
+            return
+        p_target.print_help()
+        return
 
-    cmds[args.cmd](args)
+    parser.print_help()
 
 
 if __name__ == "__main__":

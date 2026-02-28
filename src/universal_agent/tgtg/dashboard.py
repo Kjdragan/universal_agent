@@ -27,7 +27,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 # Shared state updated by the monitor thread
 _state: dict[str, Any] = {
-    "items": {},       # item_id -> latest item dict
+    "items": {},       # item_id -> {"item": ..., "desire": "high"|"watch"|None}
     "orders": [],      # list of placed orders
     "events": [],      # recent log events (capped at 100)
     "started_at": datetime.now().isoformat(),
@@ -39,12 +39,18 @@ _sse_queues: list[asyncio.Queue] = []
 
 # ── State helpers (called from monitor thread) ────────────────────────────────
 
-def push_item_update(item: dict) -> None:
+def push_item_update(item: dict, target=None) -> None:
     item_id = str(item.get("item", {}).get("item_id", ""))
+    entry = {
+        "item": item,
+        "desire": target.desire if target else None,
+        "max_price": target.max_price if target else None,
+        "order_count": target.order_count if target else 1,
+    }
     with _state_lock:
-        _state["items"][item_id] = item
+        _state["items"][item_id] = entry
         _state["poll_count"] += 1
-    _broadcast({"type": "item_update", "item_id": item_id, "data": item})
+    _broadcast({"type": "item_update", "item_id": item_id, "data": entry})
 
 
 def push_order(order: dict, item: dict) -> None:
@@ -69,7 +75,6 @@ def push_log(message: str, level: str = "info") -> None:
 
 
 def _broadcast(data: dict) -> None:
-    """Send an event to all connected SSE clients (non-blocking)."""
     payload = json.dumps(data)
     for q in list(_sse_queues):
         try:
@@ -132,27 +137,64 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>TGTG Sniper Dashboard</title>
 <style>
-  :root { --green: #22c55e; --red: #ef4444; --yellow: #eab308; --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --muted: #64748b; }
+  :root {
+    --green: #22c55e; --red: #ef4444; --yellow: #eab308;
+    --orange: #f97316; --fire: #ff6b2b;
+    --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --muted: #64748b;
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; padding: 1.5rem; }
   h1 { font-size: 1.4rem; margin-bottom: 1rem; color: var(--green); }
-  h2 { font-size: 1rem; margin-bottom: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  h2 { font-size: 0.85rem; margin-bottom: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.07em; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
   .card { background: var(--card); border-radius: 0.75rem; padding: 1.25rem; }
-  .deal { border-left: 4px solid var(--muted); padding: 0.75rem 1rem; margin-bottom: 0.75rem; border-radius: 0 0.5rem 0.5rem 0; background: #0f172a; }
+
+  /* Deal cards — base */
+  .deal {
+    border-left: 4px solid var(--muted);
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.75rem;
+    border-radius: 0 0.5rem 0.5rem 0;
+    background: #0f172a;
+    position: relative;
+  }
+  /* Watch — in stock */
   .deal.in-stock { border-color: var(--green); }
+  /* High desire — always highlighted differently */
+  .deal.desire-high { border-color: var(--fire); background: #1a0f00; }
+  .deal.desire-high.in-stock { border-color: var(--fire); background: #1f1000; box-shadow: 0 0 12px rgba(255,107,43,0.25); }
+
+  .desire-badge {
+    display: inline-block; padding: 0.1rem 0.45rem;
+    border-radius: 4px; font-size: 0.7rem; font-weight: 700;
+    letter-spacing: 0.04em; margin-right: 0.35rem; vertical-align: middle;
+  }
+  .badge-fire  { background: #7c2d12; color: var(--fire); }
+  .badge-watch { background: #1e293b; color: var(--muted); }
+
   .deal .store { font-weight: 600; font-size: 0.95rem; }
-  .deal .meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.25rem; }
+  .deal .meta { font-size: 0.8rem; color: var(--muted); margin-top: 0.3rem; display: flex; gap: 1rem; flex-wrap: wrap; }
+  .deal .meta .price-cap { color: #94a3b8; }
+
   .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
   .badge-green { background: #14532d; color: var(--green); }
   .badge-muted { background: #1e293b; color: var(--muted); }
+  .badge-orange { background: #431407; color: var(--orange); }
+
   .log-entry { font-size: 0.78rem; padding: 0.3rem 0; border-bottom: 1px solid #1e293b; color: var(--muted); }
   .log-entry .ts { color: #334155; margin-right: 0.5rem; }
   .order-row { padding: 0.5rem 0; border-bottom: 1px solid #1e293b; font-size: 0.85rem; }
+
   .status { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; font-size: 0.85rem; color: var(--muted); }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
   a { color: var(--green); text-decoration: none; }
+
+  .legend { display: flex; gap: 1rem; margin-bottom: 1rem; font-size: 0.8rem; color: var(--muted); }
+  .legend span { display: flex; align-items: center; gap: 0.3rem; }
+  .dot-fire { width:10px;height:10px;border-radius:2px;background:var(--fire); }
+  .dot-green { width:10px;height:10px;border-radius:2px;background:var(--green); }
+  .dot-muted { width:10px;height:10px;border-radius:2px;background:var(--muted); }
 </style>
 </head>
 <body>
@@ -160,7 +202,13 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 <div class="status">
   <div class="dot" id="dot"></div>
   <span id="status-text">Connecting…</span>
-  <span style="margin-left:auto" id="poll-count">–</span>
+  <span style="margin-left:auto;font-size:0.8rem;color:var(--muted)" id="poll-count">–</span>
+</div>
+
+<div class="legend">
+  <span><div class="dot-fire"></div> High-desire (auto-buy)</span>
+  <span><div class="dot-green"></div> Watch (notify only)</span>
+  <span><div class="dot-muted"></div> Unregistered</span>
 </div>
 
 <div class="grid">
@@ -183,10 +231,16 @@ _DASHBOARD_HTML = """<!DOCTYPE html>
 </div>
 
 <script>
-const fmt = (item) => {
+const fmt = (entry) => {
+  const item = entry.item ?? entry;  // support both wrapped and bare item dicts
+  const desire = entry.desire ?? null;
+  const maxPrice = entry.max_price ?? null;
+  const orderCount = entry.order_count ?? 1;
+
   const id = item?.item?.item_id ?? '';
   const store = item?.store?.store_name ?? id;
   const avail = item?.items_available ?? 0;
+
   const pickup = (() => {
     try {
       const w = item.item.pickup_interval;
@@ -194,32 +248,62 @@ const fmt = (item) => {
       return s.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) + '–' + e.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
     } catch { return 'unknown'; }
   })();
+
   const price = (() => {
     try {
       const p = item.item.price_including_taxes;
       return (p.minor_units / 10 ** p.decimals).toFixed(2) + ' ' + p.code;
     } catch { return '?'; }
   })();
-  const cls = avail > 0 ? 'deal in-stock' : 'deal';
-  const badge = avail > 0
-    ? `<span class="badge badge-green">${avail} left</span>`
+
+  const isHigh = desire === 'high';
+  const cardCls = ['deal', isHigh ? 'desire-high' : '', avail > 0 ? 'in-stock' : ''].filter(Boolean).join(' ');
+
+  const desireBadge = desire === 'high'
+    ? '<span class="desire-badge badge-fire">🔥 AUTO-BUY</span>'
+    : desire === 'watch'
+      ? '<span class="desire-badge badge-watch">👁 WATCH</span>'
+      : '';
+
+  const stockBadge = avail > 0
+    ? (isHigh
+        ? `<span class="badge badge-orange">⚡ ${avail} bag(s) — buying</span>`
+        : `<span class="badge badge-green">${avail} left</span>`)
     : `<span class="badge badge-muted">Sold out</span>`;
-  return `<div class="${cls}">
-    <div class="store">${store} ${badge}</div>
-    <div class="meta">💰 ${price} &nbsp;🕐 ${pickup} &nbsp;<a href="https://share.toogoodtogo.com/item/${id}" target="_blank">Open →</a></div>
+
+  const priceCap = maxPrice ? `<span class="price-cap">cap: ${maxPrice}</span>` : '';
+  const countNote = isHigh && orderCount > 1 ? `<span>×${orderCount} bags</span>` : '';
+
+  return `<div class="${cardCls}">
+    <div class="store">${desireBadge}${store} ${stockBadge}</div>
+    <div class="meta">
+      <span>💰 ${price}</span>
+      <span>🕐 ${pickup}</span>
+      ${priceCap}${countNote}
+      <span><a href="https://share.toogoodtogo.com/item/${id}" target="_blank">Open →</a></span>
+    </div>
   </div>`;
 };
 
 async function loadState() {
   const r = await fetch('/api/state');
   const s = await r.json();
-  const items = Object.values(s.items);
-  document.getElementById('deals-list').innerHTML = items.length
-    ? items.map(fmt).join('')
+  const entries = Object.values(s.items);
+  // Sort: high-desire first, then in-stock, then the rest
+  entries.sort((a, b) => {
+    const da = a.desire === 'high' ? 0 : 1;
+    const db = b.desire === 'high' ? 0 : 1;
+    if (da !== db) return da - db;
+    const sa = (a.item?.items_available ?? 0) > 0 ? 0 : 1;
+    const sb = (b.item?.items_available ?? 0) > 0 ? 0 : 1;
+    return sa - sb;
+  });
+  document.getElementById('deals-list').innerHTML = entries.length
+    ? entries.map(fmt).join('')
     : 'No items yet. Waiting for first poll…';
   renderOrders(s.orders);
   renderLog(s.events);
-  document.getElementById('poll-count').textContent = `Polls: ${s.poll_count}`;
+  document.getElementById('poll-count').textContent = `${s.poll_count} polls`;
 }
 
 function renderOrders(orders) {
@@ -245,19 +329,7 @@ es.onerror = () => {
   document.getElementById('status-text').textContent = 'Disconnected — retrying…';
   document.getElementById('dot').style.background = 'var(--red)';
 };
-es.onmessage = (e) => {
-  const msg = JSON.parse(e.data);
-  if (msg.type === 'item_update') {
-    loadState();
-  } else if (msg.type === 'order_created') {
-    fetch('/api/orders').then(r=>r.json()).then(renderOrders);
-  } else if (msg.type === 'log') {
-    fetch('/api/events').then(r=>r.json()).then(renderLog);
-  }
-  const pc = document.getElementById('poll-count');
-  const n = parseInt(pc.textContent.replace('Polls: ','') || '0');
-  pc.textContent = 'Polls: ' + (n + 1);
-};
+es.onmessage = () => { loadState(); };
 </script>
 </body>
 </html>

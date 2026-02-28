@@ -44,10 +44,33 @@ POLL_WINDOW_MINUTES: int = int(os.getenv("TGTG_POLL_WINDOW_MINUTES", "90"))
 
 # ── Proxies ───────────────────────────────────────────────────────────────────
 # Rotating residential proxies keep DataDome from fingerprinting a single IP.
-# Format: "http://user:pass@proxy-host:port" or "socks5://..."
-# Multiple proxies: comma-separated (module will round-robin).
-_raw_proxies = os.getenv("TGTG_PROXIES", "")
-TGTG_PROXIES: list[str] = [p.strip() for p in _raw_proxies.split(",") if p.strip()]
+#
+# Option A — explicit list:
+#   TGTG_PROXIES=http://user:pass@host:port,http://user:pass@host2:port
+#
+# Option B — auto-built from shared Webshare credentials (same vars used by the
+#   YouTube transcript module).  If TGTG_PROXIES is not set but
+#   WEBSHARE_PROXY_USER / WEBSHARE_PROXY_PASS are present, a single
+#   Webshare rotating-residential URL is constructed automatically.
+#
+# Webshare rotating endpoint:  proxy.webshare.io:80  (HTTP)
+# Sticky-session endpoint:     proxy.webshare.io:80  with -country suffix user
+_WEBSHARE_HOST = os.getenv("WEBSHARE_PROXY_HOST", "proxy.webshare.io")
+_WEBSHARE_PORT = os.getenv("WEBSHARE_PROXY_PORT", "80")
+
+def _build_proxy_list() -> list[str]:
+    raw = os.getenv("TGTG_PROXIES", "").strip()
+    if raw:
+        return [p.strip() for p in raw.split(",") if p.strip()]
+
+    # Fall back to Webshare shared credentials
+    user = (os.getenv("PROXY_USERNAME") or os.getenv("WEBSHARE_PROXY_USER") or "").strip()
+    pw   = (os.getenv("PROXY_PASSWORD") or os.getenv("WEBSHARE_PROXY_PASS") or "").strip()
+    if user and pw:
+        return [f"http://{user}:{pw}@{_WEBSHARE_HOST}:{_WEBSHARE_PORT}"]
+    return []
+
+TGTG_PROXIES: list[str] = _build_proxy_list()
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
