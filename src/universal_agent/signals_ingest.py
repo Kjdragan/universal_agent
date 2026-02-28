@@ -234,17 +234,35 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
         minimum=30,
         maximum=3_600,
     )
+    follow_up_budget = 3
+    confidence_target = 0.72
 
     # Keep CSI analytics context concentrated in a small number of durable lanes
     # so dashboard/session lists do not explode into one lane per event type.
     session_key = f"csi_{route.replace('-', '_')}"
+    message = _analytics_message(event)
+    if route == "trend-specialist":
+        message = (
+            f"{message}\n\n"
+            "specialist_followup_policy:\n"
+            f"- confidence_target: {confidence_target}\n"
+            f"- follow_up_budget: {follow_up_budget}\n"
+            "- follow_up_strategy: request focused CSI analysis tasks only when confidence is below target\n"
+            "- stop_condition: stop after budget exhausted or confidence target is reached\n"
+        )
     return {
         "kind": "agent",
         "name": "CSIAnalyticsEvent",
         "session_key": session_key,
         "to": route,
-        "message": _analytics_message(event),
+        "message": message,
         "timeout_seconds": timeout_seconds,
+        "metadata": {
+            "event_type": event_type,
+            "source": source,
+            "follow_up_budget": follow_up_budget if route == "trend-specialist" else 0,
+            "confidence_target": confidence_target if route == "trend-specialist" else None,
+        },
     }
 
 

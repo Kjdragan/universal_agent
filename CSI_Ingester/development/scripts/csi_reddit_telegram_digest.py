@@ -20,6 +20,7 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 from csi_ingester.store import token_usage as token_usage_store
+from csi_ingester.llm_auth import resolve_csi_llm_auth
 
 CORE_ORDER = ("ai", "political", "war", "other_interest")
 
@@ -119,6 +120,25 @@ def _resolve_setting(keys: list[str], env_files: list[Path]) -> str:
         if found:
             return found
     return ""
+
+
+def _collect_env_file_values(env_files: list[Path]) -> dict[str, str]:
+    merged: dict[str, str] = {}
+    for env_file in env_files:
+        if not env_file.exists():
+            continue
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                item = line.strip()
+                if not item or item.startswith("#") or "=" not in item:
+                    continue
+                key, raw_val = item.split("=", 1)
+                key = key.strip()
+                value = _parse_dotenv_value(raw_val)
+                merged[key] = value
+        except Exception:
+            continue
+    return merged
 
 
 def _is_truthy(raw: str) -> bool:
@@ -368,18 +388,20 @@ def _maybe_build_claude_digest(
     max_items: int,
     window_label: str,
     env_files: list[Path],
+    env_file_values: dict[str, str],
     watchlist_map: dict[str, str],
 ) -> tuple[str | None, dict[str, int]]:
     use_claude = os.getenv("CSI_REDDIT_DIGEST_USE_CLAUDE", "0").strip() == "1"
     if not use_claude:
         return None, {}
 
-    api_key = _resolve_setting(["ANTHROPIC_API_KEY"], env_files)
+    auth = resolve_csi_llm_auth(env_file_values, default_base_url="https://api.anthropic.com")
+    api_key = auth.api_key
     if not api_key:
         return None, {}
 
     model = os.getenv("CSI_REDDIT_DIGEST_CLAUDE_MODEL", "claude-3-5-haiku-latest").strip()
-    base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+    base_url = auth.base_url or "https://api.anthropic.com"
     endpoint = f"{base_url}/v1/messages" if not base_url.endswith("/v1/messages") else base_url
 
     compact_posts: list[dict[str, Any]] = []
@@ -562,6 +584,7 @@ def main() -> int:
         env_files.append(Path(args.env_file).expanduser())
     if args.csi_env_file:
         env_files.append(Path(args.csi_env_file).expanduser())
+    env_file_values = _collect_env_file_values(env_files)
     state = _load_state(state_path)
 
     conn = _connect(db_path)
@@ -636,6 +659,7 @@ def main() -> int:
         max_items=max(1, int(args.max_items)),
         window_label=args.window_label,
         env_files=env_files,
+        env_file_values=env_file_values,
         watchlist_map=watchlist_map,
     )
     if digest is None:

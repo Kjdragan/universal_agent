@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatDateTimeTz, toEpochMs } from "@/lib/timezone";
 
 type CSIReport = {
-    id: number;
+    id: number | string;
     report_type: string;
+    report_class?: string;
+    window_hours?: number | null;
+    source_mix?: Record<string, number>;
+    divergence_score?: number;
+    divergence_note?: string;
+    metadata?: Record<string, any>;
     report_data: any;
     usage: any;
     created_at: string;
@@ -18,7 +24,10 @@ type PipelineNotification = {
     kind: string;
     title: string;
     message: string;
+    summary?: string;
+    full_message?: string;
     severity: string;
+    status?: string;
     created_at: string;
     metadata?: any;
 };
@@ -27,6 +36,49 @@ type SelectedItem =
     | { type: "report"; data: CSIReport }
     | { type: "notification"; data: PipelineNotification }
     | null;
+
+type CSIHealth = {
+    status: string;
+    stale_pipelines?: Array<{ event_type: string }>;
+    undelivered_last_24h?: number;
+    dead_letter_last_24h?: number;
+    timezone?: string;
+    source_health?: Array<{
+        source: string;
+        status: string;
+        lag_minutes?: number | null;
+        events_last_48h?: number;
+        events_last_6h?: number;
+        throughput_per_hour_6h?: number;
+        failures_last_24h?: number;
+        last_seen?: string | null;
+    }>;
+    overnight_continuity?: {
+        window_start_utc?: string;
+        window_end_utc?: string;
+        window_start_local?: string;
+        window_end_local?: string;
+        checks?: Array<{
+            event_type: string;
+            expected_runs: number;
+            observed_runs: number;
+            missing_runs: number;
+            status: string;
+            expected_max_lag_minutes: number;
+        }>;
+    };
+};
+
+type CSISpecialistLoop = {
+    topic_key: string;
+    topic_label: string;
+    status: string;
+    confidence_target: number;
+    confidence_score: number;
+    follow_up_budget_remaining: number;
+    events_count: number;
+    updated_at: string;
+};
 
 const API_BASE = "/api/dashboard/gateway";
 
@@ -107,8 +159,11 @@ export default function CSIDashboard() {
     const [previewContent, setPreviewContent] = useState<string>("");
     const [previewLoading, setPreviewLoading] = useState(false);
     const [previewError, setPreviewError] = useState<string | null>(null);
+    const [health, setHealth] = useState<CSIHealth | null>(null);
+    const [loops, setLoops] = useState<CSISpecialistLoop[]>([]);
+    const [deepLinkApplied, setDeepLinkApplied] = useState(false);
 
-    async function openArtifactPreview(path: string, label: string) {
+    const openArtifactPreview = useCallback(async (path: string, label: string) => {
         const normalized = normalizeArtifactPath(path);
         if (!normalized) {
             setPreviewError("Invalid artifact path.");
@@ -136,39 +191,82 @@ export default function CSIDashboard() {
         } finally {
             setPreviewLoading(false);
         }
-    }
+    }, []);
+
+    const loadData = useCallback(async () => {
+        try {
+            const [repRes, notifRes, healthRes, loopsRes] = await Promise.all([
+                fetch(`${API_BASE}/api/v1/dashboard/csi/reports`, { cache: "no-store" }),
+                fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=100&source_domain=csi`, { cache: "no-store" }),
+                fetch(`${API_BASE}/api/v1/dashboard/csi/health`, { cache: "no-store" }),
+                fetch(`${API_BASE}/api/v1/dashboard/csi/specialist-loops?limit=8`, { cache: "no-store" }),
+            ]);
+
+            if (!repRes.ok) throw new Error(`HTTP ${repRes.status}`);
+            const data = await repRes.json();
+            if (data.status === "error" || data.status === "unavailable") {
+                throw new Error(data.detail || "CSI unavailable");
+            }
+            setReports(data.reports || []);
+
+            if (notifRes.ok) {
+                const ndata = await notifRes.json();
+                if (Array.isArray(ndata.notifications)) {
+                    const csiNotifs = ndata.notifications.filter(
+                        (n: PipelineNotification) =>
+                            (n.kind && n.kind.startsWith("csi")) || String(n.kind || "").includes("simone_handoff")
+                    );
+                    setNotifications(csiNotifs);
+                }
+            }
+            if (healthRes.ok) {
+                const hData = await healthRes.json();
+                setHealth(hData as CSIHealth);
+            }
+            if (loopsRes.ok) {
+                const loopsData = await loopsRes.json();
+                if (Array.isArray(loopsData.loops)) {
+                    setLoops(loopsData.loops as CSISpecialistLoop[]);
+                }
+            }
+            setError(null);
+        } catch (err: any) {
+            setError(err.message);
+        } finally {
+            setLoading(false);
+        }
+    }, []);
 
     useEffect(() => {
-        async function loadData() {
-            try {
-                const [repRes, notifRes] = await Promise.all([
-                    fetch(`${API_BASE}/api/v1/dashboard/csi/reports`),
-                    fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=50`)
-                ]);
+        void loadData();
+        const timer = window.setInterval(() => void loadData(), 30000);
+        return () => window.clearInterval(timer);
+    }, [loadData]);
 
-                if (!repRes.ok) throw new Error(`HTTP ${repRes.status}`);
-                const data = await repRes.json();
-                if (data.status === "error" || data.status === "unavailable") {
-                    throw new Error(data.detail || "CSI unavailable");
-                }
-                setReports(data.reports || []);
+    useEffect(() => {
+        if (deepLinkApplied || loading) return;
+        const params = new URLSearchParams(window.location.search);
+        const reportKey = String(params.get("report_key") || "").trim();
+        const artifactPath = String(params.get("artifact_path") || "").trim();
+        if (!reportKey && !artifactPath) {
+            setDeepLinkApplied(true);
+            return;
+        }
 
-                if (notifRes.ok) {
-                    const ndata = await notifRes.json();
-                    if (Array.isArray(ndata.notifications)) {
-                        // Filter for CSI-related notifications
-                        const csiNotifs = ndata.notifications.filter((n: PipelineNotification) => n.kind && n.kind.startsWith("csi"));
-                        setNotifications(csiNotifs);
-                    }
-                }
-            } catch (err: any) {
-                setError(err.message);
-            } finally {
-                setLoading(false);
+        if (reportKey) {
+            const matchedReport = reports.find((report) => String(report?.report_data?.report_key || report?.metadata?.report_key || "").trim() === reportKey);
+            if (matchedReport) {
+                setSelectedItem({ type: "report", data: matchedReport });
             }
         }
-        loadData();
-    }, []);
+
+        if (artifactPath) {
+            window.setTimeout(() => {
+                void openArtifactPreview(artifactPath, "Linked Artifact");
+            }, 0);
+        }
+        setDeepLinkApplied(true);
+    }, [deepLinkApplied, loading, openArtifactPreview, reports]);
 
     useEffect(() => {
         setPreviewPath(null);
@@ -227,7 +325,7 @@ export default function CSIDashboard() {
                         {purgeBusy ? "Cleaning..." : "Clean CSI Sessions"}
                     </button>
                     <button
-                        onClick={() => window.location.reload()}
+                        onClick={() => void loadData()}
                         className="rounded-md bg-cyan-600/20 px-3 py-1.5 text-sm font-medium text-cyan-300 hover:bg-cyan-600/30 transition-colors border border-cyan-500/30"
                     >
                         Refresh Feed
@@ -252,6 +350,144 @@ export default function CSIDashboard() {
                     <div className="mt-2 flex items-baseline gap-2">
                         <span className="text-lg font-bold text-slate-100">{loading ? "..." : lastReportTime}</span>
                     </div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                    <div className="text-sm font-medium text-slate-400">CSI Pipeline Health</div>
+                    <div className="mt-2 flex items-center gap-2">
+                        <span className={`text-lg font-bold ${(health?.stale_pipelines?.length || 0) > 0 ? "text-amber-300" : "text-emerald-300"}`}>
+                            {loading ? "..." : `${health?.stale_pipelines?.length || 0} stale`}
+                        </span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                        DLQ 24h: {health?.dead_letter_last_24h ?? 0} | Undelivered 24h: {health?.undelivered_last_24h ?? 0}
+                    </div>
+                </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">CSI Overnight Continuity</h2>
+                    <span className="text-[11px] text-slate-500">
+                        Timezone: {health?.timezone || "UTC"}
+                    </span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                    Local window: {health?.overnight_continuity?.window_start_local ? formatDateTimeTz(health.overnight_continuity.window_start_local, { placeholder: "--" }) : "--"} →{" "}
+                    {health?.overnight_continuity?.window_end_local ? formatDateTimeTz(health.overnight_continuity.window_end_local, { placeholder: "--" }) : "--"}
+                </div>
+                <div className="mt-3 grid gap-4 xl:grid-cols-2">
+                    <div className="overflow-auto rounded border border-slate-800">
+                        <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-900/70 text-slate-400">
+                                <tr>
+                                    <th className="px-2 py-1.5">Pipeline</th>
+                                    <th className="px-2 py-1.5">Expected</th>
+                                    <th className="px-2 py-1.5">Observed</th>
+                                    <th className="px-2 py-1.5">Missing</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {(health?.overnight_continuity?.checks || []).slice(0, 12).map((row) => (
+                                    <tr key={`overnight-${row.event_type}`} className="border-t border-slate-800/60">
+                                        <td className="px-2 py-1.5 text-slate-300">{row.event_type}</td>
+                                        <td className="px-2 py-1.5 text-slate-400">{row.expected_runs}</td>
+                                        <td className="px-2 py-1.5 text-slate-400">{row.observed_runs}</td>
+                                        <td className={`px-2 py-1.5 ${row.missing_runs > 0 ? "text-amber-300" : "text-emerald-300"}`}>
+                                            {row.missing_runs}
+                                        </td>
+                                    </tr>
+                                ))}
+                                {(!health?.overnight_continuity?.checks || health?.overnight_continuity?.checks?.length === 0) && (
+                                    <tr>
+                                        <td className="px-2 py-2 text-slate-500" colSpan={4}>
+                                            No overnight continuity checks available yet.
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="overflow-auto rounded border border-slate-800">
+                        <table className="w-full text-left text-xs">
+                            <thead className="bg-slate-900/70 text-slate-400">
+                                <tr>
+                                    <th className="px-2 py-1.5">Source</th>
+                                    <th className="px-2 py-1.5">Status</th>
+                                    <th className="px-2 py-1.5">Lag (min)</th>
+                                    <th className="px-2 py-1.5">6h / hr</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {(health?.source_health || []).slice(0, 10).map((row) => (
+                                    <tr key={`source-${row.source}`} className="border-t border-slate-800/60">
+                                        <td className="px-2 py-1.5 text-slate-300">{row.source}</td>
+                                        <td
+                                            className={`px-2 py-1.5 ${
+                                                row.status === "ok" ? "text-emerald-300" : row.status === "degraded" ? "text-amber-300" : "text-rose-300"
+                                            }`}
+                                        >
+                                            {row.status}
+                                        </td>
+                                        <td className="px-2 py-1.5 text-slate-400">
+                                            {typeof row.lag_minutes === "number" ? row.lag_minutes : "--"}
+                                        </td>
+                                        <td className="px-2 py-1.5 text-slate-400">
+                                            {row.events_last_6h ?? 0} / {row.throughput_per_hour_6h ?? 0}
+                                        </td>
+                                    </tr>
+                                ))}
+                                {(!health?.source_health || health?.source_health?.length === 0) && (
+                                    <tr>
+                                        <td className="px-2 py-2 text-slate-500" colSpan={4}>
+                                            No source health samples available yet.
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                <h2 className="text-sm font-semibold tracking-wide text-slate-300">Trend Specialist Loops</h2>
+                <div className="mt-2 overflow-auto rounded border border-slate-800">
+                    <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-900/70 text-slate-400">
+                            <tr>
+                                <th className="px-2 py-1.5">Topic</th>
+                                <th className="px-2 py-1.5">Status</th>
+                                <th className="px-2 py-1.5">Confidence</th>
+                                <th className="px-2 py-1.5">Budget</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {loops.map((loop) => (
+                                <tr key={loop.topic_key} className="border-t border-slate-800/60">
+                                    <td className="px-2 py-1.5 text-slate-300">{loop.topic_label}</td>
+                                    <td
+                                        className={`px-2 py-1.5 ${
+                                            loop.status === "closed" ? "text-emerald-300" : loop.status === "budget_exhausted" ? "text-amber-300" : "text-sky-300"
+                                        }`}
+                                    >
+                                        {loop.status}
+                                    </td>
+                                    <td className="px-2 py-1.5 text-slate-400">
+                                        {loop.confidence_score} / {loop.confidence_target}
+                                    </td>
+                                    <td className="px-2 py-1.5 text-slate-400">{loop.follow_up_budget_remaining}</td>
+                                </tr>
+                            ))}
+                            {loops.length === 0 && (
+                                <tr>
+                                    <td className="px-2 py-2 text-slate-500" colSpan={4}>
+                                        No specialist loops tracked yet.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -283,10 +519,10 @@ export default function CSIDashboard() {
                                             <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
                                             <div className="min-w-0 flex-1">
                                                 <div className="flex items-center justify-between">
-                                                    <span className="font-medium truncate pr-2">{n.title}</span>
+                                                    <span className="font-medium pr-2">{n.title}</span>
                                                     <span className="text-[10px] opacity-70 shrink-0">{timeAgo(n.created_at)}</span>
                                                 </div>
-                                                <p className="mt-0.5 truncate text-xs opacity-80">{n.message}</p>
+                                                <p className="mt-0.5 line-clamp-2 text-xs opacity-80">{n.summary || n.message}</p>
                                             </div>
                                         </button>
                                     );
@@ -352,15 +588,46 @@ export default function CSIDashboard() {
                                     <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${SEVERITY_STYLES[selectedItem.data.severity] || SEVERITY_STYLES.info}`}>
                                         {selectedItem.data.severity}
                                     </span>
-                                    <span className="text-xs text-slate-500">{formatDateTimeTz(selectedItem.data.created_at, { placeholder: "--" })}</span>
+                                    <span
+                                        className="text-xs text-slate-500"
+                                        title={`UTC: ${formatDateTimeTz(selectedItem.data.created_at, { timeZone: "UTC", placeholder: "--" })}`}
+                                    >
+                                        Local: {formatDateTimeTz(selectedItem.data.created_at, { placeholder: "--" })}
+                                    </span>
                                 </div>
                                 <h2 className="text-lg font-semibold text-slate-100">{selectedItem.data.title}</h2>
                                 <p className="text-xs text-slate-400 font-mono mt-1">ID: {selectedItem.data.id} | Kind: {selectedItem.data.kind}</p>
+                                <div className="mt-2 flex gap-2">
+                                    <button
+                                        type="button"
+                                        className="rounded border border-cyan-700/60 bg-cyan-600/15 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-600/25"
+                                        onClick={async () => {
+                                            const instruction = window.prompt("Add context for Simone:");
+                                            if (!instruction || !instruction.trim()) return;
+                                            const resp = await fetch(
+                                                `${API_BASE}/api/v1/dashboard/activity/${encodeURIComponent(String(selectedItem.data.id))}/send-to-simone`,
+                                                {
+                                                    method: "POST",
+                                                    headers: { "Content-Type": "application/json" },
+                                                    body: JSON.stringify({ instruction: instruction.trim() }),
+                                                },
+                                            );
+                                            if (!resp.ok) {
+                                                const txt = await resp.text();
+                                                alert(`Failed to send to Simone: ${txt}`);
+                                                return;
+                                            }
+                                            alert("Sent to Simone.");
+                                        }}
+                                    >
+                                        Send to Simone
+                                    </button>
+                                </div>
                             </div>
                             <div className="p-6 overflow-y-auto flex-1 scrollbar-thin">
                                 <h3 className="text-sm font-medium text-slate-300 mb-2 uppercase tracking-wide">Message Content</h3>
                                 <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-4 mb-6 whitespace-pre-wrap text-sm text-slate-300">
-                                    {selectedItem.data.message}
+                                    {selectedItem.data.full_message || selectedItem.data.message}
                                 </div>
 
                                 {selectedItem.data.metadata && Object.keys(selectedItem.data.metadata).length > 0 && (
@@ -468,12 +735,28 @@ export default function CSIDashboard() {
                                 <div className="flex flex-wrap items-center gap-4 justify-between">
                                     <div className="flex items-center gap-3">
                                         <span className="px-2.5 py-1 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold uppercase tracking-wide">
-                                            {selectedItem.data.report_type}
+                                            {selectedItem.data.report_class || selectedItem.data.report_type}
                                         </span>
-                                        <span className="text-xs text-slate-400">{formatDateTimeTz(selectedItem.data.created_at, { placeholder: "--" })}</span>
+                                        {typeof selectedItem.data.window_hours === "number" && selectedItem.data.window_hours > 0 && (
+                                            <span className="text-[11px] rounded border border-slate-700 px-2 py-0.5 text-slate-300">
+                                                {selectedItem.data.window_hours}h window
+                                            </span>
+                                        )}
+                                        <span
+                                            className="text-xs text-slate-400"
+                                            title={`UTC: ${formatDateTimeTz(selectedItem.data.created_at, { timeZone: "UTC", placeholder: "--" })}`}
+                                        >
+                                            {formatDateTimeTz(selectedItem.data.created_at, { placeholder: "--" })}
+                                        </span>
                                     </div>
                                     <span className="text-xs text-slate-500 font-mono">Report #{selectedItem.data.id}</span>
                                 </div>
+                                {typeof selectedItem.data.divergence_score === "number" && (
+                                    <div className="mt-2 rounded border border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-300">
+                                        Daily/Emerging divergence: {selectedItem.data.divergence_score}
+                                        {selectedItem.data.divergence_note ? ` — ${selectedItem.data.divergence_note}` : ""}
+                                    </div>
+                                )}
                                 {selectedItem.data.usage && (
                                     <div className="mt-3 flex items-center gap-3 text-xs text-slate-500">
                                         <div className="flex items-center gap-1.5" title="Prompt Tokens">
