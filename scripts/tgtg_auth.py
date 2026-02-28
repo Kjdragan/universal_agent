@@ -24,7 +24,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from tgtg import TgtgClient
 from src.universal_agent.tgtg.config import CREDENTIALS_FILE
 
-EMAIL = "kevinjdragan@gmail.com"
+import os
+
+EMAIL = os.getenv("TGTG_EMAIL", "")
 STATE_FILE = Path("/tmp/tgtg_auth_state.json")
 LINK_FILE = Path("/tmp/tgtg_magic_link.txt")
 
