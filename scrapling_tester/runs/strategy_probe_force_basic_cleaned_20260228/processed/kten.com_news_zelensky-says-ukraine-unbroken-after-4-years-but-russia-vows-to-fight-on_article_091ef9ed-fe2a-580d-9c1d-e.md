@@ -1,0 +1,636 @@
+# www.kten.com
+
+## Metadata
+
+- **URL**: https://www.kten.com/news/zelensky-says-ukraine-unbroken-after-4-years-but-russia-vows-to-fight-on/article_091ef9ed-fe2a-580d-9c1d-e18a1139f3cf.html
+- **Domain**: www.kten.com
+- **Scraped at**: 2026-02-28T14:30:52.290933+00:00
+- **HTTP Status**: 200
+- **Fetcher tier**: BASIC
+- **test_label**: strategy_probe_force_basic
+- **source_dir**: /home/kjdragan/lrepos/universal_agent/scrapling_tester/runs/sample_processed_json_eval_with_browsers/inbox/source_batch
+
+## Content
+
+Zelensky says Ukraine unbroken after 4 years, but Russia vows to fight on | News | kten.com
+Skip to main content
+You have permission to edit this article.
+Close
+Welcome,
+Guest
+Sign Up
+Dashboard
+Logout
+My Account
+News
+Oklahoma Headlines
+Texas Headlines
+Crime
+U.S. News
+Politics
+Business
+Lifestyle
+Entertainment
+Video
+Watch Live
+Weather
+Weather News
+Braindrop
+Interactive Radar
+Surviving the Storm
+Sports
+The First and Ten
+Baseball-softball
+Basketball
+Football
+MLB
+NBA
+NCAA
+NFL
+Olympics
+Features
+Texoma's Golden Apple
+Community Calendar
+My Christmas Tree
+Station
+Meet the Team
+TV Listings
+Contact KTEN
+Newsletters
+KTEN Jobs
+Sales Team
+Advertise with Us
+KTEN EEO Reports
+Closed Captioning
+Election Results
+Site search
+Search
+Breaking:
+US, Israel launch strikes on Iran, Tehran hits back across region
+Open user controls
+Log In Using Your Account
+Don't have an account?
+Sign Up Today
+63°
+Mostly Cloudy
+(75020)
+Today
+Sunshine and clouds mixed. Slight chance of a rain shower. High 82F. Winds SSE at 10 to 20 mph..
+Tonight
+Partly cloudy this evening, then becoming cloudy after midnight. Slight chance of a rain shower. Low 59F. Winds SSE at 5 to 10 mph.
+Baseball/Softball
+For Your Health
+Jobs
+Share This
+Facebook
+Twitter
+WhatsApp
+SMS
+Email
+Ukraine has been remembering its dead on the fourth anniversary of Russia's invasion
+YURIY DYACHYSHYN
+Print
+Copy article link
+Save
+Ukraine's President Volodymyr Zelensky has warned that any peace deal must not 'betray' his country
+HENRY NICHOLLS
+Infographic with maps of Ukraine showing additional territory occupied by the Russian army each year from 2022 to 2025, with the extent of advances in km2, according to calculations by AFP based on data from the Institute for the Study of War and AEI's Critical Threats Project
+Valentin RAKOVSKY, Valentina BRESCHI
+Camille CAMDESSUS
+The presidential bunker in Kyiv is close to the capital's main Independence Square
+The Kremlin hoped to Ukraine in days when it launched its invasion on February 24, 2022
+Henry NICHOLLS
+Ukrainian President Volodymyr Zelensky (C), is flanked by EU chiefs Antonio Costa and Ursula von der Leyen during a Kyiv news conference
+Tetiana DZHAFAROVA
+Zelensky has warned that any peace deal must not 'betray' his country
+A makeshift memorial for soldiers fallen fighting for Ukraine is set up in Kyiv's Independence Square
+Zelensky says Ukraine unbroken after 4 years, but Russia vows to fight on
+Maria KOSTENKO with Vadym TOMASHEVSKY in Irpin AFP
+Feb 24, 2026
+Updated
+Feb 25, 2026
+1
+Ukraine has been remembering its dead on the fourth anniversary of Russia's invasion
+Ukraine's President Volodymyr Zelensky has warned that any peace deal must not 'betray' his country
+Infographic with maps of Ukraine showing additional territory occupied by the Russian army each year from 2022 to 2025, with the extent of advances in km2, according to calculations by AFP based on data from the Institute for the Study of War and AEI's Critical Threats Project
+The presidential bunker in Kyiv is close to the capital's main Independence Square
+The Kremlin hoped to Ukraine in days when it launched its invasion on February 24, 2022
+Ukrainian President Volodymyr Zelensky (C), is flanked by EU chiefs Antonio Costa and Ursula von der Leyen during a Kyiv news conference
+A makeshift memorial for soldiers fallen fighting for Ukraine is set up in Kyiv's Independence Square
+Vladimir Putin has not broken Ukraine, its leader Volodymyr Zelensky said Tuesday, as the Kremlin marked the start of the fifth year of its invasion by vowing to keep fighting Europe's bloodiest conflict since World War II until it achieves its goals.
+Moscow had hoped to take Kyiv in days when it launched its invasion on February 24, 2022.
+Four years later -- with hundreds of thousands dead, millions forced to flee, much of eastern Ukraine destroyed and US-led peace talks still deadlocked over territory -- it conceded that it has not achieved all it wants in the country.
+"The goals haven't been fully achieved yet, which is why the military operation continues," Kremlin spokesman Dmitry Peskov told reporters in response to an AFP question.
+Ukraine, meanwhile, was ready to do "everything" it could to secure peace, Zelensky said in a video address that featured images of Ukrainians carrying out acts of resistance against Russian soldiers in the opening days of the conflict.
+But any settlement must not "betray" the price paid by Ukrainians throughout the conflict, he said.
+"Putin has not achieved his goals. He did not break the Ukrainians. He did not win this war. We have preserved Ukraine, and we will do everything to achieve peace -- and to ensure there is justice," Zelensky said.
+"We want peace. Strong, dignified, and lasting peace," he said, but any deal must be "accepted by Ukrainians".
+"Everything Ukraine has gone through. It must not be surrendered, forgotten, or betrayed," he added.
+Several European leaders including Finnish President Alexander Stubb and Swedish Prime Minister Ulf Kristersson visited Kyiv on Tuesday to mark the anniversary.
+In an address to the EU parliament and speaking alongside visiting EU chiefs Ursula von der Leyen and Antonio Costa, Zelensky urged Brussels to accelerate Kyiv's admission to the bloc, or face "decades" of Russian attempts to disrupt the process.
+Speaking in Moscow to agents of his FSB security service, Putin said Ukraine has "not managed to inflict a strategic defeat on Russia on the battlefield" and was upping its behind-the-lines sabotage attacks.
+- 'Sirens and shrapnel' -
+In the suburb of Irpin -- where the bodies of hundreds of civilians were discovered in 2022 after it and the neighbouring suburb of Bucha were occupied by Russian forces -- locals told AFP how the war had completely changed their lives, and the country.
+"We have become accustomed to sleeping under sirens and shrapnel," said Yevgenia Antoniuk, 43.
+Recalling a moment in 2022 when she gave some bread to a hungry old man after the Russians abandoned Irpin, she said: "He burst into tears and began kissing my hands. At that moment, I hated Russians so deeply and strongly that I realised that neither I, nor my children, nor my grandchildren would ever forget or forgive them."
+As in many places across the country, locals there had gathered for a ceremony to mark the four-year anniversary.
+Ukrainians are filled with a mix of fatigue at the relentless bombardments and mounting battlefield losses, and determination to resist.
+Whatever the outcome on the battlefield or at the negotiating table, "there will be no victory for us in this war," said Valentyn Oleksiyenko, a 29-year-old wounded veteran.
+"The price we are paying for it is too high. Too many of our people have been killed," he added.
+Hundreds of thousands have been killed since Moscow invaded.
+The UN has verified around 15,000 Ukrainian civilians killed, but says the true number is likely considerably higher.
+Others said the fact Ukraine had not fallen to the Russians was a victory in itself.
+"We have shown that no matter who the enemy is that comes to our land, we can repel them," said Isakiy Zinkevich, a 38-year-old priest in Bucha, a Kyiv commuter town that became synonymous with atrocities committed by Russian troops.
+- Territory -
+The United States has been pushing to end the conflict, mediating talks this year in Geneva and Abu Dhabi between the two sides, but they remain at odds over the issue of territory.
+Russia, which occupies around 20 percent of Ukraine, is fighting to gain full control of Ukraine's eastern Donetsk region as part of any deal.
+Ukraine has rejected the demand and said it would not sign a deal without security guarantees from allies -- including the US -- to deter Russia from invading again.
+The grinding four-year war has devastated the country, with the cost of post-war reconstruction estimated at around $588 billion over the next decade, according to a joint World Bank, EU and UN report with Kyiv, published on Monday.
+bur-jc/mmp/rmb
+Latest Headlines from CNN
+Originally published on
+doc.afp.com
+BLOX Digital Content Exchange
+Tags
+Afp
+Ukraine
+Volodymyr Zelenskyy
+Russia
+Vladimir Putin
+Russian Irredentism
+Russian Invasion Of Ukraine
+Invasions Of Ukraine
+Foreign Relations Of Ukraine
+International Relations
+Russia–ukraine Military Relations
+Foreign Relations Of Russia
+Russo-ukrainian War
+War
+Diplomacy
+Conflicts
+Global Politics
+Foreign Policy
+Government Of Russia
+Military
+Russian–ukrainian Wars
+Russia–ukraine Relations
+Anti-ukrainian Sentiment
+Government
+Wars
+World War Iii
+Foreign Relations
+Imperialism
+Kyiv
+Enlargement Of Nato
+Politics Of Ukraine
+Russo-ukrainian War (2022–present)
+Dmitry Peskov
+Military Of Russia
+Irpin
+Military Operations
+Recommended for you
+WEATHER FORECAST
+2:48
+Video play button
+Sunshine ahead Saturday
+MORE WEATHER
+Currently in Denison
+64° / 57°
+9 AM
+67°
+10 AM
+70°
+11 AM
+73°
+12 PM
+74°
+1 PM
+77°
+Latest
+Democrats look to Tejano music star Bobby Pulido in a high-stakes South Texas congressional race
+Hair extensions commonly used by Black women can contain hazardous chemicals, studies show
+A Supreme Court case over whether marijuana users can own guns is creating unusual alliances
+‘RuPaul’s Drag Race’: Guest Star Gabe Lopez Died Weeks Before Episode Aired
+Nacogdoches man charged with endangering elderly father after he was reported missing, found deceased
+Warm day ahead for South Texas
+Celina police assist in successful SWAT operation
+James Talarico believes a Texas surprise is coming in November. First, he needs to win the Senate primary
+Sections
+EEO Reports
+FCC Public Files
+Public Files Inspection Contact
+FCC Applications
+Contact Information
+KTEN.com
+Phone:
+Email:
+info@kten.com
+YouTube
+Instagram
+iOS App
+Android App
+×
+Browser Compatibility
+Your browser is out of date and potentially vulnerable to security risks.
+© Copyright 2026
+KTEN
+10 High Point Circle, Denison, TX
+|
+Powered by
+BLOX Content Management System
+BLOX Digital
+Back
+Sorry
+Get Started
+Manage Service
+Cancel anytime
+You are logged in
+Switch accounts
+Secure transaction. Cancel anytime.
+Account processing issue - the email address may already exist
+User information
+Username (Optional)
+This is the name that will be displayed next to your photo for comments, blog posts, and more. Choose wisely!
+*
+Your email address will be used to confirm your account. We won't share it with anyone else.
+Create a password that only you will remember. If you forget it, you'll be able to recover it using your email address.
+Confirm your password.
+Mailing lists
+Join our mailing lists
+Have the latest local news delivered every morning so you don't miss out on updates.
+Get our expert short-term forecast, summary of the weather details and news of any severe weather.
+We'll send breaking news and news alerts to you as they happen!
+CAPTCHA
+Create Account
+Have an account? Log In
+You're all set!
+Thank you
+Your account has been registered, and you are now logged in.
+Check your email for details.
+OK
+Invalid password or account does not exist
+Email Address
+Password
+Forgot your password?
+Email me a log in link
+Need an account? Sign Up
+Reset Password
+Submitting this form below will send a message to your email with a link to change your password.
+Email or Screen Name
+Forgot Password
+An email message containing instructions on how to reset your password has been sent to the email address listed on your account.
+Account Email
+Send Email
+Promotional Offers
+Enter Promo Code
+Redeem
+No promotional rates found.
+Purchase Gift
+Purchase Access
+See More Offers
+details
+close
+An error occurred
+What's your email address?
+Confirm password
+Who is this gift for?
+Recipient name
+Recipient email
+Optional message for the recipient
+Who is this gift from?
+Purchaser name
+Purchaser email
+Purchaser zip code
+Delivery date
+What's your billing location?
+State
+Alabama
+Alaska
+Arizona
+Arkansas
+California
+Colorado
+Connecticut
+Delaware
+Florida
+Georgia
+Hawaii
+Idaho
+Illinois
+Indiana
+Iowa
+Kansas
+Kentucky
+Louisiana
+Maine
+Maryland
+Massachusetts
+Michigan
+Minnesota
+Mississippi
+Missouri
+Montana
+Nebraska
+Nevada
+New Hampshire
+New Jersey
+New Mexico
+New York
+North Carolina
+North Dakota
+Ohio
+Oklahoma
+Oregon
+Pennsylvania
+Rhode Island
+South Carolina
+South Dakota
+Tennessee
+Texas
+Utah
+Vermont
+Virginia
+Washington
+Washington D.C.
+West Virginia
+Wisconsin
+Wyoming
+Puerto Rico
+US Virgin Islands
+Armed Forces Americas
+Armed Forces Pacific
+Armed Forces Europe
+Northern Mariana Islands
+Marshall Islands
+American Samoa
+Federated States of Micronesia
+Guam
+Palau
+Alberta, Canada
+British Columbia, Canada
+Manitoba, Canada
+New Brunswick, Canada
+Newfoundland, Canada
+Nova Scotia, Canada
+Northwest Territories, Canada
+Nunavut, Canada
+Ontario, Canada
+Prince Edward Island, Canada
+Quebec, Canada
+Saskatchewan, Canada
+Yukon Territory, Canada
+Zip Code
+Country
+United States of America
+United States Minor Outlying Islands
+Canada
+Mexico, United Mexican States
+Bahamas, Commonwealth of the
+Cuba, Republic of
+Dominican Republic
+Haiti, Republic of
+Jamaica
+Afghanistan
+Albania, People's Socialist Republic of
+Algeria, People's Democratic Republic of
+Andorra, Principality of
+Angola, Republic of
+Anguilla
+Antarctica (the territory South of 60 deg S)
+Antigua and Barbuda
+Argentina, Argentine Republic
+Armenia
+Aruba
+Australia, Commonwealth of
+Austria, Republic of
+Azerbaijan, Republic of
+Bahrain, Kingdom of
+Bangladesh, People's Republic of
+Barbados
+Belarus
+Belgium, Kingdom of
+Belize
+Benin, People's Republic of
+Bermuda
+Bhutan, Kingdom of
+Bolivia, Republic of
+Bosnia and Herzegovina
+Botswana, Republic of
+Bouvet Island (Bouvetoya)
+Brazil, Federative Republic of
+British Indian Ocean Territory (Chagos Archipelago)
+British Virgin Islands
+Brunei Darussalam
+Bulgaria, People's Republic of
+Burkina Faso
+Burundi, Republic of
+Cambodia, Kingdom of
+Cameroon, United Republic of
+Cape Verde, Republic of
+Cayman Islands
+Central African Republic
+Chad, Republic of
+Chile, Republic of
+China, People's Republic of
+Christmas Island
+Cocos (Keeling) Islands
+Colombia, Republic of
+Comoros, Union of the
+Congo, Democratic Republic of
+Congo, People's Republic of
+Cook Islands
+Costa Rica, Republic of
+Cote D'Ivoire, Ivory Coast, Republic of the
+Cyprus, Republic of
+Czech Republic
+Denmark, Kingdom of
+Djibouti, Republic of
+Dominica, Commonwealth of
+Ecuador, Republic of
+Egypt, Arab Republic of
+El Salvador, Republic of
+Equatorial Guinea, Republic of
+Eritrea
+Estonia
+Ethiopia
+Faeroe Islands
+Falkland Islands (Malvinas)
+Fiji, Republic of the Fiji Islands
+Finland, Republic of
+France, French Republic
+French Guiana
+French Polynesia
+French Southern Territories
+Gabon, Gabonese Republic
+Gambia, Republic of the
+Germany
+Ghana, Republic of
+Gibraltar
+Greece, Hellenic Republic
+Greenland
+Grenada
+Guadaloupe
+Guatemala, Republic of
+Guinea, Revolutionary
+People's Rep'c of
+Guinea-Bissau, Republic of
+Guyana, Republic of
+Heard and McDonald Islands
+Holy See (Vatican City State)
+Honduras, Republic of
+Hong Kong, Special Administrative Region of China
+Hrvatska (Croatia)
+Hungary, Hungarian People's Republic
+Iceland, Republic of
+India, Republic of
+Indonesia, Republic of
+Iran, Islamic Republic of
+Iraq, Republic of
+Ireland
+Israel, State of
+Italy, Italian Republic
+Japan
+Jordan, Hashemite Kingdom of
+Kazakhstan, Republic of
+Kenya, Republic of
+Kiribati, Republic of
+Korea, Democratic People's Republic of
+Korea, Republic of
+Kuwait, State of
+Kyrgyz Republic
+Lao People's Democratic Republic
+Latvia
+Lebanon, Lebanese Republic
+Lesotho, Kingdom of
+Liberia, Republic of
+Libyan Arab Jamahiriya
+Liechtenstein, Principality of
+Lithuania
+Luxembourg, Grand Duchy of
+Macao, Special Administrative Region of China
+Macedonia, the former Yugoslav Republic of
+Madagascar, Republic of
+Malawi, Republic of
+Malaysia
+Maldives, Republic of
+Mali, Republic of
+Malta, Republic of
+Martinique
+Mauritania, Islamic Republic of
+Mauritius
+Mayotte
+Micronesia, Federated States of
+Moldova, Republic of
+Monaco, Principality of
+Mongolia, Mongolian People's Republic
+Montserrat
+Morocco, Kingdom of
+Mozambique, People's Republic of
+Myanmar
+Namibia
+Nauru, Republic of
+Nepal, Kingdom of
+Netherlands Antilles
+Netherlands, Kingdom of the
+New Caledonia
+New Zealand
+Nicaragua, Republic of
+Niger, Republic of the
+Nigeria, Federal Republic of
+Niue, Republic of
+Norfolk Island
+Norway, Kingdom of
+Oman, Sultanate of
+Pakistan, Islamic Republic of
+Palestinian Territory, Occupied
+Panama, Republic of
+Papua New Guinea
+Paraguay, Republic of
+Peru, Republic of
+Philippines, Republic of the
+Pitcairn Island
+Poland, Polish People's Republic
+Portugal, Portuguese Republic
+Qatar, State of
+Reunion
+Romania, Socialist Republic of
+Russian Federation
+Rwanda, Rwandese Republic
+Samoa, Independent State of
+San Marino, Republic of
+Sao Tome and Principe, Democratic Republic of
+Saudi Arabia, Kingdom of
+Senegal, Republic of
+Serbia and Montenegro
+Seychelles, Republic of
+Sierra Leone, Republic of
+Singapore, Republic of
+Slovakia (Slovak Republic)
+Slovenia
+Solomon Islands
+Somalia, Somali Republic
+South Africa, Republic of
+South Georgia and the South Sandwich Islands
+Spain, Spanish State
+Sri Lanka, Democratic Socialist Republic of
+St. Helena
+St. Kitts and Nevis
+St. Lucia
+St. Pierre and Miquelon
+St. Vincent and the Grenadines
+Sudan, Democratic Republic of the
+Suriname, Republic of
+Svalbard & Jan Mayen Islands
+Swaziland, Kingdom of
+Sweden, Kingdom of
+Switzerland, Swiss Confederation
+Syrian Arab Republic
+Taiwan, Province of China
+Tajikistan
+Tanzania, United Republic of
+Thailand, Kingdom of
+Timor-Leste, Democratic Republic of
+Togo, Togolese Republic
+Tokelau (Tokelau Islands)
+Tonga, Kingdom of
+Trinidad and Tobago, Republic of
+Tunisia, Republic of
+Turkey, Republic of
+Turkmenistan
+Turks and Caicos Islands
+Tuvalu
+Uganda, Republic of
+United Arab Emirates
+United Kingdom of Great Britain & N. Ireland
+Uruguay, Eastern Republic of
+Uzbekistan
+Vanuatu
+Venezuela, Bolivarian Republic of
+Viet Nam, Socialist Republic of
+Wallis and Futuna Islands
+Western Sahara
+Yemen
+Zambia, Republic of
+Zimbabwe
+What's your delivery address?
+Copy billing location
+Address
+City
+Zip code
+Phone
+Subtotal:
+Total:
+How would you like to pay?
+Ending in
+Add New Card
+I Agree to the Subscription
+Terms of Use.
+This service will be automatically renewed and your credit card billed once it nears expiration.
+Secure transaction.
+Your gift purchase was successful!
+Your purchase was successful, and you are now logged in.
+Rate:
+Begins:
+Transaction ID:
+A receipt was sent to your email.
+This offer is currently unavailable.

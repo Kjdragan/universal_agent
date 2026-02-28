@@ -1,0 +1,21 @@
+{
+  "urls": [
+    "https://www.nytimes.com/2026/02/27/us/politics/anthropic-military-ai.html",
+    "https://www.nytimes.com/2026/02/27/technology/defense-department-anthropic-ai-safety.html",
+    "https://www.nytimes.com/2026/02/27/technology/anthropic-trump-pentagon-silicon-valley.html",
+    "https://www.nytimes.com/2026/02/27/style/epstein-friends-associates-complicity.html",
+    "https://www.nytimes.com/2026/02/27/us/lausd-superintendent-alberto-carvalho-fbi.html",
+    "https://www.nytimes.com/2026/02/27/us/politics/trump-iran-talks.html",
+    "https://www.nytimes.com/2026/02/27/us/politics/uss-ford-iran.html",
+    "https://www.nytimes.com/2026/02/27/world/middleeast/iran-student-protests.html"
+  ],
+  "options": {
+    "min_level": "basic",
+    "force_level": null,
+    "solve_cloudflare": true,
+    "headless": true,
+    "network_idle": true,
+    "timeout": 45
+  },
+  "test_label": "nyt_paywall_probe_adaptive"
+}

@@ -1,0 +1,77 @@
+{
+  "type": "news",
+  "timestamp": "2026-02-27T19:53:06.875309",
+  "tool": "COMPOSIO_SEARCH_NEWS",
+  "articles": [
+    {
+      "position": 1,
+      "title": "Russian Offensive Campaign Assessment, February 26, 2026",
+      "url": "https://understandingwar.org/research/russia-ukraine/russian-offensive-campaign-assessment-february-26-2026/",
+      "source": "Institute for the Study of War",
+      "snippet": "Russia launched another massive missile and drone strike against Ukraine on the night of February 25 to 26, targeting energy infrastructure."
+    },
+    {
+      "position": 2,
+      "title": "DW News. . A 33-year-old Kenyan has been charged with human trafficking after allegedly recruiting Kenyans with false promises to fight for Russia in Ukraine. In total, more than 1,000 Kenyans were reportedly lured to take part in the war, with about 90 still at",
+      "url": "https://www.facebook.com/deutschewellenews/videos/a-33-year-old-kenyan-has-been-charged-with-human-trafficking-after-allegedly-rec/1245903847497849/",
+      "source": "Facebook",
+      "snippet": null
+    },
+    {
+      "position": 3,
+      "title": "Envoys signal no breakthrough on bridging Russia and Ukraine's political and military differences",
+      "url": "https://www.aol.com/articles/ukrainian-russian-envoys-hold-second-092516169.html",
+      "source": "AOL.com",
+      "snippet": "The latest U.S.-brokered talks between envoys from Moscow and Kyiv over Russia's all-out invasion of Ukraine ended Wednesday with no sign of a breakthrough..."
+    },
+    {
+      "position": 4,
+      "title": "Russian UAV Video Feeds Plunge Over 90% Following Ukraine\u2013SpaceX Starlink Cutoff",
+      "url": "https://united24media.com/latest-news/russian-uav-video-feeds-plunge-over-90-following-ukraine-spacex-starlink-cutoff-16339",
+      "source": "UNITED24 Media",
+      "snippet": "Ukraine says blocking Russian Starlink terminals cut enemy drone links; military live streams fell 11x, aiding counterattacks and safer civilian areas."
+    },
+    {
+      "position": 5,
+      "title": "When home becomes the front line",
+      "url": "https://scotscoop.com/when-home-becomes-the-front-line/",
+      "source": "Scot Scoop News",
+      "snippet": "Amid the blasts, lies stillness. Shahed drones hurtle toward buildings in ruin. Death and devastation unfold before the lens, captured by a hand that..."
+    },
+    {
+      "position": 6,
+      "title": "Besieged Russians in Kupiansk high-rises \"dwindling,\" Ukrainian military says",
+      "url": "https://euromaidanpress.com/2026/02/27/besieged-russians-in-kupiansk-high-rises-dwindling-ukrainian-military-says/",
+      "source": "Euromaidan Press",
+      "snippet": "Ukraine detects just 20 active Russian radios in besieged Kupiansk high-rises. Trapped garrison slowly collapsing after months-long encirclement."
+    },
+    {
+      "position": 7,
+      "title": "Cease-fire agreed near Zaporizhzhia for power repairs: IAEA | Daily Sabah",
+      "url": "https://www.dailysabah.com/world/europe/cease-fire-agreed-near-zaporizhzhia-for-power-repairs-iaea/amp",
+      "source": "Daily Sabah",
+      "snippet": "The International Atomic Energy Agency (IAEA) said Friday that a local cease-fire between Ukraine and Russia has come into force around the Zaporizhzhia..."
+    },
+    {
+      "position": 8,
+      "title": "ISW Russian Offensive Campaign Assessment, February 26, 2026",
+      "url": "https://www.kyivpost.com/post/70862",
+      "source": "Kyiv Post",
+      "snippet": "War in Ukraine - Latest update, key takeaways and map from the Institute for the Study of War on February 26, 2026."
+    },
+    {
+      "position": 9,
+      "title": "\u2018Delaying, stalling and blaming\u2019: Russia shows little sign of compromise as war enters fifth year, expert says",
+      "url": "https://www.aol.com/articles/delaying-stalling-blaming-russia-shows-154436253.html",
+      "source": "AOL.com",
+      "snippet": "Four years after Russia launched its full-scale invasion of Ukraine, the war shows no clear end in sight as costly battlefield advances continue and renewed..."
+    },
+    {
+      "position": 10,
+      "title": "New Photobook Documents Russia\u2019s War Against Ukraine Through Lens of Kharkiv Photographer",
+      "url": "https://united24media.com/latest-news/new-photobook-documents-russias-war-against-ukraine-through-lens-of-kharkiv-photographer-16326",
+      "source": "UNITED24 Media",
+      "snippet": "Red Hook Editions to publish Vladyslav Krasnoshchok's photobook on russia's full-scale war, with bilingual notes and key facts on aggression."
+    }
+  ]
+}
