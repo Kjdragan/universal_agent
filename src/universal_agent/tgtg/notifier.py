@@ -44,13 +44,14 @@ def _tgtg_deep_link(item_id: str) -> str:
     return f"https://share.toogoodtogo.com/item/{item_id}"
 
 
-def send_stock_alert(item: dict, order: dict | None = None) -> bool:
+def send_stock_alert(item: dict, order: dict | None = None, target=None) -> bool:
     """
     Send a Telegram message for a newly available item.
 
     Args:
         item:   TGTG item dict from get_items() / get_item().
         order:  If auto-purchase succeeded, pass the order dict here.
+        target: Target instance (used to show desire level in message).
 
     Returns True if the message was sent successfully.
     """
@@ -66,9 +67,15 @@ def send_stock_alert(item: dict, order: dict | None = None) -> bool:
     rating = item.get("item", {}).get("average_overall_rating", {}).get("average_overall_rating")
     rating_str = f"{rating:.1f}⭐" if rating else "–"
 
+    desire = getattr(target, "desire", None)
+    desire_line = "\n🔥 *HIGH-DESIRE target* — auto-buying now" if desire == "high" else ""
+
     if order:
         header = f"✅ *AUTO-PURCHASED!* Bag reserved at {store}"
         order_line = f"\n🧾 Order ID: `{order.get('id', '?')}`"
+    elif desire == "high":
+        header = f"🔥 *HIGH-DESIRE DEAL!* {store}"
+        order_line = ""
     else:
         header = f"🔔 *DEAL AVAILABLE!* {store}"
         order_line = ""
@@ -79,6 +86,7 @@ def send_stock_alert(item: dict, order: dict | None = None) -> bool:
         f"💰 Price: *{price}*\n"
         f"🕐 Pickup: {pickup}\n"
         f"⭐ Rating: {rating_str}"
+        f"{desire_line}"
         f"{order_line}"
     )
 
