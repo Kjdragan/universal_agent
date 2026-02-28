@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from universal_agent import gateway_server
 from universal_agent.ops_service import OpsService
@@ -78,3 +79,10 @@ def test_issue_ops_token_and_use_bearer(client, monkeypatch):
     )
     assert authed.status_code == 200
     assert "sessions" in authed.json()
+
+
+def test_local_worker_blocks_websocket_surface(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_FACTORY_POLICY", build_factory_runtime_policy("LOCAL_WORKER"))
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/api/v1/sessions/session_test/stream"):
+            pass
