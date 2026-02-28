@@ -86,7 +86,10 @@ TGTG_SCAN_INTERVAL_HOURS: float = float(os.getenv("TGTG_SCAN_INTERVAL_HOURS", "2
 # Maximum spend per calendar day across auto-purchases (in the bag's currency).
 # Leave blank / unset to disable the cap.
 _daily_budget_raw: str = os.getenv("TGTG_DAILY_BUDGET", "")
-TGTG_DAILY_BUDGET: float | None = float(_daily_budget_raw) if _daily_budget_raw else None
+try:
+    TGTG_DAILY_BUDGET: float | None = float(_daily_budget_raw) if _daily_budget_raw else None
+except ValueError:
+    TGTG_DAILY_BUDGET: float | None = None
 
 # ── Webhook ───────────────────────────────────────────────────────────────────
 # HTTP POST target for stock / order / dead-item events.
