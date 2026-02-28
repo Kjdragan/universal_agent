@@ -1,10 +1,11 @@
 from threading import RLock
 from dataclasses import dataclass
+from typing import overload
 
-from playwright.sync_api._generated import Page as SyncPage
-from playwright.async_api._generated import Page as AsyncPage
+from playwright.sync_api import Page as SyncPage
+from playwright.async_api import Page as AsyncPage
 
-from scrapling.core._types import Optional, List, Literal, overload, TypeVar, Generic, cast
+from scrapling.core._types import Optional, List, Literal, TypeVar, Generic, cast
 
 PageState = Literal["ready", "busy", "error"]  # States that a page can be in
 PageType = TypeVar("PageType", SyncPage, AsyncPage)
