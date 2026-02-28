@@ -76,7 +76,9 @@ def push_log(message: str, level: str = "info") -> None:
 
 def _broadcast(data: dict) -> None:
     payload = json.dumps(data)
-    for q in list(_sse_queues):
+    with _state_lock:
+        snapshot = list(_sse_queues)
+    for q in snapshot:
         try:
             q.put_nowait(payload)
         except asyncio.QueueFull:
@@ -107,7 +109,8 @@ def get_orders():
 async def sse_events():
     """Server-Sent Events endpoint for live updates."""
     q: asyncio.Queue = asyncio.Queue(maxsize=50)
-    _sse_queues.append(q)
+    with _state_lock:
+        _sse_queues.append(q)
 
     async def generator():
         try:
@@ -118,7 +121,11 @@ async def sse_events():
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
         finally:
-            _sse_queues.remove(q)
+            with _state_lock:
+                try:
+                    _sse_queues.remove(q)
+                except ValueError:
+                    pass
 
     return StreamingResponse(generator(), media_type="text/event-stream")
 

@@ -38,7 +38,7 @@ python3 -c "
 from tgtg import TgtgClient
 import json
 
-EMAIL = 'kevinjdragan@gmail.com'
+EMAIL = 'your@email.com'
 
 print('Sending magic link to', EMAIL, '...')
 print('Do NOT open this email on your phone if you have the TGTG app installed!')
@@ -57,7 +57,7 @@ print('=== COPY EVERYTHING ABOVE THIS LINE ===')
 You will see:
 
 ```
-Sending magic link to kevinjdragan@gmail.com ...
+Sending magic link to your@email.com ...
 Do NOT open this email on your phone if you have the TGTG app installed!
 
 Check your mailbox on PC to continue...
@@ -112,7 +112,7 @@ cp .env.example .env
 Then open `.env` and fill in these four lines using the values from Step 2:
 
 ```env
-TGTG_EMAIL=kevinjdragan@gmail.com
+TGTG_EMAIL=your@email.com
 TGTG_ACCESS_TOKEN=<paste access_token value here>
 TGTG_REFRESH_TOKEN=<paste refresh_token value here>
 TGTG_COOKIE=<paste cookie value here>
@@ -159,7 +159,7 @@ uv run python -m src.universal_agent.tgtg.cli status
 You should see something like:
 
 ```
-✅ Authenticated as kevinjdragan@gmail.com
+✅ Authenticated as your@email.com
    Watching: all favourites (or N items)
    Location: 51.5074, -0.1278 (radius 5 km)
 ```
