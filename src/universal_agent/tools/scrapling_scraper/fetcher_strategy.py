@@ -91,8 +91,9 @@ def _is_bot_blocked(page: Any) -> bool:
             except Exception:
                 pass
         return any(sig in body for sig in _BOT_SIGNALS)
-    except Exception:
-        return False
+    except Exception as e:
+        logger.warning("Error during bot detection for %s: %s. Assuming blocked.", getattr(page, 'url', 'unknown URL'), e)
+        return True
 
 
 def _safe_fetch_basic(req: ScrapeRequest) -> Any:
