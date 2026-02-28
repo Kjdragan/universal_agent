@@ -81,6 +81,17 @@ def test_issue_ops_token_and_use_bearer(client, monkeypatch):
     assert "sessions" in authed.json()
 
 
+def test_ops_surface_unauthorized_is_401_not_500(client, monkeypatch):
+    monkeypatch.setattr(gateway_server, "_FACTORY_POLICY", build_factory_runtime_policy("HEADQUARTERS"))
+    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "required-token")
+    monkeypatch.setattr(gateway_server, "OPS_JWT_SECRET", "")
+    monkeypatch.setattr(gateway_server, "OPS_AUTH_ALLOW_LEGACY", True)
+
+    resp = client.get("/api/v1/ops/sessions")
+    assert resp.status_code == 401
+    assert resp.json().get("detail") == "Unauthorized"
+
+
 def test_local_worker_blocks_websocket_surface(client, monkeypatch):
     monkeypatch.setattr(gateway_server, "_FACTORY_POLICY", build_factory_runtime_policy("LOCAL_WORKER"))
     with pytest.raises(WebSocketDisconnect):
