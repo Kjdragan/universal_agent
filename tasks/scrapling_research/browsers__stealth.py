@@ -108,12 +108,18 @@ class StealthySession(SyncSession, StealthySessionMixin):
         else:
             raise RuntimeError("Session has been already started")
 
-    def _cloudflare_solver(self, page: Page) -> None:  # pragma: no cover
+    def _cloudflare_solver(
+        self, page: Page, attempts: int = 0, max_attempts: int = 3
+    ) -> None:  # pragma: no cover
         """Solve the cloudflare challenge displayed on the playwright page passed
 
         :param page: The targeted page
         :return:
         """
+        if attempts >= max_attempts:
+            log.warning("Cloudflare solver exceeded max attempts (%s), giving up", max_attempts)
+            return None
+
         self._wait_for_networkidle(page, timeout=5000)
         challenge_type = self._detect_cloudflare(ResponseFactory._get_page_content(page))
         if not challenge_type:
@@ -183,7 +189,7 @@ class StealthySession(SyncSession, StealthySessionMixin):
                     return None
                 else:
                     log.info("Looks like Cloudflare captcha is still present, solving again")
-                    return self._cloudflare_solver(page)
+                    return self._cloudflare_solver(page, attempts=attempts + 1, max_attempts=max_attempts)
 
     def fetch(self, url: str, **kwargs: Unpack[StealthFetchParams]) -> Response:
         """Opens up the browser and do your request based on your chosen options.
@@ -363,12 +369,18 @@ class AsyncStealthySession(AsyncSession, StealthySessionMixin):
         else:
             raise RuntimeError("Session has been already started")
 
-    async def _cloudflare_solver(self, page: async_Page) -> None:  # pragma: no cover
+    async def _cloudflare_solver(
+        self, page: async_Page, attempts: int = 0, max_attempts: int = 3
+    ) -> None:  # pragma: no cover
         """Solve the cloudflare challenge displayed on the playwright page passed
 
         :param page: The targeted page
         :return:
         """
+        if attempts >= max_attempts:
+            log.warning("Cloudflare solver exceeded max attempts (%s), giving up", max_attempts)
+            return None
+
         await self._wait_for_networkidle(page, timeout=5000)
         challenge_type = self._detect_cloudflare(await ResponseFactory._get_async_page_content(page))
         if not challenge_type:
@@ -438,7 +450,9 @@ class AsyncStealthySession(AsyncSession, StealthySessionMixin):
                     return None
                 else:
                     log.info("Looks like Cloudflare captcha is still present, solving again")
-                    return await self._cloudflare_solver(page)
+                    return await self._cloudflare_solver(
+                        page, attempts=attempts + 1, max_attempts=max_attempts
+                    )
 
     async def fetch(self, url: str, **kwargs: Unpack[StealthFetchParams]) -> Response:
         """Opens up the browser and do your request based on your chosen options.
