@@ -2068,6 +2068,19 @@ wheels = [
 ]
 
 [[package]]
+name = "infisical-python"
+version = "2.3.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/9f/1a1d144302b761509c71ac9d407d443a039811a78bdc76e5fb9301dff4b9/infisical_python-2.3.5.tar.gz", hash = "sha256:68437d7178c220948166726d6ca8ca544e8e7f9fa960230e0ea9b39ea440a40a", size = 55920, upload-time = "2024-08-19T21:29:12.905Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1c/b3/214016e624887c6859329da8a905302eaf7266652e30e2d2ffacb172673a/infisical_python-2.3.5-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:d1d5c4797bee9c83cf34b39b088d32b1302f964973e38642868bf676c334dcae", size = 5171748, upload-time = "2024-08-19T21:28:26Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/58/79f6987d1471866231b3e45a5692a4d9f063abcb2291a8afde32cdf2d1f0/infisical_python-2.3.5-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:d86c9f6bfc88cc4694e2850da80c82b05c1479995337ba650971752aacc1c0fa", size = 4950698, upload-time = "2024-08-19T21:28:27.865Z" },
+    { url = "https://files.pythonhosted.org/packages/5a/1c/c0f4748c5aa0a05aae28ad8ee3d525d59642b72b6977cfab11491ce01924/infisical_python-2.3.5-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:87f166ce9fee1ac316412a7f019189a6485e93e53a0d29bec4eccece591f0511", size = 5538754, upload-time = "2024-08-19T21:28:29.336Z" },
+    { url = "https://files.pythonhosted.org/packages/4d/d5/76976935a03e9bda5e8c69e2ed7270a0a0c2f4b203fed5ec3da47d98c30f/infisical_python-2.3.5-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:8d426713143ec49edc77e059059d97bb47f371c56e8de8ab83d60d2d3b7f239f", size = 5559570, upload-time = "2024-08-19T21:28:31.271Z" },
+    { url = "https://files.pythonhosted.org/packages/72/80/5c0e0ebe695689f02d68efbaecb1b76b2eba3d8e5ef87117382452370226/infisical_python-2.3.5-cp312-none-win_amd64.whl", hash = "sha256:f52ca7f6a63150eb0ebf0eda5f350cb3b2519e7a0b4a88f2b74827f72e8cae06", size = 4858223, upload-time = "2024-08-19T21:28:32.836Z" },
+]
+
+[[package]]
 name = "iniconfig"
 version = "2.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -6119,6 +6132,7 @@ dependencies = [
     { name = "google-genai" },
     { name = "gradio" },
     { name = "httpx" },
+    { name = "infisical-python" },
     { name = "json-repair" },
     { name = "json5" },
     { name = "lancedb" },
@@ -6195,6 +6209,7 @@ requires-dist = [
     { name = "google-genai", specifier = ">=1.56.0" },
     { name = "gradio", specifier = ">=6.2.0" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "infisical-python", specifier = "==2.3.5" },
     { name = "json-repair", specifier = ">=0.55.1" },
     { name = "json5", specifier = ">=0.13.0" },
     { name = "lancedb", specifier = ">=0.27.1" },

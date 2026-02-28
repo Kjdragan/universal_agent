@@ -33,12 +33,12 @@ from types import SimpleNamespace
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
 import httpx
 
-# Load .env early so SDK/CLI subprocesses inherit API keys and settings.
 BASE_DIR = Path(__file__).parent.parent.parent
-load_dotenv(BASE_DIR / ".env", override=False)
+from universal_agent.infisical_loader import initialize_runtime_secrets
+
+initialize_runtime_secrets()
 from universal_agent.utils.env_aliases import apply_xai_key_aliases
 apply_xai_key_aliases()
 
@@ -347,6 +347,37 @@ def _normalize_tutorial_bootstrap_execution_target(value: str) -> str:
     return ""
 
 
+def _tutorial_bootstrap_open_metadata(repo_dir: str) -> tuple[str, str]:
+    normalized_repo_dir = str(repo_dir or "").strip()
+    if not normalized_repo_dir:
+        return "", ""
+    try:
+        resolved_path = Path(normalized_repo_dir).expanduser().resolve()
+        open_uri = resolved_path.as_uri()
+    except Exception:
+        open_uri = f"file://{urllib.parse.quote(normalized_repo_dir)}"
+    hint = "If your browser blocks file:// links, copy the repo path and open it in your file manager."
+    return open_uri, hint
+
+
+def _tutorial_bootstrap_enrich_job(job: dict[str, Any]) -> dict[str, Any]:
+    record = dict(job)
+    repo_dir = str(record.get("repo_dir") or "").strip()
+    if not repo_dir:
+        target_root = str(record.get("target_root") or "").strip()
+        repo_name = str(record.get("repo_name") or "").strip()
+        if target_root and repo_name:
+            repo_dir = str((Path(target_root).expanduser() / repo_name).resolve())
+            record["repo_dir"] = repo_dir
+    if repo_dir:
+        repo_open_uri, repo_open_hint = _tutorial_bootstrap_open_metadata(repo_dir)
+        if repo_open_uri:
+            record["repo_open_uri"] = repo_open_uri
+        if repo_open_hint:
+            record["repo_open_hint"] = repo_open_hint
+    return record
+
+
 def _storage_explorer_href(*, scope: str, path: str, preview: Optional[str] = None) -> str:
     normalized_path = str(path or "").strip().replace("\\", "/").strip("/")
     normalized_preview = str(preview or "").strip().replace("\\", "/").strip("/")
@@ -567,7 +598,7 @@ def _remember_tutorial_bootstrap_job(job: dict[str, Any]) -> dict[str, Any]:
     job_id = str(job.get("job_id") or "").strip()
     if not job_id:
         return {}
-    record = dict(job)
+    record = _tutorial_bootstrap_enrich_job(dict(job))
     with _tutorial_bootstrap_jobs_lock:
         _tutorial_bootstrap_jobs[job_id] = record
         status = str(record.get("status") or "").strip().lower()
@@ -579,7 +610,7 @@ def _remember_tutorial_bootstrap_job(job: dict[str, Any]) -> dict[str, Any]:
             _tutorial_bootstrap_queue.clear()
             _tutorial_bootstrap_queue.extend(_tutorial_bootstrap_queue_copy)
         _tutorial_bootstrap_prune_locked()
-        return dict(_tutorial_bootstrap_jobs.get(job_id) or record)
+        return _tutorial_bootstrap_enrich_job(dict(_tutorial_bootstrap_jobs.get(job_id) or record))
 
 
 def _tutorial_bootstrap_list_jobs(*, limit: int = 100, run_path: str = "") -> list[dict[str, Any]]:
@@ -594,7 +625,27 @@ def _tutorial_bootstrap_list_jobs(*, limit: int = 100, run_path: str = "") -> li
         ]
     rows.sort(key=lambda row: float(row.get("queued_at_epoch") or 0.0), reverse=True)
     clamped = max(1, min(int(limit), 1000))
-    return [dict(row) for row in rows[:clamped]]
+    return [_tutorial_bootstrap_enrich_job(dict(row)) for row in rows[:clamped]]
+
+
+def _tutorial_bootstrap_find_active_job(*, run_path: str, execution_target: str = "local") -> Optional[dict[str, Any]]:
+    normalized_run_path = str(run_path or "").strip().strip("/")
+    normalized_target = str(execution_target or "").strip().lower() or "local"
+    with _tutorial_bootstrap_jobs_lock:
+        rows = sorted(
+            _tutorial_bootstrap_jobs.values(),
+            key=lambda row: float(row.get("queued_at_epoch") or 0.0),
+            reverse=True,
+        )
+    for row in rows:
+        if str(row.get("tutorial_run_path") or "").strip().strip("/") != normalized_run_path:
+            continue
+        if str(row.get("execution_target") or "").strip().lower() != normalized_target:
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status in {"queued", "running"}:
+            return _tutorial_bootstrap_enrich_job(dict(row))
+    return None
 
 
 def _tutorial_bootstrap_claim_next(*, worker_id: str) -> Optional[dict[str, Any]]:
@@ -630,8 +681,9 @@ def _tutorial_bootstrap_claim_next(*, worker_id: str) -> Optional[dict[str, Any]
             job["claimed_at"] = now_iso
             job["claimed_at_epoch"] = now_ts
             job["started_at"] = now_iso
-            _tutorial_bootstrap_jobs[job_id] = job
-            return dict(job)
+            enriched = _tutorial_bootstrap_enrich_job(job)
+            _tutorial_bootstrap_jobs[job_id] = enriched
+            return dict(enriched)
     return None
 
 
@@ -667,8 +719,9 @@ def _tutorial_bootstrap_update_result(
         job["stdout"] = str(stdout or "")[-6000:]
         job["stderr"] = str(stderr or "")[-4000:]
         job["error"] = str(error or "")[-1200:]
-        _tutorial_bootstrap_jobs[normalized_job_id] = job
-        return dict(job)
+        enriched = _tutorial_bootstrap_enrich_job(job)
+        _tutorial_bootstrap_jobs[normalized_job_id] = enriched
+        return dict(enriched)
 
 
 def _tutorial_review_prompt(
@@ -9731,6 +9784,9 @@ _TUTORIAL_NOTIFICATION_KINDS = frozenset({
     "youtube_tutorial_failed",
     "youtube_ingest_failed",
     "youtube_hook_recovery_queued",
+    "tutorial_repo_bootstrap_queued",
+    "tutorial_repo_bootstrap_ready",
+    "tutorial_repo_bootstrap_failed",
 })
 
 
@@ -9879,6 +9935,23 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
         raise HTTPException(status_code=400, detail="execution_target must be local or server")
 
     if execution_target == "local":
+        existing_job = _tutorial_bootstrap_find_active_job(run_path=run_rel, execution_target="local")
+        if existing_job:
+            return {
+                "queued": True,
+                "job_id": str(existing_job.get("job_id") or ""),
+                "status": str(existing_job.get("status") or "queued"),
+                "execution_target": "local",
+                "run_path": run_rel,
+                "repo_name": str(existing_job.get("repo_name") or repo_name),
+                "target_root": str(existing_job.get("target_root") or target_root),
+                "job": existing_job,
+                "existing_job_reused": True,
+                "worker_hint": (
+                    "Run scripts/tutorial_local_bootstrap_worker.py on your local desktop "
+                    "with --gateway-url and --ops-token to process queued jobs."
+                ),
+            }
         now = datetime.now(timezone.utc)
         job_id = f"tbj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
         job = {
@@ -9920,6 +9993,7 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
             "repo_name": repo_name,
             "target_root": target_root,
             "job": saved,
+            "existing_job_reused": False,
             "worker_hint": (
                 "Run scripts/tutorial_local_bootstrap_worker.py on your local desktop "
                 "with --gateway-url and --ops-token to process queued jobs."
@@ -9967,6 +10041,7 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
         run_rel,
         repo_dir,
     )
+    repo_open_uri, repo_open_hint = _tutorial_bootstrap_open_metadata(repo_dir)
     return {
         "ok": True,
         "execution_target": "server",
@@ -9974,6 +10049,8 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
         "repo_name": repo_name,
         "target_root": target_root,
         "repo_dir": repo_dir,
+        "repo_open_uri": repo_open_uri,
+        "repo_open_hint": repo_open_hint,
         "stdout": stdout[-4000:],
         "stderr": stderr[-2000:],
     }

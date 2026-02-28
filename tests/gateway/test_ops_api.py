@@ -1233,6 +1233,7 @@ def test_dashboard_tutorial_bootstrap_repo_local_queue_and_worker_flow(client, t
     created = create_resp.json()
     assert created["queued"] is True
     assert created["execution_target"] == "local"
+    assert created["existing_job_reused"] is False
     job_id = str(created["job_id"])
 
     listed = client.get("/api/v1/dashboard/tutorials/bootstrap-jobs?limit=20").json()["jobs"]
@@ -1279,11 +1280,128 @@ def test_dashboard_tutorial_bootstrap_repo_local_queue_and_worker_flow(client, t
     result_job = result_resp.json()["job"]
     assert result_job["status"] == "completed"
     assert result_job["repo_dir"] == "/home/kjdragan/YoutubeCodeExamples/demo_repo"
+    assert str(result_job.get("repo_open_uri") or "").startswith("file://")
+    assert "repo_open_hint" in result_job
 
     latest = client.get(f"/api/v1/dashboard/tutorials/bootstrap-jobs?run_path=youtube-tutorial-creation/demo-run").json()["jobs"]
     assert len(latest) == 1
     assert latest[0]["job_id"] == job_id
     assert latest[0]["status"] == "completed"
+    assert str(latest[0].get("repo_open_uri") or "").startswith("file://")
+
+
+def test_dashboard_tutorial_bootstrap_repo_local_queue_reuses_existing_active_job(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "reuse-run"
+    impl_dir = run_dir / "implementation"
+    impl_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"title": "Reuse Run", "video_id": "reuse123", "status": "full"}),
+        encoding="utf-8",
+    )
+    (impl_dir / "create_new_repo.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "TARGET_ROOT=\"${1:?}\"\n"
+        "REPO_NAME=\"${2:?}\"\n"
+        "mkdir -p \"$TARGET_ROOT/$REPO_NAME\"\n"
+        "echo \"Repo ready: $TARGET_ROOT/$REPO_NAME\"\n",
+        encoding="utf-8",
+    )
+
+    first = client.post(
+        "/api/v1/dashboard/tutorials/bootstrap-repo",
+        json={
+            "run_path": "youtube-tutorial-creation/reuse-run",
+            "repo_name": "reuse_repo_a",
+            "execution_target": "local",
+        },
+    )
+    assert first.status_code == 200
+    first_payload = first.json()
+    assert first_payload["queued"] is True
+    assert first_payload["existing_job_reused"] is False
+    first_job_id = str(first_payload["job_id"])
+
+    second = client.post(
+        "/api/v1/dashboard/tutorials/bootstrap-repo",
+        json={
+            "run_path": "youtube-tutorial-creation/reuse-run",
+            "repo_name": "reuse_repo_b",
+            "execution_target": "local",
+        },
+    )
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert second_payload["queued"] is True
+    assert second_payload["existing_job_reused"] is True
+    assert str(second_payload["job_id"]) == first_job_id
+    assert str(second_payload["status"]).lower() in {"queued", "running"}
+
+    listed = client.get("/api/v1/dashboard/tutorials/bootstrap-jobs?run_path=youtube-tutorial-creation/reuse-run").json()["jobs"]
+    assert len(listed) == 1
+    assert str(listed[0]["job_id"]) == first_job_id
+
+
+def test_dashboard_tutorial_bootstrap_repo_failed_result_preserves_error_metadata(client, tmp_path, monkeypatch):
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+    monkeypatch.setattr(gateway_server, "OPS_TOKEN", "ops_test_token")
+
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "failed-run"
+    impl_dir = run_dir / "implementation"
+    impl_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"title": "Failed Run", "video_id": "failed123", "status": "full"}),
+        encoding="utf-8",
+    )
+    (impl_dir / "create_new_repo.sh").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+
+    create_resp = client.post(
+        "/api/v1/dashboard/tutorials/bootstrap-repo",
+        json={"run_path": "youtube-tutorial-creation/failed-run", "execution_target": "local"},
+    )
+    assert create_resp.status_code == 200
+    job_id = str(create_resp.json()["job_id"])
+
+    headers = {"x-ua-ops-token": "ops_test_token"}
+    claim_resp = client.post(
+        "/api/v1/ops/tutorials/bootstrap-jobs/claim",
+        headers=headers,
+        json={"worker_id": "local-desktop-worker"},
+    )
+    assert claim_resp.status_code == 200
+    assert str(claim_resp.json()["job"]["job_id"]) == job_id
+
+    failure_text = "Bootstrap script exited with code 1"
+    result_resp = client.post(
+        f"/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/result",
+        headers=headers,
+        json={
+            "worker_id": "local-desktop-worker",
+            "status": "failed",
+            "repo_dir": "/home/kjdragan/YoutubeCodeExamples/failed_repo",
+            "stderr": "traceback...",
+            "error": failure_text,
+        },
+    )
+    assert result_resp.status_code == 200
+    result_job = result_resp.json()["job"]
+    assert result_job["status"] == "failed"
+    assert result_job["error"] == failure_text
+    assert result_job["repo_dir"] == "/home/kjdragan/YoutubeCodeExamples/failed_repo"
+
+    notif_resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=20")
+    assert notif_resp.status_code == 200
+    notifications = notif_resp.json()["notifications"]
+    failure_events = [n for n in notifications if str(n.get("kind")) == "tutorial_repo_bootstrap_failed"]
+    assert failure_events, "Expected tutorial_repo_bootstrap_failed notification"
+    latest = failure_events[0]
+    metadata = latest.get("metadata") or {}
+    assert str(metadata.get("job_id") or "") == job_id
+    assert str(metadata.get("error") or "") == failure_text
 
 
 def test_dashboard_coder_vp_metrics_endpoint(client, tmp_path):
