@@ -30,6 +30,7 @@ from universal_agent.durable.state import (
 )
 from universal_agent.vp.clients.base import MissionOutcome, VpClient
 from universal_agent.vp.worker_loop import VpWorkerLoop
+from universal_agent.runtime_role import build_factory_runtime_policy
 
 # Mock OpsService to avoid full gateway dependency chains in unit tests
 # OR rely on the fact that lifespan will init a real OpsService with a real InProcessGateway pointing to tmp_path?
@@ -53,6 +54,19 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "_notifications", [])
     monkeypatch.setattr(gateway_server, "_tutorial_bootstrap_jobs", {})
     monkeypatch.setattr(gateway_server, "_tutorial_bootstrap_queue", deque())
+    monkeypatch.setattr(gateway_server, "_delegation_mission_bus", None)
+    monkeypatch.setattr(
+        gateway_server,
+        "_delegation_metrics",
+        {
+            "redis_enabled": False,
+            "connected": False,
+            "last_error": None,
+            "last_publish_at": None,
+            "published_total": 0,
+        },
+    )
+    monkeypatch.setattr(gateway_server, "_factory_registrations", {})
     monkeypatch.setattr(gateway_server, "_continuity_active_alerts", set())
     monkeypatch.setattr(gateway_server, "_continuity_metric_events", deque(maxlen=5000))
     monkeypatch.setattr(gateway_server, "_calendar_missed_events", {})
@@ -79,6 +93,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "HEARTBEAT_ENABLED", False)
     monkeypatch.setattr(gateway_server, "CRON_ENABLED", False)
     monkeypatch.setattr(gateway_server, "_DEPLOYMENT_PROFILE", "local_workstation")
+    monkeypatch.setattr(gateway_server, "_FACTORY_POLICY", build_factory_runtime_policy("HEADQUARTERS"))
     monkeypatch.setattr(gateway_server, "OPS_TOKEN", "")
     monkeypatch.setattr(gateway_server, "SESSION_API_TOKEN", "")
     projection = gateway_server.SchedulingProjectionState(enabled=False)
@@ -1402,6 +1417,105 @@ def test_dashboard_tutorial_bootstrap_repo_failed_result_preserves_error_metadat
     metadata = latest.get("metadata") or {}
     assert str(metadata.get("job_id") or "") == job_id
     assert str(metadata.get("error") or "") == failure_text
+
+
+def test_dashboard_tutorial_bootstrap_repo_local_redis_dispatch_publishes_mission(client, tmp_path, monkeypatch):
+    class _FakeMissionBus:
+        def __init__(self):
+            self.published = []
+
+        def publish_mission(self, envelope):
+            self.published.append(envelope)
+            return f"{len(self.published)}-0"
+
+    artifacts_root = tmp_path / "artifacts"
+    monkeypatch.setattr(gateway_server, "ARTIFACTS_DIR", artifacts_root)
+    fake_bus = _FakeMissionBus()
+    monkeypatch.setattr(gateway_server, "_delegation_mission_bus", fake_bus)
+
+    run_dir = artifacts_root / "youtube-tutorial-creation" / "redis-run"
+    impl_dir = run_dir / "implementation"
+    impl_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "manifest.json").write_text(
+        json.dumps({"title": "Redis Run", "video_id": "redis123", "status": "full"}),
+        encoding="utf-8",
+    )
+    (impl_dir / "create_new_repo.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "TARGET_ROOT=\"${1:?}\"\n"
+        "REPO_NAME=\"${2:?}\"\n"
+        "mkdir -p \"$TARGET_ROOT/$REPO_NAME\"\n"
+        "echo \"Repo ready: $TARGET_ROOT/$REPO_NAME\"\n",
+        encoding="utf-8",
+    )
+
+    create_resp = client.post(
+        "/api/v1/dashboard/tutorials/bootstrap-repo",
+        json={
+            "run_path": "youtube-tutorial-creation/redis-run",
+            "target_root": "/home/kjdragan/YoutubeCodeExamples",
+            "repo_name": "redis_repo",
+            "execution_target": "local",
+        },
+    )
+    assert create_resp.status_code == 200
+    payload = create_resp.json()
+    assert payload["queued"] is True
+    assert payload["dispatch_backend"] == "redis_stream"
+    assert len(fake_bus.published) == 1
+    assert str(fake_bus.published[0].job_id) == str(payload["job_id"])
+
+    listed = client.get("/api/v1/dashboard/tutorials/bootstrap-jobs?run_path=youtube-tutorial-creation/redis-run").json()["jobs"]
+    assert len(listed) == 1
+    assert listed[0]["dispatch_backend"] == "redis_stream"
+    assert str(listed[0].get("delegation_message_id") or "").endswith("-0")
+    job_id = str(payload["job_id"])
+
+    start_resp = client.post(
+        f"/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/start",
+        json={"worker_id": "worker_factory-local-1"},
+    )
+    assert start_resp.status_code == 200
+    assert start_resp.json()["job"]["status"] == "running"
+
+    claim_resp = client.post(
+        "/api/v1/ops/tutorials/bootstrap-jobs/claim",
+        json={"worker_id": "local-desktop-worker"},
+    )
+    assert claim_resp.status_code == 200
+    assert claim_resp.json()["job"] is None
+
+
+def test_factory_capabilities_and_registration_endpoints(client):
+    caps_resp = client.get("/api/v1/factory/capabilities")
+    assert caps_resp.status_code == 200
+    caps_payload = caps_resp.json()
+    assert "factory" in caps_payload
+    assert str(caps_payload["factory"].get("factory_id") or "")
+
+    reg_resp = client.post(
+        "/api/v1/factory/registrations",
+        json={
+            "factory_id": "factory-local-1",
+            "factory_role": "LOCAL_WORKER",
+            "registration_status": "online",
+            "heartbeat_latency_ms": 42.5,
+            "capabilities": ["tutorial_bootstrap_consumer", "transport:redis"],
+            "metadata": {"worker_id": "worker_factory-local-1"},
+        },
+    )
+    assert reg_resp.status_code == 200
+    assert reg_resp.json()["ok"] is True
+    registration = reg_resp.json()["registration"]
+    assert registration["factory_id"] == "factory-local-1"
+    assert registration["factory_role"] == "LOCAL_WORKER"
+
+    list_resp = client.get("/api/v1/factory/registrations")
+    assert list_resp.status_code == 200
+    list_payload = list_resp.json()
+    assert list_payload["count"] >= 1
+    assert any(str(row.get("factory_id") or "") == "factory-local-1" for row in list_payload["registrations"])
 
 
 def test_dashboard_coder_vp_metrics_endpoint(client, tmp_path):

@@ -43,6 +43,13 @@ from universal_agent.auth.ops_auth import (
 )
 from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 from universal_agent.runtime_role import FactoryRole, build_factory_runtime_policy
+from universal_agent.delegation.redis_bus import (
+    MISSION_CONSUMER_GROUP,
+    MISSION_DLQ_STREAM,
+    MISSION_STREAM,
+    RedisMissionBus,
+)
+from universal_agent.delegation.schema import MissionEnvelope, MissionPayload
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -182,6 +189,30 @@ if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
     _DEPLOYMENT_PROFILE = "local_workstation"
 
 _FACTORY_POLICY = build_factory_runtime_policy()
+_FACTORY_ID = (
+    str(os.getenv("UA_FACTORY_ID") or "").strip()
+    or str(os.getenv("INFISICAL_MACHINE_IDENTITY_NAME") or "").strip()
+    or f"factory-{uuid.uuid4().hex[:8]}"
+)
+
+
+def _redis_url_from_env() -> str:
+    explicit = str(os.getenv("UA_REDIS_URL") or "").strip()
+    if explicit:
+        return explicit
+    host = str(os.getenv("UA_REDIS_HOST") or "127.0.0.1").strip() or "127.0.0.1"
+    port = int(str(os.getenv("UA_REDIS_PORT") or "6379").strip() or 6379)
+    password = str(os.getenv("REDIS_PASSWORD") or "").strip()
+    db = int(str(os.getenv("UA_REDIS_DB") or "0").strip() or 0)
+    if password:
+        encoded = urllib.parse.quote(password, safe="")
+        return f"redis://:{encoded}@{host}:{port}/{db}"
+    return f"redis://{host}:{port}/{db}"
+
+
+def _delegation_redis_enabled() -> bool:
+    raw = str(os.getenv("UA_DELEGATION_REDIS_ENABLED") or "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 _LOCAL_WORKER_ALLOWED_PATHS = {
     "/api/v1/health",
@@ -611,7 +642,8 @@ def _remember_tutorial_bootstrap_job(job: dict[str, Any]) -> dict[str, Any]:
     with _tutorial_bootstrap_jobs_lock:
         _tutorial_bootstrap_jobs[job_id] = record
         status = str(record.get("status") or "").strip().lower()
-        if status == "queued":
+        dispatch_backend = str(record.get("dispatch_backend") or "http_queue").strip().lower()
+        if status == "queued" and dispatch_backend == "http_queue":
             if job_id not in _tutorial_bootstrap_queue:
                 _tutorial_bootstrap_queue.append(job_id)
         else:
@@ -681,7 +713,10 @@ def _tutorial_bootstrap_claim_next(*, worker_id: str) -> Optional[dict[str, Any]
             if not isinstance(job, dict):
                 continue
             status = str(job.get("status") or "").strip().lower()
+            dispatch_backend = str(job.get("dispatch_backend") or "http_queue").strip().lower()
             if status != "queued":
+                continue
+            if dispatch_backend != "http_queue":
                 continue
             claims = int(job.get("claim_attempts") or 0) + 1
             job["status"] = "running"
@@ -694,6 +729,40 @@ def _tutorial_bootstrap_claim_next(*, worker_id: str) -> Optional[dict[str, Any]
             _tutorial_bootstrap_jobs[job_id] = enriched
             return dict(enriched)
     return None
+
+
+def _tutorial_bootstrap_mark_running(*, job_id: str, worker_id: str) -> dict[str, Any]:
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id:
+        raise HTTPException(status_code=400, detail="job_id is required")
+    worker = str(worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
+    now_ts = time.time()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _tutorial_bootstrap_jobs_lock:
+        job = _tutorial_bootstrap_jobs.get(normalized_job_id)
+        if not isinstance(job, dict):
+            raise HTTPException(status_code=404, detail="Bootstrap job not found")
+        dispatch_backend = str(job.get("dispatch_backend") or "http_queue").strip().lower()
+        if dispatch_backend not in {"http_queue", "redis_stream"}:
+            raise HTTPException(status_code=409, detail=f"Unsupported dispatch backend for running transition: {dispatch_backend}")
+        status = str(job.get("status") or "").strip().lower()
+        assigned_worker = str(job.get("worker_id") or "").strip()
+        if assigned_worker and assigned_worker != worker:
+            raise HTTPException(status_code=409, detail="Job is assigned to a different worker")
+        if status not in {"queued", "running"}:
+            raise HTTPException(status_code=409, detail=f"Job is not claimable from status={status or 'unknown'}")
+        if status == "running":
+            return _tutorial_bootstrap_enrich_job(dict(job))
+        claims = int(job.get("claim_attempts") or 0) + 1
+        job["status"] = "running"
+        job["worker_id"] = worker
+        job["claim_attempts"] = claims
+        job["claimed_at"] = now_iso
+        job["claimed_at_epoch"] = now_ts
+        job["started_at"] = now_iso
+        enriched = _tutorial_bootstrap_enrich_job(job)
+        _tutorial_bootstrap_jobs[normalized_job_id] = enriched
+        return dict(enriched)
 
 
 def _tutorial_bootstrap_update_result(
@@ -731,6 +800,130 @@ def _tutorial_bootstrap_update_result(
         enriched = _tutorial_bootstrap_enrich_job(job)
         _tutorial_bootstrap_jobs[normalized_job_id] = enriched
         return dict(enriched)
+
+
+def _factory_capabilities_payload() -> dict[str, Any]:
+    provider_override = str(os.getenv("LLM_PROVIDER_OVERRIDE") or "").strip()
+    capabilities = {
+        "factory_id": _FACTORY_ID,
+        "factory_role": _FACTORY_POLICY.role,
+        "deployment_profile": _DEPLOYMENT_PROFILE,
+        "gateway_mode": _FACTORY_POLICY.gateway_mode,
+        "delegation_mode": _FACTORY_POLICY.delegation_mode,
+        "heartbeat_scope": _FACTORY_POLICY.heartbeat_scope,
+        "start_ui": bool(_FACTORY_POLICY.start_ui),
+        "enable_telegram_poll": bool(_FACTORY_POLICY.enable_telegram_poll),
+        "enable_vp_coder": str(os.getenv("ENABLE_VP_CODER", "true")).strip().lower() == "true",
+        "llm_provider_override": provider_override or None,
+        "redis_delegation_enabled": bool(_delegation_bus_enabled and _delegation_mission_bus is not None),
+        "redis_stream_name": _delegation_bus_stream if _delegation_bus_enabled else None,
+        "redis_consumer_group": _delegation_bus_group if _delegation_bus_enabled else None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return capabilities
+
+
+def _factory_capability_labels() -> list[str]:
+    payload = _factory_capabilities_payload()
+    labels: list[str] = []
+    if payload.get("gateway_mode") == "full":
+        labels.append("gateway_full")
+    if payload.get("gateway_mode") == "health_only":
+        labels.append("gateway_health_only")
+    if payload.get("start_ui"):
+        labels.append("ui")
+    if payload.get("enable_telegram_poll"):
+        labels.append("telegram_poll")
+    if payload.get("enable_vp_coder"):
+        labels.append("vp_coder")
+    if payload.get("redis_delegation_enabled"):
+        labels.append("delegation_redis")
+    labels.append(f"delegation_mode:{payload.get('delegation_mode')}")
+    labels.append(f"heartbeat_scope:{payload.get('heartbeat_scope')}")
+    if payload.get("llm_provider_override"):
+        labels.append(f"llm_override:{payload.get('llm_provider_override')}")
+    return sorted(set([str(label) for label in labels if str(label).strip()]))
+
+
+def _upsert_factory_registration(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    factory_id = str(payload.get("factory_id") or "").strip() or _FACTORY_ID
+    role = str(payload.get("factory_role") or payload.get("role") or _FACTORY_POLICY.role).strip() or _FACTORY_POLICY.role
+    record = {
+        "factory_id": factory_id,
+        "factory_role": role,
+        "deployment_profile": str(payload.get("deployment_profile") or _DEPLOYMENT_PROFILE).strip() or _DEPLOYMENT_PROFILE,
+        "source": source,
+        "registration_status": str(payload.get("registration_status") or "online").strip() or "online",
+        "heartbeat_latency_ms": payload.get("heartbeat_latency_ms"),
+        "capabilities": payload.get("capabilities") if isinstance(payload.get("capabilities"), list) else [],
+        "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        "last_seen_at": now_iso,
+        "updated_at": now_iso,
+    }
+    with _factory_registration_lock:
+        previous = _factory_registrations.get(factory_id)
+        if isinstance(previous, dict):
+            record["first_seen_at"] = str(previous.get("first_seen_at") or now_iso)
+        else:
+            record["first_seen_at"] = now_iso
+        _factory_registrations[factory_id] = record
+    return dict(record)
+
+
+def _register_local_factory_presence() -> dict[str, Any]:
+    capabilities_payload = _factory_capabilities_payload()
+    payload = {
+        "factory_id": _FACTORY_ID,
+        "factory_role": _FACTORY_POLICY.role,
+        "deployment_profile": _DEPLOYMENT_PROFILE,
+        "capabilities": _factory_capability_labels(),
+        "metadata": {
+            "self_registration": True,
+            "capabilities_payload": capabilities_payload,
+        },
+        "registration_status": "online",
+    }
+    return _upsert_factory_registration(payload, source="gateway_startup")
+
+
+def _publish_tutorial_bootstrap_mission(
+    *,
+    request: Request,
+    job: dict[str, Any],
+) -> tuple[bool, str]:
+    if _delegation_mission_bus is None or not _FACTORY_POLICY.can_publish_delegations:
+        return False, ""
+    job_id = str(job.get("job_id") or "").strip()
+    if not job_id:
+        return False, ""
+    base_url = str(request.base_url).rstrip("/")
+    run_path = str(job.get("tutorial_run_path") or "").strip()
+    payload = MissionEnvelope(
+        job_id=job_id,
+        idempotency_key=f"tutorial-bootstrap:{job_id}",
+        priority=1,
+        timeout_seconds=max(30, min(int(job.get("timeout_seconds") or 900), 3600)),
+        max_retries=3,
+        payload=MissionPayload(
+            task=f"Bootstrap tutorial repo for run_path={run_path}",
+            context={
+                "mission_kind": "tutorial_bootstrap_repo",
+                "job_id": job_id,
+                "gateway_url": base_url,
+                "tutorial_run_path": run_path,
+                "repo_name": str(job.get("repo_name") or ""),
+                "target_root": str(job.get("target_root") or ""),
+                "python_version": str(job.get("python_version") or ""),
+                "timeout_seconds": int(job.get("timeout_seconds") or 900),
+                "_retry_count": 0,
+            },
+        ),
+    )
+    message_id = _delegation_mission_bus.publish_mission(payload)
+    _delegation_metrics["last_publish_at"] = datetime.now(timezone.utc).isoformat()
+    _delegation_metrics["published_total"] = int(_delegation_metrics.get("published_total") or 0) + 1
+    return True, message_id
 
 
 def _tutorial_review_prompt(
@@ -973,6 +1166,15 @@ class OpsTokenIssueResponse(BaseModel):
     token_type: str = "Bearer"
     ttl_seconds: int
     expires_at: str
+
+
+class FactoryRegistrationRequest(BaseModel):
+    factory_id: Optional[str] = None
+    factory_role: Optional[str] = None
+    registration_status: str = "online"
+    heartbeat_latency_ms: Optional[float] = None
+    capabilities: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class GatewayEventWire(BaseModel):
@@ -1390,6 +1592,20 @@ _tutorial_bootstrap_claim_ttl_seconds = max(
     60,
     int(os.getenv("UA_TUTORIAL_BOOTSTRAP_CLAIM_TTL_SECONDS", "1800") or 1800),
 )
+_delegation_mission_bus: Optional[RedisMissionBus] = None
+_delegation_bus_enabled = _delegation_redis_enabled()
+_delegation_bus_stream = str(os.getenv("UA_DELEGATION_STREAM_NAME") or MISSION_STREAM).strip() or MISSION_STREAM
+_delegation_bus_group = str(os.getenv("UA_DELEGATION_CONSUMER_GROUP") or MISSION_CONSUMER_GROUP).strip() or MISSION_CONSUMER_GROUP
+_delegation_bus_dlq_stream = str(os.getenv("UA_DELEGATION_DLQ_STREAM") or MISSION_DLQ_STREAM).strip() or MISSION_DLQ_STREAM
+_delegation_metrics: dict[str, Any] = {
+    "redis_enabled": _delegation_bus_enabled,
+    "connected": False,
+    "last_error": None,
+    "last_publish_at": None,
+    "published_total": 0,
+}
+_factory_registration_lock = threading.Lock()
+_factory_registrations: dict[str, dict[str, Any]] = {}
 _continuity_active_alerts: set[str] = set()
 _continuity_metric_events: deque[dict[str, Any]] = deque(
     maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
@@ -7226,6 +7442,17 @@ def _require_delegation_consume_allowed() -> None:
         )
 
 
+def _require_headquarters_role_for_fleet() -> None:
+    if _FACTORY_POLICY.role != FactoryRole.HEADQUARTERS.value:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Factory registration endpoints are only available for "
+                f"FACTORY_ROLE={FactoryRole.HEADQUARTERS.value}"
+            ),
+        )
+
+
 def _extract_auth_token_from_headers(headers: Any) -> str:
     header = str(headers.get("authorization", "")).strip()
     token = ""
@@ -7396,7 +7623,7 @@ manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _FACTORY_POLICY
+    global _FACTORY_POLICY, _delegation_mission_bus
     bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
     _FACTORY_POLICY = bootstrap_state.policy
     _refresh_ops_auth_config_from_env()
@@ -7405,6 +7632,32 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Universal Agent Gateway Server starting...")
     logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
     logger.info("🏭 Factory role resolved: %s (gateway_mode=%s)", _FACTORY_POLICY.role, _FACTORY_POLICY.gateway_mode)
+
+    _delegation_mission_bus = None
+    _delegation_metrics["connected"] = False
+    _delegation_metrics["last_error"] = None
+    if _delegation_bus_enabled and (_FACTORY_POLICY.can_publish_delegations or _FACTORY_POLICY.can_listen_delegations):
+        try:
+            redis_url = _redis_url_from_env()
+            _delegation_mission_bus = RedisMissionBus.from_url(
+                redis_url,
+                stream_name=_delegation_bus_stream,
+                consumer_group=_delegation_bus_group,
+                dlq_stream=_delegation_bus_dlq_stream,
+            )
+            _delegation_mission_bus.ensure_group()
+            _delegation_metrics["connected"] = True
+            logger.info(
+                "📬 Delegation Redis bus connected stream=%s group=%s",
+                _delegation_bus_stream,
+                _delegation_bus_group,
+            )
+        except Exception as exc:
+            _delegation_mission_bus = None
+            _delegation_metrics["last_error"] = str(exc)
+            logger.warning("Delegation Redis bus unavailable; falling back to http queue: %s", exc)
+
+    _register_local_factory_presence()
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
     
     # Initialize runtime database (required by ProcessTurnAdapter -> setup_session)
@@ -7990,6 +8243,54 @@ async def health(response: Response):
         "runtime_path": os.getenv("PATH", ""),
         "runtime_tools": runtime_tool_status(),
         "deployment_profile": _deployment_profile_defaults(),
+    }
+
+
+@app.get("/api/v1/factory/capabilities")
+async def factory_capabilities(request: Request):
+    _require_ops_auth(request)
+    return {
+        "factory": _factory_capabilities_payload(),
+        "delegation": dict(_delegation_metrics),
+    }
+
+
+@app.post("/api/v1/factory/registrations")
+async def register_factory_presence(request: Request, payload: FactoryRegistrationRequest):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    body = payload.model_dump(exclude_none=True)
+    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+    metadata = dict(metadata)
+    metadata.setdefault("remote_host", request.client.host if request.client else "")
+    body["metadata"] = metadata
+    record = _upsert_factory_registration(body, source="api_registration")
+    return {"ok": True, "registration": record}
+
+
+@app.get("/api/v1/factory/registrations")
+async def list_factory_registrations(
+    request: Request,
+    limit: int = 200,
+    registration_status: str = "",
+):
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    clamped_limit = max(1, min(int(limit), 1000))
+    status_filter = str(registration_status or "").strip().lower()
+    with _factory_registration_lock:
+        rows = [dict(record) for record in _factory_registrations.values()]
+    if status_filter:
+        rows = [
+            row
+            for row in rows
+            if str(row.get("registration_status") or "").strip().lower() == status_filter
+        ]
+    rows.sort(key=lambda row: str(row.get("last_seen_at") or ""), reverse=True)
+    return {
+        "registrations": rows[:clamped_limit],
+        "count": len(rows),
+        "headquarters_factory_id": _FACTORY_ID,
     }
 
 
@@ -10044,7 +10345,7 @@ async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequ
 
 
 @app.post("/api/v1/dashboard/tutorials/bootstrap-repo")
-async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoRequest):
+async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialBootstrapRepoRequest):
     _require_delegation_publish_allowed()
 
     run_path = str(payload.run_path or "").strip().strip("/")
@@ -10081,25 +10382,41 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
         raise HTTPException(status_code=400, detail="execution_target must be local or server")
 
     if execution_target == "local":
+        def _worker_hint_for(dispatch_backend: str) -> str:
+            normalized = str(dispatch_backend or "http_queue").strip().lower()
+            if normalized == "redis_stream":
+                return (
+                    "Run scripts/tutorial_local_bootstrap_worker.py on your local desktop "
+                    "with --transport redis and matching UA_REDIS_* environment."
+                )
+            return (
+                "Run scripts/tutorial_local_bootstrap_worker.py on your local desktop "
+                "with --gateway-url and --ops-token to process queued jobs."
+            )
+
         existing_job = _tutorial_bootstrap_find_active_job(run_path=run_rel, execution_target="local")
         if existing_job:
+            existing_dispatch_backend = str(existing_job.get("dispatch_backend") or "http_queue").strip().lower()
             return {
                 "queued": True,
                 "job_id": str(existing_job.get("job_id") or ""),
                 "status": str(existing_job.get("status") or "queued"),
                 "execution_target": "local",
+                "dispatch_backend": existing_dispatch_backend,
                 "run_path": run_rel,
                 "repo_name": str(existing_job.get("repo_name") or repo_name),
                 "target_root": str(existing_job.get("target_root") or target_root),
                 "job": existing_job,
                 "existing_job_reused": True,
-                "worker_hint": (
-                    "Run scripts/tutorial_local_bootstrap_worker.py on your local desktop "
-                    "with --gateway-url and --ops-token to process queued jobs."
-                ),
+                "worker_hint": _worker_hint_for(existing_dispatch_backend),
             }
         now = datetime.now(timezone.utc)
         job_id = f"tbj_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
+        dispatch_backend = (
+            "redis_stream"
+            if (_delegation_mission_bus is not None and _FACTORY_POLICY.can_publish_delegations)
+            else "http_queue"
+        )
         job = {
             "job_id": job_id,
             "status": "queued",
@@ -10114,8 +10431,30 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
             "target_root": target_root,
             "python_version": python_version,
             "timeout_seconds": timeout_seconds,
+            "dispatch_backend": dispatch_backend,
         }
         saved = _remember_tutorial_bootstrap_job(job)
+        dispatch_message_id = ""
+        if dispatch_backend == "redis_stream":
+            try:
+                published, message_id = _publish_tutorial_bootstrap_mission(request=request, job=saved)
+                if published:
+                    dispatch_message_id = str(message_id or "")
+                    if dispatch_message_id:
+                        saved["delegation_message_id"] = dispatch_message_id
+                        saved = _remember_tutorial_bootstrap_job(saved)
+                else:
+                    dispatch_backend = "http_queue"
+                    saved["dispatch_backend"] = "http_queue"
+                    saved["dispatch_fallback_reason"] = "redis_bus_unavailable"
+                    saved = _remember_tutorial_bootstrap_job(saved)
+            except Exception as exc:
+                logger.warning("Failed publishing tutorial bootstrap mission to Redis: %s", exc)
+                dispatch_backend = "http_queue"
+                saved["dispatch_backend"] = "http_queue"
+                saved["dispatch_fallback_reason"] = str(exc)
+                saved = _remember_tutorial_bootstrap_job(saved)
+
         _add_notification(
             kind="tutorial_repo_bootstrap_queued",
             title="Tutorial Repo Bootstrap Queued",
@@ -10127,6 +10466,8 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
                 "repo_name": repo_name,
                 "target_root": target_root,
                 "execution_target": "local",
+                "dispatch_backend": dispatch_backend,
+                "delegation_message_id": dispatch_message_id or None,
                 "source": "dashboard_tutorial_bootstrap",
             },
         )
@@ -10135,15 +10476,13 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
             "job_id": job_id,
             "status": "queued",
             "execution_target": "local",
+            "dispatch_backend": dispatch_backend,
             "run_path": run_rel,
             "repo_name": repo_name,
             "target_root": target_root,
             "job": saved,
             "existing_job_reused": False,
-            "worker_hint": (
-                "Run scripts/tutorial_local_bootstrap_worker.py on your local desktop "
-                "with --gateway-url and --ops-token to process queued jobs."
-            ),
+            "worker_hint": _worker_hint_for(dispatch_backend),
         }
 
     args = ["bash", str(script_path), target_root, repo_name]
@@ -10208,6 +10547,19 @@ async def ops_tutorial_bootstrap_claim(request: Request, payload: TutorialBootst
     _require_delegation_consume_allowed()
     worker_id = str(payload.worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
     job = _tutorial_bootstrap_claim_next(worker_id=worker_id)
+    return {"worker_id": worker_id, "job": job}
+
+
+@app.post("/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/start")
+async def ops_tutorial_bootstrap_start(
+    request: Request,
+    job_id: str,
+    payload: TutorialBootstrapJobClaimRequest,
+):
+    _require_ops_auth(request)
+    _require_delegation_consume_allowed()
+    worker_id = str(payload.worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
+    job = _tutorial_bootstrap_mark_running(job_id=job_id, worker_id=worker_id)
     return {"worker_id": worker_id, "job": job}
 
 
