@@ -1,8 +1,8 @@
 """
 Convert a Scrapling Response page into a Markdown document.
 
-Extracts title, metadata, links, headings, and the main body text.
-Falls back gracefully if structural selectors return nothing.
+Primary mode is content-focused output to minimize navigation/header/footer
+noise in the final markdown.
 """
 
 from __future__ import annotations
@@ -73,6 +73,88 @@ def _get_body_text(page: Any) -> str:
         return ""
 
 
+_BOILERPLATE_PATTERNS = (
+    r"^\s*(home|menu|navigation|main menu)\s*$",
+    r"^\s*(sign in|log in|register|subscribe|newsletter)\s*$",
+    r"^\s*(privacy policy|terms(?: of (?:use|service))?|cookie(?:s| policy)?)\s*$",
+    r"^\s*(accept all|reject all|manage preferences)\s*$",
+    r"^\s*(share|follow us|follow|advertisement|sponsored)\s*$",
+    r"^\s*(skip to content|back to top)\s*$",
+)
+_BOILERPLATE_RE = re.compile("|".join(_BOILERPLATE_PATTERNS), re.IGNORECASE)
+
+
+def _looks_like_boilerplate_line(line: str) -> bool:
+    """Heuristic filter for nav/footer/cookie/social chrome."""
+    if not line:
+        return True
+    if _BOILERPLATE_RE.match(line):
+        return True
+    if line.count("|") >= 3:
+        return True
+    words = line.split()
+    if 1 <= len(words) <= 2:
+        lowered = line.lower()
+        if any(k in lowered for k in ("login", "subscribe", "cookie", "privacy", "terms")):
+            return True
+    return False
+
+
+def _looks_like_content_line(line: str) -> bool:
+    """Heuristic classifier for article-like text vs. navigation labels."""
+    words = line.split()
+    word_count = len(words)
+    if word_count == 0:
+        return False
+    if len(line) >= 120:
+        return True
+    if word_count >= 10:
+        return True
+    if word_count >= 6 and re.search(r"[.!?:;]$", line):
+        return True
+    if re.search(r"\d", line) and word_count >= 5:
+        return True
+    # Menu-like single token lines are usually boilerplate.
+    if word_count <= 4 and not re.search(r"[.!?:;]$", line):
+        return False
+    return word_count >= 5
+
+
+def _clean_body_text(text: str) -> str:
+    """Remove repeated and boilerplate lines while preserving paragraph flow."""
+    if not text:
+        return ""
+
+    lines = [re.sub(r"\s+", " ", ln).strip() for ln in text.splitlines()]
+    cleaned: list[str] = []
+    seen_counts: dict[str, int] = {}
+    kept_any = False
+    for line in lines:
+        if not line:
+            if cleaned and cleaned[-1]:
+                cleaned.append("")
+            continue
+        if _looks_like_boilerplate_line(line):
+            continue
+        seen_counts[line] = seen_counts.get(line, 0) + 1
+        # Keep first occurrence for heavily duplicated UI strings.
+        if seen_counts[line] > 1 and len(line) < 80:
+            continue
+        if kept_any and not _looks_like_content_line(line):
+            continue
+        kept_any = True
+        cleaned.append(line)
+
+    # Collapse repeated blank lines.
+    compact: list[str] = []
+    for ln in cleaned:
+        if ln == "" and compact and compact[-1] == "":
+            continue
+        compact.append(ln)
+
+    return "\n".join(compact).strip()
+
+
 def _extract_links(page: Any, base_url: str) -> list[tuple[str, str]]:
     """Return list of (text, href) pairs for all <a> tags with non-empty href."""
     links: list[tuple[str, str]] = []
@@ -115,6 +197,9 @@ def page_to_markdown(
     url: str,
     fetcher_level: str = "unknown",
     job_metadata: dict | None = None,
+    clean_markdown: bool = True,
+    include_structure: bool = False,
+    include_links: bool = False,
 ) -> str:
     """
     Convert a Scrapling Response *page* to a Markdown string.
@@ -156,7 +241,8 @@ def page_to_markdown(
     headings = _extract_headings(page)
 
     # --- Body text ---
-    body_text = _get_body_text(page)
+    body_text_raw = _get_body_text(page)
+    body_text = _clean_body_text(body_text_raw) if clean_markdown else body_text_raw
 
     # --- Links ---
     links = _extract_links(page, url)
@@ -181,7 +267,7 @@ def page_to_markdown(
                 lines.append(f"- **{k}**: {v}")
     lines.append("")
 
-    if headings:
+    if include_structure and headings:
         lines.append("## Page Structure")
         lines.append("")
         for level, text in headings:
@@ -199,7 +285,7 @@ def page_to_markdown(
         lines.append(body_trimmed)
         lines.append("")
 
-    if links:
+    if include_links and links:
         lines.append("## Links")
         lines.append("")
         # De-duplicate while preserving order

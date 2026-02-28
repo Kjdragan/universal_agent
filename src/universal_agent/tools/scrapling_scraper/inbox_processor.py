@@ -29,13 +29,20 @@ Object with ``urls`` key + optional ``options``::
         "network_idle": true,
         "timeout": 30,
         "wait_selector": null,
-        "proxy": null
+        "proxy": null,
+        "clean_markdown": true,
+        "include_structure": false,
+        "include_links": false
       },
       "tags": "optional extra metadata"
     }
 
 Any top-level keys besides ``urls`` and ``options`` are preserved in the
 Markdown metadata block.
+
+For search-tool payloads that do not provide ``urls``, the processor
+automatically extracts URL-like fields (``url``, ``link``, ``href``,
+``source_url``) recursively from nested dict/list content.
 """
 
 from __future__ import annotations
@@ -72,6 +79,9 @@ class JobOptions:
     wait_selector: Optional[str] = None
     proxy: Optional[str] = None
     extra_headers: Optional[dict[str, str]] = None
+    clean_markdown: bool = True
+    include_structure: bool = False
+    include_links: bool = False
 
 
 @dataclass
@@ -91,6 +101,8 @@ _LEVEL_MAP: dict[str, FetcherLevel] = {
     "dynamic": FetcherLevel.DYNAMIC,
     "stealthy": FetcherLevel.STEALTHY,
 }
+_URL_KEYS = {"url", "link", "href", "source_url"}
+_SCALAR_TYPES = (str, int, float, bool)
 
 
 def _parse_level(value: Any, default: Optional[FetcherLevel]) -> Optional[FetcherLevel]:
@@ -119,6 +131,70 @@ def _url_to_filename(url: str) -> str:
     return safe[:120]  # cap length
 
 
+def _normalize_http_url(value: Any) -> str | None:
+    """Return a normalized HTTP(S) URL string, or None."""
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if not candidate.lower().startswith(("http://", "https://")):
+        return None
+    return candidate
+
+
+def _collect_urls_recursive(obj: Any, urls: list[str], seen: set[str]) -> None:
+    """Recursively scan dict/list payloads for URL-like fields."""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            key_norm = str(key).strip().lower()
+            if key_norm in _URL_KEYS:
+                normalized = _normalize_http_url(value)
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    urls.append(normalized)
+            if isinstance(value, (dict, list)):
+                _collect_urls_recursive(value, urls, seen)
+    elif isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, (dict, list)):
+                _collect_urls_recursive(item, urls, seen)
+            else:
+                normalized = _normalize_http_url(item)
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    urls.append(normalized)
+
+
+def _extract_urls_from_payload(raw: dict[str, Any]) -> list[str]:
+    """
+    Extract URLs from arbitrary search-result style JSON payloads.
+
+    This supports inbox payloads that do not have an explicit ``urls`` key.
+    """
+    urls: list[str] = []
+    seen: set[str] = set()
+    _collect_urls_recursive(raw, urls, seen)
+    return urls
+
+
+def _extract_compact_metadata(raw: dict[str, Any]) -> dict[str, Any]:
+    """
+    Keep only small scalar top-level fields for auto-extracted payloads.
+
+    This prevents giant nested objects from being duplicated in every markdown
+    output while still preserving useful context (tool, timestamp, type, query).
+    """
+    metadata: dict[str, Any] = {}
+    for key, value in raw.items():
+        if key in ("urls", "options"):
+            continue
+        if value is None or isinstance(value, _SCALAR_TYPES):
+            metadata[key] = value
+    metadata["url_extraction_mode"] = "recursive_fields"
+    return metadata
+
+
 def _load_job(path: Path) -> ScrapingJob:
     """Parse a JSON file into a ScrapingJob."""
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -130,14 +206,20 @@ def _load_job(path: Path) -> ScrapingJob:
     if isinstance(raw, list):
         urls = [u.strip() for u in raw if isinstance(u, str) and u.strip()]
     elif isinstance(raw, dict):
-        raw_urls = raw.get("urls", [])
-        if isinstance(raw_urls, str):
-            raw_urls = [raw_urls]
-        if not isinstance(raw_urls, list):
-            raise TypeError(f"'urls' must be a list of strings in {path}")
-        urls = [u.strip() for u in raw_urls if isinstance(u, str) and u.strip()]
+        raw_urls = raw.get("urls")
+        if raw_urls is None:
+            urls = _extract_urls_from_payload(raw)
+            metadata = _extract_compact_metadata(raw)
+        else:
+            if isinstance(raw_urls, str):
+                raw_urls = [raw_urls]
+            if not isinstance(raw_urls, list):
+                raise TypeError(f"'urls' must be a list of strings in {path}")
+            urls = [u.strip() for u in raw_urls if isinstance(u, str) and u.strip()]
+            metadata = {k: v for k, v in raw.items() if k not in ("urls", "options")}
         raw_options = raw.get("options", {}) or {}
-        metadata = {k: v for k, v in raw.items() if k not in ("urls", "options")}
+        if not isinstance(raw_options, dict):
+            raw_options = {}
     else:
         raise TypeError(f"Unsupported JSON format in {path}: expected list or dict")
 
@@ -151,6 +233,9 @@ def _load_job(path: Path) -> ScrapingJob:
         wait_selector=raw_options.get("wait_selector") or None,
         proxy=raw_options.get("proxy") or None,
         extra_headers=raw_options.get("extra_headers") or None,
+        clean_markdown=bool(raw_options.get("clean_markdown", True)),
+        include_structure=bool(raw_options.get("include_structure", False)),
+        include_links=bool(raw_options.get("include_links", False)),
     )
 
     return ScrapingJob(
@@ -380,6 +465,9 @@ class InboxProcessor:
                 url=url,
                 fetcher_level=level_used.name,
                 job_metadata=job.metadata,
+                clean_markdown=opts.clean_markdown,
+                include_structure=opts.include_structure,
+                include_links=opts.include_links,
             )
         except Exception as exc:
             logger.exception("Failed to convert %s to Markdown", url)

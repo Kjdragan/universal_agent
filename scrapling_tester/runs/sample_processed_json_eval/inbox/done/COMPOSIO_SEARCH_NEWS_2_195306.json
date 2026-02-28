@@ -1,0 +1,77 @@
+{
+  "type": "news",
+  "timestamp": "2026-02-27T19:53:06.877470",
+  "tool": "COMPOSIO_SEARCH_NEWS",
+  "articles": [
+    {
+      "position": 1,
+      "title": "How sanctions can help stabilise global oil supply",
+      "url": "https://voxeu.org/voxeu/columns/how-sanctions-can-help-stabilise-global-oil-supply",
+      "source": "CEPR",
+      "snippet": "There were initial concerns that the introduction of the Russian oil price cap in 2022 would see Russia cut production, global oil supply fall,..."
+    },
+    {
+      "position": 2,
+      "title": "Is a Conflict-Ending Solution Even Possible in Ukraine?",
+      "url": "https://carnegieendowment.org/emissary/2026/02/ukraine-russia-war-ceasefire-possible",
+      "source": "Carnegie Endowment for International Peace",
+      "snippet": "On the fourth anniversary of Russia's full-scale invasion, Carnegie experts discuss the war's impacts and what might come next."
+    },
+    {
+      "position": 3,
+      "title": "Russia\u2019s war economy slows as sanctions enter 5th year",
+      "url": "https://www.aa.com.tr/en/asia-pacific/russia-s-war-economy-slows-as-sanctions-enter-5th-year/3841981",
+      "source": "Anadolu Ajans\u0131",
+      "snippet": "Despite efforts to offset the impact, including a pivot to China and India for energy exports, Moscow's military-focused economy faces a bleak outlook,..."
+    },
+    {
+      "position": 4,
+      "title": "Beware the paper bear \u2014 stripping Putin\u2019s economic bluff bare naked",
+      "url": "https://fortune.com/2026/02/27/exclusive-analysis-russian-economy-paper-bear-trump-putin-zelensky-talks-sonnenfeld-yale/",
+      "source": "Fortune",
+      "snippet": "Last week, Ukrainian President Volodymyr Zelensky said that state intelligence had uncovered discussions between the U.S. and Russia on economic agreements..."
+    },
+    {
+      "position": 5,
+      "title": "Russia-Ukraine Conflict and Oil; AI Impact on CLO Ratings; and Wood Pellet Trade Flows",
+      "url": "https://www.spglobal.com/en/research-insights/market-insights/daily-update-feb-27-2026",
+      "source": "S&P Global",
+      "snippet": "Friday, February 27, 2026 \u2014 Read today's Daily Update about how the Russia-Ukraine conflict is affecting global oil markets, the influence of artificial..."
+    },
+    {
+      "position": 6,
+      "title": "Russia\u2019s Industrial Core Under Strain as Massive Job Loss Fears Grow Amid Wartime Slowdown",
+      "url": "https://united24media.com/latest-news/russias-industrial-core-under-strain-as-massive-job-loss-fears-grow-amid-wartime-slowdown-16347",
+      "source": "UNITED24 Media",
+      "snippet": "Sanctions and lower revenue strain Russia's war economy; Nizhny Novgorod firms report overdue state payments, costly loans, and possible layoffs."
+    },
+    {
+      "position": 7,
+      "title": "Deep Inside Putin\u2019s War Machine, the Pain Is Starting to Show",
+      "url": "https://www.bloomberg.com/news/articles/2026-02-27/russia-ukraine-putin-s-war-economy-puts-industrial-region-under-pressure",
+      "source": "Bloomberg.com",
+      "snippet": "As Russia's war economy strains under growing pressure from sanctions and slumping revenues, even businesses in regions that have benefited from massive..."
+    },
+    {
+      "position": 8,
+      "title": "Trump hints at friendly Cuba takeover amid crisis",
+      "url": "https://mezha.net/eng/bukvy/trump-hints-at-friendly-cuba-takeover-amid-crisis/",
+      "source": "mezha.net",
+      "snippet": "Analysis of Donald Trump s remarks hinting at a friendly takeover of Cuba amid severe economic crisis and sanctions, exploring potential policy implications..."
+    },
+    {
+      "position": 9,
+      "title": "Will Europe Survive the Ukraine War Unscathed?",
+      "url": "https://www.islamtimes.com/en/article/1266810/will-europe-survive-the-ukraine-war-unscathed",
+      "source": "\u0627\u0633\u0644\u0627\u0645 \u062a\u0627\u064a\u0645\u0632",
+      "snippet": "Islam Times - As the Ukraine war enters its fifth year, Europe\u2014which once saw itself as the architect of maximum pressure against Moscow\u2014now faces internal..."
+    },
+    {
+      "position": 10,
+      "title": "Russia\u2019s war economy faces mounting strain as revenues fall \u2014 Bloomberg",
+      "url": "https://english.nv.ua/amp/russia-s-war-economy-strains-as-revenues-fall-and-deficits-grow-50587596.html",
+      "source": "The New Voice of Ukraine",
+      "snippet": "Russia's war-driven economy is facing growing pressure from sanctions and declining revenues, with the impact increasingly felt in regions that previously..."
+    }
+  ]
+}
