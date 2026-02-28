@@ -357,7 +357,7 @@ def build_system_prompt(
     # ── 9. SEARCH HYGIENE ─────────────────────────────────────────────
     sections.append(
         "## 🔍 SEARCH TOOL PREFERENCE & HYGIENE\n"
-        "- For web/news research, ALWAYS use Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
+        "- For information-gathering web/news requests, your first action is `Task(subagent_type='research-specialist', ...)`; the specialist then uses Composio search tools (SERPAPI_SEARCH, COMPOSIO_SEARCH_NEWS, etc.).\n"
         "- **X/Twitter exception:** do NOT use Composio toolkits or Composio tool discovery for X/Twitter.\n"
         "  Use `mcp__internal__x_trends_posts` (preferred) or `grok-x-trends` (fallback).\n"
         "- Do NOT use native 'WebSearch' — it bypasses our artifact saving system.\n"
