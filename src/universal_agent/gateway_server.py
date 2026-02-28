@@ -36,11 +36,13 @@ from zoneinfo import ZoneInfo
 import httpx
 
 BASE_DIR = Path(__file__).parent.parent.parent
-from universal_agent.infisical_loader import initialize_runtime_secrets
-
-initialize_runtime_secrets()
-from universal_agent.utils.env_aliases import apply_xai_key_aliases
-apply_xai_key_aliases()
+from universal_agent.auth.ops_auth import (
+    allow_legacy_ops_auth,
+    issue_ops_jwt,
+    validate_ops_token,
+)
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
+from universal_agent.runtime_role import FactoryRole, build_factory_runtime_policy
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -178,6 +180,13 @@ TEXT_EXTENSIONS = (
 _DEPLOYMENT_PROFILE = (os.getenv("UA_DEPLOYMENT_PROFILE") or "local_workstation").strip().lower()
 if _DEPLOYMENT_PROFILE not in {"local_workstation", "standalone_node", "vps"}:
     _DEPLOYMENT_PROFILE = "local_workstation"
+
+_FACTORY_POLICY = build_factory_runtime_policy()
+
+_LOCAL_WORKER_ALLOWED_PATHS = {
+    "/api/v1/health",
+    "/api/v1/hooks/readyz",
+}
 
 AUTONOMOUS_DAILY_BRIEFING_JOB_KEY = "autonomous_daily_briefing"
 AUTONOMOUS_DAILY_BRIEFING_DEFAULT_CRON = "0 7 * * *"
@@ -911,6 +920,17 @@ else:
 # Ops access token (optional hard gate for /api/v1/ops/* endpoints)
 OPS_TOKEN = os.getenv("UA_OPS_TOKEN", "").strip()
 SESSION_API_TOKEN = (os.getenv("UA_INTERNAL_API_TOKEN", "").strip() or OPS_TOKEN)
+OPS_JWT_SECRET = os.getenv("UA_OPS_JWT_SECRET", "").strip()
+OPS_AUTH_ALLOW_LEGACY = allow_legacy_ops_auth()
+_OPS_LEGACY_DEPRECATION_EMITTED = False
+
+
+def _refresh_ops_auth_config_from_env() -> None:
+    global OPS_TOKEN, SESSION_API_TOKEN, OPS_JWT_SECRET, OPS_AUTH_ALLOW_LEGACY
+    OPS_TOKEN = os.getenv("UA_OPS_TOKEN", "").strip()
+    SESSION_API_TOKEN = (os.getenv("UA_INTERNAL_API_TOKEN", "").strip() or OPS_TOKEN)
+    OPS_JWT_SECRET = os.getenv("UA_OPS_JWT_SECRET", "").strip()
+    OPS_AUTH_ALLOW_LEGACY = allow_legacy_ops_auth()
 
 
 # =============================================================================
@@ -942,6 +962,17 @@ class ExecuteRequest(BaseModel):
     user_input: str
     force_complex: bool = False
     metadata: dict = {}
+
+
+class OpsTokenIssueRequest(BaseModel):
+    subject: Optional[str] = None
+
+
+class OpsTokenIssueResponse(BaseModel):
+    token: str
+    token_type: str = "Bearer"
+    ttl_seconds: int
+    expires_at: str
 
 
 class GatewayEventWire(BaseModel):
@@ -7135,7 +7166,8 @@ def is_user_allowed(user_id: str) -> bool:
 
 
 def _require_ops_auth(request: Request, token_override: Optional[str] = None) -> None:
-    if not OPS_TOKEN:
+    global _OPS_LEGACY_DEPRECATION_EMITTED
+    if not OPS_TOKEN and not OPS_JWT_SECRET:
         return
     header = request.headers.get("authorization", "")
     token = ""
@@ -7145,8 +7177,53 @@ def _require_ops_auth(request: Request, token_override: Optional[str] = None) ->
         token = request.headers.get("x-ua-ops-token", "").strip()
     if not token and token_override is not None:
         token = str(token_override).strip()
-    if token != OPS_TOKEN:
+    verdict = validate_ops_token(
+        token,
+        jwt_secret=OPS_JWT_SECRET,
+        legacy_token=OPS_TOKEN,
+        allow_legacy=OPS_AUTH_ALLOW_LEGACY,
+    )
+    if not verdict.ok:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    if verdict.mode == "legacy" and not _OPS_LEGACY_DEPRECATION_EMITTED:
+        logger.warning(
+            "Legacy UA_OPS_TOKEN auth accepted. Migrate callers to JWT Bearer tokens "
+            "from /auth/ops-token."
+        )
+        _OPS_LEGACY_DEPRECATION_EMITTED = True
+
+
+def _require_ops_token_issuance_auth(request: Request) -> None:
+    token = _extract_auth_token_from_headers(request.headers)
+    if SESSION_API_TOKEN and token == SESSION_API_TOKEN:
+        return
+    if OPS_TOKEN and token == OPS_TOKEN:
+        return
+    if not SESSION_API_TOKEN and not OPS_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Ops token issuance requires bootstrap credentials. Configure UA_INTERNAL_API_TOKEN "
+                "or UA_OPS_TOKEN."
+            ),
+        )
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _require_delegation_publish_allowed() -> None:
+    if not _FACTORY_POLICY.can_publish_delegations:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Delegation publish is disabled for FACTORY_ROLE={_FACTORY_POLICY.role}",
+        )
+
+
+def _require_delegation_consume_allowed() -> None:
+    if not _FACTORY_POLICY.can_listen_delegations:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Delegation consume is disabled for FACTORY_ROLE={_FACTORY_POLICY.role}",
+        )
 
 
 def _extract_auth_token_from_headers(headers: Any) -> str:
@@ -7319,8 +7396,14 @@ manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _FACTORY_POLICY
+    bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
+    _FACTORY_POLICY = bootstrap_state.policy
+    _refresh_ops_auth_config_from_env()
+
     logger.info("🚀 Universal Agent Gateway Server starting...")
     logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
+    logger.info("🏭 Factory role resolved: %s (gateway_mode=%s)", _FACTORY_POLICY.role, _FACTORY_POLICY.gateway_mode)
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
     
     # Initialize runtime database (required by ProcessTurnAdapter -> setup_session)
@@ -7513,6 +7596,29 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def enforce_factory_role_http_surface(request: Request, call_next):
+    if _FACTORY_POLICY.gateway_mode == "health_only":
+        if request.url.path not in _LOCAL_WORKER_ALLOWED_PATHS:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        f"Route disabled for FACTORY_ROLE={_FACTORY_POLICY.role}; "
+                        "LOCAL_WORKER exposes health-only API surface."
+                    )
+                },
+            )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def enforce_ops_auth_http_surface(request: Request, call_next):
+    if request.url.path.startswith("/api/v1/ops/"):
+        _require_ops_auth(request)
+    return await call_next(request)
+
+
 # =============================================================================
 # REST Endpoints
 # =============================================================================
@@ -7552,6 +7658,29 @@ async def hooks_readyz():
     status = _hooks_service.readiness_status()
     status["service_initialized"] = True
     return status
+
+
+@app.post("/auth/ops-token", response_model=OpsTokenIssueResponse)
+async def issue_ops_token_endpoint(request: Request, payload: OpsTokenIssueRequest):
+    if _FACTORY_POLICY.role != FactoryRole.HEADQUARTERS.value:
+        raise HTTPException(
+            status_code=403,
+            detail=f"/auth/ops-token is only available for FACTORY_ROLE={FactoryRole.HEADQUARTERS.value}",
+        )
+    _require_ops_token_issuance_auth(request)
+    if not OPS_JWT_SECRET:
+        raise HTTPException(status_code=503, detail="UA_OPS_JWT_SECRET is not configured")
+    subject = str(payload.subject or "ops").strip() or "ops"
+    token, expires_at = issue_ops_jwt(
+        jwt_secret=OPS_JWT_SECRET,
+        subject=subject,
+        ttl_seconds=3600,
+    )
+    return OpsTokenIssueResponse(
+        token=token,
+        ttl_seconds=3600,
+        expires_at=expires_at.isoformat(),
+    )
 
 
 @app.post("/api/v1/hooks/{subpath:path}")
@@ -9901,6 +10030,8 @@ async def dashboard_tutorial_review_dispatch(payload: TutorialReviewDispatchRequ
 
 @app.post("/api/v1/dashboard/tutorials/bootstrap-repo")
 async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoRequest):
+    _require_delegation_publish_allowed()
+
     run_path = str(payload.run_path or "").strip().strip("/")
     if not run_path:
         raise HTTPException(status_code=400, detail="run_path is required")
@@ -10059,6 +10190,7 @@ async def dashboard_tutorial_bootstrap_repo(payload: TutorialBootstrapRepoReques
 @app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")
 async def ops_tutorial_bootstrap_claim(request: Request, payload: TutorialBootstrapJobClaimRequest):
     _require_ops_auth(request)
+    _require_delegation_consume_allowed()
     worker_id = str(payload.worker_id or "").strip() or f"worker-{uuid.uuid4().hex[:8]}"
     job = _tutorial_bootstrap_claim_next(worker_id=worker_id)
     return {"worker_id": worker_id, "job": job}
@@ -10067,6 +10199,7 @@ async def ops_tutorial_bootstrap_claim(request: Request, payload: TutorialBootst
 @app.get("/api/v1/ops/tutorials/bootstrap-jobs/{job_id}/bundle")
 async def ops_tutorial_bootstrap_bundle(request: Request, job_id: str):
     _require_ops_auth(request)
+    _require_delegation_consume_allowed()
     normalized_job_id = str(job_id or "").strip()
     if not normalized_job_id:
         raise HTTPException(status_code=400, detail="job_id is required")
@@ -10116,6 +10249,7 @@ async def ops_tutorial_bootstrap_result(
     payload: TutorialBootstrapJobResultRequest,
 ):
     _require_ops_auth(request)
+    _require_delegation_consume_allowed()
     updated = _tutorial_bootstrap_update_result(
         job_id=job_id,
         worker_id=str(payload.worker_id or "").strip(),
@@ -13339,6 +13473,9 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
 
 @app.websocket("/api/v1/sessions/{session_id}/stream")
 async def websocket_stream(websocket: WebSocket, session_id: str):
+    if _FACTORY_POLICY.gateway_mode == "health_only":
+        await websocket.close(code=4403, reason="WebSocket API disabled for LOCAL_WORKER role")
+        return
     if not await _require_session_ws_auth(websocket):
         return
     try:

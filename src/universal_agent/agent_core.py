@@ -20,11 +20,7 @@ from typing import AsyncGenerator, Any, Callable, Optional
 from dataclasses import dataclass, field
 from enum import Enum
 
-from universal_agent.infisical_loader import initialize_runtime_secrets
-from universal_agent.utils.env_aliases import apply_xai_key_aliases
-
-initialize_runtime_secrets()
-apply_xai_key_aliases()
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 
 import logfire
 from claude_agent_sdk.client import ClaudeSDKClient
@@ -1224,6 +1220,17 @@ class UniversalAgent:
         """Initialize using AgentSetup for consistent configuration."""
         if self._initialized:
             return
+
+        bootstrap_runtime_environment()
+        global LOGFIRE_DISABLED, LOGFIRE_TOKEN
+        LOGFIRE_DISABLED = os.getenv("UA_DISABLE_LOGFIRE", "").lower() in {"1", "true", "yes"}
+        LOGFIRE_TOKEN = None
+        if not LOGFIRE_DISABLED:
+            LOGFIRE_TOKEN = (
+                os.getenv("LOGFIRE_TOKEN")
+                or os.getenv("LOGFIRE_WRITE_TOKEN")
+                or os.getenv("LOGFIRE_API_KEY")
+            )
 
         from universal_agent.agent_setup import AgentSetup
         

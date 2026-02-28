@@ -35,11 +35,7 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional, Callable
-from universal_agent.infisical_loader import initialize_runtime_secrets
-from universal_agent.utils.env_aliases import apply_xai_key_aliases
-
-initialize_runtime_secrets()
-apply_xai_key_aliases()
+from universal_agent.runtime_bootstrap import bootstrap_runtime_environment
 
 from universal_agent.utils.message_history import (
     TRUNCATION_THRESHOLD,
@@ -671,6 +667,18 @@ if LOGFIRE_TOKEN:
     print("✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/")
 elif not LOGFIRE_DISABLED:
     print("⚠️ No LOGFIRE_TOKEN found - tracing disabled")
+
+
+def _refresh_logfire_runtime_flags() -> None:
+    global LOGFIRE_DISABLED, LOGFIRE_TOKEN
+    LOGFIRE_DISABLED = os.getenv("UA_DISABLE_LOGFIRE", "").lower() in {"1", "true", "yes"}
+    LOGFIRE_TOKEN = None
+    if not LOGFIRE_DISABLED:
+        LOGFIRE_TOKEN = (
+            os.getenv("LOGFIRE_TOKEN")
+            or os.getenv("LOGFIRE_WRITE_TOKEN")
+            or os.getenv("LOGFIRE_API_KEY")
+        )
 
 from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import (
@@ -8367,6 +8375,9 @@ async def main(args: argparse.Namespace):
         current_execution_session, \
         gateway_mode_active, \
         current_step_id
+
+    bootstrap_runtime_environment()
+    _refresh_logfire_runtime_flags()
 
     # Create main span for entire execution
     main_span = logfire.span("ua_cli_session")

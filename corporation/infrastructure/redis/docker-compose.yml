@@ -5,11 +5,19 @@ services:
     restart: unless-stopped
     ports:
       - "6379:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD before starting Redis}
     volumes:
       - redis_data:/data
       - ./redis.conf:/usr/local/etc/redis/redis.conf
-    command: redis-server /usr/local/etc/redis/redis.conf
-    # Note: Ensure you configure a strong requirepass in redis.conf 
+    command: >
+      sh -c 'exec redis-server /usr/local/etc/redis/redis.conf --requirepass "$${REDIS_PASSWORD}"'
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    # Note: Ensure REDIS_PASSWORD is sourced from Infisical secret injection.
     # and restrict port 6379 via UFW firewall on the VPS to only allow known Factory IPs.
 
 volumes:
