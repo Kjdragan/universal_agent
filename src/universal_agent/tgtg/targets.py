@@ -75,9 +75,13 @@ class Target:
         today = now_local.date()
 
         def _hhmm(s: str):
-            h, m = int(s[:2]), int(s[3:5])
-            # Build an aware datetime for today at HH:MM in local tz
-            return datetime.combine(today, time(h, m), tzinfo=now_local.tzinfo)
+            try:
+                h, m = int(s[:2]), int(s[3:5])
+                # Build an aware datetime for today at HH:MM in local tz
+                return datetime.combine(today, time(h, m), tzinfo=now_local.tzinfo)
+            except (ValueError, TypeError):
+                log.warning("Invalid time format for availability window: '%s'. Expected HH:MM.", s)
+                return None
 
         avail_start = _hhmm(self.available_from) if self.available_from else None
         avail_end = _hhmm(self.available_to) if self.available_to else None
