@@ -10,7 +10,7 @@ sources:
     enabled: true
     poll_interval_seconds: 30
     playlists:
-      - id: "${CSI_YT_PLAYLIST_ID}"
+      - id: "${YT_TUTORIALS_PLAYLIST_ID}"
   youtube_channel_rss:
     enabled: true
     poll_interval_seconds: 300

@@ -69,6 +69,10 @@ class YouTubePlaylistAdapter(SourceAdapter):
                     self._set_next_poll(playlist_id, detected_new=False, now_ts=now_ts)
                     self._persist_playlist_state(playlist_id)
                     continue
+                # Sort items newest first to establish the stable head of the playlist
+                items.sort(key=lambda x: str(x.get("occurred_at") or ""), reverse=True)
+                items = items[: self._max_seen_cache]
+                
                 seen = self._seen_by_playlist.setdefault(playlist_id, set())
                 current_ids = [item["video_id"] for item in items if item.get("video_id")]
                 seeded = self._seeded_by_playlist.get(playlist_id, False)
@@ -80,7 +84,7 @@ class YouTubePlaylistAdapter(SourceAdapter):
                     continue
 
                 new_items = [item for item in items if item.get("video_id") and item["video_id"] not in seen]
-                # Oldest first for deterministic processing.
+                # Re-reverse to emit oldest first for regular chronological flow.
                 for item in reversed(new_items):
                     events.append(
                         RawEvent(
