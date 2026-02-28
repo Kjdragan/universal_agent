@@ -403,8 +403,8 @@ def _write_error_markdown(path: Path, url: str, error: str) -> None:
     )
     try:
         path.write_text(content, encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error("Failed to write error stub to %s: %s", path, e)
 
 
 # ---------------------------------------------------------------------------
