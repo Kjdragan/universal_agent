@@ -755,7 +755,7 @@ class Selector(SelectorsGeneration):
             if results:
                 # From the results, get the ones that fulfill passed regex patterns
                 for pattern in patterns:
-                    results = results.filter(lambda e: e.text.re(pattern, check_match=True))
+                    results = results.filter(lambda e, p=pattern: e.text.re(p, check_match=True))
 
                 # From the results, get the ones that fulfill passed functions
                 for function in functions:
@@ -763,7 +763,7 @@ class Selector(SelectorsGeneration):
         else:
             results = results or self.below_elements
             for pattern in patterns:
-                results = results.filter(lambda e: e.text.re(pattern, check_match=True))
+                results = results.filter(lambda e, p=pattern: e.text.re(p, check_match=True))
 
             # Collect an element if it fulfills the passed function otherwise
             for function in functions:

@@ -139,7 +139,7 @@ def _load_job(path: Path) -> ScrapingJob:
         raw_options = raw.get("options", {}) or {}
         metadata = {k: v for k, v in raw.items() if k not in ("urls", "options")}
     else:
-        raise ValueError(f"Unsupported JSON format in {path}")
+        raise TypeError(f"Unsupported JSON format in {path}: expected list or dict")
 
     opts = JobOptions(
         min_level=_parse_level(raw_options.get("min_level"), FetcherLevel.BASIC),
@@ -316,24 +316,26 @@ class InboxProcessor:
             return result
 
         # --- Scrape each URL ---
-        fatal_error = False
+        all_failed = True
         for url in job.urls:
             url_result = self._scrape_url(url, job)
             if url_result == "scraped":
                 result["urls_scraped"] += 1
+                all_failed = False
             elif url_result == "skipped":
                 result["urls_skipped"] += 1
+                all_failed = False
             else:
                 result["urls_failed"] += 1
 
             if self.per_url_delay > 0:
                 time.sleep(self.per_url_delay)
 
-        # --- Move to done/ ---
-        dest_dir = self._failed_dir if fatal_error else self._done_dir
+        # --- Move to done/failed ---
+        dest_dir = self._failed_dir if all_failed else self._done_dir
         self._move_to(processing_path, dest_dir)
-        result["job_ok"] = 1 if not fatal_error else 0
-        result["job_failed"] = 1 if fatal_error else 0
+        result["job_ok"] = 0 if all_failed else 1
+        result["job_failed"] = 1 if all_failed else 0
         return result
 
     def _scrape_url(self, url: str, job: ScrapingJob) -> str:
@@ -367,7 +369,7 @@ class InboxProcessor:
         try:
             page, level_used = self._strategy.fetch(req)
         except Exception as exc:
-            logger.error("Failed to fetch %s: %s", url, exc)
+            logger.exception("Failed to fetch %s", url)
             # Write an error stub so we know this URL was attempted
             _write_error_markdown(out_path, url, str(exc))
             return "failed"
@@ -380,7 +382,7 @@ class InboxProcessor:
                 job_metadata=job.metadata,
             )
         except Exception as exc:
-            logger.error("Failed to convert %s to Markdown: %s", url, exc)
+            logger.exception("Failed to convert %s to Markdown", url)
             _write_error_markdown(out_path, url, f"Markdown conversion error: {exc}")
             return "failed"
 
@@ -388,7 +390,7 @@ class InboxProcessor:
             out_path.write_text(md, encoding="utf-8")
             logger.info("Saved %s → %s", url, out_path)
         except Exception as exc:
-            logger.error("Failed to write output for %s: %s", url, exc)
+            logger.exception("Failed to write output for %s", url)
             return "failed"
 
         return "scraped"

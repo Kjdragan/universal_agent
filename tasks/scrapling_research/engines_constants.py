@@ -1,17 +1,3 @@
-# Disable loading these resources for speed
-EXTRA_RESOURCES = {
-    "font",
-    "image",
-    "media",
-    "beacon",
-    "object",
-    "imageset",
-    "texttrack",
-    "websocket",
-    "csp_report",
-    "stylesheet",
-}
-
 HARMFUL_ARGS = (
     # This will be ignored to avoid detection more and possibly avoid the popup crashing bug abuse: https://issues.chromium.org/issues/340836884
     "--enable-automation",
