@@ -101,3 +101,9 @@ RLM/corpora/
 
 # === Claude Internal ===
 .claude/worktrees/
+
+# Scraping run outputs
+scraping/runs/*/
+*.html.md
+urls.json
+run_report.json
