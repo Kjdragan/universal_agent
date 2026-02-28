@@ -88,8 +88,12 @@ def _is_bot_blocked(page: Any) -> bool:
         except Exception:
             try:
                 body = str(page.text or "").lower()
-            except Exception:
-                pass
+            except Exception as fallback_exc:
+                logger.debug(
+                    "Could not extract body text for bot detection on %s: %s",
+                    getattr(page, "url", "unknown URL"),
+                    fallback_exc,
+                )
         return any(sig in body for sig in _BOT_SIGNALS)
     except Exception as e:
         logger.warning("Error during bot detection for %s: %s. Assuming blocked.", getattr(page, 'url', 'unknown URL'), e)
@@ -279,8 +283,6 @@ class FetcherStrategy:
                     last_page_level = level
                     time.sleep(self.escalation_delay)
                     continue
-                logger.info("[%s] Successfully fetched %s", level.name, req.url)
-                return page, level
             except Exception as exc:
                 logger.warning(
                     "[%s] Error fetching %s: %s — escalating",
@@ -288,6 +290,9 @@ class FetcherStrategy:
                 )
                 last_exc = exc
                 time.sleep(self.escalation_delay)
+            else:
+                logger.info("[%s] Successfully fetched %s", level.name, req.url)
+                return page, level
 
         # All tiers exhausted — return best partial result or raise
         if last_page is not None:

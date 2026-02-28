@@ -181,6 +181,12 @@ class TestLoadJob:
         with pytest.raises(Exception):
             _load_job(p)
 
+    def test_unsupported_json_type_raises_type_error(self, tmp_path):
+        p = tmp_path / "bad_type.json"
+        p.write_text(json.dumps(123))
+        with pytest.raises(TypeError):
+            _load_job(p)
+
 
 # ---------------------------------------------------------------------------
 # page_to_markdown
@@ -370,6 +376,8 @@ class TestInboxProcessor:
         summary = processor.run_once()
 
         assert summary["urls_failed"] == 1
+        assert summary["jobs_failed"] == 1
+        assert (tmp_inbox / "failed" / "job_err.json").exists()
         md_files = list(tmp_output.glob("*.md"))
         assert len(md_files) == 1
         assert "Error" in md_files[0].read_text()
