@@ -487,40 +487,42 @@ def _find_stalled_workspace_turns(
             key=lambda p: p.stat().st_mtime if p.exists() else 0.0,
             reverse=True,
         )
-        for turn_file in turn_files:
-            started_at = ""
-            finalized = False
-            try:
-                for line in turn_file.read_text(encoding="utf-8").splitlines():
-                    raw = line.strip()
-                    if not raw:
-                        continue
-                    event = json.loads(raw)
-                    if not isinstance(event, dict):
-                        continue
-                    kind = str(event.get("event") or "").strip()
-                    if kind == "turn_started" and not started_at:
-                        started_at = str(event.get("timestamp") or "").strip()
-                    elif kind == "turn_finalized":
-                        finalized = True
-                if finalized or not started_at:
+        if not turn_files:
+            continue
+            
+        turn_file = turn_files[0]  # Only check the absolute newest turn file
+        started_at = ""
+        finalized = False
+        try:
+            for line in turn_file.read_text(encoding="utf-8").splitlines():
+                raw = line.strip()
+                if not raw:
                     continue
-            except Exception:
+                event = json.loads(raw)
+                if not isinstance(event, dict):
+                    continue
+                kind = str(event.get("event") or "").strip()
+                if kind == "turn_started" and not started_at:
+                    started_at = str(event.get("timestamp") or "").strip()
+                elif kind == "turn_finalized":
+                    finalized = True
+            if finalized or not started_at:
                 continue
+        except Exception:
+            continue
 
-            age_minutes = _minutes_since(started_at, now=now)
-            if age_minutes is None or age_minutes < min_age_minutes:
-                continue
+        age_minutes = _minutes_since(started_at, now=now)
+        if age_minutes is None or age_minutes < min_age_minutes:
+            continue
 
-            stalled.append(
-                {
-                    "session_path": str(session_dir),
-                    "turn_id": turn_file.stem,
-                    "started_at": started_at,
-                    "age_minutes": age_minutes,
-                }
-            )
-            break
+        stalled.append(
+            {
+                "session_path": str(session_dir),
+                "turn_id": turn_file.stem,
+                "started_at": started_at,
+                "age_minutes": age_minutes,
+            }
+        )
         if len(stalled) >= max(1, max_hits):
             return stalled
     return stalled
