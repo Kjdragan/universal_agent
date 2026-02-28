@@ -7400,6 +7400,7 @@ async def lifespan(app: FastAPI):
     bootstrap_state = bootstrap_runtime_environment(profile=_DEPLOYMENT_PROFILE)
     _FACTORY_POLICY = bootstrap_state.policy
     _refresh_ops_auth_config_from_env()
+    _maybe_instrument_logfire_fastapi()
 
     logger.info("🚀 Universal Agent Gateway Server starting...")
     logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
@@ -7578,14 +7579,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Instrument FastAPI with Logfire for automatic HTTP route tracing
-try:
-    import logfire as _logfire_gw
-    if os.getenv("LOGFIRE_TOKEN") or os.getenv("LOGFIRE_WRITE_TOKEN"):
-        _logfire_gw.instrument_fastapi(app)
-        logger.info("✅ Logfire FastAPI instrumentation enabled for gateway server")
-except Exception as _lf_err:
-    logger.debug("Logfire FastAPI instrumentation not available: %s", _lf_err)
+_LOGFIRE_FASTAPI_INSTRUMENTED = False
+
+
+def _maybe_instrument_logfire_fastapi() -> None:
+    global _LOGFIRE_FASTAPI_INSTRUMENTED
+    if _LOGFIRE_FASTAPI_INSTRUMENTED:
+        return
+    try:
+        import logfire as _logfire_gw
+
+        if os.getenv("LOGFIRE_TOKEN") or os.getenv("LOGFIRE_WRITE_TOKEN"):
+            _logfire_gw.instrument_fastapi(app)
+            _LOGFIRE_FASTAPI_INSTRUMENTED = True
+            logger.info("✅ Logfire FastAPI instrumentation enabled for gateway server")
+    except Exception as _lf_err:
+        logger.debug("Logfire FastAPI instrumentation not available: %s", _lf_err)
+
+
+_maybe_instrument_logfire_fastapi()
 
 app.add_middleware(
     CORSMiddleware,

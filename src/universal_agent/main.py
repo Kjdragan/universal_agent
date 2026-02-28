@@ -586,6 +586,7 @@ if not LOGFIRE_DISABLED:
         or os.getenv("LOGFIRE_API_KEY")
     )
 PAYLOAD_LOGGING_CONFIG: PayloadLoggingConfig = load_payload_logging_config()
+_LOGFIRE_CONFIGURED_TOKEN: str = ""
 
 # TIMEOUT CONFIGURATION (Critical for Large Reports)
 # Default is 60s (60000ms).
@@ -593,16 +594,19 @@ PAYLOAD_LOGGING_CONFIG: PayloadLoggingConfig = load_payload_logging_config()
 if "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT" not in os.environ:
     os.environ["CLAUDE_CODE_STREAM_CLOSE_TIMEOUT"] = "3600000"
 
-if LOGFIRE_TOKEN:
+def _configure_logfire_runtime_if_available() -> bool:
+    global _LOGFIRE_CONFIGURED_TOKEN
+    if not LOGFIRE_TOKEN:
+        return False
+    if _LOGFIRE_CONFIGURED_TOKEN == LOGFIRE_TOKEN:
+        return True
+
     # Custom scrubbing to prevent over-redaction of previews
     def scrubbing_callback(m: logfire.ScrubMatch):
-        # Whitelist specific fields often caught by scrubbers (e.g. 'session')
         if not m.path:
             return None
 
         last_key = m.path[-1]
-
-        # safely check if key is a string before doing string operations
         if isinstance(last_key, str):
             if (
                 last_key
@@ -630,40 +634,27 @@ if LOGFIRE_TOKEN:
         token=LOGFIRE_TOKEN,
         send_to_logfire="if-token-present",
         scrubbing=logfire.ScrubbingOptions(callback=scrubbing_callback),
-        inspect_arguments=False,  # Suppress InspectArgumentsFailedWarning
+        inspect_arguments=False,
     )
 
-    # Instrument MCP for distributed tracing
     try:
         logfire.instrument_mcp()
-        print("✅ Logfire MCP instrumentation enabled")
-    except Exception as e:
-        print(f"⚠️ MCP instrumentation not available: {e}")
-
-    # Instrument HTTPX to trace all API calls
+    except Exception:
+        pass
     try:
         logfire.instrument_httpx(capture_headers=True)
-        print("✅ Logfire HTTPX instrumentation enabled")
-    except Exception as e:
-        print(f"⚠️ HTTPX instrumentation not available: {e}")
-
-    # Instrument Anthropic SDK to trace Claude conversation turns and tool calls
+    except Exception:
+        pass
     try:
         logfire.instrument_anthropic()
-        print("✅ Logfire Anthropic instrumentation enabled")
-    except Exception as e:
-        print(f"⚠️ Anthropic instrumentation not available: {e}")
+    except Exception:
+        pass
 
-    if PAYLOAD_LOGGING_CONFIG.full_payload_mode:
-        print(
-            "✅ Logfire full payload mode enabled "
-            f"(max_chars={PAYLOAD_LOGGING_CONFIG.max_chars}, "
-            f"redact={PAYLOAD_LOGGING_CONFIG.redact_sensitive}, "
-            f"redact_emails={PAYLOAD_LOGGING_CONFIG.redact_emails})"
-        )
+    _LOGFIRE_CONFIGURED_TOKEN = LOGFIRE_TOKEN
+    return True
 
 
-
+if _configure_logfire_runtime_if_available():
     print("✅ Logfire tracing enabled - view at https://logfire.pydantic.dev/")
 elif not LOGFIRE_DISABLED:
     print("⚠️ No LOGFIRE_TOKEN found - tracing disabled")
@@ -679,6 +670,7 @@ def _refresh_logfire_runtime_flags() -> None:
             or os.getenv("LOGFIRE_WRITE_TOKEN")
             or os.getenv("LOGFIRE_API_KEY")
         )
+    _configure_logfire_runtime_if_available()
 
 from claude_agent_sdk.client import ClaudeSDKClient
 from claude_agent_sdk.types import (
