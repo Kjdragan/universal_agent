@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,42 @@ script_dir = Path(__file__).parent.parent.parent / "scripts"
 sys.path.insert(0, str(script_dir))
 import csi_playlist_tutorial_digest
 from csi_playlist_tutorial_digest import _find_stalled_workspace_turns, _prune_pending_by_age
+
+
+def _create_events_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            source TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            occurred_at TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            emitted_at TEXT,
+            subject_json TEXT NOT NULL,
+            routing_json TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            delivered INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+        """
+    )
+    conn.commit()
+
+
+def _insert_event(conn: sqlite3.Connection, *, source: str, event_type: str = "video_added_to_playlist") -> None:
+    conn.execute(
+        """
+        INSERT INTO events (
+            event_id, dedupe_key, source, event_type, occurred_at, received_at,
+            subject_json, routing_json, metadata_json, delivered, created_at
+        ) VALUES (?, ?, ?, ?, datetime('now'), datetime('now'), '{}', '{}', '{}', 1, datetime('now'))
+        """,
+        (f"evt_{source}_1", f"dk_{source}_1", source, event_type),
+    )
+    conn.commit()
 
 
 def test_find_stalled_workspace_turns_ignores_old_turns(tmp_path: Path):
@@ -123,3 +160,58 @@ def test_prune_pending_by_age_can_be_disabled():
 
     assert dropped == 0
     assert "very_old" in kept
+
+
+def test_playlist_digest_defaults_to_playlist_source_only(tmp_path: Path, monkeypatch, capsys):
+    db_path = tmp_path / "csi.db"
+    state_path = tmp_path / "state.json"
+    conn = sqlite3.connect(str(db_path))
+    _create_events_table(conn)
+    _insert_event(conn, source="youtube_channel_rss", event_type="channel_new_upload")
+    conn.close()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "csi_playlist_tutorial_digest.py",
+            "--db-path",
+            str(db_path),
+            "--state-path",
+            str(state_path),
+            "--dry-run",
+        ],
+    )
+    rc = csi_playlist_tutorial_digest.main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    # Default source must ignore creator RSS rows.
+    assert "PLAYLIST_TUTORIAL_NEW_COUNT=0" in out
+
+
+def test_playlist_digest_can_read_non_default_source_only_when_explicit(tmp_path: Path, monkeypatch, capsys):
+    db_path = tmp_path / "csi.db"
+    state_path = tmp_path / "state.json"
+    conn = sqlite3.connect(str(db_path))
+    _create_events_table(conn)
+    _insert_event(conn, source="youtube_channel_rss", event_type="channel_new_upload")
+    conn.close()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "csi_playlist_tutorial_digest.py",
+            "--db-path",
+            str(db_path),
+            "--state-path",
+            str(state_path),
+            "--source",
+            "youtube_channel_rss",
+            "--dry-run",
+        ],
+    )
+    rc = csi_playlist_tutorial_digest.main()
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "PLAYLIST_TUTORIAL_NEW_COUNT=1" in out

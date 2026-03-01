@@ -1,6 +1,6 @@
 # CSI Rebuild Status
 
-Last updated: 2026-03-01 12:41 America/Chicago
+Last updated: 2026-03-01 12:47 America/Chicago
 Status owner: Codex
 
 ## Program State
@@ -9,10 +9,10 @@ Status owner: Codex
 - Main branch readiness: Complete
 
 ## Current Objectives
-1. Validate DLQ replay timer/service wiring in deployment docs and scripts.
-2. Enforce/validate stream routing invariants in tests.
-3. Expose delivery telemetry in CSI dashboard health endpoint.
-4. Start CSI opportunity bundle contract implementation.
+1. Begin CSI opportunity bundle contract implementation.
+2. Add dashboard surfacing for delivery-target telemetry.
+3. Prepare deploy verification checklist for CSI timers/services.
+4. Start confidence-method refactor scaffolding.
 
 ## Progress Board
 | Workstream | State | Notes |
@@ -27,7 +27,8 @@ Status owner: Codex
 | Delivery attempt telemetry | Done | Added `delivery_attempts` schema + persistence in service and analytics emit paths. |
 | CSI health delivery visibility | Done | `/api/v1/dashboard/csi/health` now reports delivery totals and per-target status. |
 | DLQ replay automation | Done | Added `csi-replay-dlq.service` + `.timer` and installer wiring. |
-| Phase 1 reliability changes | In progress | Packet 2 complete; packet 3 (routing invariant tests + deploy validation) queued. |
+| Source routing invariants | Done | Added tests proving playlist digest ignores RSS source unless explicitly overridden. |
+| Phase 1 reliability changes | In progress | Packet 3 complete; moving to packet 4 (opportunity contract start). |
 
 ## Validation Snapshot
 - `CSI_Ingester/development/tests/unit/test_digest_cursor_recovery.py`: 2 passed.
@@ -35,10 +36,11 @@ Status owner: Codex
 - `CSI_Ingester/development/tests/unit/test_delivery_attempts.py`: 2 passed.
 - `CSI_Ingester/development/tests/unit/test_service_flow.py`: 2 passed.
 - `tests/gateway/test_ops_api.py -k dashboard_csi_health_includes_overnight_and_source_health`: 1 passed.
+- `CSI_Ingester/development/tests/unit/test_csi_playlist_tutorial_digest.py`: 6 passed.
 
 ## Open Risks
 - Monitor that new runtime-generated artifacts do not reintroduce panel noise.
 - Validate deploy/runtime state after mainline consolidation.
 
 ## Next Execution Step
-- Implement reliability packet 3: strengthen routing invariants test coverage and run deploy-time smoke validation checklist.
+- Implement packet 4: scaffold opportunity bundle contract and persist first structured bundle records.
