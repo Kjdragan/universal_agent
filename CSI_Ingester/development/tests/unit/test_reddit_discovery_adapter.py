@@ -101,3 +101,95 @@ def test_reddit_discovery_warns_when_no_watchlist_subreddits(tmp_path, caplog):
 
     assert subreddits == []
     assert "resolved to zero subreddits" in caplog.text
+
+
+async def test_reddit_discovery_subreddit_failure_does_not_abort_others(monkeypatch):
+    adapter = RedditDiscoveryAdapter(
+        {
+            "subreddits": ["failsub", "goodsub"],
+            "seed_on_first_run": False,
+        }
+    )
+
+    async def _fake_fetch_children(client, *, subreddit, per_subreddit_limit, user_agent):
+        if subreddit == "failsub":
+            raise RuntimeError("http_403")
+        return [
+            {
+                "data": {
+                    "id": "abc123",
+                    "subreddit": "goodsub",
+                    "title": "Good post",
+                    "url": "https://example.com/p",
+                    "permalink": "/r/goodsub/comments/abc123/good_post/",
+                    "author": "demo",
+                    "score": 12,
+                    "num_comments": 4,
+                    "created_utc": 1700000000,
+                }
+            }
+        ]
+
+    monkeypatch.setattr(adapter, "_fetch_subreddit_children", _fake_fetch_children)
+    events = await adapter.fetch_events()
+    assert len(events) == 1
+    assert events[0].payload["post_id"] == "abc123"
+
+
+async def test_reddit_discovery_fetch_children_falls_back_between_endpoints(monkeypatch):
+    adapter = RedditDiscoveryAdapter(
+        {
+            "subreddits": ["artificial"],
+            "endpoints": [
+                "https://www.reddit.com/r/{subreddit}/new/.json",
+                "https://old.reddit.com/r/{subreddit}/new/.json",
+            ],
+        }
+    )
+
+    class _Resp:
+        def __init__(self, status_code: int, payload: dict | None):
+            self.status_code = status_code
+            self._payload = payload
+            self.content = b"{}"
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("invalid json")
+            return self._payload
+
+    class _Client:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        async def get(self, url, params=None, headers=None):
+            self.calls.append(str(url))
+            if "www.reddit.com" in str(url):
+                return _Resp(403, {"error": "forbidden"})
+            return _Resp(
+                200,
+                {
+                    "data": {
+                        "children": [
+                            {
+                                "data": {
+                                    "id": "abc999",
+                                    "subreddit": "artificial",
+                                    "title": "Recovered",
+                                }
+                            }
+                        ]
+                    }
+                },
+            )
+
+    client = _Client()
+    children = await adapter._fetch_subreddit_children(
+        client,  # type: ignore[arg-type]
+        subreddit="artificial",
+        per_subreddit_limit=10,
+        user_agent="CSIIngester/1.0",
+    )
+    assert len(children) == 1
+    assert any("www.reddit.com" in url for url in client.calls)
+    assert any("old.reddit.com" in url for url in client.calls)

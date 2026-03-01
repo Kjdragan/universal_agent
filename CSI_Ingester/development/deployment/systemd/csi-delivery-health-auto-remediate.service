@@ -1,0 +1,14 @@
+[Unit]
+Description=Run CSI delivery-health auto-remediation workflow
+After=network.target csi-ingester.service universal-agent-gateway.service
+Wants=csi-ingester.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
+EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_delivery_health_auto_remediate.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db
+
+[Install]
+WantedBy=multi-user.target
+

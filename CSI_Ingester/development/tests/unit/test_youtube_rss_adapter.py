@@ -124,6 +124,34 @@ async def test_rss_adapter_persists_seed_state_across_restart(monkeypatch):
     assert events[0].payload["video_id"] == "v_new"
 
 
+async def test_rss_adapter_channel_failure_does_not_abort_other_channels(monkeypatch):
+    adapter = YouTubeChannelRSSAdapter(
+        {
+            "watchlist": [{"channel_id": "UC_FAIL"}, {"channel_id": "UC_GOOD"}],
+            "seed_on_first_run": False,
+        }
+    )
+
+    async def _fake_fetch(client, *, channel_id):
+        if channel_id == "UC_FAIL":
+            raise RuntimeError("network boom")
+        return [
+            {
+                "video_id": "v_good",
+                "channel_id": "UC_GOOD",
+                "url": "https://youtube.com/watch?v=v_good",
+                "title": "Good",
+                "published_at": "2026-02-22T00:20:00Z",
+                "occurred_at": "2026-02-22T00:20:00Z",
+            }
+        ]
+
+    monkeypatch.setattr(adapter, "_fetch_channel_entries", _fake_fetch)
+    events = await adapter.fetch_events()
+    assert len(events) == 1
+    assert events[0].payload["video_id"] == "v_good"
+
+
 def test_rss_adapter_loads_watchlist_from_json_file(tmp_path: Path):
     payload = {
         "channels": [

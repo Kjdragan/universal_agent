@@ -75,6 +75,7 @@ dependencies = [
     "pytz>=2025.2",
     "infisical-python==2.3.5",
     "redis>=7.2.1",
+    "agentmail>=0.2.22",
 ]
 
 [tool.ruff]

@@ -77,6 +77,50 @@ type CSIHealth = {
     };
 };
 
+type CSIDeliveryHint = {
+    code: string;
+    severity: string;
+    title: string;
+    action: string;
+    runbook_command?: string;
+    detail?: string;
+};
+
+type CSIDeliverySource = {
+    source: string;
+    status: string;
+    events_recent: number;
+    expected_min_events?: number;
+    delivered_recent: number;
+    undelivered_recent: number;
+    dlq_recent: number;
+    lag_minutes?: number | null;
+    failed_attempt_ratio?: number;
+    repair_hints?: CSIDeliveryHint[];
+    adapter_health?: Record<string, any>;
+};
+
+type CSIDeliveryHealth = {
+    status: string;
+    overall?: {
+        status?: string;
+        window_hours?: number;
+        stale_threshold_minutes?: number;
+        failing_sources?: string[];
+        stale_sources?: string[];
+    };
+    tuning?: {
+        max_failed_attempt_ratio?: number;
+        min_rss_events?: number;
+        min_reddit_events?: number;
+        max_dlq_recent?: number;
+        adapter_consecutive_failures?: number;
+        stale_threshold_minutes?: number;
+        window_hours?: number;
+    };
+    sources?: CSIDeliverySource[];
+};
+
 type CSISpecialistLoop = {
     topic_key: string;
     topic_label: string;
@@ -204,6 +248,7 @@ export default function CSIDashboard() {
     const [previewLoading, setPreviewLoading] = useState(false);
     const [previewError, setPreviewError] = useState<string | null>(null);
     const [health, setHealth] = useState<CSIHealth | null>(null);
+    const [deliveryHealth, setDeliveryHealth] = useState<CSIDeliveryHealth | null>(null);
     const [loops, setLoops] = useState<CSISpecialistLoop[]>([]);
     const [opportunityBundles, setOpportunityBundles] = useState<CSIOpportunityBundle[]>([]);
     const [deepLinkApplied, setDeepLinkApplied] = useState(false);
@@ -211,6 +256,7 @@ export default function CSIDashboard() {
     const [triageBusy, setTriageBusy] = useState(false);
     const [cleanupBusy, setCleanupBusy] = useState(false);
     const [loopsStatus, setLoopsStatus] = useState<string | null>(null);
+    const [deliveryStatus, setDeliveryStatus] = useState<string | null>(null);
 
     const openArtifactPreview = useCallback(async (path: string, label: string) => {
         const normalized = normalizeArtifactPath(path);
@@ -244,10 +290,11 @@ export default function CSIDashboard() {
 
     const loadData = useCallback(async () => {
         try {
-            const [repRes, notifRes, healthRes, loopsRes, oppRes] = await Promise.all([
+            const [repRes, notifRes, healthRes, deliveryRes, loopsRes, oppRes] = await Promise.all([
                 fetch(`${API_BASE}/api/v1/dashboard/csi/reports`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=100&source_domain=csi`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/csi/health`, { cache: "no-store" }),
+                fetch(`${API_BASE}/api/v1/dashboard/csi/delivery-health?window_hours=24`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/csi/specialist-loops?limit=8`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/csi/opportunities?limit=5`, { cache: "no-store" }),
             ]);
@@ -272,6 +319,12 @@ export default function CSIDashboard() {
             if (healthRes.ok) {
                 const hData = await healthRes.json();
                 setHealth(hData as CSIHealth);
+            }
+            if (deliveryRes.ok) {
+                const dData = await deliveryRes.json();
+                setDeliveryHealth(dData as CSIDeliveryHealth);
+            } else {
+                setDeliveryHealth(null);
             }
             if (loopsRes.ok) {
                 const loopsData = await loopsRes.json();
@@ -460,6 +513,17 @@ export default function CSIDashboard() {
         }
     }
 
+    async function copyCommand(command: string) {
+        const trimmed = String(command || "").trim();
+        if (!trimmed) return;
+        try {
+            await navigator.clipboard.writeText(trimmed);
+            setDeliveryStatus("Runbook command copied.");
+        } catch {
+            setDeliveryStatus("Clipboard copy failed.");
+        }
+    }
+
     return (
         <div className="flex h-full flex-col gap-6">
             <div className="flex items-center justify-between">
@@ -526,6 +590,116 @@ export default function CSIDashboard() {
                     <div className="mt-1 text-xs text-slate-500">
                         Method: {latestBundle?.confidence_method || "n/a"} | Coverage: {latestBundle?.quality_summary?.coverage_score ?? 0}
                     </div>
+                </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">Data Plane Delivery Health</h2>
+                    <span
+                        className={`text-xs ${
+                            deliveryHealth?.overall?.status === "ok"
+                                ? "text-emerald-300"
+                                : deliveryHealth?.overall?.status === "failing"
+                                  ? "text-rose-300"
+                                  : "text-amber-300"
+                        }`}
+                    >
+                        {deliveryHealth?.overall?.status || "unknown"}
+                    </span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                    window={deliveryHealth?.tuning?.window_hours ?? 24}h | stale&gt;{deliveryHealth?.tuning?.stale_threshold_minutes ?? 240}m |
+                    max_failed_ratio={deliveryHealth?.tuning?.max_failed_attempt_ratio ?? 0.2}
+                </div>
+                {deliveryStatus && (
+                    <div className="mt-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-300">
+                        {deliveryStatus}
+                    </div>
+                )}
+                <div className="mt-3 overflow-auto rounded border border-slate-800">
+                    <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-900/70 text-slate-400">
+                            <tr>
+                                <th className="px-2 py-1.5">Source</th>
+                                <th className="px-2 py-1.5">Status</th>
+                                <th className="px-2 py-1.5">Events</th>
+                                <th className="px-2 py-1.5">Delivery</th>
+                                <th className="px-2 py-1.5">DLQ</th>
+                                <th className="px-2 py-1.5">Hints</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {(deliveryHealth?.sources || []).map((row) => (
+                                <tr key={`delivery-${row.source}`} className="border-t border-slate-800/60 align-top">
+                                    <td className="px-2 py-1.5 text-slate-300">{row.source}</td>
+                                    <td
+                                        className={`px-2 py-1.5 ${
+                                            row.status === "ok"
+                                                ? "text-emerald-300"
+                                                : row.status === "failing"
+                                                  ? "text-rose-300"
+                                                  : "text-amber-300"
+                                        }`}
+                                    >
+                                        {row.status}
+                                    </td>
+                                    <td className="px-2 py-1.5 text-slate-400">
+                                        {row.events_recent ?? 0}
+                                        {typeof row.expected_min_events === "number" ? (
+                                            <span className="ml-1 text-[10px] text-slate-500">/ min {row.expected_min_events}</span>
+                                        ) : null}
+                                        <div className="text-[10px] text-slate-500">
+                                            lag {typeof row.lag_minutes === "number" ? row.lag_minutes : "--"}m
+                                        </div>
+                                    </td>
+                                    <td className="px-2 py-1.5 text-slate-400">
+                                        {row.delivered_recent ?? 0}/{row.undelivered_recent ?? 0}
+                                        <div className="text-[10px] text-slate-500">
+                                            fail ratio {typeof row.failed_attempt_ratio === "number" ? row.failed_attempt_ratio : "--"}
+                                        </div>
+                                    </td>
+                                    <td className="px-2 py-1.5 text-slate-400">{row.dlq_recent ?? 0}</td>
+                                    <td className="px-2 py-1.5 text-slate-300">
+                                        {(row.repair_hints || []).length === 0 ? (
+                                            <span className="text-[11px] text-slate-500">No action needed.</span>
+                                        ) : (
+                                            <div className="space-y-1.5">
+                                                {(row.repair_hints || []).slice(0, 3).map((hint, idx) => (
+                                                    <div key={`${row.source}-hint-${idx}`} className="rounded border border-slate-800 bg-slate-950/60 p-1.5">
+                                                        <div
+                                                            className={`text-[10px] ${
+                                                                hint.severity === "critical" ? "text-rose-300" : "text-amber-300"
+                                                            }`}
+                                                        >
+                                                            {hint.title}
+                                                        </div>
+                                                        <div className="text-[10px] text-slate-400">{hint.action}</div>
+                                                        {hint.runbook_command && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => void copyCommand(hint.runbook_command || "")}
+                                                                className="mt-1 rounded border border-cyan-700/40 bg-cyan-700/10 px-1.5 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-700/20"
+                                                            >
+                                                                Copy Runbook Cmd
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </td>
+                                </tr>
+                            ))}
+                            {(!deliveryHealth?.sources || deliveryHealth.sources.length === 0) && (
+                                <tr>
+                                    <td className="px-2 py-2 text-slate-500" colSpan={6}>
+                                        No delivery health samples available yet.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
                 </div>
             </div>
 

@@ -170,26 +170,20 @@ class RedditDiscoveryAdapter(SourceAdapter):
         async with httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True) as client:
             for subreddit in subreddits:
                 self._hydrate_subreddit_state(subreddit)
-                url = f"https://www.reddit.com/r/{subreddit}/new.json"
-                resp = await client.get(
-                    url,
-                    params={"limit": per_subreddit_limit},
-                    headers={"User-Agent": user_agent, "Accept": "application/json"},
-                )
-                if resp.status_code >= 400:
-                    logger.warning(
-                        "Reddit fetch failed subreddit=%s status=%s",
-                        subreddit,
-                        resp.status_code,
+                try:
+                    children = await self._fetch_subreddit_children(
+                        client,
+                        subreddit=subreddit,
+                        per_subreddit_limit=per_subreddit_limit,
+                        user_agent=user_agent,
                     )
+                except Exception as exc:
+                    logger.warning("Reddit fetch failed subreddit=%s error=%s", subreddit, exc)
                     self._persist_subreddit_state(subreddit)
                     continue
-
-                payload = resp.json() if resp.content else {}
-                data = payload.get("data") if isinstance(payload, dict) else {}
-                children = data.get("children") if isinstance(data, dict) else []
-                if not isinstance(children, list):
-                    children = []
+                if not children:
+                    self._persist_subreddit_state(subreddit)
+                    continue
 
                 items: list[dict[str, Any]] = []
                 for child in children:
@@ -242,6 +236,61 @@ class RedditDiscoveryAdapter(SourceAdapter):
                 self._persist_subreddit_state(subreddit)
 
         return events
+
+    async def _fetch_subreddit_children(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        subreddit: str,
+        per_subreddit_limit: int,
+        user_agent: str,
+    ) -> list[dict[str, Any]]:
+        endpoints = list(self.config.get("endpoints") or [])
+        if not endpoints:
+            endpoints = [
+                "https://www.reddit.com/r/{subreddit}/new/.json",
+                "https://old.reddit.com/r/{subreddit}/new/.json",
+            ]
+        headers = {
+            "User-Agent": user_agent,
+            "Accept": "application/json",
+            "Cache-Control": "no-cache",
+        }
+        params = {"limit": per_subreddit_limit, "raw_json": 1}
+        last_error = ""
+        for template in endpoints:
+            url = str(template or "").strip().format(subreddit=subreddit)
+            if not url:
+                continue
+            try:
+                resp = await client.get(url, params=params, headers=headers)
+            except Exception as exc:
+                last_error = f"request:{type(exc).__name__}:{exc}"
+                logger.warning("Reddit endpoint request failed subreddit=%s url=%s error=%s", subreddit, url, exc)
+                continue
+            if resp.status_code >= 400:
+                last_error = f"http_{resp.status_code}"
+                logger.warning(
+                    "Reddit endpoint error subreddit=%s url=%s status=%s",
+                    subreddit,
+                    url,
+                    resp.status_code,
+                )
+                continue
+            try:
+                payload = resp.json() if resp.content else {}
+            except Exception as exc:
+                last_error = f"json:{type(exc).__name__}:{exc}"
+                logger.warning("Reddit endpoint JSON parse failed subreddit=%s url=%s error=%s", subreddit, url, exc)
+                continue
+            data = payload.get("data") if isinstance(payload, dict) else {}
+            children = data.get("children") if isinstance(data, dict) else []
+            if isinstance(children, list):
+                return children
+            last_error = "invalid_payload_shape"
+        if last_error:
+            raise RuntimeError(last_error)
+        return []
 
     def normalize(self, raw: RawEvent) -> CreatorSignalEvent:
         now = _iso_now()

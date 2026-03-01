@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CSI delivery-health canary every 10 minutes
+
+[Timer]
+OnCalendar=*:00/10
+Persistent=true
+Unit=csi-delivery-health-canary.service
+
+[Install]
+WantedBy=timers.target
+

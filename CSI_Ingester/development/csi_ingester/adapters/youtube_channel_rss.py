@@ -51,7 +51,16 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
                 if not channel_id:
                     continue
                 self._hydrate_channel_state(channel_id)
-                entries = await self._fetch_channel_entries(client, channel_id=channel_id)
+                try:
+                    entries = await self._fetch_channel_entries(client, channel_id=channel_id)
+                except Exception as exc:
+                    logger.warning(
+                        "RSS fetch channel failed channel_id=%s error=%s",
+                        channel_id,
+                        exc,
+                    )
+                    self._persist_channel_state(channel_id)
+                    continue
                 if not entries:
                     self._persist_channel_state(channel_id)
                     continue
@@ -189,21 +198,30 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         modified = self._modified_by_channel.get(channel_id)
         if modified:
             headers["If-Modified-Since"] = modified
-        response = await client.get(
-            "https://www.youtube.com/feeds/videos.xml",
-            params={"channel_id": channel_id},
-            headers=headers,
-        )
+        try:
+            response = await client.get(
+                "https://www.youtube.com/feeds/videos.xml",
+                params={"channel_id": channel_id},
+                headers=headers,
+            )
+        except Exception as exc:
+            logger.warning("RSS request failed channel_id=%s error=%s", channel_id, exc)
+            return []
         if response.status_code == 304:
             return []
         if response.status_code >= 400:
+            logger.warning("RSS request error channel_id=%s status=%s", channel_id, response.status_code)
             return []
         if "etag" in response.headers:
             self._etag_by_channel[channel_id] = response.headers["etag"]
         if "last-modified" in response.headers:
             self._modified_by_channel[channel_id] = response.headers["last-modified"]
 
-        root = ET.fromstring(response.text)
+        try:
+            root = ET.fromstring(response.text)
+        except Exception as exc:
+            logger.warning("RSS parse failed channel_id=%s error=%s", channel_id, exc)
+            return []
         entries: list[dict[str, Any]] = []
         for entry in root.findall("a:entry", ATOM_NS):
             video_id = _safe_text(entry.find("yt:videoId", ATOM_NS))

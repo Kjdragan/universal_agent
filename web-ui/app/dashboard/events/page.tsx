@@ -43,6 +43,24 @@ type ActivityAuditRow = {
   metadata?: Record<string, unknown>;
 };
 
+type DeliveryHealthRemediationStep = {
+  code?: string;
+  source?: string;
+  title?: string;
+  severity?: string;
+  action?: string;
+  runbook_command?: string;
+  detail?: string;
+};
+
+type DeliveryHealthPanelState = {
+  status: string;
+  failingSources: string[];
+  degradedSources: string[];
+  steps: DeliveryHealthRemediationStep[];
+  primaryRunbookCommand: string;
+};
+
 type EventPreset = {
   id: string;
   owner_id: string;
@@ -154,6 +172,44 @@ function savePresetCache(presets: EventPreset[]) {
   } catch {
     // ignore local cache failures
   }
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+function parseDeliveryHealthPanelState(item: ActivityEvent | null): DeliveryHealthPanelState | null {
+  if (!item) return null;
+  const kind = String(item.kind || "").trim().toLowerCase();
+  if (kind !== "csi_delivery_health_regression" && kind !== "csi_delivery_health_recovered") {
+    return null;
+  }
+  const metadata = item.metadata && typeof item.metadata === "object" ? item.metadata : {};
+  const status = String((metadata as Record<string, unknown>).delivery_health_status || "").trim().toLowerCase();
+  const failingSources = asStringArray((metadata as Record<string, unknown>).failing_sources);
+  const degradedSources = asStringArray((metadata as Record<string, unknown>).degraded_sources);
+  const rawSteps = (metadata as Record<string, unknown>).remediation_steps;
+  const steps = Array.isArray(rawSteps)
+    ? rawSteps.filter((row): row is DeliveryHealthRemediationStep => typeof row === "object" && row !== null)
+    : [];
+  const primaryRunbookCommand = String((metadata as Record<string, unknown>).primary_runbook_command || "").trim();
+  return {
+    status: status || (kind.endsWith("_recovered") ? "ok" : "degraded"),
+    failingSources,
+    degradedSources,
+    steps,
+    primaryRunbookCommand,
+  };
+}
+
+function canaryStatusClasses(status: string): string {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (normalized === "failing") return "border-rose-700/60 bg-rose-950/30 text-rose-200";
+  if (normalized === "degraded") return "border-amber-700/60 bg-amber-950/30 text-amber-200";
+  return "border-emerald-700/60 bg-emerald-950/30 text-emerald-200";
 }
 
 export default function DashboardEventsPage() {
@@ -549,6 +605,7 @@ export default function DashboardEventsPage() {
     () => items.find((item) => item.id === selectedId) ?? null,
     [items, selectedId],
   );
+  const selectedCanary = useMemo(() => parseDeliveryHealthPanelState(selected), [selected]);
 
   const sourceOptions = useMemo(() => {
     const values = new Set<string>();
@@ -728,6 +785,17 @@ export default function DashboardEventsPage() {
     if (!href) return;
     window.location.href = href;
   }, [loadAudit, loadCounters, loadEvents, selected]);
+
+  const copyCommand = useCallback(async (command: string) => {
+    const text = String(command || "").trim();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setHandoffResult("Copied remediation command.");
+    } catch {
+      setHandoffResult("Unable to copy command.");
+    }
+  }, []);
 
   async function submitHandoff() {
     if (!selected) return;
@@ -963,6 +1031,9 @@ export default function DashboardEventsPage() {
                     {item.source_domain}
                   </span>
                   <span className={`text-[10px] uppercase ${severityStyle}`}>{item.severity}</span>
+                  {(item.kind === "csi_delivery_health_regression" || item.kind === "csi_delivery_health_recovered") && (
+                    <span className="text-[10px] uppercase text-amber-300">canary</span>
+                  )}
                   {Boolean(item.metadata?.pinned) && (
                     <span className="text-[10px] uppercase text-amber-300">pinned</span>
                   )}
@@ -1024,6 +1095,97 @@ export default function DashboardEventsPage() {
               </div>
 
               <div className="flex-1 space-y-3 overflow-y-auto p-4 scrollbar-thin">
+                {selectedCanary && (
+                  <div className="space-y-2 rounded border border-cyan-900/60 bg-cyan-950/20 p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="text-[11px] uppercase tracking-wide text-cyan-200">Delivery Health Canary</div>
+                      <span className={`rounded border px-2 py-0.5 text-[10px] uppercase ${canaryStatusClasses(selectedCanary.status)}`}>
+                        {selectedCanary.status || "unknown"}
+                      </span>
+                    </div>
+
+                    {(selectedCanary.failingSources.length > 0 || selectedCanary.degradedSources.length > 0) && (
+                      <div className="flex flex-wrap gap-2 text-[11px]">
+                        {selectedCanary.failingSources.map((source) => (
+                          <span
+                            key={`failing-${source}`}
+                            className="rounded border border-rose-700/60 bg-rose-950/30 px-2 py-0.5 text-rose-200"
+                          >
+                            failing: {source}
+                          </span>
+                        ))}
+                        {selectedCanary.degradedSources.map((source) => (
+                          <span
+                            key={`degraded-${source}`}
+                            className="rounded border border-amber-700/60 bg-amber-950/30 px-2 py-0.5 text-amber-200"
+                          >
+                            degraded: {source}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="flex flex-wrap gap-2">
+                      {selectedCanary.primaryRunbookCommand && (
+                        <button
+                          type="button"
+                          onClick={() => void copyCommand(selectedCanary.primaryRunbookCommand)}
+                          className="rounded border border-cyan-700/50 bg-cyan-500/10 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-500/20"
+                        >
+                          Copy Primary Runbook
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => { window.location.href = "/dashboard/csi"; }}
+                        className="rounded border border-slate-700 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-800/80"
+                      >
+                        View in CSI
+                      </button>
+                    </div>
+
+                    {selectedCanary.steps.length > 0 && (
+                      <div className="space-y-1">
+                        <div className="text-[11px] uppercase tracking-wide text-slate-300">Guided Remediation</div>
+                        <div className="space-y-2">
+                          {selectedCanary.steps.map((step, index) => {
+                            const stepCommand = String(step.runbook_command || "").trim();
+                            const stepSource = String(step.source || "").trim();
+                            const stepSeverity = String(step.severity || "warning").trim().toLowerCase();
+                            return (
+                              <div key={`step-${index}`} className="rounded border border-slate-800 bg-slate-900/50 p-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="text-[11px] text-slate-100">{step.title || step.code || "Remediation Step"}</span>
+                                  <span className={`rounded border px-1.5 py-0.5 text-[10px] uppercase ${canaryStatusClasses(stepSeverity)}`}>
+                                    {stepSeverity}
+                                  </span>
+                                  {stepSource && <span className="text-[10px] text-slate-400">{stepSource}</span>}
+                                  {stepCommand && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void copyCommand(stepCommand)}
+                                      className="ml-auto rounded border border-cyan-700/50 bg-cyan-500/10 px-2 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-500/20"
+                                    >
+                                      Copy Command
+                                    </button>
+                                  )}
+                                </div>
+                                {step.action && <div className="mt-1 text-[11px] text-slate-300">{step.action}</div>}
+                                {step.detail && <div className="mt-1 text-[11px] text-slate-400">{step.detail}</div>}
+                                {stepCommand && (
+                                  <pre className="mt-2 rounded border border-slate-800 bg-slate-950/50 p-2 text-[10px] text-slate-300 overflow-x-auto whitespace-pre-wrap">
+                                    {stepCommand}
+                                  </pre>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-1">
                   <div className="text-[11px] uppercase tracking-wide text-slate-400">Message</div>
                   <div className="rounded border border-slate-800 bg-slate-900/50 p-3 text-xs whitespace-pre-wrap text-slate-300">

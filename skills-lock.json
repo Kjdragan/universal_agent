@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "agentmail": {
+      "source": "agentmail-to/agentmail-skills",
+      "sourceType": "github",
+      "computedHash": "b07e11812d60685f015ceade7dd5dc261a4f909dd95e1c68de63c13385e82e70"
+    }
+  }
+}

@@ -293,6 +293,136 @@ def test_signals_ingest_keeps_full_csi_notification_message(client, monkeypatch)
     assert not str(csi_notice.get("message") or "").endswith("...")
 
 
+def test_signals_ingest_delivery_health_regression_emits_actionable_alert(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "delivery_health_regression"
+    payload["events"][0]["subject"] = {
+        "status": "failing",
+        "failing_sources": ["youtube_channel_rss"],
+        "degraded_sources": [],
+        "remediation": {
+            "steps": [
+                {
+                    "code": "delivery_failures_detected",
+                    "source": "youtube_channel_rss",
+                    "runbook_command": "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_replay_dlq.py --limit 100",
+                }
+            ]
+        },
+    }
+    request_id = "req-delivery-health-regression"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    regression_notice = next(
+        item for item in gateway_server._notifications if item.get("kind") == "csi_delivery_health_regression"
+    )
+    assert regression_notice.get("severity") == "error"
+    assert bool(regression_notice.get("requires_action")) is True
+    metadata = regression_notice.get("metadata") if isinstance(regression_notice.get("metadata"), dict) else {}
+    assert metadata.get("delivery_health_status") == "failing"
+    assert isinstance(metadata.get("remediation_steps"), list)
+    assert "csi_replay_dlq.py" in str(metadata.get("primary_runbook_command") or "")
+
+
+def test_signals_ingest_delivery_health_recovered_emits_success_notice(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "delivery_health_recovered"
+    payload["events"][0]["subject"] = {
+        "status": "ok",
+        "failing_sources": [],
+        "degraded_sources": [],
+        "remediation": {"steps": []},
+    }
+    request_id = "req-delivery-health-recovered"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    recovered_notice = next(
+        item for item in gateway_server._notifications if item.get("kind") == "csi_delivery_health_recovered"
+    )
+    assert recovered_notice.get("severity") == "success"
+    assert bool(recovered_notice.get("requires_action")) is False
+
+
+def test_signals_ingest_auto_remediation_failed_emits_actionable_notice(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "delivery_health_auto_remediation_failed"
+    payload["events"][0]["subject"] = {
+        "status": "failed",
+        "health_status": "failing",
+        "executed_actions": [
+            {
+                "handler": "restart_ingester",
+                "code": "adapter_consecutive_failures",
+                "source": "youtube_channel_rss",
+                "success": False,
+                "result": {"detail": "exit=1 stderr=permission denied"},
+            }
+        ],
+        "skipped_actions": [],
+    }
+    request_id = "req-auto-remediation-failed"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    notice = next(
+        item
+        for item in gateway_server._notifications
+        if item.get("kind") == "csi_delivery_health_auto_remediation_failed"
+    )
+    assert len(hook_stub.action_calls) >= 1
+    assert str(hook_stub.action_calls[0].get("to") or "") == "data-analyst"
+    assert notice.get("severity") == "error"
+    assert bool(notice.get("requires_action")) is True
+    metadata = notice.get("metadata") if isinstance(notice.get("metadata"), dict) else {}
+    assert metadata.get("auto_remediation_status") == "failed"
+    assert metadata.get("delivery_health_status") == "failing"
+    assert isinstance(metadata.get("executed_actions"), list)
+
+
 def test_signals_ingest_noisy_events_emit_hourly_digest(client, monkeypatch):
     monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
     monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")

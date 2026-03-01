@@ -58,6 +58,17 @@ class _EmitterFail:
         return False, 503, {"ok": False}
 
 
+class _AdapterFetchFail(SourceAdapter):
+    async def fetch_events(self) -> list[RawEvent]:
+        raise RuntimeError("fetch boom")
+
+    def normalize(self, raw: RawEvent) -> CreatorSignalEvent:
+        raise AssertionError("normalize should not be called")
+
+    def get_dedupe_key(self, event: CreatorSignalEvent) -> str:
+        return "unused"
+
+
 def _service(tmp_path: Path) -> tuple[CSIService, object]:
     config = CSIConfig(
         raw={
@@ -113,3 +124,51 @@ async def test_service_moves_failed_emit_to_dlq(tmp_path):
     assert int(attempts[0]["delivered"]) == 0
     assert int(attempts[0]["status_code"]) == 503
     assert str(attempts[0]["error_class"]) == "upstream_5xx"
+
+
+async def test_service_records_dlq_when_emitter_disabled(tmp_path):
+    service, conn = _service(tmp_path)
+    adapter = _FakeAdapter()
+    service.emitter = None
+
+    await service._poll_adapter("fake", adapter)
+    dlq = conn.execute("SELECT COUNT(*) AS c FROM dead_letter WHERE event_id = 'evt-1'").fetchone()
+    assert int(dlq["c"]) == 1
+    attempts = conn.execute(
+        "SELECT delivered, status_code, error_class FROM delivery_attempts WHERE event_id = 'evt-1' ORDER BY id ASC"
+    ).fetchall()
+    assert len(attempts) == 1
+    assert int(attempts[0]["delivered"]) == 0
+    assert int(attempts[0]["status_code"]) == 503
+    assert str(attempts[0]["error_class"]) == "upstream_5xx"
+
+    state = conn.execute(
+        "SELECT state_json FROM source_state WHERE source_key = 'adapter_health:fake' LIMIT 1"
+    ).fetchone()
+    assert state is not None
+    import json as _json
+
+    parsed = _json.loads(str(state["state_json"]))
+    assert bool(parsed.get("ok")) is True
+    assert int((parsed.get("last_cycle") or {}).get("emit_disabled") or 0) == 1
+
+
+async def test_service_records_adapter_health_on_fetch_failure(tmp_path):
+    service, conn = _service(tmp_path)
+    adapter = _AdapterFetchFail()
+    service.emitter = _EmitterOK()
+
+    import pytest
+
+    with pytest.raises(RuntimeError):
+        await service._poll_adapter("fetch_fail", adapter)
+    state = conn.execute(
+        "SELECT state_json FROM source_state WHERE source_key = 'adapter_health:fetch_fail' LIMIT 1"
+    ).fetchone()
+    assert state is not None
+    import json as _json
+
+    parsed = _json.loads(str(state["state_json"]))
+    assert bool(parsed.get("ok")) is False
+    assert int(parsed.get("consecutive_failures") or 0) >= 1
+    assert "fetch_events:RuntimeError" in str(parsed.get("last_error") or "")

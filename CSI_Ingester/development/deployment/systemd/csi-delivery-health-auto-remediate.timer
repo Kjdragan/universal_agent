@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CSI delivery-health auto-remediation every 15 minutes
+
+[Timer]
+OnCalendar=*:05/15
+Persistent=true
+Unit=csi-delivery-health-auto-remediate.service
+
+[Install]
+WantedBy=timers.target
+

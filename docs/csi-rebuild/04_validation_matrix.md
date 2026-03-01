@@ -13,15 +13,20 @@ Last updated: 2026-03-01
 - End-to-end ingest -> enrich -> synthesize -> emit -> dashboard path.
 - DLQ replay success and failure paths.
 - Notification dismissal/delete behavior in tutorial panel.
+- Adapter failure isolation (one failing RSS channel/subreddit does not abort entire poll cycle).
+- Dashboard delivery-health endpoint source rollup (`/api/v1/dashboard/csi/delivery-health`).
+- CSI operator UX rendering of source-level repair hints and runbook command actions.
+- Runtime delivery-health canary transitions (`delivery_health_regression` + `delivery_health_recovered`) and actionable metadata passthrough.
 
 ## Operational Canaries (VPS)
 - RSS Telegram receives non-alert content when RSS events exist.
 - Reddit Telegram receives non-alert content when Reddit events exist.
 - DLQ backlog trend is stable/declining.
 - Overnight continuity checks reflect observed runs correctly.
+- `scripts/csi_validate_live_flow.py --emit-smoke` confirms smoke events are accepted and visible in UA activity.
+- `scripts/csi_delivery_health_canary.py` emits regression/recovery events with guided runbook commands.
 
 ## Acceptance Metrics
 - `undelivered_last_24h <= 2%`
 - `dlq_replay_success_60m >= 95%`
 - narrative + ranked bundle emitted in active windows
-

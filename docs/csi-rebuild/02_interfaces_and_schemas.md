@@ -42,7 +42,7 @@ Last updated: 2026-03-01
 ## Dashboard API Targets
 - Extend `/api/v1/dashboard/csi/reports`
 - Add `/api/v1/dashboard/csi/opportunities` (implemented)
-- Add `/api/v1/dashboard/csi/delivery-health`
+- Add `/api/v1/dashboard/csi/delivery-health` (implemented)
 - Add `/api/v1/dashboard/csi/specialist-loops/{topic_key}/action` (implemented)
 - Add `/api/v1/dashboard/csi/specialist-loops/triage` (implemented)
 - Add `/api/v1/dashboard/csi/specialist-loops/cleanup` (implemented)
@@ -64,3 +64,18 @@ Last updated: 2026-03-01
 - `reopen`
 - `close`
 - `request_followup`
+
+## Delivery Health Contract (Implemented)
+- Per-source fields include:
+  - `events_recent`, `delivered_recent`, `undelivered_recent`
+  - `delivery_attempts_recent`, `delivery_attempts_failed`, `failed_attempt_ratio`
+  - `dlq_recent`, `lag_minutes`, `status`
+  - `adapter_health` snapshot
+  - `repair_hints[]` (operator remediation guidance with runbook command)
+- API response includes `tuning` section:
+  - `max_failed_attempt_ratio`
+  - `min_rss_events`
+  - `min_reddit_events`
+  - `max_dlq_recent`
+  - `adapter_consecutive_failures`
+  - `stale_threshold_minutes`

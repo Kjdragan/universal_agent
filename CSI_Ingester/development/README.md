@@ -35,6 +35,12 @@ Run signed CSI->UA smoke check:
 uv run python scripts/csi_local_e2e_smoke.py
 ```
 
+Run data-plane validation (RSS/Reddit ingest + optional live smoke to UA):
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_validate_live_flow.py --lookback-hours 24 --emit-smoke
+```
+
 Run endpoint smoke against a live UA endpoint:
 
 ```bash

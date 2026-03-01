@@ -3293,12 +3293,15 @@ def _csi_is_high_value_event(event_type: str) -> bool:
         "rss_insight_daily",
         "report_product_ready",
         "opportunity_bundle_ready",
+        "delivery_health_auto_remediation_failed",
     }
 
 
 def _csi_event_has_anomaly(event_type: str, subject: Any) -> bool:
     lowered = str(event_type or "").strip().lower()
-    if "failed" in lowered or "error" in lowered:
+    if lowered == "delivery_health_regression":
+        return True
+    if "failed" in lowered or "error" in lowered or "regression" in lowered:
         return True
     subject_obj = subject if isinstance(subject, dict) else {}
     if lowered == "category_quality_report":
@@ -3314,20 +3317,37 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     is_digest = _csi_should_digest_event(event_type)
     has_anomaly = _csi_event_has_anomaly(event_type, subject)
     high_value = _csi_is_high_value_event(event_type)
+    subject_obj = subject if isinstance(subject, dict) else {}
     severity = "info"
-    if has_anomaly:
+    if event_type == "delivery_health_recovered":
+        severity = "success"
+    elif event_type == "delivery_health_regression":
+        status_hint = str(subject_obj.get("status") or "").strip().lower()
+        severity = "error" if status_hint == "failing" else "warning"
+    elif event_type == "delivery_health_auto_remediation_succeeded":
+        severity = "success"
+    elif event_type == "delivery_health_auto_remediation_failed":
+        severity = "error"
+    elif has_anomaly:
         severity = "error"
     elif "quality" in event_type and not is_digest:
         severity = "warning"
-    requires_action = bool(has_anomaly or high_value)
-    todoist_sync = bool(
+    requires_action = bool(
         has_anomaly
+        or high_value
+        or event_type in {"delivery_health_regression", "delivery_health_auto_remediation_failed"}
+    )
+    if event_type == "delivery_health_recovered":
+        requires_action = False
+    todoist_sync = bool(
+        (has_anomaly and event_type != "delivery_health_recovered")
         or event_type in {
             "rss_insight_daily",
             "report_product_ready",
             "opportunity_bundle_ready",
             "rss_trend_report",
             "reddit_trend_report",
+            "delivery_health_regression",
         }
     )
     return {
@@ -8544,7 +8564,21 @@ async def signals_ingest_endpoint(request: Request):
             analytics_dispatch_count += 1
 
             policy = _csi_event_notification_policy(event)
+            event_type_norm = str(event.event_type or "").strip().lower()
+            notification_kind = "csi_insight"
             title = f"CSI Insight: {event.event_type or 'Report'} from {event.source or 'Unknown'}"
+            if event_type_norm == "delivery_health_regression":
+                notification_kind = "csi_delivery_health_regression"
+                title = "CSI Delivery Health Regression Detected"
+            elif event_type_norm == "delivery_health_recovered":
+                notification_kind = "csi_delivery_health_recovered"
+                title = "CSI Delivery Health Recovered"
+            elif event_type_norm == "delivery_health_auto_remediation_failed":
+                notification_kind = "csi_delivery_health_auto_remediation_failed"
+                title = "CSI Auto-Remediation Failed"
+            elif event_type_norm == "delivery_health_auto_remediation_succeeded":
+                notification_kind = "csi_delivery_health_auto_remediation_succeeded"
+                title = "CSI Auto-Remediation Succeeded"
             message = analytics_action.get("message", "No content")
 
             metadata = {
@@ -8566,6 +8600,39 @@ async def signals_ingest_endpoint(request: Request):
                     md_path = artifact_paths.get("markdown")
                     if md_path:
                         message += f"\n\nReport Artifact: {md_path}"
+                if event_type_norm in {"delivery_health_regression", "delivery_health_recovered"}:
+                    metadata["delivery_health_status"] = str(event.subject.get("status") or "")
+                    metadata["failing_sources"] = event.subject.get("failing_sources")
+                    metadata["degraded_sources"] = event.subject.get("degraded_sources")
+                    remediation = event.subject.get("remediation") if isinstance(event.subject.get("remediation"), dict) else {}
+                    steps = remediation.get("steps") if isinstance(remediation.get("steps"), list) else []
+                    if steps:
+                        metadata["remediation_steps"] = steps[:8]
+                        first_command = ""
+                        for step in steps:
+                            if isinstance(step, dict):
+                                first_command = str(step.get("runbook_command") or "").strip()
+                                if first_command:
+                                    break
+                        if first_command:
+                            metadata["primary_runbook_command"] = first_command
+                elif event_type_norm in {"delivery_health_auto_remediation_failed", "delivery_health_auto_remediation_succeeded"}:
+                    metadata["delivery_health_status"] = str(event.subject.get("health_status") or "")
+                    metadata["auto_remediation_status"] = str(event.subject.get("status") or "")
+                    metadata["executed_actions"] = event.subject.get("executed_actions")
+                    metadata["skipped_actions"] = event.subject.get("skipped_actions")
+                    executed = event.subject.get("executed_actions")
+                    if isinstance(executed, list):
+                        first_command = ""
+                        for action in executed:
+                            if isinstance(action, dict):
+                                result = action.get("result") if isinstance(action.get("result"), dict) else {}
+                                maybe = str(result.get("runbook_command") or "").strip()
+                                if maybe:
+                                    first_command = maybe
+                                    break
+                        if first_command:
+                            metadata["primary_runbook_command"] = first_command
 
             full_signal_message = (
                 "Received new CSI signal. Review in the CSI dashboard tab or Todoist.\n\n"
@@ -8575,7 +8642,7 @@ async def signals_ingest_endpoint(request: Request):
                 _csi_emit_digest_notification(event, full_signal_message)
             else:
                 _add_notification(
-                    kind="csi_insight",
+                    kind=notification_kind,
                     title=title,
                     message=full_signal_message,
                     summary=_activity_summary_text(message, max_chars=260),
@@ -9849,6 +9916,320 @@ async def dashboard_csi_health():
         }
     except Exception as exc:
         return {"status": "error", "detail": f"Failed loading CSI health: {exc}"}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/csi/delivery-health")
+async def dashboard_csi_delivery_health(
+    window_hours: int = 24,
+    stale_minutes: int = 240,
+    max_failed_attempt_ratio: Optional[float] = None,
+    min_rss_events: Optional[int] = None,
+    min_reddit_events: Optional[int] = None,
+    max_dlq_recent: Optional[int] = None,
+):
+    clamped_window = max(1, min(int(window_hours), 24 * 30))
+    stale_threshold_minutes = max(30, min(int(stale_minutes), 24 * 60 * 7))
+    tuned_max_failed_attempt_ratio = (
+        max(0.0, min(float(max_failed_attempt_ratio), 1.0))
+        if max_failed_attempt_ratio is not None
+        else max(0.0, min(float(os.getenv("UA_CSI_DELIVERY_MAX_FAILED_ATTEMPT_RATIO", "0.2") or 0.2), 1.0))
+    )
+    tuned_min_rss_events = (
+        max(0, int(min_rss_events))
+        if min_rss_events is not None
+        else max(0, int(os.getenv("UA_CSI_DELIVERY_MIN_RSS_EVENTS_24H", "1") or 1))
+    )
+    tuned_min_reddit_events = (
+        max(0, int(min_reddit_events))
+        if min_reddit_events is not None
+        else max(0, int(os.getenv("UA_CSI_DELIVERY_MIN_REDDIT_EVENTS_24H", "1") or 1))
+    )
+    tuned_max_dlq_recent = (
+        max(0, int(max_dlq_recent))
+        if max_dlq_recent is not None
+        else max(0, int(os.getenv("UA_CSI_DELIVERY_MAX_DLQ_RECENT", "0") or 0))
+    )
+    tuned_adapter_consecutive_failures = max(
+        1,
+        int(os.getenv("UA_CSI_DELIVERY_ADAPTER_CONSECUTIVE_FAILURES", "3") or 3),
+    )
+    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    if not db_path.exists():
+        return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        source_names = ["youtube_channel_rss", "reddit_discovery", "csi_analytics"]
+        window_expr = f"-{clamped_window} hours"
+        source_rows: list[dict[str, Any]] = []
+        now_ts = time.time()
+        adapter_health_map: dict[str, dict[str, Any]] = {}
+        try:
+            adapter_health_rows = conn.execute(
+                """
+                SELECT source_key, state_json, updated_at
+                FROM source_state
+                WHERE source_key LIKE 'adapter_health:%'
+                ORDER BY updated_at DESC
+                """
+            ).fetchall()
+        except Exception:
+            adapter_health_rows = []
+        adapter_health: list[dict[str, Any]] = []
+        for row in adapter_health_rows:
+            parsed = _activity_json_loads_obj(row["state_json"], default={})
+            if not isinstance(parsed, dict):
+                parsed = {}
+            adapter_name = str(parsed.get("adapter") or str(row["source_key"] or "").replace("adapter_health:", ""))
+            adapter_entry = {
+                "adapter": adapter_name,
+                "source_key": str(row["source_key"] or ""),
+                "updated_at": str(row["updated_at"] or ""),
+                "state": parsed,
+            }
+            adapter_health.append(adapter_entry)
+            adapter_health_map[adapter_name] = adapter_entry
+
+        expected_min_events_by_source = {
+            "youtube_channel_rss": tuned_min_rss_events,
+            "reddit_discovery": tuned_min_reddit_events,
+            "csi_analytics": 0,
+        }
+
+        for source_name in source_names:
+            event_row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN delivered = 1 THEN 1 ELSE 0 END) AS delivered_total,
+                    SUM(CASE WHEN delivered = 0 THEN 1 ELSE 0 END) AS undelivered_total,
+                    MAX(created_at) AS last_event_at,
+                    MAX(CASE WHEN delivered = 1 THEN created_at ELSE NULL END) AS last_delivered_at
+                FROM events
+                WHERE source = ?
+                  AND created_at >= datetime('now', ?)
+                """,
+                (source_name, window_expr),
+            ).fetchone()
+            attempts_row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS attempts,
+                    SUM(CASE WHEN da.delivered = 1 THEN 1 ELSE 0 END) AS attempts_delivered,
+                    SUM(CASE WHEN da.delivered = 0 THEN 1 ELSE 0 END) AS attempts_failed,
+                    MAX(da.attempted_at) AS last_attempt_at
+                FROM delivery_attempts da
+                JOIN events e ON e.event_id = da.event_id
+                WHERE e.source = ?
+                  AND da.attempted_at >= datetime('now', ?)
+                """,
+                (source_name, window_expr),
+            ).fetchone()
+            try:
+                dlq_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM dead_letter
+                    WHERE created_at >= datetime('now', ?)
+                      AND json_extract(event_json, '$.source') = ?
+                    """,
+                    (window_expr, source_name),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                dlq_row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM dead_letter
+                    WHERE created_at >= datetime('now', ?)
+                      AND event_json LIKE ?
+                    """,
+                    (window_expr, f'%"source":"{source_name}"%'),
+                ).fetchone()
+
+            last_error_row = conn.execute(
+                """
+                SELECT da.error_class, da.error_detail, da.attempted_at
+                FROM delivery_attempts da
+                JOIN events e ON e.event_id = da.event_id
+                WHERE e.source = ?
+                  AND da.delivered = 0
+                  AND da.attempted_at >= datetime('now', ?)
+                ORDER BY da.attempted_at DESC, da.id DESC
+                LIMIT 1
+                """,
+                (source_name, window_expr),
+            ).fetchone()
+
+            total = int((event_row["total"] if event_row is not None else 0) or 0)
+            delivered_total = int((event_row["delivered_total"] if event_row is not None else 0) or 0)
+            undelivered_total = int((event_row["undelivered_total"] if event_row is not None else 0) or 0)
+            attempts = int((attempts_row["attempts"] if attempts_row is not None else 0) or 0)
+            attempts_delivered = int((attempts_row["attempts_delivered"] if attempts_row is not None else 0) or 0)
+            attempts_failed = int((attempts_row["attempts_failed"] if attempts_row is not None else 0) or 0)
+            dlq_total = int((dlq_row["total"] if dlq_row is not None else 0) or 0)
+            event_delivery_ratio = round((float(delivered_total) / float(total)), 4) if total > 0 else 0.0
+            attempt_success_ratio = round((float(attempts_delivered) / float(attempts)), 4) if attempts > 0 else 0.0
+            last_event_at = str(event_row["last_event_at"] or "") if event_row is not None else ""
+            lag_minutes: Optional[float] = None
+            parsed_last = _parse_iso_timestamp(last_event_at)
+            if parsed_last is not None:
+                if parsed_last.tzinfo is None:
+                    parsed_last = parsed_last.replace(tzinfo=timezone.utc)
+                lag_minutes = round((now_ts - parsed_last.timestamp()) / 60.0, 2)
+            failed_attempt_ratio = round((float(attempts_failed) / float(attempts)), 4) if attempts > 0 else 0.0
+            expected_min_events = int(expected_min_events_by_source.get(source_name) or 0)
+            under_min_volume = total < expected_min_events
+            stale = total == 0 or (lag_minutes is not None and lag_minutes > float(stale_threshold_minutes))
+            high_failed_ratio = attempts > 0 and failed_attempt_ratio > float(tuned_max_failed_attempt_ratio)
+            all_failed = attempts > 0 and attempts_failed == attempts
+            dlq_exceeds = dlq_total > int(tuned_max_dlq_recent)
+            status_value = "ok"
+            if under_min_volume or stale:
+                status_value = "stale"
+            if attempts_failed > 0 or dlq_exceeds:
+                status_value = "degraded"
+            if all_failed or high_failed_ratio:
+                status_value = "failing"
+            adapter_state = (adapter_health_map.get(source_name) or {}).get("state")
+            if not isinstance(adapter_state, dict):
+                adapter_state = {}
+            adapter_consecutive_failures = int(adapter_state.get("consecutive_failures") or 0)
+            adapter_last_error = str(adapter_state.get("last_error") or "").strip()
+            if adapter_consecutive_failures >= tuned_adapter_consecutive_failures:
+                status_value = "failing"
+
+            repair_hints: list[dict[str, Any]] = []
+            if source_name == "youtube_channel_rss" and (under_min_volume or stale):
+                repair_hints.append(
+                    {
+                        "code": "rss_source_stale_or_low_volume",
+                        "severity": "warning",
+                        "title": "RSS source volume below threshold",
+                        "action": "Check RSS watchlist path and timer health; verify channel IDs are loading.",
+                        "runbook_command": (
+                            "systemctl status csi-ingester csi-rss-trend-report.timer csi-rss-telegram-digest.timer && "
+                            "journalctl -u csi-ingester -n 120 --no-pager"
+                        ),
+                    }
+                )
+            if source_name == "reddit_discovery" and (under_min_volume or stale):
+                repair_hints.append(
+                    {
+                        "code": "reddit_source_stale_or_low_volume",
+                        "severity": "warning",
+                        "title": "Reddit source volume below threshold",
+                        "action": "Check reddit watchlist and endpoint reachability/fallback behavior.",
+                        "runbook_command": (
+                            "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_probe.py "
+                            "--watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
+                        ),
+                    }
+                )
+            if attempts_failed > 0 or high_failed_ratio:
+                repair_hints.append(
+                    {
+                        "code": "delivery_failures_detected",
+                        "severity": "critical" if status_value == "failing" else "warning",
+                        "title": "CSI -> UA delivery failures detected",
+                        "action": "Verify UA ingest endpoint auth and replay DLQ after repair.",
+                        "runbook_command": (
+                            "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_replay_dlq.py "
+                            "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --limit 100 --max-attempts 3"
+                        ),
+                    }
+                )
+            if dlq_exceeds:
+                repair_hints.append(
+                    {
+                        "code": "dlq_backlog_exceeds_threshold",
+                        "severity": "critical",
+                        "title": "DLQ backlog exceeds threshold",
+                        "action": "Inspect latest delivery errors and replay DLQ once root cause is fixed.",
+                        "runbook_command": (
+                            "sqlite3 /opt/universal_agent/CSI_Ingester/development/var/csi.db "
+                            "\"select id,event_id,error_reason,created_at from dead_letter order by id desc limit 25;\""
+                        ),
+                    }
+                )
+            if adapter_consecutive_failures >= tuned_adapter_consecutive_failures:
+                repair_hints.append(
+                    {
+                        "code": "adapter_consecutive_failures",
+                        "severity": "critical",
+                        "title": f"Adapter failing repeatedly ({adapter_consecutive_failures} consecutive failures)",
+                        "action": "Inspect adapter errors and fix source-level connectivity/parsing.",
+                        "runbook_command": "journalctl -u csi-ingester -n 200 --no-pager",
+                        "detail": adapter_last_error,
+                    }
+                )
+
+            source_rows.append(
+                {
+                    "source": source_name,
+                    "status": status_value,
+                    "window_hours": clamped_window,
+                    "expected_min_events": expected_min_events,
+                    "events_recent": total,
+                    "delivered_recent": delivered_total,
+                    "undelivered_recent": undelivered_total,
+                    "event_delivery_ratio": event_delivery_ratio,
+                    "delivery_attempts_recent": attempts,
+                    "delivery_attempts_success": attempts_delivered,
+                    "delivery_attempts_failed": attempts_failed,
+                    "delivery_attempt_success_ratio": attempt_success_ratio,
+                    "failed_attempt_ratio": failed_attempt_ratio,
+                    "dlq_recent": dlq_total,
+                    "last_event_at": last_event_at or None,
+                    "last_delivered_at": str(event_row["last_delivered_at"] or "") if event_row is not None else None,
+                    "last_attempt_at": str(attempts_row["last_attempt_at"] or "") if attempts_row is not None else None,
+                    "last_error": {
+                        "error_class": str(last_error_row["error_class"] or "") if last_error_row is not None else "",
+                        "error_detail": str(last_error_row["error_detail"] or "") if last_error_row is not None else "",
+                        "attempted_at": str(last_error_row["attempted_at"] or "") if last_error_row is not None else "",
+                    },
+                    "lag_minutes": lag_minutes,
+                    "adapter_health": adapter_state,
+                    "repair_hints": repair_hints,
+                }
+            )
+
+        failing_sources = [row["source"] for row in source_rows if str(row.get("status") or "") == "failing"]
+        stale_sources = [row["source"] for row in source_rows if str(row.get("status") or "") == "stale"]
+        overall_status = "ok"
+        if failing_sources:
+            overall_status = "failing"
+        elif stale_sources:
+            overall_status = "degraded"
+        elif any(str(row.get("status") or "") == "degraded" for row in source_rows):
+            overall_status = "degraded"
+        return {
+            "status": "ok",
+            "overall": {
+                "status": overall_status,
+                "window_hours": clamped_window,
+                "stale_threshold_minutes": stale_threshold_minutes,
+                "failing_sources": failing_sources,
+                "stale_sources": stale_sources,
+            },
+            "tuning": {
+                "max_failed_attempt_ratio": tuned_max_failed_attempt_ratio,
+                "min_rss_events": tuned_min_rss_events,
+                "min_reddit_events": tuned_min_reddit_events,
+                "max_dlq_recent": tuned_max_dlq_recent,
+                "adapter_consecutive_failures": tuned_adapter_consecutive_failures,
+                "stale_threshold_minutes": stale_threshold_minutes,
+                "window_hours": clamped_window,
+            },
+            "db_path": str(db_path),
+            "sources": source_rows,
+            "adapter_health": adapter_health,
+        }
+    except Exception as exc:
+        return {"status": "error", "detail": f"Failed loading CSI delivery health: {exc}"}
     finally:
         if conn is not None:
             conn.close()

@@ -41,6 +41,10 @@ install_unit "csi-daily-summary.service"
 install_unit "csi-daily-summary.timer"
 install_unit "csi-hourly-token-report.service"
 install_unit "csi-hourly-token-report.timer"
+install_unit "csi-delivery-health-canary.service"
+install_unit "csi-delivery-health-canary.timer"
+install_unit "csi-delivery-health-auto-remediate.service"
+install_unit "csi-delivery-health-auto-remediate.timer"
 
 systemctl daemon-reload
 systemctl enable --now csi-rss-telegram-digest.timer
@@ -59,6 +63,8 @@ systemctl enable --now csi-replay-dlq.timer
 systemctl enable --now csi-report-product-finalize.timer
 systemctl enable --now csi-daily-summary.timer
 systemctl enable --now csi-hourly-token-report.timer
+systemctl enable --now csi-delivery-health-canary.timer
+systemctl enable --now csi-delivery-health-auto-remediate.timer
 
 echo "SYSTEMD_EXTRAS_INSTALLED=1"
 systemctl is-active csi-rss-telegram-digest.timer
@@ -77,3 +83,5 @@ systemctl is-active csi-replay-dlq.timer
 systemctl is-active csi-report-product-finalize.timer
 systemctl is-active csi-daily-summary.timer
 systemctl is-active csi-hourly-token-report.timer
+systemctl is-active csi-delivery-health-canary.timer
+systemctl is-active csi-delivery-health-auto-remediate.timer

@@ -1048,6 +1048,101 @@ def test_dashboard_csi_health_includes_overnight_and_source_health(client, tmp_p
     assert isinstance(payload.get("delivery_targets"), list)
 
 
+def test_dashboard_csi_delivery_health_reports_source_and_adapter_state(client, tmp_path, monkeypatch):
+    db_path = tmp_path / "csi_delivery_health.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT,
+                source TEXT,
+                event_type TEXT,
+                created_at TEXT,
+                delivered INTEGER DEFAULT 0
+            );
+            CREATE TABLE delivery_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT,
+                target TEXT,
+                delivered INTEGER,
+                status_code INTEGER,
+                error_class TEXT,
+                error_detail TEXT,
+                attempted_at TEXT
+            );
+            CREATE TABLE dead_letter (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT,
+                event_json TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE source_state (
+                source_key TEXT PRIMARY KEY,
+                state_json TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO events (event_id, source, event_type, created_at, delivered) VALUES (?, ?, ?, ?, ?)",
+            ("evt-rss-1", "youtube_channel_rss", "channel_new_upload", now, 1),
+        )
+        conn.execute(
+            "INSERT INTO events (event_id, source, event_type, created_at, delivered) VALUES (?, ?, ?, ?, ?)",
+            ("evt-reddit-1", "reddit_discovery", "subreddit_new_post", now, 0),
+        )
+        conn.execute(
+            """
+            INSERT INTO delivery_attempts (event_id, target, delivered, status_code, error_class, attempted_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            ("evt-rss-1", "ua_signals_ingest", 1, 200, "", now),
+        )
+        conn.execute(
+            """
+            INSERT INTO delivery_attempts (event_id, target, delivered, status_code, error_class, error_detail, attempted_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            ("evt-reddit-1", "ua_signals_ingest", 0, 503, "upstream_5xx", "boom", now),
+        )
+        conn.execute(
+            "INSERT INTO dead_letter (event_id, event_json, created_at) VALUES (?, ?, ?)",
+            ("evt-reddit-1", json.dumps({"source": "reddit_discovery"}), now),
+        )
+        conn.execute(
+            "INSERT INTO source_state (source_key, state_json, updated_at) VALUES (?, ?, ?)",
+            (
+                "adapter_health:reddit_discovery",
+                json.dumps({"adapter": "reddit_discovery", "ok": False, "consecutive_failures": 3}),
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    resp = client.get("/api/v1/dashboard/csi/delivery-health?window_hours=24")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    assert isinstance(payload.get("tuning"), dict)
+    assert float((payload.get("tuning") or {}).get("max_failed_attempt_ratio") or 0.0) >= 0.0
+    assert isinstance(payload.get("sources"), list)
+    by_source = {str(item.get("source") or ""): item for item in payload.get("sources") or []}
+    assert "youtube_channel_rss" in by_source
+    assert "reddit_discovery" in by_source
+    assert int((by_source["youtube_channel_rss"] or {}).get("events_recent") or 0) >= 1
+    assert int((by_source["reddit_discovery"] or {}).get("delivery_attempts_failed") or 0) >= 1
+    assert isinstance((by_source["reddit_discovery"] or {}).get("repair_hints"), list)
+    assert len((by_source["reddit_discovery"] or {}).get("repair_hints") or []) >= 1
+    assert isinstance((by_source["reddit_discovery"] or {}).get("adapter_health"), dict)
+    assert isinstance(payload.get("adapter_health"), list)
+
+
 def test_dashboard_csi_reports_includes_opportunity_bundle_events(client, tmp_path, monkeypatch):
     db_path = tmp_path / "csi_opportunity_reports.db"
     conn = sqlite3.connect(str(db_path))
