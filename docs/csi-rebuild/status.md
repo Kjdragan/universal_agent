@@ -60,6 +60,7 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 | High-signal publishing pipeline (packet 19) | Done | Added `csi_publish_filter.py` with 4-tier classification (critical, high_value, digest, suppressed), quality/anomaly gating, and executive digest builder. 24 suppression/dedupe + digest output tests pass. |
 | Source coverage expansion controls (packet 20) | Done | Added `csi_source_coverage.py` with per-source quotas, watchlist sharding, feature-flag scaffold (X/Threads/Bluesky/HN), backpressure detection with progressive throttling, starvation prevention, and quota enforcement. 30 tests pass. |
 | Operations governance pack (packet 21) | Done | Added 5 runbooks: incident triage, remediation escalation, rollback, data repair, and on-call quick commands with expected outputs and "what good looks like" criteria. |
+| RC soak + GA gate (packet 22) | Done | Added `08_rc_soak_ga_gate.md` with 72h soak validation report template, SLO compliance summary, quality metrics targets, GA sign-off criteria (hard + soft gates), open-risk registry with 6 tracked risks, and soak validation commands. |
 
 ## Validation Snapshot
 - `CSI_Ingester/development/tests/unit/test_digest_cursor_recovery.py`: 2 passed.
@@ -111,4 +112,5 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 - Validate deploy/runtime state after mainline consolidation.
 
 ## Next Execution Step
-- Implement packet 22: RC soak + GA gate.
+- Begin 72h RC soak period per `docs/csi-rebuild/08_rc_soak_ga_gate.md`.
+- All packets 1-22 complete. CSI v2 rebuild is **RC-ready**.
