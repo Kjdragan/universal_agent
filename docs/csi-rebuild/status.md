@@ -57,6 +57,7 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 | Research quality scoring v1 (packet 16) | Done | Added `csi_quality_score.py` with 4-dimension scorer (evidence coverage, novelty, source diversity, actionability). Wired quality score into CSI notification metadata. Added quality grade badge in notification list + detailed breakdown in notification detail panel. 20 unit tests + integration assertions pass. |
 | UA<->CSI follow-up contract v2 (packet 17) | Done | Added `csi_followup_contract.py` with explicit request/response schema, correlation IDs, hard budget (max 10) and timeout (60s-86400s) enforcement. Wired correlation_id into gateway specialist loop follow-up path. 24 contract tests pass. |
 | Iterative refinement policy engine (packet 18) | Done | Added `csi_refinement_policy.py` with deterministic 5-outcome policy (close_loop, request_followup, escalate, budget_exhausted, suppressed). Priority chain: suppressed > close > budget_exhausted > escalate > followup. 20 policy table + simulation tests pass. |
+| High-signal publishing pipeline (packet 19) | Done | Added `csi_publish_filter.py` with 4-tier classification (critical, high_value, digest, suppressed), quality/anomaly gating, and executive digest builder. 24 suppression/dedupe + digest output tests pass. |
 
 ## Validation Snapshot
 - `CSI_Ingester/development/tests/unit/test_digest_cursor_recovery.py`: 2 passed.
@@ -95,6 +96,7 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 - `tests/unit/test_csi_followup_contract.py` (packet 17): 24 passed.
 - `tests/gateway/test_signals_ingest_endpoint.py` (packet 17): 20 passed.
 - `tests/unit/test_csi_refinement_policy.py` (packet 18): 20 passed.
+- `tests/unit/test_csi_publish_filter.py` (packet 19): 24 passed.
 - `tests/gateway/test_ops_api.py -k dashboard_csi_delivery_health_reports_source_and_adapter_state`: 1 passed.
 - `CSI_Ingester/development/tests/unit/test_csi_delivery_slo_gatekeeper.py`: 2 passed.
 - `tests/gateway/test_signals_ingest_endpoint.py -k reliability_slo or auto_remediation_failed or delivery_health_regression or delivery_health_recovered`: 5 passed.
@@ -106,4 +108,4 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 - Validate deploy/runtime state after mainline consolidation.
 
 ## Next Execution Step
-- Implement packet 19: high-signal publishing pipeline.
+- Implement packet 20: source coverage expansion controls.
