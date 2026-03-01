@@ -599,6 +599,14 @@ def main() -> int:
         return 0
 
     last_sent_id = int(state.get("last_sent_id") or 0)
+    if last_sent_id > max_id:
+        print(
+            "REDDIT_TELEGRAM_CURSOR_AHEAD "
+            f"last_sent_id={last_sent_id} max_id={max_id} action=reset_to_0"
+        )
+        last_sent_id = 0
+        if not args.dry_run:
+            _save_state(state_path, {"last_sent_id": 0})
     rows = conn.execute(
         """
         SELECT id, event_id, created_at, delivered, subject_json

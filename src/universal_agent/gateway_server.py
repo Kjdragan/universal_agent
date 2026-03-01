@@ -10236,12 +10236,16 @@ _TUTORIAL_NOTIFICATION_KINDS = frozenset({
 
 
 @app.get("/api/v1/dashboard/tutorials/notifications")
-async def dashboard_tutorial_notifications(limit: int = 50):
+async def dashboard_tutorial_notifications(limit: int = 50, include_dismissed: bool = False):
     """Return recent notifications relevant to the YouTube tutorial pipeline."""
     clamped = max(1, min(int(limit), 200))
     matching = [
         n for n in reversed(_notifications)
         if n.get("kind") in _TUTORIAL_NOTIFICATION_KINDS
+        and (
+            include_dismissed
+            or _normalize_notification_status(n.get("status") or "new") != "dismissed"
+        )
     ][:clamped]
     return {"notifications": matching}
 

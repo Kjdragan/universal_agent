@@ -106,6 +106,16 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(delta / 86400)}d ago`;
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs = 12000): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeoutHandle);
+  }
+}
+
 const SEVERITY_STYLES: Record<string, string> = {
   success: "border-emerald-600/50 bg-emerald-900/20 text-emerald-200",
   error: "border-rose-600/50 bg-rose-900/20 text-rose-200",
@@ -339,12 +349,16 @@ export default function DashboardTutorialsPage() {
       const normalized = asText(notificationId);
       if (!normalized) return;
       setDismissingNotificationId(normalized);
+      setNotifications((prev) => prev.filter((item) => asText(item.id) !== normalized));
       try {
-        const res = await fetch(`${API_BASE}/api/v1/dashboard/notifications/${encodeURIComponent(normalized)}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "dismissed", note: "deleted in tutorials panel" }),
-        });
+        const res = await fetchWithTimeout(
+          `${API_BASE}/api/v1/dashboard/notifications/${encodeURIComponent(normalized)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "dismissed", note: "deleted in tutorials panel" }),
+          },
+        );
         if (!res.ok) {
           const payload = await res.json().catch(() => ({}));
           const detail = asText((payload as Record<string, unknown>).detail) || `Delete failed (${res.status})`;
@@ -366,28 +380,42 @@ export default function DashboardTutorialsPage() {
       if (targetCount === 0) return;
       if (!window.confirm(`Delete all ${targetCount} pipeline notification${targetCount > 1 ? "s" : ""}?`)) return;
       setClearingNotifications(true);
+      const targetIds = new Set(visibleNotifications.map((n) => asText(n.id)).filter(Boolean));
+      setNotifications((prev) => prev.filter((item) => !targetIds.has(asText(item.id))));
       try {
         const uniqueKinds = Array.from(
           new Set(visibleNotifications.map((n) => asText(n.kind)).filter(Boolean)),
         );
         if (uniqueKinds.length === 0) return;
-        await Promise.all(
+        const results = await Promise.allSettled(
           uniqueKinds.map((kind) =>
-            fetch(`${API_BASE}/api/v1/dashboard/notifications/bulk`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                status: "dismissed",
-                kind,
-                limit: 1000,
-                note: "deleted in tutorials panel bulk action",
-              }),
-            }),
+            fetchWithTimeout(
+              `${API_BASE}/api/v1/dashboard/notifications/bulk`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  status: "dismissed",
+                  kind,
+                  limit: 1000,
+                  note: "deleted in tutorials panel bulk action",
+                }),
+              },
+            ),
           ),
         );
+        const failed = results.filter(
+          (result) => result.status === "rejected" || (result.status === "fulfilled" && !result.value.ok),
+        ).length;
+        if (failed > 0) {
+          setDispatchStatus(
+            `Deleted with partial failure (${failed}/${results.length} kind request${results.length === 1 ? "" : "s"} failed).`,
+          );
+        }
         await load();
       } catch (err: any) {
         setDispatchStatus(err?.message || "Failed to clear notifications");
+        await load();
       } finally {
         setClearingNotifications(false);
       }

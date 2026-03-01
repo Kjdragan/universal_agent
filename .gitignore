@@ -111,6 +111,8 @@ RLM/corpora/
 # === Claude Internal ===
 .claude/worktrees/
 .claude/settings.local.json
+.claude/skills/**/.git/
+.claude/skills/visual-explainer/
 
 # Scraping run outputs
 scraping/runs/*/

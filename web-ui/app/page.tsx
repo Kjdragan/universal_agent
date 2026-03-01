@@ -98,7 +98,9 @@ type VpHydrationSnapshot = {
 const RUN_LOG_USER_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+👤\s+USER:\s*(.+)$/;
 const RUN_LOG_ASSISTANT_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+🤖\s+ASSISTANT:\s*(.+)$/;
 
-const RUN_LOG_LEVEL_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+([A-Z]+)\s+([\s\S]+)$/;
+const RUN_LOG_TIMESTAMPED_LINE = /^\[\d{2}:\d{2}:\d{2}\]\s+([\s\S]+)$/;
+const RUN_LOG_LEVEL_PREFIX = /^(INFO|WARN|WARNING|ERROR|DEBUG|TRACE)\b[:\s-]*(.*)$/i;
+const RUN_LOG_TOOL_HINT = /\b(TOOL CALL|TOOL RESULT|CODE EXECUTION|WAITING|MISSION|DISPATCH)\b/i;
 
 function extractHistoryFromRunLog(raw: string): { messages: HydratedChatMessage[], logs: HydratedActivityLog[] } {
   const messages: HydratedChatMessage[] = [];
@@ -119,19 +121,49 @@ function extractHistoryFromRunLog(raw: string): { messages: HydratedChatMessage[
       continue;
     }
 
-    const levelMatch = line.match(RUN_LOG_LEVEL_LINE);
-    if (levelMatch?.[1] && levelMatch?.[2]) {
-      const level = levelMatch[1];
-      const message = levelMatch[2].trim();
-      if (message) {
-        logs.push({
-          message,
-          level,
-          prefix: "rehydrated",
-        });
+    const timestamped = line.match(RUN_LOG_TIMESTAMPED_LINE);
+    if (timestamped?.[1]) {
+      const rawMessage = timestamped[1].trim();
+      if (!rawMessage) continue;
+
+      let level = "INFO";
+      let message = rawMessage;
+      const noIconPrefix = rawMessage.replace(/^[^A-Za-z0-9]+/, "");
+      const levelPrefix = noIconPrefix.match(RUN_LOG_LEVEL_PREFIX);
+      if (levelPrefix?.[1]) {
+        const normalized = levelPrefix[1].toUpperCase();
+        level = normalized === "WARNING" ? "WARN" : normalized;
+        message = (levelPrefix[2] || "").trim() || noIconPrefix;
+      } else if (RUN_LOG_TOOL_HINT.test(noIconPrefix)) {
+        level = "INFO";
+        message = noIconPrefix;
       }
+
+      logs.push({
+        message,
+        level,
+        prefix: "rehydrated",
+      });
     }
   }
+
+  // Hook/tail sessions sometimes contain lines that do not fit strict patterns.
+  // If parsing yielded nothing, show a compact tail fallback so observer attach
+  // still surfaces session progress.
+  if (messages.length === 0 && logs.length === 0) {
+    const fallbackLines = lines
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-200);
+    for (const line of fallbackLines) {
+      logs.push({
+        message: line,
+        level: "INFO",
+        prefix: "rehydrated-tail",
+      });
+    }
+  }
+
   return { messages: messages.slice(-80), logs: logs.slice(-200) };
 }
 

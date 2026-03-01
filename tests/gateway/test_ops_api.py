@@ -1419,6 +1419,29 @@ def test_dashboard_tutorial_bootstrap_repo_failed_result_preserves_error_metadat
     assert str(metadata.get("error") or "") == failure_text
 
 
+def test_dashboard_tutorial_notifications_hide_dismissed_by_default(client):
+    notif = gateway_server._add_notification(
+        kind="tutorial_repo_bootstrap_queued",
+        title="Tutorial Repo Bootstrap Queued",
+        message="Queued local repo creation for: test-run",
+        severity="info",
+        requires_action=False,
+        metadata={"tutorial_run_path": "youtube-tutorial-creation/test-run"},
+    )
+    assert isinstance(notif, dict)
+    notif["status"] = "dismissed"
+
+    default_resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=50")
+    assert default_resp.status_code == 200
+    default_ids = {str(item.get("id") or "") for item in default_resp.json().get("notifications") or []}
+    assert str(notif.get("id") or "") not in default_ids
+
+    include_resp = client.get("/api/v1/dashboard/tutorials/notifications?limit=50&include_dismissed=true")
+    assert include_resp.status_code == 200
+    include_ids = {str(item.get("id") or "") for item in include_resp.json().get("notifications") or []}
+    assert str(notif.get("id") or "") in include_ids
+
+
 def test_dashboard_tutorial_bootstrap_repo_local_redis_dispatch_publishes_mission(client, tmp_path, monkeypatch):
     class _FakeMissionBus:
         def __init__(self):
