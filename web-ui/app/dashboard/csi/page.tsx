@@ -121,6 +121,34 @@ type CSIDeliveryHealth = {
     sources?: CSIDeliverySource[];
 };
 
+type CSIReliabilitySLO = {
+    status?: string;
+    detail?: string;
+    target_day_utc?: string;
+    last_checked_at?: string;
+    window_start_utc?: string;
+    window_end_utc?: string;
+    metrics?: {
+        delivery_success_ratio?: number;
+        dlq_backlog_current?: number;
+        dlq_backlog_delta?: number;
+        canary_regression_count?: number;
+    };
+    thresholds?: {
+        min_delivery_success_ratio?: number;
+        max_dlq_backlog?: number;
+        max_dlq_backlog_delta?: number;
+        max_canary_regressions?: number;
+    };
+    top_root_causes?: Array<{
+        code?: string;
+        title?: string;
+        detail?: string;
+        runbook_command?: string;
+        severity?: string;
+    }>;
+};
+
 type CSISpecialistLoop = {
     topic_key: string;
     topic_label: string;
@@ -249,6 +277,7 @@ export default function CSIDashboard() {
     const [previewError, setPreviewError] = useState<string | null>(null);
     const [health, setHealth] = useState<CSIHealth | null>(null);
     const [deliveryHealth, setDeliveryHealth] = useState<CSIDeliveryHealth | null>(null);
+    const [reliabilitySlo, setReliabilitySlo] = useState<CSIReliabilitySLO | null>(null);
     const [loops, setLoops] = useState<CSISpecialistLoop[]>([]);
     const [opportunityBundles, setOpportunityBundles] = useState<CSIOpportunityBundle[]>([]);
     const [deepLinkApplied, setDeepLinkApplied] = useState(false);
@@ -290,11 +319,12 @@ export default function CSIDashboard() {
 
     const loadData = useCallback(async () => {
         try {
-            const [repRes, notifRes, healthRes, deliveryRes, loopsRes, oppRes] = await Promise.all([
+            const [repRes, notifRes, healthRes, deliveryRes, sloRes, loopsRes, oppRes] = await Promise.all([
                 fetch(`${API_BASE}/api/v1/dashboard/csi/reports`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=100&source_domain=csi`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/csi/health`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/csi/delivery-health?window_hours=24`, { cache: "no-store" }),
+                fetch(`${API_BASE}/api/v1/dashboard/csi/reliability-slo`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/csi/specialist-loops?limit=8`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/csi/opportunities?limit=5`, { cache: "no-store" }),
             ]);
@@ -325,6 +355,12 @@ export default function CSIDashboard() {
                 setDeliveryHealth(dData as CSIDeliveryHealth);
             } else {
                 setDeliveryHealth(null);
+            }
+            if (sloRes.ok) {
+                const sData = await sloRes.json();
+                setReliabilitySlo((sData?.slo || null) as CSIReliabilitySLO | null);
+            } else {
+                setReliabilitySlo(null);
             }
             if (loopsRes.ok) {
                 const loopsData = await loopsRes.json();
@@ -591,6 +627,51 @@ export default function CSIDashboard() {
                         Method: {latestBundle?.confidence_method || "n/a"} | Coverage: {latestBundle?.quality_summary?.coverage_score ?? 0}
                     </div>
                 </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">Daily Reliability SLO</h2>
+                    <span
+                        className={`text-xs ${
+                            reliabilitySlo?.status === "ok"
+                                ? "text-emerald-300"
+                                : reliabilitySlo?.status === "breached"
+                                  ? "text-rose-300"
+                                  : "text-slate-400"
+                        }`}
+                    >
+                        {reliabilitySlo?.status || "unknown"}
+                    </span>
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                    day={reliabilitySlo?.target_day_utc || "--"} | delivery_ratio=
+                    {reliabilitySlo?.metrics?.delivery_success_ratio ?? "--"} | dlq=
+                    {reliabilitySlo?.metrics?.dlq_backlog_current ?? "--"} | canary_regressions=
+                    {reliabilitySlo?.metrics?.canary_regression_count ?? "--"}
+                </div>
+                {(reliabilitySlo?.top_root_causes || []).length > 0 && (
+                    <div className="mt-3 space-y-1.5">
+                        {(reliabilitySlo?.top_root_causes || []).slice(0, 3).map((cause, idx) => (
+                            <div
+                                key={`slo-cause-${idx}`}
+                                className="rounded border border-slate-800 bg-slate-950/60 px-2 py-1.5 text-[11px]"
+                            >
+                                <div className="text-slate-200">{cause.title || cause.code || "SLO root cause"}</div>
+                                {cause.detail && <div className="text-slate-400">{cause.detail}</div>}
+                                {cause.runbook_command && (
+                                    <button
+                                        type="button"
+                                        onClick={() => void copyCommand(cause.runbook_command || "")}
+                                        className="mt-1 rounded border border-cyan-700/40 bg-cyan-700/10 px-1.5 py-0.5 text-[10px] text-cyan-200 hover:bg-cyan-700/20"
+                                    >
+                                        Copy Runbook Cmd
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">

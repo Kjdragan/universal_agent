@@ -373,6 +373,86 @@ def test_signals_ingest_delivery_health_recovered_emits_success_notice(client, m
     assert bool(recovered_notice.get("requires_action")) is False
 
 
+def test_signals_ingest_reliability_slo_breached_emits_actionable_notice(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "delivery_reliability_slo_breached"
+    payload["events"][0]["subject"] = {
+        "status": "breached",
+        "target_day_utc": "2026-03-01",
+        "metrics": {"delivery_success_ratio": 0.71, "dlq_backlog_current": 8, "canary_regression_count": 4},
+        "thresholds": {"min_delivery_success_ratio": 0.98, "max_dlq_backlog": 0, "max_canary_regressions": 2},
+        "top_root_causes": [
+            {
+                "code": "delivery_success_ratio_below_min",
+                "title": "Delivery success ratio below SLO",
+                "runbook_command": "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_replay_dlq.py --limit 200",
+            }
+        ],
+    }
+    request_id = "req-reliability-slo-breached"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    notice = next(
+        item for item in gateway_server._notifications if item.get("kind") == "csi_delivery_reliability_slo_breached"
+    )
+    assert notice.get("severity") == "error"
+    assert bool(notice.get("requires_action")) is True
+    metadata = notice.get("metadata") if isinstance(notice.get("metadata"), dict) else {}
+    assert metadata.get("slo_status") == "breached"
+    assert isinstance(metadata.get("top_root_causes"), list)
+    assert "csi_replay_dlq.py" in str(metadata.get("primary_runbook_command") or "")
+
+
+def test_signals_ingest_reliability_slo_recovered_emits_success_notice(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "delivery_reliability_slo_recovered"
+    payload["events"][0]["subject"] = {
+        "status": "ok",
+        "target_day_utc": "2026-03-02",
+        "metrics": {"delivery_success_ratio": 1.0, "dlq_backlog_current": 0, "canary_regression_count": 0},
+        "thresholds": {"min_delivery_success_ratio": 0.98, "max_dlq_backlog": 0, "max_canary_regressions": 2},
+        "top_root_causes": [],
+    }
+    request_id = "req-reliability-slo-recovered"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+    notice = next(
+        item for item in gateway_server._notifications if item.get("kind") == "csi_delivery_reliability_slo_recovered"
+    )
+    assert notice.get("severity") == "success"
+    assert bool(notice.get("requires_action")) is False
+
+
 def test_signals_ingest_auto_remediation_failed_emits_actionable_notice(client, monkeypatch):
     monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
     monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")

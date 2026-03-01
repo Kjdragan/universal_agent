@@ -1,20 +1,20 @@
 # CSI Rebuild Status
 
-Last updated: 2026-03-01 15:55 America/Chicago
+Last updated: 2026-03-01 17:28 America/Chicago
 Status owner: Codex
 
 Handoff reference: `docs/csi-rebuild/06_packet_handoff.md`
 Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 
 ## Program State
-- Phase: 1 (reliability implementation)
+- Phase: 2 (reliability autopilot)
 - Overall: In progress
 - Main branch readiness: Complete
 
 ## Current Objectives
-1. Tune production thresholds for CSI delivery-health scoring.
-2. Surface source-level repair hints in CSI operator UX.
-3. Keep live-flow validation path current (ingest + UA activity confirmation).
+1. Keep packet 13 daily SLO gatekeeper signals stable in production.
+2. Validate packet 13 timer/service rollout and daily state updates on VPS.
+3. Move to packet 14 artifact discoverability and traceability.
 4. Keep deploy verification checklist current for CSI timers/services.
 
 ## Progress Board
@@ -31,7 +31,7 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 | CSI health delivery visibility | Done | `/api/v1/dashboard/csi/health` now reports delivery totals and per-target status. |
 | DLQ replay automation | Done | Added `csi-replay-dlq.service` + `.timer` and installer wiring. |
 | Source routing invariants | Done | Added tests proving playlist digest ignores RSS source unless explicitly overridden. |
-| Phase 1 reliability changes | In progress | Packet 6 + Packet 7 + Packet 8 + Packet 9 delivered; preparing packet 10 runtime canaries. |
+| Phase 1 reliability changes | Done | Packets 6-10 delivered and validated. |
 | Opportunity bundle persistence | Done | Added `opportunity_bundles` migration + store helpers. |
 | Opportunity bundle emission | Done | `csi_report_product_finalize.py` now emits `opportunity_bundle_ready` with artifacts. |
 | Opportunity API/UI surfacing | Done | Added `/api/v1/dashboard/csi/opportunities` and CSI dashboard section. |
@@ -49,6 +49,9 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 | Delivery-health threshold tuning (packet 9) | Done | Endpoint now supports production tuning for volume/failure/DLQ thresholds and per-source status scoring. |
 | Delivery-health operator hints UI (packet 9) | Done | CSI dashboard now surfaces source-level repair hints with copyable runbook commands. |
 | Runtime canary automation (packet 10) | Done | Added `csi_delivery_health_canary.py`, canary systemd timer/service, and actionable CSI regression/recovery alert wiring in gateway notifications. |
+| Canary-aware operator panel (packet 11) | Done | Added dedicated delivery-health regression/recovery notification kinds + metadata passthrough for runbook actions. |
+| Guarded auto-remediation runner (packet 12) | Done | Added `csi_delivery_health_auto_remediate.py` + timer/service + guardrail tests and notification wiring. |
+| Reliability SLO gatekeeper (packet 13) | Done | Added `csi_delivery_slo_gatekeeper.py`, daily timer/service, SLO breach/recovery ingest wiring, API endpoint, and CSI dashboard SLO panel. |
 
 ## Validation Snapshot
 - `CSI_Ingester/development/tests/unit/test_digest_cursor_recovery.py`: 2 passed.
@@ -81,10 +84,14 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 - `CSI_Ingester/development/tests/unit/test_csi_delivery_health_canary.py`: 3 passed.
 - `tests/gateway/test_signals_ingest_endpoint.py`: 16 passed.
 - `tests/gateway/test_ops_api.py -k dashboard_csi_delivery_health_reports_source_and_adapter_state`: 1 passed.
+- `CSI_Ingester/development/tests/unit/test_csi_delivery_slo_gatekeeper.py`: 2 passed.
+- `tests/gateway/test_signals_ingest_endpoint.py -k reliability_slo or auto_remediation_failed or delivery_health_regression or delivery_health_recovered`: 5 passed.
+- `tests/gateway/test_ops_api.py -k dashboard_csi_reliability_slo_reads_latest_state or dashboard_csi_delivery_health_reports_source_and_adapter_state`: 2 passed.
+- `npm --prefix web-ui run build`: passed.
 
 ## Open Risks
 - Monitor that new runtime-generated artifacts do not reintroduce panel noise.
 - Validate deploy/runtime state after mainline consolidation.
 
 ## Next Execution Step
-- Implement packet 11: canary-aware operator panel (dedicated cards/actions for delivery-health regression and recovery events).
+- Implement packet 14: artifact discoverability and traceability (notification -> session -> artifact linkage).

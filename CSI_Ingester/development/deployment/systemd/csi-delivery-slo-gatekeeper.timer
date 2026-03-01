@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI delivery reliability SLO gatekeeper daily
+
+[Timer]
+OnCalendar=*-*-* 00:25:00 UTC
+Persistent=true
+Unit=csi-delivery-slo-gatekeeper.service
+
+[Install]
+WantedBy=timers.target

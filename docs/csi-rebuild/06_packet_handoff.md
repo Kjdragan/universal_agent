@@ -1,14 +1,19 @@
-# CSI Rebuild Packet Handoff (1-10)
+# CSI Rebuild Packet Handoff (1-10, Historical Snapshot)
 
-Last updated: 2026-03-01 15:20 America/Chicago  
+Last updated: 2026-03-01 17:28 America/Chicago  
 Owner: Codex  
 Purpose: low-context transfer document so a new developer can continue immediately.
 
+> Note: this document is retained as a historical checkpoint from the packet-10 era.
+> Active handoff state is now tracked in:
+> - `docs/csi-rebuild/status.md`
+> - `docs/csi-rebuild/07_post_packet10_work_phases.md`
+
 ## Current State (At A Glance)
 - Branch: `main`
-- Remote: `origin/main` at `6a47173`
-- Packet status: `1-9 complete`, `10 in progress (not started in code yet)`
-- CSI working tree: contains uncommitted packet 8/9 code + docs updates that still need commit/deploy.
+- Remote: `origin/main` at `577bdc1`
+- Packet status: `1-13 complete` (see `status.md` for live progression).
+- CSI working tree: use `git status` for current mutable state; this file no longer tracks it.
 
 ## Packet Matrix
 | Packet | Objective | Status | Evidence |
@@ -101,4 +106,3 @@ M  web-ui/app/dashboard/csi/page.tsx
 5. Deploy packet 10 and confirm:
    - regression event auto-alerts with remediation guidance,
    - recovery event clears/updates status cleanly.
-

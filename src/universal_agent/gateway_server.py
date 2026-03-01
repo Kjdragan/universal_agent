@@ -3294,12 +3294,15 @@ def _csi_is_high_value_event(event_type: str) -> bool:
         "report_product_ready",
         "opportunity_bundle_ready",
         "delivery_health_auto_remediation_failed",
+        "delivery_reliability_slo_breached",
     }
 
 
 def _csi_event_has_anomaly(event_type: str, subject: Any) -> bool:
     lowered = str(event_type or "").strip().lower()
     if lowered == "delivery_health_regression":
+        return True
+    if lowered == "delivery_reliability_slo_breached":
         return True
     if "failed" in lowered or "error" in lowered or "regression" in lowered:
         return True
@@ -3324,6 +3327,10 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     elif event_type == "delivery_health_regression":
         status_hint = str(subject_obj.get("status") or "").strip().lower()
         severity = "error" if status_hint == "failing" else "warning"
+    elif event_type == "delivery_reliability_slo_recovered":
+        severity = "success"
+    elif event_type == "delivery_reliability_slo_breached":
+        severity = "error"
     elif event_type == "delivery_health_auto_remediation_succeeded":
         severity = "success"
     elif event_type == "delivery_health_auto_remediation_failed":
@@ -3335,9 +3342,14 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     requires_action = bool(
         has_anomaly
         or high_value
-        or event_type in {"delivery_health_regression", "delivery_health_auto_remediation_failed"}
+        or event_type
+        in {
+            "delivery_health_regression",
+            "delivery_health_auto_remediation_failed",
+            "delivery_reliability_slo_breached",
+        }
     )
-    if event_type == "delivery_health_recovered":
+    if event_type in {"delivery_health_recovered", "delivery_reliability_slo_recovered"}:
         requires_action = False
     todoist_sync = bool(
         (has_anomaly and event_type != "delivery_health_recovered")
@@ -3348,6 +3360,7 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
             "rss_trend_report",
             "reddit_trend_report",
             "delivery_health_regression",
+            "delivery_reliability_slo_breached",
         }
     )
     return {
@@ -8573,6 +8586,12 @@ async def signals_ingest_endpoint(request: Request):
             elif event_type_norm == "delivery_health_recovered":
                 notification_kind = "csi_delivery_health_recovered"
                 title = "CSI Delivery Health Recovered"
+            elif event_type_norm == "delivery_reliability_slo_breached":
+                notification_kind = "csi_delivery_reliability_slo_breached"
+                title = "CSI Reliability SLO Breached"
+            elif event_type_norm == "delivery_reliability_slo_recovered":
+                notification_kind = "csi_delivery_reliability_slo_recovered"
+                title = "CSI Reliability SLO Recovered"
             elif event_type_norm == "delivery_health_auto_remediation_failed":
                 notification_kind = "csi_delivery_health_auto_remediation_failed"
                 title = "CSI Auto-Remediation Failed"
@@ -8628,6 +8647,31 @@ async def signals_ingest_endpoint(request: Request):
                             if isinstance(action, dict):
                                 result = action.get("result") if isinstance(action.get("result"), dict) else {}
                                 maybe = str(result.get("runbook_command") or "").strip()
+                                if maybe:
+                                    first_command = maybe
+                                    break
+                        if first_command:
+                            metadata["primary_runbook_command"] = first_command
+                elif event_type_norm in {"delivery_reliability_slo_breached", "delivery_reliability_slo_recovered"}:
+                    metadata["slo_status"] = str(event.subject.get("status") or "")
+                    metadata["target_day_utc"] = str(event.subject.get("target_day_utc") or "")
+                    metrics = event.subject.get("metrics") if isinstance(event.subject.get("metrics"), dict) else {}
+                    if metrics:
+                        metadata["slo_metrics"] = metrics
+                    thresholds = event.subject.get("thresholds") if isinstance(event.subject.get("thresholds"), dict) else {}
+                    if thresholds:
+                        metadata["slo_thresholds"] = thresholds
+                    top_root_causes = (
+                        event.subject.get("top_root_causes")
+                        if isinstance(event.subject.get("top_root_causes"), list)
+                        else []
+                    )
+                    if top_root_causes:
+                        metadata["top_root_causes"] = top_root_causes[:3]
+                        first_command = ""
+                        for cause in top_root_causes:
+                            if isinstance(cause, dict):
+                                maybe = str(cause.get("runbook_command") or "").strip()
                                 if maybe:
                                     first_command = maybe
                                     break
@@ -10230,6 +10274,67 @@ async def dashboard_csi_delivery_health(
         }
     except Exception as exc:
         return {"status": "error", "detail": f"Failed loading CSI delivery health: {exc}"}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/csi/reliability-slo")
+async def dashboard_csi_reliability_slo():
+    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    if not db_path.exists():
+        return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT source_key, state_json, updated_at
+            FROM source_state
+            WHERE source_key = 'runtime_canary:delivery_slo'
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return {
+                "status": "ok",
+                "slo": {
+                    "status": "unknown",
+                    "detail": "No daily reliability SLO evaluations recorded yet.",
+                    "target_day_utc": None,
+                    "last_checked_at": None,
+                    "window_start_utc": None,
+                    "window_end_utc": None,
+                    "metrics": {},
+                    "thresholds": {},
+                    "top_root_causes": [],
+                    "history": [],
+                },
+            }
+
+        state = _activity_json_loads_obj(row["state_json"], default={})
+        if not isinstance(state, dict):
+            state = {}
+        history = state.get("history") if isinstance(state.get("history"), list) else []
+        top_root_causes = state.get("top_root_causes") if isinstance(state.get("top_root_causes"), list) else []
+        return {
+            "status": "ok",
+            "slo": {
+                "status": str(state.get("status") or "unknown"),
+                "detail": str(state.get("last_transition_reason") or ""),
+                "target_day_utc": str(state.get("target_day_utc") or ""),
+                "last_checked_at": str(state.get("last_checked_at") or row["updated_at"] or ""),
+                "window_start_utc": str(state.get("window_start_utc") or ""),
+                "window_end_utc": str(state.get("window_end_utc") or ""),
+                "metrics": state.get("metrics") if isinstance(state.get("metrics"), dict) else {},
+                "thresholds": state.get("thresholds") if isinstance(state.get("thresholds"), dict) else {},
+                "top_root_causes": [item for item in top_root_causes if isinstance(item, dict)][:3],
+                "history": [item for item in history if isinstance(item, dict)][-30:],
+            },
+        }
+    except Exception as exc:
+        return {"status": "error", "detail": f"Failed loading CSI reliability SLO status: {exc}"}
     finally:
         if conn is not None:
             conn.close()

@@ -230,6 +230,8 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
         route = "data-analyst"
     if event_type.startswith("delivery_health_auto_remediation"):
         route = "data-analyst"
+    if event_type.startswith("delivery_reliability_slo_"):
+        route = "data-analyst"
     if event_type == "hourly_token_usage_report":
         route = "data-analyst"
     timeout_seconds = _int_env(

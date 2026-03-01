@@ -1143,6 +1143,70 @@ def test_dashboard_csi_delivery_health_reports_source_and_adapter_state(client, 
     assert isinstance(payload.get("adapter_health"), list)
 
 
+def test_dashboard_csi_reliability_slo_reads_latest_state(client, tmp_path, monkeypatch):
+    db_path = tmp_path / "csi_reliability_slo.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE source_state (
+                source_key TEXT PRIMARY KEY,
+                state_json TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "INSERT INTO source_state (source_key, state_json, updated_at) VALUES (?, ?, ?)",
+            (
+                "runtime_canary:delivery_slo",
+                json.dumps(
+                    {
+                        "status": "breached",
+                        "target_day_utc": "2026-03-01",
+                        "last_checked_at": now,
+                        "window_start_utc": "2026-03-01T00:00:00Z",
+                        "window_end_utc": "2026-03-02T00:00:00Z",
+                        "metrics": {
+                            "delivery_success_ratio": 0.81,
+                            "dlq_backlog_current": 4,
+                            "canary_regression_count": 3,
+                        },
+                        "thresholds": {
+                            "min_delivery_success_ratio": 0.98,
+                            "max_dlq_backlog": 0,
+                        },
+                        "top_root_causes": [
+                            {
+                                "code": "delivery_success_ratio_below_min",
+                                "title": "Delivery success ratio below SLO",
+                            }
+                        ],
+                        "history": [{"target_day_utc": "2026-02-28", "status": "ok"}],
+                    }
+                ),
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    resp = client.get("/api/v1/dashboard/csi/reliability-slo")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    slo = payload.get("slo") if isinstance(payload.get("slo"), dict) else {}
+    assert str(slo.get("status") or "") == "breached"
+    assert str(slo.get("target_day_utc") or "") == "2026-03-01"
+    assert isinstance(slo.get("metrics"), dict)
+    assert isinstance(slo.get("thresholds"), dict)
+    assert isinstance(slo.get("top_root_causes"), list)
+    assert isinstance(slo.get("history"), list)
+
+
 def test_dashboard_csi_reports_includes_opportunity_bundle_events(client, tmp_path, monkeypatch):
     db_path = tmp_path / "csi_opportunity_reports.db"
     conn = sqlite3.connect(str(db_path))

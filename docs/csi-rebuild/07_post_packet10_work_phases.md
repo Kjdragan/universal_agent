@@ -1,6 +1,6 @@
 # CSI Post-Packet-10 Work Phases (AI Handoff Plan)
 
-Last updated: 2026-03-01 15:35 America/Chicago  
+Last updated: 2026-03-01 17:28 America/Chicago  
 Owner: Codex  
 Audience: next AI coder taking over CSI rebuild execution
 
@@ -11,9 +11,9 @@ Audience: next AI coder taking over CSI rebuild execution
 4. [05_incident_log.md](/home/kjdragan/lrepos/universal_agent/docs/csi-rebuild/05_incident_log.md)
 
 ## Current Baseline
-- Packets `1-9`: complete (packet 8/9 are implemented locally and pending commit/deploy in current working tree).
-- Packet `10`: defined and ready for implementation (`runtime canary automation`).
-- Current objective after packet 10: shift from repair to autonomous reliability + useful research outcomes.
+- Packets `1-13`: complete in source (packet 11-13 now implemented with tests and docs updates).
+- Current objective: packet `14` artifact discoverability + traceability flow (notification -> session -> artifact).
+- Reliability autopilot baseline is active: canary alerts, guarded remediation, and daily SLO gatekeeper are all wired.
 
 ## Operating Contract For Any New AI Coder
 1. Execute exactly one packet at a time unless explicitly marked parallel-safe.
@@ -34,7 +34,7 @@ Audience: next AI coder taking over CSI rebuild execution
 
 ## Packet Backlog (Execution-Ready)
 
-## Packet 11: Canary-Aware Operator Panel
+## Packet 11 (Complete): Canary-Aware Operator Panel
 - Objective: make packet 10 canary signals first-class in dashboard and notifications.
 - Deliverables:
   - `delivery_health_regression` and `delivery_health_recovered` surfaced as dedicated operator cards.
@@ -46,7 +46,7 @@ Audience: next AI coder taking over CSI rebuild execution
 - Exit criteria:
   - Operator can diagnose a regression from UI alone in under 60 seconds.
 
-## Packet 12: Guarded Auto-Remediation Runner
+## Packet 12 (Complete): Guarded Auto-Remediation Runner
 - Objective: automate safe remediations for known faults.
 - Deliverables:
   - Automated playbooks for:
@@ -61,7 +61,7 @@ Audience: next AI coder taking over CSI rebuild execution
 - Exit criteria:
   - System can self-heal common failures without human action and without flapping.
 
-## Packet 13: Reliability SLO Gatekeeper
+## Packet 13 (Complete): Reliability SLO Gatekeeper
 - Objective: enforce reliability budgets automatically.
 - Deliverables:
   - Daily SLO computation job for:

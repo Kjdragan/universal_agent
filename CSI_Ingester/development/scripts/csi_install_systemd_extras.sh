@@ -45,6 +45,8 @@ install_unit "csi-delivery-health-canary.service"
 install_unit "csi-delivery-health-canary.timer"
 install_unit "csi-delivery-health-auto-remediate.service"
 install_unit "csi-delivery-health-auto-remediate.timer"
+install_unit "csi-delivery-slo-gatekeeper.service"
+install_unit "csi-delivery-slo-gatekeeper.timer"
 
 systemctl daemon-reload
 systemctl enable --now csi-rss-telegram-digest.timer
@@ -65,6 +67,7 @@ systemctl enable --now csi-daily-summary.timer
 systemctl enable --now csi-hourly-token-report.timer
 systemctl enable --now csi-delivery-health-canary.timer
 systemctl enable --now csi-delivery-health-auto-remediate.timer
+systemctl enable --now csi-delivery-slo-gatekeeper.timer
 
 echo "SYSTEMD_EXTRAS_INSTALLED=1"
 systemctl is-active csi-rss-telegram-digest.timer
@@ -85,3 +88,4 @@ systemctl is-active csi-daily-summary.timer
 systemctl is-active csi-hourly-token-report.timer
 systemctl is-active csi-delivery-health-canary.timer
 systemctl is-active csi-delivery-health-auto-remediate.timer
+systemctl is-active csi-delivery-slo-gatekeeper.timer
