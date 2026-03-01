@@ -1,3 +1,4 @@
+import builtins
 import logging
 
 import pytest
@@ -80,3 +81,34 @@ def test_initialize_runtime_secrets_does_not_log_sensitive_values(monkeypatch, c
     assert result.ok is True
     assert all(secret_marker not in err for err in result.errors)
     assert secret_marker not in caplog.text
+
+
+def test_fetch_infisical_secrets_uses_rest_fallback_when_sdk_unavailable(monkeypatch):
+    monkeypatch.setenv("INFISICAL_CLIENT_ID", "client")
+    monkeypatch.setenv("INFISICAL_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("INFISICAL_PROJECT_ID", "project")
+    monkeypatch.setenv("INFISICAL_ENVIRONMENT", "dev")
+    monkeypatch.setenv("INFISICAL_SECRET_PATH", "/")
+
+    called = {"rest": False}
+
+    def _fake_rest(**kwargs):
+        called["rest"] = True
+        assert kwargs["client_id"] == "client"
+        assert kwargs["project_id"] == "project"
+        return {"LOG_LEVEL": "INFO"}
+
+    monkeypatch.setattr(infisical_loader, "_fetch_infisical_secrets_via_rest", _fake_rest)
+
+    real_import = builtins.__import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name == "infisical_client":
+            raise ModuleNotFoundError("No module named 'infisical_client'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    values = infisical_loader._fetch_infisical_secrets()
+    assert called["rest"] is True
+    assert values["LOG_LEVEL"] == "INFO"
