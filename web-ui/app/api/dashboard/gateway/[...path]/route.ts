@@ -64,6 +64,34 @@ function maybeApplyOwnerFilter(pathname: string, params: URLSearchParams, ownerI
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTransientRetry(
+  upstreamUrl: URL,
+  init: RequestInit,
+  method: string,
+): Promise<Response> {
+  const upperMethod = method.toUpperCase();
+  const retryable = upperMethod === "GET" || upperMethod === "HEAD";
+  const maxAttempts = retryable ? 3 : 1;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await fetch(upstreamUrl, init);
+    } catch (err) {
+      lastError = err;
+      if (attempt >= maxAttempts) break;
+      // Transient gateway restarts can drop localhost:8002 briefly.
+      await sleep(120 * attempt);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function proxyRequest(request: NextRequest, path: string[]) {
   const session = await getDashboardSessionFromCookies();
   if (!session.authenticated && session.authRequired) {
@@ -84,13 +112,17 @@ async function proxyRequest(request: NextRequest, path: string[]) {
 
   let upstreamResponse: Response;
   try {
-    upstreamResponse = await fetch(upstreamUrl, {
+    upstreamResponse = await fetchWithTransientRetry(
+      upstreamUrl,
+      {
+        method,
+        headers,
+        body,
+        cache: "no-store",
+        redirect: "manual",
+      },
       method,
-      headers,
-      body,
-      cache: "no-store",
-      redirect: "manual",
-    });
+    );
   } catch (err) {
     // Most common local-dev failure: web UI started before gateway is reachable.
     return NextResponse.json(
