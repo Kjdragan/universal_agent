@@ -55,6 +55,7 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 | Artifact discoverability & traceability (packet 14) | Done | Normalized traceability metadata (source, session_key, report_key, artifact_paths) on all CSI ingest-path notifications. Added Open Report/Session/Artifact action buttons and fallback explanation in CSI dashboard notification detail. Added metadata completeness test. |
 | Session rehydrate reliability (packet 15) | Done | Added checkpoint diagnostics (age, tasks, artifacts, original_request) and rehydrate readiness assessment to session detail API. Added rehydrate indicator UI in sessions panel with structured fallback explanation. Added 3 API tests for checkpoint/run_log+memory/empty-history variants. |
 | Research quality scoring v1 (packet 16) | Done | Added `csi_quality_score.py` with 4-dimension scorer (evidence coverage, novelty, source diversity, actionability). Wired quality score into CSI notification metadata. Added quality grade badge in notification list + detailed breakdown in notification detail panel. 20 unit tests + integration assertions pass. |
+| UA<->CSI follow-up contract v2 (packet 17) | Done | Added `csi_followup_contract.py` with explicit request/response schema, correlation IDs, hard budget (max 10) and timeout (60s-86400s) enforcement. Wired correlation_id into gateway specialist loop follow-up path. 24 contract tests pass. |
 
 ## Validation Snapshot
 - `CSI_Ingester/development/tests/unit/test_digest_cursor_recovery.py`: 2 passed.
@@ -90,6 +91,8 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 - `tests/gateway/test_ops_api.py -k rehydrate` (packet 15): 3 passed.
 - `tests/unit/test_csi_quality_score.py` (packet 16): 20 passed.
 - `tests/gateway/test_signals_ingest_endpoint.py` (packet 16): 20 passed.
+- `tests/unit/test_csi_followup_contract.py` (packet 17): 24 passed.
+- `tests/gateway/test_signals_ingest_endpoint.py` (packet 17): 20 passed.
 - `tests/gateway/test_ops_api.py -k dashboard_csi_delivery_health_reports_source_and_adapter_state`: 1 passed.
 - `CSI_Ingester/development/tests/unit/test_csi_delivery_slo_gatekeeper.py`: 2 passed.
 - `tests/gateway/test_signals_ingest_endpoint.py -k reliability_slo or auto_remediation_failed or delivery_health_regression or delivery_health_recovered`: 5 passed.
@@ -101,4 +104,4 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 - Validate deploy/runtime state after mainline consolidation.
 
 ## Next Execution Step
-- Implement packet 17: UA<->CSI follow-up contract v2.
+- Implement packet 18: iterative refinement policy engine.

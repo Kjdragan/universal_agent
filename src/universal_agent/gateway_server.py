@@ -3679,12 +3679,31 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
         finally:
             conn.close()
 
+    # Packet 17: generate correlation_id for traceable follow-up
+    _followup_correlation_id: str | None = None
+    if request_followup:
+        try:
+            from universal_agent.csi_followup_contract import build_followup_request
+            _fu_req = build_followup_request(
+                topic_key=topic_key,
+                reason=f"confidence {confidence_score:.3f} < target {confidence_target:.3f}",
+                budget_remaining=max(0, followup_remaining),
+                budget_total=int(_csi_specialist_followup_budget),
+                request_type="targeted_followup",
+                quality_threshold=confidence_target,
+            )
+            _followup_correlation_id = _fu_req.correlation_id
+        except Exception:
+            import uuid as _uuid_mod
+            _followup_correlation_id = f"fu_{_uuid_mod.uuid4().hex[:12]}"
+
     followup_message = (
         "CSI specialist follow-up request.\n"
         f"topic_key: {topic_key}\n"
         f"topic_label: {topic_label}\n"
         f"event_type: {event_type}\n"
         f"event_id: {event_id}\n"
+        f"correlation_id: {_followup_correlation_id or ''}\n"
         f"confidence_score: {confidence_score}\n"
         f"confidence_target: {confidence_target}\n"
         f"confidence_method: {confidence_method}\n"
@@ -3709,6 +3728,7 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
         "quality_alerts": quality_alerts,
         "follow_up_budget_remaining": max(0, followup_remaining),
         "request_followup": request_followup,
+        "followup_correlation_id": _followup_correlation_id,
         "followup_message": followup_message,
         "source_mix": source_mix,
         "note": followup_note,
