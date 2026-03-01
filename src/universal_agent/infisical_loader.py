@@ -5,6 +5,7 @@ import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,8 @@ def _fetch_infisical_secrets() -> dict[str, str]:
     project_id = str(os.getenv("INFISICAL_PROJECT_ID") or "").strip()
     environment = str(os.getenv("INFISICAL_ENVIRONMENT") or "dev").strip() or "dev"
     secret_path = str(os.getenv("INFISICAL_SECRET_PATH") or "/").strip() or "/"
+    api_url = str(os.getenv("INFISICAL_API_URL") or "https://app.infisical.com").strip() or "https://app.infisical.com"
+    api_url = api_url.rstrip("/")
 
     missing = [
         name for name, value in (
@@ -109,37 +112,120 @@ def _fetch_infisical_secrets() -> dict[str, str]:
     if missing:
         raise RuntimeError(f"Missing required Infisical settings: {', '.join(missing)}")
 
-    from infisical_client import (
-        AuthenticationOptions,
-        ClientSettings,
-        InfisicalClient,
-        ListSecretsOptions,
-        UniversalAuthMethod,
-    )
+    try:
+        from infisical_client import (
+            AuthenticationOptions,
+            ClientSettings,
+            InfisicalClient,
+            ListSecretsOptions,
+            UniversalAuthMethod,
+        )
+    except Exception as exc:
+        logger.warning("Infisical SDK unavailable; falling back to REST bootstrap (%s)", _safe_error(exc))
+        return _fetch_infisical_secrets_via_rest(
+            api_url=api_url,
+            client_id=client_id,
+            client_secret=client_secret,
+            project_id=project_id,
+            environment=environment,
+            secret_path=secret_path,
+        )
 
-    client = InfisicalClient(
-        ClientSettings(
-            auth=AuthenticationOptions(
-                universal_auth=UniversalAuthMethod(
-                    client_id=client_id,
-                    client_secret=client_secret,
+    try:
+        client = InfisicalClient(
+            ClientSettings(
+                auth=AuthenticationOptions(
+                    universal_auth=UniversalAuthMethod(
+                        client_id=client_id,
+                        client_secret=client_secret,
+                    )
                 )
             )
         )
-    )
-    secrets = client.listSecrets(
-        options=ListSecretsOptions(
-            environment=environment,
-            project_id=project_id,
-            path=secret_path,
+        secrets = client.listSecrets(
+            options=ListSecretsOptions(
+                environment=environment,
+                project_id=project_id,
+                path=secret_path,
+            )
         )
-    )
+        out: dict[str, str] = {}
+        for item in secrets:
+            key = str(getattr(item, "secret_key", "")).strip()
+            if not key:
+                continue
+            out[key] = str(getattr(item, "secret_value", "") or "")
+        return out
+    except Exception as exc:
+        logger.warning("Infisical SDK fetch failed; falling back to REST bootstrap (%s)", _safe_error(exc))
+        return _fetch_infisical_secrets_via_rest(
+            api_url=api_url,
+            client_id=client_id,
+            client_secret=client_secret,
+            project_id=project_id,
+            environment=environment,
+            secret_path=secret_path,
+        )
+
+
+def _fetch_infisical_secrets_via_rest(
+    *,
+    api_url: str,
+    client_id: str,
+    client_secret: str,
+    project_id: str,
+    environment: str,
+    secret_path: str,
+) -> dict[str, str]:
+    import httpx
+
+    with httpx.Client(timeout=20.0) as client:
+        auth_resp = client.post(
+            f"{api_url}/api/v1/auth/universal-auth/login",
+            json={
+                "clientId": client_id,
+                "clientSecret": client_secret,
+            },
+        )
+        auth_resp.raise_for_status()
+        auth_payload = auth_resp.json() if auth_resp.headers.get("content-type", "").startswith("application/json") else {}
+        access_token = str((auth_payload or {}).get("accessToken") or "").strip()
+        if not access_token:
+            raise RuntimeError("Infisical REST auth response missing access token")
+
+        secrets_resp = client.get(
+            f"{api_url}/api/v3/secrets/raw",
+            params={
+                "workspaceId": project_id,
+                "environment": environment,
+                "secretPath": secret_path,
+                "recursive": "true",
+                "include_imports": "true",
+            },
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        secrets_resp.raise_for_status()
+        payload: Any = (
+            secrets_resp.json()
+            if secrets_resp.headers.get("content-type", "").startswith("application/json")
+            else {}
+        )
+
+    items = payload.get("secrets") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        raise RuntimeError("Infisical REST secrets response missing secrets list")
+
     out: dict[str, str] = {}
-    for item in secrets:
-        key = str(getattr(item, "secret_key", "")).strip()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("secretKey") or item.get("secret_key") or "").strip()
         if not key:
             continue
-        out[key] = str(getattr(item, "secret_value", "") or "")
+        value = item.get("secretValue")
+        if value is None:
+            value = item.get("secret_value")
+        out[key] = str(value or "")
     return out
 
 

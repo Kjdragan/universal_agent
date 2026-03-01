@@ -181,6 +181,10 @@ rsync -az \
   command -v uv >/dev/null 2>&1
   command -v sqlite3 >/dev/null 2>&1
 
+  echo '== Infisical SDK toolchain =='
+  chmod 0755 scripts/install_vps_infisical_sdk.sh
+  APP_ROOT='$REMOTE_DIR' APP_USER='ua' bash scripts/install_vps_infisical_sdk.sh --prepare-only
+
   echo '== Resilience hardening =='
   chmod 0755 scripts/install_vps_swap.sh scripts/install_vps_memory_guardrails.sh scripts/install_vps_oom_alert.sh scripts/watchdog_oom_notifier.py
   case \"\$(printf '%s' '${DEPLOY_CONFIGURE_SWAP}' | tr '[:upper:]' '[:lower:]')\" in
@@ -209,7 +213,10 @@ rsync -az \
   esac
 
   echo '== Python deps =='
-  runuser -u ua -- bash -lc 'export PATH=\"/home/ua/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"; cd $REMOTE_DIR && uv sync'
+  runuser -u ua -- bash -lc 'export PATH=\"/home/ua/.local/bin:/home/ua/.cargo/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"; export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1; cd $REMOTE_DIR && uv sync'
+
+  echo '== Infisical SDK verification =='
+  APP_ROOT='$REMOTE_DIR' APP_USER='ua' bash scripts/install_vps_infisical_sdk.sh --verify-only
 
   echo '== Web UI build =='
   if [ -d web-ui ] && command -v npm >/dev/null 2>&1; then
