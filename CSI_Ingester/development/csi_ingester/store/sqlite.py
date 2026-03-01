@@ -165,12 +165,29 @@ CREATE TABLE IF NOT EXISTS category_quality_snapshots (
 CREATE INDEX IF NOT EXISTS idx_category_quality_snapshots_observed_at ON category_quality_snapshots(observed_at);
 """
 
+MIGRATION_0006_DELIVERY_ATTEMPTS = """
+CREATE TABLE IF NOT EXISTS delivery_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT 'ua_signals_ingest',
+    delivered INTEGER NOT NULL DEFAULT 0,
+    status_code INTEGER NOT NULL DEFAULT 0,
+    error_class TEXT,
+    error_detail TEXT,
+    attempted_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_delivery_attempts_event_id ON delivery_attempts(event_id);
+CREATE INDEX IF NOT EXISTS idx_delivery_attempts_target ON delivery_attempts(target, attempted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_delivery_attempts_status ON delivery_attempts(delivered, status_code, attempted_at DESC);
+"""
+
 MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0001_core", MIGRATION_0001_CORE),
     ("0002_source_state", MIGRATION_0002_SOURCE_STATE),
     ("0003_token_usage", MIGRATION_0003_TOKEN_USAGE),
     ("0004_rss_analysis", MIGRATION_0004_RSS_ANALYSIS),
     ("0005_analyst", MIGRATION_0005_ANALYST),
+    ("0006_delivery_attempts", MIGRATION_0006_DELIVERY_ATTEMPTS),
 )
 
 

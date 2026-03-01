@@ -8990,6 +8990,44 @@ async def dashboard_csi_health():
             ).fetchone()["c"]
             or 0
         )
+        delivery_targets: list[dict[str, Any]] = []
+        delivery_attempts_total = 0
+        delivery_attempts_failed = 0
+        delivery_rows: list[sqlite3.Row] = []
+        try:
+            delivery_rows = conn.execute(
+                """
+                SELECT
+                    target,
+                    COUNT(*) AS attempts,
+                    SUM(CASE WHEN delivered = 1 THEN 1 ELSE 0 END) AS delivered_count,
+                    SUM(CASE WHEN delivered = 0 THEN 1 ELSE 0 END) AS failed_count
+                FROM delivery_attempts
+                WHERE attempted_at >= datetime('now', '-24 hours')
+                GROUP BY target
+                ORDER BY target ASC
+                """
+            ).fetchall()
+        except Exception:
+            delivery_rows = []
+        if delivery_rows:
+            for row in delivery_rows:
+                attempts = int(row["attempts"] or 0)
+                failed = int(row["failed_count"] or 0)
+                delivered_count = int(row["delivered_count"] or 0)
+                delivery_attempts_total += attempts
+                delivery_attempts_failed += failed
+                failure_ratio = round((failed / attempts), 4) if attempts > 0 else 0.0
+                delivery_targets.append(
+                    {
+                        "target": str(row["target"] or "unknown"),
+                        "attempts_last_24h": attempts,
+                        "delivered_last_24h": delivered_count,
+                        "failed_last_24h": failed,
+                        "failure_ratio": failure_ratio,
+                        "status": "ok" if failed == 0 else ("degraded" if failure_ratio < 0.25 else "failing"),
+                    }
+                )
         source_rows = conn.execute(
             """
             SELECT source, MAX(occurred_at) AS last_seen, COUNT(*) AS total
@@ -9123,6 +9161,9 @@ async def dashboard_csi_health():
             "last_event": dict(last_event_row) if last_event_row else None,
             "undelivered_last_24h": undelivered,
             "dead_letter_last_24h": dlq_count,
+            "delivery_attempts_last_24h": delivery_attempts_total,
+            "delivery_failures_last_24h": delivery_attempts_failed,
+            "delivery_targets": delivery_targets,
             "sources": [dict(row) for row in source_rows],
             "source_health": source_health,
             "event_types": [dict(row) for row in event_rows],

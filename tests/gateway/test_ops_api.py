@@ -946,6 +946,20 @@ def test_dashboard_csi_health_includes_overnight_and_source_health(client, tmp_p
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE delivery_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT,
+                target TEXT,
+                delivered INTEGER,
+                status_code INTEGER,
+                error_class TEXT,
+                error_detail TEXT,
+                attempted_at TEXT
+            )
+            """
+        )
         now = datetime.now(timezone.utc)
         recent = now.isoformat()
         conn.execute(
@@ -955,6 +969,14 @@ def test_dashboard_csi_health_includes_overnight_and_source_health(client, tmp_p
         conn.execute(
             "INSERT INTO events (event_id, source, event_type, occurred_at, delivered) VALUES (?, ?, ?, ?, ?)",
             ("evt-2", "reddit_discovery", "reddit_trend_report", recent, 1),
+        )
+        conn.execute(
+            """
+            INSERT INTO delivery_attempts (
+                event_id, target, delivered, status_code, attempted_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("evt-1", "ua_signals_ingest", 1, 200, recent),
         )
         conn.commit()
     finally:
@@ -967,6 +989,8 @@ def test_dashboard_csi_health_includes_overnight_and_source_health(client, tmp_p
     assert payload["status"] == "ok"
     assert isinstance(payload.get("source_health"), list)
     assert isinstance((payload.get("overnight_continuity") or {}).get("checks"), list)
+    assert int(payload.get("delivery_attempts_last_24h") or 0) >= 1
+    assert isinstance(payload.get("delivery_targets"), list)
 
 
 def test_dashboard_csi_reports_quality_gate_suppresses_near_duplicate_emerging(client, tmp_path, monkeypatch):

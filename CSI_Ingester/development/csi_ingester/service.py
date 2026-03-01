@@ -15,6 +15,7 @@ from csi_ingester.emitter.ua_client import UAEmitter
 from csi_ingester.metrics import MetricsRegistry
 from csi_ingester.scheduler import PollingScheduler
 from csi_ingester.store import dedupe as dedupe_store
+from csi_ingester.store import delivery_attempts as delivery_attempt_store
 from csi_ingester.store import dlq as dlq_store
 from csi_ingester.store import events as event_store
 from csi_ingester.store import source_state as source_state_store
@@ -94,6 +95,14 @@ class CSIService:
             if self.emitter is None:
                 continue
             delivered, status_code, payload = await self.emitter.emit_with_retries([event])
+            delivery_attempt_store.record_attempt(
+                self.conn,
+                event_id=event.event_id,
+                target="ua_signals_ingest",
+                delivered=bool(delivered),
+                status_code=int(status_code or 0),
+                payload=payload if isinstance(payload, dict) else {"payload": payload},
+            )
             if delivered:
                 event_store.mark_delivered(self.conn, event.event_id)
                 self.metrics.inc("csi.events.delivered")
