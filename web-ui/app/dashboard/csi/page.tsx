@@ -75,6 +75,8 @@ type CSISpecialistLoop = {
     status: string;
     confidence_target: number;
     confidence_score: number;
+    confidence_method?: string;
+    confidence_evidence?: Record<string, any>;
     follow_up_budget_remaining: number;
     events_count: number;
     updated_at: string;
@@ -512,6 +514,7 @@ export default function CSIDashboard() {
                                 <th className="px-2 py-1.5">Topic</th>
                                 <th className="px-2 py-1.5">Status</th>
                                 <th className="px-2 py-1.5">Confidence</th>
+                                <th className="px-2 py-1.5">Method</th>
                                 <th className="px-2 py-1.5">Budget</th>
                             </tr>
                         </thead>
@@ -529,12 +532,13 @@ export default function CSIDashboard() {
                                     <td className="px-2 py-1.5 text-slate-400">
                                         {loop.confidence_score} / {loop.confidence_target}
                                     </td>
+                                    <td className="px-2 py-1.5 text-slate-400">{loop.confidence_method || "heuristic"}</td>
                                     <td className="px-2 py-1.5 text-slate-400">{loop.follow_up_budget_remaining}</td>
                                 </tr>
                             ))}
                             {loops.length === 0 && (
                                 <tr>
-                                    <td className="px-2 py-2 text-slate-500" colSpan={4}>
+                                    <td className="px-2 py-2 text-slate-500" colSpan={5}>
                                         No specialist loops tracked yet.
                                     </td>
                                 </tr>

@@ -43,3 +43,9 @@ Last updated: 2026-03-01
 - Extend `/api/v1/dashboard/csi/reports`
 - Add `/api/v1/dashboard/csi/opportunities` (implemented)
 - Add `/api/v1/dashboard/csi/delivery-health`
+
+## Specialist Loop Confidence Fields (Implemented)
+- `confidence_score`: numeric loop confidence.
+- `confidence_target`: configured threshold.
+- `confidence_method`: `heuristic|evidence_model`.
+- `confidence_evidence`: structured evidence snapshot used by scorer.

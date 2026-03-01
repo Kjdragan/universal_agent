@@ -128,6 +128,8 @@ from universal_agent.signals_ingest import (
 from universal_agent.mission_guardrails import build_mission_contract, MissionGuardrailTracker
 from universal_agent.memory.orchestrator import get_memory_orchestrator
 from universal_agent.memory.paths import resolve_shared_memory_workspace
+from universal_agent.csi_confidence import confidence_baseline as _csi_confidence_baseline_model
+from universal_agent.csi_confidence import score_event_confidence as _csi_score_event_confidence
 from universal_agent.runtime_env import ensure_runtime_path, runtime_tool_status
 from universal_agent.timeout_policy import (
     gateway_ws_send_timeout_seconds,
@@ -3326,18 +3328,7 @@ def _csi_specialist_topic_key(event: Any) -> tuple[str, str]:
 
 
 def _csi_confidence_baseline(event_type: str) -> float:
-    lowered = str(event_type or "").strip().lower()
-    if lowered == "opportunity_bundle_ready":
-        return 0.88
-    if lowered == "report_product_ready":
-        return 0.82
-    if lowered == "rss_insight_daily":
-        return 0.76
-    if lowered in {"rss_trend_report", "reddit_trend_report"}:
-        return 0.64
-    if lowered == "rss_insight_emerging":
-        return 0.58
-    return 0.6
+    return float(_csi_confidence_baseline_model(event_type))
 
 
 def _csi_parse_mix_json(raw: Any) -> dict[str, int]:
@@ -3353,12 +3344,27 @@ def _csi_parse_mix_json(raw: Any) -> dict[str, int]:
     return out
 
 
-def _csi_estimate_confidence(*, event_type: str, events_count: int, source_mix: dict[str, int]) -> float:
-    baseline = _csi_confidence_baseline(event_type)
-    diversity = len([k for k, v in source_mix.items() if int(v or 0) > 0])
-    diversity_bonus = min(0.18, max(0, diversity - 1) * 0.07)
-    volume_bonus = min(0.1, max(0, events_count - 1) * 0.02)
-    return round(min(0.95, baseline + diversity_bonus + volume_bonus), 3)
+def _csi_estimate_confidence(
+    *,
+    event_type: str,
+    subject: Optional[dict[str, Any]],
+    events_count: int,
+    source_mix: dict[str, int],
+) -> dict[str, Any]:
+    scoring = _csi_score_event_confidence(
+        event_type=event_type,
+        subject=subject if isinstance(subject, dict) else {},
+        events_count=int(events_count),
+        source_mix=source_mix if isinstance(source_mix, dict) else {},
+    )
+    score = float(scoring.get("score") or 0.0)
+    method = str(scoring.get("method") or "heuristic").strip().lower() or "heuristic"
+    evidence = scoring.get("evidence") if isinstance(scoring.get("evidence"), dict) else {}
+    return {
+        "score": round(max(0.0, min(0.95, score)), 3),
+        "method": method,
+        "evidence": evidence,
+    }
 
 
 def _csi_should_request_followup(last_followup_requested_at: Optional[str]) -> bool:
@@ -3377,6 +3383,9 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
     event_type = str(getattr(event, "event_type", "") or "").strip().lower()
     if not _csi_is_high_value_event(event_type):
         return {"updated": False, "request_followup": False}
+    subject_obj = getattr(event, "subject", None)
+    if not isinstance(subject_obj, dict):
+        subject_obj = {}
     topic_key, topic_label = _csi_specialist_topic_key(event)
     source_bucket = _csi_source_bucket(event)
     event_id = str(getattr(event, "event_id", "") or "")
@@ -3407,11 +3416,15 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                 last_followup_requested_at = str(row["last_followup_requested_at"] or "") or None
                 created_at = str(row["created_at"] or now_iso)
 
-            confidence_score = _csi_estimate_confidence(
+            confidence = _csi_estimate_confidence(
                 event_type=event_type,
+                subject=subject_obj,
                 events_count=events_count,
                 source_mix=source_mix,
             )
+            confidence_score = float(confidence.get("score") or 0.0)
+            confidence_method = str(confidence.get("method") or "heuristic")
+            confidence_evidence = confidence.get("evidence") if isinstance(confidence.get("evidence"), dict) else {}
             request_followup = False
             status_value = "open"
             closed_at = None
@@ -3436,9 +3449,10 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                 INSERT INTO csi_specialist_loops (
                     topic_key, topic_label, status, confidence_target, confidence_score,
                     follow_up_budget_total, follow_up_budget_remaining, events_count, source_mix_json,
+                    confidence_method, evidence_json,
                     last_event_type, last_event_id, last_event_at, last_followup_requested_at,
                     created_at, updated_at, closed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(topic_key) DO UPDATE SET
                     topic_label=excluded.topic_label,
                     status=excluded.status,
@@ -3448,6 +3462,8 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                     follow_up_budget_remaining=excluded.follow_up_budget_remaining,
                     events_count=excluded.events_count,
                     source_mix_json=excluded.source_mix_json,
+                    confidence_method=excluded.confidence_method,
+                    evidence_json=excluded.evidence_json,
                     last_event_type=excluded.last_event_type,
                     last_event_id=excluded.last_event_id,
                     last_event_at=excluded.last_event_at,
@@ -3465,6 +3481,8 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                     max(0, followup_remaining),
                     events_count,
                     _activity_json_dumps(source_mix, fallback="{}"),
+                    confidence_method,
+                    _activity_json_dumps(confidence_evidence, fallback="{}"),
                     event_type,
                     event_id,
                     event_at,
@@ -3486,6 +3504,7 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
         f"event_id: {event_id}\n"
         f"confidence_score: {confidence_score}\n"
         f"confidence_target: {confidence_target}\n"
+        f"confidence_method: {confidence_method}\n"
         f"follow_up_budget_remaining: {max(0, followup_remaining)}\n"
         "Request one focused follow-up CSI analysis task and summarize confidence deltas."
     )
@@ -3497,6 +3516,8 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
         "status": status_value,
         "confidence_score": confidence_score,
         "confidence_target": confidence_target,
+        "confidence_method": confidence_method,
+        "confidence_evidence": confidence_evidence,
         "events_count": events_count,
         "follow_up_budget_remaining": max(0, followup_remaining),
         "request_followup": request_followup,
@@ -4482,6 +4503,21 @@ def _ensure_activity_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_csi_specialist_loops_updated_at ON csi_specialist_loops(updated_at DESC);
         """
     )
+    try:
+        loop_columns = {
+            str(row["name"]): str(row["type"] or "")
+            for row in conn.execute("PRAGMA table_info(csi_specialist_loops)").fetchall()
+        }
+    except Exception:
+        loop_columns = {}
+    if "confidence_method" not in loop_columns:
+        conn.execute(
+            "ALTER TABLE csi_specialist_loops ADD COLUMN confidence_method TEXT NOT NULL DEFAULT 'heuristic'"
+        )
+    if "evidence_json" not in loop_columns:
+        conn.execute(
+            "ALTER TABLE csi_specialist_loops ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'"
+        )
     conn.commit()
 
 
@@ -5325,6 +5361,8 @@ def _list_csi_specialist_loops(limit: int = 50, status_filter: Optional[str] = N
                     "status": str(row["status"] or "open"),
                     "confidence_target": float(row["confidence_target"] or 0.0),
                     "confidence_score": float(row["confidence_score"] or 0.0),
+                    "confidence_method": str(row["confidence_method"] or "heuristic"),
+                    "confidence_evidence": _activity_json_loads_obj(row["evidence_json"], default={}),
                     "follow_up_budget_total": int(row["follow_up_budget_total"] or 0),
                     "follow_up_budget_remaining": int(row["follow_up_budget_remaining"] or 0),
                     "events_count": int(row["events_count"] or 0),
@@ -8068,6 +8106,8 @@ async def signals_ingest_endpoint(request: Request):
                             "topic_key": loop_state.get("topic_key"),
                             "confidence_score": loop_state.get("confidence_score"),
                             "confidence_target": loop_state.get("confidence_target"),
+                            "confidence_method": loop_state.get("confidence_method"),
+                            "confidence_evidence": loop_state.get("confidence_evidence"),
                             "events_count": loop_state.get("events_count"),
                         },
                         created_at=event.occurred_at or event.received_at,
@@ -8086,6 +8126,8 @@ async def signals_ingest_endpoint(request: Request):
                             "topic_key": loop_state.get("topic_key"),
                             "confidence_score": loop_state.get("confidence_score"),
                             "confidence_target": loop_state.get("confidence_target"),
+                            "confidence_method": loop_state.get("confidence_method"),
+                            "confidence_evidence": loop_state.get("confidence_evidence"),
                             "events_count": loop_state.get("events_count"),
                         },
                         created_at=event.occurred_at or event.received_at,
@@ -8115,6 +8157,8 @@ async def signals_ingest_endpoint(request: Request):
                             "topic_key": loop_state.get("topic_key"),
                             "confidence_score": loop_state.get("confidence_score"),
                             "confidence_target": loop_state.get("confidence_target"),
+                            "confidence_method": loop_state.get("confidence_method"),
+                            "confidence_evidence": loop_state.get("confidence_evidence"),
                             "follow_up_budget_remaining": loop_state.get("follow_up_budget_remaining"),
                             "source_mix": loop_state.get("source_mix"),
                             "dispatch_reason": follow_reason,

@@ -427,3 +427,48 @@ def test_signals_ingest_emerging_requests_followup_and_records_loop(client, monk
     loops = loops_resp.json().get("loops") or []
     assert loops
     assert int(loops[0].get("follow_up_budget_remaining") or 0) <= 2
+    assert str(loops[0].get("confidence_method") or "") in {"heuristic", "evidence_model"}
+
+
+def test_signals_ingest_opportunity_bundle_uses_evidence_confidence(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    unique_suffix = str(int(time.time()))
+    payload["events"][0]["event_type"] = "opportunity_bundle_ready"
+    payload["events"][0]["subject"] = {
+        "report_type": "opportunity_bundle",
+        "report_key": f"opportunity_bundle:test:{unique_suffix}",
+        "bundle_id": f"bundle:test:{unique_suffix}",
+        "quality_summary": {"signal_volume": 21, "freshness_minutes": 24, "coverage_score": 0.86},
+        "opportunities": [
+            {"opportunity_id": "opp-1", "title": "Momentum theme", "source_mix": {"youtube_channel_rss": 9, "reddit_discovery": 5}},
+            {"opportunity_id": "opp-2", "title": "Community pulse", "source_mix": {"reddit_discovery": 6}},
+        ],
+        "window_start_utc": "2026-02-22T00:00:00Z",
+        "window_end_utc": "2026-02-22T06:00:00Z",
+    }
+    request_id = "req-loop-evidence"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+
+    loops_resp = client.get("/api/v1/dashboard/csi/specialist-loops?limit=10")
+    assert loops_resp.status_code == 200
+    loops = loops_resp.json().get("loops") or []
+    assert loops
+    assert str(loops[0].get("confidence_method") or "") == "evidence_model"
+    evidence = loops[0].get("confidence_evidence") if isinstance(loops[0].get("confidence_evidence"), dict) else {}
+    assert int(evidence.get("signal_volume") or 0) >= 1
