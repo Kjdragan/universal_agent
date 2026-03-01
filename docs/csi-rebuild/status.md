@@ -1,6 +1,6 @@
 # CSI Rebuild Status
 
-Last updated: 2026-03-01 11:51 America/Chicago
+Last updated: 2026-03-01 12:22 America/Chicago
 Status owner: Codex
 
 ## Program State
@@ -9,10 +9,10 @@ Status owner: Codex
 - Main branch readiness: Complete
 
 ## Current Objectives
-1. Complete confidence-method refactor scaffold with evidence hooks.
-2. Persist confidence method/evidence on specialist loops.
+1. Complete specialist-loop quality alerting guardrails.
+2. Surface specialist quality state in CSI health/dashboard.
 3. Keep deploy verification checklist current for CSI timers/services.
-4. Begin rollout hardening for CSI specialist loop quality alerts.
+4. Begin operator triage automation for CSI loop remediation.
 
 ## Progress Board
 | Workstream | State | Notes |
@@ -28,7 +28,7 @@ Status owner: Codex
 | CSI health delivery visibility | Done | `/api/v1/dashboard/csi/health` now reports delivery totals and per-target status. |
 | DLQ replay automation | Done | Added `csi-replay-dlq.service` + `.timer` and installer wiring. |
 | Source routing invariants | Done | Added tests proving playlist digest ignores RSS source unless explicitly overridden. |
-| Phase 1 reliability changes | In progress | Packet 5 scaffold delivered; moving to specialist quality alert hardening. |
+| Phase 1 reliability changes | In progress | Packet 6 guardrails delivered; moving to operator triage automation packet. |
 | Opportunity bundle persistence | Done | Added `opportunity_bundles` migration + store helpers. |
 | Opportunity bundle emission | Done | `csi_report_product_finalize.py` now emits `opportunity_bundle_ready` with artifacts. |
 | Opportunity API/UI surfacing | Done | Added `/api/v1/dashboard/csi/opportunities` and CSI dashboard section. |
@@ -36,6 +36,8 @@ Status owner: Codex
 | Specialist loop confidence persistence | Done | `csi_specialist_loops` now stores `confidence_method` and `evidence_json`. |
 | Specialist loop dashboard surfacing | Done | CSI loops API/UI now show confidence method. |
 | VPS deployment (packet 4) | Done | `deploy_vps.sh` successful; gateway/api/webui/telegram/vp workers active. |
+| Specialist quality guardrails | Done | Added low-signal suppression, stale-evidence alerts, confidence-drift alerts with cooldown dedupe. |
+| Specialist quality health summary | Done | `/api/v1/dashboard/csi/health` now returns `specialist_quality` aggregate. |
 
 ## Validation Snapshot
 - `CSI_Ingester/development/tests/unit/test_digest_cursor_recovery.py`: 2 passed.
@@ -52,10 +54,12 @@ Status owner: Codex
 - `tests/gateway/test_signals_ingest_endpoint.py -k emerging_requests_followup_and_records_loop or opportunity_bundle_uses_evidence_confidence`: 2 passed.
 - `tests/gateway/test_ops_api.py -k dashboard_csi_opportunities or dashboard_csi_reports or dashboard_csi_health_includes_overnight_and_source_health`: 8 passed.
 - `npm --prefix web-ui run build`: passed.
+- `tests/gateway/test_signals_ingest_endpoint.py -k low_signal_suppresses_followup_and_emits_alert or stale_evidence_emits_quality_alert`: 2 passed.
+- `tests/unit/test_csi_confidence.py tests/gateway/test_ops_api.py -k dashboard_csi_*`: 10 passed.
 
 ## Open Risks
 - Monitor that new runtime-generated artifacts do not reintroduce panel noise.
 - Validate deploy/runtime state after mainline consolidation.
 
 ## Next Execution Step
-- Implement packet 6: specialist-loop quality alerting and operator guardrails (confidence drift, stale evidence, low-signal suppression).
+- Implement packet 7: operator triage automation for specialist-loop remediation actions and cleanup UX.

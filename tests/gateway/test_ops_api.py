@@ -989,6 +989,7 @@ def test_dashboard_csi_health_includes_overnight_and_source_health(client, tmp_p
     assert payload["status"] == "ok"
     assert isinstance(payload.get("source_health"), list)
     assert isinstance((payload.get("overnight_continuity") or {}).get("checks"), list)
+    assert isinstance(payload.get("specialist_quality"), dict)
     assert int(payload.get("delivery_attempts_last_24h") or 0) >= 1
     assert isinstance(payload.get("delivery_targets"), list)
 

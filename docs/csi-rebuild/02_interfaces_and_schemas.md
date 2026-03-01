@@ -49,3 +49,8 @@ Last updated: 2026-03-01
 - `confidence_target`: configured threshold.
 - `confidence_method`: `heuristic|evidence_model`.
 - `confidence_evidence`: structured evidence snapshot used by scorer.
+
+## Specialist Guardrail Notifications (Implemented)
+- `csi_specialist_confidence_drift`
+- `csi_specialist_evidence_stale`
+- `csi_specialist_low_signal_suppressed`

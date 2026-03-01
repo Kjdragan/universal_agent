@@ -1584,6 +1584,33 @@ _csi_specialist_followup_cooldown_minutes = max(
     5,
     int(os.getenv("UA_CSI_SPECIALIST_FOLLOWUP_COOLDOWN_MINUTES", "45") or 45),
 )
+_csi_specialist_min_signal_volume = max(
+    1,
+    int(os.getenv("UA_CSI_SPECIALIST_MIN_SIGNAL_VOLUME", "5") or 5),
+)
+_csi_specialist_low_signal_streak_threshold = max(
+    1,
+    int(os.getenv("UA_CSI_SPECIALIST_LOW_SIGNAL_STREAK_THRESHOLD", "2") or 2),
+)
+_csi_specialist_low_signal_suppress_minutes = max(
+    15,
+    int(os.getenv("UA_CSI_SPECIALIST_LOW_SIGNAL_SUPPRESS_MINUTES", "120") or 120),
+)
+_csi_specialist_stale_evidence_minutes = max(
+    30,
+    int(os.getenv("UA_CSI_SPECIALIST_STALE_EVIDENCE_MINUTES", "180") or 180),
+)
+_csi_specialist_alert_cooldown_minutes = max(
+    10,
+    int(os.getenv("UA_CSI_SPECIALIST_ALERT_COOLDOWN_MINUTES", "120") or 120),
+)
+try:
+    _csi_specialist_confidence_drift_threshold = max(
+        0.05,
+        min(0.4, float(os.getenv("UA_CSI_SPECIALIST_CONFIDENCE_DRIFT_THRESHOLD", "0.12") or 0.12)),
+    )
+except Exception:
+    _csi_specialist_confidence_drift_threshold = 0.12
 _tutorial_review_jobs: dict[str, dict[str, Any]] = {}
 _tutorial_review_jobs_max = int(os.getenv("UA_TUTORIAL_REVIEW_JOBS_MAX", "300") or 300)
 _tutorial_bootstrap_jobs: dict[str, dict[str, Any]] = {}
@@ -3400,6 +3427,9 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                 "SELECT * FROM csi_specialist_loops WHERE topic_key = ? LIMIT 1",
                 (topic_key,),
             ).fetchone()
+            previous_confidence_score = 0.0
+            previous_low_signal_streak = 0
+            previous_suppressed_until = None
             if row is None:
                 source_mix = {source_bucket: 1}
                 events_count = 1
@@ -3415,6 +3445,9 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                 confidence_target = float(row["confidence_target"] or _csi_specialist_confidence_target)
                 last_followup_requested_at = str(row["last_followup_requested_at"] or "") or None
                 created_at = str(row["created_at"] or now_iso)
+                previous_confidence_score = float(row["confidence_score"] or 0.0)
+                previous_low_signal_streak = int(row["low_signal_streak"] or 0)
+                previous_suppressed_until = str(row["suppressed_until"] or "") or None
 
             confidence = _csi_estimate_confidence(
                 event_type=event_type,
@@ -3425,6 +3458,66 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
             confidence_score = float(confidence.get("score") or 0.0)
             confidence_method = str(confidence.get("method") or "heuristic")
             confidence_evidence = confidence.get("evidence") if isinstance(confidence.get("evidence"), dict) else {}
+            signal_volume = int(confidence_evidence.get("signal_volume") or 0)
+            freshness_minutes = int(confidence_evidence.get("freshness_minutes") or 0)
+            low_signal = signal_volume < int(_csi_specialist_min_signal_volume)
+            if low_signal:
+                # Guardrail: low-signal loops should not auto-close solely from baseline bonuses.
+                confidence_score = min(confidence_score, max(0.0, confidence_target - 0.02))
+                confidence_evidence["low_signal_guardrail_applied"] = True
+            low_signal_streak = previous_low_signal_streak + 1 if low_signal else 0
+            stale_evidence = freshness_minutes > int(_csi_specialist_stale_evidence_minutes)
+            now_dt = _parse_iso_timestamp(now_iso) or datetime.now(timezone.utc)
+            if now_dt.tzinfo is None:
+                now_dt = now_dt.replace(tzinfo=timezone.utc)
+            suppressed_until = previous_suppressed_until
+            suppressed_active = False
+            if suppressed_until:
+                suppressed_dt = _parse_iso_timestamp(suppressed_until)
+                if suppressed_dt is not None:
+                    if suppressed_dt.tzinfo is None:
+                        suppressed_dt = suppressed_dt.replace(tzinfo=timezone.utc)
+                    suppressed_active = suppressed_dt.timestamp() > now_dt.timestamp()
+            quality_alerts: list[dict[str, Any]] = []
+            drift_amount = max(0.0, previous_confidence_score - confidence_score)
+            if previous_confidence_score > 0 and drift_amount >= float(_csi_specialist_confidence_drift_threshold):
+                quality_alerts.append(
+                    {
+                        "kind": "csi_specialist_confidence_drift",
+                        "title": "CSI Specialist Confidence Drift",
+                        "message": (
+                            f"Loop {topic_label} confidence dropped by {drift_amount:.2f} "
+                            f"({previous_confidence_score:.2f} → {confidence_score:.2f})."
+                        ),
+                        "severity": "warning",
+                        "metadata": {
+                            "topic_key": topic_key,
+                            "drift_amount": round(drift_amount, 3),
+                            "previous_confidence_score": previous_confidence_score,
+                            "confidence_score": confidence_score,
+                            "confidence_target": confidence_target,
+                            "confidence_method": confidence_method,
+                        },
+                    }
+                )
+            if stale_evidence:
+                quality_alerts.append(
+                    {
+                        "kind": "csi_specialist_evidence_stale",
+                        "title": "CSI Specialist Evidence Stale",
+                        "message": (
+                            f"Loop {topic_label} evidence is stale "
+                            f"({freshness_minutes}m > {_csi_specialist_stale_evidence_minutes}m)."
+                        ),
+                        "severity": "warning",
+                        "metadata": {
+                            "topic_key": topic_key,
+                            "freshness_minutes": freshness_minutes,
+                            "stale_threshold_minutes": int(_csi_specialist_stale_evidence_minutes),
+                            "confidence_method": confidence_method,
+                        },
+                    }
+                )
             request_followup = False
             status_value = "open"
             closed_at = None
@@ -3433,9 +3526,41 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                 status_value = "closed"
                 closed_at = now_iso
                 followup_note = "confidence_target_reached"
+                low_signal_streak = 0
+                suppressed_until = None
+            elif low_signal_streak >= int(_csi_specialist_low_signal_streak_threshold):
+                status_value = "suppressed_low_signal"
+                followup_note = "low_signal_suppression_triggered"
+                suppressed_until_dt = now_dt + timedelta(minutes=int(_csi_specialist_low_signal_suppress_minutes))
+                suppressed_until = suppressed_until_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+                if previous_low_signal_streak < int(_csi_specialist_low_signal_streak_threshold):
+                    quality_alerts.append(
+                        {
+                            "kind": "csi_specialist_low_signal_suppressed",
+                            "title": "CSI Specialist Low-Signal Suppression",
+                            "message": (
+                                f"Loop {topic_label} entered low-signal suppression for "
+                                f"{int(_csi_specialist_low_signal_suppress_minutes)}m "
+                                f"(signal_volume={signal_volume})."
+                            ),
+                            "severity": "warning",
+                            "metadata": {
+                                "topic_key": topic_key,
+                                "signal_volume": signal_volume,
+                                "low_signal_streak": low_signal_streak,
+                                "low_signal_streak_threshold": int(_csi_specialist_low_signal_streak_threshold),
+                                "suppressed_until": suppressed_until,
+                            },
+                        }
+                    )
+            elif suppressed_active:
+                status_value = "suppressed_low_signal"
+                followup_note = "low_signal_suppression_active"
             elif followup_remaining <= 0:
                 status_value = "budget_exhausted"
                 followup_note = "followup_budget_exhausted"
+            elif stale_evidence:
+                followup_note = "stale_evidence_hold"
             elif _csi_should_request_followup(last_followup_requested_at):
                 request_followup = True
                 followup_remaining -= 1
@@ -3451,8 +3576,9 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                     follow_up_budget_total, follow_up_budget_remaining, events_count, source_mix_json,
                     confidence_method, evidence_json,
                     last_event_type, last_event_id, last_event_at, last_followup_requested_at,
+                    low_signal_streak, suppressed_until,
                     created_at, updated_at, closed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(topic_key) DO UPDATE SET
                     topic_label=excluded.topic_label,
                     status=excluded.status,
@@ -3468,6 +3594,8 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                     last_event_id=excluded.last_event_id,
                     last_event_at=excluded.last_event_at,
                     last_followup_requested_at=excluded.last_followup_requested_at,
+                    low_signal_streak=excluded.low_signal_streak,
+                    suppressed_until=excluded.suppressed_until,
                     updated_at=excluded.updated_at,
                     closed_at=excluded.closed_at
                 """,
@@ -3487,6 +3615,8 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                     event_id,
                     event_at,
                     last_followup_requested,
+                    low_signal_streak,
+                    suppressed_until,
                     created_at,
                     now_iso,
                     closed_at,
@@ -3506,6 +3636,8 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
         f"confidence_target: {confidence_target}\n"
         f"confidence_method: {confidence_method}\n"
         f"follow_up_budget_remaining: {max(0, followup_remaining)}\n"
+        f"low_signal_streak: {low_signal_streak}\n"
+        f"suppressed_until: {suppressed_until or ''}\n"
         "Request one focused follow-up CSI analysis task and summarize confidence deltas."
     )
 
@@ -3519,6 +3651,9 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
         "confidence_method": confidence_method,
         "confidence_evidence": confidence_evidence,
         "events_count": events_count,
+        "low_signal_streak": low_signal_streak,
+        "suppressed_until": suppressed_until,
+        "quality_alerts": quality_alerts,
         "follow_up_budget_remaining": max(0, followup_remaining),
         "request_followup": request_followup,
         "followup_message": followup_message,
@@ -4495,6 +4630,8 @@ def _ensure_activity_schema(conn: sqlite3.Connection) -> None:
             last_event_id TEXT,
             last_event_at TEXT,
             last_followup_requested_at TEXT,
+            low_signal_streak INTEGER NOT NULL DEFAULT 0,
+            suppressed_until TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             closed_at TEXT
@@ -4517,6 +4654,14 @@ def _ensure_activity_schema(conn: sqlite3.Connection) -> None:
     if "evidence_json" not in loop_columns:
         conn.execute(
             "ALTER TABLE csi_specialist_loops ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '{}'"
+        )
+    if "low_signal_streak" not in loop_columns:
+        conn.execute(
+            "ALTER TABLE csi_specialist_loops ADD COLUMN low_signal_streak INTEGER NOT NULL DEFAULT 0"
+        )
+    if "suppressed_until" not in loop_columns:
+        conn.execute(
+            "ALTER TABLE csi_specialist_loops ADD COLUMN suppressed_until TEXT"
         )
     conn.commit()
 
@@ -5354,6 +5499,9 @@ def _list_csi_specialist_loops(limit: int = 50, status_filter: Optional[str] = N
         ).fetchall()
         out: list[dict[str, Any]] = []
         for row in rows:
+            evidence = _activity_json_loads_obj(row["evidence_json"], default={})
+            if not isinstance(evidence, dict):
+                evidence = {}
             out.append(
                 {
                     "topic_key": str(row["topic_key"] or ""),
@@ -5362,7 +5510,7 @@ def _list_csi_specialist_loops(limit: int = 50, status_filter: Optional[str] = N
                     "confidence_target": float(row["confidence_target"] or 0.0),
                     "confidence_score": float(row["confidence_score"] or 0.0),
                     "confidence_method": str(row["confidence_method"] or "heuristic"),
-                    "confidence_evidence": _activity_json_loads_obj(row["evidence_json"], default={}),
+                    "confidence_evidence": evidence,
                     "follow_up_budget_total": int(row["follow_up_budget_total"] or 0),
                     "follow_up_budget_remaining": int(row["follow_up_budget_remaining"] or 0),
                     "events_count": int(row["events_count"] or 0),
@@ -5371,6 +5519,8 @@ def _list_csi_specialist_loops(limit: int = 50, status_filter: Optional[str] = N
                     "last_event_id": str(row["last_event_id"] or ""),
                     "last_event_at": str(row["last_event_at"] or "") or None,
                     "last_followup_requested_at": str(row["last_followup_requested_at"] or "") or None,
+                    "low_signal_streak": int(row["low_signal_streak"] or 0),
+                    "suppressed_until": str(row["suppressed_until"] or "") or None,
                     "created_at": str(row["created_at"] or _utc_now_iso()),
                     "updated_at": str(row["updated_at"] or _utc_now_iso()),
                     "closed_at": str(row["closed_at"] or "") or None,
@@ -8091,6 +8241,38 @@ async def signals_ingest_endpoint(request: Request):
             _csi_emit_specialist_synthesis(event, full_signal_message)
             loop_state = _csi_update_specialist_loop(event, full_signal_message)
             if loop_state.get("updated"):
+                for alert in loop_state.get("quality_alerts", []) if isinstance(loop_state.get("quality_alerts"), list) else []:
+                    if not isinstance(alert, dict):
+                        continue
+                    kind = str(alert.get("kind") or "").strip()
+                    if not kind:
+                        continue
+                    topic_key = str((alert.get("metadata") or {}).get("topic_key") or loop_state.get("topic_key") or "").strip()
+                    cooldown_seconds = int(_csi_specialist_alert_cooldown_minutes) * 60
+                    if _has_recent_notification(
+                        kind=kind,
+                        metadata_match={"topic_key": topic_key} if topic_key else None,
+                        within_seconds=max(60, cooldown_seconds),
+                    ):
+                        continue
+                    metadata = alert.get("metadata") if isinstance(alert.get("metadata"), dict) else {}
+                    metadata = {
+                        **metadata,
+                        "topic_key": topic_key or metadata.get("topic_key"),
+                        "confidence_method": loop_state.get("confidence_method"),
+                        "confidence_target": loop_state.get("confidence_target"),
+                        "confidence_score": loop_state.get("confidence_score"),
+                    }
+                    _add_notification(
+                        kind=kind,
+                        title=str(alert.get("title") or "CSI Specialist Quality Alert"),
+                        message=str(alert.get("message") or "CSI specialist quality guardrail triggered."),
+                        severity=str(alert.get("severity") or "warning"),
+                        requires_action=True,
+                        metadata=metadata,
+                        created_at=event.occurred_at or event.received_at,
+                    )
+
                 loop_status = str(loop_state.get("status") or "")
                 if loop_status == "closed":
                     _add_notification(
@@ -8109,6 +8291,8 @@ async def signals_ingest_endpoint(request: Request):
                             "confidence_method": loop_state.get("confidence_method"),
                             "confidence_evidence": loop_state.get("confidence_evidence"),
                             "events_count": loop_state.get("events_count"),
+                            "low_signal_streak": loop_state.get("low_signal_streak"),
+                            "suppressed_until": loop_state.get("suppressed_until"),
                         },
                         created_at=event.occurred_at or event.received_at,
                     )
@@ -8129,6 +8313,8 @@ async def signals_ingest_endpoint(request: Request):
                             "confidence_method": loop_state.get("confidence_method"),
                             "confidence_evidence": loop_state.get("confidence_evidence"),
                             "events_count": loop_state.get("events_count"),
+                            "low_signal_streak": loop_state.get("low_signal_streak"),
+                            "suppressed_until": loop_state.get("suppressed_until"),
                         },
                         created_at=event.occurred_at or event.received_at,
                     )
@@ -8162,6 +8348,8 @@ async def signals_ingest_endpoint(request: Request):
                             "follow_up_budget_remaining": loop_state.get("follow_up_budget_remaining"),
                             "source_mix": loop_state.get("source_mix"),
                             "dispatch_reason": follow_reason,
+                            "low_signal_streak": loop_state.get("low_signal_streak"),
+                            "suppressed_until": loop_state.get("suppressed_until"),
                         },
                         created_at=event.occurred_at or event.received_at,
                     )
@@ -9258,6 +9446,37 @@ async def dashboard_csi_health():
                     "status": status_value,
                 }
             )
+        specialist_quality = {
+            "total_loops": 0,
+            "open_loops": 0,
+            "suppressed_low_signal": 0,
+            "budget_exhausted": 0,
+            "closed_loops": 0,
+            "stale_evidence_loops": 0,
+            "evidence_model_loops": 0,
+        }
+        try:
+            specialist_rows = conn.execute(
+                "SELECT status, confidence_method, evidence_json FROM csi_specialist_loops"
+            ).fetchall()
+        except Exception:
+            specialist_rows = []
+        for row in specialist_rows:
+            specialist_quality["total_loops"] += 1
+            status_name = str(row["status"] or "").strip().lower()
+            if status_name == "open":
+                specialist_quality["open_loops"] += 1
+            elif status_name == "suppressed_low_signal":
+                specialist_quality["suppressed_low_signal"] += 1
+            elif status_name == "budget_exhausted":
+                specialist_quality["budget_exhausted"] += 1
+            elif status_name == "closed":
+                specialist_quality["closed_loops"] += 1
+            if str(row["confidence_method"] or "").strip().lower() == "evidence_model":
+                specialist_quality["evidence_model_loops"] += 1
+            evidence = _activity_json_loads_obj(row["evidence_json"], default={})
+            if isinstance(evidence, dict) and int(evidence.get("freshness_minutes") or 0) > int(_csi_specialist_stale_evidence_minutes):
+                specialist_quality["stale_evidence_loops"] += 1
         return {
             "status": "ok",
             "db_path": str(db_path),
@@ -9270,6 +9489,7 @@ async def dashboard_csi_health():
             "delivery_targets": delivery_targets,
             "sources": [dict(row) for row in source_rows],
             "source_health": source_health,
+            "specialist_quality": specialist_quality,
             "event_types": [dict(row) for row in event_rows],
             "stale_pipelines": stale,
             "overnight_continuity": {

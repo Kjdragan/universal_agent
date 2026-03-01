@@ -472,3 +472,81 @@ def test_signals_ingest_opportunity_bundle_uses_evidence_confidence(client, monk
     assert str(loops[0].get("confidence_method") or "") == "evidence_model"
     evidence = loops[0].get("confidence_evidence") if isinstance(loops[0].get("confidence_evidence"), dict) else {}
     assert int(evidence.get("signal_volume") or 0) >= 1
+
+
+def test_signals_ingest_low_signal_suppresses_followup_and_emits_alert(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setenv("UA_CSI_SPECIALIST_MIN_SIGNAL_VOLUME", "5")
+    monkeypatch.setenv("UA_CSI_SPECIALIST_LOW_SIGNAL_STREAK_THRESHOLD", "2")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    unique_suffix = str(int(time.time()))
+    payload = _payload(source="csi_analytics")
+    payload["events"][0]["event_type"] = "opportunity_bundle_ready"
+    payload["events"][0]["subject"] = {
+        "report_type": "opportunity_bundle",
+        "report_key": f"opportunity_bundle:low-signal:{unique_suffix}",
+        "bundle_id": f"bundle:low-signal:{unique_suffix}",
+        "quality_summary": {"signal_volume": 1, "freshness_minutes": 12, "coverage_score": 0.42},
+        "opportunities": [],
+    }
+
+    for idx in range(2):
+        request_id = f"req-low-signal-{idx}"
+        timestamp = str(int(time.time()))
+        headers = {
+            "Authorization": "Bearer secret",
+            "X-CSI-Request-ID": request_id,
+            "X-CSI-Timestamp": timestamp,
+            "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+        }
+        response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+        assert response.status_code == 200
+
+    loops_resp = client.get("/api/v1/dashboard/csi/specialist-loops?limit=10")
+    assert loops_resp.status_code == 200
+    loops = loops_resp.json().get("loops") or []
+    assert loops
+    assert str(loops[0].get("status") or "") == "suppressed_low_signal"
+    assert int(loops[0].get("low_signal_streak") or 0) >= 2
+
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "csi_specialist_low_signal_suppressed" in kinds
+
+
+def test_signals_ingest_stale_evidence_emits_quality_alert(client, monkeypatch):
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setenv("UA_CSI_SPECIALIST_STALE_EVIDENCE_MINUTES", "180")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    payload = _payload(source="csi_analytics")
+    unique_suffix = str(int(time.time()))
+    payload["events"][0]["event_type"] = "opportunity_bundle_ready"
+    payload["events"][0]["subject"] = {
+        "report_type": "opportunity_bundle",
+        "report_key": f"opportunity_bundle:stale:{unique_suffix}",
+        "bundle_id": f"bundle:stale:{unique_suffix}",
+        "quality_summary": {"signal_volume": 12, "freshness_minutes": 480, "coverage_score": 0.8},
+        "opportunities": [{"opportunity_id": "opp-1", "title": "Stale candidate"}],
+    }
+    request_id = "req-stale-evidence"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, payload),
+    }
+    response = client.post("/api/v1/signals/ingest", json=payload, headers=headers)
+    assert response.status_code == 200
+
+    kinds = [str(item.get("kind") or "") for item in gateway_server._notifications]
+    assert "csi_specialist_evidence_stale" in kinds

@@ -42,6 +42,14 @@ type CSIHealth = {
     stale_pipelines?: Array<{ event_type: string }>;
     undelivered_last_24h?: number;
     dead_letter_last_24h?: number;
+    specialist_quality?: {
+        total_loops?: number;
+        open_loops?: number;
+        suppressed_low_signal?: number;
+        budget_exhausted?: number;
+        stale_evidence_loops?: number;
+        evidence_model_loops?: number;
+    };
     timezone?: string;
     source_health?: Array<{
         source: string;
@@ -405,6 +413,9 @@ export default function CSIDashboard() {
                     <div className="mt-1 text-xs text-slate-500">
                         DLQ 24h: {health?.dead_letter_last_24h ?? 0} | Undelivered 24h: {health?.undelivered_last_24h ?? 0}
                     </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                        Specialist loops: {health?.specialist_quality?.total_loops ?? 0} | Suppressed: {health?.specialist_quality?.suppressed_low_signal ?? 0}
+                    </div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
                     <div className="text-sm font-medium text-slate-400">Latest Opportunity Bundle</div>
@@ -524,7 +535,11 @@ export default function CSIDashboard() {
                                     <td className="px-2 py-1.5 text-slate-300">{loop.topic_label}</td>
                                     <td
                                         className={`px-2 py-1.5 ${
-                                            loop.status === "closed" ? "text-emerald-300" : loop.status === "budget_exhausted" ? "text-amber-300" : "text-sky-300"
+                                            loop.status === "closed"
+                                                ? "text-emerald-300"
+                                                : loop.status === "budget_exhausted" || loop.status === "suppressed_low_signal"
+                                                  ? "text-amber-300"
+                                                  : "text-sky-300"
                                         }`}
                                     >
                                         {loop.status}
