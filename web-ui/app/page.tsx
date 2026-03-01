@@ -1821,20 +1821,20 @@ export default function HomePage() {
         <header className="h-14 border-b border-slate-800/80 bg-slate-900/85 backdrop-blur-md flex items-center px-3 shrink-0 z-20 relative gap-2">
 
           {/* Left: Logo & Brand */}
-          <div className="flex items-center gap-2 shrink-0 h-full">
+          <div className="relative z-40 flex items-center gap-2 shrink-0 h-full pointer-events-auto">
             {/* Logo Image */}
             <div className="relative h-full w-24 md:w-32 py-2">
               <Image
                 src="/simon_logo_v2.png"
                 alt="Simon"
                 fill
-                className="object-contain object-left"
+                className="object-contain object-left pointer-events-none select-none"
                 priority
               />
             </div>
             <a
               href="/storage?tab=explorer"
-              className="inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-slate-300 transition-colors hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
+              className="relative z-40 inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-slate-300 transition-colors hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
               title="Open File Browser"
               aria-label="Open File Browser"
             >
@@ -1844,7 +1844,7 @@ export default function HomePage() {
             </a>
             <a
               href="/dashboard"
-              className="hidden md:inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-xl text-slate-300 transition hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
+              className="relative z-40 hidden md:inline-flex h-10 w-11 items-center justify-center rounded-lg border border-slate-700/80 bg-slate-900/60 text-xl text-slate-300 transition hover:border-cyan-500/50 hover:bg-slate-800/60 hover:text-cyan-200"
               title="Dashboard Home"
               aria-label="Dashboard Home"
             >
