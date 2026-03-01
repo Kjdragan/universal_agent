@@ -3876,6 +3876,64 @@ def test_ops_work_thread_decision_roundtrip(client):
     assert len(promote_thread.get("history", [])) == 2
 
 
+def test_ops_session_detail_rehydrate_with_checkpoint(client, tmp_path):
+    """Packet 15: session with checkpoint -> rehydrate_ready=True."""
+    session_id = "session_hook_csi_trend_specialist"
+    ws = tmp_path / session_id
+    ws.mkdir()
+    checkpoint_data = {
+        "session_id": session_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "original_request": "Analyze RSS trends for AI category",
+        "completed_tasks": ["Fetched RSS feeds", "Generated trend report"],
+        "artifacts": [{"path": "work_products/trend.md", "description": "Trend report"}],
+    }
+    (ws / "session_checkpoint.json").write_text(json.dumps(checkpoint_data))
+    resp = client.get(f"/api/v1/ops/sessions/{session_id}")
+    assert resp.status_code == 200
+    session = resp.json()["session"]
+    assert session["has_checkpoint"] is True
+    assert session["checkpoint_tasks_completed"] == 2
+    assert session["checkpoint_artifacts_count"] == 1
+    assert "Analyze RSS trends" in (session["checkpoint_original_request"] or "")
+    assert session["rehydrate_ready"] is True
+    assert session["rehydrate_reason"] == "checkpoint_available"
+
+
+def test_ops_session_detail_rehydrate_with_run_log_and_memory(client, tmp_path):
+    """Packet 15: session with run_log + MEMORY.md but no checkpoint -> rehydrate_ready=True."""
+    session_id = "session_hook_csi_delivery_check"
+    ws = tmp_path / session_id
+    ws.mkdir()
+    (ws / "run.log").write_text("Run started\nRun completed\n")
+    (ws / "MEMORY.md").write_text("# Session Memory\nDelivery health is OK.\n")
+    resp = client.get(f"/api/v1/ops/sessions/{session_id}")
+    assert resp.status_code == 200
+    session = resp.json()["session"]
+    assert session["has_checkpoint"] is False
+    assert session["has_run_log"] is True
+    assert session["has_memory"] is True
+    assert session["rehydrate_ready"] is True
+    assert session["rehydrate_reason"] == "run_log_and_memory_available"
+
+
+def test_ops_session_detail_rehydrate_empty_history(client, tmp_path):
+    """Packet 15: empty session workspace -> rehydrate_ready=False with structured reason."""
+    session_id = "session_hook_csi_empty_session"
+    ws = tmp_path / session_id
+    ws.mkdir()
+    resp = client.get(f"/api/v1/ops/sessions/{session_id}")
+    assert resp.status_code == 200
+    session = resp.json()["session"]
+    assert session["has_checkpoint"] is False
+    assert session["has_run_log"] is False
+    assert session["has_memory"] is False
+    assert session["rehydrate_ready"] is False
+    assert "no_run_log" in session["rehydrate_reason"]
+    assert "no_checkpoint" in session["rehydrate_reason"]
+    assert "no_memory_file" in session["rehydrate_reason"]
+
+
 def test_ops_work_thread_rejects_invalid_decision(client):
     resp = client.post(
         "/api/v1/ops/work-threads/decide",

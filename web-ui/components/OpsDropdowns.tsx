@@ -1055,6 +1055,44 @@ export function SessionsSection({
               </div>
             )}
           </div>
+          {(() => {
+            const sel = filteredSessions.find((s) => s.session_id === selected);
+            if (!sel) return null;
+            const ready = sel.rehydrate_ready;
+            const reason = sel.rehydrate_reason || "";
+            if (ready) {
+              return (
+                <div className="rounded border border-emerald-700/40 bg-emerald-900/10 px-2 py-1.5 text-[10px] text-emerald-300 flex items-center gap-1.5">
+                  <span>&#10003;</span> Session rehydrate ready ({reason.replace(/_/g, " ")})
+                  {sel.has_checkpoint && sel.checkpoint_tasks_completed != null && (
+                    <span className="text-emerald-400/70 ml-1">
+                      &middot; {sel.checkpoint_tasks_completed} tasks, {sel.checkpoint_artifacts_count ?? 0} artifacts
+                    </span>
+                  )}
+                </div>
+              );
+            }
+            const hints: Record<string, string> = {
+              no_run_log: "No run log found. The session may not have executed yet.",
+              no_checkpoint: "No checkpoint file. Run the session at least once to generate a checkpoint.",
+              no_memory_file: "No MEMORY.md or memory directory. Context cannot be rehydrated from memory.",
+              memory_mode_direct_only: "Memory mode is direct_only. Shared memory is not available for rehydrate.",
+            };
+            const parts = reason.split("; ").filter(Boolean);
+            return (
+              <div className="rounded border border-amber-700/40 bg-amber-900/10 px-2 py-2 text-[10px] text-amber-300 space-y-1">
+                <div className="font-semibold">Session cannot be rehydrated</div>
+                <ul className="list-disc list-inside text-amber-200/80 space-y-0.5">
+                  {parts.map((p) => (
+                    <li key={p}>{hints[p] || p.replace(/_/g, " ")}</li>
+                  ))}
+                </ul>
+                <div className="text-amber-400/60 mt-1">
+                  Next action: Run the session once to generate a checkpoint, or create a MEMORY.md file in the workspace.
+                </div>
+              </div>
+            );
+          })()}
           <div className="border rounded bg-background/40 p-2">
             <div className="font-semibold mb-2 flex items-center justify-between">
               <span>run.log tail</span>

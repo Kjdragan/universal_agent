@@ -292,12 +292,84 @@ class OpsService:
             "last_run_source": str(runtime.get("last_run_source") or ""),
         }
         
+        # Packet 15: checkpoint diagnostics and rehydrate readiness
+        checkpoint_diag = self._read_checkpoint_diagnostics(session_path)
+        summary["has_checkpoint"] = checkpoint_diag["has_checkpoint"]
+        summary["checkpoint_age_seconds"] = checkpoint_diag.get("age_seconds")
+        summary["checkpoint_tasks_completed"] = checkpoint_diag.get("tasks_completed", 0)
+        summary["checkpoint_artifacts_count"] = checkpoint_diag.get("artifacts_count", 0)
+        summary["checkpoint_original_request"] = checkpoint_diag.get("original_request")
+
+        rehydrate_ready, rehydrate_reason = self._assess_rehydrate_readiness(
+            session_path=session_path,
+            has_run_log=summary["has_run_log"],
+            has_checkpoint=checkpoint_diag["has_checkpoint"],
+            has_memory=summary["has_memory"],
+            memory_mode=memory_mode,
+        )
+        summary["rehydrate_ready"] = rehydrate_ready
+        summary["rehydrate_reason"] = rehydrate_reason
+
         heartbeat_state = self._read_heartbeat_state(session_path)
         if heartbeat_state:
             summary["heartbeat_last"] = heartbeat_state.get("last_run")
             summary["heartbeat_summary"] = heartbeat_state.get("last_summary")
             
         return summary
+
+    def _read_checkpoint_diagnostics(self, workspace_path: Path) -> dict:
+        """Packet 15: read checkpoint file and return diagnostics."""
+        checkpoint_path = workspace_path / "session_checkpoint.json"
+        if not checkpoint_path.exists():
+            return {"has_checkpoint": False}
+        try:
+            data = json.loads(checkpoint_path.read_text())
+            age_seconds: Optional[float] = None
+            ts = data.get("timestamp")
+            if ts:
+                try:
+                    ckpt_dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    age_seconds = (datetime.now(timezone.utc) - ckpt_dt).total_seconds()
+                except Exception:
+                    pass
+            tasks = data.get("completed_tasks")
+            artifacts = data.get("artifacts")
+            original_request = str(data.get("original_request") or "").strip()
+            return {
+                "has_checkpoint": True,
+                "age_seconds": age_seconds,
+                "tasks_completed": len(tasks) if isinstance(tasks, list) else 0,
+                "artifacts_count": len(artifacts) if isinstance(artifacts, list) else 0,
+                "original_request": original_request[:200] if original_request else None,
+            }
+        except Exception:
+            return {"has_checkpoint": False}
+
+    @staticmethod
+    def _assess_rehydrate_readiness(
+        *,
+        session_path: Path,
+        has_run_log: bool,
+        has_checkpoint: bool,
+        has_memory: bool,
+        memory_mode: str,
+    ) -> tuple:
+        """Packet 15: determine if a session can be rehydrated and why not."""
+        if has_checkpoint:
+            return True, "checkpoint_available"
+        if has_run_log and has_memory:
+            return True, "run_log_and_memory_available"
+        reasons = []
+        if not has_run_log:
+            reasons.append("no_run_log")
+        if not has_checkpoint:
+            reasons.append("no_checkpoint")
+        if not has_memory:
+            reasons.append("no_memory_file")
+        if memory_mode == "direct_only":
+            reasons.append("memory_mode_direct_only")
+        reason = "; ".join(reasons) if reasons else "unknown"
+        return False, reason
 
     def _read_heartbeat_state(self, workspace_path: Path) -> Optional[dict]:
         state_path = workspace_path / "heartbeat_state.json"
