@@ -16,6 +16,39 @@
 
 ---
 
+## 2026-03-01 Takeover Progress Update (Codex)
+
+1. **Phase 4 Corporation View implemented in UI:**
+   - Added new dashboard page: `web-ui/app/dashboard/corporation/page.tsx`
+   - Added HQ-only navigation entry in `web-ui/app/dashboard/layout.tsx`
+   - Nav visibility now probes `GET /api/v1/factory/capabilities` and only shows Corporation View when:
+     - `factory_role == HEADQUARTERS`
+     - `gateway_mode == full`
+
+2. **Corporation View data contracts wired to existing backend:**
+   - `GET /api/v1/factory/capabilities`
+   - `GET /api/v1/factory/registrations`
+   - UI cards/table include role, gateway mode, fleet size, online count, stale heartbeat count, delegation bus status, and registration capability tags.
+
+3. **Automated validation completed for this phase increment:**
+   - `uv run pytest tests/gateway/test_ops_api.py -k "factory_capabilities_and_registration_endpoints or local_redis_dispatch" -q` => `2 passed`
+   - `uv run pytest tests/gateway/test_ops_auth_role_surface.py -q` => `5 passed`
+   - `cd web-ui && npm run build` succeeded with `/dashboard/corporation` route generated.
+
+4. **Live VPS acceptance run completed for Redis delegation loop:**
+   - Enqueued tutorial bootstrap mission with `dispatch_backend=redis_stream`
+   - Processed by worker with `scripts/tutorial_local_bootstrap_worker.py --transport redis --once`
+   - Verified terminal state `completed` with populated:
+     - `repo_dir`
+     - `repo_open_uri`
+   - Verified authenticated fleet endpoints on VPS return expected HQ + worker records.
+
+5. **GitHub PR blocker resolution in this environment:**
+   - `gh` CLI is still unauthenticated here.
+   - GitHub MCP tooling is available and can be used for PR discovery/creation/review flows without `gh auth login`.
+
+---
+
 ## Answers to Handoff Questions
 
 **Q: What is the exact handoff baseline commit/branch I should treat as source of truth?**
