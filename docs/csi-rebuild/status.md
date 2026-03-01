@@ -1,6 +1,6 @@
 # CSI Rebuild Status
 
-Last updated: 2026-03-01 12:33 America/Chicago
+Last updated: 2026-03-01 12:41 America/Chicago
 Status owner: Codex
 
 ## Program State
@@ -9,7 +9,7 @@ Status owner: Codex
 - Main branch readiness: Complete
 
 ## Current Objectives
-1. Add DLQ replay timer/service and runbook wiring.
+1. Validate DLQ replay timer/service wiring in deployment docs and scripts.
 2. Enforce/validate stream routing invariants in tests.
 3. Expose delivery telemetry in CSI dashboard health endpoint.
 4. Start CSI opportunity bundle contract implementation.
@@ -26,7 +26,8 @@ Status owner: Codex
 | Hidden outstanding stash/worktrees | Done | No extra worktrees; temporary stash dropped. |
 | Delivery attempt telemetry | Done | Added `delivery_attempts` schema + persistence in service and analytics emit paths. |
 | CSI health delivery visibility | Done | `/api/v1/dashboard/csi/health` now reports delivery totals and per-target status. |
-| Phase 1 reliability changes | In progress | Packet 1 complete; packet 2 (DLQ replay timer + invariants) queued. |
+| DLQ replay automation | Done | Added `csi-replay-dlq.service` + `.timer` and installer wiring. |
+| Phase 1 reliability changes | In progress | Packet 2 complete; packet 3 (routing invariant tests + deploy validation) queued. |
 
 ## Validation Snapshot
 - `CSI_Ingester/development/tests/unit/test_digest_cursor_recovery.py`: 2 passed.
@@ -40,4 +41,4 @@ Status owner: Codex
 - Validate deploy/runtime state after mainline consolidation.
 
 ## Next Execution Step
-- Implement reliability packet 2: add `csi-replay-dlq` systemd timer/service, runbook updates, and replay observability checks.
+- Implement reliability packet 3: strengthen routing invariants test coverage and run deploy-time smoke validation checklist.

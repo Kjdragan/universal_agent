@@ -1,0 +1,11 @@
+[Unit]
+Description=Run CSI DLQ replay every 15 minutes
+
+[Timer]
+OnCalendar=*:08/15
+Persistent=true
+Unit=csi-replay-dlq.service
+
+[Install]
+WantedBy=timers.target
+

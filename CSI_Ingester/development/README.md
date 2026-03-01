@@ -112,6 +112,7 @@ Timers installed:
 - `csi-rss-reclassify-categories.timer` -> every 6 hours at minute `:17` (reclassify older RSS rows with current taxonomy)
 - `csi-category-quality-loop.timer` -> hourly at minute `:27` (adaptive taxonomy quality loop + threshold/category tuning)
 - `csi-rss-quality-gate.timer` -> every 15 minutes (SLO-style quality gates + alert event emission)
+- `csi-replay-dlq.timer` -> every 15 minutes at `:08` (replays failed CSI->UA deliveries from dead-letter queue)
 - `csi-analysis-task-runner.timer` -> every 10 minutes at `:06` (runs UA-submitted CSI analysis tasks)
 - `csi-analysis-task-bootstrap.timer` -> hourly at minute `:03` (auto-seeds baseline recurring analysis tasks)
 - `csi-report-product-finalize.timer` -> hourly at minute `:35` (materializes report artifacts + emits `report_product_ready`)
@@ -122,6 +123,12 @@ Run hourly token report manually:
 
 ```bash
 scripts/csi_run.sh python3 scripts/csi_hourly_token_report.py --db-path /path/to/csi.db --force
+```
+
+Replay DLQ entries manually:
+
+```bash
+scripts/csi_run.sh python3 scripts/csi_replay_dlq.py --db-path /path/to/csi.db --limit 100 --max-attempts 3
 ```
 
 Run RSS semantic enrichment manually:
