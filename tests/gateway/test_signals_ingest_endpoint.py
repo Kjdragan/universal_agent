@@ -728,6 +728,96 @@ def test_signals_ingest_low_signal_suppresses_followup_and_emits_alert(client, m
     assert "csi_specialist_low_signal_suppressed" in kinds
 
 
+def test_signals_ingest_csi_notification_metadata_traceability_fields(client, monkeypatch):
+    """Packet 14: every CSI notification must carry normalized traceability fields."""
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")
+    monkeypatch.setenv("UA_SIGNALS_INGEST_ALLOWED_INSTANCES", "csi-vps-01")
+    monkeypatch.setattr(gateway_server, "_notifications", [])
+    hook_stub = _HookStub()
+    monkeypatch.setattr("universal_agent.gateway_server._hooks_service", hook_stub)
+
+    # Case 1: report_product_ready with artifact_paths
+    payload_with_artifacts = _payload(source="csi_analytics")
+    payload_with_artifacts["events"][0]["event_type"] = "report_product_ready"
+    payload_with_artifacts["events"][0]["subject"] = {
+        "report_key": "rss_trend:hourly:2026-03-01T12",
+        "artifact_paths": {
+            "markdown": "/opt/universal_agent/artifacts/csi/trend_report_2026-03-01.md",
+            "json": "/opt/universal_agent/artifacts/csi/trend_report_2026-03-01.json",
+        },
+        "window_start_utc": "2026-03-01T06:00:00Z",
+        "window_end_utc": "2026-03-01T12:00:00Z",
+    }
+    request_id = "req-trace-1"
+    timestamp = str(int(time.time()))
+    headers = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id,
+        "X-CSI-Timestamp": timestamp,
+        "X-CSI-Signature": _sign("secret", request_id, timestamp, headers_payload := payload_with_artifacts),
+    }
+    resp1 = client.post("/api/v1/signals/ingest", json=payload_with_artifacts, headers=headers)
+    assert resp1.status_code == 200
+
+    # Case 2: rss_trend_report without artifact_paths
+    payload_no_artifacts = _payload(source="csi_analytics")
+    payload_no_artifacts["events"][0]["event_type"] = "rss_trend_report"
+    payload_no_artifacts["events"][0]["event_id"] = "evt-trace-2"
+    payload_no_artifacts["events"][0]["subject"] = {
+        "window_start_utc": "2026-03-01T00:00:00Z",
+        "window_end_utc": "2026-03-01T06:00:00Z",
+        "totals": {"items": 5, "by_category": {"ai": 5}},
+    }
+    request_id_2 = "req-trace-2"
+    timestamp_2 = str(int(time.time()))
+    headers_2 = {
+        "Authorization": "Bearer secret",
+        "X-CSI-Request-ID": request_id_2,
+        "X-CSI-Timestamp": timestamp_2,
+        "X-CSI-Signature": _sign("secret", request_id_2, timestamp_2, payload_no_artifacts),
+    }
+    resp2 = client.post("/api/v1/signals/ingest", json=payload_no_artifacts, headers=headers_2)
+    assert resp2.status_code == 200
+
+    # Only check notifications from the signals ingest notification path (have event_type in metadata)
+    csi_notifications = [
+        item for item in gateway_server._notifications
+        if str(item.get("kind") or "").startswith("csi")
+        and isinstance(item.get("metadata"), dict)
+        and "event_type" in item["metadata"]
+    ]
+    assert len(csi_notifications) >= 2, f"Expected >=2 ingest-path CSI notifications, got {len(csi_notifications)}"
+
+    REQUIRED_METADATA_KEYS = {"event_type", "event_id", "source", "session_key", "report_key", "artifact_paths", "notification_policy"}
+    for notif in csi_notifications:
+        meta = notif.get("metadata") if isinstance(notif.get("metadata"), dict) else {}
+        missing = REQUIRED_METADATA_KEYS - set(meta.keys())
+        assert not missing, f"Notification {notif.get('kind')} missing metadata keys: {missing}"
+        assert "source" in meta and meta["source"], f"source must be non-empty on {notif.get('kind')}"
+
+    # Verify the artifact-bearing notification has the correct paths
+    artifact_notif = next(
+        (n for n in csi_notifications if (n.get("metadata") or {}).get("report_key") == "rss_trend:hourly:2026-03-01T12"),
+        None,
+    )
+    assert artifact_notif is not None
+    artifact_meta = artifact_notif["metadata"]
+    assert isinstance(artifact_meta["artifact_paths"], dict)
+    assert "markdown" in artifact_meta["artifact_paths"]
+    assert "json" in artifact_meta["artifact_paths"]
+    assert artifact_meta["session_key"] is not None or artifact_meta["session_key"] is None  # present as key
+
+    # Verify the no-artifact notification has artifact_paths=None
+    no_artifact_notif = next(
+        (n for n in csi_notifications if str(n.get("metadata", {}).get("event_type") or "") == "rss_trend_report"),
+        None,
+    )
+    assert no_artifact_notif is not None
+    assert no_artifact_notif["metadata"]["artifact_paths"] is None
+    assert no_artifact_notif["metadata"]["report_key"] is None
+
+
 def test_signals_ingest_stale_evidence_emits_quality_alert(client, monkeypatch):
     monkeypatch.setenv("UA_SIGNALS_INGEST_ENABLED", "1")
     monkeypatch.setenv("UA_SIGNALS_INGEST_SHARED_SECRET", "secret")

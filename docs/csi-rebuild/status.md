@@ -1,6 +1,6 @@
 # CSI Rebuild Status
 
-Last updated: 2026-03-01 17:28 America/Chicago
+Last updated: 2026-03-01 23:30 America/Chicago
 Status owner: Codex
 
 Handoff reference: `docs/csi-rebuild/06_packet_handoff.md`
@@ -52,6 +52,7 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 | Canary-aware operator panel (packet 11) | Done | Added dedicated delivery-health regression/recovery notification kinds + metadata passthrough for runbook actions. |
 | Guarded auto-remediation runner (packet 12) | Done | Added `csi_delivery_health_auto_remediate.py` + timer/service + guardrail tests and notification wiring. |
 | Reliability SLO gatekeeper (packet 13) | Done | Added `csi_delivery_slo_gatekeeper.py`, daily timer/service, SLO breach/recovery ingest wiring, API endpoint, and CSI dashboard SLO panel. |
+| Artifact discoverability & traceability (packet 14) | Done | Normalized traceability metadata (source, session_key, report_key, artifact_paths) on all CSI ingest-path notifications. Added Open Report/Session/Artifact action buttons and fallback explanation in CSI dashboard notification detail. Added metadata completeness test. |
 
 ## Validation Snapshot
 - `CSI_Ingester/development/tests/unit/test_digest_cursor_recovery.py`: 2 passed.
@@ -83,6 +84,7 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 - `npm --prefix web-ui run lint`: passed (existing warning outside CSI scope).
 - `CSI_Ingester/development/tests/unit/test_csi_delivery_health_canary.py`: 3 passed.
 - `tests/gateway/test_signals_ingest_endpoint.py`: 16 passed.
+- `tests/gateway/test_signals_ingest_endpoint.py` (packet 14): 20 passed.
 - `tests/gateway/test_ops_api.py -k dashboard_csi_delivery_health_reports_source_and_adapter_state`: 1 passed.
 - `CSI_Ingester/development/tests/unit/test_csi_delivery_slo_gatekeeper.py`: 2 passed.
 - `tests/gateway/test_signals_ingest_endpoint.py -k reliability_slo or auto_remediation_failed or delivery_health_regression or delivery_health_recovered`: 5 passed.
@@ -94,4 +96,4 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 - Validate deploy/runtime state after mainline consolidation.
 
 ## Next Execution Step
-- Implement packet 14: artifact discoverability and traceability (notification -> session -> artifact linkage).
+- Implement packet 15: session rehydrate reliability.

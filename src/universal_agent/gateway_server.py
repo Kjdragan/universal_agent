@@ -8600,23 +8600,27 @@ async def signals_ingest_endpoint(request: Request):
                 title = "CSI Auto-Remediation Succeeded"
             message = analytics_action.get("message", "No content")
 
+            # Packet 14: normalize traceability fields on every CSI notification
+            _session_key = str(analytics_action.get("session_key") or "").strip()
+            subject_obj = event.subject if isinstance(event.subject, dict) else {}
+            _report_key = str(subject_obj.get("report_key") or "").strip()
+            _artifact_paths = subject_obj.get("artifact_paths") if isinstance(subject_obj.get("artifact_paths"), dict) else None
+            _source = str(event.source or "").strip()
             metadata = {
                 "event_type": event.event_type,
                 "event_id": event.event_id,
+                "source": _source,
+                "session_key": _session_key or None,
+                "report_key": _report_key or None,
+                "artifact_paths": _artifact_paths,
                 "notification_policy": {
                     "high_value": bool(policy.get("high_value")),
                     "has_anomaly": bool(policy.get("has_anomaly")),
                 },
             }
             if isinstance(event.subject, dict):
-                report_key = str(event.subject.get("report_key") or "").strip()
-                if report_key:
-                    metadata["report_key"] = report_key
-                artifact_paths = event.subject.get("artifact_paths")
-                if artifact_paths:
-                    metadata["artifact_paths"] = artifact_paths
-                    # Include the markdown path in the notification message explicitly for easy access
-                    md_path = artifact_paths.get("markdown")
+                if _artifact_paths:
+                    md_path = _artifact_paths.get("markdown")
                     if md_path:
                         message += f"\n\nReport Artifact: {md_path}"
                 if event_type_norm in {"delivery_health_regression", "delivery_health_recovered"}:

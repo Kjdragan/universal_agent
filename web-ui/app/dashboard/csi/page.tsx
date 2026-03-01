@@ -1194,7 +1194,32 @@ export default function CSIDashboard() {
                                 </div>
                                 <h2 className="text-lg font-semibold text-slate-100">{selectedItem.data.title}</h2>
                                 <p className="text-xs text-slate-400 font-mono mt-1">ID: {selectedItem.data.id} | Kind: {selectedItem.data.kind}</p>
-                                <div className="mt-2 flex gap-2">
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                    {selectedItem.data.metadata?.report_key && (
+                                        <a
+                                            href={`/dashboard/csi?report_key=${encodeURIComponent(selectedItem.data.metadata.report_key)}`}
+                                            className="rounded border border-indigo-700/60 bg-indigo-600/15 px-2 py-1 text-[11px] text-indigo-100 hover:bg-indigo-600/25 no-underline"
+                                        >
+                                            Open Report
+                                        </a>
+                                    )}
+                                    {selectedItem.data.metadata?.session_key && (
+                                        <a
+                                            href={`/dashboard/sessions?session_id=${encodeURIComponent(selectedItem.data.metadata.session_key)}`}
+                                            className="rounded border border-emerald-700/60 bg-emerald-600/15 px-2 py-1 text-[11px] text-emerald-100 hover:bg-emerald-600/25 no-underline"
+                                        >
+                                            Open Session
+                                        </a>
+                                    )}
+                                    {selectedItem.data.metadata?.artifact_paths?.markdown && (
+                                        <button
+                                            type="button"
+                                            onClick={() => openArtifactPreview(selectedItem.data.metadata.artifact_paths.markdown, "Report Markdown")}
+                                            className="rounded border border-cyan-700/60 bg-cyan-600/15 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-600/25"
+                                        >
+                                            Open Artifact
+                                        </button>
+                                    )}
                                     <button
                                         type="button"
                                         className="rounded border border-cyan-700/60 bg-cyan-600/15 px-2 py-1 text-[11px] text-cyan-100 hover:bg-cyan-600/25"
@@ -1231,7 +1256,7 @@ export default function CSIDashboard() {
                                     <>
                                         <h3 className="text-sm font-medium text-slate-300 mb-2 uppercase tracking-wide">Metadata</h3>
                                         <div className="bg-slate-950 border border-slate-800/80 rounded-lg p-4 flex flex-col gap-4">
-                                            {selectedItem.data.metadata.artifact_paths && (
+                                            {selectedItem.data.metadata.artifact_paths ? (
                                                 <div className="space-y-1">
                                                     <h4 className="text-xs font-semibold text-slate-400">ARTIFACT FILES</h4>
                                                     {selectedItem.data.metadata.artifact_paths.markdown && (
@@ -1260,6 +1285,14 @@ export default function CSIDashboard() {
                                                             </button>
                                                         </div>
                                                     )}
+                                                </div>
+                                            ) : (
+                                                <div className="rounded border border-slate-800 bg-slate-900/40 px-3 py-2">
+                                                    <h4 className="text-xs font-semibold text-slate-400 mb-1">ARTIFACT FILES</h4>
+                                                    <p className="text-[11px] text-slate-500">
+                                                        No artifact files attached to this notification. The originating CSI pipeline may not have produced
+                                                        downloadable artifacts for this event type, or the event was emitted before artifact generation completed.
+                                                    </p>
                                                 </div>
                                             )}
                                             {previewPath && (
