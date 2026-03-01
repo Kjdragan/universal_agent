@@ -59,6 +59,7 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 | Iterative refinement policy engine (packet 18) | Done | Added `csi_refinement_policy.py` with deterministic 5-outcome policy (close_loop, request_followup, escalate, budget_exhausted, suppressed). Priority chain: suppressed > close > budget_exhausted > escalate > followup. 20 policy table + simulation tests pass. |
 | High-signal publishing pipeline (packet 19) | Done | Added `csi_publish_filter.py` with 4-tier classification (critical, high_value, digest, suppressed), quality/anomaly gating, and executive digest builder. 24 suppression/dedupe + digest output tests pass. |
 | Source coverage expansion controls (packet 20) | Done | Added `csi_source_coverage.py` with per-source quotas, watchlist sharding, feature-flag scaffold (X/Threads/Bluesky/HN), backpressure detection with progressive throttling, starvation prevention, and quota enforcement. 30 tests pass. |
+| Operations governance pack (packet 21) | Done | Added 5 runbooks: incident triage, remediation escalation, rollback, data repair, and on-call quick commands with expected outputs and "what good looks like" criteria. |
 
 ## Validation Snapshot
 - `CSI_Ingester/development/tests/unit/test_digest_cursor_recovery.py`: 2 passed.
@@ -110,4 +111,4 @@ Post-packet roadmap: `docs/csi-rebuild/07_post_packet10_work_phases.md`
 - Validate deploy/runtime state after mainline consolidation.
 
 ## Next Execution Step
-- Implement packet 21: operations governance pack.
+- Implement packet 22: RC soak + GA gate.
