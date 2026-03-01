@@ -61,6 +61,7 @@ Providing the CEO (User) a single pane of glass over the entire fleet.
   - enqueue via `POST /api/v1/dashboard/tutorials/bootstrap-repo` with `dispatch_backend=redis_stream`
   - consume via `scripts/tutorial_local_bootstrap_worker.py --transport redis --once`
   - final state observed: `completed` with `repo_dir` and `repo_open_uri`
+  - post-deploy verification rerun also reached `completed` end-state
 - [x] **Live HQ fleet endpoints validated on VPS (authenticated):**
   - `GET /api/v1/factory/capabilities`
   - `GET /api/v1/factory/registrations`

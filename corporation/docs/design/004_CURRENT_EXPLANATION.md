@@ -41,11 +41,17 @@
    - Verified terminal state `completed` with populated:
      - `repo_dir`
      - `repo_open_uri`
+   - Post-deploy mission loop rerun also verified `completed` status on live services.
    - Verified authenticated fleet endpoints on VPS return expected HQ + worker records.
 
 5. **GitHub PR blocker resolution in this environment:**
    - `gh` CLI is still unauthenticated here.
    - GitHub MCP tooling is available and can be used for PR discovery/creation/review flows without `gh auth login`.
+
+6. **Deployment status:**
+   - Changes deployed to VPS from branch `takeover/phase3-foundation`.
+   - `web-ui` build on VPS includes `/dashboard/corporation`.
+   - Core services healthy after restart (`gateway`, `api`, `webui`, `telegram`, VP workers).
 
 ---
 
