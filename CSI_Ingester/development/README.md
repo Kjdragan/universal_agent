@@ -84,6 +84,8 @@ Telegram channel separation options:
 - pending reminder controls:
 - `CSI_TUTORIAL_PENDING_REMINDER_MINUTES` (default `30`)
 - `CSI_TUTORIAL_PENDING_REMINDER_COOLDOWN_MINUTES` (default `120`)
+- `CSI_TUTORIAL_PENDING_MAX_AGE_HOURS` (default `12`; stale pending items older than this are dropped to avoid resurfacing old videos forever)
+- historical pending backfill is now opt-in (`--backfill-pending-count`, default `0`) to prevent old playlist rows from reappearing when no new videos were added.
 - playlist tutorial digest also runs a stalled-turn watchdog:
 - it scans matching tutorial workspaces for `turn_started` entries without `turn_finalized`;
 - if a turn stays open beyond threshold, CSI sends a "Tutorial Session Stalled" alert into the tutorial Telegram stream with workspace hints.

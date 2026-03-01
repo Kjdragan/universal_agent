@@ -11,7 +11,7 @@ import sys
 script_dir = Path(__file__).parent.parent.parent / "scripts"
 sys.path.insert(0, str(script_dir))
 import csi_playlist_tutorial_digest
-from csi_playlist_tutorial_digest import _find_stalled_workspace_turns
+from csi_playlist_tutorial_digest import _find_stalled_workspace_turns, _prune_pending_by_age
 
 
 def test_find_stalled_workspace_turns_ignores_old_turns(tmp_path: Path):
@@ -85,3 +85,41 @@ def test_find_stalled_workspace_turns_flags_new_stalled_turn(tmp_path: Path):
     assert stalled[0]["turn_id"] == "turn_stalled"
     assert stalled[0]["started_at"] == started_at
     assert stalled[0]["age_minutes"] == 30
+
+
+def test_prune_pending_by_age_drops_only_stale_items():
+    now = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
+    pending = {
+        "fresh_vid": {
+            "video_id": "fresh_vid",
+            "pending_since": "2026-03-01T10:30:00Z",
+            "created_at": "2026-03-01T10:30:00Z",
+        },
+        "stale_vid": {
+            "video_id": "stale_vid",
+            "pending_since": "2026-02-20T10:30:00Z",
+            "created_at": "2026-02-20T10:30:00Z",
+        },
+    }
+
+    kept, dropped = _prune_pending_by_age(pending, max_age_hours=48, now=now)
+
+    assert dropped == 1
+    assert "fresh_vid" in kept
+    assert "stale_vid" not in kept
+
+
+def test_prune_pending_by_age_can_be_disabled():
+    now = datetime(2026, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
+    pending = {
+        "very_old": {
+            "video_id": "very_old",
+            "pending_since": "2026-01-01T00:00:00Z",
+            "created_at": "2026-01-01T00:00:00Z",
+        }
+    }
+
+    kept, dropped = _prune_pending_by_age(pending, max_age_hours=0, now=now)
+
+    assert dropped == 0
+    assert "very_old" in kept

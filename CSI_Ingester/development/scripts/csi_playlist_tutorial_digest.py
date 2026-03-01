@@ -378,6 +378,34 @@ def _minutes_since(value: str, *, now: datetime | None = None) -> int | None:
     return max(0, int(delta.total_seconds() // 60))
 
 
+def _prune_pending_by_age(
+    pending_by_video: dict[str, dict[str, Any]],
+    *,
+    max_age_hours: int,
+    now: datetime,
+) -> tuple[dict[str, dict[str, Any]], int]:
+    """Drop stale pending entries to avoid resurfacing old playlist videos indefinitely."""
+    if max_age_hours <= 0:
+        return pending_by_video, 0
+
+    kept: dict[str, dict[str, Any]] = {}
+    dropped = 0
+    threshold_minutes = max_age_hours * 60
+    for video_id, meta in pending_by_video.items():
+        if not isinstance(meta, dict):
+            dropped += 1
+            continue
+        age_minutes = _minutes_since(
+            str(meta.get("pending_since") or meta.get("created_at") or ""),
+            now=now,
+        )
+        if age_minutes is not None and age_minutes > threshold_minutes:
+            dropped += 1
+            continue
+        kept[video_id] = meta
+    return kept, dropped
+
+
 def _find_workspace_session_hints(
     *,
     workspace_root: Path,
@@ -862,8 +890,14 @@ def main() -> int:
     parser.add_argument(
         "--backfill-pending-count",
         type=int,
-        default=20,
+        default=0,
         help="Backfill unresolved pending videos from recent delivered playlist events up to this count.",
+    )
+    parser.add_argument(
+        "--pending-max-age-hours",
+        type=int,
+        default=None,
+        help="Drop pending tracking entries older than this age in hours (default 48; set 0 to disable pruning).",
     )
     parser.add_argument(
         "--pending-reminder-minutes",
@@ -1183,6 +1217,13 @@ def main() -> int:
         default=30,
         minimum=0,
     )
+    pending_max_age_hours = _resolve_int_arg_or_env(
+        cli_value=args.pending_max_age_hours,
+        keys=["CSI_TUTORIAL_PENDING_MAX_AGE_HOURS"],
+        env_files=env_files,
+        default=12,
+        minimum=0,
+    )
     reminder_cooldown_minutes = _resolve_int_arg_or_env(
         cli_value=args.pending_reminder_cooldown_minutes,
         keys=["CSI_TUTORIAL_PENDING_REMINDER_COOLDOWN_MINUTES"],
@@ -1205,12 +1246,19 @@ def main() -> int:
         minimum=1,
     )
     print(f"PLAYLIST_TUTORIAL_PENDING_REMINDER_MINUTES={reminder_threshold_minutes}")
+    print(f"PLAYLIST_TUTORIAL_PENDING_MAX_AGE_HOURS={pending_max_age_hours}")
     print(f"PLAYLIST_TUTORIAL_PENDING_REMINDER_COOLDOWN_MINUTES={reminder_cooldown_minutes}")
     print(f"PLAYLIST_TUTORIAL_STALLED_TURN_MINUTES={stalled_threshold_minutes}")
     print(f"PLAYLIST_TUTORIAL_STALLED_TURN_COOLDOWN_MINUTES={stalled_cooldown_minutes}")
 
     now_utc = datetime.now(timezone.utc)
     pending_reminder_items: list[dict[str, Any]] = []
+    pending_for_state, pending_dropped = _prune_pending_by_age(
+        pending_for_state,
+        max_age_hours=pending_max_age_hours,
+        now=now_utc,
+    )
+    print(f"PLAYLIST_TUTORIAL_PENDING_DROPPED_OLD={pending_dropped}")
     if pending_for_state and reminder_threshold_minutes > 0:
         for video_id, meta in list(pending_for_state.items()):
             age_minutes = _minutes_since(

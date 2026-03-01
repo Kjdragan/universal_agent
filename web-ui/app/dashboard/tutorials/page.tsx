@@ -150,6 +150,9 @@ export default function DashboardTutorialsPage() {
   const [dispatchingRunPath, setDispatchingRunPath] = useState<string>("");
   const [dispatchStatus, setDispatchStatus] = useState<string>("");
   const [deletingRunPath, setDeletingRunPath] = useState<string>("");
+  const [deletingAllRuns, setDeletingAllRuns] = useState(false);
+  const [clearingNotifications, setClearingNotifications] = useState(false);
+  const [dismissingNotificationId, setDismissingNotificationId] = useState<string>("");
   const [bootstrappingRunPath, setBootstrappingRunPath] = useState<string>("");
   const [seenRuns, setSeenRuns] = useState<Set<string>>(new Set());
   const [showNotifications, setShowNotifications] = useState(true);
@@ -331,6 +334,100 @@ export default function DashboardTutorialsPage() {
     [load],
   );
 
+  const dismissNotification = useCallback(
+    async (notificationId: string) => {
+      const normalized = asText(notificationId);
+      if (!normalized) return;
+      setDismissingNotificationId(normalized);
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/dashboard/notifications/${encodeURIComponent(normalized)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "dismissed", note: "deleted in tutorials panel" }),
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          const detail = asText((payload as Record<string, unknown>).detail) || `Delete failed (${res.status})`;
+          throw new Error(detail);
+        }
+        await load();
+      } catch (err: any) {
+        setDispatchStatus(err?.message || "Failed to delete notification");
+      } finally {
+        setDismissingNotificationId("");
+      }
+    },
+    [load],
+  );
+
+  const clearAllNotifications = useCallback(
+    async () => {
+      const targetCount = visibleNotifications.length;
+      if (targetCount === 0) return;
+      if (!window.confirm(`Delete all ${targetCount} pipeline notification${targetCount > 1 ? "s" : ""}?`)) return;
+      setClearingNotifications(true);
+      try {
+        const uniqueKinds = Array.from(
+          new Set(visibleNotifications.map((n) => asText(n.kind)).filter(Boolean)),
+        );
+        if (uniqueKinds.length === 0) return;
+        await Promise.all(
+          uniqueKinds.map((kind) =>
+            fetch(`${API_BASE}/api/v1/dashboard/notifications/bulk`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                status: "dismissed",
+                kind,
+                limit: 1000,
+                note: "deleted in tutorials panel bulk action",
+              }),
+            }),
+          ),
+        );
+        await load();
+      } catch (err: any) {
+        setDispatchStatus(err?.message || "Failed to clear notifications");
+      } finally {
+        setClearingNotifications(false);
+      }
+    },
+    [load, visibleNotifications],
+  );
+
+  const deleteAllRuns = useCallback(
+    async () => {
+      const targetCount = runs.length;
+      if (targetCount === 0) return;
+      if (!window.confirm(`Delete all ${targetCount} processed tutorial run${targetCount > 1 ? "s" : ""}?\n\nThis cannot be undone.`)) {
+        return;
+      }
+      setDeletingAllRuns(true);
+      try {
+        const results = await Promise.allSettled(
+          runs.map((run) =>
+            fetch(
+              `${API_BASE}/api/v1/dashboard/tutorials/runs?run_path=${encodeURIComponent(asText(run.run_path))}`,
+              { method: "DELETE" },
+            ),
+          ),
+        );
+        const failed = results.filter(
+          (result) => result.status === "rejected" || (result.status === "fulfilled" && !result.value.ok),
+        ).length;
+        if (failed > 0) {
+          setDispatchStatus(`Deleted ${targetCount - failed}/${targetCount} runs. ${failed} failed.`);
+        }
+        await load();
+      } catch (err: any) {
+        setDispatchStatus(err?.message || "Failed to delete all runs");
+      } finally {
+        setDeletingAllRuns(false);
+      }
+    },
+    [load, runs],
+  );
+
   const bootstrapRunRepo = useCallback(
     async (runPath: string) => {
       const normalized = asText(runPath);
@@ -400,13 +497,23 @@ export default function DashboardTutorialsPage() {
             <h2 className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
               Pipeline Activity ({visibleNotifications.length})
             </h2>
-            <button
-              type="button"
-              onClick={() => setShowNotifications((v) => !v)}
-              className="text-[11px] text-slate-500 hover:text-slate-300"
-            >
-              {showNotifications ? "Hide" : "Show"}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void clearAllNotifications()}
+                disabled={clearingNotifications || visibleNotifications.length === 0}
+                className="rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+              >
+                {clearingNotifications ? "Deleting..." : "Delete All"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowNotifications((v) => !v)}
+                className="text-[11px] text-slate-500 hover:text-slate-300"
+              >
+                {showNotifications ? "Hide" : "Show"}
+              </button>
+            </div>
           </div>
           {showNotifications && (
             <div className="space-y-1.5">
@@ -416,7 +523,7 @@ export default function DashboardTutorialsPage() {
                 return (
                   <div
                     key={n.id}
-                    className={`flex items-start gap-2 rounded border px-2.5 py-1.5 text-xs ${style}`}
+                    className={`group flex items-start gap-2 rounded border px-2.5 py-1.5 text-xs ${style}`}
                   >
                     <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
                     <div className="min-w-0 flex-1">
@@ -426,6 +533,16 @@ export default function DashboardTutorialsPage() {
                         <p className="mt-0.5 truncate opacity-80">{n.message}</p>
                       )}
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => void dismissNotification(n.id)}
+                      disabled={dismissingNotificationId === n.id || clearingNotifications}
+                      title="Delete notification"
+                      aria-label="Delete notification"
+                      className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 rounded p-1 text-rose-200 hover:bg-rose-900/30 disabled:opacity-40"
+                    >
+                      <span aria-hidden="true">🗑</span>
+                    </button>
                   </div>
                 );
               })}
@@ -446,9 +563,19 @@ export default function DashboardTutorialsPage() {
       )}
 
       <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">
-          Processed Tutorial Runs ({runs.length})
-        </h2>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">
+            Processed Tutorial Runs ({runs.length})
+          </h2>
+          <button
+            type="button"
+            onClick={() => void deleteAllRuns()}
+            disabled={deletingAllRuns || runs.length === 0}
+            className="rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+          >
+            {deletingAllRuns ? "Deleting..." : "Delete All"}
+          </button>
+        </div>
         <div className="space-y-3">
           {runs.length === 0 && (
             <div className="rounded border border-slate-800 bg-slate-950/50 px-3 py-4 text-sm text-slate-400">
@@ -472,7 +599,7 @@ export default function DashboardTutorialsPage() {
             const hasCreateRepoScript = files.some((file) => asText(file.name).toLowerCase() === "create_new_repo.sh");
             const showCreateRepoAction = Boolean(implRequired || hasCreateRepoScript);
             return (
-              <article key={runPath} className="rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2">
+              <article key={runPath} className="group rounded-lg border border-slate-800/80 bg-slate-950/60 px-3 py-2">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div>
                     <p className="text-sm font-semibold text-slate-100">
@@ -593,11 +720,12 @@ export default function DashboardTutorialsPage() {
                     <button
                       type="button"
                       onClick={() => void deleteRun(runPath)}
-                      disabled={deletingRunPath === runPath || dispatchingRunPath === runPath || bootstrappingRunPath === runPath}
+                      disabled={deletingRunPath === runPath || dispatchingRunPath === runPath || bootstrappingRunPath === runPath || deletingAllRuns}
                       title="Delete this tutorial run"
-                      className="rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-50"
+                      aria-label="Delete this tutorial run"
+                      className="opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 rounded border border-rose-700/60 bg-rose-900/20 px-2 py-1 text-[11px] text-rose-200 hover:bg-rose-900/35 disabled:opacity-40"
                     >
-                      {deletingRunPath === runPath ? "Deleting..." : "Delete"}
+                      {deletingRunPath === runPath ? "Deleting..." : "🗑"}
                     </button>
                   </div>
                 </div>

@@ -4,10 +4,19 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+.python-version
 env/
 venv/
 .venv/
 .env
+.coverage
+.mypy_cache/
+.ruff_cache/
+.nox/
+.tox/
+.hypothesis/
+*.swp
+*.swo
 
 # Persistent skill artifacts (durable outputs; not committed)
 /artifacts/
@@ -15,10 +24,8 @@ pip-log.txt
 pip-delete-this-directory.txt
 .pytest_cache/
 *.egg-info/
-uv.lock
 
 # === Environments & IDs ===
-.env
 .env.local
 .env.*.local
 # Explicit local secret snapshot from VPS security sync.
@@ -43,7 +50,7 @@ Prompt_Assets/
 Memory_System/data/
 Memory_System_Data/
 src/universal_agent/Memory_System_Data/
-letta/
+/letta/
 .letta/
 
 # === Project Workspaces & Artifacts ===
@@ -103,6 +110,7 @@ RLM/corpora/
 
 # === Claude Internal ===
 .claude/worktrees/
+.claude/settings.local.json
 
 # Scraping run outputs
 scraping/runs/*/
