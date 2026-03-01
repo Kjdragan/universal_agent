@@ -1117,7 +1117,19 @@ export default function CSIDashboard() {
                                             <div className="min-w-0 flex-1">
                                                 <div className="flex items-center justify-between">
                                                     <span className="font-medium pr-2">{n.title}</span>
-                                                    <span className="text-[10px] opacity-70 shrink-0">{timeAgo(n.created_at)}</span>
+                                                    <span className="flex items-center gap-1.5 shrink-0">
+                                                        {n.metadata?.quality?.quality_grade && (
+                                                            <span className={`px-1 py-0.5 rounded text-[9px] font-bold leading-none ${
+                                                                n.metadata.quality.quality_grade === "A" ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30" :
+                                                                n.metadata.quality.quality_grade === "B" ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" :
+                                                                n.metadata.quality.quality_grade === "C" ? "bg-amber-500/20 text-amber-300 border border-amber-500/30" :
+                                                                "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                                                            }`} title={`Quality: ${(n.metadata.quality.quality_score * 100).toFixed(0)}%`}>
+                                                                {n.metadata.quality.quality_grade}
+                                                            </span>
+                                                        )}
+                                                        <span className="text-[10px] opacity-70">{timeAgo(n.created_at)}</span>
+                                                    </span>
                                                 </div>
                                                 <p className="mt-0.5 line-clamp-2 text-xs opacity-80">{n.summary || n.message}</p>
                                             </div>
@@ -1247,6 +1259,49 @@ export default function CSIDashboard() {
                                 </div>
                             </div>
                             <div className="p-6 overflow-y-auto flex-1 scrollbar-thin">
+                                {selectedItem.data.metadata?.quality && (
+                                    <div className="mb-6 rounded-lg border border-slate-800 bg-slate-900/50 p-4">
+                                        <h3 className="text-sm font-medium text-slate-300 mb-3 uppercase tracking-wide">Quality Score</h3>
+                                        <div className="flex items-center gap-4 mb-3">
+                                            <span className={`text-2xl font-bold ${
+                                                selectedItem.data.metadata.quality.quality_grade === "A" ? "text-emerald-400" :
+                                                selectedItem.data.metadata.quality.quality_grade === "B" ? "text-cyan-400" :
+                                                selectedItem.data.metadata.quality.quality_grade === "C" ? "text-amber-400" :
+                                                "text-rose-400"
+                                            }`}>
+                                                {selectedItem.data.metadata.quality.quality_grade}
+                                            </span>
+                                            <div className="flex-1">
+                                                <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+                                                    <div
+                                                        className={`h-full rounded-full transition-all ${
+                                                            selectedItem.data.metadata.quality.quality_score >= 0.8 ? "bg-emerald-500" :
+                                                            selectedItem.data.metadata.quality.quality_score >= 0.6 ? "bg-cyan-500" :
+                                                            selectedItem.data.metadata.quality.quality_score >= 0.4 ? "bg-amber-500" :
+                                                            "bg-rose-500"
+                                                        }`}
+                                                        style={{ width: `${(selectedItem.data.metadata.quality.quality_score * 100).toFixed(0)}%` }}
+                                                    />
+                                                </div>
+                                                <span className="text-[10px] text-slate-500 mt-0.5">
+                                                    {(selectedItem.data.metadata.quality.quality_score * 100).toFixed(0)}% composite
+                                                </span>
+                                            </div>
+                                        </div>
+                                        {selectedItem.data.metadata.quality.dimensions && (
+                                            <div className="grid grid-cols-2 gap-2 text-[11px]">
+                                                {Object.entries(selectedItem.data.metadata.quality.dimensions as Record<string, number>).map(([dim, val]) => (
+                                                    <div key={dim} className="flex items-center justify-between rounded border border-slate-800/60 bg-slate-900/30 px-2 py-1">
+                                                        <span className="text-slate-400">{dim.replace(/_/g, " ")}</span>
+                                                        <span className={`font-mono font-semibold ${
+                                                            val >= 0.8 ? "text-emerald-400" : val >= 0.5 ? "text-cyan-400" : val >= 0.3 ? "text-amber-400" : "text-rose-400"
+                                                        }`}>{(val * 100).toFixed(0)}%</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                                 <h3 className="text-sm font-medium text-slate-300 mb-2 uppercase tracking-wide">Message Content</h3>
                                 <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-4 mb-6 whitespace-pre-wrap text-sm text-slate-300">
                                     {selectedItem.data.full_message || selectedItem.data.message}

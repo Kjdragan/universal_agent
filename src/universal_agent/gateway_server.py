@@ -8606,6 +8606,25 @@ async def signals_ingest_endpoint(request: Request):
             _report_key = str(subject_obj.get("report_key") or "").strip()
             _artifact_paths = subject_obj.get("artifact_paths") if isinstance(subject_obj.get("artifact_paths"), dict) else None
             _source = str(event.source or "").strip()
+
+            # Packet 16: compute report quality score
+            _quality_result: dict[str, Any] | None = None
+            try:
+                from universal_agent.csi_quality_score import score_report_quality
+                _source_mix: dict[str, int] = {}
+                for opp in (subject_obj.get("opportunities") or []):
+                    if isinstance(opp, dict) and isinstance(opp.get("source_mix"), dict):
+                        for k, v in opp["source_mix"].items():
+                            _source_mix[k] = _source_mix.get(k, 0) + int(v or 0)
+                if not _source_mix and _source:
+                    _source_mix[_source] = 1
+                _quality_result = score_report_quality(
+                    subject=subject_obj,
+                    source_mix=_source_mix,
+                )
+            except Exception:
+                pass
+
             metadata = {
                 "event_type": event.event_type,
                 "event_id": event.event_id,
@@ -8613,6 +8632,7 @@ async def signals_ingest_endpoint(request: Request):
                 "session_key": _session_key or None,
                 "report_key": _report_key or None,
                 "artifact_paths": _artifact_paths,
+                "quality": _quality_result,
                 "notification_policy": {
                     "high_value": bool(policy.get("high_value")),
                     "has_anomaly": bool(policy.get("has_anomaly")),

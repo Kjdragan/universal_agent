@@ -789,7 +789,7 @@ def test_signals_ingest_csi_notification_metadata_traceability_fields(client, mo
     ]
     assert len(csi_notifications) >= 2, f"Expected >=2 ingest-path CSI notifications, got {len(csi_notifications)}"
 
-    REQUIRED_METADATA_KEYS = {"event_type", "event_id", "source", "session_key", "report_key", "artifact_paths", "notification_policy"}
+    REQUIRED_METADATA_KEYS = {"event_type", "event_id", "source", "session_key", "report_key", "artifact_paths", "quality", "notification_policy"}
     for notif in csi_notifications:
         meta = notif.get("metadata") if isinstance(notif.get("metadata"), dict) else {}
         missing = REQUIRED_METADATA_KEYS - set(meta.keys())
@@ -806,7 +806,16 @@ def test_signals_ingest_csi_notification_metadata_traceability_fields(client, mo
     assert isinstance(artifact_meta["artifact_paths"], dict)
     assert "markdown" in artifact_meta["artifact_paths"]
     assert "json" in artifact_meta["artifact_paths"]
-    assert artifact_meta["session_key"] is not None or artifact_meta["session_key"] is None  # present as key
+    assert "session_key" in artifact_meta  # key present (may be None)
+
+    # Packet 16: verify quality score is present and well-structured
+    quality = artifact_meta.get("quality")
+    assert isinstance(quality, dict), "quality must be a dict on artifact notification"
+    assert "quality_score" in quality
+    assert "quality_grade" in quality
+    assert "dimensions" in quality
+    assert 0.0 <= quality["quality_score"] <= 1.0
+    assert quality["quality_grade"] in ("A", "B", "C", "D")
 
     # Verify the no-artifact notification has artifact_paths=None
     no_artifact_notif = next(
