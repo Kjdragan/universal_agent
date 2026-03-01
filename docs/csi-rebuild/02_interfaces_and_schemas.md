@@ -43,6 +43,9 @@ Last updated: 2026-03-01
 - Extend `/api/v1/dashboard/csi/reports`
 - Add `/api/v1/dashboard/csi/opportunities` (implemented)
 - Add `/api/v1/dashboard/csi/delivery-health`
+- Add `/api/v1/dashboard/csi/specialist-loops/{topic_key}/action` (implemented)
+- Add `/api/v1/dashboard/csi/specialist-loops/triage` (implemented)
+- Add `/api/v1/dashboard/csi/specialist-loops/cleanup` (implemented)
 
 ## Specialist Loop Confidence Fields (Implemented)
 - `confidence_score`: numeric loop confidence.
@@ -54,3 +57,10 @@ Last updated: 2026-03-01
 - `csi_specialist_confidence_drift`
 - `csi_specialist_evidence_stale`
 - `csi_specialist_low_signal_suppressed`
+
+## Specialist Loop Operator Actions (Implemented)
+- `unsuppress`
+- `reset_budget`
+- `reopen`
+- `close`
+- `request_followup`

@@ -85,8 +85,11 @@ type CSISpecialistLoop = {
     confidence_score: number;
     confidence_method?: string;
     confidence_evidence?: Record<string, any>;
+    follow_up_budget_total?: number;
     follow_up_budget_remaining: number;
     events_count: number;
+    low_signal_streak?: number;
+    suppressed_until?: string | null;
     updated_at: string;
 };
 
@@ -204,6 +207,10 @@ export default function CSIDashboard() {
     const [loops, setLoops] = useState<CSISpecialistLoop[]>([]);
     const [opportunityBundles, setOpportunityBundles] = useState<CSIOpportunityBundle[]>([]);
     const [deepLinkApplied, setDeepLinkApplied] = useState(false);
+    const [loopActionBusy, setLoopActionBusy] = useState<Record<string, boolean>>({});
+    const [triageBusy, setTriageBusy] = useState(false);
+    const [cleanupBusy, setCleanupBusy] = useState(false);
+    const [loopsStatus, setLoopsStatus] = useState<string | null>(null);
 
     const openArtifactPreview = useCallback(async (path: string, label: string) => {
         const normalized = normalizeArtifactPath(path);
@@ -358,6 +365,98 @@ export default function CSIDashboard() {
             setPurgeStatus(`CSI session cleanup failed: ${err.message || "unknown error"}`);
         } finally {
             setPurgeBusy(false);
+        }
+    }
+
+    async function runLoopAction(topicKey: string, action: string, followUpBudget?: number) {
+        const actionKey = `${topicKey}:${action}`;
+        setLoopActionBusy((prev) => ({ ...prev, [actionKey]: true }));
+        setLoopsStatus(null);
+        try {
+            const resp = await fetch(
+                `${API_BASE}/api/v1/dashboard/csi/specialist-loops/${encodeURIComponent(topicKey)}/action`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        action,
+                        follow_up_budget: typeof followUpBudget === "number" ? followUpBudget : undefined,
+                    }),
+                },
+            );
+            const payload = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                const detail = payload?.detail ? String(payload.detail) : `HTTP ${resp.status}`;
+                throw new Error(detail);
+            }
+            const loopLabel = String(payload?.loop?.topic_label || topicKey);
+            setLoopsStatus(`Applied ${action} to ${loopLabel}.`);
+            await loadData();
+        } catch (err: any) {
+            setLoopsStatus(`Loop action failed: ${err?.message || "unknown error"}`);
+        } finally {
+            setLoopActionBusy((prev) => ({ ...prev, [actionKey]: false }));
+        }
+    }
+
+    async function runLoopTriage(withFollowup: boolean) {
+        setTriageBusy(true);
+        setLoopsStatus(null);
+        try {
+            const resp = await fetch(`${API_BASE}/api/v1/dashboard/csi/specialist-loops/triage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    apply: true,
+                    max_items: 50,
+                    request_followup: withFollowup,
+                }),
+            });
+            const payload = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                const detail = payload?.detail ? String(payload.detail) : `HTTP ${resp.status}`;
+                throw new Error(detail);
+            }
+            const appliedCount = Array.isArray(payload?.applied) ? payload.applied.length : 0;
+            const followupCount = Array.isArray(payload?.followups) ? payload.followups.length : 0;
+            const errorCount = Array.isArray(payload?.errors) ? payload.errors.length : 0;
+            setLoopsStatus(
+                `Triage complete: ${appliedCount} remediation action(s), ${followupCount} follow-up dispatch(es), ${errorCount} error(s).`,
+            );
+            await loadData();
+        } catch (err: any) {
+            setLoopsStatus(`Triage failed: ${err?.message || "unknown error"}`);
+        } finally {
+            setTriageBusy(false);
+        }
+    }
+
+    async function runLoopCleanup() {
+        setCleanupBusy(true);
+        setLoopsStatus(null);
+        try {
+            const resp = await fetch(`${API_BASE}/api/v1/dashboard/csi/specialist-loops/cleanup`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    apply: true,
+                    older_than_days: 7,
+                    max_items: 300,
+                }),
+            });
+            const payload = await resp.json().catch(() => ({}));
+            if (!resp.ok) {
+                const detail = payload?.detail ? String(payload.detail) : `HTTP ${resp.status}`;
+                throw new Error(detail);
+            }
+            const deleted = Array.isArray(payload?.deleted) ? payload.deleted.length : 0;
+            const candidates = Array.isArray(payload?.candidates) ? payload.candidates.length : 0;
+            setLoopsStatus(`Cleanup complete: deleted ${deleted} of ${candidates} stale specialist loop(s).`);
+            await loadData();
+        } catch (err: any) {
+            setLoopsStatus(`Cleanup failed: ${err?.message || "unknown error"}`);
+        } finally {
+            setCleanupBusy(false);
         }
     }
 
@@ -517,7 +616,40 @@ export default function CSIDashboard() {
             </div>
 
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                <h2 className="text-sm font-semibold tracking-wide text-slate-300">Trend Specialist Loops</h2>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">Trend Specialist Loops</h2>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => void runLoopTriage(false)}
+                            disabled={triageBusy || cleanupBusy}
+                            className="rounded border border-cyan-700/40 bg-cyan-700/10 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-700/20 disabled:opacity-60"
+                        >
+                            {triageBusy ? "Triaging..." : "Run Triage"}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void runLoopTriage(true)}
+                            disabled={triageBusy || cleanupBusy}
+                            className="rounded border border-indigo-700/40 bg-indigo-700/10 px-2 py-1 text-[11px] text-indigo-200 hover:bg-indigo-700/20 disabled:opacity-60"
+                        >
+                            {triageBusy ? "Triaging..." : "Triage + Follow-up"}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void runLoopCleanup()}
+                            disabled={cleanupBusy || triageBusy}
+                            className="rounded border border-amber-700/40 bg-amber-700/10 px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-700/20 disabled:opacity-60"
+                        >
+                            {cleanupBusy ? "Cleaning..." : "Cleanup Closed"}
+                        </button>
+                    </div>
+                </div>
+                {loopsStatus && (
+                    <div className="mt-2 rounded border border-slate-800 bg-slate-950/60 px-2 py-1 text-[11px] text-slate-300">
+                        {loopsStatus}
+                    </div>
+                )}
                 <div className="mt-2 overflow-auto rounded border border-slate-800">
                     <table className="w-full text-left text-xs">
                         <thead className="bg-slate-900/70 text-slate-400">
@@ -527,6 +659,7 @@ export default function CSIDashboard() {
                                 <th className="px-2 py-1.5">Confidence</th>
                                 <th className="px-2 py-1.5">Method</th>
                                 <th className="px-2 py-1.5">Budget</th>
+                                <th className="px-2 py-1.5 text-right">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -548,12 +681,70 @@ export default function CSIDashboard() {
                                         {loop.confidence_score} / {loop.confidence_target}
                                     </td>
                                     <td className="px-2 py-1.5 text-slate-400">{loop.confidence_method || "heuristic"}</td>
-                                    <td className="px-2 py-1.5 text-slate-400">{loop.follow_up_budget_remaining}</td>
+                                    <td className="px-2 py-1.5 text-slate-400">
+                                        {loop.follow_up_budget_remaining}
+                                        {typeof loop.low_signal_streak === "number" && loop.low_signal_streak > 0 ? (
+                                            <span className="ml-2 text-[10px] text-amber-300">streak {loop.low_signal_streak}</span>
+                                        ) : null}
+                                    </td>
+                                    <td className="px-2 py-1.5">
+                                        <div className="flex justify-end gap-1">
+                                            {loop.status === "suppressed_low_signal" && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void runLoopAction(loop.topic_key, "unsuppress")}
+                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:unsuppress`])}
+                                                    className="rounded border border-sky-700/40 bg-sky-700/10 px-1.5 py-0.5 text-[10px] text-sky-200 hover:bg-sky-700/20 disabled:opacity-60"
+                                                >
+                                                    Unsuppress
+                                                </button>
+                                            )}
+                                            {(loop.status === "budget_exhausted" || loop.follow_up_budget_remaining <= 0) && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void runLoopAction(loop.topic_key, "reset_budget")}
+                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:reset_budget`])}
+                                                    className="rounded border border-amber-700/40 bg-amber-700/10 px-1.5 py-0.5 text-[10px] text-amber-200 hover:bg-amber-700/20 disabled:opacity-60"
+                                                >
+                                                    Reset Budget
+                                                </button>
+                                            )}
+                                            {loop.status !== "closed" ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void runLoopAction(loop.topic_key, "close")}
+                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:close`])}
+                                                    className="rounded border border-rose-700/40 bg-rose-700/10 px-1.5 py-0.5 text-[10px] text-rose-200 hover:bg-rose-700/20 disabled:opacity-60"
+                                                >
+                                                    Close
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void runLoopAction(loop.topic_key, "reopen")}
+                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:reopen`])}
+                                                    className="rounded border border-emerald-700/40 bg-emerald-700/10 px-1.5 py-0.5 text-[10px] text-emerald-200 hover:bg-emerald-700/20 disabled:opacity-60"
+                                                >
+                                                    Reopen
+                                                </button>
+                                            )}
+                                            {loop.status !== "closed" && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void runLoopAction(loop.topic_key, "request_followup")}
+                                                    disabled={Boolean(loopActionBusy[`${loop.topic_key}:request_followup`])}
+                                                    className="rounded border border-indigo-700/40 bg-indigo-700/10 px-1.5 py-0.5 text-[10px] text-indigo-200 hover:bg-indigo-700/20 disabled:opacity-60"
+                                                >
+                                                    Follow-up
+                                                </button>
+                                            )}
+                                        </div>
+                                    </td>
                                 </tr>
                             ))}
                             {loops.length === 0 && (
                                 <tr>
-                                    <td className="px-2 py-2 text-slate-500" colSpan={5}>
+                                    <td className="px-2 py-2 text-slate-500" colSpan={6}>
                                         No specialist loops tracked yet.
                                     </td>
                                 </tr>

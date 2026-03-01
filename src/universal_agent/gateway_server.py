@@ -1415,6 +1415,26 @@ class ActivityEventActionRequest(BaseModel):
     snooze_minutes: Optional[int] = None
 
 
+class CSISpecialistLoopActionRequest(BaseModel):
+    action: str
+    note: Optional[str] = None
+    follow_up_budget: Optional[int] = None
+
+
+class CSISpecialistLoopTriageRequest(BaseModel):
+    apply: bool = True
+    max_items: int = 50
+    request_followup: bool = False
+    note: Optional[str] = None
+
+
+class CSISpecialistLoopCleanupRequest(BaseModel):
+    apply: bool = True
+    older_than_days: int = 7
+    max_items: int = 200
+    note: Optional[str] = None
+
+
 class DashboardEventPresetCreateRequest(BaseModel):
     name: str
     filters: dict[str, Any] = Field(default_factory=dict)
@@ -5529,6 +5549,333 @@ def _list_csi_specialist_loops(limit: int = 50, status_filter: Optional[str] = N
         return out
     finally:
         conn.close()
+
+
+def _get_csi_specialist_loop(topic_key: str) -> Optional[dict[str, Any]]:
+    cleaned_topic_key = str(topic_key or "").strip()
+    if not cleaned_topic_key:
+        return None
+    conn = _activity_connect()
+    try:
+        _ensure_activity_schema(conn)
+        row = conn.execute(
+            "SELECT * FROM csi_specialist_loops WHERE topic_key = ? LIMIT 1",
+            (cleaned_topic_key,),
+        ).fetchone()
+        if row is None:
+            return None
+        evidence = _activity_json_loads_obj(row["evidence_json"], default={})
+        if not isinstance(evidence, dict):
+            evidence = {}
+        return {
+            "topic_key": str(row["topic_key"] or ""),
+            "topic_label": str(row["topic_label"] or ""),
+            "status": str(row["status"] or "open"),
+            "confidence_target": float(row["confidence_target"] or 0.0),
+            "confidence_score": float(row["confidence_score"] or 0.0),
+            "confidence_method": str(row["confidence_method"] or "heuristic"),
+            "confidence_evidence": evidence,
+            "follow_up_budget_total": int(row["follow_up_budget_total"] or 0),
+            "follow_up_budget_remaining": int(row["follow_up_budget_remaining"] or 0),
+            "events_count": int(row["events_count"] or 0),
+            "source_mix": _csi_parse_mix_json(row["source_mix_json"]),
+            "last_event_type": str(row["last_event_type"] or ""),
+            "last_event_id": str(row["last_event_id"] or ""),
+            "last_event_at": str(row["last_event_at"] or "") or None,
+            "last_followup_requested_at": str(row["last_followup_requested_at"] or "") or None,
+            "low_signal_streak": int(row["low_signal_streak"] or 0),
+            "suppressed_until": str(row["suppressed_until"] or "") or None,
+            "created_at": str(row["created_at"] or _utc_now_iso()),
+            "updated_at": str(row["updated_at"] or _utc_now_iso()),
+            "closed_at": str(row["closed_at"] or "") or None,
+        }
+    finally:
+        conn.close()
+
+
+def _csi_loop_audit_event_id(topic_key: str) -> str:
+    cleaned = str(topic_key or "").strip()
+    if not cleaned:
+        return "csi_loop:unknown"
+    return f"csi_loop:{cleaned}"
+
+
+def _csi_loop_status_from_state(
+    *,
+    confidence_score: float,
+    confidence_target: float,
+    follow_up_budget_remaining: int,
+    suppressed_until: Optional[str],
+) -> str:
+    if float(confidence_score) >= float(confidence_target):
+        return "closed"
+    suppressed_text = str(suppressed_until or "").strip()
+    if suppressed_text:
+        suppressed_dt = _parse_iso_timestamp(suppressed_text)
+        if suppressed_dt is not None:
+            if suppressed_dt.tzinfo is None:
+                suppressed_dt = suppressed_dt.replace(tzinfo=timezone.utc)
+            if suppressed_dt.timestamp() > time.time():
+                return "suppressed_low_signal"
+    if int(follow_up_budget_remaining) <= 0:
+        return "budget_exhausted"
+    return "open"
+
+
+def _csi_specialist_followup_message(
+    *,
+    loop: dict[str, Any],
+    trigger: str,
+    note: Optional[str] = None,
+) -> str:
+    return (
+        "CSI specialist follow-up request.\n"
+        f"topic_key: {loop.get('topic_key')}\n"
+        f"topic_label: {loop.get('topic_label')}\n"
+        f"status: {loop.get('status')}\n"
+        f"trigger: {trigger}\n"
+        f"confidence_score: {loop.get('confidence_score')}\n"
+        f"confidence_target: {loop.get('confidence_target')}\n"
+        f"confidence_method: {loop.get('confidence_method')}\n"
+        f"follow_up_budget_remaining: {loop.get('follow_up_budget_remaining')}\n"
+        f"events_count: {loop.get('events_count')}\n"
+        f"last_event_type: {loop.get('last_event_type')}\n"
+        f"last_event_id: {loop.get('last_event_id')}\n"
+        f"last_event_at: {loop.get('last_event_at')}\n"
+        f"operator_note: {str(note or '').strip()}\n"
+        "Request one focused follow-up CSI analysis task and summarize confidence deltas."
+    )
+
+
+async def _csi_dispatch_specialist_followup(
+    *,
+    loop: dict[str, Any],
+    trigger: str,
+    note: Optional[str] = None,
+) -> tuple[bool, str]:
+    if not _hooks_service:
+        return False, "Hooks service not initialized"
+    message = _csi_specialist_followup_message(loop=loop, trigger=trigger, note=note)
+    ok, reason = await _hooks_service.dispatch_internal_action(
+        {
+            "kind": "agent",
+            "name": "CSITrendFollowUpRequest",
+            "session_key": "csi_trend_specialist",
+            "to": "trend-specialist",
+            "message": message,
+            "timeout_seconds": int(max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))),
+        }
+    )
+    return bool(ok), str(reason or "")
+
+
+def _apply_csi_specialist_loop_action(
+    *,
+    topic_key: str,
+    action: str,
+    actor: str,
+    note: Optional[str] = None,
+    follow_up_budget: Optional[int] = None,
+) -> dict[str, Any]:
+    cleaned_topic_key = str(topic_key or "").strip()
+    cleaned_action = str(action or "").strip().lower()
+    if not cleaned_topic_key:
+        raise HTTPException(status_code=400, detail="topic_key is required")
+    if cleaned_action not in {"unsuppress", "reset_budget", "reopen", "close"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported action '{cleaned_action}'")
+
+    now_iso = _utc_now_iso()
+    with _csi_specialist_loop_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            row = conn.execute(
+                "SELECT * FROM csi_specialist_loops WHERE topic_key = ? LIMIT 1",
+                (cleaned_topic_key,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Specialist loop not found")
+
+            confidence_target = float(row["confidence_target"] or _csi_specialist_confidence_target)
+            confidence_score = float(row["confidence_score"] or 0.0)
+            follow_up_budget_total = int(row["follow_up_budget_total"] or _csi_specialist_followup_budget)
+            follow_up_budget_remaining = int(row["follow_up_budget_remaining"] or 0)
+            low_signal_streak = int(row["low_signal_streak"] or 0)
+            suppressed_until = str(row["suppressed_until"] or "") or None
+            status_value = str(row["status"] or "open")
+            closed_at = str(row["closed_at"] or "") or None
+
+            if cleaned_action == "unsuppress":
+                low_signal_streak = 0
+                suppressed_until = None
+                closed_at = None
+                status_value = _csi_loop_status_from_state(
+                    confidence_score=confidence_score,
+                    confidence_target=confidence_target,
+                    follow_up_budget_remaining=follow_up_budget_remaining,
+                    suppressed_until=suppressed_until,
+                )
+            elif cleaned_action == "reset_budget":
+                target_budget = int(follow_up_budget or 0)
+                if target_budget <= 0:
+                    target_budget = int(_csi_specialist_followup_budget)
+                follow_up_budget_total = max(1, target_budget)
+                follow_up_budget_remaining = max(1, follow_up_budget_total)
+                closed_at = None
+                status_value = _csi_loop_status_from_state(
+                    confidence_score=confidence_score,
+                    confidence_target=confidence_target,
+                    follow_up_budget_remaining=follow_up_budget_remaining,
+                    suppressed_until=suppressed_until,
+                )
+            elif cleaned_action == "reopen":
+                closed_at = None
+                status_value = "open"
+                if follow_up_budget_remaining <= 0:
+                    follow_up_budget_remaining = max(1, follow_up_budget_total)
+            elif cleaned_action == "close":
+                status_value = "closed"
+                closed_at = now_iso
+                low_signal_streak = 0
+                suppressed_until = None
+
+            conn.execute(
+                """
+                UPDATE csi_specialist_loops
+                SET status = ?,
+                    follow_up_budget_total = ?,
+                    follow_up_budget_remaining = ?,
+                    low_signal_streak = ?,
+                    suppressed_until = ?,
+                    updated_at = ?,
+                    closed_at = ?
+                WHERE topic_key = ?
+                """,
+                (
+                    status_value,
+                    int(max(1, follow_up_budget_total)),
+                    int(max(0, follow_up_budget_remaining)),
+                    int(max(0, low_signal_streak)),
+                    suppressed_until,
+                    now_iso,
+                    closed_at,
+                    cleaned_topic_key,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    updated = _get_csi_specialist_loop(cleaned_topic_key)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Specialist loop not found")
+    _record_activity_audit(
+        event_id=_csi_loop_audit_event_id(cleaned_topic_key),
+        action=f"csi_loop_{cleaned_action}",
+        actor=actor,
+        outcome="ok",
+        note=note,
+        metadata={
+            "topic_key": cleaned_topic_key,
+            "status": updated.get("status"),
+            "follow_up_budget_remaining": updated.get("follow_up_budget_remaining"),
+        },
+    )
+    return updated
+
+
+async def _csi_operator_request_followup(
+    *,
+    topic_key: str,
+    actor: str,
+    note: Optional[str] = None,
+    trigger: str = "operator_manual",
+) -> dict[str, Any]:
+    cleaned_topic_key = str(topic_key or "").strip()
+    loop = _get_csi_specialist_loop(cleaned_topic_key)
+    if loop is None:
+        raise HTTPException(status_code=404, detail="Specialist loop not found")
+    if str(loop.get("status") or "").strip().lower() == "closed":
+        raise HTTPException(status_code=400, detail="Cannot request follow-up for a closed loop")
+    if int(loop.get("follow_up_budget_remaining") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Follow-up budget exhausted for this loop")
+
+    ok, reason = await _csi_dispatch_specialist_followup(loop=loop, trigger=trigger, note=note)
+    if not ok:
+        _record_activity_audit(
+            event_id=_csi_loop_audit_event_id(cleaned_topic_key),
+            action="csi_loop_request_followup",
+            actor=actor,
+            outcome="failed",
+            note=note,
+            metadata={
+                "topic_key": cleaned_topic_key,
+                "reason": reason,
+            },
+        )
+        return {"ok": False, "reason": reason, "loop": loop}
+
+    now_iso = _utc_now_iso()
+    with _csi_specialist_loop_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            row = conn.execute(
+                "SELECT * FROM csi_specialist_loops WHERE topic_key = ? LIMIT 1",
+                (cleaned_topic_key,),
+            ).fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Specialist loop not found")
+            remaining = max(0, int(row["follow_up_budget_remaining"] or 0) - 1)
+            confidence_score = float(row["confidence_score"] or 0.0)
+            confidence_target = float(row["confidence_target"] or _csi_specialist_confidence_target)
+            suppressed_until = str(row["suppressed_until"] or "") or None
+            status_value = _csi_loop_status_from_state(
+                confidence_score=confidence_score,
+                confidence_target=confidence_target,
+                follow_up_budget_remaining=remaining,
+                suppressed_until=suppressed_until,
+            )
+            closed_at = now_iso if status_value == "closed" else None
+            conn.execute(
+                """
+                UPDATE csi_specialist_loops
+                SET follow_up_budget_remaining = ?,
+                    status = ?,
+                    last_followup_requested_at = ?,
+                    updated_at = ?,
+                    closed_at = ?
+                WHERE topic_key = ?
+                """,
+                (
+                    remaining,
+                    status_value,
+                    now_iso,
+                    now_iso,
+                    closed_at,
+                    cleaned_topic_key,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    updated = _get_csi_specialist_loop(cleaned_topic_key)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Specialist loop not found")
+    _record_activity_audit(
+        event_id=_csi_loop_audit_event_id(cleaned_topic_key),
+        action="csi_loop_request_followup",
+        actor=actor,
+        outcome="ok",
+        note=note,
+        metadata={
+            "topic_key": cleaned_topic_key,
+            "trigger": trigger,
+            "follow_up_budget_remaining": updated.get("follow_up_budget_remaining"),
+        },
+    )
+    return {"ok": True, "reason": reason, "loop": updated}
 
 
 def _record_activity_audit(
@@ -9646,6 +9993,286 @@ async def dashboard_csi_opportunities(limit: int = 8):
 async def dashboard_csi_specialist_loops(limit: int = 50, status: Optional[str] = None):
     loops = _list_csi_specialist_loops(limit=limit, status_filter=status)
     return {"status": "ok", "loops": loops}
+
+
+@app.post("/api/v1/dashboard/csi/specialist-loops/{topic_key}/action")
+async def dashboard_csi_specialist_loop_action(
+    topic_key: str,
+    payload: CSISpecialistLoopActionRequest,
+    request: Request,
+):
+    action = str(payload.action or "").strip().lower()
+    if not action:
+        raise HTTPException(status_code=400, detail="action is required")
+    actor = _activity_actor_from_request(request)
+    note = str(payload.note or "").strip() or None
+
+    if action == "request_followup":
+        result = await _csi_operator_request_followup(
+            topic_key=topic_key,
+            actor=actor,
+            note=note,
+            trigger="operator_manual_action",
+        )
+        loop = result.get("loop") if isinstance(result.get("loop"), dict) else {}
+        if bool(result.get("ok")):
+            _add_notification(
+                kind="csi_specialist_followup_requested",
+                title="CSI Specialist Follow-up Requested",
+                message=f"Loop {loop.get('topic_label')} follow-up dispatch succeeded.",
+                severity="info",
+                requires_action=False,
+                metadata={
+                    "topic_key": loop.get("topic_key"),
+                    "confidence_score": loop.get("confidence_score"),
+                    "confidence_target": loop.get("confidence_target"),
+                    "confidence_method": loop.get("confidence_method"),
+                    "follow_up_budget_remaining": loop.get("follow_up_budget_remaining"),
+                    "trigger": "operator_manual_action",
+                },
+            )
+            return {"ok": True, "action": action, "loop": loop, "reason": result.get("reason")}
+        _add_notification(
+            kind="csi_specialist_followup_request_failed",
+            title="CSI Specialist Follow-up Request Failed",
+            message=f"Loop {loop.get('topic_label') or topic_key} follow-up dispatch failed: {result.get('reason')}",
+            severity="warning",
+            requires_action=True,
+            metadata={"topic_key": topic_key, "reason": result.get("reason"), "trigger": "operator_manual_action"},
+        )
+        raise HTTPException(status_code=502, detail=str(result.get("reason") or "follow-up dispatch failed"))
+
+    loop = _apply_csi_specialist_loop_action(
+        topic_key=topic_key,
+        action=action,
+        actor=actor,
+        note=note,
+        follow_up_budget=payload.follow_up_budget,
+    )
+    return {"ok": True, "action": action, "loop": loop}
+
+
+@app.post("/api/v1/dashboard/csi/specialist-loops/triage")
+async def dashboard_csi_specialist_loop_triage(payload: CSISpecialistLoopTriageRequest, request: Request):
+    max_items = max(1, min(int(payload.max_items or 50), 500))
+    apply_changes = bool(payload.apply)
+    request_followup = bool(payload.request_followup)
+    actor = _activity_actor_from_request(request)
+    note = str(payload.note or "").strip() or None
+
+    loops = _list_csi_specialist_loops(limit=max_items)
+    candidates: list[dict[str, Any]] = []
+    for loop in loops:
+        topic_key = str(loop.get("topic_key") or "").strip()
+        status_value = str(loop.get("status") or "").strip().lower()
+        confidence_score = float(loop.get("confidence_score") or 0.0)
+        confidence_target = float(loop.get("confidence_target") or _csi_specialist_confidence_target)
+        remaining = int(loop.get("follow_up_budget_remaining") or 0)
+        suppressed_until = str(loop.get("suppressed_until") or "").strip()
+        suppressed_expired = False
+        if suppressed_until:
+            suppressed_dt = _parse_iso_timestamp(suppressed_until)
+            if suppressed_dt is not None:
+                if suppressed_dt.tzinfo is None:
+                    suppressed_dt = suppressed_dt.replace(tzinfo=timezone.utc)
+                suppressed_expired = suppressed_dt.timestamp() <= time.time()
+            else:
+                suppressed_expired = True
+
+        recommendation = ""
+        reason = ""
+        if status_value == "suppressed_low_signal" and suppressed_expired:
+            recommendation = "unsuppress"
+            reason = "suppression window expired"
+        elif status_value == "budget_exhausted" and confidence_score < confidence_target:
+            recommendation = "reset_budget"
+            reason = "budget exhausted before target confidence"
+        elif status_value == "open" and remaining <= 0 and confidence_score < confidence_target:
+            recommendation = "reset_budget"
+            reason = "open loop has zero budget"
+
+        if not recommendation:
+            continue
+        candidates.append(
+            {
+                "topic_key": topic_key,
+                "topic_label": loop.get("topic_label"),
+                "before_status": status_value or "open",
+                "recommendation": recommendation,
+                "reason": reason,
+            }
+        )
+
+    applied: list[dict[str, Any]] = []
+    followups: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for item in candidates:
+        topic_key = str(item.get("topic_key") or "")
+        recommendation = str(item.get("recommendation") or "")
+        try:
+            if apply_changes:
+                loop = _apply_csi_specialist_loop_action(
+                    topic_key=topic_key,
+                    action=recommendation,
+                    actor=actor,
+                    note=note or f"triage:{item.get('reason')}",
+                )
+            else:
+                loop = _get_csi_specialist_loop(topic_key) or {}
+            applied.append(
+                {
+                    **item,
+                    "applied": apply_changes,
+                    "after_status": str(loop.get("status") or item.get("before_status") or "open"),
+                    "follow_up_budget_remaining": int(loop.get("follow_up_budget_remaining") or 0),
+                }
+            )
+            can_follow = (
+                apply_changes
+                and request_followup
+                and str(loop.get("status") or "").strip().lower() == "open"
+                and int(loop.get("follow_up_budget_remaining") or 0) > 0
+            )
+            if can_follow:
+                follow = await _csi_operator_request_followup(
+                    topic_key=topic_key,
+                    actor=actor,
+                    note=note or f"triage-followup:{item.get('reason')}",
+                    trigger="operator_triage",
+                )
+                followups.append(
+                    {
+                        "topic_key": topic_key,
+                        "ok": bool(follow.get("ok")),
+                        "reason": str(follow.get("reason") or ""),
+                        "status": str((follow.get("loop") or {}).get("status") or loop.get("status") or "open"),
+                    }
+                )
+        except Exception as exc:
+            errors.append({"topic_key": topic_key, "error": str(exc)})
+
+    if apply_changes:
+        _add_notification(
+            kind="csi_specialist_triage_run",
+            title="CSI Specialist Triage Completed",
+            message=(
+                f"Triage reviewed {len(loops)} loops. "
+                f"Applied {len(applied)} remediation action(s), "
+                f"{len(followups)} follow-up dispatch(es), "
+                f"{len(errors)} error(s)."
+            ),
+            severity="info" if not errors else "warning",
+            requires_action=bool(errors),
+            metadata={
+                "total_loops_reviewed": len(loops),
+                "candidates": len(candidates),
+                "actions_applied": len(applied),
+                "followups_requested": len(followups),
+                "errors": errors[:10],
+                "request_followup": request_followup,
+            },
+        )
+
+    return {
+        "status": "ok",
+        "apply": apply_changes,
+        "total_loops_reviewed": len(loops),
+        "candidates": candidates,
+        "applied": applied,
+        "followups": followups,
+        "errors": errors,
+    }
+
+
+@app.post("/api/v1/dashboard/csi/specialist-loops/cleanup")
+async def dashboard_csi_specialist_loop_cleanup(payload: CSISpecialistLoopCleanupRequest, request: Request):
+    apply_changes = bool(payload.apply)
+    max_items = max(1, min(int(payload.max_items or 200), 1000))
+    older_than_days = max(1, min(int(payload.older_than_days or 7), 365))
+    actor = _activity_actor_from_request(request)
+    note = str(payload.note or "").strip() or None
+
+    loops = _list_csi_specialist_loops(limit=max_items)
+    now_ts = time.time()
+    cutoff_ts = now_ts - (older_than_days * 86400)
+    candidates: list[dict[str, Any]] = []
+    for loop in loops:
+        status_value = str(loop.get("status") or "").strip().lower()
+        if status_value not in {"closed", "budget_exhausted"}:
+            continue
+        updated_at = _parse_iso_timestamp(loop.get("updated_at"))
+        if updated_at is None:
+            continue
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        if updated_at.timestamp() > cutoff_ts:
+            continue
+        candidates.append(
+            {
+                "topic_key": str(loop.get("topic_key") or ""),
+                "topic_label": str(loop.get("topic_label") or ""),
+                "status": status_value,
+                "updated_at": str(loop.get("updated_at") or ""),
+            }
+        )
+
+    deleted_keys: list[str] = []
+    errors: list[dict[str, Any]] = []
+    if apply_changes and candidates:
+        with _csi_specialist_loop_lock:
+            conn = _activity_connect()
+            try:
+                _ensure_activity_schema(conn)
+                for item in candidates:
+                    topic_key = str(item.get("topic_key") or "").strip()
+                    if not topic_key:
+                        continue
+                    try:
+                        conn.execute(
+                            "DELETE FROM csi_specialist_loops WHERE topic_key = ?",
+                            (topic_key,),
+                        )
+                        deleted_keys.append(topic_key)
+                        _record_activity_audit(
+                            event_id=_csi_loop_audit_event_id(topic_key),
+                            action="csi_loop_cleanup_delete",
+                            actor=actor,
+                            outcome="ok",
+                            note=note,
+                            metadata={"topic_key": topic_key, "older_than_days": older_than_days},
+                        )
+                    except Exception as exc:
+                        errors.append({"topic_key": topic_key, "error": str(exc)})
+                conn.commit()
+            finally:
+                conn.close()
+
+    if apply_changes:
+        _add_notification(
+            kind="csi_specialist_cleanup_run",
+            title="CSI Specialist Loop Cleanup Completed",
+            message=(
+                f"Loop cleanup identified {len(candidates)} stale loop(s) "
+                f"older than {older_than_days} day(s); deleted {len(deleted_keys)}."
+            ),
+            severity="info" if not errors else "warning",
+            requires_action=bool(errors),
+            metadata={
+                "older_than_days": older_than_days,
+                "candidates": len(candidates),
+                "deleted": len(deleted_keys),
+                "errors": errors[:10],
+            },
+        )
+
+    return {
+        "status": "ok",
+        "apply": apply_changes,
+        "older_than_days": older_than_days,
+        "candidates": candidates,
+        "deleted": deleted_keys,
+        "errors": errors,
+    }
 
 
 @app.get("/api/v1/dashboard/todolist/pipeline")

@@ -191,6 +191,60 @@ def _create_dummy_session(base_dir: Path, session_id: str, logs: list[str]):
     return session_dir
 
 
+def _insert_specialist_loop(
+    *,
+    topic_key: str,
+    topic_label: str,
+    status: str,
+    confidence_score: float,
+    confidence_target: float = 0.72,
+    follow_up_budget_total: int = 3,
+    follow_up_budget_remaining: int = 3,
+    updated_at: str,
+    suppressed_until: str | None = None,
+):
+    conn = gateway_server._activity_connect()
+    try:
+        gateway_server._ensure_activity_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO csi_specialist_loops (
+                topic_key, topic_label, status, confidence_target, confidence_score,
+                follow_up_budget_total, follow_up_budget_remaining, events_count, source_mix_json,
+                confidence_method, evidence_json,
+                last_event_type, last_event_id, last_event_at, last_followup_requested_at,
+                low_signal_streak, suppressed_until,
+                created_at, updated_at, closed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                topic_key,
+                topic_label,
+                status,
+                confidence_target,
+                confidence_score,
+                follow_up_budget_total,
+                follow_up_budget_remaining,
+                3,
+                json.dumps({"rss": 2}),
+                "heuristic",
+                json.dumps({"signal_volume": 12, "freshness_minutes": 30}),
+                "rss_trend_report",
+                f"evt-{topic_key}",
+                updated_at,
+                None,
+                0,
+                suppressed_until,
+                updated_at,
+                updated_at,
+                updated_at if status == "closed" else None,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def test_gateway_lifespan_runs_stale_reconcile_on_startup(tmp_path, monkeypatch):
     monkeypatch.setattr(gateway_server, "WORKSPACES_DIR", tmp_path)
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str((tmp_path / "runtime_state.db").resolve()))
@@ -1165,6 +1219,120 @@ def test_dashboard_csi_opportunities_fallbacks_to_events(client, tmp_path, monke
     assert payload.get("source") == "events_fallback"
     latest = payload.get("latest") or {}
     assert str(latest.get("bundle_id") or "") == "bundle:fallback:1"
+
+
+def test_dashboard_csi_specialist_loop_action_unsuppress_and_followup(client, monkeypatch):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    _insert_specialist_loop(
+        topic_key="rss:loop:1",
+        topic_label="rss :: loop 1",
+        status="suppressed_low_signal",
+        confidence_score=0.63,
+        follow_up_budget_remaining=2,
+        updated_at=now_iso,
+        suppressed_until=(datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+    )
+
+    unsuppress = client.post(
+        "/api/v1/dashboard/csi/specialist-loops/rss%3Aloop%3A1/action",
+        json={"action": "unsuppress"},
+    )
+    assert unsuppress.status_code == 200
+    unsuppress_payload = unsuppress.json()
+    assert unsuppress_payload["ok"] is True
+    assert str((unsuppress_payload.get("loop") or {}).get("status") or "") == "open"
+    assert (unsuppress_payload.get("loop") or {}).get("suppressed_until") in (None, "")
+
+    class _FakeHooks:
+        async def dispatch_internal_action(self, _payload):
+            return True, "dispatched"
+
+    monkeypatch.setattr(gateway_server, "_hooks_service", _FakeHooks())
+    followup = client.post(
+        "/api/v1/dashboard/csi/specialist-loops/rss%3Aloop%3A1/action",
+        json={"action": "request_followup"},
+    )
+    assert followup.status_code == 200
+    followup_payload = followup.json()
+    loop = followup_payload.get("loop") or {}
+    assert followup_payload["ok"] is True
+    assert str(followup_payload.get("action") or "") == "request_followup"
+    assert int(loop.get("follow_up_budget_remaining") or 0) == 1
+
+
+def test_dashboard_csi_specialist_loop_triage_applies_remediation(client):
+    now = datetime.now(timezone.utc)
+    _insert_specialist_loop(
+        topic_key="rss:triage:suppressed",
+        topic_label="rss :: suppressed",
+        status="suppressed_low_signal",
+        confidence_score=0.61,
+        follow_up_budget_remaining=2,
+        updated_at=now.isoformat(),
+        suppressed_until=(now - timedelta(minutes=5)).isoformat(),
+    )
+    _insert_specialist_loop(
+        topic_key="reddit:triage:budget",
+        topic_label="reddit :: budget",
+        status="budget_exhausted",
+        confidence_score=0.58,
+        follow_up_budget_remaining=0,
+        updated_at=now.isoformat(),
+    )
+
+    triage = client.post(
+        "/api/v1/dashboard/csi/specialist-loops/triage",
+        json={"apply": True, "max_items": 20, "request_followup": False},
+    )
+    assert triage.status_code == 200
+    payload = triage.json()
+    applied = payload.get("applied") or []
+    assert payload.get("status") == "ok"
+    assert payload.get("apply") is True
+    assert len(applied) >= 2
+    applied_by_key = {str(item.get("topic_key") or ""): item for item in applied}
+    assert str((applied_by_key.get("rss:triage:suppressed") or {}).get("after_status") or "") == "open"
+    assert str((applied_by_key.get("reddit:triage:budget") or {}).get("after_status") or "") == "open"
+
+
+def test_dashboard_csi_specialist_loop_cleanup_deletes_stale_closed(client):
+    now = datetime.now(timezone.utc)
+    stale_closed = (now - timedelta(days=10)).isoformat()
+    stale_open = (now - timedelta(days=10)).isoformat()
+    _insert_specialist_loop(
+        topic_key="rss:cleanup:closed",
+        topic_label="rss :: closed",
+        status="closed",
+        confidence_score=0.83,
+        follow_up_budget_remaining=0,
+        updated_at=stale_closed,
+    )
+    _insert_specialist_loop(
+        topic_key="rss:cleanup:open",
+        topic_label="rss :: open",
+        status="open",
+        confidence_score=0.52,
+        follow_up_budget_remaining=2,
+        updated_at=stale_open,
+    )
+
+    cleanup = client.post(
+        "/api/v1/dashboard/csi/specialist-loops/cleanup",
+        json={"apply": True, "older_than_days": 7, "max_items": 50},
+    )
+    assert cleanup.status_code == 200
+    payload = cleanup.json()
+    deleted = payload.get("deleted") or []
+    assert payload.get("status") == "ok"
+    assert "rss:cleanup:closed" in deleted
+    assert "rss:cleanup:open" not in deleted
+
+    loops_resp = client.get("/api/v1/dashboard/csi/specialist-loops?limit=50")
+    assert loops_resp.status_code == 200
+    loops = loops_resp.json().get("loops") or []
+    keys = {str(item.get("topic_key") or "") for item in loops}
+    assert "rss:cleanup:closed" not in keys
+    assert "rss:cleanup:open" in keys
 
 
 def test_dashboard_csi_reports_quality_gate_suppresses_near_duplicate_emerging(client, tmp_path, monkeypatch):
