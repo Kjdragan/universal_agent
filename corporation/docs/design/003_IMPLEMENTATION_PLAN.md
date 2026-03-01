@@ -36,21 +36,34 @@ Moving off legacy hardcoded secrets and laying the groundwork for safe distribut
 - [x] **Security Constraints:** Utilize zero-trust short-lived Ops Tokens and sandbox execution directories.
 - [ ] **Implement Capability Parameterization:** Inject `.env` flags (`FACTORY_ROLE`, `ENABLE_VP_CODER`, `LLM_PROVIDER`) throughout the python services so that agents can dynamically generate valid `capabilities.md` profiles.
 
-### Phase 3: Message Bus & Stateless Delegation (Next)
+### Phase 3: Message Bus & Stateless Delegation (In Progress)
 
 The structural shift to uncouple headquarters from direct endpoint communication with workers.
 
-- [ ] **Deploy Redis Infrastructure:** Run a Redis instance (via Docker) on the Hostinger VPS to act as the corporate Message Bus.
+- [x] **Deploy Redis Infrastructure:** Run a Redis instance (via Docker) on the Hostinger VPS to act as the corporate Message Bus.
 - [ ] **Implement Stream Consumers:** Replace point-to-point ad-hoc polling scripts (e.g., the current tutorial worker) with generalized Universal Agent Stream Consumer tasks.
 - [ ] **Stateless Delegation Payloads:** Standardize the JSON schema for mission briefs. HQ publishes a Mission; a Local Factory pulls it, routes it to its active VP Agents, and publishes back the completed result.
 
-### Phase 4: Corporation Observability UX (Future)
+### Phase 4: Corporation Observability UX (In Progress)
 
 Providing the CEO (User) a single pane of glass over the entire fleet.
 
-- [ ] **The "Corporation View" Dashboard:** A new tab in the Next.js UI visible exclusively when `FACTORY_ROLE=HEADQUARTERS`.
-- [ ] **Real-Time Fleet Status:** Display all connected factories, their heartbeat latency, and active `.env` capabilities.
+- [x] **The "Corporation View" Dashboard:** A new tab in the Next.js UI visible exclusively when `FACTORY_ROLE=HEADQUARTERS`.
+- [x] **Real-Time Fleet Status:** Display all connected factories, their heartbeat latency, and active `.env` capabilities.
 - [ ] **Cost Analytics:** Aggregate ZAI API telemetry across all participating factories to monitor burn rate and execution efficiency.
+
+## 5. Acceptance Checklist Snapshot (2026-03-01)
+
+- [x] **Gateway role/auth surface tests pass:** `uv run pytest tests/gateway/test_ops_auth_role_surface.py -q` => `5 passed`.
+- [x] **Fleet endpoint and Redis dispatch tests pass:** `uv run pytest tests/gateway/test_ops_api.py -k "factory_capabilities_and_registration_endpoints or local_redis_dispatch" -q` => `2 passed`.
+- [x] **Dashboard build includes Corporation View route:** `cd web-ui && npm run build` includes `/dashboard/corporation`.
+- [x] **Live VPS Redis delegation loop validated:**
+  - enqueue via `POST /api/v1/dashboard/tutorials/bootstrap-repo` with `dispatch_backend=redis_stream`
+  - consume via `scripts/tutorial_local_bootstrap_worker.py --transport redis --once`
+  - final state observed: `completed` with `repo_dir` and `repo_open_uri`
+- [x] **Live HQ fleet endpoints validated on VPS (authenticated):**
+  - `GET /api/v1/factory/capabilities`
+  - `GET /api/v1/factory/registrations`
 
 ### Phase 5: Organizational Memory Sync (Future)
 

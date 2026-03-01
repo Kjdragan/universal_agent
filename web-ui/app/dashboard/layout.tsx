@@ -6,9 +6,10 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import SystemCommandBar from "@/components/dashboard/SystemCommandBar";
 
-const NAV_ITEMS: { href: string; label: string; external?: boolean; primary?: boolean }[] = [
+const NAV_ITEMS: { href: string; label: string; external?: boolean; primary?: boolean; requiresHeadquarters?: boolean }[] = [
   { href: "/", label: "← Back to Main App", primary: true },
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/dashboard/corporation", label: "Corporation View", requiresHeadquarters: true },
   { href: "/dashboard/chat", label: "Chat Launch" },
   { href: "/dashboard/sessions", label: "Sessions" },
   { href: "/dashboard/skills", label: "Skills" },
@@ -33,6 +34,13 @@ type DashboardAuthSession = {
   expires_at?: number | null;
 };
 
+type FactoryCapabilitiesResponse = {
+  factory?: {
+    factory_role?: string;
+    gateway_mode?: string;
+  };
+};
+
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [session, setSession] = useState<DashboardAuthSession | null>(null);
@@ -41,6 +49,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [password, setPassword] = useState("");
   const [ownerId, setOwnerId] = useState("owner_primary");
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [showCorporationNav, setShowCorporationNav] = useState(false);
 
   const loadAuthSession = useCallback(async () => {
     setLoadingAuth(true);
@@ -53,9 +62,28 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       }
       setSession(data);
       setOwnerId((prev) => prev || data.owner_id || "owner_primary");
+
+      if (data.authenticated) {
+        try {
+          const capsRes = await fetch("/api/dashboard/gateway/api/v1/factory/capabilities", { cache: "no-store" });
+          if (!capsRes.ok) {
+            setShowCorporationNav(false);
+          } else {
+            const capsData = (await capsRes.json()) as FactoryCapabilitiesResponse;
+            const role = String(capsData?.factory?.factory_role || "").trim().toUpperCase();
+            const gatewayMode = String(capsData?.factory?.gateway_mode || "").trim().toLowerCase();
+            setShowCorporationNav(role === "HEADQUARTERS" && gatewayMode === "full");
+          }
+        } catch {
+          setShowCorporationNav(false);
+        }
+      } else {
+        setShowCorporationNav(false);
+      }
     } catch (error) {
       setSession(null);
       setAuthError((error as Error).message);
+      setShowCorporationNav(false);
     } finally {
       setLoadingAuth(false);
     }
@@ -191,7 +219,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           ].join(" ")}
         >
           <nav className="flex-1 space-y-1 overflow-y-auto">
-            {NAV_ITEMS.map((item) => {
+            {NAV_ITEMS.filter((item) => !item.requiresHeadquarters || showCorporationNav).map((item) => {
               const active = !item.external && pathname === item.href;
               if (item.external) {
                 return (
