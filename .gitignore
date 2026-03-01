@@ -107,3 +107,4 @@ scraping/runs/*/
 *.html.md
 urls.json
 run_report.json
+latest_export.md
