@@ -4,9 +4,10 @@ Last updated: 2026-03-01
 
 ## Existing Event Output
 - `report_product_ready`
+- `opportunity_bundle_ready` (implemented)
 
 ## New Event Output (Planned)
-- `opportunity_bundle_ready`
+- `delivery_health_snapshot` (deferred)
 
 ## Opportunity Bundle Schema (Target)
 ```json
@@ -40,6 +41,5 @@ Last updated: 2026-03-01
 
 ## Dashboard API Targets
 - Extend `/api/v1/dashboard/csi/reports`
-- Add `/api/v1/dashboard/csi/opportunities`
+- Add `/api/v1/dashboard/csi/opportunities` (implemented)
 - Add `/api/v1/dashboard/csi/delivery-health`
-

@@ -3243,6 +3243,7 @@ def _csi_is_high_value_event(event_type: str) -> bool:
         "rss_insight_emerging",
         "rss_insight_daily",
         "report_product_ready",
+        "opportunity_bundle_ready",
     }
 
 
@@ -3272,7 +3273,13 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
     requires_action = bool(has_anomaly or high_value)
     todoist_sync = bool(
         has_anomaly
-        or event_type in {"rss_insight_daily", "report_product_ready", "rss_trend_report", "reddit_trend_report"}
+        or event_type in {
+            "rss_insight_daily",
+            "report_product_ready",
+            "opportunity_bundle_ready",
+            "rss_trend_report",
+            "reddit_trend_report",
+        }
     )
     return {
         "event_type": event_type,
@@ -3320,6 +3327,8 @@ def _csi_specialist_topic_key(event: Any) -> tuple[str, str]:
 
 def _csi_confidence_baseline(event_type: str) -> float:
     lowered = str(event_type or "").strip().lower()
+    if lowered == "opportunity_bundle_ready":
+        return 0.88
     if lowered == "report_product_ready":
         return 0.82
     if lowered == "rss_insight_daily":
@@ -5698,6 +5707,7 @@ def _activity_digest_should_compact(
         "rss_insight_daily",
         "rss_insight_emerging",
         "report_product_ready",
+        "opportunity_bundle_ready",
     }:
         return False
     return True
@@ -8659,6 +8669,28 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                 "insight_reports": int(report_data.get("insight_report_count") or 0),
                 "trend_report": 1 if bool(report_data.get("has_trend_report")) else 0,
             }
+        if lowered == "opportunity_bundle":
+            mix = report_data.get("source_mix")
+            if isinstance(mix, dict):
+                return {str(k): int(v or 0) for k, v in mix.items()}
+            opportunities = report_data.get("opportunities")
+            if isinstance(opportunities, list):
+                aggregated: dict[str, int] = {}
+                for item in opportunities:
+                    if not isinstance(item, dict):
+                        continue
+                    item_mix = item.get("source_mix")
+                    if not isinstance(item_mix, dict):
+                        continue
+                    for key, value in item_mix.items():
+                        name = str(key or "").strip() or "unknown"
+                        aggregated[name] = int(aggregated.get(name) or 0) + int(value or 0)
+                if aggregated:
+                    return aggregated
+            quality = report_data.get("quality_summary")
+            if isinstance(quality, dict):
+                return {"signal_volume": int(quality.get("signal_volume") or 0)}
+            return {"opportunities": int(len(report_data.get("opportunities") or []))}
         return {"items": total_items}
 
     def _theme_set(report_data: dict[str, Any]) -> set[str]:
@@ -8677,6 +8709,8 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
 
     def _report_class(report_type: str) -> str:
         lowered = report_type.lower()
+        if "opportunity" in lowered:
+            return "opportunity"
         if "daily" in lowered:
             return "daily"
         if "emerging" in lowered:
@@ -8867,7 +8901,7 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     """
                     SELECT event_id, occurred_at, subject_json
                     FROM events
-                    WHERE event_type = 'report_product_ready'
+                    WHERE event_type IN ('report_product_ready', 'opportunity_bundle_ready')
                     ORDER BY occurred_at DESC
                     LIMIT ?
                     """,
@@ -8877,13 +8911,33 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     if not isinstance(subject, dict):
                         subject = {}
                     artifact_paths = subject.get("artifact_paths") if isinstance(subject.get("artifact_paths"), dict) else {}
-                    markdown = (
-                        "## CSI Report Product\n\n"
-                        f"- generated_at_utc: `{subject.get('generated_at_utc')}`\n"
-                        f"- window_hours: `{subject.get('window_hours')}`\n"
-                        f"- has_trend_report: `{subject.get('has_trend_report')}`\n"
-                        f"- insight_report_count: `{subject.get('insight_report_count')}`\n"
-                    )
+                    report_type_value = str(subject.get("report_type") or "hourly_report_product")
+                    if report_type_value == "opportunity_bundle":
+                        quality_summary = subject.get("quality_summary") if isinstance(subject.get("quality_summary"), dict) else {}
+                        opportunities = subject.get("opportunities") if isinstance(subject.get("opportunities"), list) else []
+                        markdown = (
+                            "## CSI Opportunity Bundle\n\n"
+                            f"- generated_at_utc: `{subject.get('generated_at_utc')}`\n"
+                            f"- window_hours: `{subject.get('window_hours')}`\n"
+                            f"- confidence_method: `{subject.get('confidence_method')}`\n"
+                            f"- opportunities: `{len(opportunities)}`\n"
+                            f"- quality_summary: `{json.dumps(quality_summary, ensure_ascii=False)}`\n"
+                        )
+                        if opportunities:
+                            markdown += "\n### Top Opportunities\n"
+                            for item in opportunities[:5]:
+                                title = str(item.get("title") or "").strip() or "Untitled opportunity"
+                                confidence = item.get("confidence_score")
+                                novelty = item.get("novelty_score")
+                                markdown += f"- {title} (confidence={confidence}, novelty={novelty})\n"
+                    else:
+                        markdown = (
+                            "## CSI Report Product\n\n"
+                            f"- generated_at_utc: `{subject.get('generated_at_utc')}`\n"
+                            f"- window_hours: `{subject.get('window_hours')}`\n"
+                            f"- has_trend_report: `{subject.get('has_trend_report')}`\n"
+                            f"- insight_report_count: `{subject.get('insight_report_count')}`\n"
+                        )
                     if artifact_paths:
                         markdown += (
                             "\n### Artifacts\n"
@@ -8893,24 +8947,29 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     reports.append(
                         {
                             "id": f"evt:{row['event_id']}",
-                            "report_type": str(subject.get("report_type") or "hourly_report_product"),
-                            "report_class": "product",
+                            "report_type": report_type_value,
+                            "report_class": _report_class(report_type_value),
                             "window_hours": float(subject.get("window_hours") or 0),
                             "source_mix": _source_mix_for_report(
-                                str(subject.get("report_type") or "hourly_report_product"),
+                                report_type_value,
                                 subject,
                             ),
                             "report_data": {
                                 "markdown_content": markdown,
                                 "artifact_paths": artifact_paths,
                                 "subject": subject,
+                                "report_key": str(subject.get("report_key") or ""),
                             },
                             "usage": None,
                             "created_at": _normalize_notification_timestamp(row["occurred_at"]),
                             "window_start_utc": None,
                             "window_end_utc": None,
                             "model_name": None,
-                            "metadata": {"event_id": row["event_id"]},
+                            "metadata": {
+                                "event_id": row["event_id"],
+                                "report_key": str(subject.get("report_key") or ""),
+                                "bundle_id": str(subject.get("bundle_id") or ""),
+                            },
                         }
                     )
 
@@ -9068,6 +9127,7 @@ async def dashboard_csi_health():
             "reddit_trend_report": 180,
             "rss_insight_emerging": 180,
             "report_product_ready": 180,
+            "opportunity_bundle_ready": 180,
             "hourly_token_usage_report": 180,
             "category_quality_report": 240,
             "analysis_task_completed": 480,
@@ -9178,6 +9238,141 @@ async def dashboard_csi_health():
         }
     except Exception as exc:
         return {"status": "error", "detail": f"Failed loading CSI health: {exc}"}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+@app.get("/api/v1/dashboard/csi/opportunities")
+async def dashboard_csi_opportunities(limit: int = 8):
+    clamped_limit = max(1, min(int(limit), 50))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    if not db_path.exists():
+        return {"status": "unavailable", "detail": f"CSI database not found at {db_path}", "bundles": [], "latest": None}
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        bundles: list[dict[str, Any]] = []
+        table_row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='opportunity_bundles'"
+        ).fetchone()
+        if table_row is not None:
+            rows = conn.execute(
+                """
+                SELECT
+                    bundle_id,
+                    report_key,
+                    window_start_utc,
+                    window_end_utc,
+                    confidence_method,
+                    quality_summary_json,
+                    opportunities_json,
+                    artifact_markdown_path,
+                    artifact_json_path,
+                    created_at
+                FROM opportunity_bundles
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (clamped_limit,),
+            ).fetchall()
+            for row in rows:
+                try:
+                    quality_summary = json.loads(str(row["quality_summary_json"] or "{}"))
+                    if not isinstance(quality_summary, dict):
+                        quality_summary = {}
+                except Exception:
+                    quality_summary = {}
+                try:
+                    opportunities = json.loads(str(row["opportunities_json"] or "[]"))
+                    if not isinstance(opportunities, list):
+                        opportunities = []
+                except Exception:
+                    opportunities = []
+                source_mix: dict[str, int] = {}
+                for item in opportunities:
+                    if not isinstance(item, dict):
+                        continue
+                    mix = item.get("source_mix")
+                    if not isinstance(mix, dict):
+                        continue
+                    for key, value in mix.items():
+                        k = str(key or "").strip() or "unknown"
+                        source_mix[k] = int(source_mix.get(k) or 0) + int(value or 0)
+                bundles.append(
+                    {
+                        "bundle_id": str(row["bundle_id"] or ""),
+                        "report_key": str(row["report_key"] or ""),
+                        "window_start_utc": str(row["window_start_utc"] or ""),
+                        "window_end_utc": str(row["window_end_utc"] or ""),
+                        "confidence_method": str(row["confidence_method"] or "heuristic"),
+                        "quality_summary": quality_summary,
+                        "opportunities": [item for item in opportunities if isinstance(item, dict)],
+                        "source_mix": source_mix,
+                        "artifact_paths": {
+                            "markdown": str(row["artifact_markdown_path"] or ""),
+                            "json": str(row["artifact_json_path"] or ""),
+                        },
+                        "created_at": _normalize_notification_timestamp(row["created_at"]),
+                    }
+                )
+            return {
+                "status": "ok",
+                "source": "csi_db",
+                "bundles": bundles,
+                "latest": bundles[0] if bundles else None,
+            }
+
+        rows = conn.execute(
+            """
+            SELECT event_id, occurred_at, subject_json
+            FROM events
+            WHERE event_type = 'opportunity_bundle_ready'
+            ORDER BY occurred_at DESC
+            LIMIT ?
+            """,
+            (clamped_limit,),
+        ).fetchall()
+        for row in rows:
+            subject = _activity_json_loads_obj(row["subject_json"], default={})
+            if not isinstance(subject, dict):
+                subject = {}
+            opportunities = subject.get("opportunities")
+            if not isinstance(opportunities, list):
+                opportunities = []
+            source_mix: dict[str, int] = {}
+            for item in opportunities:
+                if not isinstance(item, dict):
+                    continue
+                mix = item.get("source_mix")
+                if not isinstance(mix, dict):
+                    continue
+                for key, value in mix.items():
+                    k = str(key or "").strip() or "unknown"
+                    source_mix[k] = int(source_mix.get(k) or 0) + int(value or 0)
+            bundles.append(
+                {
+                    "bundle_id": str(subject.get("bundle_id") or row["event_id"] or ""),
+                    "report_key": str(subject.get("report_key") or ""),
+                    "window_start_utc": str(subject.get("window_start_utc") or ""),
+                    "window_end_utc": str(subject.get("window_end_utc") or ""),
+                    "confidence_method": str(subject.get("confidence_method") or "heuristic"),
+                    "quality_summary": subject.get("quality_summary") if isinstance(subject.get("quality_summary"), dict) else {},
+                    "opportunities": [item for item in opportunities if isinstance(item, dict)],
+                    "source_mix": source_mix,
+                    "artifact_paths": subject.get("artifact_paths") if isinstance(subject.get("artifact_paths"), dict) else {},
+                    "created_at": _normalize_notification_timestamp(row["occurred_at"]),
+                }
+            )
+        return {
+            "status": "ok",
+            "source": "events_fallback",
+            "bundles": bundles,
+            "latest": bundles[0] if bundles else None,
+        }
+    except Exception as exc:
+        return {"status": "error", "detail": f"Failed loading CSI opportunities: {exc}", "bundles": [], "latest": None}
     finally:
         if conn is not None:
             conn.close()

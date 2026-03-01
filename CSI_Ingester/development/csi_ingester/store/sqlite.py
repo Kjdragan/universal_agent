@@ -181,6 +181,24 @@ CREATE INDEX IF NOT EXISTS idx_delivery_attempts_target ON delivery_attempts(tar
 CREATE INDEX IF NOT EXISTS idx_delivery_attempts_status ON delivery_attempts(delivered, status_code, attempted_at DESC);
 """
 
+MIGRATION_0007_OPPORTUNITY_BUNDLES = """
+CREATE TABLE IF NOT EXISTS opportunity_bundles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bundle_id TEXT UNIQUE NOT NULL,
+    report_key TEXT,
+    window_start_utc TEXT NOT NULL,
+    window_end_utc TEXT NOT NULL,
+    confidence_method TEXT NOT NULL DEFAULT 'heuristic',
+    quality_summary_json TEXT NOT NULL DEFAULT '{}',
+    opportunities_json TEXT NOT NULL DEFAULT '[]',
+    artifact_markdown_path TEXT,
+    artifact_json_path TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_opportunity_bundles_created_at ON opportunity_bundles(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_opportunity_bundles_window ON opportunity_bundles(window_end_utc DESC);
+"""
+
 MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0001_core", MIGRATION_0001_CORE),
     ("0002_source_state", MIGRATION_0002_SOURCE_STATE),
@@ -188,6 +206,7 @@ MIGRATIONS: tuple[tuple[str, str], ...] = (
     ("0004_rss_analysis", MIGRATION_0004_RSS_ANALYSIS),
     ("0005_analyst", MIGRATION_0005_ANALYST),
     ("0006_delivery_attempts", MIGRATION_0006_DELIVERY_ATTEMPTS),
+    ("0007_opportunity_bundles", MIGRATION_0007_OPPORTUNITY_BUNDLES),
 )
 
 

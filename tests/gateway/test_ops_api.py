@@ -993,6 +993,179 @@ def test_dashboard_csi_health_includes_overnight_and_source_health(client, tmp_p
     assert isinstance(payload.get("delivery_targets"), list)
 
 
+def test_dashboard_csi_reports_includes_opportunity_bundle_events(client, tmp_path, monkeypatch):
+    db_path = tmp_path / "csi_opportunity_reports.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT,
+                event_type TEXT,
+                occurred_at TEXT,
+                subject_json TEXT
+            )
+            """
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        subject = {
+            "report_type": "opportunity_bundle",
+            "report_key": "opportunity_bundle:test:2026030101",
+            "bundle_id": "bundle:test:2026030101",
+            "generated_at_utc": now,
+            "window_hours": 24,
+            "confidence_method": "heuristic",
+            "quality_summary": {"signal_volume": 17, "coverage_score": 0.83},
+            "opportunities": [
+                {
+                    "opportunity_id": "agentic-ai-01",
+                    "title": "Momentum theme: Agentic AI",
+                    "source_mix": {"youtube_channel_rss": 9, "reddit_discovery": 4},
+                    "confidence_score": 0.86,
+                    "novelty_score": 0.73,
+                }
+            ],
+            "artifact_paths": {
+                "markdown": "/opt/universal_agent/artifacts/csi-reports/2026-03-01/opportunities/hourly_2026030101_bundle.md",
+                "json": "/opt/universal_agent/artifacts/csi-reports/2026-03-01/opportunities/hourly_2026030101_bundle.json",
+            },
+        }
+        conn.execute(
+            "INSERT INTO events (event_id, event_type, occurred_at, subject_json) VALUES (?, ?, ?, ?)",
+            ("evt-opportunity-1", "opportunity_bundle_ready", now, json.dumps(subject)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    resp = client.get("/api/v1/dashboard/csi/reports?limit=10")
+    assert resp.status_code == 200
+    payload = resp.json()
+    reports = payload.get("reports") or []
+    bundle_report = next((item for item in reports if str(item.get("report_type") or "") == "opportunity_bundle"), None)
+    assert bundle_report is not None
+    assert str(bundle_report.get("report_class") or "") == "opportunity"
+    assert "Opportunity Bundle" in str((bundle_report.get("report_data") or {}).get("markdown_content") or "")
+    mix = bundle_report.get("source_mix") if isinstance(bundle_report.get("source_mix"), dict) else {}
+    assert int(mix.get("youtube_channel_rss") or 0) >= 1
+
+
+def test_dashboard_csi_opportunities_reads_bundle_table(client, tmp_path, monkeypatch):
+    db_path = tmp_path / "csi_opportunity_bundles.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE opportunity_bundles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bundle_id TEXT UNIQUE NOT NULL,
+                report_key TEXT,
+                window_start_utc TEXT NOT NULL,
+                window_end_utc TEXT NOT NULL,
+                confidence_method TEXT NOT NULL DEFAULT 'heuristic',
+                quality_summary_json TEXT NOT NULL DEFAULT '{}',
+                opportunities_json TEXT NOT NULL DEFAULT '[]',
+                artifact_markdown_path TEXT,
+                artifact_json_path TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO opportunity_bundles (
+                bundle_id, report_key, window_start_utc, window_end_utc,
+                confidence_method, quality_summary_json, opportunities_json,
+                artifact_markdown_path, artifact_json_path, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "bundle:test:1",
+                "opportunity_bundle:test:1",
+                "2026-03-01T00:00:00Z",
+                "2026-03-01T01:00:00Z",
+                "heuristic",
+                json.dumps({"signal_volume": 22, "coverage_score": 0.9}),
+                json.dumps(
+                    [
+                        {
+                            "opportunity_id": "opp-1",
+                            "title": "Topic breakout: workflows",
+                            "source_mix": {"youtube_channel_rss": 7, "reddit_discovery": 5},
+                            "confidence_score": 0.88,
+                        }
+                    ]
+                ),
+                "/tmp/opportunity.md",
+                "/tmp/opportunity.json",
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    resp = client.get("/api/v1/dashboard/csi/opportunities?limit=5")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    assert payload.get("source") == "csi_db"
+    latest = payload.get("latest") or {}
+    assert str(latest.get("bundle_id") or "") == "bundle:test:1"
+    opportunities = latest.get("opportunities") if isinstance(latest.get("opportunities"), list) else []
+    assert len(opportunities) == 1
+    assert str(opportunities[0].get("title") or "").startswith("Topic breakout")
+
+
+def test_dashboard_csi_opportunities_fallbacks_to_events(client, tmp_path, monkeypatch):
+    db_path = tmp_path / "csi_opportunity_events.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_id TEXT,
+                event_type TEXT,
+                occurred_at TEXT,
+                subject_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO events (event_id, event_type, occurred_at, subject_json) VALUES (?, ?, ?, ?)",
+            (
+                "evt-opportunity-fallback-1",
+                "opportunity_bundle_ready",
+                datetime.now(timezone.utc).isoformat(),
+                json.dumps(
+                    {
+                        "bundle_id": "bundle:fallback:1",
+                        "report_key": "opportunity_bundle:fallback:1",
+                        "report_type": "opportunity_bundle",
+                        "opportunities": [{"opportunity_id": "opp-fallback", "title": "Fallback opportunity"}],
+                        "quality_summary": {"signal_volume": 4},
+                    }
+                ),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setenv("CSI_DB_PATH", str(db_path))
+    resp = client.get("/api/v1/dashboard/csi/opportunities?limit=5")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload.get("status") == "ok"
+    assert payload.get("source") == "events_fallback"
+    latest = payload.get("latest") or {}
+    assert str(latest.get("bundle_id") or "") == "bundle:fallback:1"
+
+
 def test_dashboard_csi_reports_quality_gate_suppresses_near_duplicate_emerging(client, tmp_path, monkeypatch):
     db_path = tmp_path / "csi_quality.db"
     conn = sqlite3.connect(str(db_path))

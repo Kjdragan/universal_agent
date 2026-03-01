@@ -80,6 +80,37 @@ type CSISpecialistLoop = {
     updated_at: string;
 };
 
+type CSIOpportunity = {
+    opportunity_id: string;
+    title: string;
+    thesis: string;
+    source_mix?: Record<string, number>;
+    evidence_refs?: string[];
+    novelty_score?: number;
+    confidence_score?: number;
+    risk_flags?: string[];
+    recommended_action?: string;
+    followup_task_template?: string;
+};
+
+type CSIOpportunityBundle = {
+    bundle_id: string;
+    report_key?: string;
+    window_start_utc?: string;
+    window_end_utc?: string;
+    confidence_method?: string;
+    quality_summary?: {
+        signal_volume?: number;
+        freshness_minutes?: number;
+        delivery_health?: string;
+        coverage_score?: number;
+    };
+    source_mix?: Record<string, number>;
+    opportunities?: CSIOpportunity[];
+    artifact_paths?: { markdown?: string; json?: string };
+    created_at: string;
+};
+
 const API_BASE = "/api/dashboard/gateway";
 
 const SEVERITY_STYLES: Record<string, string> = {
@@ -161,6 +192,7 @@ export default function CSIDashboard() {
     const [previewError, setPreviewError] = useState<string | null>(null);
     const [health, setHealth] = useState<CSIHealth | null>(null);
     const [loops, setLoops] = useState<CSISpecialistLoop[]>([]);
+    const [opportunityBundles, setOpportunityBundles] = useState<CSIOpportunityBundle[]>([]);
     const [deepLinkApplied, setDeepLinkApplied] = useState(false);
 
     const openArtifactPreview = useCallback(async (path: string, label: string) => {
@@ -195,11 +227,12 @@ export default function CSIDashboard() {
 
     const loadData = useCallback(async () => {
         try {
-            const [repRes, notifRes, healthRes, loopsRes] = await Promise.all([
+            const [repRes, notifRes, healthRes, loopsRes, oppRes] = await Promise.all([
                 fetch(`${API_BASE}/api/v1/dashboard/csi/reports`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/notifications?limit=100&source_domain=csi`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/csi/health`, { cache: "no-store" }),
                 fetch(`${API_BASE}/api/v1/dashboard/csi/specialist-loops?limit=8`, { cache: "no-store" }),
+                fetch(`${API_BASE}/api/v1/dashboard/csi/opportunities?limit=5`, { cache: "no-store" }),
             ]);
 
             if (!repRes.ok) throw new Error(`HTTP ${repRes.status}`);
@@ -227,6 +260,14 @@ export default function CSIDashboard() {
                 const loopsData = await loopsRes.json();
                 if (Array.isArray(loopsData.loops)) {
                     setLoops(loopsData.loops as CSISpecialistLoop[]);
+                }
+            }
+            if (oppRes.ok) {
+                const oppData = await oppRes.json();
+                if (Array.isArray(oppData.bundles)) {
+                    setOpportunityBundles(oppData.bundles as CSIOpportunityBundle[]);
+                } else {
+                    setOpportunityBundles([]);
                 }
             }
             setError(null);
@@ -278,6 +319,7 @@ export default function CSIDashboard() {
 
     const totalReports = reports.length;
     const lastReportTime = reports.length > 0 ? formatDateTimeTz(reports[0].created_at, { placeholder: "N/A" }) : "N/A";
+    const latestBundle = opportunityBundles.length > 0 ? opportunityBundles[0] : null;
 
     async function purgeCsiSessions() {
         if (!confirm("Purge older CSI hook sessions and keep only the latest 2?")) return;
@@ -360,6 +402,17 @@ export default function CSIDashboard() {
                     </div>
                     <div className="mt-1 text-xs text-slate-500">
                         DLQ 24h: {health?.dead_letter_last_24h ?? 0} | Undelivered 24h: {health?.undelivered_last_24h ?? 0}
+                    </div>
+                </div>
+                <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                    <div className="text-sm font-medium text-slate-400">Latest Opportunity Bundle</div>
+                    <div className="mt-2 flex items-center gap-2">
+                        <span className="text-lg font-bold text-cyan-200">
+                            {loading ? "..." : `${latestBundle?.opportunities?.length || 0} ranked`}
+                        </span>
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                        Method: {latestBundle?.confidence_method || "n/a"} | Coverage: {latestBundle?.quality_summary?.coverage_score ?? 0}
                     </div>
                 </div>
             </div>
@@ -489,6 +542,85 @@ export default function CSIDashboard() {
                         </tbody>
                     </table>
                 </div>
+            </div>
+
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h2 className="text-sm font-semibold tracking-wide text-slate-300">Latest Opportunity Bundle</h2>
+                    <span className="text-[11px] text-slate-500">
+                        {latestBundle?.created_at ? formatDateTimeTz(latestBundle.created_at, { placeholder: "--" }) : "No bundle yet"}
+                    </span>
+                </div>
+                {!latestBundle ? (
+                    <div className="mt-3 text-xs text-slate-500">No opportunity bundles available yet.</div>
+                ) : (
+                    <div className="mt-3 space-y-3">
+                        <div className="rounded border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-300">
+                            <div>Bundle: <span className="font-mono text-slate-400">{latestBundle.bundle_id || "--"}</span></div>
+                            <div className="mt-1">
+                                Window: {latestBundle.window_start_utc ? formatDateTimeTz(latestBundle.window_start_utc, { placeholder: "--" }) : "--"} →{" "}
+                                {latestBundle.window_end_utc ? formatDateTimeTz(latestBundle.window_end_utc, { placeholder: "--" }) : "--"}
+                            </div>
+                            <div className="mt-1">
+                                Signal volume: {latestBundle.quality_summary?.signal_volume ?? 0} | Freshness (min): {latestBundle.quality_summary?.freshness_minutes ?? "--"} | Delivery: {latestBundle.quality_summary?.delivery_health || "--"}
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                                {latestBundle.artifact_paths?.markdown && (
+                                    <button
+                                        type="button"
+                                        onClick={() => openArtifactPreview(latestBundle.artifact_paths?.markdown || "", "Opportunity Markdown")}
+                                        className="rounded border border-cyan-700/40 bg-cyan-700/10 px-2 py-1 text-[11px] text-cyan-200 hover:bg-cyan-700/20"
+                                    >
+                                        Preview Bundle Markdown
+                                    </button>
+                                )}
+                                {latestBundle.artifact_paths?.json && (
+                                    <button
+                                        type="button"
+                                        onClick={() => openArtifactPreview(latestBundle.artifact_paths?.json || "", "Opportunity JSON")}
+                                        className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-300 hover:bg-slate-800/60"
+                                    >
+                                        Preview Bundle JSON
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                        <div className="overflow-auto rounded border border-slate-800">
+                            <table className="w-full text-left text-xs">
+                                <thead className="bg-slate-900/70 text-slate-400">
+                                    <tr>
+                                        <th className="px-2 py-1.5">Opportunity</th>
+                                        <th className="px-2 py-1.5">Confidence</th>
+                                        <th className="px-2 py-1.5">Novelty</th>
+                                        <th className="px-2 py-1.5">Sources</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(latestBundle.opportunities || []).slice(0, 8).map((opp) => (
+                                        <tr key={opp.opportunity_id || opp.title} className="border-t border-slate-800/60">
+                                            <td className="px-2 py-1.5 text-slate-300">
+                                                <div className="font-medium">{opp.title}</div>
+                                                <div className="text-[11px] text-slate-500 line-clamp-2">{opp.thesis}</div>
+                                            </td>
+                                            <td className="px-2 py-1.5 text-slate-300">{opp.confidence_score ?? "--"}</td>
+                                            <td className="px-2 py-1.5 text-slate-300">{opp.novelty_score ?? "--"}</td>
+                                            <td className="px-2 py-1.5 text-slate-400">
+                                                {Object.entries(opp.source_mix || {}).map(([k, v]) => `${k}:${v}`).join(", ") || "--"}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    {(latestBundle.opportunities || []).length === 0 && (
+                                        <tr>
+                                            <td className="px-2 py-2 text-slate-500" colSpan={4}>
+                                                No opportunities ranked in latest bundle.
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
             </div>
 
             <div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-3 min-h-0">
