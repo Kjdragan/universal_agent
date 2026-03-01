@@ -48,6 +48,8 @@ letta/
 
 # === Project Workspaces & Artifacts ===
 AGENT_RUN_WORKSPACES/
+AGENT_RUN_WORKSPACES_ARCHIVE/
+Memory_System/ua_shared_workspace/memory/sessions/
 urw_sessions/
 urw_smoke_workspace*/
 urw_phase*_workspace*/
