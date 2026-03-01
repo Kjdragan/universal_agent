@@ -67,3 +67,37 @@ def test_reddit_discovery_subreddit_list_includes_watchlist_file(tmp_path):
     )
     subreddits = adapter._subreddits()
     assert subreddits == ["artificial", "MachineLearning", "LocalLLaMA", "geopolitics"]
+
+
+def test_reddit_discovery_uses_fallback_watchlist_when_configured_path_missing(tmp_path):
+    fallback = tmp_path / "reddit_watchlist.json"
+    fallback.write_text(
+        """
+        {
+          "subreddits": [
+            {"name": "artificial"},
+            {"name": "LocalLLaMA"}
+          ]
+        }
+        """.strip(),
+        encoding="utf-8",
+    )
+    missing = tmp_path / "missing_reddit_watchlist.json"
+    adapter = RedditDiscoveryAdapter({"watchlist_file": str(missing), "subreddits": []})
+    adapter._watchlist_fallback_file = fallback
+
+    subreddits = adapter._subreddits()
+    assert subreddits == ["artificial", "LocalLLaMA"]
+
+
+def test_reddit_discovery_warns_when_no_watchlist_subreddits(tmp_path, caplog):
+    missing = tmp_path / "missing_reddit_watchlist.json"
+    missing_fallback = tmp_path / "missing_fallback.json"
+    adapter = RedditDiscoveryAdapter({"watchlist_file": str(missing), "subreddits": []})
+    adapter._watchlist_fallback_file = missing_fallback
+
+    with caplog.at_level("WARNING"):
+        subreddits = adapter._subreddits()
+
+    assert subreddits == []
+    assert "resolved to zero subreddits" in caplog.text

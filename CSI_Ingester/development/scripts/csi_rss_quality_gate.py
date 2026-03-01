@@ -79,6 +79,32 @@ def _save_state(path: Path, state: dict[str, Any]) -> None:
     path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _recent_rss_dlq_count(conn: sqlite3.Connection, window_expr: str) -> int:
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM dead_letter
+            WHERE created_at >= datetime('now', ?)
+              AND json_extract(event_json, '$.source') = 'youtube_channel_rss'
+            """,
+            (window_expr,),
+        ).fetchone()
+        return int((row["total"] if row is not None else 0) or 0)
+    except sqlite3.OperationalError:
+        # Fallback when JSON functions are unavailable in sqlite build.
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS total
+            FROM dead_letter
+            WHERE created_at >= datetime('now', ?)
+              AND event_json LIKE '%"source":"youtube_channel_rss"%'
+            """,
+            (window_expr,),
+        ).fetchone()
+        return int((row["total"] if row is not None else 0) or 0)
+
+
 def _get_metrics(conn: sqlite3.Connection, *, window_hours: int) -> dict[str, Any]:
     window_expr = f"-{max(1, int(window_hours))} hours"
 
@@ -90,15 +116,6 @@ def _get_metrics(conn: sqlite3.Connection, *, window_hours: int) -> dict[str, An
         FROM events
         WHERE source = 'youtube_channel_rss'
           AND created_at >= datetime('now', ?)
-        """,
-        (window_expr,),
-    ).fetchone()
-
-    dlq_row = conn.execute(
-        """
-        SELECT COUNT(*) AS total
-        FROM dead_letter
-        WHERE created_at >= datetime('now', ?)
         """,
         (window_expr,),
     ).fetchone()
@@ -125,7 +142,7 @@ def _get_metrics(conn: sqlite3.Connection, *, window_hours: int) -> dict[str, An
 
     total = int(ev_row["total"] or 0)
     undelivered = int(ev_row["undelivered"] or 0)
-    dlq_recent = int(dlq_row["total"] or 0)
+    dlq_recent = _recent_rss_dlq_count(conn, window_expr)
 
     analyzed_total = int(analysis_row["analyzed_total"] or 0)
     transcript_ok = int(analysis_row["transcript_ok"] or 0)

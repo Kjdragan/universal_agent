@@ -14,14 +14,14 @@ sources:
   youtube_channel_rss:
     enabled: true
     poll_interval_seconds: 300
-    watchlist_file: "/opt/universal_agent/CSI_Ingester/development/channels_watchlist.json"
+    watchlist_file: "channels_watchlist.json"
     watchlist: []
   reddit_discovery:
     enabled: true
     poll_interval_seconds: 300
     limit: 30
     user_agent: "CSIIngester/1.0 (by u/csi_ingester)"
-    watchlist_file: "/opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
+    watchlist_file: "reddit_watchlist.json"
     seed_on_first_run: true
     max_seen_cache_per_subreddit: 2000
     subreddits: []

@@ -138,3 +138,34 @@ def test_rss_adapter_loads_watchlist_from_json_file(tmp_path: Path):
     resolved = adapter._resolve_watchlist()
     assert [item["channel_id"] for item in resolved] == ["UC_ONE", "UC_TWO"]
     assert resolved[0]["channel_name"] == "Creator One"
+
+
+def test_rss_adapter_uses_fallback_watchlist_when_configured_path_missing(tmp_path: Path):
+    fallback_payload = {
+        "channels": [
+            {"channel_id": "UC_FALLBACK", "channel_name": "Fallback Creator"},
+        ]
+    }
+    fallback_file = tmp_path / "channels_watchlist.json"
+    fallback_file.write_text(json.dumps(fallback_payload), encoding="utf-8")
+    missing_file = tmp_path / "missing_watchlist.json"
+
+    adapter = YouTubeChannelRSSAdapter({"watchlist_file": str(missing_file), "watchlist": []})
+    adapter._watchlist_fallback_file = fallback_file
+
+    resolved = adapter._resolve_watchlist()
+    assert [item["channel_id"] for item in resolved] == ["UC_FALLBACK"]
+    assert resolved[0]["channel_name"] == "Fallback Creator"
+
+
+def test_rss_adapter_warns_when_no_watchlist_channels(tmp_path: Path, caplog):
+    missing_file = tmp_path / "missing_watchlist.json"
+    missing_fallback = tmp_path / "missing_fallback.json"
+    adapter = YouTubeChannelRSSAdapter({"watchlist_file": str(missing_file), "watchlist": []})
+    adapter._watchlist_fallback_file = missing_fallback
+
+    with caplog.at_level("WARNING"):
+        resolved = adapter._resolve_watchlist()
+
+    assert resolved == []
+    assert "resolved to zero channels" in caplog.text

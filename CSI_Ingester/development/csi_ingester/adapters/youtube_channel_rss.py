@@ -30,6 +30,7 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         self._seed_on_first_run = bool(config.get("seed_on_first_run", True))
         self._max_seen_cache = max(50, int(config.get("max_seen_cache_per_channel", 1000)))
         self._watchlist_file = str(config.get("watchlist_file") or "").strip()
+        self._watchlist_fallback_file = Path(__file__).resolve().parents[2] / "channels_watchlist.json"
         self._watchlist_file_mtime: float | None = None
         self._watchlist_file_channels: list[dict[str, str]] = []
         self._load_state_fn = lambda source_key: None
@@ -104,6 +105,14 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
         for item in self._load_watchlist_file_channels():
             _push_item(item)
 
+        if not merged:
+            logger.warning(
+                "RSS watchlist resolved to zero channels configured_inline=%d configured_file=%s fallback_file=%s",
+                len(configured),
+                self._watchlist_file or "(unset)",
+                self._watchlist_fallback_file,
+            )
+
         return merged
 
     def _load_watchlist_file_channels(self) -> list[dict[str, str]]:
@@ -111,9 +120,20 @@ class YouTubeChannelRSSAdapter(SourceAdapter):
             return []
         path = Path(self._watchlist_file).expanduser()
         if not path.exists():
-            if self._watchlist_file_channels:
+            fallback_path = self._watchlist_fallback_file
+            if fallback_path.exists() and fallback_path != path:
+                logger.warning(
+                    "RSS watchlist file missing path=%s; using fallback path=%s",
+                    path,
+                    fallback_path,
+                )
+                path = fallback_path
+            elif self._watchlist_file_channels:
                 logger.warning("RSS watchlist file missing path=%s; keeping previous cached list", path)
-            return self._watchlist_file_channels
+                return self._watchlist_file_channels
+            else:
+                logger.warning("RSS watchlist file missing path=%s and no cached channels available", path)
+                return self._watchlist_file_channels
 
         try:
             mtime = path.stat().st_mtime

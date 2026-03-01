@@ -26,6 +26,7 @@ class RedditDiscoveryAdapter(SourceAdapter):
         self._seed_on_first_run = bool(config.get("seed_on_first_run", True))
         self._max_seen_cache = max(100, int(config.get("max_seen_cache_per_subreddit", 2000)))
         self._watchlist_file = str(config.get("watchlist_file") or "").strip()
+        self._watchlist_fallback_file = Path(__file__).resolve().parents[2] / "reddit_watchlist.json"
         self._watchlist_file_mtime: float | None = None
         self._watchlist_file_subreddits: list[str] = []
         self._load_state_fn = lambda source_key: None
@@ -64,16 +65,19 @@ class RedditDiscoveryAdapter(SourceAdapter):
     def _subreddits(self) -> list[str]:
         raw = self.config.get("subreddits")
         out: list[str] = []
+        configured_count = 0
         if isinstance(raw, list):
             for item in raw:
                 if isinstance(item, str) and item.strip():
                     out.append(item.strip())
+                    configured_count += 1
                 elif isinstance(item, dict):
                     name = str(item.get("name") or "").strip()
                     if not name:
                         name = str(item.get("subreddit") or "").strip()
                     if name:
                         out.append(name)
+                        configured_count += 1
         out.extend(self._load_watchlist_file_subreddits())
         deduped: list[str] = []
         seen: set[str] = set()
@@ -83,6 +87,13 @@ class RedditDiscoveryAdapter(SourceAdapter):
                 continue
             seen.add(key)
             deduped.append(item)
+        if not deduped:
+            logger.warning(
+                "Reddit watchlist resolved to zero subreddits configured_inline=%d configured_file=%s fallback_file=%s",
+                configured_count,
+                self._watchlist_file or "(unset)",
+                self._watchlist_fallback_file,
+            )
         return deduped
 
     def _load_watchlist_file_subreddits(self) -> list[str]:
@@ -90,9 +101,20 @@ class RedditDiscoveryAdapter(SourceAdapter):
             return []
         path = Path(self._watchlist_file).expanduser()
         if not path.exists():
-            if self._watchlist_file_subreddits:
+            fallback_path = self._watchlist_fallback_file
+            if fallback_path.exists() and fallback_path != path:
+                logger.warning(
+                    "Reddit watchlist file missing path=%s; using fallback path=%s",
+                    path,
+                    fallback_path,
+                )
+                path = fallback_path
+            elif self._watchlist_file_subreddits:
                 logger.warning("Reddit watchlist file missing path=%s; keeping previous cached list", path)
-            return self._watchlist_file_subreddits
+                return self._watchlist_file_subreddits
+            else:
+                logger.warning("Reddit watchlist file missing path=%s and no cached subreddits available", path)
+                return self._watchlist_file_subreddits
 
         try:
             mtime = path.stat().st_mtime
@@ -155,6 +177,11 @@ class RedditDiscoveryAdapter(SourceAdapter):
                     headers={"User-Agent": user_agent, "Accept": "application/json"},
                 )
                 if resp.status_code >= 400:
+                    logger.warning(
+                        "Reddit fetch failed subreddit=%s status=%s",
+                        subreddit,
+                        resp.status_code,
+                    )
                     self._persist_subreddit_state(subreddit)
                     continue
 
