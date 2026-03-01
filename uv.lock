@@ -4999,6 +4999,15 @@ wheels = [
 ]
 
 [[package]]
+name = "redis"
+version = "7.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/31/1476f206482dd9bc53fdbbe9f6fbd5e05d153f18e54667ce839df331f2e6/redis-7.2.1.tar.gz", hash = "sha256:6163c1a47ee2d9d01221d8456bc1c75ab953cbda18cfbc15e7140e9ba16ca3a5", size = 4906735, upload-time = "2026-02-25T20:05:18.171Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/98/1dd1a5c060916cf21d15e67b7d6a7078e26e2605d5c37cbc9f4f5454c478/redis-7.2.1-py3-none-any.whl", hash = "sha256:49e231fbc8df2001436ae5252b3f0f3dc930430239bfeb6da4c7ee92b16e5d33", size = 396057, upload-time = "2026-02-25T20:05:16.533Z" },
+]
+
+[[package]]
 name = "referencing"
 version = "0.36.2"
 source = { registry = "https://pypi.org/simple" }
@@ -6162,6 +6171,7 @@ dependencies = [
     { name = "python-telegram-bot" },
     { name = "pytube" },
     { name = "pytz" },
+    { name = "redis" },
     { name = "remotion-lambda" },
     { name = "reportlab" },
     { name = "rich" },
@@ -6239,6 +6249,7 @@ requires-dist = [
     { name = "python-telegram-bot", specifier = ">=21.0" },
     { name = "pytube", specifier = ">=15.0.0,<16" },
     { name = "pytz", specifier = ">=2025.2" },
+    { name = "redis", specifier = ">=7.2.1" },
     { name = "remotion-lambda", specifier = ">=4.0.409" },
     { name = "reportlab", specifier = ">=4.4.7" },
     { name = "rich", specifier = ">=14.2.0" },
