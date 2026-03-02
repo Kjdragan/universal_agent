@@ -42,7 +42,24 @@ tests/gateway/test_execution_lock_metrics.py  1 test  ✅
 Total: 24 tests passing
 ```
 
+## Bug Fix: Phase 3 Regression (c22c520)
+
+**SyntaxError in `on_subagent_stop` — breaks gateway on any `main.py` import**
+
+Phase 3 inserted `OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir` at line ~3401
+**before** the existing `global OBSERVER_WORKSPACE_DIR` declaration at line ~3405.
+Python 3.13 raises `SyntaxError: name assigned before global declaration` at compile time,
+preventing `main.py` from loading. This broke the gateway for any execution path (agent runs,
+heartbeat) that imports `main.py`.
+
+**Fix:** Moved `global OBSERVER_WORKSPACE_DIR` to the top of the function (before the `_ctx`
+block). AST-based full-file scan confirmed no other functions have the same pattern.
+
+**Lesson:** After Phase 3 migrations, always run `py_compile.compile()` (not just `ast.parse()`)
+to catch semantic SyntaxErrors that AST parsing misses.
+
 ## Remaining Known Issues
 - `save_interrupt_checkpoint` (nested in `main()`) still uses `global current_step_id` — this is CLI-only, intentionally left as-is
 - DEBUG print at `main.py:8815` reads module-global `run_id` — cosmetic, harmless
 - Module-level globals still exist as fallback values for CLI path; Phase 3 aliases read from ContextVar first and fall through gracefully
+- 2 pre-existing failures in `test_ops_api.py` (notification snooze/bulk-update) — unrelated to this refactor
