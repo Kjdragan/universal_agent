@@ -157,6 +157,9 @@ rsync -az \
   # Runtime roots must be writable by service user for memory/session capture.
   mkdir -p Memory_System AGENT_RUN_WORKSPACES artifacts logs
   chown -R ua:ua Memory_System AGENT_RUN_WORKSPACES artifacts logs 2>/dev/null || true
+  # Process heartbeat directory for watchdog liveness detection.
+  mkdir -p /var/lib/universal-agent/heartbeat
+  chown ua:ua /var/lib/universal-agent/heartbeat 2>/dev/null || true
   # Tutorial bootstrap target root (used by dashboard "Create Repo" action).
   mkdir -p '${DEPLOY_TUTORIAL_REPO_ROOT}'
   chown -R ua:ua '${DEPLOY_TUTORIAL_REPO_ROOT}' 2>/dev/null || true
