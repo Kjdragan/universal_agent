@@ -102,6 +102,16 @@ _RESEARCH_PIPELINE_DELIVERY_MARKERS = (
     "send to me",
 )
 
+_YOUTUBE_TRANSCRIPT_INTENT_MARKERS = (
+    "youtu.be",
+    "youtube.com",
+    "youtube video",
+    "video id",
+    "transcript",
+    "captions",
+    "subtitles",
+)
+
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
     """Set the context-local callback for tool events."""
@@ -317,6 +327,13 @@ def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
     # Information-gathering requests should route through specialists, with
     # report/delivery requests treated as a stronger signal.
     return has_search or has_report or has_delivery
+
+
+def _looks_like_youtube_transcript_intent(text: Any) -> bool:
+    candidate = str(text or "").strip().lower()
+    if not candidate:
+        return False
+    return any(marker in candidate for marker in _YOUTUBE_TRANSCRIPT_INTENT_MARKERS)
 
 
 def _is_subagent_context_for_tool(input_data: dict, primary_transcript_path: Optional[str]) -> bool:
@@ -536,6 +553,8 @@ class AgentHookSet:
         self._vp_dispatch_seen_this_turn = False
         self._requires_research_delegate_first = False
         self._research_delegate_seen_this_turn = False
+        self._requires_youtube_skill_first = False
+        self._youtube_skill_seen_this_turn = False
         workspace_norm = str(active_workspace or "").replace("\\", "/").lower()
         self._is_vp_worker_lane = (
             "/agent_run_workspaces/vp_" in workspace_norm
@@ -781,7 +800,46 @@ class AgentHookSet:
         if normalized_tool_name == "vp_dispatch_mission":
             self._vp_dispatch_seen_this_turn = True
 
+        if normalized_tool_name == "skill":
+            requested_skill = str(tool_input.get("skill", "") or "").strip().lower()
+            if requested_skill == "youtube-transcript-metadata":
+                self._youtube_skill_seen_this_turn = True
+
         is_subagent_context = _is_subagent_context_for_tool(input_data, self._primary_transcript_path)
+
+        if (
+            self._requires_youtube_skill_first
+            and not self._youtube_skill_seen_this_turn
+            and not is_subagent_context
+            and not self._is_vp_worker_lane
+            and not self._is_cron_lane
+        ):
+            is_mcp_youtube_metadata = (
+                tool_name.lower().startswith("mcp__youtube__")
+                and normalized_tool_name == "get_metadata"
+            )
+            if is_mcp_youtube_metadata:
+                logfire.info(
+                    "youtube_mcp_blocked_prefer_skill",
+                    tool_name=tool_name,
+                    run_id=self.run_id,
+                )
+                return {
+                    "systemMessage": (
+                        "⚠️ YouTube transcript workflow detected.\n\n"
+                        "Do not call `mcp__youtube__get_metadata` first — it fails bot detection on cloud IPs.\n"
+                        "Use `Skill(skill='youtube-transcript-metadata', args='<url>')` instead. "
+                        "It uses the hardened proxy-backed transcript+metadata path and is the correct tool here."
+                    ),
+                    "decision": "block",
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            "youtube-transcript-metadata skill must be called before mcp__youtube__get_metadata."
+                        ),
+                    },
+                }
         if (
             self._requires_vp_tool_path
             and not self._vp_dispatch_seen_this_turn
@@ -1189,6 +1247,13 @@ class AgentHookSet:
             and not self._is_cron_lane
         )
         self._research_delegate_seen_this_turn = False
+        self._requires_youtube_skill_first = (
+            _looks_like_youtube_transcript_intent(prompt_text)
+            and not self._requires_vp_tool_path
+            and not self._is_vp_worker_lane
+            and not self._is_cron_lane
+        )
+        self._youtube_skill_seen_this_turn = False
 
         # Reset counters for the new user turn
         self._current_turn_tool_count = 0
