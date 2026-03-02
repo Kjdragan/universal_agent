@@ -1040,9 +1040,15 @@ export default function DashboardEventsPage() {
               </button>
             );
           })}
-          <span className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-300">
-            totals
-          </span>
+          <button
+            type="button"
+            onClick={() => setSourceFilter("")}
+            className={`rounded border px-2 py-1 text-[11px] transition-colors ${sourceFilter === "" ? "border-cyan-500/60 bg-cyan-500/10 text-cyan-200 ring-1 ring-cyan-400/70" : "border-slate-700 bg-slate-900/60 text-slate-300 hover:bg-slate-800/70"}`}
+            title={`Show all sources • unread: ${counters.totals.unread} | actionable: ${counters.totals.actionable} | total: ${counters.totals.total}`}
+            aria-pressed={sourceFilter === ""}
+          >
+            all
+          </button>
         </div>
 
         <div className="mt-2 rounded border border-slate-800 bg-slate-950/50 p-2">
