@@ -1362,9 +1362,20 @@ class AgentHookSet:
             return {}
 
         try:
+            prefix_parts: list[str] = []
+
+            # UV_CACHE_DIR injection is independent of workspace — always apply
+            # so uv run commands never inherit a stale/wrong path from the env.
+            if "uv run" in command and "UV_CACHE_DIR=" not in command:
+                prefix_parts.append("export UV_CACHE_DIR=/tmp/uv_cache")
+
             ws = get_current_workspace() or self.workspace_dir or ""
             if not ws:
-                return {}
+                if not prefix_parts:
+                    return {}
+                updated_command = "; ".join(prefix_parts) + "; " + command
+                return _build_bash_command_update(command_source, tool_input, updated_command)
+
             from universal_agent.artifacts import resolve_artifacts_dir
 
             artifacts_root = str(resolve_artifacts_dir())
@@ -1387,17 +1398,10 @@ class AgentHookSet:
             auto_cd_env = str(os.getenv("UA_BASH_AUTO_CD_WORKSPACE", "1") or "1").strip().lower()
             auto_cd_enabled = auto_cd_env not in {"0", "false", "no", "off"}
 
-            prefix_parts: list[str] = []
             if "CURRENT_SESSION_WORKSPACE=" not in command:
                 prefix_parts.append(f"export CURRENT_SESSION_WORKSPACE={shlex.quote(ws)}")
             if "UA_ARTIFACTS_DIR=" not in command:
                 prefix_parts.append(f"export UA_ARTIFACTS_DIR={shlex.quote(artifacts_root)}")
-            # Always inject a safe UV cache dir for uv run commands. The inherited
-            # UV_CACHE_DIR (e.g. from .env) may point to a path that is inaccessible
-            # from the agent's working context (wrong user, wrong machine, wrong perms).
-            # Override unconditionally unless the command itself already sets it.
-            if "uv run" in command and "UV_CACHE_DIR=" not in command:
-                prefix_parts.append("export UV_CACHE_DIR=/tmp/uv_cache")
             if auto_cd_enabled and not has_cd_prefix:
                 prefix_parts.append(f"cd {shlex.quote(ws)}")
 
