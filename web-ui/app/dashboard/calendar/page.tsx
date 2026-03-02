@@ -19,7 +19,7 @@ export default function DashboardCalendarPage() {
             Back to Home
           </Link>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/70">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/70">
           <CalendarSection variant="full" />
         </div>
       </div>
