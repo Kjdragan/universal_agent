@@ -2931,6 +2931,15 @@ def _workspace_dir_for_session(session_id: str) -> Optional[Path]:
         except Exception:
             session = None
     if not session:
+        # Disk fallback: if workspace directory exists under WORKSPACES_DIR, use it.
+        try:
+            from universal_agent.security_paths import validate_session_id as _vsid
+            safe_id = _vsid(session_id)
+            candidate = WORKSPACES_DIR / safe_id
+            if candidate.is_dir():
+                return candidate
+        except Exception:
+            pass
         return None
     workspace = Path(str(session.workspace_dir or "")).expanduser()
     if not str(workspace):
@@ -7140,7 +7149,7 @@ def _calendar_project_cron_events(
                 "source": "cron",
                 "source_ref": str(job.job_id),
                 "owner_id": str(job.user_id),
-                "session_id": str(metadata.get("session_id") or workspace_session_id or ""),
+                "session_id": str(workspace_session_id or metadata.get("session_id") or ""),
                 "channel": str(metadata.get("channel") or "cron"),
                 "title": str(metadata.get("title") or f"Chron: {str(job.command)[:40]}"),
                 "description": str(job.command),
@@ -7657,7 +7666,14 @@ async def _calendar_apply_event_action(
             matched = _calendar_match_cron_run(
                 [r for r in runs if str(r.get("job_id") or "") == source_ref], float(scheduled_at_int)
             )
-            session_id = str((matched or {}).get("session_id") or (job.metadata or {}).get("session_id") or "")
+            ws_dir = str(getattr(job, "workspace_dir", "") or "")
+            ws_session_id = Path(ws_dir).name if ws_dir else ""
+            session_id = str(
+                (matched or {}).get("session_id")
+                or ws_session_id
+                or (job.metadata or {}).get("session_id")
+                or ""
+            )
             return {"status": "ok", "action": action_norm, "session_id": session_id}
 
     if source == "heartbeat":
