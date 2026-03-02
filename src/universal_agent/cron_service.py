@@ -433,9 +433,16 @@ class CronService:
         runs_path = workspaces_dir / "cron_runs.jsonl"
         self.store = CronStore(jobs_path, runs_path)
         self.jobs = self.store.load_jobs()
+        _now_ts = time.time()
+        _needs_save = False
         for job in self.jobs.values():
-            if job.next_run_at is None:
-                job.schedule_next(time.time())
+            if job.next_run_at is None or job.next_run_at < _now_ts:
+                # Recalculate from now to prevent stale/wrong timestamps from
+                # causing immediate catch-up fires on restart (fix #5: timezone double-fire).
+                job.schedule_next(_now_ts)
+                _needs_save = True
+        if _needs_save:
+            self.store.save_jobs(self.jobs.values())
 
     async def start(self) -> None:
         if self.running:
@@ -656,9 +663,24 @@ class CronService:
                             if job.model:
                                 request_metadata["model"] = job.model
 
+                            # Resolve UA_ARTIFACTS_DIR and inject as preamble so the
+                            # agent always sees a concrete absolute path (fix #2).
+                            try:
+                                from universal_agent.artifacts import resolve_artifacts_dir
+                                _artifacts_dir = str(resolve_artifacts_dir())
+                            except Exception:
+                                _artifacts_dir = os.getenv("UA_ARTIFACTS_DIR", "").strip()
+                            if _artifacts_dir:
+                                resolved_command = (
+                                    f"[SYSTEM CONTEXT: UA_ARTIFACTS_DIR={_artifacts_dir}]\n\n"
+                                    + job.command
+                                )
+                            else:
+                                resolved_command = job.command
+
                             request = GatewayRequest(
-                                user_input=job.command,
-                                force_complex=False,
+                                user_input=resolved_command,
+                                force_complex=True,
                                 metadata=request_metadata,
                             )
                             run_coro = self.gateway.run_query(session, request)
@@ -732,6 +754,30 @@ class CronService:
                     self.store.save_jobs(self.jobs.values())
                 self.store.append_run(record)
                 self._emit_event({"type": "cron_run_completed", "run": record.to_dict(), "reason": reason})
+
+                # Post-run memory capture: write a session rollover to shared memory
+                # so cron run context is available to future sessions (fix #6).
+                if record.status == "success":
+                    try:
+                        from universal_agent.feature_flags import memory_enabled
+                        if memory_enabled():
+                            from universal_agent.memory.orchestrator import get_memory_orchestrator
+                            from universal_agent.memory.paths import resolve_shared_memory_workspace
+                            _ws_dir = str(job.workspace_dir)
+                            _transcript = os.path.join(_ws_dir, "transcript.md")
+                            _shared_root = resolve_shared_memory_workspace(_ws_dir)
+                            _broker = get_memory_orchestrator(workspace_dir=_shared_root)
+                            _broker.capture_session_rollover(
+                                session_id=record.session_id or job.job_id,
+                                trigger="cron_run_completed",
+                                transcript_path=_transcript,
+                                summary=(
+                                    f"Cron job '{job.job_id}' completed. "
+                                    + (record.output_preview or "")[:200]
+                                ),
+                            )
+                    except Exception:
+                        pass
                 if moved_outputs:
                     logger.info(
                         "Chron job %s moved %d root output(s) into work_products: %s",

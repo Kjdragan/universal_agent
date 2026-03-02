@@ -541,6 +541,10 @@ class AgentHookSet:
             "/agent_run_workspaces/vp_" in workspace_norm
             and "/vp-mission-" in workspace_norm
         )
+        self._is_cron_lane = (
+            "/agent_run_workspaces/cron_" in workspace_norm
+            or os.getenv("UA_RUN_SOURCE", "").strip().lower() == "cron"
+        )
 
     def build_hooks(self) -> dict:
         """Return the hook dictionary compatible with UniversalAgent."""
@@ -845,6 +849,7 @@ class AgentHookSet:
             and not self._research_delegate_seen_this_turn
             and not is_subagent_context
             and not self._is_vp_worker_lane
+            and not self._is_cron_lane
         ):
             if normalized_tool_name == "task":
                 delegated = str(tool_input.get("subagent_type", "") or "").strip().lower()
@@ -1181,6 +1186,7 @@ class AgentHookSet:
             _looks_like_research_report_pipeline_intent(prompt_text)
             and not self._requires_vp_tool_path
             and not self._is_vp_worker_lane
+            and not self._is_cron_lane
         )
         self._research_delegate_seen_this_turn = False
 

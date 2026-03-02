@@ -1349,14 +1349,14 @@ class InProcessGateway(Gateway):
                             errors.append(msg.strip())
                 if event.type == EventType.ITERATION_END:
                     trace_id = event.data.get("trace_id")
-        except Exception as exc:
+        except BaseException as exc:
             duration = round(max(0.0, time.time() - start_time), 3)
             _write_sync_ready_marker(
                 state="failed",
                 ready=True,
                 started_at_epoch=start_time,
                 completed_at_epoch=time.time(),
-                error=str(exc),
+                error=str(exc) or type(exc).__name__,
                 execution_summary={"tool_calls": tool_calls, "duration_seconds": duration},
             )
             raise

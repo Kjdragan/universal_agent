@@ -1,6 +1,6 @@
 <!-- Runtime Capabilities Snapshot (Auto) -->
 
-<!-- Generated: 2026-03-02 09:40:25 -->
+<!-- Generated: 2026-03-02 12:25:46 -->
 
 ### Capability Routing Doctrine
 - Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.
@@ -99,6 +99,7 @@
 - **design-md**: Analyze Stitch projects and synthesize a semantic design system into DESIGN.md files (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/stitch-skills/design-md/SKILL.md`)
 - **discord**: Use when you need to control Discord from Clawdbot via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, create/edit/delete channels and categories, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/discord/SKILL.md`)
 - **enhance-prompt**: Transforms vague UI ideas into polished, Stitch-optimized prompts. Enhances specificity, adds UI/UX keywords, injects design system context, and structures output for better generation results. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/stitch-skills/enhance-prompt/SKILL.md`)
+- **excalidraw-diagram**: Create Excalidraw diagram JSON files that make visual arguments. Use when the user wants to visualize workflows, architectures, or concepts. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/excalidraw-diagram/SKILL.md`)
 - **excalidraw-free**: Create Excalidraw diagrams. USE WHEN user specifically asks for Excalidraw. WORKFLOWS - mind-maps, swimlane, process-flow. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/graph-draw/SKILL.md`)
 - **gemini**: Gemini CLI for one-shot Q&A, summaries, and generation. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/gemini/SKILL.md`)
 - **gemini-url-context-scraper**: Fast URL/PDF/image content extraction using Gemini "URL Context" (built-in web/PDF reader) via google-genai. Use when the user wants to: scrape a URL, read/summarize a PDF, extract structured facts from public web content, or create an interim “scraped context” work product for downstream tasks. Writes interim outputs to CURRENT_SESSION_WORKSPACE/work_products by default, and can persist outputs under UA_ARTIFACTS_DIR on request. Produces runnable PEP 723 + `uv run` scripts with dotenv auto-loading (no hardcoded secrets). (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/gemini-url-context-scraper/SKILL.md`)
