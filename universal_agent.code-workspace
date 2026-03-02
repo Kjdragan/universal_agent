@@ -1,7 +1,12 @@
 {
 	"folders": [
 		{
-			"path": "."
+			"path": ".",
+			"name": "universal_agent"
+		},
+		{
+			"path": "CSI_Ingester/development",
+			"name": "CSI_Ingester"
 		}
 	],
 	"settings": {

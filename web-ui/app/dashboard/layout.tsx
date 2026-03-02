@@ -54,6 +54,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const loadAuthSession = useCallback(async () => {
     setLoadingAuth(true);
     setAuthError(null);
+    let authenticated = false;
     try {
       const response = await fetch("/api/dashboard/auth/session", { cache: "no-store" });
       const data = (await response.json()) as DashboardAuthSession;
@@ -62,30 +63,35 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       }
       setSession(data);
       setOwnerId((prev) => prev || data.owner_id || "owner_primary");
-
-      if (data.authenticated) {
-        try {
-          const capsRes = await fetch("/api/dashboard/gateway/api/v1/factory/capabilities", { cache: "no-store" });
-          if (!capsRes.ok) {
-            setShowCorporationNav(false);
-          } else {
-            const capsData = (await capsRes.json()) as FactoryCapabilitiesResponse;
-            const role = String(capsData?.factory?.factory_role || "").trim().toUpperCase();
-            const gatewayMode = String(capsData?.factory?.gateway_mode || "").trim().toLowerCase();
-            setShowCorporationNav(role === "HEADQUARTERS" && gatewayMode === "full");
-          }
-        } catch {
-          setShowCorporationNav(false);
-        }
-      } else {
-        setShowCorporationNav(false);
-      }
+      authenticated = Boolean(data.authenticated);
     } catch (error) {
       setSession(null);
       setAuthError((error as Error).message);
       setShowCorporationNav(false);
     } finally {
       setLoadingAuth(false);
+    }
+
+    if (authenticated) {
+      try {
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 5000);
+        const capsRes = await fetch("/api/dashboard/gateway/api/v1/factory/capabilities", {
+          cache: "no-store",
+          signal: ac.signal,
+        });
+        clearTimeout(timer);
+        if (capsRes.ok) {
+          const capsData = (await capsRes.json()) as FactoryCapabilitiesResponse;
+          const role = String(capsData?.factory?.factory_role || "").trim().toUpperCase();
+          const gatewayMode = String(capsData?.factory?.gateway_mode || "").trim().toLowerCase();
+          setShowCorporationNav(role === "HEADQUARTERS" && gatewayMode === "full");
+        } else {
+          setShowCorporationNav(false);
+        }
+      } catch {
+        setShowCorporationNav(false);
+      }
     }
   }, []);
 
