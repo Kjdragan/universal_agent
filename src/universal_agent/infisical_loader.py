@@ -259,7 +259,7 @@ def initialize_runtime_secrets(profile: str | None = None, *, force_reload: bool
         if infisical_enabled:
             try:
                 secret_values = _fetch_infisical_secrets()
-                loaded_count = _inject_environment_values(secret_values, overwrite=False)
+                loaded_count = _inject_environment_values(secret_values, overwrite=True)
                 source = "infisical"
                 logger.info(
                     "Infisical runtime secret bootstrap succeeded: profile=%s loaded=%d",

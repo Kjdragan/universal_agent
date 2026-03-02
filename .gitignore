@@ -120,3 +120,8 @@ scraping/runs/*/
 urls.json
 run_report.json
 latest_export.md
+
+# === User-requested local excludes ===
+src/universal_agent/prompt_assets/capabilities.last_good.md
+.claude/skills/excalidraw-diagram/references/uv.lock
+docs/ag-ui-protocol-streaming.excalidraw

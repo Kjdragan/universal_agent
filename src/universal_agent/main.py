@@ -6874,6 +6874,30 @@ async def run_conversation(client, query: str, start_ts: float, iteration: int =
         return needs_user_input, auth_link, final_text
 
 
+# ---------------------------------------------------------------------------
+# Query route types — 3-tier routing
+# ---------------------------------------------------------------------------
+ROUTE_SIMPLE = "SIMPLE"      # LLM answers from its own knowledge, no tools
+ROUTE_STANDARD = "STANDARD"  # Normal user query → Simone's full tool loop (skills, agents, capabilities)
+ROUTE_SYSTEM = "SYSTEM"      # Specialized utility (cron, heartbeat) → system routing (stub: tool loop for now)
+
+
+def _is_system_intent(query: str) -> bool:
+    """Detect cron/heartbeat/system-utility queries that bypass normal user routing."""
+    lowered = query.lower()
+    # Heartbeat/watchdog markers
+    if "read heartbeat" in lowered or "heartbeat_ok" in lowered:
+        return True
+    # Explicit cron / scheduled-task markers
+    if any(kw in lowered for kw in ["cron job", "scheduled task", "system task", "run cron", "cron check"]):
+        return True
+    # UA run-source env signal (set by execution engine for non-user-initiated runs)
+    run_source = os.getenv("UA_RUN_SOURCE", "").strip().lower()
+    if run_source in {"heartbeat", "cron", "system"}:
+        return True
+    return False
+
+
 def _is_memory_intent(query: str) -> bool:
     lowered = query.lower()
     memory_phrases = [
@@ -6904,72 +6928,108 @@ def _is_context_only_intent(query: str) -> bool:
 
 
 def _is_tool_required_intent(query: str) -> bool:
-    """Detect queries that obviously require tools — skip LLM classification."""
+    """Detect STANDARD queries that obviously need tools — skip LLM classification.
+    Note: heartbeat/cron queries are handled by _is_system_intent, not here.
+    """
     lowered = query.lower()
-    # Heartbeat prompts always need tools (date check, file reads, monitors)
-    if "read heartbeat" in lowered or "heartbeat_ok" in lowered:
-        return True
     # Explicit tool/action verbs
     if any(kw in lowered for kw in ["search for", "send email", "run ", "execute ", "create a report"]):
+        return True
+    # YouTube/media URL fetching always needs external tools
+    if any(kw in lowered for kw in ["youtu.be", "youtube.com", "transcript", "get the transcript", "fetch transcript"]):
+        return True
+    # Any URL fetch/scrape intent needs tools
+    if any(kw in lowered for kw in ["http://", "https://"]) and any(kw in lowered for kw in ["get", "fetch", "scrape", "read", "summarize", "transcript", "content", "extract"]):
         return True
     return False
 
 
 async def classify_query(client: ClaudeSDKClient, query: str) -> str:
-    """Determine if a query is SIMPLE (direct answer) or COMPLEX (needs tools)."""
+    """Classify a query into one of three routes: SIMPLE, STANDARD, or SYSTEM.
+
+    SIMPLE   — LLM answers from its own knowledge/history, no tools needed.
+    STANDARD — Normal user request; Simone handles with full tool loop (skills, agents, capabilities).
+    SYSTEM   — Automated/utility process that is NOT a user request — cron jobs, scheduled tasks, 
+    heartbeat checks, system monitoring, background maintenance 
+    (e.g., 'run the daily digest cron', 'check system health', 'process the scheduled task queue').
+    """
     _ctx = _get_ctx()
+    current_step_id = None
+    run_id = None
     if _ctx is not None:
         current_step_id = _ctx.current_step_id
         run_id = _ctx.run_id
-    if _is_tool_required_intent(query):
-        print("\n🤔 Query Classification: COMPLEX (Heuristic: tool_required_intent)")
+
+    # --- Tier 1: System heuristic (checked first — system queries must not fall through to simple) ---
+    if _is_system_intent(query):
+        print(f"\n\U0001f914 Query Classification: {ROUTE_SYSTEM} (Heuristic: system_intent)")
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
                 query=query,
-                decision="COMPLEX",
+                decision=ROUTE_SYSTEM,
+                raw_response="HEURISTIC_SYSTEM_INTENT",
+                run_id=run_id,
+                step_id=current_step_id,
+            )
+        return ROUTE_SYSTEM
+
+    # --- Tier 2: Standard tool-required heuristic ---
+    if _is_tool_required_intent(query):
+        print(f"\n\U0001f914 Query Classification: {ROUTE_STANDARD} (Heuristic: tool_required_intent)")
+        if LOGFIRE_TOKEN:
+            logfire.info(
+                "query_classification",
+                query=query,
+                decision=ROUTE_STANDARD,
                 raw_response="HEURISTIC_TOOL_REQUIRED",
                 run_id=run_id,
                 step_id=current_step_id,
             )
-        return "COMPLEX"
+        return ROUTE_STANDARD
+
+    # --- Tier 3: Simple knowledge/context heuristics ---
     if _is_memory_intent(query):
-        print("\n🤔 Query Classification: SIMPLE (Heuristic: memory_intent)")
+        print(f"\n\U0001f914 Query Classification: {ROUTE_SIMPLE} (Heuristic: memory_intent)")
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
                 query=query,
-                decision="SIMPLE",
+                decision=ROUTE_SIMPLE,
                 raw_response="HEURISTIC_MEMORY_INTENT",
                 run_id=run_id,
                 step_id=current_step_id,
             )
-        return "SIMPLE"
+        return ROUTE_SIMPLE
     if _is_context_only_intent(query):
-        print("\n🤔 Query Classification: SIMPLE (Heuristic: context_only_intent)")
+        print(f"\n\U0001f914 Query Classification: {ROUTE_SIMPLE} (Heuristic: context_only_intent)")
         if LOGFIRE_TOKEN:
             logfire.info(
                 "query_classification",
                 query=query,
-                decision="SIMPLE",
+                decision=ROUTE_SIMPLE,
                 raw_response="HEURISTIC_CONTEXT_ONLY",
                 run_id=run_id,
                 step_id=current_step_id,
             )
-        return "SIMPLE"
+        return ROUTE_SIMPLE
 
-    # Classification logic with definition-based prompting
+    # --- LLM classifier: 3-way prompt ---
     classification_prompt = (
-        f"Classify the following user query as either 'SIMPLE' or 'COMPLEX'.\n"
+        f"Classify the following query into exactly one of three categories: SIMPLE, STANDARD, or SYSTEM.\n"
         f"Query: {query}\n\n"
         f"Definitions:\n"
-        f"- SIMPLE: Can be answered directly by your foundational knowledge OR from the conversation history above, without using external tools (e.g., 'Capital of France', 'Explain concept', 'What was the filename I just asked you to create?').\n"
-        f"- COMPLEX: Requires external tools, searching the web, executing code, checking real-time data, sending emails, OR confirming/continuing a previous multi-step workflow (e.g., 'yes', 'proceed', 'continue').\n\n"
-        f"Respond with ONLY 'SIMPLE' or 'COMPLEX'."
+        f"- SIMPLE: Can be answered directly from your foundational knowledge or conversation history — no external tools needed "
+        f"(e.g., 'Capital of France', 'Explain a concept', 'What was the filename you just created?').\n"
+        f"- STANDARD: Normal user request requiring tools, skills, agents, web search, code execution, URL fetching, "
+        f"YouTube transcripts, API calls, file operations, OR continuing a multi-step workflow "
+        f"(e.g., 'yes/proceed/continue', 'get the transcript for this URL', 'research X and write a report').\n"
+        f"- SYSTEM: Automated/utility process that is NOT a user request — cron jobs, scheduled tasks, "
+        f"heartbeat checks, system monitoring, background maintenance "
+        f"(e.g., 'run the daily digest cron', 'check system health', 'process the scheduled task queue').\n\n"
+        f"Respond with ONLY one word: SIMPLE, STANDARD, or SYSTEM."
     )
 
-    # We use the client to query, but since it has tools configured, we must rely on the prompt to restrict tool usage.
-    # In a production system, we might use a separate client without tools.
     with logfire.span(
         "llm_api_wait",
         context="classification",
@@ -6995,12 +7055,15 @@ async def classify_query(client: ClaudeSDKClient, query: str) -> str:
 
     decision = result_text.strip().upper()
 
-    # Safe fallback
-    final_decision = "SIMPLE" if "SIMPLE" in decision else "COMPLEX"
+    # Precedence: SYSTEM > SIMPLE > STANDARD (STANDARD is the safe fallback for ambiguous tool queries)
+    if "SYSTEM" in decision:
+        final_decision = ROUTE_SYSTEM
+    elif "SIMPLE" in decision:
+        final_decision = ROUTE_SIMPLE
+    else:
+        final_decision = ROUTE_STANDARD
 
-    print(
-        f"\n🤔 Query Classification: {final_decision} (Model logic: {decision[:50]}...)"
-    )
+    print(f"\n\U0001f914 Query Classification: {final_decision} (Model: {decision[:50]})")
     if LOGFIRE_TOKEN:
         logfire.info(
             "query_classification",
@@ -8100,13 +8163,12 @@ async def process_turn(
                 workspace_path=workspace_dir,
             )
 
-    # 2. Determine Complexity
-    complexity = (
-        "COMPLEX" if force_complex else await classify_query(client, user_input)
-    )
+    # 2. Determine Route (3-tier: SIMPLE / STANDARD / SYSTEM)
+    route_type = ROUTE_STANDARD if force_complex else await classify_query(client, user_input)
 
-    # 3. Route Query
-    is_simple = (complexity == "SIMPLE") and not force_complex
+    # 3. Route Decision
+    is_simple = route_type == ROUTE_SIMPLE
+    is_system = route_type == ROUTE_SYSTEM
 
     final_response_text = ""
 
@@ -8122,11 +8184,11 @@ async def process_turn(
             return False
     
     if is_simple:
-        # Try Fast Path
+        # SIMPLE path: fast path via direct LLM answer
         emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "fast"}))
         success, fast_path_text = await handle_simple_query(client, user_input)
         if not success:
-            is_simple = False  # Fallback to Complex Path
+            is_simple = False  # Fallback to Standard Path
         else:
             final_response_text = fast_path_text
             # NOTE: Do NOT emit TEXT or ITERATION_END here.
@@ -8137,14 +8199,31 @@ async def process_turn(
             # chat output in the Web UI (every fast-path response
             # appeared twice).
 
+    if is_system and not is_simple:
+        # SYSTEM path detected — log and emit; currently falls through to the tool loop.
+        # Future: delegate immediately to cron/system subagent before entering tool loop.
+        emit_event(AgentEvent(type=EventType.STATUS, data={
+            "status": "system_query_detected",
+            "path": "system",
+            "route": ROUTE_SYSTEM,
+            "is_log": True,
+        }))
+        if LOGFIRE_TOKEN:
+            logfire.info(
+                "system_route_detected",
+                route=ROUTE_SYSTEM,
+                query=user_input[:200],
+                run_id=_ctx.run_id if _ctx else None,
+            )
+
     if not is_simple:
-        # Complex Path (Tool Loop) - track per-request timing
+        # STANDARD or SYSTEM path — tool loop (Simone's full capabilities)
         request_start_ts = time.time()
         iteration = 1
         current_query = f"{system_events_block}\n\n{user_input}" if system_events_block else user_input
-        
-        # Emit processing started for complex path
-        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": "complex", "iteration": iteration}))
+
+        path_label = "system" if is_system else "standard"
+        emit_event(AgentEvent(type=EventType.STATUS, data={"status": "processing", "path": path_label, "iteration": iteration}))
 
         while True:
             try:
@@ -9380,17 +9459,17 @@ async def main(args: argparse.Namespace):
                         break
 
                     try:
-                        # [Harness Mode] Force Complex Path to avoid Fast Path output capture bug
+                        # [Harness Mode] Force Standard Path to avoid Fast Path output capture bug
                         harness_info = get_iteration_info(runtime_db_conn, run_id)
                         force_complex_for_harness = bool(harness_info.get("completion_promise"))
                         if force_complex_for_harness:
-                            print("📋 Harness mode active - forcing Complex Path")
+                            print("📋 Harness mode active - forcing Standard Path")
 
                         if gateway:
                             gateway_used_fast_path = False
                             if not force_complex_for_harness:
                                 gateway_decision = await classify_query(client, user_input)
-                                if gateway_decision == "SIMPLE":
+                                if gateway_decision == ROUTE_SIMPLE:
                                     handled, fast_path_text = await handle_simple_query(
                                         client, user_input
                                     )
