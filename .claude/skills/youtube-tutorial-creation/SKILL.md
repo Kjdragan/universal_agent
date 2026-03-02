@@ -7,6 +7,9 @@ description: |
 
 # YouTube Tutorial Creation Skill
 
+> **Mandatory Dependency:** Always invoke the `youtube-transcript-metadata` skill first (Step 3 below).
+> Never fetch transcripts or metadata inline — the transcript skill is the single source of truth.
+
 This skill converts a YouTube tutorial into durable, referenceable artifacts:
 - `CONCEPT.md` (educational tutorial-style writeup)
 - `IMPLEMENTATION.md` (how to run/use)

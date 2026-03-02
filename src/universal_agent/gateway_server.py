@@ -104,6 +104,8 @@ from universal_agent.work_threads import (
     upsert_work_thread,
 )
 from universal_agent.hooks_service import HooksService
+from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
+from universal_agent.services import tutorial_telegram_notifier
 from universal_agent.security_paths import (
     allow_external_workspaces_from_env,
     resolve_ops_log_path,
@@ -1527,6 +1529,7 @@ _heartbeat_service: Optional[HeartbeatService] = None
 _cron_service: Optional[CronService] = None
 _ops_service: Optional[OpsService] = None
 _hooks_service: Optional[HooksService] = None
+_yt_playlist_watcher: Optional[YouTubePlaylistWatcher] = None
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
@@ -6507,6 +6510,7 @@ def _hook_notification_sink(payload: dict[str, Any]) -> None:
         requires_action=bool(payload.get("requires_action")),
         metadata=metadata if isinstance(metadata, dict) else None,
     )
+    tutorial_telegram_notifier.maybe_send(payload)
 
 
 def _normalize_notification_status(status: str) -> str:
@@ -8279,7 +8283,7 @@ async def lifespan(app: FastAPI):
     main_module.budget_config = main_module.load_budget_config()
     
     # Initialize Heartbeat Service
-    global _heartbeat_service, _cron_service, _ops_service, _hooks_service
+    global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
     global _todoist_chron_reconcile_task, _todoist_chron_reconcile_stop_event
     if HEARTBEAT_ENABLED:
@@ -8348,6 +8352,21 @@ async def lifespan(app: FastAPI):
         notification_sink=_hook_notification_sink,
     )
     logger.info("🪝 Hooks Service Initialized")
+
+    # YouTube tutorial playlist watcher (native UA poller — replaces CSI ingester source)
+    async def _yt_watcher_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
+        if _hooks_service is None:
+            return False, "hooks_service_not_ready"
+        return await _hooks_service.dispatch_internal_payload(
+            subpath=subpath, payload=payload, headers={"x-ua-source": "yt_playlist_watcher"}
+        )
+
+    _yt_playlist_watcher = YouTubePlaylistWatcher(
+        dispatch_fn=_yt_watcher_dispatch_fn,
+        notification_sink=_hook_notification_sink,
+    )
+    await _yt_playlist_watcher.start()
+
     try:
         recovered = await _hooks_service.recover_interrupted_youtube_sessions(WORKSPACES_DIR)
     except Exception:
@@ -8409,6 +8428,8 @@ async def lifespan(app: FastAPI):
             pass
         _todoist_chron_reconcile_task = None
     _todoist_chron_reconcile_stop_event = None
+    if _yt_playlist_watcher:
+        await _yt_playlist_watcher.stop()
     if _heartbeat_service:
         await _heartbeat_service.stop()
     if _cron_service:
@@ -12252,6 +12273,25 @@ async def dashboard_tutorial_bootstrap_repo(request: Request, payload: TutorialB
         "stdout": stdout[-4000:],
         "stderr": stderr[-2000:],
     }
+
+
+@app.get("/api/v1/ops/youtube-playlist-watcher")
+async def ops_yt_playlist_watcher_status(request: Request):
+    _require_ops_auth(request)
+    if _yt_playlist_watcher is None:
+        return {"enabled": False, "reason": "not_initialized"}
+    status = _yt_playlist_watcher.status()
+    status["telegram"] = tutorial_telegram_notifier.configured_status()
+    return status
+
+
+@app.post("/api/v1/ops/youtube-playlist-watcher/poll")
+async def ops_yt_playlist_watcher_poll_now(request: Request):
+    _require_ops_auth(request)
+    if _yt_playlist_watcher is None:
+        raise HTTPException(status_code=503, detail="YouTube playlist watcher not initialized")
+    result = await _yt_playlist_watcher.poll_now()
+    return result
 
 
 @app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")

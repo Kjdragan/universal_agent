@@ -63,6 +63,20 @@ type PipelineNotification = {
   metadata?: Record<string, unknown>;
 };
 
+type WatcherStatus = {
+  enabled: boolean;
+  playlist_id?: string;
+  poll_interval_seconds?: number;
+  last_poll_at?: string;
+  last_poll_ok?: boolean;
+  last_error?: string;
+  seen_count?: number;
+  dispatched_total?: number;
+  poll_count?: number;
+  reason?: string;
+  telegram?: { configured: boolean; bot_token_set: boolean; chat_id_set: boolean };
+};
+
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -116,6 +130,20 @@ async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, tim
   }
 }
 
+const KIND_EMOJI: Record<string, string> = {
+  youtube_playlist_new_video: "🎬",
+  youtube_playlist_dispatch_failed: "⚠️",
+  youtube_tutorial_started: "▶️",
+  youtube_tutorial_progress: "⏳",
+  youtube_tutorial_ready: "✅",
+  youtube_tutorial_failed: "❌",
+  youtube_ingest_failed: "❌",
+  hook_dispatch_queue_overflow: "⚠️",
+  youtube_hook_recovery_queued: "🔁",
+  tutorial_review_ready: "📋",
+  tutorial_review_failed: "❌",
+};
+
 const SEVERITY_STYLES: Record<string, string> = {
   success: "border-emerald-600/50 bg-emerald-900/20 text-emerald-200",
   error: "border-rose-600/50 bg-rose-900/20 text-rose-200",
@@ -166,6 +194,9 @@ export default function DashboardTutorialsPage() {
   const [bootstrappingRunPath, setBootstrappingRunPath] = useState<string>("");
   const [seenRuns, setSeenRuns] = useState<Set<string>>(new Set());
   const [showNotifications, setShowNotifications] = useState(true);
+  const [watcherStatus, setWatcherStatus] = useState<WatcherStatus | null>(null);
+  const [pollingNow, setPollingNow] = useState(false);
+  const [pollResult, setPollResult] = useState<string>("");
 
   // Load seen runs from localStorage on mount
   useEffect(() => {
@@ -213,7 +244,36 @@ export default function DashboardTutorialsPage() {
     void load();
   }, [load]);
 
-  // Auto-refresh notifications every 30s
+  const fetchWatcherStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/youtube-playlist-watcher`);
+      if (res.ok) setWatcherStatus(await res.json() as WatcherStatus);
+    } catch { }
+  }, []);
+
+  useEffect(() => { void fetchWatcherStatus(); }, [fetchWatcherStatus]);
+
+  const pollNow = useCallback(async () => {
+    setPollingNow(true);
+    setPollResult("");
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/youtube-playlist-watcher/poll`, { method: "POST" });
+      const data = await res.json().catch(() => ({})) as Record<string, unknown>;
+      if (!res.ok) {
+        setPollResult(`Poll failed: ${asText(data.detail) || res.status}`);
+      } else {
+        const n = Number(data.new_dispatched ?? 0);
+        setPollResult(n > 0 ? `Dispatched ${n} new video${n !== 1 ? "s" : ""}` : "No new videos found");
+      }
+      await fetchWatcherStatus();
+    } catch (err: unknown) {
+      setPollResult(`Poll error: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setPollingNow(false);
+    }
+  }, [fetchWatcherStatus]);
+
+  // Auto-refresh notifications and watcher status every 30s
   useEffect(() => {
     const hasActiveBootstrapJobs = bootstrapJobs.some((job) => {
       const status = asText(job.status).toLowerCase();
@@ -239,9 +299,10 @@ export default function DashboardTutorialsPage() {
           }
         }
       } catch { }
+      void fetchWatcherStatus();
     }, refreshMs);
     return () => clearInterval(interval);
-  }, [bootstrapJobs]);
+  }, [bootstrapJobs, fetchWatcherStatus]);
 
   // Mark currently visible runs as seen after initial load
   useEffect(() => {
@@ -518,6 +579,69 @@ export default function DashboardTutorialsPage() {
         </button>
       </div>
 
+      {/* ── Playlist Watcher Status ── */}
+      {watcherStatus !== null && (
+        <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-slate-300">📺 Playlist Watcher</span>
+              {watcherStatus.enabled ? (
+                <span className="rounded bg-emerald-900/60 border border-emerald-700/50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-300">Active</span>
+              ) : (
+                <span className="rounded bg-slate-800 border border-slate-700/50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-slate-400">
+                  {watcherStatus.reason === "not_initialized" ? "Not Initialized" : "Disabled"}
+                </span>
+              )}
+              {watcherStatus.telegram?.configured && (
+                <span title="Telegram notifications configured" className="rounded bg-sky-900/50 border border-sky-700/40 px-1.5 py-0.5 text-[10px] text-sky-300">✈️ Telegram</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {pollResult && (
+                <span className={`text-[11px] ${pollResult.startsWith("Poll") ? "text-rose-300" : "text-emerald-300"}`}>
+                  {pollResult}
+                </span>
+              )}
+              {watcherStatus.enabled && (
+                <button
+                  type="button"
+                  onClick={() => void pollNow()}
+                  disabled={pollingNow}
+                  className="rounded border border-sky-700/60 bg-sky-900/25 px-2 py-1 text-[11px] text-sky-100 hover:bg-sky-900/40 disabled:opacity-50"
+                >
+                  {pollingNow ? "Polling..." : "Poll Now"}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400">
+            {watcherStatus.playlist_id && (
+              <span>Playlist: <code className="text-slate-300">{watcherStatus.playlist_id}</code></span>
+            )}
+            {watcherStatus.poll_interval_seconds !== undefined && (
+              <span>Interval: {watcherStatus.poll_interval_seconds}s</span>
+            )}
+            {watcherStatus.last_poll_at && (
+              <span>
+                Last poll: <span className={watcherStatus.last_poll_ok === false ? "text-rose-300" : "text-slate-300"}>
+                  {timeAgo(watcherStatus.last_poll_at)}
+                  {watcherStatus.last_poll_ok === false && " ✗"}
+                </span>
+              </span>
+            )}
+            {watcherStatus.seen_count !== undefined && (
+              <span>Seen videos: {watcherStatus.seen_count}</span>
+            )}
+            {watcherStatus.dispatched_total !== undefined && (
+              <span>Dispatched total: {watcherStatus.dispatched_total}</span>
+            )}
+            {watcherStatus.last_error && (
+              <span className="text-rose-300" title={watcherStatus.last_error}>Error: {watcherStatus.last_error.slice(0, 60)}</span>
+            )}
+          </div>
+        </section>
+      )}
+
       {/* ── Pipeline Notifications ── */}
       {visibleNotifications.length > 0 && (
         <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-3">
@@ -548,17 +672,26 @@ export default function DashboardTutorialsPage() {
               {visibleNotifications.slice(0, 8).map((n) => {
                 const style = SEVERITY_STYLES[n.severity] || SEVERITY_STYLES.info;
                 const dot = SEVERITY_DOTS[n.severity] || SEVERITY_DOTS.info;
+                const kindEmoji = KIND_EMOJI[n.kind];
+                const videoUrl = typeof n.metadata?.video_url === "string" ? n.metadata.video_url : "";
                 return (
                   <div
                     key={n.id}
                     className={`group flex items-start gap-2 rounded border px-2.5 py-1.5 text-xs ${style}`}
                   >
-                    <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+                    {kindEmoji ? (
+                      <span className="mt-0.5 shrink-0 text-sm leading-none" aria-hidden="true">{kindEmoji}</span>
+                    ) : (
+                      <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+                    )}
                     <div className="min-w-0 flex-1">
                       <span className="font-medium">{n.title}</span>
                       <span className="ml-1.5 text-[10px] opacity-70">{timeAgo(n.created_at)}</span>
                       {n.message && n.message !== n.title && (
                         <p className="mt-0.5 truncate opacity-80">{n.message}</p>
+                      )}
+                      {videoUrl && (
+                        <a href={videoUrl} target="_blank" rel="noopener noreferrer" className="mt-0.5 block text-[10px] text-cyan-300 underline underline-offset-2 opacity-80 hover:opacity-100">Watch video →</a>
                       )}
                     </div>
                     <button

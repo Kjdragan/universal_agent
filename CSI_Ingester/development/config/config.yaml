@@ -7,7 +7,7 @@ storage:
 
 sources:
   youtube_playlist:
-    enabled: true
+    enabled: false
     poll_interval_seconds: 30
     playlists:
       - id: "${YT_TUTORIALS_PLAYLIST_ID}"
