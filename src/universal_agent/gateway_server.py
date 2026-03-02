@@ -8894,22 +8894,43 @@ async def signals_ingest_endpoint(request: Request):
                         project_key="csi",
                     )
                 except Exception as exc:
-                    logger.exception("Failed to create Todoist task for CSI signal")
-                    debug_info = (
-                        f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
-                        f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
-                    )
-                    _add_notification(
-                        kind="system_error",
-                        title="Todoist Sync Failed",
-                        message=(
-                            "Could not sync CSI task to Todoist. "
-                            "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
-                            f"and taxonomy. Error: {exc}. Debug: {debug_info}"
-                        ),
-                        severity="error",
-                        metadata={"integration": "todoist", "reason": "task_sync_failed"},
-                    )
+                    exc_str = str(exc)
+                    is_limit = "MAX_ITEMS_LIMIT_REACHED" in exc_str or "Maximum number of items" in exc_str
+                    if is_limit:
+                        logger.warning("Todoist CSI project item limit reached; skipping task sync: %s", exc)
+                        if not _has_recent_notification(
+                            kind="system_notice",
+                            metadata_match={"integration": "todoist", "reason": "items_limit_reached"},
+                            within_seconds=3600,
+                        ):
+                            _add_notification(
+                                kind="system_notice",
+                                title="Todoist CSI Project Full",
+                                message=(
+                                    "The 'UA: CSI Actions' Todoist project has reached its item limit. "
+                                    "Complete or delete old tasks to resume syncing. "
+                                    "New CSI signals are still visible in the CSI Feed tab."
+                                ),
+                                severity="warning",
+                                metadata={"integration": "todoist", "reason": "items_limit_reached"},
+                            )
+                    else:
+                        logger.exception("Failed to create Todoist task for CSI signal")
+                        debug_info = (
+                            f"TODOIST_API_KEY={'found' if has_api_key else 'missing'} "
+                            f"TODOIST_API_TOKEN={'found' if has_api_token else 'missing'}"
+                        )
+                        _add_notification(
+                            kind="system_error",
+                            title="Todoist Sync Failed",
+                            message=(
+                                "Could not sync CSI task to Todoist. "
+                                "Check Todoist credentials (TODOIST_API_TOKEN or TODOIST_API_KEY) "
+                                f"and taxonomy. Error: {exc}. Debug: {debug_info}"
+                            ),
+                            severity="error",
+                            metadata={"integration": "todoist", "reason": "task_sync_failed"},
+                        )
 
         if dispatch_count > 0:
             body["internal_dispatches"] = dispatch_count

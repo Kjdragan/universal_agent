@@ -355,7 +355,7 @@ class TodoService:
 
     def complete_task(self, task_id: str, summary: str | None = None) -> bool:
         try:
-            self.api.close_task(task_id)
+            self.api.complete_task(task_id)
             if summary:
                 self.add_comment(task_id, f"**Agent note:** {summary}")
             return True
@@ -688,7 +688,9 @@ def _find_by_name(items: list[object], name: str) -> Optional[object]:
 
 def _collect_items(values: object) -> list[object]:
     out: list[object] = []
-    for item in list(values or []):
+    if values is None:
+        return out
+    for item in values:
         if isinstance(item, list):
             out.extend(item)
         else:
