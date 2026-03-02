@@ -51,7 +51,7 @@ from universal_agent.delegation.redis_bus import (
 )
 from universal_agent.delegation.schema import MissionEnvelope, MissionPayload
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
+from fastapi import BackgroundTasks, FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -8590,9 +8590,7 @@ async def signals_ingest_endpoint(request: Request):
                 analytics_throttled_count += 1
                 continue
 
-            ok, _reason = await _hooks_service.dispatch_internal_action(analytics_action)
-            if not ok:
-                continue
+            asyncio.create_task(_hooks_service.dispatch_internal_action(analytics_action))
             _csi_record_dispatch(event.source, event.event_type)
             analytics_dispatch_count += 1
 
@@ -8831,7 +8829,8 @@ async def signals_ingest_endpoint(request: Request):
                             max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))
                         ),
                     }
-                    follow_ok, follow_reason = await _hooks_service.dispatch_internal_action(followup_payload)
+                    asyncio.create_task(_hooks_service.dispatch_internal_action(followup_payload))
+                    follow_ok, follow_reason = True, "background"
                     _add_notification(
                         kind="csi_specialist_followup_requested" if follow_ok else "csi_specialist_followup_request_failed",
                         title="CSI Specialist Follow-up Requested" if follow_ok else "CSI Specialist Follow-up Request Failed",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from typing import Any
 
@@ -21,6 +22,8 @@ class UAEmitter:
         self.shared_secret = shared_secret
         self.instance_id = instance_id
         self.csi_version = csi_version
+        # Allow overriding via env var; default 120s to accommodate heavy analytics payloads
+        self.emit_timeout_seconds = int(os.environ.get("CSI_UA_EMIT_TIMEOUT_SECONDS", "120"))
 
     async def emit_batch(self, events: list[CreatorSignalEvent], timeout_seconds: int = 30) -> tuple[int, dict[str, Any]]:
         payload = {
@@ -54,7 +57,7 @@ class UAEmitter:
         last_status = 0
         last_body: dict[str, Any] = {}
         for attempt in range(1, max_attempts + 1):
-            status_code, payload = await self.emit_batch(events)
+            status_code, payload = await self.emit_batch(events, timeout_seconds=self.emit_timeout_seconds)
             last_status, last_body = status_code, payload
             if 200 <= status_code < 300:
                 return True, status_code, payload
