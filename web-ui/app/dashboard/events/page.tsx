@@ -241,6 +241,7 @@ export default function DashboardEventsPage() {
   const [counters, setCounters] = useState<EventCounters>(emptyCounters());
   const [activityMetrics, setActivityMetrics] = useState<ActivityOpsMetrics | null>(null);
   const [activityMetricsError, setActivityMetricsError] = useState("");
+  const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
 
   const sseSeqRef = useRef(0);
   const sseFailuresRef = useRef(0);
@@ -351,6 +352,57 @@ export default function DashboardEventsPage() {
       void loadCounters();
     }, 350);
   }, [loadCounters]);
+
+  const deleteAllNotifications = useCallback(async () => {
+    const ids = items.map((row) => String(row.id || "").trim()).filter(Boolean);
+    const targetCount = ids.length;
+    if (targetCount === 0) return;
+    if (!window.confirm(`Delete all ${targetCount} visible notifications/events?`)) return;
+
+    setBulkDeleteBusy(true);
+    try {
+      const results = await Promise.allSettled(
+        ids.map(async (eventId) => {
+          const res = await fetch(
+            `${API_BASE}/api/v1/dashboard/activity/${encodeURIComponent(eventId)}`,
+            { method: "DELETE" },
+          );
+          if (!res.ok) {
+            const payload = await res.json().catch(() => ({}));
+            throw new Error(String(payload.detail || `HTTP ${res.status}`));
+          }
+          return eventId;
+        }),
+      );
+
+      const deletedIds = new Set<string>();
+      let failedCount = 0;
+      for (const row of results) {
+        if (row.status === "fulfilled") {
+          deletedIds.add(row.value);
+        } else {
+          failedCount += 1;
+        }
+      }
+
+      if (deletedIds.size > 0) {
+        setItems((prev) => prev.filter((row) => !deletedIds.has(String(row.id || ""))));
+        setSelectedId((prev) => (deletedIds.has(prev) ? "" : prev));
+      }
+
+      await loadCounters();
+
+      if (failedCount > 0) {
+        setHandoffResult(`Deleted ${deletedIds.size} item(s); ${failedCount} failed.`);
+      } else {
+        setHandoffResult(`Deleted ${deletedIds.size} notification/event item(s).`);
+      }
+    } catch (err: any) {
+      setHandoffResult(err?.message || "Failed to delete notifications/events.");
+    } finally {
+      setBulkDeleteBusy(false);
+    }
+  }, [items, loadCounters]);
 
   const loadEvents = useCallback(async ({ append = false, cursorToken = "" }: { append?: boolean; cursorToken?: string } = {}) => {
     if (append) {
@@ -864,6 +916,17 @@ export default function DashboardEventsPage() {
           <span className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-300">
             Stream: {sseStateText}
           </span>
+          <button
+            type="button"
+            onClick={() => {
+              void deleteAllNotifications();
+            }}
+            disabled={bulkDeleteBusy || items.length === 0}
+            className="rounded border border-rose-800/60 bg-rose-950/25 px-3 py-1.5 text-xs text-rose-200 hover:bg-rose-900/35 disabled:cursor-not-allowed disabled:opacity-50"
+            title="Delete all currently visible notifications/events"
+          >
+            {bulkDeleteBusy ? "Deleting..." : `Delete All (${items.length})`}
+          </button>
           <button
             type="button"
             onClick={() => {
