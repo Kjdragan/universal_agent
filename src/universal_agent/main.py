@@ -155,6 +155,8 @@ from universal_agent.execution_context import bind_workspace
 from universal_agent.execution_session import ExecutionSession
 from universal_agent.session_ctx import (
     SessionContext as _SessionContext,
+    get_ctx as _get_ctx,
+    require_ctx as _require_ctx,
     set_ctx as _set_ctx,
 )
 from universal_agent.trace_utils import write_trace
