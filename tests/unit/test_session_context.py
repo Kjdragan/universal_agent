@@ -210,6 +210,43 @@ async def test_three_concurrent_sessions_fully_isolated():
 
 
 @pytest.mark.asyncio
+async def test_execution_engine_create_task_pattern():
+    """
+    Mirrors the exact pattern in execution_engine.py:
+
+        async def run_engine():
+            execution_session = ExecutionSession(run_id=..., ...)
+            # ... process_turn calls set_ctx(SessionContext(run_id=...)) ...
+
+        engine_task = asyncio.create_task(run_engine())
+
+    Two concurrent engine_task calls must each see only their own session state.
+    This is the key Phase 1 correctness property.
+    """
+    results: dict = {}
+    both_started = asyncio.Barrier(2)
+
+    async def run_engine(session_name: str, delay: float) -> None:
+        # Simulate what process_turn does at entry: set_ctx with session data
+        ctx = SessionContext(run_id=f"run-{session_name}")
+        set_ctx(ctx)
+        # Both tasks are now running — hold at barrier to force overlap
+        await both_started.wait()
+        await asyncio.sleep(delay)
+        # After yielding, each task must still see its own run_id
+        results[session_name] = require_ctx().run_id
+
+    # Both tasks created from the same parent context — this is exactly what
+    # execution_engine.py does when two gateway sessions are dispatched.
+    task1 = asyncio.create_task(run_engine("alpha", delay=0.05))
+    task2 = asyncio.create_task(run_engine("beta", delay=0.01))
+    await asyncio.gather(task1, task2)
+
+    assert results["alpha"] == "run-alpha", f"Session alpha contaminated: {results['alpha']}"
+    assert results["beta"] == "run-beta", f"Session beta contaminated: {results['beta']}"
+
+
+@pytest.mark.asyncio
 async def test_parent_context_not_affected_by_child_task():
     """
     The parent task's context must not be changed by child task's set_ctx().

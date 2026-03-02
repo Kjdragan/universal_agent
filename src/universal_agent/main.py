@@ -153,6 +153,10 @@ from universal_agent.cli_io import (
 )
 from universal_agent.execution_context import bind_workspace
 from universal_agent.execution_session import ExecutionSession
+from universal_agent.session_ctx import (
+    SessionContext as _SessionContext,
+    set_ctx as _set_ctx,
+)
 from universal_agent.trace_utils import write_trace
 from universal_agent.trace_catalog import (
     emit_trace_catalog,
@@ -7797,6 +7801,35 @@ async def process_turn(
     abs_workspace_dir = bind_workspace(
         workspace_dir, absolute=True, observer_setter=_set_observer_workspace
     )
+
+    # Phase 1: Establish ContextVar-backed session context for this asyncio task.
+    # asyncio.create_task() copies the current context, so this assignment is
+    # invisible to sibling tasks — each concurrent session gets its own copy.
+    # Mutable containers are passed by reference intentionally: in-place mutations
+    # (append, pop, clear) stay in sync with the module globals during the
+    # incremental migration. Scalar fields will be migrated in Phase 2.
+    _set_ctx(_SessionContext(
+        run_id=run_id,
+        trace=trace,
+        runtime_db_conn=runtime_db_conn,
+        current_step_id=current_step_id,
+        tool_ledger=tool_ledger,
+        observer_workspace_dir=OBSERVER_WORKSPACE_DIR,
+        forced_tool_queue=forced_tool_queue,
+        start_ts=start_ts,
+        forced_tool_mode_active=forced_tool_mode_active,
+        budget_state=budget_state,
+        gateway_mode_active=gateway_mode_active,
+        budget_config=budget_config,
+        forced_tool_active_ids=forced_tool_active_ids,
+        tool_execution_emitted_ids=tool_execution_emitted_ids,
+        provider_session_forked_from=provider_session_forked_from,
+        primary_transcript_path=_primary_transcript_path,
+        tool_execution_stream_start_times=tool_execution_stream_start_times,
+        tool_execution_start_times=tool_execution_start_times,
+        gateway_tool_call_map=gateway_tool_call_map,
+        seen_transcript_paths=_seen_transcript_paths,
+    ))
 
     # Ephemeral system events (cron completions, exec finishes, monitors) are
     # injected by the gateway/heartbeat service via env for this single turn.
