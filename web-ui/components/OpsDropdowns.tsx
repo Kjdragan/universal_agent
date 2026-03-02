@@ -27,6 +27,8 @@ type SessionSummary = {
   workspace_dir?: string;
   active_connections?: number;
   active_runs?: number;
+  rehydrate_ready?: boolean;
+  rehydrate_reason?: string;
 };
 type SkillStatus = { name: string; enabled: boolean; available: boolean; unavailable_reason?: string | null };
 type SystemEventItem = { id: string; event_type: string; payload: Record<string, unknown>; created_at?: string; session_id?: string; timestamp: number };
