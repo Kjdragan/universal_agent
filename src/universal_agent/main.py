@@ -3396,13 +3396,13 @@ async def on_subagent_stop(
     Hook: Fires when a sub-agent completes its work.
     Verifies artifacts were created and injects guidance for next steps.
     """
+    global OBSERVER_WORKSPACE_DIR
     _ctx = _get_ctx()
     if _ctx is not None:
         OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     logfire.info("subagent_stop_hook_fired", input_preview=str(input_data)[:500])
 
     # Check if report was created in work_products/
-    global OBSERVER_WORKSPACE_DIR
     if OBSERVER_WORKSPACE_DIR:
         work_products = os.path.join(OBSERVER_WORKSPACE_DIR, "work_products")
         search_results = os.path.join(OBSERVER_WORKSPACE_DIR, "search_results")
