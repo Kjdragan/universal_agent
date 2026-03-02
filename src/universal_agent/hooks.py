@@ -77,8 +77,12 @@ _RESEARCH_PIPELINE_SEARCH_MARKERS = (
     "gather information",
     "what happened",
     "news on",
-    "research",
     "look up",
+    "do some research",
+    "conduct research",
+    "research on ",
+    "research about",
+    "research this",
 )
 
 _RESEARCH_PIPELINE_REPORT_MARKERS = (
@@ -86,7 +90,8 @@ _RESEARCH_PIPELINE_REPORT_MARKERS = (
     "generate a report",
     "write a report",
     "research report",
-    "report",
+    "compile a report",
+    "put together a report",
 )
 
 _RESEARCH_PIPELINE_DELIVERY_MARKERS = (
@@ -286,9 +291,25 @@ def _looks_like_explicit_vp_intent(text: Any) -> bool:
     return any(pattern.search(candidate) for pattern in _VP_EXPLICIT_INTENT_PATTERNS)
 
 
+_RESEARCH_PIPELINE_MEDIA_EXCLUSIONS = (
+    "youtu.be",
+    "youtube.com",
+    "transcript",
+    "youtube video",
+    "subtitles",
+    "captions",
+    "download video",
+    "video id",
+    "podcast",
+)
+
+
 def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
     candidate = str(text or "").strip().lower()
     if not candidate:
+        return False
+    # Fast exclusion: media/transcript fetches are never research pipeline tasks.
+    if any(m in candidate for m in _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS):
         return False
     has_search = any(marker in candidate for marker in _RESEARCH_PIPELINE_SEARCH_MARKERS)
     has_report = any(marker in candidate for marker in _RESEARCH_PIPELINE_REPORT_MARKERS)
