@@ -797,6 +797,25 @@ export default function DashboardEventsPage() {
     }
   }, []);
 
+  const deleteNotification = useCallback(async (id: string, opts?: { skipConfirm?: boolean }) => {
+    const eventId = String(id || "").trim();
+    if (!eventId) return;
+    if (!opts?.skipConfirm && !window.confirm("Delete this notification?")) return;
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/v1/dashboard/activity/${encodeURIComponent(eventId)}`,
+        { method: "DELETE" },
+      );
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(String(payload.detail || `HTTP ${res.status}`));
+      setItems((prev) => prev.filter((row) => row.id !== eventId));
+      setSelectedId((prev) => (prev === eventId ? "" : prev));
+      await loadCounters();
+    } catch (err: any) {
+      setHandoffResult(err?.message || "Failed to delete notification.");
+    }
+  }, [loadCounters]);
+
   async function submitHandoff() {
     if (!selected) return;
     const instruction = handoffInstruction.trim();
@@ -1015,35 +1034,49 @@ export default function DashboardEventsPage() {
             const severityStyle = SEVERITY_STYLES[item.severity] || SEVERITY_STYLES.info;
             const active = selectedId === item.id;
             return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => setSelectedId(item.id)}
-                className={[
-                  "w-full rounded border px-3 py-2 text-left transition-colors",
-                  active
-                    ? "border-cyan-500/60 bg-cyan-500/10"
-                    : "border-slate-800 bg-slate-950/40 hover:bg-slate-900/60",
-                ].join(" ")}
-              >
-                <div className="mb-1 flex items-center gap-2">
-                  <span className={`rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${sourceStyle}`}>
-                    {item.source_domain}
-                  </span>
-                  <span className={`text-[10px] uppercase ${severityStyle}`}>{item.severity}</span>
-                  {(item.kind === "csi_delivery_health_regression" || item.kind === "csi_delivery_health_recovered") && (
-                    <span className="text-[10px] uppercase text-amber-300">canary</span>
-                  )}
-                  {Boolean(item.metadata?.pinned) && (
-                    <span className="text-[10px] uppercase text-amber-300">pinned</span>
-                  )}
-                  <span className="ml-auto text-[10px] text-slate-500" title={formatDateTimeTz(item.created_at_utc, { timeZone: "UTC", placeholder: "--" })}>
-                    {timeAgo(item.created_at_utc)}
-                  </span>
-                </div>
-                <div className="text-sm font-medium text-slate-200">{item.title}</div>
-                <div className="mt-1 text-xs text-slate-400 line-clamp-2">{item.summary || item.full_message}</div>
-              </button>
+              <div key={item.id} className="relative group">
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(item.id)}
+                  className={[
+                    "w-full rounded border px-3 py-2 text-left transition-colors",
+                    active
+                      ? "border-cyan-500/60 bg-cyan-500/10"
+                      : "border-slate-800 bg-slate-950/40 hover:bg-slate-900/60",
+                  ].join(" ")}
+                >
+                  <div className="mb-1 flex items-center gap-2">
+                    <span className={`rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${sourceStyle}`}>
+                      {item.source_domain}
+                    </span>
+                    <span className={`text-[10px] uppercase ${severityStyle}`}>{item.severity}</span>
+                    {(item.kind === "csi_delivery_health_regression" || item.kind === "csi_delivery_health_recovered") && (
+                      <span className="text-[10px] uppercase text-amber-300">canary</span>
+                    )}
+                    {Boolean(item.metadata?.pinned) && (
+                      <span className="text-[10px] uppercase text-amber-300">pinned</span>
+                    )}
+                    <span className="ml-auto pr-6 text-[10px] text-slate-500" title={formatDateTimeTz(item.created_at_utc, { timeZone: "UTC", placeholder: "--" })}>
+                      {timeAgo(item.created_at_utc)}
+                    </span>
+                  </div>
+                  <div className="text-sm font-medium text-slate-200">{item.title}</div>
+                  <div className="mt-1 text-xs text-slate-400 line-clamp-2">{item.summary || item.full_message}</div>
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); void deleteNotification(item.id); }}
+                  className="absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity rounded p-1 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40"
+                  title="Delete notification"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14H6L5 6"/>
+                    <path d="M10 11v6M14 11v6"/>
+                    <path d="M9 6V4h6v2"/>
+                  </svg>
+                </button>
+              </div>
             );
           })}
           {hasMore && (
@@ -1086,6 +1119,20 @@ export default function DashboardEventsPage() {
                   >
                     Local: {formatDateTimeTz(selected.created_at_utc, { placeholder: "--" })}
                   </span>
+                  <button
+                    type="button"
+                    onClick={() => void deleteNotification(selected.id)}
+                    className="ml-auto flex items-center gap-1 rounded border border-rose-700/60 bg-rose-950/20 px-2 py-1 text-[11px] text-rose-300 hover:bg-rose-900/40 hover:text-rose-200 transition-colors"
+                    title="Delete this notification"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6"/>
+                      <path d="M19 6l-1 14H6L5 6"/>
+                      <path d="M10 11v6M14 11v6"/>
+                      <path d="M9 6V4h6v2"/>
+                    </svg>
+                    Delete
+                  </button>
                 </div>
                 <div className="text-sm font-semibold text-slate-100">{selected.title}</div>
                 <div className="mt-1 text-[10px] font-mono text-slate-500">

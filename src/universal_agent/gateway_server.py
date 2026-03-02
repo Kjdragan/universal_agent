@@ -11463,6 +11463,38 @@ async def dashboard_activity_action(activity_id: str, payload: ActivityEventActi
     return {"ok": True, "action": action, "event": refreshed or event}
 
 
+@app.delete("/api/v1/dashboard/activity/{activity_id}")
+async def dashboard_activity_delete(activity_id: str, request: Request):
+    event_id = str(activity_id or "").strip()
+    if not event_id:
+        raise HTTPException(status_code=400, detail="activity_id is required")
+    event = _get_activity_event(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Activity event not found")
+    actor = _activity_actor_from_request(request)
+    with _activity_store_lock:
+        conn = _activity_connect()
+        try:
+            _ensure_activity_schema(conn)
+            conn.execute("DELETE FROM activity_events WHERE id = ?", (event_id,))
+            _activity_stream_append(
+                conn,
+                event_id=event_id,
+                op="delete",
+                payload={"id": event_id},
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    _record_activity_audit(
+        event_id=event_id,
+        action="delete",
+        actor=actor,
+        outcome="ok",
+    )
+    return {"ok": True, "deleted": event_id}
+
+
 @app.patch("/api/v1/dashboard/notifications/{notification_id}")
 async def dashboard_notification_update(notification_id: str, payload: NotificationUpdateRequest, request: Request):
     _apply_notification_snooze_expiry()
