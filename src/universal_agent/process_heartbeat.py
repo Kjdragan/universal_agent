@@ -8,13 +8,27 @@ long-running LLM call, the heartbeat file keeps getting updated.
 The companion ``vps_service_watchdog.sh`` checks this file's freshness
 instead of (or in addition to) an HTTP health probe.
 
+.. important::
+
+   **This is NOT the UA Heartbeat Service** (``heartbeat_service.py``).
+
+   ============================================  ==========================================
+   **Process Heartbeat** (this module)           **UA Heartbeat Service**
+   ============================================  ==========================================
+   OS-level liveness signal                      Application-level proactive agent scheduler
+   Daemon thread, writes file every 10s          Async task, runs agent every ~30 min
+   Independent of event loop                     Runs ON the event loop
+   Read by ``vps_service_watchdog.sh``           Drives HEARTBEAT.md checks, Todoist, etc.
+   Env prefix: ``UA_PROCESS_HEARTBEAT_*``        Env prefix: ``UA_HEARTBEAT_*`` / ``UA_HB_*``
+   ============================================  ==========================================
+
 Env vars
 --------
-UA_HEARTBEAT_FILE
+UA_PROCESS_HEARTBEAT_FILE
     Path to the heartbeat file.
     Default: ``/var/lib/universal-agent/heartbeat/gateway.heartbeat``
 
-UA_HEARTBEAT_INTERVAL_SECONDS
+UA_PROCESS_HEARTBEAT_INTERVAL_SECONDS
     Write interval in seconds.  Default: ``10``.
 """
 
@@ -36,12 +50,18 @@ _thread: threading.Thread | None = None
 
 
 def _heartbeat_path() -> Path:
-    return Path(os.getenv("UA_HEARTBEAT_FILE", _DEFAULT_PATH).strip() or _DEFAULT_PATH)
+    return Path(
+        os.getenv("UA_PROCESS_HEARTBEAT_FILE", os.getenv("UA_HEARTBEAT_FILE", _DEFAULT_PATH)).strip()
+        or _DEFAULT_PATH
+    )
 
 
 def _heartbeat_interval() -> float:
     try:
-        val = float(os.getenv("UA_HEARTBEAT_INTERVAL_SECONDS", str(_DEFAULT_INTERVAL)))
+        raw = os.getenv("UA_PROCESS_HEARTBEAT_INTERVAL_SECONDS")
+        if raw is None:
+            raw = str(_DEFAULT_INTERVAL)
+        val = float(raw)
         return max(1.0, val)
     except (ValueError, TypeError):
         return float(_DEFAULT_INTERVAL)

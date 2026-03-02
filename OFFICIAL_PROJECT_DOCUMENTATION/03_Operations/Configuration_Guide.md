@@ -47,7 +47,39 @@ For session-specific behavior, you can place a `heartbeat_config.json` in the wo
 
 ---
 
-## 4. Best Practices for Junior Developers
+## 4. Process Heartbeat vs Heartbeat Service
+
+> **These are two completely different systems.** Confusing them will lead to misconfiguration.
+
+| | **Process Heartbeat** | **UA Heartbeat Service** |
+|---|---|---|
+| **Purpose** | OS-level liveness signal ("is the gateway process alive?") | Application-level proactive agent scheduler |
+| **Implementation** | Daemon **thread** writes timestamp to file every 10s | Async **task** runs agent sessions every ~30 min |
+| **Event loop** | **Independent** — works even when event loop is blocked | Runs **on** the event loop |
+| **Consumer** | `vps_service_watchdog.sh` (systemd timer) | Internal: drives HEARTBEAT.md checks, Todoist, briefings |
+| **Env prefix** | `UA_PROCESS_HEARTBEAT_*` | `UA_HEARTBEAT_*` / `UA_HB_*` |
+| **Source** | `src/universal_agent/process_heartbeat.py` | `src/universal_agent/heartbeat_service.py` |
+
+### Process Heartbeat
+
+The gateway process runs a background thread that writes the current Unix timestamp to a file every 10 seconds. The VPS service watchdog reads this file instead of making an HTTP health check to determine if the gateway is alive. This prevents false-positive restarts during long-running LLM calls that temporarily block the async event loop.
+
+**Key env vars:**
+- `UA_PROCESS_HEARTBEAT_FILE` — File path (default: `/var/lib/universal-agent/heartbeat/gateway.heartbeat`)
+- `UA_PROCESS_HEARTBEAT_INTERVAL_SECONDS` — Write interval (default: `10`)
+- `UA_WATCHDOG_HEARTBEAT_STALE_SECONDS` — Staleness threshold before watchdog considers process dead (default: `300`)
+
+**Directory requirement:** `/var/lib/universal-agent/heartbeat` must exist and be owned by the `ua` service user. This is handled automatically by `deploy_vps.sh`.
+
+### UA Heartbeat Service
+
+The Heartbeat Service is the proactive agent scheduler that periodically wakes sessions to check HEARTBEAT.md, process Todoist tasks, run system health checks, and perform autonomous briefings. It has no relation to the process liveness mechanism above.
+
+**Key env vars:** `UA_ENABLE_HEARTBEAT`, `UA_HEARTBEAT_EVERY`, `UA_HEARTBEAT_ACTIVE_HOURS`, etc.
+
+---
+
+## 5. Best Practices for Junior Developers
 
 - **Use a `.env` file**: Create a `.env` in the root of the project to manage secrets localy.
 - **Watch the Logs**: Enable Logfire to see the sequence of tool calls and thinking turns in real-time.
