@@ -6,10 +6,19 @@ Certify the CSI rebuild for stable operations through a structured soak period a
 ## 72-Hour Soak Validation Report Template
 
 ### Soak Window
-- **Start:** `YYYY-MM-DDTHH:MM:SSZ`
-- **End:** `YYYY-MM-DDTHH:MM:SSZ`
+- **Start:** `2026-03-02T01:57:00Z`
+- **End:** `2026-03-05T01:57:00Z`
 - **Duration:** 72 hours
 - **Environment:** VPS production (host `100.106.113.93`)
+
+### T=0 Baseline (2026-03-02T01:57Z)
+- **Gateway**: healthy, deployed with packets 14-22 code
+- **Adapters**: youtube_playlist (328 polls/0 failures), youtube_channel_rss (29/0), reddit_discovery (31/0) — all healthy
+- **Pre-existing issue**: csi_analytics source `failing` — delivery timeouts (ua_status_599), 12 DLQ entries
+- **SLO**: breached (delivery success ratio 0.60 vs 0.98 target) — caused by csi_analytics timeouts, not new code
+- **Specialist loops**: 50 total, mix of open/closed, active data flowing
+- **Events (last 1h)**: 26 events (channel_new_upload:11, subreddit_new_post:5, delivery_health_regression:2, + reports/insights)
+- **Notifications**: empty (gateway just restarted; will accumulate during soak)
 
 ### Data Plane Health
 
