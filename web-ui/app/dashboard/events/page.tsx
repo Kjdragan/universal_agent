@@ -1026,20 +1026,22 @@ export default function DashboardEventsPage() {
         <div className="mt-2 flex flex-wrap gap-2">
           {SOURCE_ORDER.map((source) => {
             const bucket = counters.by_source[source] || { unread: 0, actionable: 0, total: 0 };
+            const selected = sourceFilter === source;
             return (
               <button
                 key={`src-chip-${source}`}
                 type="button"
                 onClick={() => setSourceFilter((prev) => (prev === source ? "" : source))}
-                className={`rounded border px-2 py-1 text-[11px] ${SOURCE_STYLES[source] || SOURCE_STYLES.system}`}
+                className={`rounded border px-2 py-1 text-[11px] transition-colors ${SOURCE_STYLES[source] || SOURCE_STYLES.system} ${selected ? "ring-1 ring-cyan-400/70" : "opacity-80 hover:opacity-100"}`}
                 title={`unread: ${bucket.unread} | actionable: ${bucket.actionable} | total: ${bucket.total}`}
+                aria-pressed={selected}
               >
-                {source} {bucket.unread}/{bucket.actionable}/{bucket.total}
+                {source}
               </button>
             );
           })}
           <span className="rounded border border-slate-700 bg-slate-900/60 px-2 py-1 text-[11px] text-slate-300">
-            totals {counters.totals.unread}/{counters.totals.actionable}/{counters.totals.total}
+            totals
           </span>
         </div>
 
