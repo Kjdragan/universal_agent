@@ -7163,6 +7163,8 @@ def _calendar_project_cron_events(
             if matched_run:
                 event["run_status"] = matched_run.get("status")
                 event["run_id"] = matched_run.get("run_id")
+                if matched_run.get("session_id"):
+                    event["session_id"] = str(matched_run["session_id"])
             if status_value == "missed":
                 if scheduled_at < (now_ts - 48 * 3600):
                     continue
@@ -7650,7 +7652,12 @@ async def _calendar_apply_event_action(
                 "path": f"/api/v1/ops/logs/tail?path=cron_runs.jsonl",
             }
         if action_norm == "open_session":
-            session_id = str((job.metadata or {}).get("session_id") or "")
+            _source, _ref, scheduled_at_int = _calendar_parse_event_id(event_id)
+            runs = _cron_service.list_runs(limit=2000)
+            matched = _calendar_match_cron_run(
+                [r for r in runs if str(r.get("job_id") or "") == source_ref], float(scheduled_at_int)
+            )
+            session_id = str((matched or {}).get("session_id") or (job.metadata or {}).get("session_id") or "")
             return {"status": "ok", "action": action_norm, "session_id": session_id}
 
     if source == "heartbeat":

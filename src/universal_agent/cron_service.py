@@ -340,6 +340,7 @@ class CronRunRecord:
     finished_at: Optional[float] = None
     error: Optional[str] = None
     output_preview: Optional[str] = None
+    session_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -351,6 +352,7 @@ class CronRunRecord:
             "finished_at": self.finished_at,
             "error": self.error,
             "output_preview": self.output_preview,
+            "session_id": self.session_id,
         }
 
 
@@ -644,6 +646,7 @@ class CronService:
                                 user_id=job.user_id,
                                 workspace_dir=job.workspace_dir,
                             )
+                            record.session_id = str(getattr(session, "session_id", "") or "")
                             # Build request metadata with optional model override
                             request_metadata: dict[str, Any] = {
                                 "source": "cron",
