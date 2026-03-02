@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, Optional
 
 import httpx
@@ -117,34 +118,58 @@ def _escape(text: str) -> str:
     return text
 
 
+_SEND_MAX_RETRIES = 3
+_SEND_RETRY_BACKOFF = (1.0, 3.0, 5.0)
+
+
 def _send(text: str) -> bool:
     token = _bot_token()
     chat = _chat_id()
     if not token or not chat:
         return False
     url = _BASE.format(token=token)
-    try:
-        resp = httpx.post(
-            url,
-            json={
-                "chat_id": chat,
-                "text": text,
-                "parse_mode": "Markdown",
-                "disable_web_page_preview": True,
-            },
-            timeout=10,
-        )
-        if not resp.is_success:
-            logger.warning(
-                "Telegram tutorial notify failed status=%d body=%s",
-                resp.status_code,
-                resp.text[:200],
+    last_exc: Optional[Exception] = None
+    for attempt in range(_SEND_MAX_RETRIES):
+        try:
+            resp = httpx.post(
+                url,
+                json={
+                    "chat_id": chat,
+                    "text": text,
+                    "parse_mode": "Markdown",
+                    "disable_web_page_preview": True,
+                },
+                timeout=10,
             )
-            return False
-        return True
-    except Exception as exc:
-        logger.warning("Telegram tutorial notify error: %s", exc)
-        return False
+            if resp.is_success:
+                return True
+            # 4xx errors are not retryable (bad request, chat not found, etc.)
+            if 400 <= resp.status_code < 500:
+                logger.warning(
+                    "Telegram tutorial notify failed status=%d body=%s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+                return False
+            # 5xx — retry
+            logger.warning(
+                "Telegram tutorial notify server error status=%d attempt=%d/%d",
+                resp.status_code,
+                attempt + 1,
+                _SEND_MAX_RETRIES,
+            )
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "Telegram tutorial notify error attempt=%d/%d: %s",
+                attempt + 1,
+                _SEND_MAX_RETRIES,
+                exc,
+            )
+        if attempt < _SEND_MAX_RETRIES - 1:
+            time.sleep(_SEND_RETRY_BACKOFF[min(attempt, len(_SEND_RETRY_BACKOFF) - 1)])
+    logger.warning("Telegram tutorial notify exhausted %d retries (last: %s)", _SEND_MAX_RETRIES, last_exc)
+    return False
 
 
 def maybe_send(payload: dict[str, Any]) -> bool:
