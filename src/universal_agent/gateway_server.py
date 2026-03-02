@@ -65,7 +65,7 @@ from universal_agent.gateway import (
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.feature_flags import heartbeat_enabled, memory_index_enabled, cron_enabled
 from universal_agent.identity import resolve_user_id
-from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path
+from universal_agent.durable.db import connect_runtime_db, get_runtime_db_path, get_activity_db_path
 from universal_agent.durable.migrations import ensure_schema
 from universal_agent.durable.state import (
     append_vp_event,
@@ -3680,6 +3680,15 @@ def _csi_update_specialist_loop(event: Any, detail: str) -> dict[str, Any]:
                 ),
             )
             conn.commit()
+        except sqlite3.OperationalError as db_err:
+            if "locked" in str(db_err).lower():
+                logger.debug(
+                    "CSI specialist loop DB contention (yielding to agent session) topic_key=%s: %s",
+                    topic_key,
+                    db_err,
+                )
+                return {"updated": False, "request_followup": False, "skipped_reason": "db_contention"}
+            raise
         finally:
             conn.close()
 
@@ -4623,7 +4632,13 @@ def _merge_activity_actions(*action_sets: list[dict[str, Any]]) -> list[dict[str
 
 
 def _activity_connect() -> sqlite3.Connection:
-    conn = connect_runtime_db(get_runtime_db_path())
+    """Connect to the dedicated activity / CSI database.
+
+    This DB is intentionally separate from runtime_state.db so that
+    low-priority CSI background writes never contend with high-priority
+    agent session writes (run queue, checkpoints, leases).
+    """
+    conn = connect_runtime_db(get_activity_db_path())
     conn.row_factory = sqlite3.Row
     return conn
 
