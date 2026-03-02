@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 from contextvars import ContextVar
 from universal_agent.agent_core import AgentEvent, EventType
 from universal_agent.constants import DISALLOWED_TOOLS, PRIMARY_ONLY_BLOCKED_TOOLS
-_TOOL_EVENT_START_TS: Optional[float] = None
+_TOOL_EVENT_START_TS: ContextVar[Optional[float]] = ContextVar("_TOOL_EVENT_START_TS", default=None)
 
 # -----------------------------------------------------------------------------
 
@@ -105,8 +105,7 @@ def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None
 
 def set_event_start_ts(start_ts: Optional[float]) -> None:
     """Set the start timestamp for time_offset calculation."""
-    global _TOOL_EVENT_START_TS
-    _TOOL_EVENT_START_TS = start_ts
+    _TOOL_EVENT_START_TS.set(start_ts)
 
 
 def reset_tool_event_tracking() -> None:
@@ -135,9 +134,10 @@ def _emit_event(event: AgentEvent) -> None:
 
 
 def _tool_time_offset() -> float:
-    if _TOOL_EVENT_START_TS is None:
+    _ts = _TOOL_EVENT_START_TS.get()
+    if _ts is None:
         return 0.0
-    return round(time.time() - _TOOL_EVENT_START_TS, 3)
+    return round(time.time() - _ts, 3)
 
 
 def _normalize_tool_use_id(tool_use_id: object, input_data: Optional[dict] = None) -> str:

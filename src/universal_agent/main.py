@@ -555,35 +555,35 @@ def _normalize_gateway_file_path(path_value: Any) -> Any:
 
 
 def _ensure_gateway_step() -> str:
-    global current_step_id
-    if not runtime_db_conn or not run_id:
-        return current_step_id or "unknown"
-    if not current_step_id or current_step_id == "unknown":
-        current_step_id = str(uuid.uuid4())
+    _ctx = _require_ctx()
+    if not _ctx.runtime_db_conn or not _ctx.run_id:
+        return _ctx.current_step_id or "unknown"
+    if not _ctx.current_step_id or _ctx.current_step_id == "unknown":
+        _ctx.current_step_id = str(uuid.uuid4())
     try:
-        row = runtime_db_conn.execute(
+        row = _ctx.runtime_db_conn.execute(
             "SELECT 1 FROM run_steps WHERE step_id = ? LIMIT 1",
-            (current_step_id,),
+            (_ctx.current_step_id,),
         ).fetchone()
     except Exception:
         row = None
     if not row:
         try:
-            step_index = _next_step_index(runtime_db_conn, run_id)
-            start_step(runtime_db_conn, run_id, current_step_id, step_index)
+            step_index = _next_step_index(_ctx.runtime_db_conn, _ctx.run_id)
+            start_step(_ctx.runtime_db_conn, _ctx.run_id, _ctx.current_step_id, step_index)
             logfire.info(
                 "durable_step_started_gateway_hook",
-                run_id=run_id,
-                step_id=current_step_id,
+                run_id=_ctx.run_id,
+                step_id=_ctx.current_step_id,
                 step_index=step_index,
             )
         except Exception as exc:
             logfire.warning(
                 "runtime_step_insert_failed_gateway_hook",
-                step_id=current_step_id,
+                step_id=_ctx.current_step_id,
                 error=str(exc),
             )
-    return current_step_id
+    return _ctx.current_step_id
 
 
 # Configure Logfire BEFORE importing Claude SDK
