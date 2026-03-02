@@ -29,6 +29,9 @@ type SessionSummary = {
   active_runs?: number;
   rehydrate_ready?: boolean;
   rehydrate_reason?: string;
+  has_checkpoint?: boolean;
+  checkpoint_tasks_completed?: number;
+  checkpoint_artifacts_count?: number;
 };
 type SkillStatus = { name: string; enabled: boolean; available: boolean; unavailable_reason?: string | null };
 type SystemEventItem = { id: string; event_type: string; payload: Record<string, unknown>; created_at?: string; session_id?: string; timestamp: number };
