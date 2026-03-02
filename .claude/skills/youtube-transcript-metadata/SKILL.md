@@ -21,7 +21,7 @@ Use this as the core YouTube ingestion building block.
 Script path:
 - `scripts/fetch_youtube_transcript_metadata.py`
 
-From repo root:
+From repo root (the `on_pre_bash_inject_workspace_env` hook auto-injects `UV_CACHE_DIR=/tmp/uv_cache`; include it explicitly if calling outside the hook chain):
 
 ```bash
 uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py \

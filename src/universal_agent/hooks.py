@@ -1321,6 +1321,11 @@ class AgentHookSet:
                 prefix_parts.append(f"export CURRENT_SESSION_WORKSPACE={shlex.quote(ws)}")
             if "UA_ARTIFACTS_DIR=" not in command:
                 prefix_parts.append(f"export UA_ARTIFACTS_DIR={shlex.quote(artifacts_root)}")
+            # Inject a safe UV cache dir so PEP-723 skill scripts (uv run ...) never
+            # hit the workspace-local .uv-cache, which may have permission issues or
+            # stale state depending on how the repo was originally set up.
+            if "uv run" in command and "UV_CACHE_DIR=" not in command and not os.environ.get("UV_CACHE_DIR"):
+                prefix_parts.append("export UV_CACHE_DIR=/tmp/uv_cache")
             if auto_cd_enabled and not has_cd_prefix:
                 prefix_parts.append(f"cd {shlex.quote(ws)}")
 
