@@ -356,6 +356,9 @@ def _maybe_trip_tool_loop_circuit_breaker(
 
     This is intentionally conservative: it only trips on strongly repetitive patterns.
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        trace = _ctx.trace
     enabled = (os.getenv("UA_CIRCUIT_BREAKER_ENABLED", "1") or "").strip().lower() in {
         "1",
         "true",
@@ -477,6 +480,9 @@ def _normalize_gateway_tool_call_id(raw_id: object) -> str:
 
 
 def _get_gateway_tool_call_id(raw_id: object) -> str:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        gateway_tool_call_map = _ctx.gateway_tool_call_map
     key = str(raw_id or uuid.uuid4())
     if key in gateway_tool_call_map:
         return gateway_tool_call_map[key]
@@ -525,6 +531,9 @@ def safe_clear_history(client: Any) -> bool:
 
 
 def _normalize_gateway_file_path(path_value: Any) -> Any:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     if not isinstance(path_value, str) or not path_value:
         return path_value
     if not OBSERVER_WORKSPACE_DIR:
@@ -1139,6 +1148,9 @@ def _tool_read_path_from_input(tool_input: Any) -> str | None:
 
 
 def _maybe_abs_path(path_value: str) -> str:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     # Read/Write/Edit tools sometimes pass relative paths.
     # Resolve relative to the active observer workspace when available, otherwise cwd.
     try:
@@ -2383,6 +2395,10 @@ async def on_post_tool_use_validation(
     """
     PostToolUse Hook: nudge the model when schema validation fails.
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
     return await post_tool_use_schema_nudge(
         input_data,
         run_id=run_id,
@@ -2490,6 +2506,9 @@ async def on_post_email_send_artifact(
     input_data: dict, tool_use_id: object, context: dict
 ) -> dict:
     """PostToolUse Hook: persist Gmail send evidence to workspace artifacts."""
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     tool_name = context.get("tool_name", "") or input_data.get("tool_name", "")
     tool_input = input_data.get("tool_input", {}) or {}
     tool_response = input_data.get("tool_response") or input_data.get("tool_result")
@@ -2515,6 +2534,9 @@ async def on_post_email_send_artifact(
         return None
 
     def _write_artifact(records):
+        _ctx = _get_ctx()
+        if _ctx is not None:
+            OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
         if not records:
             return
         base_dir = os.path.join(
@@ -2998,6 +3020,9 @@ async def on_pre_task_skill_awareness(
     Also injects CURRENT_SESSION_WORKSPACE so the sub-agent writes to the
     correct session directory (not the repo root).
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     tool_input = input_data.get("tool_input", {})
     subagent_type = tool_input.get("subagent_type", "unknown")
 
@@ -3371,6 +3396,9 @@ async def on_subagent_stop(
     Hook: Fires when a sub-agent completes its work.
     Verifies artifacts were created and injects guidance for next steps.
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        OBSERVER_WORKSPACE_DIR = _ctx.observer_workspace_dir
     logfire.info("subagent_stop_hook_fired", input_preview=str(input_data)[:500])
 
     # Check if report was created in work_products/
@@ -3850,6 +3878,10 @@ _seen_transcript_paths: set[str] = set()
 def _mark_run_waiting_for_human(
     reason: str, *, tool_name: str = "", tool_call_id: str = ""
 ) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if runtime_db_conn and run_id:
         update_run_status(runtime_db_conn, run_id, "waiting_for_human")
     logfire.warning(
@@ -3862,6 +3894,10 @@ def _mark_run_waiting_for_human(
 
 
 def _maybe_mark_run_succeeded() -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not run_id:
         return
     status = get_run_status(runtime_db_conn, run_id)
@@ -3920,6 +3956,9 @@ def build_job_prompt(run_spec: dict) -> Optional[str]:
 
 
 def _next_step_index(conn: sqlite3.Connection, run_id: str) -> int:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
     row = conn.execute(
         "SELECT MAX(step_index) AS max_step FROM run_steps WHERE run_id = ?",
         (run_id,),
@@ -3945,6 +3984,10 @@ def infer_run_mode(
 def _handle_cancel_request(
     conn: Optional[sqlite3.Connection], run_id: Optional[str], workspace_dir: str
 ) -> bool:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        trace = _ctx.trace
     global run_cancelled_by_operator
     if not conn or not run_id:
         return False
@@ -4281,6 +4324,11 @@ def _should_inject_provider_idempotency(
 def _maybe_update_provider_session(
     session_id: Optional[str], forked_from: Optional[str] = None
 ) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
+        trace = _ctx.trace
     if not session_id:
         return
     if runtime_db_conn and run_id:
@@ -4312,6 +4360,11 @@ def _disable_provider_resume() -> None:
 
 
 def _invalidate_provider_session(error_msg: str) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
+        trace = _ctx.trace
     if runtime_db_conn and run_id:
         update_run_provider_session(runtime_db_conn, run_id, None)
     if trace is not None:
@@ -4386,6 +4439,10 @@ def _tool_input_slug_matches(
 
 
 def _get_current_step_phase() -> Optional[str]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not current_step_id:
         return None
     try:
@@ -4407,6 +4464,9 @@ def _should_trigger_test_crash(
     stage: str,
     tool_input: Optional[dict] = None,
 ) -> tuple[bool, dict[str, Optional[str]]]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
     crash_tool = os.getenv("UA_TEST_CRASH_AFTER_TOOL")
     crash_id = os.getenv("UA_TEST_CRASH_AFTER_TOOL_CALL_ID")
     crash_stage = os.getenv("UA_TEST_CRASH_AFTER_STAGE")
@@ -4468,6 +4528,9 @@ def _maybe_crash_after_tool(
     stage: str,
     tool_input: Optional[dict] = None,
 ) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
     should_crash, crash_context = _should_trigger_test_crash(
         raw_tool_name=raw_tool_name,
         tool_call_id=tool_call_id,
@@ -4508,6 +4571,9 @@ def _maybe_crash_after_tool(
 
 
 def _assert_prepared_tool_row(tool_call_id: str, raw_tool_name: str) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        tool_ledger = _ctx.tool_ledger
     if tool_ledger is None:
         return
     row = tool_ledger.get_tool_call(tool_call_id)
@@ -4536,6 +4602,10 @@ def _ensure_phase_checkpoint(
     tool_name: Optional[str] = None,
     note: Optional[str] = None,
 ) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not run_id or not step_id or step_id == "unknown":
         return
     try:
@@ -4581,6 +4651,10 @@ def _ensure_phase_checkpoint(
 
 
 def _is_job_run() -> bool:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not run_id:
         return False
     try:
@@ -4596,6 +4670,11 @@ def _is_harness_mode() -> bool:
     Returns True if max_iterations is set in the run config.
     This is distinct from crash recovery (forced_tool_mode_active).
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        forced_tool_mode_active = _ctx.forced_tool_mode_active
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     if not runtime_db_conn or not run_id:
         return False
     try:
@@ -4918,6 +4997,9 @@ _invalid_side_effect_warnings: set[tuple[str, str, str]] = set()
 
 
 def _normalize_side_effect_class(value: Optional[str], tool_name: str) -> str:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
     if value in VALID_SIDE_EFFECT_CLASSES:
         return value
     normalized = (value or "").strip() or "unknown"
@@ -5009,6 +5091,10 @@ def _persist_subagent_output(
     output: Any,
     output_str: str,
 ) -> Optional[dict[str, str]]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
     if not workspace_dir:
         return None
     _, task_key = _ensure_task_key(tool_input)
@@ -5151,6 +5237,9 @@ def _forced_tool_matches(
 
 
 def _forced_task_active() -> bool:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        forced_tool_active_ids = _ctx.forced_tool_active_ids
     return any(
         item.get("tool_name") == "task" and item.get("tool_namespace") == "claude_code"
         for item in forced_tool_active_ids.values()
@@ -5160,6 +5249,9 @@ def _forced_task_active() -> bool:
 def _load_inflight_tool_calls(
     conn: sqlite3.Connection, run_id: str
 ) -> list[dict[str, Any]]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
     rows = conn.execute(
         """
         SELECT tool_call_id, tool_name, tool_namespace, raw_tool_name, step_id,
@@ -5458,6 +5550,10 @@ def build_resume_packet(
     workspace_dir: str,
     last_n: int = 5,
 ) -> tuple[dict[str, Any], str]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
     run_row = get_run(conn, run_id)
     checkpoint = load_last_checkpoint(conn, run_id)
     checkpoint_id = checkpoint["checkpoint_id"] if checkpoint else None
@@ -5586,6 +5682,9 @@ def update_restart_file(
     job_summary_path: Optional[str] = None,
     runwide_summary_line: Optional[str] = None,
 ) -> None:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
     # Logic removed per user request to avoid file path errors
     pass
 
@@ -5599,6 +5698,10 @@ async def continue_job_run(
     max_error_retries: int = 3,
     execution_session: Optional[ExecutionSession] = None,
 ) -> Optional[str]:
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        run_id = _ctx.run_id
+        runtime_db_conn = _ctx.runtime_db_conn
     error_retries = 0
     last_error = None
     final_response_text = ""
@@ -5689,6 +5792,9 @@ async def _run_memory_flush_subagent(client: Any, workspace_dir: str, token_usag
     Runs a specialized sub-agent to summarize and persist critical information
     before context is wiped (Auto-Flush).
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        start_ts = _ctx.start_ts
     # Feature Flag Check
     if os.environ.get("UA_MEMORY_ENABLED") != "1":
         return
@@ -6811,6 +6917,10 @@ def _is_tool_required_intent(query: str) -> bool:
 
 async def classify_query(client: ClaudeSDKClient, query: str) -> str:
     """Determine if a query is SIMPLE (direct answer) or COMPLEX (needs tools)."""
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
     if _is_tool_required_intent(query):
         print("\n🤔 Query Classification: COMPLEX (Heuristic: tool_required_intent)")
         if LOGFIRE_TOKEN:
@@ -6910,6 +7020,10 @@ async def handle_simple_query(client: ClaudeSDKClient, query: str) -> tuple[bool
     Returns True if handled successfully, False if tool use was attempted (fallback needed).
     Also returns the full response text.
     """
+    _ctx = _get_ctx()
+    if _ctx is not None:
+        current_step_id = _ctx.current_step_id
+        run_id = _ctx.run_id
     print(f"\n⚡ Direct Answer (Fast Path):")
     print("-" * 40)
 
@@ -7869,6 +7983,9 @@ async def process_turn(
         from mcp_server import set_mcp_log_callback
 
         def _mcp_log_bridge(msg: str, level: str, prefix: str = "") -> None:
+            _ctx = _get_ctx()
+            if _ctx is not None:
+                start_ts = _ctx.start_ts
             emit_event(AgentEvent(
                 type=EventType.STATUS,
                 data={
