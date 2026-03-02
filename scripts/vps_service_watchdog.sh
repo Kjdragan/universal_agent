@@ -12,6 +12,7 @@ HEALTH_FAIL_THRESHOLD="${UA_WATCHDOG_HEALTH_FAIL_THRESHOLD:-3}"
 HTTP_TIMEOUT_SECONDS="${UA_WATCHDOG_HTTP_TIMEOUT_SECONDS:-8}"
 HTTP_OK_MAX_STATUS="${UA_WATCHDOG_HTTP_OK_MAX_STATUS:-499}"
 POST_RESTART_SETTLE_SECONDS="${UA_WATCHDOG_POST_RESTART_SETTLE_SECONDS:-2}"
+HEARTBEAT_STALE_SECONDS="${UA_WATCHDOG_HEARTBEAT_STALE_SECONDS:-300}"
 
 if ! [[ "$HEALTH_FAIL_THRESHOLD" =~ ^[0-9]+$ ]] || [[ "$HEALTH_FAIL_THRESHOLD" -lt 1 ]]; then
   log "invalid UA_WATCHDOG_HEALTH_FAIL_THRESHOLD=$HEALTH_FAIL_THRESHOLD (must be >=1)"
@@ -94,6 +95,26 @@ is_http_healthy() {
   return 1
 }
 
+is_heartbeat_fresh() {
+  # Check if a heartbeat file exists and was updated within HEARTBEAT_STALE_SECONDS.
+  local hb_file="$1"
+  if [[ ! -f "$hb_file" ]]; then
+    return 1
+  fi
+  local now file_epoch age
+  now="$(date +%s)"
+  # Read the timestamp from the file (Unix epoch float, take integer part)
+  file_epoch="$(head -1 "$hb_file" 2>/dev/null | cut -d. -f1)"
+  if [[ -z "$file_epoch" ]] || ! [[ "$file_epoch" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  age=$((now - file_epoch))
+  if [[ "$age" -le "$HEARTBEAT_STALE_SECONDS" ]]; then
+    return 0
+  fi
+  return 1
+}
+
 restart_service() {
   local service="$1"
   local reason="$2"
@@ -117,6 +138,7 @@ restart_service() {
 check_service() {
   local service="$1"
   local health_url="${2:-}"
+  local heartbeat_file="${3:-}"
 
   local active_state
   active_state="$("$SYSTEMCTL_BIN" is-active "$service" 2>/dev/null || true)"
@@ -126,6 +148,31 @@ check_service() {
     return
   fi
 
+  # --- Heartbeat file check (preferred, event-loop independent) ---
+  if [[ -n "$heartbeat_file" ]]; then
+    if is_heartbeat_fresh "$heartbeat_file"; then
+      local previous
+      previous="$(read_fail_count "$service")"
+      reset_fail_count "$service"
+      if [[ "$previous" -gt 0 ]]; then
+        log "service=$service health=recovered method=heartbeat previous_failures=$previous"
+      fi
+      return
+    fi
+    # Heartbeat stale — count as failure
+    local failures
+    failures="$(read_fail_count "$service")"
+    failures=$((failures + 1))
+    write_fail_count "$service" "$failures"
+    log "service=$service health=failed method=heartbeat_stale file=$heartbeat_file consecutive_failures=$failures threshold=$HEALTH_FAIL_THRESHOLD"
+    if [[ "$failures" -ge "$HEALTH_FAIL_THRESHOLD" ]]; then
+      restart_service "$service" "heartbeat_stale" || true
+      reset_fail_count "$service"
+    fi
+    return
+  fi
+
+  # --- HTTP health check (fallback for services without heartbeat file) ---
   if [[ -z "$health_url" ]]; then
     reset_fail_count "$service"
     log "service=$service state=active health=not_configured"
@@ -139,9 +186,9 @@ check_service() {
     previous="$(read_fail_count "$service")"
     reset_fail_count "$service"
     if [[ "$previous" -gt 0 ]]; then
-      log "service=$service health=recovered status_code=$code previous_failures=$previous"
+      log "service=$service health=recovered method=http status_code=$code previous_failures=$previous"
     else
-      log "service=$service health=ok status_code=$code"
+      log "service=$service health=ok method=http status_code=$code"
     fi
     return
   fi
@@ -150,7 +197,7 @@ check_service() {
   failures="$(read_fail_count "$service")"
   failures=$((failures + 1))
   write_fail_count "$service" "$failures"
-  log "service=$service health=failed status_code=$code consecutive_failures=$failures threshold=$HEALTH_FAIL_THRESHOLD"
+  log "service=$service health=failed method=http status_code=$code consecutive_failures=$failures threshold=$HEALTH_FAIL_THRESHOLD"
 
   if [[ "$failures" -lt "$HEALTH_FAIL_THRESHOLD" ]]; then
     return
@@ -160,16 +207,20 @@ check_service() {
   reset_fail_count "$service"
 }
 
-DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health\nuniversal-agent-api|http://127.0.0.1:8001/api/health\nuniversal-agent-webui|http://127.0.0.1:3000/\nuniversal-agent-telegram|\ncsi-ingester|http://127.0.0.1:8091/healthz'
+# Service specs format: service_name|http_health_url|heartbeat_file
+# If heartbeat_file is set, it takes priority over http_health_url.
+DEFAULT_HEARTBEAT_DIR="/var/lib/universal-agent/heartbeat"
+DEFAULT_SERVICE_SPECS=$'universal-agent-gateway|http://127.0.0.1:8002/api/v1/health|/var/lib/universal-agent/heartbeat/gateway.heartbeat\nuniversal-agent-api|http://127.0.0.1:8001/api/health|\nuniversal-agent-webui|http://127.0.0.1:3000/|\nuniversal-agent-telegram||\ncsi-ingester|http://127.0.0.1:8091/healthz|'
 SERVICE_SPECS="${UA_WATCHDOG_SERVICE_SPECS:-$DEFAULT_SERVICE_SPECS}"
 
 while IFS= read -r spec; do
   [[ -z "$spec" ]] && continue
-  IFS='|' read -r service health_url <<<"$spec"
+  IFS='|' read -r service health_url heartbeat_file <<<"$spec"
   service="${service:-}"
   health_url="${health_url:-}"
+  heartbeat_file="${heartbeat_file:-}"
   [[ -z "$service" ]] && continue
-  check_service "$service" "$health_url"
+  check_service "$service" "$health_url" "$heartbeat_file"
 done <<<"$SERVICE_SPECS"
 
 log "watchdog cycle complete"

@@ -106,6 +106,7 @@ from universal_agent.work_threads import (
 from universal_agent.hooks_service import HooksService
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
 from universal_agent.services import tutorial_telegram_notifier
+from universal_agent import process_heartbeat
 from universal_agent.security_paths import (
     allow_external_workspaces_from_env,
     resolve_ops_log_path,
@@ -8231,6 +8232,7 @@ async def lifespan(app: FastAPI):
     _refresh_ops_auth_config_from_env()
     _maybe_instrument_logfire_fastapi()
 
+    process_heartbeat.start()
     logger.info("🚀 Universal Agent Gateway Server starting...")
     logger.info(f"📁 Workspaces: {WORKSPACES_DIR}")
     logger.info("🏭 Factory role resolved: %s (gateway_mode=%s)", _FACTORY_POLICY.role, _FACTORY_POLICY.gateway_mode)
@@ -8437,6 +8439,7 @@ async def lifespan(app: FastAPI):
         
     if main_module.runtime_db_conn:
         main_module.runtime_db_conn.close()
+    process_heartbeat.stop()
     logger.info("👋 Universal Agent Gateway Server shutting down...")
 
 

@@ -7,7 +7,6 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=/opt/universal_agent
 EnvironmentFile=-/opt/universal_agent/.env
-Environment=UA_WATCHDOG_HEALTH_FAIL_THRESHOLD=10
 ExecStart=/opt/universal_agent/scripts/vps_service_watchdog.sh
 
 [Install]
