@@ -1,12 +1,20 @@
 <!-- Runtime Capabilities Snapshot (Auto) -->
 
-<!-- Generated: 2026-03-02 18:01:17 -->
+<!-- Generated: 2026-03-03 09:50:10 -->
 
 ### Capability Routing Doctrine
 - Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.
 - Do not default to research/report unless explicitly requested or clearly required.
 - Browser tasks are Bowser-first: `claude-bowser-agent` (identity/session), `playwright-bowser-agent` (parallel/repeatable), `bowser-qa-agent` (UI validation).
 - Use `browserbase` when Bowser lanes are unavailable or cloud-browser behavior is explicitly needed.
+
+### 📄 Report & PDF Workflow (Built-in MCP Tools)
+When the user requests reports, PDFs, or email delivery of documents:
+- **Research phase**: Use `mcp__internal__run_research_pipeline` or dispatch `Task(subagent_type='research-specialist', ...)` to gather data into task corpus files.
+- **Report generation**: Use `mcp__internal__run_report_generation(task_name='<task>')` to delegate to the Report Writer sub-agent which handles outline → draft → cleanup → compile → PDF automatically.
+- **HTML → PDF conversion**: Use `mcp__internal__html_to_pdf(html_path='<path>', output_path='<path>.pdf')`. Do NOT use Bash with chrome/wkhtmltopdf/weasyprint — the MCP tool handles fallback automatically.
+- **Multiple reports**: Call `run_report_generation` once per topic, or write HTML via Write tool then convert each with `html_to_pdf`.
+- **Email with attachments**: Upload PDF via `mcp__internal__upload_to_composio`, then send via `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` with `GMAIL_SEND_EMAIL`.
 
 ### 🧭 External VP Control Plane (Live)
 - For user requests that explicitly mention General/Coder VP delegation, route directly through internal `vp_*` tools.

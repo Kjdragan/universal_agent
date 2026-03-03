@@ -589,6 +589,7 @@ class AgentHookSet:
                         self.on_pre_bash_warn_dependency_installs,
                         self.on_pre_bash_block_composio_sdk,
                         self.on_pre_bash_block_playwright_non_html,
+                        self.on_pre_bash_redirect_pdf_conversion,
                         self.on_pre_bash_skill_hint,
                     ],
                 ),
@@ -1183,6 +1184,59 @@ class AgentHookSet:
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
                 "permissionDecisionReason": "Playwright PDF conversion without explicit HTML input.",
+            },
+        }
+
+    async def on_pre_bash_redirect_pdf_conversion(
+        self, input_data: dict, tool_use_id: object, context: dict
+    ) -> dict:
+        """
+        PreToolUse Hook: Redirect Bash-based HTML-to-PDF conversion attempts
+        to the dedicated `mcp__internal__html_to_pdf` MCP tool.
+        Catches chrome --headless, wkhtmltopdf, and weasyprint invocations.
+        """
+        command, _, _ = _extract_bash_command(input_data)
+        command_lower = command.lower()
+
+        if "pdf" not in command_lower:
+            return {}
+
+        pdf_conversion_patterns = [
+            "google-chrome",
+            "chromium",
+            "--print-to-pdf",
+            "wkhtmltopdf",
+            "weasyprint",
+            "write_pdf",
+            "html().write_pdf",
+            "from weasyprint",
+            "import weasyprint",
+        ]
+
+        if not any(pattern in command_lower for pattern in pdf_conversion_patterns):
+            return {}
+
+        emit_status_event("Hook: redirecting Bash PDF conversion to html_to_pdf MCP tool", level="WARNING", prefix="Hook")
+        logfire.warning(
+            "bash_pdf_conversion_redirected",
+            command_preview=command[:200],
+            tool_use_id=str(tool_use_id),
+        )
+        return {
+            "systemMessage": (
+                "⚠️ REDIRECT: Use the dedicated MCP tool for HTML→PDF conversion instead of Bash.\n\n"
+                "✅ CORRECT approach:\n"
+                "```\n"
+                "mcp__internal__html_to_pdf(html_path=\"<path/to/report.html>\", output_path=\"<path/to/report.pdf>\")\n"
+                "```\n"
+                "This tool handles browser/WeasyPrint fallback automatically and resolves workspace paths correctly.\n"
+                "You can call it once per HTML file. It is faster and more reliable than manual Bash conversion."
+            ),
+            "decision": "block",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Bash PDF conversion redirected to html_to_pdf MCP tool.",
             },
         }
 

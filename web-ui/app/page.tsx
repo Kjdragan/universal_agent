@@ -1289,8 +1289,19 @@ function ChatInterface() {
             hydratedLogCount > 0 ? `${hydratedLogCount} activity events` : "",
           ].filter(Boolean);
           setHistoryHydrationNotice(`Hydrated ${fragments.join(" + ")} for ${sessionId}`);
+          hydratedSessionIdsRef.current.add(hydrationKey);
         } else if (!cancelled && store.messages.length === 0) {
-          setHistoryHydrationNotice(`No run history found for ${sessionId}`);
+          // Don't permanently cache empty results for active sessions —
+          // run.log may still be accumulating during execution.
+          const connStatus = useAgentStore.getState().connectionStatus;
+          const isActive = connStatus === "processing" || connStatus === "connected";
+          if (!isActive) {
+            setHistoryHydrationNotice(`No run history found for ${sessionId}`);
+            hydratedSessionIdsRef.current.add(hydrationKey);
+          }
+          // For active sessions, allow retry on next render cycle
+        } else {
+          hydratedSessionIdsRef.current.add(hydrationKey);
         }
       } catch (error) {
         console.warn("Failed to rehydrate session history", error);
@@ -1298,7 +1309,7 @@ function ChatInterface() {
           setHydrationError(`Session history rehydration failed: ${(error as Error).message || "unknown error"}. Check gateway connectivity.`);
         }
       } finally {
-        hydratedSessionIdsRef.current.add(hydrationKey);
+        // Moved hydration marking into the conditional blocks above
       }
     })();
 
