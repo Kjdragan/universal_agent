@@ -15994,6 +15994,27 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                         execution_start_ts = time.time()
                         if _heartbeat_service:
                             _heartbeat_service.busy_sessions.add(session.session_id)
+
+                        # Open run.log for append so session history can be rehydrated later
+                        _run_log_handle = None
+                        if session.workspace_dir:
+                            try:
+                                _rl_path = Path(session.workspace_dir) / "run.log"
+                                _run_log_handle = open(_rl_path, "a", encoding="utf-8")
+                                _ts0 = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                _run_log_handle.write(f"[{_ts0}] 👤 USER: {user_input}\n")
+                                _run_log_handle.flush()
+                            except Exception:
+                                _run_log_handle = None
+
+                        def _rl_write(line: str) -> None:
+                            if _run_log_handle:
+                                try:
+                                    _run_log_handle.write(line + "\n")
+                                    _run_log_handle.flush()
+                                except Exception:
+                                    pass
+
                         try:
                             # Execute the request and stream to all attached clients for this session.
                             async for event in gateway.execute(session, request):
@@ -16040,6 +16061,32 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                         event.data,
                                     )
                                 await manager.broadcast(session_id, agent_event_to_wire(event))
+
+                                # Persist event to run.log for later rehydration
+                                _rl_ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                if event.type == EventType.TEXT and isinstance(event.data, dict):
+                                    _rl_text = (event.data.get("text") or "").rstrip()
+                                    if _rl_text and event.data.get("final") is True:
+                                        _rl_write(f"[{_rl_ts}] 🤖 ASSISTANT: {_rl_text}")
+                                elif event.type == EventType.TOOL_CALL and isinstance(event.data, dict):
+                                    _rl_tname = event.data.get("name") or "unknown"
+                                    _rl_write(f"[{_rl_ts}] 🔧 TOOL CALL: {_rl_tname}")
+                                elif event.type == EventType.TOOL_RESULT and isinstance(event.data, dict):
+                                    _rl_tsize = event.data.get("content_size") or 0
+                                    _rl_write(f"[{_rl_ts}] 📦 TOOL RESULT ({_rl_tsize} bytes)")
+                                elif event.type == EventType.ERROR and isinstance(event.data, dict):
+                                    _rl_err = event.data.get("message") or event.data.get("error") or "unknown"
+                                    _rl_write(f"[{_rl_ts}] ERROR: {_rl_err}")
+
+                            # Close the run.log handle
+                            if _run_log_handle:
+                                try:
+                                    _rl_ts_end = datetime.now(timezone.utc).strftime("%H:%M:%S")
+                                    _run_log_handle.write(f"[{_rl_ts_end}] === Turn completed ({tool_call_count} tool calls) ===\n")
+                                    _run_log_handle.close()
+                                except Exception:
+                                    pass
+                                _run_log_handle = None
 
                             if execution_duration_seconds <= 0:
                                 execution_duration_seconds = round(time.time() - execution_start_ts, 3)
@@ -16241,6 +16288,11 @@ async def websocket_stream(websocket: WebSocket, session_id: str):
                                     },
                                 )
                         finally:
+                            if _run_log_handle:
+                                try:
+                                    _run_log_handle.close()
+                                except Exception:
+                                    pass
                             _decrement_session_active_runs(session_id, run_source=request_source)
                             if _heartbeat_service:
                                 _heartbeat_service.busy_sessions.discard(session.session_id)

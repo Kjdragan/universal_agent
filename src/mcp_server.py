@@ -67,6 +67,7 @@ sys.path.append(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )  # Repo Root
 from universal_agent.search_config import SEARCH_TOOL_CONFIG
+from universal_agent.execution_context import get_current_workspace as _ctx_get_workspace
 from universal_agent.tools.corpus_refiner import refine_corpus_programmatic
 from universal_agent.utils.email_attachment_prep import (
     prepare_attachment_for_composio_upload,
@@ -287,7 +288,12 @@ def _resolve_workspace(preferred: str | None = None) -> str | None:
     candidates = []
     if preferred:
         candidates.append(preferred)
-        
+
+    # Priority 1½: ContextVar (session-scoped, safe under concurrency)
+    ctx_workspace = _ctx_get_workspace()
+    if ctx_workspace:
+        candidates.append(ctx_workspace)
+
     # Priority 2: Marker File (Dynamic, updated by harness)
     marker_path = os.getenv("CURRENT_SESSION_WORKSPACE_FILE") or os.path.join(
         PROJECT_ROOT, "AGENT_RUN_WORKSPACES", ".current_session_workspace"
