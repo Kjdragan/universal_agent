@@ -1211,10 +1211,20 @@ function ChatInterface() {
           : (isVpObserverSession && vpWorkspaceRel
             ? `${API_BASE}/api/vps/file?scope=workspaces&path=${encodeURIComponent(`${vpWorkspaceRel}/run.log`)}`
             : `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`);
-        const response = await fetch(runLogUrl, { cache: "no-store" });
+        let response = await fetch(runLogUrl, { cache: "no-store" });
+        let didFallback = false;
+        // Fallback: if ops tail returns auth error or non-200, try direct file endpoint
+        if (!response.ok && useOpsTailHydration) {
+          const fallbackUrl = `${API_BASE}/api/files/${encodeURIComponent(sessionId)}/run.log`;
+          const fallbackResp = await fetch(fallbackUrl, { cache: "no-store" });
+          if (fallbackResp.ok) {
+            response = fallbackResp;
+            didFallback = true;
+          }
+        }
         if (response.ok) {
           let raw = "";
-          if (useOpsTailHydration) {
+          if (useOpsTailHydration && !didFallback) {
             const payload = await response.json() as { lines?: unknown; content?: unknown };
             if (Array.isArray(payload.lines)) {
               raw = payload.lines.map((line) => String(line)).join("\n");
