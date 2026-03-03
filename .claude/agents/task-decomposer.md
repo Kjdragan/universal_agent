@@ -178,7 +178,8 @@ Notes:
 | Sub-Agent | Use For | Key Tools Used |
 |-----------|---------|----------------|
 | `research-specialist` | Web search → crawl → refine corpus | Composio search + local crawl/refine |
-| `trend-specialist` | Reddit/X/Web pulse checks, "what's new" | last30days + x/reddit internal tools |
+| `trend-specialist` | Reddit/X/Web pulse checks, "what's new" | x/reddit internal tools (+ CSI work-product tools) |
+| `csi-trend-analyst` | CSI report/bundle review and bounded follow-up synthesis | CSI work-product tools + x/reddit validation |
 | `report-writer` | HTML/PDF report generation from corpus | Local compile + PDF tools |
 | `image-expert` | Image generation and editing | Local Gemini image gen |
 | `video-creation-expert` | Video/audio download, processing, effects | Local FFmpeg + yt-dlp |

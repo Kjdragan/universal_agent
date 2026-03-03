@@ -551,7 +551,7 @@ class AgentSetup:
                     "playwright",
                     "chrome",
                 ],
-                "🔬 Research & Analysis": ["research-specialist", "trend-specialist", "professor", "scribe"],
+                "🔬 Research & Analysis": ["research-specialist", "trend-specialist", "csi-trend-analyst", "professor", "scribe"],
                 "🎨 Creative & Media": ["image-expert", "video-creation-expert", "video-remotion-expert"],
                 "⚙️ Engineering & Code": ["task-decomposer", "code-writer", "codeinterpreter", "github"],
                 "🏢 Operations & Communication": [

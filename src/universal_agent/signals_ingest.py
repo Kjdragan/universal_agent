@@ -225,7 +225,7 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
         return None
 
     event_type = str(event.event_type or "").strip().lower()
-    route = "trend-specialist"
+    route = "csi-trend-analyst"
     if event_type in {"delivery_health_regression", "delivery_health_recovered"}:
         route = "data-analyst"
     if event_type.startswith("delivery_health_auto_remediation"):
@@ -245,9 +245,10 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
 
     # Keep CSI analytics context concentrated in a small number of durable lanes
     # so dashboard/session lists do not explode into one lane per event type.
-    session_key = f"csi_{route.replace('-', '_')}"
+    route_lane = route.replace("-", "_")
+    session_key = route_lane if route_lane.startswith("csi_") else f"csi_{route_lane}"
     message = _analytics_message(event)
-    if route == "trend-specialist":
+    if route == "csi-trend-analyst":
         message = (
             f"{message}\n\n"
             "specialist_followup_policy:\n"
@@ -266,8 +267,8 @@ def to_csi_analytics_action(event: CreatorSignalEvent) -> dict[str, Any] | None:
         "metadata": {
             "event_type": event_type,
             "source": source,
-            "follow_up_budget": follow_up_budget if route == "trend-specialist" else 0,
-            "confidence_target": confidence_target if route == "trend-specialist" else None,
+            "follow_up_budget": follow_up_budget if route == "csi-trend-analyst" else 0,
+            "confidence_target": confidence_target if route == "csi-trend-analyst" else None,
         },
     }
 

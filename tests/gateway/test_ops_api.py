@@ -3879,7 +3879,7 @@ def test_ops_work_thread_decision_roundtrip(client):
 
 def test_ops_session_detail_rehydrate_with_checkpoint(client, tmp_path):
     """Packet 15: session with checkpoint -> rehydrate_ready=True."""
-    session_id = "session_hook_csi_trend_specialist"
+    session_id = "session_hook_csi_trend_analyst"
     ws = tmp_path / session_id
     ws.mkdir()
     checkpoint_data = {

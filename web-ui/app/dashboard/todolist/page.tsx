@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
-const API_BASE = "";
+const API_BASE = "/api/dashboard/gateway";
+const ENDPOINTS = {
+    pipeline: `${API_BASE}/api/v1/dashboard/todolist/pipeline`,
+    actionable: `${API_BASE}/api/v1/dashboard/todolist/actionable`,
+    heartbeat: `${API_BASE}/api/v1/dashboard/todolist/heartbeat`,
+};
 
 // ── PROJECT DEFINITIONS ──────────────────────────────────────────────────────
 
@@ -63,6 +68,12 @@ const PROACTIVE_SECTIONS: Record<string, string> = {
 // ── TYPES ────────────────────────────────────────────────────────────────────
 
 type PipelineSummary = Record<string, number | Record<string, number>>;
+type EndpointDiagnostic = {
+    endpoint: string;
+    ok: boolean;
+    status?: number;
+    detail?: string;
+};
 
 type ActionableTask = {
     id: string;
@@ -91,6 +102,7 @@ type HeartbeatCandidate = {
 export default function ToDoListDashboardPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [diagnostics, setDiagnostics] = useState<EndpointDiagnostic[]>([]);
 
     const [pipelineSummary, setPipelineSummary] = useState<PipelineSummary | null>(null);
     const [actionableTasks, setActionableTasks] = useState<ActionableTask[]>([]);
@@ -99,16 +111,49 @@ export default function ToDoListDashboardPage() {
     const load = useCallback(async () => {
         setLoading(true);
         setError("");
+        setDiagnostics([]);
         try {
-            const [pipeRes, actRes, hbRes] = await Promise.all([
-                fetch(`${API_BASE}/api/v1/dashboard/todolist/pipeline`),
-                fetch(`${API_BASE}/api/v1/dashboard/todolist/actionable`),
-                fetch(`${API_BASE}/api/v1/dashboard/todolist/heartbeat`),
+            const requests = await Promise.all([
+                fetch(ENDPOINTS.pipeline),
+                fetch(ENDPOINTS.actionable),
+                fetch(ENDPOINTS.heartbeat),
+            ]);
+            const [pipeRes, actRes, hbRes] = requests;
+
+            const parsePayload = async (res: Response, endpoint: string) => {
+                if (!res.ok) {
+                    let detail = `HTTP ${res.status}`;
+                    try {
+                        const errPayload = await res.json();
+                        if (typeof errPayload?.detail === "string" && errPayload.detail) {
+                            detail = `${detail}: ${errPayload.detail}`;
+                        }
+                    } catch {
+                        // Response may not be JSON; keep HTTP detail only.
+                    }
+                    return {
+                        payload: null,
+                        diagnostic: { endpoint, ok: false, status: res.status, detail } as EndpointDiagnostic,
+                    };
+                }
+                const payload = await res.json();
+                return {
+                    payload,
+                    diagnostic: { endpoint, ok: true, status: res.status } as EndpointDiagnostic,
+                };
+            };
+
+            const [pipeParsed, actParsed, hbParsed] = await Promise.all([
+                parsePayload(pipeRes, ENDPOINTS.pipeline),
+                parsePayload(actRes, ENDPOINTS.actionable),
+                parsePayload(hbRes, ENDPOINTS.heartbeat),
             ]);
 
-            const pipePayload = pipeRes.ok ? await pipeRes.json() : null;
-            const actPayload = actRes.ok ? await actRes.json() : null;
-            const hbPayload = hbRes.ok ? await hbRes.json() : null;
+            setDiagnostics([pipeParsed.diagnostic, actParsed.diagnostic, hbParsed.diagnostic]);
+
+            const pipePayload = pipeParsed.payload;
+            const actPayload = actParsed.payload;
+            const hbPayload = hbParsed.payload;
 
             if (pipePayload?.status === "ok" && pipePayload.pipeline_summary) {
                 setPipelineSummary(pipePayload.pipeline_summary);
@@ -118,6 +163,10 @@ export default function ToDoListDashboardPage() {
             }
             if (hbPayload?.status === "ok" && Array.isArray(hbPayload.heartbeat_candidates)) {
                 setHeartbeatCandidates(hbPayload.heartbeat_candidates);
+            }
+            const failed = [pipeParsed.diagnostic, actParsed.diagnostic, hbParsed.diagnostic].filter((item) => !item.ok);
+            if (failed.length > 0) {
+                setError("One or more To Do List API requests failed. See diagnostics below.");
             }
         } catch (err: any) {
             setError(err?.message || "Failed to load To Do List data.");
@@ -148,6 +197,11 @@ export default function ToDoListDashboardPage() {
     const proactiveSections = pipelineSummary
         ? (pipelineSummary["UA: Proactive Intelligence__sections"] as Record<string, number> | undefined)
         : undefined;
+    const pipelineTaskCount = UA_PROJECTS.reduce((acc, project) => {
+        const value = pipelineSummary?.[project.key];
+        return typeof value === "number" ? acc + value : acc;
+    }, 0);
+    const hasCountMismatch = pipelineTaskCount !== actionableTasks.length;
 
     return (
         <div className="flex h-full flex-col gap-5">
@@ -170,6 +224,18 @@ export default function ToDoListDashboardPage() {
             {error && (
                 <div className="rounded-lg border border-red-900/50 bg-red-900/20 px-4 py-3 text-sm text-red-200">
                     {error}
+                </div>
+            )}
+            {diagnostics.length > 0 && diagnostics.some((item) => !item.ok) && (
+                <div className="rounded-lg border border-amber-900/50 bg-amber-950/30 px-4 py-3 text-xs text-amber-200">
+                    <div className="mb-2 font-semibold uppercase tracking-wide text-amber-300">API Diagnostics</div>
+                    <div className="space-y-1">
+                        {diagnostics.map((item) => (
+                            <div key={item.endpoint} className="font-mono">
+                                [{item.ok ? "ok" : "error"}] {item.endpoint} {item.status ? `(${item.status})` : ""}{item.detail ? ` - ${item.detail}` : ""}
+                            </div>
+                        ))}
+                    </div>
                 </div>
             )}
 
@@ -230,6 +296,11 @@ export default function ToDoListDashboardPage() {
                     </span>
                     🔥 Live Actionable Queue ({actionableTasks.length})
                 </h2>
+                {hasCountMismatch && (
+                    <div className="mb-3 rounded border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+                        Pipeline task count is {pipelineTaskCount}, while actionable queue is {actionableTasks.length}. Actionable queue only includes `@agent-ready` and unblocked tasks.
+                    </div>
+                )}
                 {actionableTasks.length === 0 ? (
                     <p className="text-sm text-slate-500 italic">No tasks are currently marked @agent-ready and unblocked.</p>
                 ) : (

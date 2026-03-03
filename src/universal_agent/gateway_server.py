@@ -3304,6 +3304,7 @@ def _csi_is_high_value_event(event_type: str) -> bool:
         "reddit_trend_report",
         "rss_insight_emerging",
         "rss_insight_daily",
+        "rss_quality_gate_alert",
         "report_product_ready",
         "opportunity_bundle_ready",
         "delivery_health_auto_remediation_failed",
@@ -3368,6 +3369,7 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
         (has_anomaly and event_type != "delivery_health_recovered")
         or event_type in {
             "rss_insight_daily",
+            "rss_quality_gate_alert",
             "report_product_ready",
             "opportunity_bundle_ready",
             "rss_trend_report",
@@ -3385,6 +3387,77 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
         "requires_action": requires_action,
         "todoist_sync": todoist_sync,
     }
+
+
+def classify_csi_project_key(
+    event_type: str,
+    subject: Any,
+    quality: Any,
+    source_mix: Any,
+) -> str:
+    """Classify CSI-driven Todoist tasks into one of the 5 UA project keys."""
+    event_type_l = str(event_type or "").strip().lower()
+    subject_obj = subject if isinstance(subject, dict) else {}
+    quality_obj = quality if isinstance(quality, dict) else {}
+    mix_obj = source_mix if isinstance(source_mix, dict) else {}
+
+    text_parts: list[str] = [event_type_l]
+    for key in (
+        "report_type",
+        "report_key",
+        "title",
+        "summary",
+        "recommendation",
+        "action",
+    ):
+        value = subject_obj.get(key)
+        if isinstance(value, str) and value.strip():
+            text_parts.append(value.strip().lower())
+    tags = subject_obj.get("tags")
+    if isinstance(tags, list):
+        text_parts.extend(str(item).strip().lower() for item in tags if str(item).strip())
+    full_text = " ".join(text_parts)
+
+    if event_type_l in {
+        "delivery_health_regression",
+        "delivery_reliability_slo_breached",
+        "delivery_health_auto_remediation_failed",
+    } or any(token in full_text for token in ("outage", "regression", "failing", "incident", "breach", "degraded")):
+        return "immediate"
+
+    if any(token in full_text for token in ("memory", "profile", "knowledge gap", "knowledge_gap")):
+        return "memory"
+
+    mission_score = float(subject_obj.get("mission_relevance_score") or 0.0)
+    if mission_score < 0.0:
+        mission_score = 0.0
+    if mission_score > 1.0:
+        mission_score = 1.0
+    if bool(subject_obj.get("mission_aligned")) or mission_score >= 0.75:
+        return "mission"
+    if any(token in full_text for token in ("mission", "identity", "values", "north star", "strategy", "strategic")):
+        return "mission"
+
+    if event_type_l in {
+        "rss_insight_emerging",
+        "analysis_task_requested",
+        "analysis_task_completed",
+        "rss_quality_gate_alert",
+        "category_quality_report",
+    }:
+        return "proactive"
+    if quality_obj.get("status") in {"warning", "needs_followup"}:
+        return "proactive"
+    if float(quality_obj.get("score") or 0.0) > 0 and float(quality_obj.get("score") or 0.0) < 0.6:
+        return "proactive"
+    if any(key in mix_obj for key in ("youtube_channel_rss", "reddit_discovery")) and event_type_l in {
+        "opportunity_bundle_ready",
+        "report_product_ready",
+    }:
+        # Normal CSI research/refinement work lands here unless promoted to mission.
+        return "csi"
+
+    return "csi"
 
 
 def _csi_source_bucket(event: Any) -> str:
@@ -5741,8 +5814,8 @@ async def _csi_dispatch_specialist_followup(
         {
             "kind": "agent",
             "name": "CSITrendFollowUpRequest",
-            "session_key": "csi_trend_specialist",
-            "to": "trend-specialist",
+            "session_key": "csi_trend_analyst",
+            "to": "csi-trend-analyst",
             "message": message,
             "timeout_seconds": int(max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))),
         }
@@ -8686,12 +8759,12 @@ async def signals_ingest_endpoint(request: Request):
             _report_key = str(subject_obj.get("report_key") or "").strip()
             _artifact_paths = subject_obj.get("artifact_paths") if isinstance(subject_obj.get("artifact_paths"), dict) else None
             _source = str(event.source or "").strip()
+            _source_mix: dict[str, int] = {}
 
             # Packet 16: compute report quality score
             _quality_result: dict[str, Any] | None = None
             try:
                 from universal_agent.csi_quality_score import score_report_quality
-                _source_mix: dict[str, int] = {}
                 for opp in (subject_obj.get("opportunities") or []):
                     if isinstance(opp, dict) and isinstance(opp.get("source_mix"), dict):
                         for k, v in opp["source_mix"].items():
@@ -8713,6 +8786,7 @@ async def signals_ingest_endpoint(request: Request):
                 "report_key": _report_key or None,
                 "artifact_paths": _artifact_paths,
                 "quality": _quality_result,
+                "source_mix": _source_mix,
                 "notification_policy": {
                     "high_value": bool(policy.get("high_value")),
                     "has_anomaly": bool(policy.get("has_anomaly")),
@@ -8884,8 +8958,8 @@ async def signals_ingest_endpoint(request: Request):
                     followup_payload = {
                         "kind": "agent",
                         "name": "CSITrendFollowUpRequest",
-                        "session_key": "csi_trend_specialist",
-                        "to": "trend-specialist",
+                        "session_key": "csi_trend_analyst",
+                        "to": "csi-trend-analyst",
                         "message": str(loop_state.get("followup_message") or ""),
                         "timeout_seconds": int(
                             max(60, _env_int("UA_CSI_ANALYTICS_HOOK_TIMEOUT_SECONDS", 420))
@@ -8948,12 +9022,23 @@ async def signals_ingest_endpoint(request: Request):
                     from universal_agent.services.todoist_service import TodoService
 
                     todoist = TodoService()
+                    project_key = classify_csi_project_key(
+                        event_type=event_type_norm,
+                        subject=subject_obj,
+                        quality=_quality_result,
+                        source_mix=_source_mix,
+                    )
+                    section_by_project = {
+                        "immediate": "immediate",
+                        "proactive": "inbox",
+                    }
                     todoist.create_task(
                         content=title,
                         description=f"{message}\n\nReview in CSI Dashboard Tab.",
-                        labels=["CSI"],
+                        labels=["CSI", f"csi-project:{project_key}"],
                         priority="high",
-                        project_key="csi",
+                        section=section_by_project.get(project_key, "background"),
+                        project_key=project_key,
                     )
                 except Exception as exc:
                     exc_str = str(exc)
@@ -9439,7 +9524,7 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     "created_at": str(item.get("created_at_utc") or _utc_now_iso()),
                     "window_start_utc": None,
                     "window_end_utc": None,
-                    "model_name": "trend-specialist",
+                    "model_name": "csi-trend-analyst",
                     "metadata": {
                         "report_key": str(metadata.get("report_key") or ""),
                         "kind": kind,
