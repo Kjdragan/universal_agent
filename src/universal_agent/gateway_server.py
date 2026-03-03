@@ -15632,6 +15632,22 @@ def agent_event_to_wire(event: AgentEvent) -> dict:
     }
 
 
+@app.websocket("/ws/agent")
+async def websocket_agent_compat(websocket: WebSocket):
+    """Compatibility shim for the web-ui chat page.
+
+    The Next.js frontend connects to ``/ws/agent?session_id=<id>`` while the
+    canonical gateway endpoint is ``/api/v1/sessions/{id}/stream``.  This thin
+    wrapper extracts the *session_id* from the query string and delegates to
+    :func:`websocket_stream`.
+    """
+    raw_session_id = (websocket.query_params.get("session_id") or "").strip()
+    if not raw_session_id:
+        # Generate a default session id so brand-new chat windows still work.
+        raw_session_id = f"session_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    await websocket_stream(websocket, raw_session_id)
+
+
 @app.websocket("/api/v1/sessions/{session_id}/stream")
 async def websocket_stream(websocket: WebSocket, session_id: str):
     if _FACTORY_POLICY.gateway_mode == "health_only":

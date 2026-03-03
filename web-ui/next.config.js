@@ -8,11 +8,11 @@ const nextConfig = {
     return [
       {
         source: '/api/:path((?!dashboard/gateway).*)',
-        destination: 'http://localhost:8001/api/:path',
+        destination: 'http://localhost:8002/api/:path',
       },
       {
         source: '/ws/:path*',
-        destination: 'http://localhost:8001/ws/:path*',
+        destination: 'http://localhost:8002/ws/:path*',
       },
     ];
   },

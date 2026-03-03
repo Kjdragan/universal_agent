@@ -1,6 +1,6 @@
 <!-- Runtime Capabilities Snapshot (Auto) -->
 
-<!-- Generated: 2026-03-02 12:25:46 -->
+<!-- Generated: 2026-03-02 18:01:17 -->
 
 ### Capability Routing Doctrine
 - Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.

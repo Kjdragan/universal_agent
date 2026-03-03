@@ -113,13 +113,13 @@ export class AgentWebSocket {
       // Use relative protocol (ws for http, wss for https)
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const hostname = window.location.hostname;
-      const port = window.location.port === "3000" ? "8001" : window.location.port;
+      const port = window.location.port === "3000" ? "8002" : window.location.port;
       const host = port ? `${hostname}:${port}` : hostname;
       this.url = `${protocol}//${host}/ws/agent`;
       return;
     }
 
-    this.url = "ws://localhost:8001/ws/agent";
+    this.url = "ws://localhost:8002/ws/agent";
   }
 
   // ==========================================================================
