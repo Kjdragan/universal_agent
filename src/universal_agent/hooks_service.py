@@ -2349,7 +2349,7 @@ class HooksService:
         total_timeout_seconds: Optional[int],
         idle_timeout_seconds: Optional[int],
     ) -> dict[str, Any]:
-        consume_task = asyncio.create_task(self._consume_gateway_execute(session, request))
+        consume_task = asyncio.create_task(self._consume_gateway_execute(session, request, workspace_root=workspace_root))
         started = time.monotonic()
         last_progress = started
         run_log_path = (
@@ -2399,7 +2399,9 @@ class HooksService:
                 except BaseException:
                     pass
 
-    async def _consume_gateway_execute(self, session, request: GatewayRequest) -> dict[str, Any]:
+    async def _consume_gateway_execute(
+        self, session, request: GatewayRequest, *, workspace_root: Optional[Path] = None,
+    ) -> dict[str, Any]:
         tool_calls = 0
         duration_seconds = 0.0
         started = time.time()
@@ -2407,28 +2409,71 @@ class HooksService:
         reported_timeout_message: Optional[str] = None
         iteration_status: str = ""
         text_tail: list[str] = []
-        async for event in self.gateway.execute(session, request):
-            event_type = getattr(event, "type", None)
-            event_name = event_type.value if hasattr(event_type, "value") else str(event_type)
-            if event_name == "tool_call":
-                tool_calls += 1
-            elif event_name == "text" and isinstance(getattr(event, "data", None), dict):
-                text = str((event.data or {}).get("text") or "").strip()
-                if text:
-                    text_tail.append(text)
-                    if len(text_tail) > 8:
-                        text_tail = text_tail[-8:]
-            elif event_name == "error" and isinstance(getattr(event, "data", None), dict):
-                message = str((event.data or {}).get("message") or "").strip()
-                detail = str((event.data or {}).get("detail") or "").strip()
-                if message or detail:
-                    reported_error_message = f"{message} {detail}".strip()
-            elif event_name == "iteration_end" and isinstance(getattr(event, "data", None), dict):
-                data = getattr(event, "data", {}) or {}
-                duration_seconds = float(data.get("duration_seconds") or duration_seconds)
-                if isinstance(data.get("tool_calls"), int):
-                    tool_calls = int(data.get("tool_calls"))
-                iteration_status = str(data.get("status") or "").strip().lower()
+
+        # Open run.log for append so hook-dispatched sessions can be rehydrated
+        _rl_handle = None
+        if workspace_root is not None:
+            try:
+                _rl_path = workspace_root / "run.log"
+                _rl_handle = open(_rl_path, "a", encoding="utf-8")
+                _ts0 = time.strftime("%H:%M:%S", time.gmtime())
+                user_text = (request.user_input or "")[:500]
+                _rl_handle.write(f"[{_ts0}] \U0001f464 USER: {user_text}\n")
+                _rl_handle.flush()
+            except Exception:
+                _rl_handle = None
+
+        def _rl_write(line: str) -> None:
+            if _rl_handle:
+                try:
+                    _rl_handle.write(line + "\n")
+                    _rl_handle.flush()
+                except Exception:
+                    pass
+
+        try:
+            async for event in self.gateway.execute(session, request):
+                event_type = getattr(event, "type", None)
+                event_name = event_type.value if hasattr(event_type, "value") else str(event_type)
+                if event_name == "tool_call":
+                    tool_calls += 1
+                    _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                    tool_name = ""
+                    if isinstance(getattr(event, "data", None), dict):
+                        tool_name = str(event.data.get("tool_name") or event.data.get("name") or "")
+                    _rl_write(f"[{_rl_ts}] \U0001f527 TOOL CALL: {tool_name}" if tool_name else f"[{_rl_ts}] \U0001f527 TOOL CALL")
+                elif event_name == "text" and isinstance(getattr(event, "data", None), dict):
+                    text = str((event.data or {}).get("text") or "").strip()
+                    if text:
+                        text_tail.append(text)
+                        if len(text_tail) > 8:
+                            text_tail = text_tail[-8:]
+                elif event_name == "error" and isinstance(getattr(event, "data", None), dict):
+                    message = str((event.data or {}).get("message") or "").strip()
+                    detail = str((event.data or {}).get("detail") or "").strip()
+                    if message or detail:
+                        reported_error_message = f"{message} {detail}".strip()
+                        _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                        _rl_write(f"[{_rl_ts}] ERROR: {reported_error_message[:300]}")
+                elif event_name == "iteration_end" and isinstance(getattr(event, "data", None), dict):
+                    data = getattr(event, "data", {}) or {}
+                    duration_seconds = float(data.get("duration_seconds") or duration_seconds)
+                    if isinstance(data.get("tool_calls"), int):
+                        tool_calls = int(data.get("tool_calls"))
+                    iteration_status = str(data.get("status") or "").strip().lower()
+                elif event_name == "status" and isinstance(getattr(event, "data", None), dict):
+                    status_msg = str((event.data or {}).get("message") or "").strip()
+                    if status_msg:
+                        _rl_ts = time.strftime("%H:%M:%S", time.gmtime())
+                        _rl_write(f"[{_rl_ts}] INFO: {status_msg[:300]}")
+        finally:
+            if _rl_handle:
+                try:
+                    _rl_ts_end = time.strftime("%H:%M:%S", time.gmtime())
+                    _rl_handle.write(f"[{_rl_ts_end}] === Turn completed ({tool_calls} tool calls) ===\n")
+                    _rl_handle.close()
+                except Exception:
+                    pass
         if duration_seconds <= 0:
             duration_seconds = round(max(0.0, time.time() - started), 3)
         text_window = "\n".join(text_tail).lower()
