@@ -9134,6 +9134,16 @@ async def get_artifact_file(file_path: str):
     return _read_file_from_root(ARTIFACTS_DIR, file_path)
 
 
+@app.get("/api/files/{session_id}/{file_path:path}")
+async def get_session_file(session_id: str, file_path: str):
+    """Get file content from a session workspace (mirrors api/server.py endpoint)."""
+    safe_id = _sanitize_session_id_or_400(session_id)
+    session_root = WORKSPACES_DIR / safe_id
+    if not session_root.is_dir():
+        raise HTTPException(status_code=404, detail="Session workspace not found")
+    return _read_file_from_root(session_root, file_path)
+
+
 @app.get("/api/v1/dashboard/metrics/coder-vp")
 async def dashboard_coder_vp_metrics(
     vp_id: str = "vp.coder.primary",
