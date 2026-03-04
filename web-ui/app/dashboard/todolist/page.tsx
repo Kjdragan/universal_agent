@@ -6,6 +6,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 
 const API_BASE = "/api/dashboard/gateway";
 const ACTIONABLE_PAGE_SIZE = 60;
+const ACTIONABLE_AUTOLOAD_THRESHOLD_PX = 480;
 const ENDPOINTS = {
     pipeline: `${API_BASE}/api/v1/dashboard/todolist/pipeline`,
     actionablePagedBase: `${API_BASE}/api/v1/dashboard/todolist/actionable_paged`,
@@ -574,6 +575,35 @@ export default function ToDoListDashboardPage() {
             actionableVirtualizer.scrollToOffset(0);
         }
     }, [actionablePagination.offset, actionableVirtualizer]);
+
+    const maybeAutoLoadActionable = useCallback(() => {
+        const el = actionableScrollRef.current;
+        if (!el) return;
+        if (loading || refreshing || loadingMore || !actionablePagination.has_more) return;
+        const remaining = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (remaining <= ACTIONABLE_AUTOLOAD_THRESHOLD_PX) {
+            void loadMoreActionable();
+        }
+    }, [
+        actionablePagination.has_more,
+        loadMoreActionable,
+        loading,
+        loadingMore,
+        refreshing,
+    ]);
+
+    useEffect(() => {
+        const el = actionableScrollRef.current;
+        if (!el) return;
+        const onScroll = () => {
+            maybeAutoLoadActionable();
+        };
+        el.addEventListener("scroll", onScroll, { passive: true });
+        maybeAutoLoadActionable();
+        return () => {
+            el.removeEventListener("scroll", onScroll);
+        };
+    }, [maybeAutoLoadActionable, actionableTasks.length, actionableVirtualHeight]);
 
     if (loading) {
         return (
