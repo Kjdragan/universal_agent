@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatDistanceToNow, parseISO } from "date-fns";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 const API_BASE = "/api/dashboard/gateway";
 const ACTIONABLE_PAGE_SIZE = 60;
@@ -259,6 +260,7 @@ export default function ToDoListDashboardPage() {
     });
     const [heartbeatCandidates, setHeartbeatCandidates] = useState<HeartbeatCandidate[]>([]);
     const [scheduledImmediateTasks, setScheduledImmediateTasks] = useState<ActionableTask[]>([]);
+    const actionableScrollRef = useRef<HTMLDivElement | null>(null);
 
     const applySnapshot = useCallback((snapshot: ToDoListCacheSnapshot) => {
         setPipelineSummary(snapshot.pipelineSummary);
@@ -554,6 +556,24 @@ export default function ToDoListDashboardPage() {
     const selectedProjectLabel = selectedProjectKey
         ? UA_PROJECTS.find((project) => project.key === selectedProjectKey)?.label || selectedProjectKey
         : "All Projects";
+    const actionableVirtualizer = useVirtualizer({
+        count: actionableTasks.length,
+        getScrollElement: () => actionableScrollRef.current,
+        estimateSize: () => 180,
+        overscan: 8,
+    });
+    const virtualActionableRows = actionableVirtualizer.getVirtualItems();
+    const actionableVirtualHeight = actionableVirtualizer.getTotalSize();
+
+    useEffect(() => {
+        actionableVirtualizer.measure();
+    }, [actionableTasks.length, actionableVirtualizer]);
+
+    useEffect(() => {
+        if (actionablePagination.offset === 0) {
+            actionableVirtualizer.scrollToOffset(0);
+        }
+    }, [actionablePagination.offset, actionableVirtualizer]);
 
     if (loading) {
         return (
@@ -697,82 +717,104 @@ export default function ToDoListDashboardPage() {
                             <span className="font-semibold text-slate-200">{actionablePagination.total || actionableTasks.length}</span>{" "}
                             actionable tasks (newest → oldest)
                         </div>
-                        <div className="space-y-3">
-                            {actionableTasks.map((task) => {
-                                const pInfo = getPriorityInfo(task.priority);
-                                const csiLinks = deriveCsiTaskLinks(task);
-                                return (
-                                    <article key={task.id} className="flex flex-col gap-2 rounded-lg border border-slate-800/80 bg-slate-950/60 p-3 [content-visibility:auto]">
-                                        <div className="flex items-start justify-between">
-                                            <div>
-                                                <h3 className="font-semibold text-slate-200">
-                                                    <a href={task.url} target="_blank" rel="noreferrer" className="hover:underline hover:text-cyan-400">
-                                                        {task.content}
-                                                    </a>
-                                                </h3>
-                                                {task.description && (
-                                                    <p className="mt-1 line-clamp-2 text-xs text-slate-400">{task.description}</p>
-                                                )}
-                                                {csiLinks.isCsiTask && csiLinks.isInteresting && (
-                                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                                        {csiLinks.reportHref && (
-                                                            <a
-                                                                href={csiLinks.reportHref}
-                                                                className="rounded border border-emerald-800/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35"
-                                                            >
-                                                                Open Report
+                        <div
+                            ref={actionableScrollRef}
+                            className="max-h-[68vh] min-h-[18rem] overflow-y-auto rounded-lg border border-slate-800/80 bg-slate-950/20 p-2"
+                        >
+                            <div
+                                className="relative w-full"
+                                style={{
+                                    height: `${actionableVirtualHeight}px`,
+                                }}
+                            >
+                                {virtualActionableRows.map((virtualRow) => {
+                                    const task = actionableTasks[virtualRow.index];
+                                    if (!task) return null;
+                                    const pInfo = getPriorityInfo(task.priority);
+                                    const csiLinks = deriveCsiTaskLinks(task);
+                                    return (
+                                        <div
+                                            key={task.id || String(virtualRow.key)}
+                                            data-index={virtualRow.index}
+                                            ref={actionableVirtualizer.measureElement}
+                                            className="absolute left-0 top-0 w-full pb-3"
+                                            style={{
+                                                transform: `translateY(${virtualRow.start}px)`,
+                                            }}
+                                        >
+                                            <article className="flex flex-col gap-2 rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
+                                                <div className="flex items-start justify-between">
+                                                    <div>
+                                                        <h3 className="font-semibold text-slate-200">
+                                                            <a href={task.url} target="_blank" rel="noreferrer" className="hover:underline hover:text-cyan-400">
+                                                                {task.content}
                                                             </a>
+                                                        </h3>
+                                                        {task.description && (
+                                                            <p className="mt-1 line-clamp-2 text-xs text-slate-400">{task.description}</p>
                                                         )}
-                                                        {csiLinks.notificationHref && (
-                                                            <a
-                                                                href={csiLinks.notificationHref}
-                                                                className="rounded border border-sky-800/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-300 hover:bg-sky-900/35"
-                                                            >
-                                                                Open CSI Event
-                                                            </a>
+                                                        {csiLinks.isCsiTask && csiLinks.isInteresting && (
+                                                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                                                {csiLinks.reportHref && (
+                                                                    <a
+                                                                        href={csiLinks.reportHref}
+                                                                        className="rounded border border-emerald-800/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35"
+                                                                    >
+                                                                        Open Report
+                                                                    </a>
+                                                                )}
+                                                                {csiLinks.notificationHref && (
+                                                                    <a
+                                                                        href={csiLinks.notificationHref}
+                                                                        className="rounded border border-sky-800/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-300 hover:bg-sky-900/35"
+                                                                    >
+                                                                        Open CSI Event
+                                                                    </a>
+                                                                )}
+                                                                {csiLinks.artifactHref && (
+                                                                    <a
+                                                                        href={csiLinks.artifactHref}
+                                                                        className="rounded border border-violet-800/60 bg-violet-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-violet-300 hover:bg-violet-900/35"
+                                                                    >
+                                                                        Open Artifact
+                                                                    </a>
+                                                                )}
+                                                                <a
+                                                                    href={csiLinks.csiFeedHref}
+                                                                    className="rounded border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800"
+                                                                >
+                                                                    CSI Feed
+                                                                </a>
+                                                            </div>
                                                         )}
-                                                        {csiLinks.artifactHref && (
-                                                            <a
-                                                                href={csiLinks.artifactHref}
-                                                                className="rounded border border-violet-800/60 bg-violet-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-violet-300 hover:bg-violet-900/35"
-                                                            >
-                                                                Open Artifact
-                                                            </a>
-                                                        )}
-                                                        <a
-                                                            href={csiLinks.csiFeedHref}
-                                                            className="rounded border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800"
-                                                        >
-                                                            CSI Feed
-                                                        </a>
                                                     </div>
-                                                )}
-                                            </div>
-                                            <span className={`ml-4 shrink-0 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>
-                                                {pInfo.label}
-                                            </span>
+                                                    <span className={`ml-4 shrink-0 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>
+                                                        {pInfo.label}
+                                                    </span>
+                                                </div>
+                                                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                                    {task.sub_agent && (
+                                                        <span className="rounded bg-slate-800/80 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300">
+                                                            {task.sub_agent}
+                                                        </span>
+                                                    )}
+                                                    {task.labels.filter(l => l !== "agent-ready").map(label => (
+                                                        <span key={label} className="rounded bg-slate-800/50 px-1.5 py-0.5 text-[10px]">
+                                                            @{label}
+                                                        </span>
+                                                    ))}
+                                                    {(task.due?.date || task.due_datetime || task.due_date) && (
+                                                        <span className="text-amber-500/80">Due: {task.due_datetime || task.due_date || task.due?.date}</span>
+                                                    )}
+                                                    <span className="ml-auto text-[10px]">
+                                                        Created: {formatDistanceToNow(parseISO(task.created_at), { addSuffix: true })}
+                                                    </span>
+                                                </div>
+                                            </article>
                                         </div>
-                                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                                            {task.sub_agent && (
-                                                <span className="rounded bg-slate-800/80 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300">
-                                                    {task.sub_agent}
-                                                </span>
-                                            )}
-                                            {task.labels.filter(l => l !== "agent-ready").map(label => (
-                                                <span key={label} className="rounded bg-slate-800/50 px-1.5 py-0.5 text-[10px]">
-                                                    @{label}
-                                                </span>
-                                            ))}
-                                            {(task.due?.date || task.due_datetime || task.due_date) && (
-                                                <span className="text-amber-500/80">Due: {task.due_datetime || task.due_date || task.due?.date}</span>
-                                            )}
-                                            <span className="ml-auto text-[10px]">
-                                                Created: {formatDistanceToNow(parseISO(task.created_at), { addSuffix: true })}
-                                            </span>
-                                        </div>
-                                    </article>
-                                );
-                            })}
+                                    );
+                                })}
+                            </div>
                         </div>
                         <div className="flex items-center justify-between rounded border border-slate-800/80 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
                             <span>
