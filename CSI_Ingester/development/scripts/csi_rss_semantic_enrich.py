@@ -57,6 +57,28 @@ def _resolve_setting(keys: list[str], env_file_values: dict[str, str]) -> str:
     return ""
 
 
+def _resolve_int_setting(
+    keys: list[str],
+    env_file_values: dict[str, str],
+    *,
+    default: int,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    raw = _resolve_setting(keys, env_file_values)
+    value = default
+    if raw:
+        try:
+            value = int(raw)
+        except Exception:
+            value = default
+    if minimum is not None:
+        value = max(int(minimum), value)
+    if maximum is not None:
+        value = min(int(maximum), value)
+    return int(value)
+
+
 def _apply_env_defaults(path: Path) -> None:
     for key, val in _load_env_file(path).items():
         os.environ.setdefault(key, val)
@@ -298,7 +320,7 @@ def main() -> int:
         help="UA transcript ingest endpoint",
     )
     parser.add_argument("--transcript-timeout-seconds", type=int, default=90)
-    parser.add_argument("--transcript-max-chars", type=int, default=120000)
+    parser.add_argument("--transcript-max-chars", type=int, default=20000)
     parser.add_argument("--transcript-min-chars", type=int, default=120)
     parser.add_argument("--claude-model", default="")
     parser.add_argument("--max-categories", type=int, default=10)
@@ -331,6 +353,27 @@ def main() -> int:
     transcript_token = _resolve_setting(
         ["CSI_RSS_ANALYSIS_TRANSCRIPT_TOKEN", "UA_YOUTUBE_INGEST_TOKEN", "UA_INTERNAL_API_TOKEN"],
         merged_env_values,
+    )
+    transcript_timeout_seconds = _resolve_int_setting(
+        ["CSI_RSS_ANALYSIS_TRANSCRIPT_TIMEOUT_SECONDS"],
+        merged_env_values,
+        default=int(args.transcript_timeout_seconds),
+        minimum=30,
+        maximum=600,
+    )
+    transcript_max_chars = _resolve_int_setting(
+        ["CSI_RSS_ANALYSIS_TRANSCRIPT_MAX_CHARS"],
+        merged_env_values,
+        default=int(args.transcript_max_chars),
+        minimum=5000,
+        maximum=800000,
+    )
+    transcript_min_chars = _resolve_int_setting(
+        ["CSI_RSS_ANALYSIS_TRANSCRIPT_MIN_CHARS"],
+        merged_env_values,
+        default=int(args.transcript_min_chars),
+        minimum=20,
+        maximum=5000,
     )
 
     use_claude = _resolve_setting(["CSI_RSS_ANALYSIS_USE_CLAUDE"], merged_env_values).strip().lower() in {
@@ -385,9 +428,9 @@ def main() -> int:
             token=transcript_token,
             video_id=video_id,
             video_url=video_url,
-            timeout_seconds=max(30, int(args.transcript_timeout_seconds)),
-            max_chars=max(5000, int(args.transcript_max_chars)),
-            min_chars=max(20, int(args.transcript_min_chars)),
+            timeout_seconds=transcript_timeout_seconds,
+            max_chars=transcript_max_chars,
+            min_chars=transcript_min_chars,
         )
         transcript_text = str(transcript_result.get("transcript_text") or "")
         transcript_chars = int(transcript_result.get("transcript_chars") or len(transcript_text))
@@ -524,6 +567,7 @@ def main() -> int:
     print(f"RSS_ENRICH_PENDING={len(rows)}")
     print(f"RSS_ENRICH_PROCESSED={processed}")
     print(f"RSS_ENRICH_TRANSCRIPT_OK={transcript_ok}")
+    print(f"RSS_ENRICH_TRANSCRIPT_MAX_CHARS_USED={transcript_max_chars}")
     print(f"RSS_ENRICH_CLAUDE_USED={claude_used}")
     print(f"RSS_ENRICH_AI={int(category_counts.get('ai') or 0)}")
     print(f"RSS_ENRICH_POLITICAL={int(category_counts.get('political') or 0)}")
