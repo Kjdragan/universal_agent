@@ -26,12 +26,12 @@ sources:
     max_seen_cache_per_subreddit: 2000
     subreddits: []
   threads_owned:
-    enabled: false
+    enabled: true
     poll_interval_seconds: 900
     timeout_seconds: 20
     user_agent: "CSIIngester/threads-owned-v1"
-    limit: 25
-    replies_limit: 15
+    limit: 10
+    replies_limit: 10
     include_mentions: true
     include_replies: true
     include_insights: true
@@ -50,39 +50,39 @@ sources:
         max_requests: 1200
         window_seconds: 86400
   threads_trends_seeded:
-    enabled: false
+    enabled: true
     poll_interval_seconds: 900
     timeout_seconds: 20
     user_agent: "CSIIngester/threads-seeded-v1"
-    per_query_limit: 20
-    search_types: ["TOP", "RECENT"]
+    per_query_limit: 15
+    search_types: ["TOP"]
     media_types: []
     trend_windows_minutes: [15, 60, 1440]
-    trend_top_k: 8
+    trend_top_k: 6
     max_seen_cache: 6000
     query_packs:
       - name: "ai-domain"
-        terms: []
-    seed_terms: []
+        terms: ["ai agents", "workflow automation", "private credit", "interest rates"]
+    seed_terms: ["market structure", "portfolio strategy"]
     quota_budgets:
       keyword_search:
-        max_requests: 1400
+        max_requests: 500
         window_seconds: 86400
   threads_trends_broad:
-    enabled: false
-    poll_interval_seconds: 900
+    enabled: true
+    poll_interval_seconds: 1800
     timeout_seconds: 20
     user_agent: "CSIIngester/threads-broad-v1"
-    per_query_limit: 20
-    search_types: ["TOP", "RECENT"]
+    per_query_limit: 15
+    search_types: ["TOP"]
     media_types: []
     trend_windows_minutes: [15, 60, 1440]
-    trend_top_k: 10
+    trend_top_k: 8
     max_seen_cache: 8000
-    query_pool: ["ai", "news", "creator", "startup", "product", "economy"]
-    max_queries_per_cycle: 20
+    query_pool: ["ai", "economy", "markets", "creator"]
+    max_queries_per_cycle: 6
     adaptive_enabled: true
-    adaptive_max_terms: 12
+    adaptive_max_terms: 6
     adaptive_max_candidates: 50
     adaptive_discovery_limit: 25
     adaptive_term_bonus: 0.25
@@ -90,7 +90,7 @@ sources:
     adaptive_min_score: 0.025
     quota_budgets:
       keyword_search:
-        max_requests: 800
+        max_requests: 400
         window_seconds: 86400
 
 delivery:
