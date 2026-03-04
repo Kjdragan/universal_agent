@@ -108,11 +108,7 @@ def to_manual_youtube_payload(event: CreatorSignalEvent) -> dict[str, Any] | Non
         video_url = f"https://www.youtube.com/watch?v={video_id}"
     if not video_url:
         return None
-    routing = event.routing if isinstance(event.routing, dict) else {}
-    priority = str(routing.get("priority") or "standard").strip().lower()
-    mode = "explainer_only"
-    if priority in {"urgent", "high"}:
-        mode = "explainer_plus_code"
+    mode = "explainer_plus_code"
     return {
         "video_url": video_url,
         "video_id": video_id,
