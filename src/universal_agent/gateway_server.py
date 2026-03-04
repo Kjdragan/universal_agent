@@ -11114,7 +11114,12 @@ async def dashboard_todolist_pipeline():
     from universal_agent.services.todoist_service import TodoService
     try:
         todoist = TodoService()
-        return {"status": "ok", "pipeline_summary": todoist.get_pipeline_summary()}
+        taxonomy = todoist._get_taxonomy_or_bootstrap()
+        return {
+            "status": "ok",
+            "pipeline_summary": todoist.get_pipeline_summary(),
+            "project_ids": taxonomy.project_ids,
+        }
     except Exception as exc:
         logger.warning(f"Failed todolist pipeline summary: {exc}")
         return {"status": "error", "detail": str(exc)}
@@ -11128,6 +11133,184 @@ async def dashboard_todolist_actionable():
         return {"status": "ok", "actionable_tasks": todoist.get_actionable_tasks()}
     except Exception as exc:
         logger.warning(f"Failed todolist actionable tasks: {exc}")
+        return {"status": "error", "detail": str(exc)}
+
+
+@app.get("/api/v1/dashboard/todolist/actionable_paged")
+async def dashboard_todolist_actionable_paged(
+    limit: int = 40,
+    offset: int = 0,
+    project_key: Optional[str] = None,
+    include_full_description: bool = False,
+    description_chars: int = 420,
+):
+    from universal_agent.services.todoist_service import PROJECT_KEY_MAP, TodoService
+
+    def _parse_created_at(raw_value: Any) -> datetime:
+        raw = str(raw_value or "").strip()
+        if not raw:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        normalized = raw.replace(" ", "T")
+        if normalized.endswith("Z"):
+            normalized = normalized[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+
+    try:
+        todoist = TodoService()
+        tasks = todoist.get_actionable_tasks()
+        taxonomy = todoist._get_taxonomy_or_bootstrap()
+
+        normalized_project_key = str(project_key or "").strip().lower()
+        if normalized_project_key:
+            # Accept either canonical aliases (e.g. "csi") or full project names
+            # sent by the dashboard cards (e.g. "UA: CSI Actions").
+            project_name_by_key = {
+                str(name).strip().lower(): str(name)
+                for name in taxonomy.project_ids.keys()
+                if str(name).strip()
+            }
+            project_name = project_name_by_key.get(normalized_project_key)
+            if not project_name:
+                project_name = PROJECT_KEY_MAP.get(normalized_project_key, PROJECT_KEY_MAP["default"])
+            selected_project_id = str(taxonomy.project_ids.get(project_name, "") or "")
+            if selected_project_id:
+                tasks = [
+                    task for task in tasks
+                    if str(task.get("project_id") or "") == selected_project_id
+                ]
+            else:
+                tasks = []
+        else:
+            project_name = None
+
+        tasks.sort(key=lambda task: _parse_created_at(task.get("created_at")), reverse=True)
+
+        bounded_limit = max(1, min(int(limit or 40), 200))
+        bounded_offset = max(0, int(offset or 0))
+        total = len(tasks)
+        page = tasks[bounded_offset:bounded_offset + bounded_limit]
+        has_more = (bounded_offset + bounded_limit) < total
+
+        desc_limit = max(0, min(int(description_chars or 420), 4000))
+        materialized: list[dict[str, Any]] = []
+        for task in page:
+            row = dict(task)
+            full_desc = str(task.get("description") or "")
+            if include_full_description:
+                row["description"] = full_desc
+                row["description_truncated"] = False
+            else:
+                if desc_limit == 0:
+                    row["description"] = ""
+                    row["description_truncated"] = bool(full_desc)
+                elif len(full_desc) > desc_limit:
+                    row["description"] = full_desc[:desc_limit] + "..."
+                    row["description_truncated"] = True
+                else:
+                    row["description"] = full_desc
+                    row["description_truncated"] = False
+            materialized.append(row)
+
+        return {
+            "status": "ok",
+            "project_key": normalized_project_key or None,
+            "project_name": project_name,
+            "actionable_tasks": materialized,
+            "pagination": {
+                "total": total,
+                "offset": bounded_offset,
+                "limit": bounded_limit,
+                "count": len(materialized),
+                "has_more": has_more,
+            },
+        }
+    except Exception as exc:
+        logger.warning(f"Failed todolist actionable paged: {exc}")
+        return {"status": "error", "detail": str(exc)}
+
+
+@app.get("/api/v1/dashboard/todolist/project")
+async def dashboard_todolist_project(
+    project_key: str = "immediate",
+    section: Optional[str] = None,
+    include_agent_ready: bool = True,
+    limit: int = 50,
+):
+    from universal_agent.services.todoist_service import (
+        PROJECT_KEY_MAP,
+        UA_PROJECT_PROACTIVE,
+        TodoService,
+    )
+
+    try:
+        todoist = TodoService()
+        taxonomy = todoist._get_taxonomy_or_bootstrap()
+        normalized_project_key = str(project_key or "").strip().lower()
+        project_name = PROJECT_KEY_MAP.get(normalized_project_key, PROJECT_KEY_MAP["default"])
+        project_id = str(taxonomy.project_ids.get(project_name, "") or "")
+        if not project_id:
+            return {
+                "status": "ok",
+                "project_key": normalized_project_key,
+                "project_name": project_name,
+                "section_key": None,
+                "include_agent_ready": include_agent_ready,
+                "tasks": [],
+                "total": 0,
+            }
+
+        tasks = todoist.get_all_tasks(project_id=project_id)
+
+        normalized_section_key = str(section or "").strip().lower()
+        if normalized_section_key:
+            section_map = (
+                taxonomy.brainstorm_sections
+                if project_name == UA_PROJECT_PROACTIVE
+                else taxonomy.section_ids.get(project_name, {})
+            )
+            section_id = str(section_map.get(normalized_section_key, "") or "")
+            if section_id:
+                tasks = [task for task in tasks if str(task.get("section_id") or "") == section_id]
+            else:
+                tasks = []
+
+        if not include_agent_ready:
+            filtered: list[dict[str, Any]] = []
+            for task in tasks:
+                labels = {str(label or "").strip() for label in (task.get("labels") or [])}
+                if "agent-ready" in labels:
+                    continue
+                filtered.append(task)
+            tasks = filtered
+
+        bounded_limit = max(1, min(int(limit or 50), 200))
+
+        def _task_sort_key(task: dict[str, Any]) -> tuple[str, str]:
+            due_datetime = str(task.get("due_datetime") or "").strip()
+            due_date = str(task.get("due_date") or "").strip()
+            created_at = str(task.get("created_at") or "").strip()
+            due_key = due_datetime or (f"{due_date}T23:59:59+00:00" if due_date else "9999-12-31T23:59:59+00:00")
+            return (due_key, created_at)
+
+        tasks.sort(key=_task_sort_key)
+
+        return {
+            "status": "ok",
+            "project_key": normalized_project_key,
+            "project_name": project_name,
+            "section_key": normalized_section_key or None,
+            "include_agent_ready": include_agent_ready,
+            "tasks": tasks[:bounded_limit],
+            "total": len(tasks),
+        }
+    except Exception as exc:
+        logger.warning(f"Failed todolist project tasks: {exc}")
         return {"status": "error", "detail": str(exc)}
 
 

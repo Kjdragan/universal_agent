@@ -4,11 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 
 const API_BASE = "/api/dashboard/gateway";
+const ACTIONABLE_PAGE_SIZE = 60;
 const ENDPOINTS = {
     pipeline: `${API_BASE}/api/v1/dashboard/todolist/pipeline`,
-    actionable: `${API_BASE}/api/v1/dashboard/todolist/actionable`,
+    actionablePagedBase: `${API_BASE}/api/v1/dashboard/todolist/actionable_paged`,
     heartbeat: `${API_BASE}/api/v1/dashboard/todolist/heartbeat`,
+    immediateScheduled: `${API_BASE}/api/v1/dashboard/todolist/project?project_key=immediate&section=scheduled&include_agent_ready=false&limit=100`,
 };
+
+const TODOLIST_CACHE_KEY = "ua_todolist_dashboard_cache_v1";
+const CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6h
 
 // ── PROJECT DEFINITIONS ──────────────────────────────────────────────────────
 
@@ -80,12 +85,55 @@ type ActionableTask = {
     content: string;
     description: string;
     due?: { date: string; is_recurring: boolean; datetime?: string } | null;
+    due_date?: string | null;
+    due_datetime?: string | null;
     labels: string[];
-    priority: number;
+    priority: number | string;
+    project_id?: string | null;
     url: string;
     created_at: string;
     sub_agent?: string | null;
+    section_id?: string | null;
+    description_truncated?: boolean;
 };
+
+type ActionablePagination = {
+    total: number;
+    offset: number;
+    limit: number;
+    count: number;
+    has_more: boolean;
+};
+
+type ToDoListCacheSnapshot = {
+    savedAt: string;
+    pipelineSummary: PipelineSummary | null;
+    projectIds: Record<string, string>;
+    selectedProjectKey: string | null;
+    actionableTasks: ActionableTask[];
+    actionablePagination: ActionablePagination;
+    heartbeatCandidates: HeartbeatCandidate[];
+    scheduledImmediateTasks: ActionableTask[];
+    diagnostics: EndpointDiagnostic[];
+    error: string;
+};
+
+let memoryCache: ToDoListCacheSnapshot | null = null;
+
+function buildActionableEndpoint(opts?: {
+    offset?: number;
+    limit?: number;
+    projectKey?: string | null;
+}): string {
+    const params = new URLSearchParams();
+    params.set("offset", String(Math.max(0, Number(opts?.offset ?? 0) || 0)));
+    params.set("limit", String(Math.max(1, Math.min(200, Number(opts?.limit ?? ACTIONABLE_PAGE_SIZE) || ACTIONABLE_PAGE_SIZE))));
+    const projectKey = String(opts?.projectKey || "").trim();
+    if (projectKey) {
+        params.set("project_key", projectKey);
+    }
+    return `${ENDPOINTS.actionablePagedBase}?${params.toString()}`;
+}
 
 type HeartbeatCandidate = {
     dedupe_key: string;
@@ -193,24 +241,66 @@ function deriveCsiTaskLinks(task: ActionableTask): CsiTaskLinks {
 
 export default function ToDoListDashboardPage() {
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [loadingMore, setLoadingMore] = useState(false);
     const [error, setError] = useState("");
     const [diagnostics, setDiagnostics] = useState<EndpointDiagnostic[]>([]);
 
     const [pipelineSummary, setPipelineSummary] = useState<PipelineSummary | null>(null);
+    const [projectIds, setProjectIds] = useState<Record<string, string>>({});
+    const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
     const [actionableTasks, setActionableTasks] = useState<ActionableTask[]>([]);
+    const [actionablePagination, setActionablePagination] = useState<ActionablePagination>({
+        total: 0,
+        offset: 0,
+        limit: ACTIONABLE_PAGE_SIZE,
+        count: 0,
+        has_more: false,
+    });
     const [heartbeatCandidates, setHeartbeatCandidates] = useState<HeartbeatCandidate[]>([]);
+    const [scheduledImmediateTasks, setScheduledImmediateTasks] = useState<ActionableTask[]>([]);
 
-    const load = useCallback(async () => {
-        setLoading(true);
-        setError("");
-        setDiagnostics([]);
+    const applySnapshot = useCallback((snapshot: ToDoListCacheSnapshot) => {
+        setPipelineSummary(snapshot.pipelineSummary);
+        setProjectIds(snapshot.projectIds || {});
+        setSelectedProjectKey(snapshot.selectedProjectKey || null);
+        setActionableTasks(snapshot.actionableTasks || []);
+        setActionablePagination(
+            snapshot.actionablePagination || {
+                total: 0,
+                offset: 0,
+                limit: ACTIONABLE_PAGE_SIZE,
+                count: 0,
+                has_more: false,
+            }
+        );
+        setHeartbeatCandidates(snapshot.heartbeatCandidates || []);
+        setScheduledImmediateTasks(snapshot.scheduledImmediateTasks || []);
+        setDiagnostics(snapshot.diagnostics || []);
+        setError(snapshot.error || "");
+    }, []);
+
+    const load = useCallback(async (opts?: { background?: boolean; projectKeyOverride?: string | null }) => {
+        const background = Boolean(opts?.background);
+        const effectiveProjectKey = opts?.projectKeyOverride !== undefined ? opts.projectKeyOverride : null;
+        if (background) {
+            setRefreshing(true);
+        } else {
+            setLoading(true);
+        }
         try {
+            const actionableEndpoint = buildActionableEndpoint({
+                offset: 0,
+                limit: ACTIONABLE_PAGE_SIZE,
+                projectKey: effectiveProjectKey,
+            });
             const requests = await Promise.all([
                 fetch(ENDPOINTS.pipeline),
-                fetch(ENDPOINTS.actionable),
+                fetch(actionableEndpoint),
                 fetch(ENDPOINTS.heartbeat),
+                fetch(ENDPOINTS.immediateScheduled),
             ]);
-            const [pipeRes, actRes, hbRes] = requests;
+            const [pipeRes, actRes, hbRes, scheduledRes] = requests;
 
             const parsePayload = async (res: Response, endpoint: string) => {
                 if (!res.ok) {
@@ -235,56 +325,222 @@ export default function ToDoListDashboardPage() {
                 };
             };
 
-            const [pipeParsed, actParsed, hbParsed] = await Promise.all([
+            const [pipeParsed, actParsed, hbParsed, scheduledParsed] = await Promise.all([
                 parsePayload(pipeRes, ENDPOINTS.pipeline),
-                parsePayload(actRes, ENDPOINTS.actionable),
+                parsePayload(actRes, actionableEndpoint),
                 parsePayload(hbRes, ENDPOINTS.heartbeat),
+                parsePayload(scheduledRes, ENDPOINTS.immediateScheduled),
             ]);
 
-            setDiagnostics([pipeParsed.diagnostic, actParsed.diagnostic, hbParsed.diagnostic]);
+            setDiagnostics([pipeParsed.diagnostic, actParsed.diagnostic, hbParsed.diagnostic, scheduledParsed.diagnostic]);
 
             const pipePayload = pipeParsed.payload;
             const actPayload = actParsed.payload;
             const hbPayload = hbParsed.payload;
+            const scheduledPayload = scheduledParsed.payload;
+
+            const cached = memoryCache;
+            let nextPipelineSummary: PipelineSummary | null = cached?.pipelineSummary || null;
+            let nextProjectIds: Record<string, string> = cached?.projectIds || {};
+            let nextActionableTasks: ActionableTask[] = cached?.actionableTasks || [];
+            let nextActionablePagination: ActionablePagination = cached?.actionablePagination || {
+                total: 0,
+                offset: 0,
+                limit: ACTIONABLE_PAGE_SIZE,
+                count: 0,
+                has_more: false,
+            };
+            let nextHeartbeatCandidates: HeartbeatCandidate[] = cached?.heartbeatCandidates || [];
+            let nextScheduledImmediateTasks: ActionableTask[] = cached?.scheduledImmediateTasks || [];
 
             if (pipePayload?.status === "ok" && pipePayload.pipeline_summary) {
-                setPipelineSummary(pipePayload.pipeline_summary);
+                nextPipelineSummary = pipePayload.pipeline_summary as PipelineSummary;
+                setPipelineSummary(nextPipelineSummary);
+                if (pipePayload.project_ids && typeof pipePayload.project_ids === "object") {
+                    nextProjectIds = pipePayload.project_ids as Record<string, string>;
+                    setProjectIds(nextProjectIds);
+                }
             }
             if (actPayload?.status === "ok" && Array.isArray(actPayload.actionable_tasks)) {
-                setActionableTasks(actPayload.actionable_tasks);
+                nextActionableTasks = actPayload.actionable_tasks as ActionableTask[];
+                nextActionablePagination = {
+                    total: Number(actPayload?.pagination?.total || nextActionableTasks.length || 0),
+                    offset: Number(actPayload?.pagination?.offset || 0),
+                    limit: Number(actPayload?.pagination?.limit || ACTIONABLE_PAGE_SIZE),
+                    count: Number(actPayload?.pagination?.count || nextActionableTasks.length || 0),
+                    has_more: Boolean(actPayload?.pagination?.has_more),
+                };
+                setActionableTasks(nextActionableTasks);
+                setActionablePagination(nextActionablePagination);
             }
             if (hbPayload?.status === "ok" && Array.isArray(hbPayload.heartbeat_candidates)) {
-                setHeartbeatCandidates(hbPayload.heartbeat_candidates);
+                nextHeartbeatCandidates = hbPayload.heartbeat_candidates as HeartbeatCandidate[];
+                setHeartbeatCandidates(nextHeartbeatCandidates);
             }
-            const failed = [pipeParsed.diagnostic, actParsed.diagnostic, hbParsed.diagnostic].filter((item) => !item.ok);
+            if (scheduledPayload?.status === "ok" && Array.isArray(scheduledPayload.tasks)) {
+                nextScheduledImmediateTasks = scheduledPayload.tasks as ActionableTask[];
+                setScheduledImmediateTasks(nextScheduledImmediateTasks);
+            }
+            const failed = [pipeParsed.diagnostic, actParsed.diagnostic, hbParsed.diagnostic, scheduledParsed.diagnostic].filter((item) => !item.ok);
+            const nextDiagnostics = [pipeParsed.diagnostic, actParsed.diagnostic, hbParsed.diagnostic, scheduledParsed.diagnostic];
+            setDiagnostics(nextDiagnostics);
             if (failed.length > 0) {
                 setError("One or more To Do List API requests failed. See diagnostics below.");
+            } else {
+                setError("");
+            }
+
+            const snapshot: ToDoListCacheSnapshot = {
+                savedAt: new Date().toISOString(),
+                pipelineSummary: nextPipelineSummary,
+                projectIds: nextProjectIds,
+                selectedProjectKey: effectiveProjectKey || null,
+                actionableTasks: nextActionableTasks,
+                actionablePagination: nextActionablePagination,
+                heartbeatCandidates: nextHeartbeatCandidates,
+                scheduledImmediateTasks: nextScheduledImmediateTasks,
+                diagnostics: nextDiagnostics,
+                error: failed.length > 0 ? "One or more To Do List API requests failed. See diagnostics below." : "",
+            };
+            memoryCache = snapshot;
+            if (typeof window !== "undefined") {
+                window.sessionStorage.setItem(TODOLIST_CACHE_KEY, JSON.stringify(snapshot));
             }
         } catch (err: any) {
             setError(err?.message || "Failed to load To Do List data.");
         } finally {
             setLoading(false);
+            setRefreshing(false);
         }
     }, []);
 
-    useEffect(() => { void load(); }, [load]);
+    const loadMoreActionable = useCallback(async () => {
+        if (loadingMore || !actionablePagination.has_more) return;
+        setLoadingMore(true);
+        try {
+            const endpoint = buildActionableEndpoint({
+                offset: actionableTasks.length,
+                limit: ACTIONABLE_PAGE_SIZE,
+                projectKey: selectedProjectKey,
+            });
+            const response = await fetch(endpoint, { cache: "no-store" });
+            if (!response.ok) {
+                setError(`Failed loading additional tasks: HTTP ${response.status}`);
+                return;
+            }
+            const payload = await response.json();
+            if (payload?.status !== "ok" || !Array.isArray(payload.actionable_tasks)) {
+                setError("Failed loading additional tasks: invalid payload");
+                return;
+            }
 
-    const getPriorityInfo = (priority: number) => {
-        switch (priority) {
+            const nextPage = payload.actionable_tasks as ActionableTask[];
+            const merged = [...actionableTasks, ...nextPage];
+            const dedupedMap = new Map<string, ActionableTask>();
+            for (const task of merged) {
+                const taskId = String(task.id || "");
+                if (!taskId) continue;
+                if (!dedupedMap.has(taskId)) dedupedMap.set(taskId, task);
+            }
+            const deduped = Array.from(dedupedMap.values());
+            const nextPagination: ActionablePagination = {
+                total: Number(payload?.pagination?.total || deduped.length || 0),
+                offset: Number(payload?.pagination?.offset || actionableTasks.length),
+                limit: Number(payload?.pagination?.limit || ACTIONABLE_PAGE_SIZE),
+                count: Number(payload?.pagination?.count || nextPage.length || 0),
+                has_more: Boolean(payload?.pagination?.has_more),
+            };
+            setActionableTasks(deduped);
+            setActionablePagination(nextPagination);
+            setError((prev) => (prev.startsWith("Failed loading additional tasks") ? "" : prev));
+
+            const updatedSnapshot: ToDoListCacheSnapshot = {
+                savedAt: new Date().toISOString(),
+                pipelineSummary,
+                projectIds,
+                selectedProjectKey,
+                actionableTasks: deduped,
+                actionablePagination: nextPagination,
+                heartbeatCandidates,
+                scheduledImmediateTasks,
+                diagnostics,
+                error,
+            };
+            memoryCache = updatedSnapshot;
+            if (typeof window !== "undefined") {
+                window.sessionStorage.setItem(TODOLIST_CACHE_KEY, JSON.stringify(updatedSnapshot));
+            }
+        } catch (err: any) {
+            setError(err?.message || "Failed loading additional tasks.");
+        } finally {
+            setLoadingMore(false);
+        }
+    }, [
+        actionablePagination.has_more,
+        actionableTasks,
+        diagnostics,
+        error,
+        heartbeatCandidates,
+        loadingMore,
+        pipelineSummary,
+        projectIds,
+        scheduledImmediateTasks,
+        selectedProjectKey,
+    ]);
+
+    useEffect(() => {
+        let hydrated = false;
+        let initialProjectKey: string | null = null;
+        const now = Date.now();
+        const inMemory = memoryCache;
+        if (inMemory) {
+            const age = now - Date.parse(inMemory.savedAt || "");
+            if (Number.isFinite(age) && age <= CACHE_MAX_AGE_MS) {
+                applySnapshot(inMemory);
+                initialProjectKey = inMemory.selectedProjectKey || null;
+                setLoading(false);
+                hydrated = true;
+            }
+        }
+        if (!hydrated && typeof window !== "undefined") {
+            const raw = window.sessionStorage.getItem(TODOLIST_CACHE_KEY);
+            if (raw) {
+                try {
+                    const parsed = JSON.parse(raw) as ToDoListCacheSnapshot;
+                    const age = now - Date.parse(parsed.savedAt || "");
+                    if (Number.isFinite(age) && age <= CACHE_MAX_AGE_MS) {
+                        applySnapshot(parsed);
+                        initialProjectKey = parsed.selectedProjectKey || null;
+                        memoryCache = parsed;
+                        setLoading(false);
+                        hydrated = true;
+                    }
+                } catch {
+                    // ignore invalid cache
+                }
+            }
+        }
+        void load({ background: hydrated, projectKeyOverride: initialProjectKey });
+    }, [applySnapshot, load]);
+
+    const getPriorityInfo = (priority: number | string | null | undefined) => {
+        let normalized = 1;
+        if (typeof priority === "number") {
+            normalized = priority;
+        } else if (typeof priority === "string") {
+            const upper = priority.toUpperCase();
+            if (upper.startsWith("P1")) normalized = 4;
+            else if (upper.startsWith("P2")) normalized = 3;
+            else if (upper.startsWith("P3")) normalized = 2;
+            else normalized = 1;
+        }
+        switch (normalized) {
             case 4: return { label: "Urgent", color: "text-rose-400 border-rose-400/30 bg-rose-400/10" };
             case 3: return { label: "High", color: "text-amber-400 border-amber-400/30 bg-amber-400/10" };
             case 2: return { label: "Medium", color: "text-sky-400 border-sky-400/30 bg-sky-400/10" };
             default: return { label: "Normal", color: "text-slate-400 border-slate-700 bg-slate-800/50" };
         }
     };
-
-    if (loading) {
-        return (
-            <div className="flex h-full items-center justify-center p-6 text-slate-400">
-                Loading To Do List integration data...
-            </div>
-        );
-    }
 
     const proactiveSections = pipelineSummary
         ? (pipelineSummary["UA: Proactive Intelligence__sections"] as Record<string, number> | undefined)
@@ -293,7 +549,19 @@ export default function ToDoListDashboardPage() {
         const value = pipelineSummary?.[project.key];
         return typeof value === "number" ? acc + value : acc;
     }, 0);
-    const hasCountMismatch = pipelineTaskCount !== actionableTasks.length;
+    const hasCountMismatch = pipelineTaskCount !== actionablePagination.total;
+    const showCountMismatch = !selectedProjectKey && hasCountMismatch;
+    const selectedProjectLabel = selectedProjectKey
+        ? UA_PROJECTS.find((project) => project.key === selectedProjectKey)?.label || selectedProjectKey
+        : "All Projects";
+
+    if (loading) {
+        return (
+            <div className="flex h-full items-center justify-center p-6 text-slate-400">
+                Loading To Do List integration data...
+            </div>
+        );
+    }
 
     return (
         <div className="flex h-full flex-col gap-5">
@@ -306,10 +574,10 @@ export default function ToDoListDashboardPage() {
                     </p>
                 </div>
                 <button
-                    onClick={load}
+                    onClick={() => { void load({ background: true, projectKeyOverride: selectedProjectKey }); }}
                     className="rounded-md border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-sm font-medium text-slate-300 transition hover:bg-slate-700 hover:text-white"
                 >
-                    Refresh
+                    {refreshing ? "Refreshing..." : "Refresh"}
                 </button>
             </div>
 
@@ -344,10 +612,20 @@ export default function ToDoListDashboardPage() {
                                 : 0
                             : null;
 
+                        const isSelected = selectedProjectKey === project.key;
                         return (
-                            <div
+                            <button
                                 key={project.key}
-                                className={`rounded-xl border p-4 flex flex-col gap-2 transition ${project.accent}`}
+                                type="button"
+                                onClick={() => {
+                                    const nextProjectKey = selectedProjectKey === project.key ? null : project.key;
+                                    setSelectedProjectKey(nextProjectKey);
+                                    void load({ background: true, projectKeyOverride: nextProjectKey });
+                                }}
+                                className={`rounded-xl border p-4 flex flex-col gap-2 text-left transition ${project.accent} ${
+                                    isSelected ? "ring-2 ring-cyan-400/70" : "hover:ring-1 hover:ring-cyan-500/40"
+                                }`}
+                                title={isSelected ? "Click to clear filter" : `Filter actionable queue by ${project.label}`}
                             >
                                 <div className="flex items-center justify-between">
                                     <span className="text-lg">{project.icon}</span>
@@ -373,7 +651,7 @@ export default function ToDoListDashboardPage() {
                                         ))}
                                     </div>
                                 )}
-                            </div>
+                            </button>
                         );
                     })}
                 </div>
@@ -386,23 +664,155 @@ export default function ToDoListDashboardPage() {
                         <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
                         <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
                     </span>
-                    🔥 Live Actionable Queue ({actionableTasks.length})
+                    🔥 Live Actionable Queue ({actionableTasks.length}/{actionablePagination.total || actionableTasks.length})
                 </h2>
-                {hasCountMismatch && (
+                {selectedProjectKey && (
+                    <div className="mb-3 flex items-center gap-2 text-xs text-cyan-300">
+                        <span className="rounded border border-cyan-800/70 bg-cyan-900/20 px-2 py-0.5">
+                            Filter: {selectedProjectLabel}
+                        </span>
+                        <button
+                            type="button"
+                            onClick={() => {
+                                setSelectedProjectKey(null);
+                                void load({ background: true, projectKeyOverride: null });
+                            }}
+                            className="rounded border border-slate-700 bg-slate-800/80 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-700"
+                        >
+                            Clear
+                        </button>
+                    </div>
+                )}
+                {showCountMismatch && (
                     <div className="mb-3 rounded border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
-                        Pipeline task count is {pipelineTaskCount}, while actionable queue is {actionableTasks.length}. Actionable queue only includes `@agent-ready` and unblocked tasks.
+                        Pipeline task count is {pipelineTaskCount}, while actionable queue is {actionablePagination.total}. Actionable queue only includes `@agent-ready` and unblocked tasks, sorted newest → oldest.
                     </div>
                 )}
                 {actionableTasks.length === 0 ? (
                     <p className="text-sm text-slate-500 italic">No tasks are currently marked @agent-ready and unblocked.</p>
                 ) : (
                     <div className="space-y-3">
-                        {actionableTasks.map((task) => {
+                        <div className="text-xs text-slate-400">
+                            Showing <span className="font-semibold text-slate-200">{actionableTasks.length}</span> of{" "}
+                            <span className="font-semibold text-slate-200">{actionablePagination.total || actionableTasks.length}</span>{" "}
+                            actionable tasks (newest → oldest)
+                        </div>
+                        <div className="space-y-3">
+                            {actionableTasks.map((task) => {
+                                const pInfo = getPriorityInfo(task.priority);
+                                const csiLinks = deriveCsiTaskLinks(task);
+                                return (
+                                    <article key={task.id} className="flex flex-col gap-2 rounded-lg border border-slate-800/80 bg-slate-950/60 p-3 [content-visibility:auto]">
+                                        <div className="flex items-start justify-between">
+                                            <div>
+                                                <h3 className="font-semibold text-slate-200">
+                                                    <a href={task.url} target="_blank" rel="noreferrer" className="hover:underline hover:text-cyan-400">
+                                                        {task.content}
+                                                    </a>
+                                                </h3>
+                                                {task.description && (
+                                                    <p className="mt-1 line-clamp-2 text-xs text-slate-400">{task.description}</p>
+                                                )}
+                                                {csiLinks.isCsiTask && csiLinks.isInteresting && (
+                                                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                                        {csiLinks.reportHref && (
+                                                            <a
+                                                                href={csiLinks.reportHref}
+                                                                className="rounded border border-emerald-800/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35"
+                                                            >
+                                                                Open Report
+                                                            </a>
+                                                        )}
+                                                        {csiLinks.notificationHref && (
+                                                            <a
+                                                                href={csiLinks.notificationHref}
+                                                                className="rounded border border-sky-800/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-300 hover:bg-sky-900/35"
+                                                            >
+                                                                Open CSI Event
+                                                            </a>
+                                                        )}
+                                                        {csiLinks.artifactHref && (
+                                                            <a
+                                                                href={csiLinks.artifactHref}
+                                                                className="rounded border border-violet-800/60 bg-violet-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-violet-300 hover:bg-violet-900/35"
+                                                            >
+                                                                Open Artifact
+                                                            </a>
+                                                        )}
+                                                        <a
+                                                            href={csiLinks.csiFeedHref}
+                                                            className="rounded border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800"
+                                                        >
+                                                            CSI Feed
+                                                        </a>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <span className={`ml-4 shrink-0 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>
+                                                {pInfo.label}
+                                            </span>
+                                        </div>
+                                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                            {task.sub_agent && (
+                                                <span className="rounded bg-slate-800/80 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300">
+                                                    {task.sub_agent}
+                                                </span>
+                                            )}
+                                            {task.labels.filter(l => l !== "agent-ready").map(label => (
+                                                <span key={label} className="rounded bg-slate-800/50 px-1.5 py-0.5 text-[10px]">
+                                                    @{label}
+                                                </span>
+                                            ))}
+                                            {(task.due?.date || task.due_datetime || task.due_date) && (
+                                                <span className="text-amber-500/80">Due: {task.due_datetime || task.due_date || task.due?.date}</span>
+                                            )}
+                                            <span className="ml-auto text-[10px]">
+                                                Created: {formatDistanceToNow(parseISO(task.created_at), { addSuffix: true })}
+                                            </span>
+                                        </div>
+                                    </article>
+                                );
+                            })}
+                        </div>
+                        <div className="flex items-center justify-between rounded border border-slate-800/80 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
+                            <span>
+                                Loaded {actionableTasks.length} / {actionablePagination.total || actionableTasks.length}
+                            </span>
+                            {actionablePagination.has_more ? (
+                                <button
+                                    type="button"
+                                    onClick={() => { void loadMoreActionable(); }}
+                                    disabled={loadingMore}
+                                    className="rounded border border-cyan-800/60 bg-cyan-900/20 px-2.5 py-1 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-900/35 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {loadingMore ? "Loading..." : `Load ${ACTIONABLE_PAGE_SIZE} More`}
+                                </button>
+                            ) : (
+                                <span className="text-[11px] text-slate-500">All actionable tasks loaded</span>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </section>
+
+            {/* ── PERSONAL SCHEDULED REMINDERS ── */}
+            <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+                <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-indigo-300">
+                    🛌 Personal Scheduled Reminders ({scheduledImmediateTasks.length})
+                </h2>
+                <p className="mb-3 text-xs text-slate-400">
+                    UA: Immediate Queue → Scheduled · non-`agent-ready` items (personal handoff reminders)
+                </p>
+                {scheduledImmediateTasks.length === 0 ? (
+                    <p className="text-sm text-slate-500 italic">No scheduled personal reminders found.</p>
+                ) : (
+                    <div className="space-y-3">
+                        {scheduledImmediateTasks.map((task) => {
                             const pInfo = getPriorityInfo(task.priority);
-                            const csiLinks = deriveCsiTaskLinks(task);
+                            const dueText = task.due_datetime || task.due_date || task.due?.datetime || task.due?.date || "";
                             return (
-                                <article key={task.id} className="flex flex-col gap-2 rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
-                                    <div className="flex items-start justify-between">
+                                <article key={task.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
+                                    <div className="flex items-start justify-between gap-3">
                                         <div>
                                             <h3 className="font-semibold text-slate-200">
                                                 <a href={task.url} target="_blank" rel="noreferrer" className="hover:underline hover:text-cyan-400">
@@ -410,60 +820,21 @@ export default function ToDoListDashboardPage() {
                                                 </a>
                                             </h3>
                                             {task.description && (
-                                                <p className="mt-1 line-clamp-2 text-xs text-slate-400">{task.description}</p>
-                                            )}
-                                            {csiLinks.isCsiTask && csiLinks.isInteresting && (
-                                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                                                    {csiLinks.reportHref && (
-                                                        <a
-                                                            href={csiLinks.reportHref}
-                                                            className="rounded border border-emerald-800/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35"
-                                                        >
-                                                            Open Report
-                                                        </a>
-                                                    )}
-                                                    {csiLinks.notificationHref && (
-                                                        <a
-                                                            href={csiLinks.notificationHref}
-                                                            className="rounded border border-sky-800/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-300 hover:bg-sky-900/35"
-                                                        >
-                                                            Open CSI Event
-                                                        </a>
-                                                    )}
-                                                    {csiLinks.artifactHref && (
-                                                        <a
-                                                            href={csiLinks.artifactHref}
-                                                            className="rounded border border-violet-800/60 bg-violet-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-violet-300 hover:bg-violet-900/35"
-                                                        >
-                                                            Open Artifact
-                                                        </a>
-                                                    )}
-                                                    <a
-                                                        href={csiLinks.csiFeedHref}
-                                                        className="rounded border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800"
-                                                    >
-                                                        CSI Feed
-                                                    </a>
-                                                </div>
+                                                <p className="mt-1 text-xs text-slate-400 line-clamp-3">{task.description}</p>
                                             )}
                                         </div>
-                                        <span className={`ml-4 shrink-0 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>
+                                        <span className={`shrink-0 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>
                                             {pInfo.label}
                                         </span>
                                     </div>
-                                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                                        {task.sub_agent && (
-                                            <span className="rounded bg-slate-800/80 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300">
-                                                {task.sub_agent}
-                                            </span>
-                                        )}
-                                        {task.labels.filter(l => l !== "agent-ready").map(label => (
-                                            <span key={label} className="rounded bg-slate-800/50 px-1.5 py-0.5 text-[10px]">
+                                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                        {task.labels.map((label) => (
+                                            <span key={`${task.id}-${label}`} className="rounded bg-slate-800/50 px-1.5 py-0.5 text-[10px]">
                                                 @{label}
                                             </span>
                                         ))}
-                                        {task.due?.date && (
-                                            <span className="text-amber-500/80">Due: {task.due.date}</span>
+                                        {dueText && (
+                                            <span className="text-indigo-300/90">Due: {dueText}</span>
                                         )}
                                         <span className="ml-auto text-[10px]">
                                             Created: {formatDistanceToNow(parseISO(task.created_at), { addSuffix: true })}
