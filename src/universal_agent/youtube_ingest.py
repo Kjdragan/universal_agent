@@ -65,6 +65,29 @@ def _classify_api_error(error: str, detail: str) -> str:
     if any(
         hint in lowered
         for hint in (
+            "402 payment required",
+            "payment required",
+            "quota exceeded",
+            "insufficient balance",
+            "billing",
+            "out of credits",
+        )
+    ):
+        return "proxy_quota_or_billing"
+    if any(
+        hint in lowered
+        for hint in (
+            "407 proxy authentication required",
+            "proxy auth",
+            "proxy authentication",
+            "invalid proxy credentials",
+            "bad proxy credentials",
+        )
+    ):
+        return "proxy_auth_failed"
+    if any(
+        hint in lowered
+        for hint in (
             "requestblocked",
             "ipblocked",
             "ip has been blocked",

@@ -23,6 +23,7 @@ import pytest
 
 from universal_agent.hooks import (
     AgentHookSet,
+    _looks_like_research_report_pipeline_intent,
     _looks_like_youtube_transcript_intent,
 )
 
@@ -74,6 +75,19 @@ class TestYouTubeIntentDetection:
         assert _looks_like_youtube_transcript_intent("https://youtu.be/xyz") is True
 
 
+class TestResearchIntentDetection:
+    def test_media_only_request_does_not_trigger_research_delegate(self):
+        text = "Get the YouTube transcript for https://youtu.be/SpReZZk_13w"
+        assert _looks_like_research_report_pipeline_intent(text) is False
+
+    def test_mixed_youtube_research_request_triggers_research_delegate(self):
+        text = (
+            "Get transcript from https://youtu.be/SpReZZk_13w, then research latest info from "
+            "multiple sources, create a report, convert to PDF, and email it."
+        )
+        assert _looks_like_research_report_pipeline_intent(text) is True
+
+
 # ---------------------------------------------------------------------------
 # 2. on_pre_tool_use_ledger YouTube guardrail
 # ---------------------------------------------------------------------------
@@ -86,11 +100,11 @@ class TestYouTubeMcpGuardrail:
     def _set_prompt(self, hooks: AgentHookSet, prompt: str) -> None:
         _run(hooks.on_user_prompt_skill_awareness({"prompt": prompt}))
 
-    def _call_mcp_youtube(self, hooks: AgentHookSet) -> dict:
+    def _call_mcp_youtube(self, hooks: AgentHookSet, tool_name: str = "mcp__youtube__get_metadata") -> dict:
         return _run(
             hooks.on_pre_tool_use_ledger(
                 {
-                    "tool_name": "mcp__youtube__get_metadata",
+                    "tool_name": tool_name,
                     "tool_input": {
                         "url": "https://youtu.be/SpReZZk_13w"
                     },
@@ -115,6 +129,37 @@ class TestYouTubeMcpGuardrail:
             )
         )
 
+    def _call_bash_youtube(self, hooks: AgentHookSet, command: str, *, parent_tool_use_id: str | None = None) -> dict:
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": command},
+        }
+        if parent_tool_use_id:
+            payload["parent_tool_use_id"] = parent_tool_use_id
+        return _run(
+            hooks.on_pre_tool_use_ledger(
+                payload,
+                "tool-bash-yt-1",
+                {},
+            )
+        )
+
+    def _call_task(self, hooks: AgentHookSet, subagent_type: str) -> dict:
+        return _run(
+            hooks.on_pre_tool_use_ledger(
+                {
+                    "tool_name": "Task",
+                    "tool_input": {
+                        "subagent_type": subagent_type,
+                        "description": "test delegation",
+                        "prompt": "test",
+                    },
+                },
+                "tool-task-1",
+                {},
+            )
+        )
+
     def test_blocks_mcp_youtube_before_skill_is_invoked(self):
         hooks = self._make_hooks()
         self._set_prompt(hooks, "get the youtube transcript for https://youtu.be/SpReZZk_13w")
@@ -131,6 +176,36 @@ class TestYouTubeMcpGuardrail:
         self._call_skill_youtube(hooks)
         result = self._call_mcp_youtube(hooks)
 
+        assert result.get("decision") != "block"
+
+    def test_blocks_other_mcp_youtube_tools_before_skill(self):
+        hooks = self._make_hooks()
+        self._set_prompt(hooks, "download subtitles from https://youtu.be/SpReZZk_13w")
+
+        result = self._call_mcp_youtube(hooks, tool_name="mcp__youtube__download_subtitles")
+        assert result.get("decision") == "block"
+        assert "mcp__youtube__*" in str(result.get("systemMessage", ""))
+
+    def test_blocks_inline_bash_youtube_fetch_before_skill(self):
+        hooks = self._make_hooks()
+        self._set_prompt(hooks, "get transcript for https://youtu.be/SpReZZk_13w")
+
+        result = self._call_bash_youtube(
+            hooks,
+            "uv run python3 -c \"from youtube_transcript_api import YouTubeTranscriptApi\"",
+        )
+        assert result.get("decision") == "block"
+        assert "youtube-transcript-metadata" in str(result.get("systemMessage", ""))
+
+    def test_allows_inline_bash_youtube_fetch_after_skill(self):
+        hooks = self._make_hooks()
+        self._set_prompt(hooks, "get transcript for https://youtu.be/SpReZZk_13w")
+        self._call_skill_youtube(hooks)
+
+        result = self._call_bash_youtube(
+            hooks,
+            "uv run python3 -c \"from youtube_transcript_api import YouTubeTranscriptApi\"",
+        )
         assert result.get("decision") != "block"
 
     def test_no_guardrail_for_non_youtube_prompt(self):
@@ -162,6 +237,47 @@ class TestYouTubeMcpGuardrail:
         result = self._call_mcp_youtube(hooks)
 
         assert result.get("decision") != "block"
+
+    def test_blocks_in_subagent_context_before_skill(self):
+        hooks = self._make_hooks()
+        self._set_prompt(hooks, "get transcript for https://youtu.be/SpReZZk_13w")
+
+        result = self._call_bash_youtube(
+            hooks,
+            "uv run python3 -c \"import yt_dlp\"",
+            parent_tool_use_id="parent-yt-task-1",
+        )
+        assert result.get("decision") == "block"
+
+    def test_mixed_prompt_requires_research_delegate_after_youtube_skill(self):
+        hooks = self._make_hooks()
+        self._set_prompt(
+            hooks,
+            (
+                "Get transcript from https://youtu.be/SpReZZk_13w, then research latest info, "
+                "create a report, and email PDF."
+            ),
+        )
+        self._call_skill_youtube(hooks)
+
+        non_task_result = _run(
+            hooks.on_pre_tool_use_ledger(
+                {
+                    "tool_name": "mcp__internal__read_text_file",
+                    "tool_input": {"path": "work_products/foo.txt"},
+                },
+                "tool-read-1",
+                {},
+            )
+        )
+        assert non_task_result.get("decision") == "block"
+        assert "research-specialist" in str(non_task_result.get("systemMessage", ""))
+
+        wrong_task_result = self._call_task(hooks, "report-writer")
+        assert wrong_task_result.get("decision") == "block"
+
+        right_task_result = self._call_task(hooks, "research-specialist")
+        assert right_task_result.get("decision") != "block"
 
     def test_flag_not_set_for_non_youtube_prompt(self):
         hooks = self._make_hooks()

@@ -120,6 +120,38 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(delta / 86400)}d ago`;
 }
 
+function notificationMetadata(notification: PipelineNotification): Record<string, unknown> {
+  return notification.metadata && typeof notification.metadata === "object"
+    ? notification.metadata
+    : {};
+}
+
+function notificationVideoId(notification: PipelineNotification): string {
+  const metadata = notificationMetadata(notification);
+  return (
+    asText(metadata.video_id)
+    || asText(metadata.youtube_video_id)
+    || asText(metadata.videoId)
+  );
+}
+
+function notificationRunPath(notification: PipelineNotification): string {
+  const metadata = notificationMetadata(notification);
+  return asText(metadata.tutorial_run_path) || asText(metadata.run_path);
+}
+
+function notificationEntityKey(notification: PipelineNotification): string {
+  const videoId = notificationVideoId(notification);
+  if (videoId) return `video:${videoId}`;
+  const runPath = notificationRunPath(notification);
+  if (runPath) return `run:${runPath}`;
+  return "";
+}
+
+function notificationTimestamp(notification: PipelineNotification): number {
+  return toEpochMs(notification.created_at) ?? 0;
+}
+
 async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs = 12000): Promise<Response> {
   const controller = new AbortController();
   const timeoutHandle = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -336,20 +368,28 @@ export default function DashboardTutorialsPage() {
     return map;
   }, [bootstrapJobs]);
 
-  // Hides notifications for videos that have successfully completed processing
-  // (so they don't clog up the notification area once the artifact is visible)
+  // Keep only the latest notification per tutorial entity (video/run),
+  // so "started" notices are replaced by newer "ready/failed" updates.
   const visibleNotifications = useMemo(() => {
-    const completedVideoIds = new Set(
-      runs
-        .filter((r) => r.status === "full" || r.status === "degraded_transcript_only")
-        .map((r) => asText(r.video_id))
-        .filter(Boolean)
+    const latestByEntity = new Map<string, PipelineNotification>();
+    const passthrough: PipelineNotification[] = [];
+
+    for (const notification of notifications) {
+      const key = notificationEntityKey(notification);
+      if (!key) {
+        passthrough.push(notification);
+        continue;
+      }
+      const existing = latestByEntity.get(key);
+      if (!existing || notificationTimestamp(notification) > notificationTimestamp(existing)) {
+        latestByEntity.set(key, notification);
+      }
+    }
+
+    return [...latestByEntity.values(), ...passthrough].sort(
+      (a, b) => notificationTimestamp(b) - notificationTimestamp(a),
     );
-    return notifications.filter((n) => {
-      const vid = asText(n.metadata?.video_id);
-      return !vid || !completedVideoIds.has(vid);
-    });
-  }, [runs, notifications]);
+  }, [notifications]);
 
   const dispatchToSimone = useCallback(
     async (runPath: string) => {
@@ -668,12 +708,13 @@ export default function DashboardTutorialsPage() {
             </div>
           </div>
           {showNotifications && (
-            <div className="space-y-1.5">
-              {visibleNotifications.slice(0, 8).map((n) => {
+            <div className="max-h-[24rem] space-y-1.5 overflow-y-auto pr-1">
+              {visibleNotifications.map((n) => {
                 const style = SEVERITY_STYLES[n.severity] || SEVERITY_STYLES.info;
                 const dot = SEVERITY_DOTS[n.severity] || SEVERITY_DOTS.info;
                 const kindEmoji = KIND_EMOJI[n.kind];
                 const videoUrl = typeof n.metadata?.video_url === "string" ? n.metadata.video_url : "";
+                const videoId = notificationVideoId(n);
                 return (
                   <div
                     key={n.id}
@@ -689,6 +730,11 @@ export default function DashboardTutorialsPage() {
                       <span className="ml-1.5 text-[10px] opacity-70">{timeAgo(n.created_at)}</span>
                       {n.message && n.message !== n.title && (
                         <p className="mt-0.5 truncate opacity-80">{n.message}</p>
+                      )}
+                      {videoId && (
+                        <p className="mt-0.5 text-[10px] opacity-80">
+                          Video ID: <span className="font-mono text-slate-100">{videoId}</span>
+                        </p>
                       )}
                       {videoUrl && (
                         <a href={videoUrl} target="_blank" rel="noopener noreferrer" className="mt-0.5 block text-[10px] text-cyan-300 underline underline-offset-2 opacity-80 hover:opacity-100">Watch video →</a>

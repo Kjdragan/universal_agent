@@ -32,5 +32,7 @@ Failure classes:
 
 - `invalid_video_target`
 - `request_blocked`
+- `proxy_quota_or_billing`
+- `proxy_auth_failed`
 - `api_unavailable`
 - `empty_or_low_quality_transcript`

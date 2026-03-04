@@ -74,8 +74,11 @@ def _build_message(kind: str, title: str, message: str, metadata: dict[str, Any]
             lines.append(f"`{video_id}`")
 
     elif kind == "youtube_tutorial_ready":
+        video_id = str(metadata.get("video_id") or "")
         status = str(metadata.get("tutorial_status") or "full")
         run_path = str(metadata.get("tutorial_run_path") or "")
+        if video_id:
+            lines.append(f"Video ID: `{video_id}`")
         lines.append(f"Status: `{status}`")
         if run_path:
             lines.append(f"Path: `{run_path}`")
@@ -91,7 +94,10 @@ def _build_message(kind: str, title: str, message: str, metadata: dict[str, Any]
                 lines.append("Files: " + ", ".join(f"`{x}`" for x in visible))
 
     elif kind == "youtube_tutorial_failed":
+        video_id = str(metadata.get("video_id") or "")
         reason = str(metadata.get("error") or metadata.get("reason") or "")
+        if video_id:
+            lines.append(f"Video ID: `{video_id}`")
         if reason:
             lines.append(f"Reason: `{_escape(reason[:120])}`")
 

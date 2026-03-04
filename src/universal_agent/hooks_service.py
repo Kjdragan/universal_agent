@@ -40,6 +40,7 @@ YOUTUBE_AGENT_LEGACY_ALIAS = "youtube-explainer-expert"
 YOUTUBE_AGENT_ROUTE_ALIASES = {YOUTUBE_AGENT_CANONICAL, YOUTUBE_AGENT_LEGACY_ALIAS}
 YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT = "/home/kjdragan/lrepos"
+YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_failed"}
 
 
 class HookReportedTimeout(RuntimeError):
@@ -766,7 +767,10 @@ class HooksService:
         self._emit_notification(
             kind="youtube_tutorial_failed",
             title="YouTube Tutorial Processing Failed",
-            message=f"{tutorial_title}: {reason}",
+            message=(
+                f"{tutorial_title}: {reason}"
+                f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
+            ),
             session_id=session_id,
             severity="error",
             requires_action=True,
@@ -782,7 +786,19 @@ class HooksService:
         max_attempts: int,
     ) -> str:
         err = str(error or "local_ingest_failed").strip()
-        cls = str(failure_class or "unknown").strip()
+        cls = str(failure_class or "unknown").strip().lower()
+        if cls == "proxy_quota_or_billing":
+            return (
+                f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: Webshare quota/billing appears exhausted; verify account credits/bandwidth and retry."
+            )
+        if cls == "proxy_auth_failed":
+            return (
+                f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: Webshare credentials appear invalid; verify PROXY_USERNAME/PROXY_PASSWORD secrets."
+            )
         return (
             f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
             f"(error={err}, failure_class={cls})"
@@ -1489,7 +1505,7 @@ class HooksService:
 
         if not (ingest_result.get("ok") and str(ingest_result.get("status") or "").lower() == "succeeded"):
             failure_class = str(ingest_result.get("failure_class") or "").strip().lower()
-            if failure_class in {"request_blocked", "api_unavailable"}:
+            if failure_class in {"request_blocked", "api_unavailable", *YOUTUBE_PROXY_ALERT_FAILURE_CLASSES}:
                 self._set_youtube_ingest_cooldown(
                     video_key=video_key,
                     failure_class=failure_class,
@@ -1941,6 +1957,7 @@ class HooksService:
                     )
                 if failed_local_ingest:
                     reason = str(metadata.get("hook_youtube_ingest_reason") or "local_ingest_failed").strip()
+                    failure_class = str(metadata.get("hook_youtube_ingest_failure_class") or "").strip().lower()
                     logger.error(
                         "Hook action failed pre-dispatch session_id=%s hook=%s reason=%s",
                         session_id,
@@ -1966,6 +1983,27 @@ class HooksService:
                             "pending_file": str(metadata.get("hook_youtube_ingest_pending_file") or ""),
                         },
                     )
+                    if failure_class in YOUTUBE_PROXY_ALERT_FAILURE_CLASSES:
+                        self._emit_notification(
+                            kind="youtube_ingest_proxy_alert",
+                            title="YouTube Proxy Alert",
+                            message=(
+                                "YouTube ingest failed due to proxy billing/quota or proxy credentials. "
+                                "Check Webshare account status and proxy secrets."
+                            ),
+                            session_id=session_id,
+                            severity="error",
+                            requires_action=True,
+                            metadata={
+                                "source": "hooks",
+                                "hook_name": hook_name,
+                                "hook_session_key": session_key,
+                                "failure_class": failure_class,
+                                "error": str(metadata.get("hook_youtube_ingest_error") or ""),
+                                "reason": reason,
+                                "video_key": str(metadata.get("hook_youtube_ingest_video_key") or ""),
+                            },
+                        )
                 else:
                     logger.info(
                         "Hook action deferred session_id=%s hook=%s reason=pending_local_ingest",
@@ -2029,7 +2067,10 @@ class HooksService:
                 self._emit_notification(
                     kind="youtube_tutorial_started",
                     title="YouTube Tutorial Pipeline Started",
-                    message=f"Processing: {processing_label}",
+                    message=(
+                        f"Processing: {processing_label}"
+                        f"{f' [video_id: {expected_video_id}]' if expected_video_id else ''}"
+                    ),
                     session_id=session_id,
                     severity="info",
                     metadata={
@@ -2074,7 +2115,10 @@ class HooksService:
                     self._emit_notification(
                         kind="youtube_tutorial_ready",
                         title="YouTube Tutorial Artifacts Ready",
-                        message=f"{tutorial_title} artifacts are ready for review.",
+                        message=(
+                            f"{tutorial_title} artifacts are ready for review."
+                            f"{f' (video_id: {expected_video_id})' if expected_video_id else ''}"
+                        ),
                         session_id=session_id,
                         severity="success",
                         requires_action=True,

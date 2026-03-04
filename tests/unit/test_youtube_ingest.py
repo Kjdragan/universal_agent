@@ -10,6 +10,22 @@ def test_extract_video_id_from_watch_url() -> None:
     assert youtube_ingest.extract_video_id("https://www.youtube.com/watch?v=dxlyCPGCvy8") == "dxlyCPGCvy8"
 
 
+def test_classify_api_error_detects_proxy_billing_issue() -> None:
+    cls = youtube_ingest._classify_api_error(
+        "youtube_transcript_api_failed",
+        "Tunnel connection failed: 402 Payment Required",
+    )
+    assert cls == "proxy_quota_or_billing"
+
+
+def test_classify_api_error_detects_proxy_auth_issue() -> None:
+    cls = youtube_ingest._classify_api_error(
+        "youtube_transcript_api_failed",
+        "407 Proxy Authentication Required",
+    )
+    assert cls == "proxy_auth_failed"
+
+
 def test_normalize_video_target_from_video_id() -> None:
     url, video_id = youtube_ingest.normalize_video_target(None, "dxlyCPGCvy8")
     assert video_id == "dxlyCPGCvy8"

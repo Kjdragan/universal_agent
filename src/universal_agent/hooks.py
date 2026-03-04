@@ -112,6 +112,17 @@ _YOUTUBE_TRANSCRIPT_INTENT_MARKERS = (
     "subtitles",
 )
 
+_YOUTUBE_INLINE_FETCH_MARKERS = (
+    "youtube_transcript_api",
+    "youtube-transcript-api",
+    "yt-dlp",
+    "yt_dlp",
+    "download_subtitles",
+    "get_metadata",
+    "youtu.be",
+    "youtube.com",
+)
+
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
     """Set the context-local callback for tool events."""
@@ -318,12 +329,15 @@ def _looks_like_research_report_pipeline_intent(text: Any) -> bool:
     candidate = str(text or "").strip().lower()
     if not candidate:
         return False
-    # Fast exclusion: media/transcript fetches are never research pipeline tasks.
-    if any(m in candidate for m in _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS):
-        return False
     has_search = any(marker in candidate for marker in _RESEARCH_PIPELINE_SEARCH_MARKERS)
     has_report = any(marker in candidate for marker in _RESEARCH_PIPELINE_REPORT_MARKERS)
     has_delivery = any(marker in candidate for marker in _RESEARCH_PIPELINE_DELIVERY_MARKERS)
+    # Avoid false positives for media-only requests (e.g., "get transcript").
+    # Mixed requests that include media plus broader research/report instructions
+    # should still trigger research delegation.
+    has_media_hint = any(m in candidate for m in _RESEARCH_PIPELINE_MEDIA_EXCLUSIONS)
+    if has_media_hint and not (has_search or has_report or has_delivery):
+        return False
     # Information-gathering requests should route through specialists, with
     # report/delivery requests treated as a stronger signal.
     return has_search or has_report or has_delivery
@@ -811,15 +825,11 @@ class AgentHookSet:
         if (
             self._requires_youtube_skill_first
             and not self._youtube_skill_seen_this_turn
-            and not is_subagent_context
             and not self._is_vp_worker_lane
             and not self._is_cron_lane
         ):
-            is_mcp_youtube_metadata = (
-                tool_name.lower().startswith("mcp__youtube__")
-                and normalized_tool_name == "get_metadata"
-            )
-            if is_mcp_youtube_metadata:
+            is_mcp_youtube_direct = tool_name.lower().startswith("mcp__youtube__")
+            if is_mcp_youtube_direct:
                 logfire.info(
                     "youtube_mcp_blocked_prefer_skill",
                     tool_name=tool_name,
@@ -828,7 +838,8 @@ class AgentHookSet:
                 return {
                     "systemMessage": (
                         "⚠️ YouTube transcript workflow detected.\n\n"
-                        "Do not call `mcp__youtube__get_metadata` first — it fails bot detection on cloud IPs.\n"
+                        "Do not call `mcp__youtube__*` tools before the skill — direct calls frequently fail "
+                        "bot detection on cloud IPs.\n"
                         "Use `Skill(skill='youtube-transcript-metadata', args='<url>')` instead. "
                         "It uses the hardened proxy-backed transcript+metadata path and is the correct tool here."
                     ),
@@ -837,10 +848,34 @@ class AgentHookSet:
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "deny",
                         "permissionDecisionReason": (
-                            "youtube-transcript-metadata skill must be called before mcp__youtube__get_metadata."
+                            "youtube-transcript-metadata skill must be called before any mcp__youtube__ tool."
                         ),
                     },
                 }
+            if normalized_tool_name == "bash":
+                command, _, _ = _extract_bash_command(input_data)
+                lowered_command = command.lower()
+                if any(marker in lowered_command for marker in _YOUTUBE_INLINE_FETCH_MARKERS):
+                    logfire.info(
+                        "youtube_bash_blocked_prefer_skill",
+                        run_id=self.run_id,
+                    )
+                    return {
+                        "systemMessage": (
+                            "⚠️ YouTube transcript workflow detected.\n\n"
+                            "Do not run inline YouTube extraction via Bash before the skill.\n"
+                            "Use `Skill(skill='youtube-transcript-metadata', args='<url>')` first, then continue "
+                            "with downstream research/reporting."
+                        ),
+                        "decision": "block",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": (
+                                "youtube-transcript-metadata skill must run before inline Bash YouTube extraction."
+                            ),
+                        },
+                    }
         if (
             self._requires_vp_tool_path
             and not self._vp_dispatch_seen_this_turn
