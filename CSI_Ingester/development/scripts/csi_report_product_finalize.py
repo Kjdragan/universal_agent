@@ -164,6 +164,15 @@ def _safe_parse_dt(raw: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _source_from_report_type(report_type: str) -> str:
+    lowered = str(report_type or "").strip().lower()
+    if "threads" in lowered:
+        return "threads_trends_seeded" if "seed" in lowered else "threads_trends_broad"
+    if "reddit" in lowered:
+        return "reddit_discovery"
+    return "youtube_channel_rss"
+
+
 def _opportunity_id(label: str, *, index: int) -> str:
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", str(label or "").strip().lower()).strip("-")
     if not slug:
@@ -272,7 +281,7 @@ def _build_opportunity_bundle(
         report_json = report.get("report_json") if isinstance(report.get("report_json"), dict) else {}
         totals = report_json.get("totals") if isinstance(report_json.get("totals"), dict) else {}
         total_signal_volume += _to_int(report_json.get("total_items") or totals.get("items"), default=0)
-        source = "reddit_discovery" if "reddit" in report_type else "youtube_channel_rss"
+        source = _source_from_report_type(report_type)
         source_presence.add(source)
         insight_start = _safe_parse_dt(report.get("window_start_utc"))
         insight_end = _safe_parse_dt(report.get("window_end_utc"))

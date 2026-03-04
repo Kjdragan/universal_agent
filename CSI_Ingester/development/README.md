@@ -124,6 +124,7 @@ Timers installed:
 - `csi-report-product-finalize.timer` -> hourly at minute `:35` (materializes report artifacts + emits `report_product_ready`)
 - `csi-daily-summary.timer` -> daily at `00:10 UTC` (writes summary artifacts under `/opt/universal_agent/artifacts/csi-reports/<day>/`)
 - `csi-hourly-token-report.timer` -> hourly at minute 05 (sends `hourly_token_usage_report` event to UA)
+- `csi-threads-token-refresh-sync.timer` -> daily at `03:15 UTC` with jitter (refreshes Threads token, syncs to Infisical, runs owned probe)
 
 Run hourly token report manually:
 
@@ -226,6 +227,183 @@ scripts/csi_run.sh python3 scripts/csi_reddit_probe.py --watchlist-file /opt/uni
 Default canary watchlist file:
 
 - `/opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json`
+
+## Threads Channel Setup (Phase 1: Analytics Only)
+
+Threads ingestion is implemented behind three adapters and defaults to disabled:
+
+- `threads_owned` (owned account posts/mentions/replies/insights)
+- `threads_trends_seeded` (seeded keyword/tag packs)
+- `threads_trends_broad` (broad crawl + adaptive expansion)
+
+For a full step-by-step "no secret-by-secret entry" setup, use:
+
+- `THREADS_INFISICAL_SETUP.md`
+
+### 1) Configure credentials
+
+Set these in CSI runtime env (for example `deployment/systemd/csi-ingester.env`):
+
+- `THREADS_APP_ID`
+- `THREADS_APP_SECRET`
+- `THREADS_USER_ID`
+- `THREADS_ACCESS_TOKEN`
+- `THREADS_TOKEN_EXPIRES_AT`
+
+Bootstrap helper script (recommended):
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_auth_bootstrap.py --print-auth-url --redirect-uri "https://your-redirect.example/callback"
+```
+
+Then, after you complete Meta consent, exchange and persist directly from the returned OAuth `code`:
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_auth_bootstrap.py \
+  --mode exchange \
+  --auth-code "<THREADS_OAUTH_CODE>" \
+  --redirect-uri "https://your-redirect.example/callback"
+```
+
+If you already have a short-lived token, you can still pass `--short-lived-token`.
+
+Refresh later (updates `THREADS_ACCESS_TOKEN` and `THREADS_TOKEN_EXPIRES_AT` in env file):
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_auth_bootstrap.py --mode refresh
+```
+
+If `THREADS_USER_ID` is empty, the bootstrap script attempts to resolve it from
+`/v1.0/me` automatically (disable with `--no-resolve-user-id`).
+
+Infisical-first flow (no local env-file write):
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_auth_bootstrap.py \
+  --mode exchange \
+  --short-lived-token "<SHORT_LIVED_TOKEN>" \
+  --skip-env-write \
+  --print-infisical-json
+```
+
+Infisical bulk sync flow (recommended, no secret-by-secret entry):
+
+```bash
+# 1) Exchange token and write a JSON payload
+scripts/csi_run.sh uv run python3 scripts/csi_threads_auth_bootstrap.py \
+  --mode exchange \
+  --auth-code "<THREADS_OAUTH_CODE>" \
+  --redirect-uri "https://your-redirect.example/callback" \
+  --skip-env-write \
+  --infisical-json-file /tmp/threads-secrets.json
+
+# 2) Upsert all keys in one call
+scripts/csi_run.sh uv run python3 scripts/csi_threads_infisical_sync.py \
+  --updates-file /tmp/threads-secrets.json
+```
+
+Infisical machine identity settings required for the sync command:
+
+- `INFISICAL_CLIENT_ID`
+- `INFISICAL_CLIENT_SECRET`
+- `INFISICAL_PROJECT_ID`
+- `INFISICAL_ENVIRONMENT` (default: `dev`)
+- `INFISICAL_SECRET_PATH` (default: `/`)
+
+### 1b) Automated daily refresh + Infisical sync (systemd timer)
+
+Refresh/sync runner script:
+
+- `scripts/csi_threads_token_refresh_sync.sh`
+
+Systemd units:
+
+- `deployment/systemd/csi-threads-token-refresh-sync.service`
+- `deployment/systemd/csi-threads-token-refresh-sync.timer`
+
+Install/enable via the existing extras installer (includes this timer now):
+
+```bash
+sudo /opt/universal_agent/CSI_Ingester/development/scripts/csi_install_systemd_extras.sh
+```
+
+Check status:
+
+```bash
+systemctl status csi-threads-token-refresh-sync.timer
+journalctl -u csi-threads-token-refresh-sync.service -n 100 --no-pager
+```
+
+Required env keys in `deployment/systemd/csi-ingester.env` for this automation:
+
+- `INFISICAL_CLIENT_ID`
+- `INFISICAL_CLIENT_SECRET`
+- `INFISICAL_PROJECT_ID`
+- `INFISICAL_ENVIRONMENT` (`dev` by default)
+- `INFISICAL_SECRET_PATH` (`/` by default)
+
+Optional control knobs:
+
+- `CSI_THREADS_REFRESH_TIMEOUT_SECONDS` (default `20`)
+- `CSI_THREADS_REFRESH_BUFFER_SECONDS` (default `21600`)
+- `CSI_THREADS_REFRESH_RUN_PROBE` (`1` default)
+- `CSI_THREADS_REFRESH_REQUIRE_PROBE_OK` (`1` default)
+- `CSI_THREADS_PROBE_SOURCE` (`owned` default)
+- `CSI_THREADS_PROBE_LIMIT` (`3` default)
+
+### 2) Enable adapters in `config/config.yaml`
+
+Toggle `enabled: true` for one or more of:
+
+- `sources.threads_owned`
+- `sources.threads_trends_seeded`
+- `sources.threads_trends_broad`
+
+Set poll intervals to `900` seconds for the default 15-minute cadence.
+
+### 3) Configure seeded/broad trend inputs
+
+- Seeded domain terms:
+  - `sources.threads_trends_seeded.query_packs[].terms`
+  - `sources.threads_trends_seeded.seed_terms`
+- Broad crawl baseline:
+  - `sources.threads_trends_broad.query_pool`
+
+Run live Threads probe before enabling adapters in production:
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_probe.py --config-path config/config.yaml --source all --limit 5 --max-terms 3
+```
+
+Probe only seeded terms with override:
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_probe.py --source seeded --seed-term "ai agents"
+```
+
+### 4) Delivery health thresholds
+
+Use source-map thresholds instead of hardcoded per-source gates:
+
+```bash
+UA_CSI_DELIVERY_SOURCE_MIN_EVENTS=youtube_channel_rss=1,reddit_discovery=1,threads_owned=0,threads_trends_seeded=0,threads_trends_broad=0,csi_analytics=0
+```
+
+Set per-Threads minimums only when you want canary/SLO checks to enforce volume.
+
+### 5) Webhooks and publishing (scaffold only in phase 1)
+
+- Webhook contract endpoints exist but are disabled by default:
+  - `GET /webhooks/threads` (verification)
+  - `POST /webhooks/threads` (signed payload intake)
+- Enable with:
+  - `CSI_THREADS_WEBHOOK_ENABLED=1`
+  - `THREADS_WEBHOOK_VERIFY_TOKEN=<token>`
+- Publishing interface is implemented as a disabled contract:
+  - `create_container`
+  - `publish_container`
+  - `reply_to_post`
+  - Gate: `CSI_THREADS_PUBLISHING_ENABLED=1` (phase 2)
 
 ## UA ↔ CSI Analyst Task Protocol
 

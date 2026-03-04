@@ -23,7 +23,7 @@ from csi_ingester.contract import CreatorSignalEvent
 from csi_ingester.store import source_state as source_state_store
 from csi_ingester.store.sqlite import connect, ensure_schema
 
-WATCHED_SOURCES: tuple[str, ...] = ("youtube_channel_rss", "reddit_discovery")
+DEFAULT_WATCHED_SOURCES: tuple[str, ...] = ("youtube_channel_rss", "reddit_discovery")
 
 
 def _utc_now_iso() -> str:
@@ -178,7 +178,34 @@ def _source_runbook(source_name: str) -> str:
             "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_probe.py "
             "--watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
         )
+    if source_name in {"threads_owned", "threads_trends_seeded", "threads_trends_broad"}:
+        return "journalctl -u csi-ingester -n 200 --no-pager | grep -i threads"
     return "journalctl -u csi-ingester -n 200 --no-pager"
+
+
+def _resolve_watched_sources(*, env_values: dict[str, str], source_min_events: dict[str, int]) -> tuple[str, ...]:
+    raw = str(env_values.get("UA_CSI_SLO_WATCHED_SOURCES") or "").strip()
+    if not raw:
+        raw = str(canary._resolve_setting(["UA_CSI_SLO_WATCHED_SOURCES"], env_values, "")).strip()
+    selected: list[str] = []
+    if raw:
+        selected = [token.strip() for token in raw.split(",") if token.strip()]
+    else:
+        selected = [
+            source_name
+            for source_name, min_events in source_min_events.items()
+            if source_name != "csi_analytics" and int(min_events) > 0
+        ]
+    if not selected:
+        return DEFAULT_WATCHED_SOURCES
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for source_name in selected:
+        if source_name in seen:
+            continue
+        seen.add(source_name)
+        deduped.append(source_name)
+    return tuple(deduped)
 
 
 def _candidate(
@@ -214,12 +241,14 @@ def _evaluate_slo(
     max_dlq_backlog_delta: int,
     max_source_lag_minutes: int,
     max_canary_regressions: int,
+    watched_sources: tuple[str, ...] = DEFAULT_WATCHED_SOURCES,
 ) -> dict[str, Any]:
     delivery = _delivery_stats(conn, start=start, end=end)
     event_delivery = _event_delivery_ratio(conn, start=start, end=end)
     dlq_current = _dlq_backlog(conn, start=start, end=end)
     dlq_previous = _dlq_backlog(conn, start=previous_start, end=previous_end)
     dlq_delta = dlq_current - dlq_previous
+    sources_to_check = watched_sources if watched_sources else DEFAULT_WATCHED_SOURCES
     freshness = [
         _source_freshness(
             conn,
@@ -227,7 +256,7 @@ def _evaluate_slo(
             end=end,
             threshold_minutes=max_source_lag_minutes,
         )
-        for source_name in WATCHED_SOURCES
+        for source_name in sources_to_check
     ]
     canary_frequency = _canary_frequency(conn, start=start, end=end)
 
@@ -563,6 +592,67 @@ def _run_once(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             ),
         ),
     }
+    source_min_events = canary._default_source_min_events()
+    source_min_events.update(
+        canary._parse_source_min_events_spec(
+            canary._resolve_setting(
+                ["UA_CSI_DELIVERY_SOURCE_MIN_EVENTS"],
+                env_values,
+                "",
+            )
+        )
+    )
+    source_min_events["youtube_channel_rss"] = max(
+        0,
+        int(
+            canary._resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_RSS_EVENTS_24H"],
+                env_values,
+                str(source_min_events.get("youtube_channel_rss", 1)),
+            )
+        ),
+    )
+    source_min_events["reddit_discovery"] = max(
+        0,
+        int(
+            canary._resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_REDDIT_EVENTS_24H"],
+                env_values,
+                str(source_min_events.get("reddit_discovery", 1)),
+            )
+        ),
+    )
+    source_min_events["threads_owned"] = max(
+        0,
+        int(
+            canary._resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_THREADS_OWNED_EVENTS_24H"],
+                env_values,
+                str(source_min_events.get("threads_owned", 0)),
+            )
+        ),
+    )
+    source_min_events["threads_trends_seeded"] = max(
+        0,
+        int(
+            canary._resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_THREADS_SEEDED_EVENTS_24H"],
+                env_values,
+                str(source_min_events.get("threads_trends_seeded", 0)),
+            )
+        ),
+    )
+    source_min_events["threads_trends_broad"] = max(
+        0,
+        int(
+            canary._resolve_setting(
+                ["UA_CSI_DELIVERY_MIN_THREADS_BROAD_EVENTS_24H"],
+                env_values,
+                str(source_min_events.get("threads_trends_broad", 0)),
+            )
+        ),
+    )
+    watched_sources = _resolve_watched_sources(env_values=env_values, source_min_events=source_min_events)
 
     db_path = Path(args.db_path).expanduser()
     conn = connect(db_path)
@@ -581,6 +671,7 @@ def _run_once(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         max_dlq_backlog_delta=int(tuned["max_dlq_backlog_delta"]),
         max_source_lag_minutes=int(tuned["max_source_lag_minutes"]),
         max_canary_regressions=int(tuned["max_canary_regressions"]),
+        watched_sources=watched_sources,
     )
 
     previous_state = source_state_store.get_state(conn, str(args.state_key)) or {}
@@ -643,6 +734,7 @@ def _run_once(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
         "window_end_utc": str(evaluation.get("window_end_utc") or ""),
         "transition": transition,
         "tuning": tuned,
+        "watched_sources": list(watched_sources),
         "top_root_causes": top_root_causes,
         "breach_count": len(evaluation.get("breaches") or []),
         "emitted": bool(emitted),

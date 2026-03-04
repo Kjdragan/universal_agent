@@ -105,6 +105,7 @@ from universal_agent.work_threads import (
 )
 from universal_agent.hooks_service import HooksService
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
+from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services import tutorial_telegram_notifier
 from universal_agent import process_heartbeat
 from universal_agent.security_paths import (
@@ -1531,6 +1532,7 @@ _cron_service: Optional[CronService] = None
 _ops_service: Optional[OpsService] = None
 _hooks_service: Optional[HooksService] = None
 _yt_playlist_watcher: Optional[YouTubePlaylistWatcher] = None
+_agentmail_service: Optional[AgentMailService] = None
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
 _system_events_max = int(os.getenv("UA_SYSTEM_EVENTS_MAX", "100"))
@@ -3450,7 +3452,16 @@ def classify_csi_project_key(
         return "proactive"
     if float(quality_obj.get("score") or 0.0) > 0 and float(quality_obj.get("score") or 0.0) < 0.6:
         return "proactive"
-    if any(key in mix_obj for key in ("youtube_channel_rss", "reddit_discovery")) and event_type_l in {
+    if any(
+        key in mix_obj
+        for key in (
+            "youtube_channel_rss",
+            "reddit_discovery",
+            "threads_owned",
+            "threads_trends_seeded",
+            "threads_trends_broad",
+        )
+    ) and event_type_l in {
         "opportunity_bundle_ready",
         "report_product_ready",
     }:
@@ -3467,6 +3478,8 @@ def _csi_source_bucket(event: Any) -> str:
     subject_obj = subject if isinstance(subject, dict) else {}
     report_type = str(subject_obj.get("report_type") or event_type).strip().lower()
     text = " ".join([event_type, source, report_type])
+    if "threads" in text:
+        return "threads"
     if "reddit" in text:
         return "reddit"
     if "rss" in text:
@@ -8480,6 +8493,23 @@ async def lifespan(app: FastAPI):
     )
     await _yt_playlist_watcher.start()
 
+    # --- AgentMail Service (Simone's native inbox) ---
+    global _agentmail_service
+
+    async def _agentmail_dispatch_fn(action_payload: dict) -> tuple[bool, str]:
+        if _hooks_service is None:
+            return False, "hooks_service_not_ready"
+        return await _hooks_service.dispatch_internal_action(action_payload)
+
+    _agentmail_service = AgentMailService(
+        dispatch_fn=_agentmail_dispatch_fn,
+        notification_sink=_hook_notification_sink,
+    )
+    try:
+        await _agentmail_service.startup()
+    except Exception:
+        logger.exception("Failed starting AgentMail service")
+
     try:
         recovered = await _hooks_service.recover_interrupted_youtube_sessions(WORKSPACES_DIR)
     except Exception:
@@ -8543,6 +8573,8 @@ async def lifespan(app: FastAPI):
     _todoist_chron_reconcile_stop_event = None
     if _yt_playlist_watcher:
         await _yt_playlist_watcher.stop()
+    if _agentmail_service:
+        await _agentmail_service.shutdown()
     if _heartbeat_service:
         await _heartbeat_service.stop()
     if _cron_service:
@@ -10186,6 +10218,93 @@ async def dashboard_csi_health():
             conn.close()
 
 
+def _parse_source_min_events_spec(raw: str) -> dict[str, int]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    out: dict[str, int] = {}
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            for key, value in parsed.items():
+                cleaned = str(key or "").strip()
+                if not cleaned:
+                    continue
+                try:
+                    out[cleaned] = max(0, int(value))
+                except Exception:
+                    continue
+            return out
+    except Exception:
+        pass
+    for token in text.split(","):
+        item = token.strip()
+        if not item or "=" not in item:
+            continue
+        key, value_raw = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        try:
+            out[key] = max(0, int(value_raw.strip()))
+        except Exception:
+            continue
+    return out
+
+
+def _default_delivery_source_min_events() -> dict[str, int]:
+    defaults = {
+        "youtube_channel_rss": 1,
+        "reddit_discovery": 1,
+        "threads_owned": 0,
+        "threads_trends_seeded": 0,
+        "threads_trends_broad": 0,
+        "csi_analytics": 0,
+    }
+    env_map = _parse_source_min_events_spec(str(os.getenv("UA_CSI_DELIVERY_SOURCE_MIN_EVENTS") or ""))
+    defaults.update(env_map)
+    return defaults
+
+
+def _delivery_hint_for_source(source_name: str, *, under_min_volume: bool, stale: bool) -> dict[str, Any] | None:
+    if not (under_min_volume or stale):
+        return None
+    if source_name == "youtube_channel_rss":
+        return {
+            "code": "rss_source_stale_or_low_volume",
+            "severity": "warning",
+            "title": "RSS source volume below threshold",
+            "action": "Check RSS watchlist path and timer health; verify channel IDs are loading.",
+            "runbook_command": (
+                "systemctl status csi-ingester csi-rss-trend-report.timer csi-rss-telegram-digest.timer && "
+                "journalctl -u csi-ingester -n 120 --no-pager"
+            ),
+        }
+    if source_name == "reddit_discovery":
+        return {
+            "code": "reddit_source_stale_or_low_volume",
+            "severity": "warning",
+            "title": "Reddit source volume below threshold",
+            "action": "Check reddit watchlist and endpoint reachability/fallback behavior.",
+            "runbook_command": (
+                "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_probe.py "
+                "--watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
+            ),
+        }
+    if source_name in {"threads_owned", "threads_trends_seeded", "threads_trends_broad"}:
+        return {
+            "code": "threads_source_stale_or_low_volume",
+            "severity": "warning",
+            "title": "Threads source volume below threshold",
+            "action": (
+                "Verify Threads token freshness, source query packs, and keyword quotas. "
+                "Confirm THREADS_* credentials are loaded in CSI runtime env."
+            ),
+            "runbook_command": "journalctl -u csi-ingester -n 200 --no-pager | grep -i threads",
+        }
+    return None
+
+
 @app.get("/api/v1/dashboard/csi/delivery-health")
 async def dashboard_csi_delivery_health(
     window_hours: int = 24,
@@ -10193,7 +10312,11 @@ async def dashboard_csi_delivery_health(
     max_failed_attempt_ratio: Optional[float] = None,
     min_rss_events: Optional[int] = None,
     min_reddit_events: Optional[int] = None,
+    min_threads_owned_events: Optional[int] = None,
+    min_threads_seeded_events: Optional[int] = None,
+    min_threads_broad_events: Optional[int] = None,
     max_dlq_recent: Optional[int] = None,
+    source_min_events: Optional[str] = None,
 ):
     clamped_window = max(1, min(int(window_hours), 24 * 30))
     stale_threshold_minutes = max(30, min(int(stale_minutes), 24 * 60 * 7))
@@ -10202,16 +10325,18 @@ async def dashboard_csi_delivery_health(
         if max_failed_attempt_ratio is not None
         else max(0.0, min(float(os.getenv("UA_CSI_DELIVERY_MAX_FAILED_ATTEMPT_RATIO", "0.2") or 0.2), 1.0))
     )
-    tuned_min_rss_events = (
-        max(0, int(min_rss_events))
-        if min_rss_events is not None
-        else max(0, int(os.getenv("UA_CSI_DELIVERY_MIN_RSS_EVENTS_24H", "1") or 1))
-    )
-    tuned_min_reddit_events = (
-        max(0, int(min_reddit_events))
-        if min_reddit_events is not None
-        else max(0, int(os.getenv("UA_CSI_DELIVERY_MIN_REDDIT_EVENTS_24H", "1") or 1))
-    )
+    source_min_map = _default_delivery_source_min_events()
+    source_min_map.update(_parse_source_min_events_spec(str(source_min_events or "")))
+    if min_rss_events is not None:
+        source_min_map["youtube_channel_rss"] = max(0, int(min_rss_events))
+    if min_reddit_events is not None:
+        source_min_map["reddit_discovery"] = max(0, int(min_reddit_events))
+    if min_threads_owned_events is not None:
+        source_min_map["threads_owned"] = max(0, int(min_threads_owned_events))
+    if min_threads_seeded_events is not None:
+        source_min_map["threads_trends_seeded"] = max(0, int(min_threads_seeded_events))
+    if min_threads_broad_events is not None:
+        source_min_map["threads_trends_broad"] = max(0, int(min_threads_broad_events))
     tuned_max_dlq_recent = (
         max(0, int(max_dlq_recent))
         if max_dlq_recent is not None
@@ -10228,7 +10353,7 @@ async def dashboard_csi_delivery_health(
     try:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
-        source_names = ["youtube_channel_rss", "reddit_discovery", "csi_analytics"]
+        source_name_set = set(source_min_map.keys())
         window_expr = f"-{clamped_window} hours"
         source_rows: list[dict[str, Any]] = []
         now_ts = time.time()
@@ -10258,11 +10383,26 @@ async def dashboard_csi_delivery_health(
             }
             adapter_health.append(adapter_entry)
             adapter_health_map[adapter_name] = adapter_entry
+            source_name_set.add(adapter_name)
 
+        try:
+            source_value_rows = conn.execute(
+                """
+                SELECT DISTINCT source
+                FROM events
+                WHERE created_at >= datetime('now', ?)
+                """,
+                (window_expr,),
+            ).fetchall()
+        except Exception:
+            source_value_rows = []
+        for row in source_value_rows:
+            source_name_set.add(str(row["source"] or "").strip())
+
+        source_names = sorted(name for name in source_name_set if name)
         expected_min_events_by_source = {
-            "youtube_channel_rss": tuned_min_rss_events,
-            "reddit_discovery": tuned_min_reddit_events,
-            "csi_analytics": 0,
+            name: int(source_min_map.get(name) or 0)
+            for name in source_names
         }
 
         for source_name in source_names:
@@ -10348,7 +10488,9 @@ async def dashboard_csi_delivery_health(
             failed_attempt_ratio = round((float(attempts_failed) / float(attempts)), 4) if attempts > 0 else 0.0
             expected_min_events = int(expected_min_events_by_source.get(source_name) or 0)
             under_min_volume = total < expected_min_events
-            stale = total == 0 or (lag_minutes is not None and lag_minutes > float(stale_threshold_minutes))
+            stale = expected_min_events > 0 and (
+                total == 0 or (lag_minutes is not None and lag_minutes > float(stale_threshold_minutes))
+            )
             high_failed_ratio = attempts > 0 and failed_attempt_ratio > float(tuned_max_failed_attempt_ratio)
             all_failed = attempts > 0 and attempts_failed == attempts
             dlq_exceeds = dlq_total > int(tuned_max_dlq_recent)
@@ -10368,32 +10510,13 @@ async def dashboard_csi_delivery_health(
                 status_value = "failing"
 
             repair_hints: list[dict[str, Any]] = []
-            if source_name == "youtube_channel_rss" and (under_min_volume or stale):
-                repair_hints.append(
-                    {
-                        "code": "rss_source_stale_or_low_volume",
-                        "severity": "warning",
-                        "title": "RSS source volume below threshold",
-                        "action": "Check RSS watchlist path and timer health; verify channel IDs are loading.",
-                        "runbook_command": (
-                            "systemctl status csi-ingester csi-rss-trend-report.timer csi-rss-telegram-digest.timer && "
-                            "journalctl -u csi-ingester -n 120 --no-pager"
-                        ),
-                    }
-                )
-            if source_name == "reddit_discovery" and (under_min_volume or stale):
-                repair_hints.append(
-                    {
-                        "code": "reddit_source_stale_or_low_volume",
-                        "severity": "warning",
-                        "title": "Reddit source volume below threshold",
-                        "action": "Check reddit watchlist and endpoint reachability/fallback behavior.",
-                        "runbook_command": (
-                            "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_reddit_probe.py "
-                            "--watchlist-file /opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
-                        ),
-                    }
-                )
+            low_volume_hint = _delivery_hint_for_source(
+                source_name,
+                under_min_volume=under_min_volume,
+                stale=stale,
+            )
+            if isinstance(low_volume_hint, dict):
+                repair_hints.append(low_volume_hint)
             if attempts_failed > 0 or high_failed_ratio:
                 repair_hints.append(
                     {
@@ -10482,8 +10605,12 @@ async def dashboard_csi_delivery_health(
             },
             "tuning": {
                 "max_failed_attempt_ratio": tuned_max_failed_attempt_ratio,
-                "min_rss_events": tuned_min_rss_events,
-                "min_reddit_events": tuned_min_reddit_events,
+                "source_min_events": source_min_map,
+                "min_rss_events": int(source_min_map.get("youtube_channel_rss") or 0),
+                "min_reddit_events": int(source_min_map.get("reddit_discovery") or 0),
+                "min_threads_owned_events": int(source_min_map.get("threads_owned") or 0),
+                "min_threads_seeded_events": int(source_min_map.get("threads_trends_seeded") or 0),
+                "min_threads_broad_events": int(source_min_map.get("threads_trends_broad") or 0),
                 "max_dlq_recent": tuned_max_dlq_recent,
                 "adapter_consecutive_failures": tuned_adapter_consecutive_failures,
                 "stale_threshold_minutes": stale_threshold_minutes,
@@ -12428,6 +12555,65 @@ async def ops_yt_playlist_watcher_poll_now(request: Request):
         raise HTTPException(status_code=503, detail="YouTube playlist watcher not initialized")
     result = await _yt_playlist_watcher.poll_now()
     return result
+
+
+@app.get("/api/v1/ops/agentmail")
+async def ops_agentmail_status(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        return {"enabled": False, "reason": "not_initialized"}
+    return _agentmail_service.status()
+
+
+@app.get("/api/v1/ops/agentmail/messages")
+async def ops_agentmail_messages(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        label = request.query_params.get("label")
+        limit = min(50, int(request.query_params.get("limit", "20")))
+        messages = await _agentmail_service.list_messages(label=label, limit=limit)
+        return {"ok": True, "messages": messages, "count": len(messages)}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/v1/ops/agentmail/send")
+async def ops_agentmail_send(request: Request):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    to = str(body.get("to", "")).strip()
+    subject = str(body.get("subject", "")).strip()
+    text = str(body.get("text", "")).strip()
+    html = body.get("html")
+    force_send = bool(body.get("force_send", False))
+    if not to or not subject or not text:
+        raise HTTPException(status_code=400, detail="to, subject, and text are required")
+    try:
+        result = await _agentmail_service.send_email(
+            to=to, subject=subject, text=text, html=html, force_send=force_send,
+        )
+        return {"ok": True, **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.post("/api/v1/ops/agentmail/drafts/{draft_id}/send")
+async def ops_agentmail_send_draft(request: Request, draft_id: str):
+    _require_ops_auth(request)
+    if _agentmail_service is None:
+        raise HTTPException(status_code=503, detail="AgentMail service not initialized")
+    try:
+        result = await _agentmail_service.send_draft(draft_id)
+        return {"ok": True, **result}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 @app.post("/api/v1/ops/tutorials/bootstrap-jobs/claim")

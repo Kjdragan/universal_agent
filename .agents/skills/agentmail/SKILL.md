@@ -1,296 +1,148 @@
 ---
 name: agentmail
-description: Give AI agents their own email inboxes using the AgentMail API. Use when building email agents, sending/receiving emails programmatically, managing inboxes, handling attachments, organizing with labels, creating drafts for human approval, or setting up real-time notifications via webhooks/websockets. Supports multi-tenant isolation with pods.
+description: "Simone's native email inbox via AgentMail. Use when Simone needs to send emails, deliver reports/artifacts to Kevin or external recipients, read inbound emails, reply to threads, or manage drafts. This is Simone's OWN email — not Gmail. Simone sends FROM her custom domain address directly."
 ---
 
-# AgentMail SDK
+# AgentMail — Simone's Native Email
 
-AgentMail is an API-first email platform for AI agents. Install the SDK and initialize the client.
+Simone has her own email inbox on a custom domain via AgentMail. This is her primary outbound communication channel for delivering work products, reports, and correspondence.
 
-## Installation
+## Key Concepts
 
-```bash
-# TypeScript/Node
-npm install agentmail
+- **Simone's inbox** is auto-provisioned at gateway startup. The address is set via `UA_AGENTMAIL_INBOX_ADDRESS` env var (custom domain).
+- **Draft-first policy**: By default (`UA_AGENTMAIL_AUTO_SEND=0`), outbound emails are created as drafts for Kevin's approval. Set `force_send=True` or `UA_AGENTMAIL_AUTO_SEND=1` to send directly.
+- **Gmail is separate**: Gmail (via Composio) is for reading/managing Kevin's personal email. AgentMail is for Simone's own outbound communications.
+- **Inbound emails** are received via WebSocket listener (when `UA_AGENTMAIL_WS_ENABLED=1`) and dispatched to the `email-handler` agent.
 
-# Python
-pip install agentmail
-```
+## When to Use AgentMail vs Gmail
 
-## Setup
+| Scenario | Use |
+|---|---|
+| Simone sends a report to Kevin | **AgentMail** — `send_email(to="kevinjdragan@gmail.com", ...)` |
+| Simone sends work to an external contact | **AgentMail** — sends from Simone's custom domain |
+| Read Kevin's personal Gmail inbox | **Gmail** (Composio `GMAIL_GET_EMAILS`) |
+| Reply as Kevin from his Gmail | **Gmail** (Composio `GMAIL_SEND_EMAIL`) |
+| Someone emails Simone directly | **AgentMail** inbound → email-handler agent |
 
-```typescript
-import { AgentMailClient } from "agentmail";
-const client = new AgentMailClient({ apiKey: "YOUR_API_KEY" });
-```
+## Sending Email (Python — via UA Service)
 
-```python
-from agentmail import AgentMail
-client = AgentMail(api_key="YOUR_API_KEY")
-```
-
-## Inboxes
-
-Create scalable inboxes on-demand. Each inbox has a unique email address.
-
-```typescript
-// Create inbox (auto-generated address)
-const autoInbox = await client.inboxes.create();
-
-// Create with custom username and domain
-const customInbox = await client.inboxes.create({
-  username: "support",
-  domain: "yourdomain.com",
-});
-
-// List, get, delete
-const inboxes = await client.inboxes.list();
-const fetchedInbox = await client.inboxes.get({
-  inboxId: "inbox@agentmail.to",
-});
-await client.inboxes.delete({ inboxId: "inbox@agentmail.to" });
-```
+The `AgentMailService` is available as a gateway service. Use it through Bash/Python scripts:
 
 ```python
-# Create inbox (auto-generated address)
-inbox = client.inboxes.create()
+import asyncio
+import os
+from agentmail import AsyncAgentMail
 
-# Create with custom username and domain
-inbox = client.inboxes.create(username="support", domain="yourdomain.com")
+client = AsyncAgentMail(api_key=os.environ["AGENTMAIL_API_KEY"])
+inbox_id = os.environ.get("UA_AGENTMAIL_INBOX_ADDRESS", "")
 
-# List, get, delete
-inboxes = client.inboxes.list()
-inbox = client.inboxes.get(inbox_id="inbox@agentmail.to")
-client.inboxes.delete(inbox_id="inbox@agentmail.to")
+# Send email (both text and html for best deliverability)
+async def send():
+    msg = await client.inboxes.messages.send(
+        inbox_id=inbox_id,
+        to="kevinjdragan@gmail.com",
+        subject="Research Report Ready",
+        text="Hi Kevin, the research report is attached.",
+        html="<p>Hi Kevin,</p><p>The research report is attached.</p>",
+        labels=["outbound", "report"],
+    )
+    print(f"Sent: {msg.message_id}")
+
+asyncio.run(send())
 ```
 
-## Messages
-
-Always send both `text` and `html` for best deliverability.
-
-```typescript
-// Send message
-await client.inboxes.messages.send({
-  inboxId: "agent@agentmail.to",
-  to: "recipient@example.com",
-  subject: "Hello",
-  text: "Plain text version",
-  html: "<p>HTML version</p>",
-  labels: ["outreach"],
-});
-
-// Reply to message
-await client.inboxes.messages.reply({
-  inboxId: "agent@agentmail.to",
-  messageId: "msg_123",
-  text: "Thanks for your email!",
-});
-
-// List and get messages
-const messages = await client.inboxes.messages.list({
-  inboxId: "agent@agentmail.to",
-});
-const message = await client.inboxes.messages.get({
-  inboxId: "agent@agentmail.to",
-  messageId: "msg_123",
-});
-
-// Update labels
-await client.inboxes.messages.update({
-  inboxId: "agent@agentmail.to",
-  messageId: "msg_123",
-  addLabels: ["replied"],
-  removeLabels: ["unreplied"],
-});
-```
+## Creating Drafts (Human-in-the-Loop)
 
 ```python
-# Send message
-client.inboxes.messages.send(
-    inbox_id="agent@agentmail.to",
-    to="recipient@example.com",
-    subject="Hello",
-    text="Plain text version",
-    html="<p>HTML version</p>",
-    labels=["outreach"]
-)
-
-# Reply to message
-client.inboxes.messages.reply(
-    inbox_id="agent@agentmail.to",
-    message_id="msg_123",
-    text="Thanks for your email!"
-)
-
-# List and get messages
-messages = client.inboxes.messages.list(inbox_id="agent@agentmail.to")
-message = client.inboxes.messages.get(inbox_id="agent@agentmail.to", message_id="msg_123")
-
-# Update labels
-client.inboxes.messages.update(
-    inbox_id="agent@agentmail.to",
-    message_id="msg_123",
-    add_labels=["replied"],
-    remove_labels=["unreplied"]
-)
+# Create a draft for Kevin to review before sending
+async def create_draft():
+    draft = await client.inboxes.drafts.create(
+        inbox_id=inbox_id,
+        to="recipient@example.com",
+        subject="Partnership Proposal",
+        text="Draft content for review...",
+        html="<p>Draft content for review...</p>",
+    )
+    print(f"Draft created: {draft.draft_id} — awaiting approval")
+    
+    # After approval:
+    # await client.inboxes.drafts.send(inbox_id=inbox_id, draft_id=draft.draft_id)
 ```
 
-## Threads
-
-Threads group related messages in a conversation.
-
-```typescript
-// List threads (with optional label filter)
-const threads = await client.inboxes.threads.list({
-  inboxId: "agent@agentmail.to",
-  labels: ["unreplied"],
-});
-
-// Get thread details
-const thread = await client.inboxes.threads.get({
-  inboxId: "agent@agentmail.to",
-  threadId: "thd_123",
-});
-
-// Org-wide thread listing
-const allThreads = await client.threads.list();
-```
+## Replying to Threads
 
 ```python
-# List threads (with optional label filter)
-threads = client.inboxes.threads.list(inbox_id="agent@agentmail.to", labels=["unreplied"])
-
-# Get thread details
-thread = client.inboxes.threads.get(inbox_id="agent@agentmail.to", thread_id="thd_123")
-
-# Org-wide thread listing
-all_threads = client.threads.list()
+# Reply to an existing email thread
+async def reply():
+    msg = await client.inboxes.messages.reply(
+        inbox_id=inbox_id,
+        message_id="msg_abc123",
+        text="Thanks for your email! I'll look into this.",
+        html="<p>Thanks for your email! I'll look into this.</p>",
+    )
+    print(f"Reply sent: {msg.message_id}")
 ```
 
-## Attachments
+## Reading Messages
 
-Send attachments with Base64 encoding. Retrieve from messages or threads.
+```python
+# List recent messages
+async def check_inbox():
+    messages = await client.inboxes.messages.list(inbox_id=inbox_id)
+    for msg in messages.messages:
+        print(f"From: {msg.from_} | Subject: {msg.subject}")
 
-```typescript
-// Send with attachment
-const content = Buffer.from(fileBytes).toString("base64");
-await client.inboxes.messages.send({
-  inboxId: "agent@agentmail.to",
-  to: "recipient@example.com",
-  subject: "Report",
-  text: "See attached.",
-  attachments: [
-    { content, filename: "report.pdf", contentType: "application/pdf" },
-  ],
-});
-
-// Get attachment
-const fileData = await client.inboxes.messages.getAttachment({
-  inboxId: "agent@agentmail.to",
-  messageId: "msg_123",
-  attachmentId: "att_456",
-});
+# Get specific message
+async def read_message(message_id: str):
+    msg = await client.inboxes.messages.get(inbox_id=inbox_id, message_id=message_id)
+    print(f"Body: {msg.text}")
 ```
+
+## Sending Attachments
 
 ```python
 import base64
 
-# Send with attachment
-content = base64.b64encode(file_bytes).decode()
-client.inboxes.messages.send(
-    inbox_id="agent@agentmail.to",
-    to="recipient@example.com",
-    subject="Report",
-    text="See attached.",
-    attachments=[{"content": content, "filename": "report.pdf", "content_type": "application/pdf"}]
-)
-
-# Get attachment
-file_data = client.inboxes.messages.get_attachment(
-    inbox_id="agent@agentmail.to",
-    message_id="msg_123",
-    attachment_id="att_456"
-)
+async def send_with_attachment(file_path: str, to: str, subject: str):
+    with open(file_path, "rb") as f:
+        content = base64.b64encode(f.read()).decode()
+    
+    filename = os.path.basename(file_path)
+    # Infer content type
+    ct = "application/pdf" if filename.endswith(".pdf") else "application/octet-stream"
+    
+    msg = await client.inboxes.messages.send(
+        inbox_id=inbox_id,
+        to=to,
+        subject=subject,
+        text=f"Please find {filename} attached.",
+        html=f"<p>Please find <strong>{filename}</strong> attached.</p>",
+        attachments=[{"content": content, "filename": filename, "content_type": ct}],
+    )
+    print(f"Sent with attachment: {msg.message_id}")
 ```
 
-## Drafts
+## Ops API Endpoints
 
-Create drafts for human-in-the-loop approval before sending.
+The gateway exposes AgentMail management endpoints:
 
-```typescript
-// Create draft
-const draft = await client.inboxes.drafts.create({
-  inboxId: "agent@agentmail.to",
-  to: "recipient@example.com",
-  subject: "Pending approval",
-  text: "Draft content",
-});
+- `GET /api/v1/ops/agentmail` — Service status (inbox address, WS state, counters)
+- `GET /api/v1/ops/agentmail/messages?label=&limit=20` — List recent messages
+- `POST /api/v1/ops/agentmail/send` — Send email `{"to", "subject", "text", "html?", "force_send?"}`
+- `POST /api/v1/ops/agentmail/drafts/{draft_id}/send` — Approve and send a draft
 
-// Send draft (converts to message)
-await client.inboxes.drafts.send({
-  inboxId: "agent@agentmail.to",
-  draftId: draft.draftId,
-});
-```
+## Environment Variables
 
-```python
-# Create draft
-draft = client.inboxes.drafts.create(
-    inbox_id="agent@agentmail.to",
-    to="recipient@example.com",
-    subject="Pending approval",
-    text="Draft content"
-)
+| Variable | Default | Purpose |
+|---|---|---|
+| `UA_AGENTMAIL_ENABLED` | `0` | Master toggle |
+| `AGENTMAIL_API_KEY` | — | API key (Infisical) |
+| `UA_AGENTMAIL_INBOX_ADDRESS` | — | Pre-configured inbox address (custom domain) |
+| `UA_AGENTMAIL_INBOX_USERNAME` | `simone` | Username if creating new inbox |
+| `UA_AGENTMAIL_AUTO_SEND` | `0` | `1` = send directly, `0` = create drafts |
+| `UA_AGENTMAIL_WS_ENABLED` | `0` | WebSocket listener for inbound email |
 
-# Send draft (converts to message)
-client.inboxes.drafts.send(inbox_id="agent@agentmail.to", draft_id=draft.draft_id)
-```
+## Real-Time Events (Reference)
 
-## Pods
-
-Multi-tenant isolation for SaaS platforms. Each customer gets isolated inboxes.
-
-```typescript
-// Create pod for a customer
-const pod = await client.pods.create({ clientId: "customer_123" });
-
-// Create inbox within pod
-const inbox = await client.inboxes.create({ podId: pod.podId });
-
-// List resources scoped to pod
-const inboxes = await client.inboxes.list({ podId: pod.podId });
-```
-
-```python
-# Create pod for a customer
-pod = client.pods.create(client_id="customer_123")
-
-# Create inbox within pod
-inbox = client.inboxes.create(pod_id=pod.pod_id)
-
-# List resources scoped to pod
-inboxes = client.inboxes.list(pod_id=pod.pod_id)
-```
-
-## Idempotency
-
-Use `clientId` for safe retries on create operations.
-
-```typescript
-const inbox = await client.inboxes.create({
-  clientId: "unique-idempotency-key",
-});
-// Retrying with same clientId returns the original inbox, not a duplicate
-```
-
-```python
-inbox = client.inboxes.create(client_id="unique-idempotency-key")
-# Retrying with same client_id returns the original inbox, not a duplicate
-```
-
-## Real-Time Events
-
-For real-time notifications, see the reference files:
-
-- [webhooks.md](references/webhooks.md) - HTTP-based notifications (requires public URL)
-- [websockets.md](references/websockets.md) - Persistent connection (no public URL needed)
+- [webhooks.md](references/webhooks.md) — HTTP-based notifications (VPS production)
+- [websockets.md](references/websockets.md) — Persistent connection (no public URL needed)

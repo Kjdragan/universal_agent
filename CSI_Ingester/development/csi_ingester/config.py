@@ -55,6 +55,26 @@ class CSIConfig:
     def ua_shared_secret(self) -> str:
         return (os.getenv("CSI_UA_SHARED_SECRET") or "").strip()
 
+    @property
+    def threads_app_id(self) -> str:
+        return (os.getenv("THREADS_APP_ID") or "").strip()
+
+    @property
+    def threads_app_secret(self) -> str:
+        return (os.getenv("THREADS_APP_SECRET") or "").strip()
+
+    @property
+    def threads_user_id(self) -> str:
+        return (os.getenv("THREADS_USER_ID") or "").strip()
+
+    @property
+    def threads_access_token(self) -> str:
+        return (os.getenv("THREADS_ACCESS_TOKEN") or "").strip()
+
+    @property
+    def threads_token_expires_at(self) -> str:
+        return (os.getenv("THREADS_TOKEN_EXPIRES_AT") or "").strip()
+
 
 def load_config(config_path: str | None = None) -> CSIConfig:
     path = Path(config_path or os.getenv("CSI_CONFIG_PATH") or "config/config.yaml")

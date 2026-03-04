@@ -395,15 +395,32 @@ export default function CSIDashboard() {
         const params = new URLSearchParams(window.location.search);
         const reportKey = String(params.get("report_key") || "").trim();
         const artifactPath = String(params.get("artifact_path") || "").trim();
-        if (!reportKey && !artifactPath) {
+        const notificationId = String(params.get("notification_id") || "").trim();
+        const eventId = String(params.get("event_id") || "").trim();
+        if (!reportKey && !artifactPath && !notificationId && !eventId) {
             setDeepLinkApplied(true);
             return;
         }
 
+        let selected = false;
         if (reportKey) {
             const matchedReport = reports.find((report) => String(report?.report_data?.report_key || report?.metadata?.report_key || "").trim() === reportKey);
             if (matchedReport) {
                 setSelectedItem({ type: "report", data: matchedReport });
+                selected = true;
+            }
+        }
+
+        if (!selected && (notificationId || eventId)) {
+            const matchedNotification = notifications.find((item) => {
+                const itemId = String(item?.id || "").trim();
+                const itemEventId = String(item?.metadata?.event_id || "").trim();
+                if (notificationId && itemId === notificationId) return true;
+                if (eventId && itemEventId === eventId) return true;
+                return false;
+            });
+            if (matchedNotification) {
+                setSelectedItem({ type: "notification", data: matchedNotification });
             }
         }
 
@@ -413,7 +430,7 @@ export default function CSIDashboard() {
             }, 0);
         }
         setDeepLinkApplied(true);
-    }, [deepLinkApplied, loading, openArtifactPreview, reports]);
+    }, [deepLinkApplied, loading, notifications, openArtifactPreview, reports]);
 
     useEffect(() => {
         setPreviewPath(null);

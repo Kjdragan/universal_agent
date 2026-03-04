@@ -1,6 +1,6 @@
 <!-- Runtime Capabilities Snapshot (Auto) -->
 
-<!-- Generated: 2026-03-03 09:50:10 -->
+<!-- Generated: 2026-03-03 21:55:44 -->
 
 ### Capability Routing Doctrine
 - Evaluate multiple capability lanes before selecting an execution path for non-trivial tasks.
@@ -73,6 +73,8 @@ When the user requests reports, PDFs, or email delivery of documents:
   -> Delegate: `Task(subagent_type='system-configuration-agent', ...)`
 
 #### 🔬 Research & Analysis
+- **csi-trend-analyst**: CSI-first trend analyst that reviews CSI reports/bundles/loop state, scores mission relevance, and recommends focused follow-up actions.
+  -> Delegate: `Task(subagent_type='csi-trend-analyst', ...)`
 - **data-analyst**: **Sub-Agent Purpose:** Statistical analysis, data processing, and visualization. **WHEN TO USE:** - Task requires numerical analysis, statistics, or data science - Research results need quantitative comparison or trend analysis - Charts, graphs, or data visualizations are needed - Data needs to be extracted, transformed, or modeled
   -> Delegate: `Task(subagent_type='data-analyst', ...)`
 - **evaluation-judge**: **Sub-Agent Purpose:** Evaluate task completion by inspecting workspace artifacts. **WHEN TO USE:** - URW Orchestrator calls you after a phase/task execution. - You inspect files and determine if success criteria are met. - Output: Structured verdict with confidence and reasoning.
@@ -85,6 +87,8 @@ When the user requests reports, PDFs, or email delivery of documents:
   -> Delegate: `Task(subagent_type='trend-specialist', ...)`
 
 #### 🛠 General
+- **email-handler**: Handles inbound emails received in Simone's AgentMail inbox. Classifies intent, drafts replies, and delegates actionable requests to appropriate specialists.
+  -> Delegate: `Task(subagent_type='email-handler', ...)`
 - **Freelance-scout**: Internal specialized agent.
   -> Delegate: `Task(subagent_type='Freelance-scout', ...)`
 - **logfire_reader**: Internal specialized agent.
@@ -97,7 +101,7 @@ When the user requests reports, PDFs, or email delivery of documents:
 ### 📚 Skills (Live)
 - **1password**: Set up and use 1Password CLI (op). Use when installing the CLI, enabling desktop app integration, signing in (single or multi-account), or reading/injecting/running secrets via op. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/1password/SKILL.md`)
 - **agent-browser**: Automates browser interactions for web testing, form filling, screenshots, and data extraction. Use when the user needs to navigate websites, interact with web pages, fill forms, take screenshots, test web applications, or extract information from web pages. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/agent-browser/SKILL.md`)
-- **agentmail**: Give AI agents their own email inboxes using the AgentMail API. Use when building email agents, sending/receiving emails programmatically, managing inboxes, handling attachments, organizing with labels, creating drafts for human approval, or setting up real-time notifications via webhooks/websockets. Supports multi-tenant isolation with pods. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/agentmail/SKILL.md`)
+- **agentmail**: Simone's native email inbox via AgentMail. Use when Simone needs to send emails, deliver reports/artifacts to Kevin or external recipients, read inbound emails, reply to threads, or manage drafts. This is Simone's OWN email — not Gmail. Simone sends FROM her custom domain address directly. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/agentmail/SKILL.md`)
 - **banana-squad**: Banana Squad: prompt-first "design agency" workflow for high-quality infographic generation. Use when you want structured, narrative prompt variations (MVP) and, later, generate+critique loops. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/banana-squad/SKILL.md`)
 - **bowser-orchestration**: Orchestrate browser-native execution using Bowser's layered stack (skills + subagents + commands) for UI validation, authenticated web operations, and parallel browser workflows. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/bowser-orchestration/SKILL.md`)
 - **claude-bowser**: Observable browser automation using Chrome MCP tools. Use when you need to browse websites, take screenshots, interact with web pages, or perform browser tasks in your current Chrome. Keywords - browse, screenshot, browser, chrome, bowser, ui testing, observable. (Source: `/home/kjdragan/lrepos/universal_agent/.claude/skills/claude-bowser/SKILL.md`)

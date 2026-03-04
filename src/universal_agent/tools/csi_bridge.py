@@ -109,6 +109,66 @@ def _read_watchlist(path_str: str, kind: str) -> Dict[str, Any]:
     return out
 
 
+def _parse_source_names(raw: str) -> List[str]:
+    tokens = [str(item).strip() for item in str(raw or "").split(",")]
+    out: List[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+
+def _default_source_names() -> List[str]:
+    configured = _parse_source_names(str(os.getenv("UA_CSI_SOURCE_HEALTH_SOURCES") or ""))
+    if configured:
+        return configured
+    return [
+        "youtube_channel_rss",
+        "reddit_discovery",
+        "threads_owned",
+        "threads_trends_seeded",
+        "threads_trends_broad",
+        "csi_analytics",
+    ]
+
+
+def _parse_source_min_events(raw: str) -> Dict[str, int]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    out: Dict[str, int] = {}
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            for key, value in parsed.items():
+                cleaned = str(key or "").strip()
+                if not cleaned:
+                    continue
+                try:
+                    out[cleaned] = max(0, int(value))
+                except Exception:
+                    continue
+            return out
+    except Exception:
+        pass
+    for token in text.split(","):
+        item = token.strip()
+        if not item or "=" not in item:
+            continue
+        key, raw_value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        try:
+            out[key] = max(0, int(raw_value.strip()))
+        except Exception:
+            continue
+    return out
+
+
 def _aggregate_source_mix(subject: Dict[str, Any], source: str) -> Dict[str, int]:
     mix: Dict[str, int] = {}
     direct_mix = subject.get("source_mix")
@@ -385,7 +445,16 @@ async def csi_source_health_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
         return _err(f"CSI database not found at {db_path}")
 
     now_ts = time.time()
-    source_names = ["youtube_channel_rss", "reddit_discovery", "csi_analytics"]
+    source_names = _default_source_names()
+    source_min_events = {
+        "youtube_channel_rss": 1,
+        "reddit_discovery": 1,
+        "threads_owned": 0,
+        "threads_trends_seeded": 0,
+        "threads_trends_broad": 0,
+        "csi_analytics": 0,
+    }
+    source_min_events.update(_parse_source_min_events(str(os.getenv("UA_CSI_DELIVERY_SOURCE_MIN_EVENTS") or "")))
     rows_out: List[Dict[str, Any]] = []
     with _connect() as conn:
         if not _table_exists(conn, "events"):
@@ -411,13 +480,15 @@ async def csi_source_health_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
                 except Exception:
                     lag_minutes = None
             status = "ok"
-            if total <= 0 or (lag_minutes is not None and lag_minutes > stale_minutes):
+            expected_min = int(source_min_events.get(source_name) or 0)
+            if expected_min > 0 and (total <= 0 or (lag_minutes is not None and lag_minutes > stale_minutes)):
                 status = "stale"
             rows_out.append(
                 {
                     "source": source_name,
                     "status": status,
                     "events": total,
+                    "expected_min_events": expected_min,
                     "last_event_at": last_event_at,
                     "lag_minutes": lag_minutes,
                 }

@@ -1,41 +1,70 @@
 # Email & Identity Resolution
 
-## "Me" and User Alias Resolution
+## Two Email Systems
 
-When the user says things like:
-- "email it to **me**"
-- "send to **my email**"
-- "gmail **me** the report"
+Simone has access to **two** email systems with distinct roles:
 
-**You should use "me" as the recipient.** The system will automatically resolve it.
+### 1. AgentMail — Simone's Own Inbox (PRIMARY for outbound)
+- **Purpose**: Simone's native email for sending work products, reports, and correspondence
+- **Sends FROM**: Simone's custom domain address (set via `UA_AGENTMAIL_INBOX_ADDRESS`)
+- **Use when**: Simone needs to deliver work to Kevin or anyone else
+- **Draft policy**: Creates drafts by default for Kevin's approval
+- **Skill**: Read `.claude/skills/agentmail/SKILL.md` for full API reference
 
-### Correct Approach
-```json
-{
-  "recipient_email": "me",
-  "subject": "Your Report",
-  "body": "See attached."
-}
+### 2. Gmail via Composio — Kevin's Personal Email
+- **Purpose**: Reading and managing Kevin's personal Gmail
+- **Sends FROM**: Kevin's Gmail (`kevinjdragan@gmail.com`)
+- **Use when**: Kevin asks to send something "from my email" or needs to read his Gmail
+- **Identity aliases**: "me", "my email", "my gmail" → resolved automatically
+
+## Routing Decision
+
+| Request | System | Reason |
+|---|---|---|
+| "Send me the report" | **AgentMail** → `kevinjdragan@gmail.com` | Simone delivers from her own address |
+| "Email this to client@example.com" | **AgentMail** | Simone's outbound communication |
+| "Check my email" | **Gmail** (Composio) | Reading Kevin's inbox |
+| "Reply to that email from my Gmail" | **Gmail** (Composio) | Kevin wants to reply as himself |
+| "Forward that to my outlook" | **Gmail** (Composio) | Kevin's personal email management |
+
+## AgentMail — Sending Work to Kevin
+
+The **preferred** way for Simone to deliver work:
+
+```python
+# Via the agentmail SDK (see SKILL.md for full examples)
+from agentmail import AsyncAgentMail
+import os, asyncio
+
+client = AsyncAgentMail(api_key=os.environ["AGENTMAIL_API_KEY"])
+inbox_id = os.environ["UA_AGENTMAIL_INBOX_ADDRESS"]
+
+async def send_to_kevin(subject, text, html=None):
+    return await client.inboxes.messages.send(
+        inbox_id=inbox_id,
+        to="kevinjdragan@gmail.com",
+        subject=subject,
+        text=text,
+        html=html or f"<p>{text}</p>",
+    )
 ```
 
-The identity system will resolve "me" to the user's actual email address (e.g., `kevin.dragan@outlook.com`).
+Or use the ops API: `POST /api/v1/ops/agentmail/send`
 
-### Available Aliases
-The following aliases can be used as recipients:
+## Gmail — "Me" Alias Resolution (Legacy Path)
+
+When the user says things like:
+- "email it to **me**" → Use **AgentMail** to send to Kevin's email
+- "gmail **me** the report" → Use **Gmail** Composio path (explicit Gmail request)
+- "check **my email**" → Use **Gmail** Composio path
+
+### Gmail Alias Mapping
 - `me` → User's primary email
 - `my email` → User's primary email
-- `my gmail` → User's Gmail address (if configured)
-- `my outlook` → User's Outlook address (if configured)
+- `my gmail` → Kevin's Gmail address
+- `my outlook` → Kevin's Outlook address (if configured)
 
 ### Important Rules
-1. **NEVER ask for the user's email** if they said "me" or "to me"
-2. Use the alias directly in `recipient_email` or `to`
-3. The pre-tool hook will resolve it automatically
-
-### Example: Full Email Flow
-1. Generate HTML report
-2. Convert to PDF via Chrome headless
-3. Upload PDF: `upload_to_composio(path, tool_slug='GMAIL_SEND_EMAIL', toolkit_slug='gmail')`
-4. Send email: `GMAIL_SEND_EMAIL({recipient_email: 'me', subject: '...', body: '...', attachment: {...}})`
-
-The email will be sent to the user's configured address.
+1. **Default to AgentMail** for Simone's outbound delivery
+2. Use Gmail/Composio only when Kevin explicitly asks to use "my Gmail" or needs to read his inbox
+3. **NEVER ask for Kevin's email** if they said "me" or "to me" — use `kevinjdragan@gmail.com`

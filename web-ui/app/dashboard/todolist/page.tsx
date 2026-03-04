@@ -97,6 +97,98 @@ type HeartbeatCandidate = {
     labels: string[];
 };
 
+type CsiTaskLinks = {
+    isCsiTask: boolean;
+    isInteresting: boolean;
+    eventType: string;
+    eventId: string;
+    reportKey: string;
+    artifactPath: string;
+    notificationHref: string;
+    reportHref: string;
+    artifactHref: string;
+    csiFeedHref: string;
+};
+
+const CSI_INTERESTING_EVENT_TYPES = new Set([
+    "report_product_ready",
+    "opportunity_bundle_ready",
+    "rss_trend_report",
+    "rss_insight_daily",
+    "rss_insight_emerging",
+    "analysis_task_completed",
+]);
+
+function extractFirstMatch(input: string, pattern: RegExp): string {
+    const match = pattern.exec(input);
+    return match?.[1] ? String(match[1]).trim() : "";
+}
+
+function deriveCsiTaskLinks(task: ActionableTask): CsiTaskLinks {
+    const content = String(task.content || "");
+    const description = String(task.description || "");
+    const text = `${content}\n${description}`;
+    const labels = Array.isArray(task.labels) ? task.labels : [];
+
+    const isCsiTask = labels.some((label) => String(label).toLowerCase() === "csi")
+        || labels.some((label) => String(label).toLowerCase().startsWith("csi-project:"))
+        || /(^|\s)csi(\s|:)/i.test(content);
+
+    if (!isCsiTask) {
+        return {
+            isCsiTask: false,
+            isInteresting: false,
+            eventType: "",
+            eventId: "",
+            reportKey: "",
+            artifactPath: "",
+            notificationHref: "",
+            reportHref: "",
+            artifactHref: "",
+            csiFeedHref: "/dashboard/csi",
+        };
+    }
+
+    const eventType = extractFirstMatch(text, /event_type:\s*([a-zA-Z0-9_.:-]+)/i).toLowerCase();
+    const eventId = extractFirstMatch(text, /event_id:\s*([a-zA-Z0-9_.:-]+)/i);
+
+    let reportKey = extractFirstMatch(text, /report_key:\s*([^\n\r]+)/i);
+    if (!reportKey) {
+        reportKey = extractFirstMatch(text, /"report_key"\s*:\s*"([^"]+)"/i);
+    }
+    reportKey = reportKey.replace(/["',]+$/g, "").trim();
+
+    let artifactPath = extractFirstMatch(text, /Report Artifact:\s*([^\n\r]+)/i);
+    if (!artifactPath) {
+        artifactPath = extractFirstMatch(text, /"markdown"\s*:\s*"([^"]+)"/i);
+    }
+    if (!artifactPath) {
+        artifactPath = extractFirstMatch(text, /"json"\s*:\s*"([^"]+)"/i);
+    }
+    artifactPath = artifactPath.replace(/["',]+$/g, "").trim();
+
+    const reportishContent = /report|bundle|opportunit|insight|trend/i.test(content);
+    const isInteresting = Boolean(
+        reportKey
+        || artifactPath
+        || CSI_INTERESTING_EVENT_TYPES.has(eventType)
+        || reportishContent
+    );
+
+    return {
+        isCsiTask: true,
+        isInteresting,
+        eventType,
+        eventId,
+        reportKey,
+        artifactPath,
+        notificationHref: eventId ? `/dashboard/csi?event_id=${encodeURIComponent(eventId)}` : "",
+        reportHref: reportKey ? `/dashboard/csi?report_key=${encodeURIComponent(reportKey)}` : "",
+        artifactHref: artifactPath ? `/dashboard/csi?artifact_path=${encodeURIComponent(artifactPath)}` : "",
+        csiFeedHref: "/dashboard/csi",
+    };
+}
+
 // ── PAGE ─────────────────────────────────────────────────────────────────────
 
 export default function ToDoListDashboardPage() {
@@ -307,6 +399,7 @@ export default function ToDoListDashboardPage() {
                     <div className="space-y-3">
                         {actionableTasks.map((task) => {
                             const pInfo = getPriorityInfo(task.priority);
+                            const csiLinks = deriveCsiTaskLinks(task);
                             return (
                                 <article key={task.id} className="flex flex-col gap-2 rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
                                     <div className="flex items-start justify-between">
@@ -318,6 +411,40 @@ export default function ToDoListDashboardPage() {
                                             </h3>
                                             {task.description && (
                                                 <p className="mt-1 line-clamp-2 text-xs text-slate-400">{task.description}</p>
+                                            )}
+                                            {csiLinks.isCsiTask && csiLinks.isInteresting && (
+                                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                                                    {csiLinks.reportHref && (
+                                                        <a
+                                                            href={csiLinks.reportHref}
+                                                            className="rounded border border-emerald-800/60 bg-emerald-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300 hover:bg-emerald-900/35"
+                                                        >
+                                                            Open Report
+                                                        </a>
+                                                    )}
+                                                    {csiLinks.notificationHref && (
+                                                        <a
+                                                            href={csiLinks.notificationHref}
+                                                            className="rounded border border-sky-800/60 bg-sky-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-sky-300 hover:bg-sky-900/35"
+                                                        >
+                                                            Open CSI Event
+                                                        </a>
+                                                    )}
+                                                    {csiLinks.artifactHref && (
+                                                        <a
+                                                            href={csiLinks.artifactHref}
+                                                            className="rounded border border-violet-800/60 bg-violet-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-violet-300 hover:bg-violet-900/35"
+                                                        >
+                                                            Open Artifact
+                                                        </a>
+                                                    )}
+                                                    <a
+                                                        href={csiLinks.csiFeedHref}
+                                                        className="rounded border border-slate-700 bg-slate-900/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300 hover:bg-slate-800"
+                                                    >
+                                                        CSI Feed
+                                                    </a>
+                                                </div>
                                             )}
                                         </div>
                                         <span className={`ml-4 shrink-0 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>

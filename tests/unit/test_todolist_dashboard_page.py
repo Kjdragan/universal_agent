@@ -19,3 +19,13 @@ def test_todolist_dashboard_includes_api_diagnostics_and_mismatch_warning():
     assert "API Diagnostics" in content
     assert "Pipeline task count is" in content
     assert "@agent-ready" in content
+
+
+def test_todolist_dashboard_includes_csi_clickthrough_actions():
+    content = _PAGE.read_text(encoding="utf-8")
+    assert "Open Report" in content
+    assert "Open CSI Event" in content
+    assert "Open Artifact" in content
+    assert "CSI Feed" in content
+    assert "/dashboard/csi?event_id=" in content
+    assert "/dashboard/csi?report_key=" in content

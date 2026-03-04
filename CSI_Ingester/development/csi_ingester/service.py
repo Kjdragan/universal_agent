@@ -9,6 +9,9 @@ from typing import Any
 
 from csi_ingester.adapters.base import SourceAdapter
 from csi_ingester.adapters.reddit_discovery import RedditDiscoveryAdapter
+from csi_ingester.adapters.threads_owned import ThreadsOwnedAdapter
+from csi_ingester.adapters.threads_trends_broad import ThreadsBroadTrendsAdapter
+from csi_ingester.adapters.threads_trends_seeded import ThreadsSeededTrendsAdapter
 from csi_ingester.adapters.youtube_channel_rss import YouTubeChannelRSSAdapter
 from csi_ingester.adapters.youtube_playlist import YouTubePlaylistAdapter
 from csi_ingester.config import CSIConfig
@@ -57,6 +60,15 @@ class CSIService:
         reddit_cfg = sources.get("reddit_discovery")
         if isinstance(reddit_cfg, dict) and reddit_cfg.get("enabled", False):
             self.adapters["reddit_discovery"] = RedditDiscoveryAdapter(reddit_cfg)
+        threads_owned_cfg = sources.get("threads_owned")
+        if isinstance(threads_owned_cfg, dict) and threads_owned_cfg.get("enabled", False):
+            self.adapters["threads_owned"] = ThreadsOwnedAdapter(threads_owned_cfg)
+        threads_seeded_cfg = sources.get("threads_trends_seeded")
+        if isinstance(threads_seeded_cfg, dict) and threads_seeded_cfg.get("enabled", False):
+            self.adapters["threads_trends_seeded"] = ThreadsSeededTrendsAdapter(threads_seeded_cfg)
+        threads_broad_cfg = sources.get("threads_trends_broad")
+        if isinstance(threads_broad_cfg, dict) and threads_broad_cfg.get("enabled", False):
+            self.adapters["threads_trends_broad"] = ThreadsBroadTrendsAdapter(threads_broad_cfg)
         for adapter in self.adapters.values():
             if hasattr(adapter, "set_state_backend"):
                 adapter.set_state_backend(
