@@ -63,7 +63,7 @@ sources:
     query_packs:
       - name: "ai-domain"
         terms: ["ai agents", "workflow automation", "private credit", "interest rates"]
-    seed_terms: ["market structure", "portfolio strategy"]
+    seed_terms: ["market structure"]
     quota_budgets:
       keyword_search:
         max_requests: 500
