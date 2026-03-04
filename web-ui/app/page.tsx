@@ -1073,9 +1073,13 @@ function ChatInterface() {
     // Pre-fill input from ?message= query param (used by dashboard Quick Command)
     const prefill = (params.get("message") || "").trim();
     const shouldFocusInput = params.get("focus_input") === "1";
+    const shouldAutoSend = params.get("auto_send") === "1";
 
     if (prefill) {
       setInput(prefill);
+      if (shouldAutoSend && nextRole !== "viewer") {
+        setPendingQuery(prefill);
+      }
     }
 
     if ((prefill || shouldFocusInput) && nextRole !== "viewer") {
@@ -1084,11 +1088,12 @@ function ChatInterface() {
       });
     }
 
-    if (prefill || shouldFocusInput) {
+    if (prefill || shouldFocusInput || shouldAutoSend) {
       // Clean up one-shot URL flags so refresh doesn't repeat actions.
       const url = new URL(window.location.href);
       url.searchParams.delete("message");
       url.searchParams.delete("focus_input");
+      url.searchParams.delete("auto_send");
       window.history.replaceState({}, "", url.toString());
     }
   }, [focusInput]);

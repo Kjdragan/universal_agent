@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatDistanceToNow, parseISO } from "date-fns";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { openOrFocusChatWindow } from "@/lib/chatWindow";
 
 const API_BASE = "/api/dashboard/gateway";
 const ACTIONABLE_PAGE_SIZE = 60;
@@ -239,6 +240,31 @@ function deriveCsiTaskLinks(task: ActionableTask): CsiTaskLinks {
     };
 }
 
+function buildPersonalReminderDispatchMessage(task: ActionableTask, instruction: string): string {
+    const dueText = task.due_datetime || task.due_date || task.due?.datetime || task.due?.date || "none";
+    const labels = (task.labels || []).map((label) => `@${label}`).join(", ") || "none";
+    const taskDescription = String(task.description || "").trim();
+    const cleanInstruction = String(instruction || "").trim();
+    return [
+        "Dispatch request for Simone from To Do List dashboard.",
+        "Source panel: Personal Scheduled Reminders (UA: Immediate Queue -> Scheduled -> non-agent-ready).",
+        "",
+        "Selected reminder context:",
+        `- Task ID: ${task.id}`,
+        `- Title: ${task.content}`,
+        `- Due: ${dueText}`,
+        `- Labels: ${labels}`,
+        `- Created At: ${task.created_at}`,
+        `- Todoist URL: ${task.url}`,
+        taskDescription ? `- Description: ${taskDescription}` : "- Description: (none)",
+        "",
+        "User directions for Simone:",
+        cleanInstruction || "(none provided)",
+        "",
+        "Please acknowledge the handoff, then execute using the provided context.",
+    ].join("\n");
+}
+
 // ── PAGE ─────────────────────────────────────────────────────────────────────
 
 export default function ToDoListDashboardPage() {
@@ -261,6 +287,9 @@ export default function ToDoListDashboardPage() {
     });
     const [heartbeatCandidates, setHeartbeatCandidates] = useState<HeartbeatCandidate[]>([]);
     const [scheduledImmediateTasks, setScheduledImmediateTasks] = useState<ActionableTask[]>([]);
+    const [handoffTask, setHandoffTask] = useState<ActionableTask | null>(null);
+    const [handoffInstruction, setHandoffInstruction] = useState("");
+    const [handoffError, setHandoffError] = useState("");
     const actionableScrollRef = useRef<HTMLDivElement | null>(null);
 
     const applySnapshot = useCallback((snapshot: ToDoListCacheSnapshot) => {
@@ -609,6 +638,36 @@ export default function ToDoListDashboardPage() {
         };
     }, [maybeAutoLoadActionable, actionableTasks.length, actionableVirtualHeight]);
 
+    const openHandoffDialog = useCallback((task: ActionableTask) => {
+        setHandoffTask(task);
+        setHandoffInstruction("");
+        setHandoffError("");
+    }, []);
+
+    const closeHandoffDialog = useCallback(() => {
+        setHandoffTask(null);
+        setHandoffInstruction("");
+        setHandoffError("");
+    }, []);
+
+    const handleDispatchToSimone = useCallback(() => {
+        if (!handoffTask) return;
+        const instruction = String(handoffInstruction || "").trim();
+        if (!instruction) {
+            setHandoffError("Add directions for Simone before sending.");
+            return;
+        }
+        const message = buildPersonalReminderDispatchMessage(handoffTask, instruction);
+        openOrFocusChatWindow({
+            newSession: true,
+            focusInput: true,
+            role: "writer",
+            message,
+            autoSend: true,
+        });
+        closeHandoffDialog();
+    }, [closeHandoffDialog, handoffInstruction, handoffTask]);
+
     const personalScheduledSection = (
         <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
             <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-indigo-300">
@@ -626,20 +685,29 @@ export default function ToDoListDashboardPage() {
                         const dueText = task.due_datetime || task.due_date || task.due?.datetime || task.due?.date || "";
                         return (
                             <article key={task.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div>
-                                        <h3 className="font-semibold text-slate-200">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div>
+                                            <h3 className="font-semibold text-slate-200">
                                             <a href={task.url} target="_blank" rel="noreferrer" className="hover:underline hover:text-cyan-400">
                                                 {task.content}
                                             </a>
                                         </h3>
                                         {task.description && (
-                                            <p className="mt-1 text-xs text-slate-400 line-clamp-3">{task.description}</p>
-                                        )}
+                                                <p className="mt-1 text-xs text-slate-400 line-clamp-3">{task.description}</p>
+                                            )}
+                                        </div>
+                                    <div className="shrink-0 flex flex-col items-end gap-1.5">
+                                        <span className={`rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>
+                                            {pInfo.label}
+                                        </span>
+                                        <button
+                                            type="button"
+                                            onClick={() => openHandoffDialog(task)}
+                                            className="rounded border border-cyan-800/60 bg-cyan-900/20 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-cyan-200 hover:bg-cyan-900/35"
+                                        >
+                                            Send to Simone
+                                        </button>
                                     </div>
-                                    <span className={`shrink-0 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>
-                                        {pInfo.label}
-                                    </span>
                                 </div>
                                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                                     {task.labels.map((label) => (
@@ -961,6 +1029,62 @@ export default function ToDoListDashboardPage() {
                         ))}
                     </div>
                 </section>
+            )}
+
+            {handoffTask && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
+                    <div className="w-full max-w-2xl rounded-xl border border-slate-700 bg-slate-900 shadow-2xl">
+                        <div className="border-b border-slate-800 px-4 py-3">
+                            <h3 className="text-sm font-semibold text-slate-100">Send Personal Reminder to Simone</h3>
+                            <p className="mt-1 text-xs text-slate-400">
+                                This opens/focuses the full chat tab, starts a new session, and auto-sends your instruction with reminder context.
+                            </p>
+                        </div>
+                        <div className="space-y-3 px-4 py-3">
+                            <div className="rounded border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs">
+                                <div className="font-semibold text-slate-200">{handoffTask.content}</div>
+                                {handoffTask.description && (
+                                    <div className="mt-1 text-slate-400">{handoffTask.description}</div>
+                                )}
+                            </div>
+                            <div>
+                                <label className="mb-1 block text-xs font-medium text-slate-300">
+                                    Directions for Simone
+                                </label>
+                                <textarea
+                                    value={handoffInstruction}
+                                    onChange={(event) => {
+                                        setHandoffInstruction(event.target.value);
+                                        if (handoffError) setHandoffError("");
+                                    }}
+                                    placeholder="Explain exactly what you want Simone to do with this reminder."
+                                    className="min-h-[140px] w-full rounded border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 outline-none focus:border-cyan-500/60"
+                                />
+                            </div>
+                            {handoffError && (
+                                <div className="rounded border border-red-800/60 bg-red-950/40 px-3 py-2 text-xs text-red-200">
+                                    {handoffError}
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex items-center justify-end gap-2 border-t border-slate-800 px-4 py-3">
+                            <button
+                                type="button"
+                                onClick={closeHandoffDialog}
+                                className="rounded border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleDispatchToSimone}
+                                className="rounded border border-cyan-700/60 bg-cyan-600/20 px-3 py-1.5 text-xs font-semibold text-cyan-100 hover:bg-cyan-600/30"
+                            >
+                                Open Chat and Send
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );
