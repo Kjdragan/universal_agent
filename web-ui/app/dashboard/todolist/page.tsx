@@ -557,6 +557,10 @@ export default function ToDoListDashboardPage() {
     const selectedProjectLabel = selectedProjectKey
         ? UA_PROJECTS.find((project) => project.key === selectedProjectKey)?.label || selectedProjectKey
         : "All Projects";
+    const immediateTotalCountRaw = Number(pipelineSummary?.["UA: Immediate Queue"]);
+    const immediateTotalCount = Number.isFinite(immediateTotalCountRaw) ? Math.max(0, immediateTotalCountRaw) : 0;
+    const immediatePersonalCount = scheduledImmediateTasks.length;
+    const immediateOtherCount = Math.max(0, immediateTotalCount - immediatePersonalCount);
     const actionableVirtualizer = useVirtualizer({
         count: actionableTasks.length,
         getScrollElement: () => actionableScrollRef.current,
@@ -604,6 +608,59 @@ export default function ToDoListDashboardPage() {
             el.removeEventListener("scroll", onScroll);
         };
     }, [maybeAutoLoadActionable, actionableTasks.length, actionableVirtualHeight]);
+
+    const personalScheduledSection = (
+        <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+            <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-indigo-300">
+                🛌 Personal Scheduled Reminders ({scheduledImmediateTasks.length})
+            </h2>
+            <p className="mb-3 text-xs text-slate-400">
+                UA: Immediate Queue → Scheduled · non-`agent-ready` items (personal handoff reminders)
+            </p>
+            {scheduledImmediateTasks.length === 0 ? (
+                <p className="text-sm text-slate-500 italic">No scheduled personal reminders found.</p>
+            ) : (
+                <div className="space-y-3">
+                    {scheduledImmediateTasks.map((task) => {
+                        const pInfo = getPriorityInfo(task.priority);
+                        const dueText = task.due_datetime || task.due_date || task.due?.datetime || task.due?.date || "";
+                        return (
+                            <article key={task.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <h3 className="font-semibold text-slate-200">
+                                            <a href={task.url} target="_blank" rel="noreferrer" className="hover:underline hover:text-cyan-400">
+                                                {task.content}
+                                            </a>
+                                        </h3>
+                                        {task.description && (
+                                            <p className="mt-1 text-xs text-slate-400 line-clamp-3">{task.description}</p>
+                                        )}
+                                    </div>
+                                    <span className={`shrink-0 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>
+                                        {pInfo.label}
+                                    </span>
+                                </div>
+                                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                    {task.labels.map((label) => (
+                                        <span key={`${task.id}-${label}`} className="rounded bg-slate-800/50 px-1.5 py-0.5 text-[10px]">
+                                            @{label}
+                                        </span>
+                                    ))}
+                                    {dueText && (
+                                        <span className="text-indigo-300/90">Due: {dueText}</span>
+                                    )}
+                                    <span className="ml-auto text-[10px]">
+                                        Created: {formatDistanceToNow(parseISO(task.created_at), { addSuffix: true })}
+                                    </span>
+                                </div>
+                            </article>
+                        );
+                    })}
+                </div>
+            )}
+        </section>
+    );
 
     if (loading) {
         return (
@@ -656,11 +713,14 @@ export default function ToDoListDashboardPage() {
                 </h2>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
                     {UA_PROJECTS.map((project) => {
-                        const count = pipelineSummary
-                            ? typeof pipelineSummary[project.key] === "number"
-                                ? (pipelineSummary[project.key] as number)
-                                : 0
-                            : null;
+                        const isImmediateProject = project.key === "UA: Immediate Queue";
+                        const count = isImmediateProject
+                            ? immediateTotalCount
+                            : (pipelineSummary
+                                ? typeof pipelineSummary[project.key] === "number"
+                                    ? (pipelineSummary[project.key] as number)
+                                    : 0
+                                : null);
 
                         const isSelected = selectedProjectKey === project.key;
                         return (
@@ -688,6 +748,13 @@ export default function ToDoListDashboardPage() {
                                 <div>
                                     <div className="font-semibold text-sm text-slate-100">{project.label}</div>
                                     <div className="text-[11px] text-slate-400 mt-0.5 leading-snug">{project.description}</div>
+                                    {isImmediateProject && (
+                                        <div className="mt-1 text-[10px] text-slate-400">
+                                            <span className="text-slate-300">{immediateOtherCount} other</span>
+                                            <span className="mx-1 text-slate-600">•</span>
+                                            <span className="text-indigo-300/90">{immediatePersonalCount} personal</span>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Proactive section breakdown */}
@@ -707,7 +774,9 @@ export default function ToDoListDashboardPage() {
                 </div>
             </section>
 
-            {/* ── IMMEDIATE ACTIONABLE QUEUE ── */}
+            {personalScheduledSection}
+
+            {/* ── LIVE ACTIONABLE QUEUE ── */}
             <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
                 <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">
                     <span className="relative flex h-2 w-2">
@@ -863,58 +932,6 @@ export default function ToDoListDashboardPage() {
                                 <span className="text-[11px] text-slate-500">All actionable tasks loaded</span>
                             )}
                         </div>
-                    </div>
-                )}
-            </section>
-
-            {/* ── PERSONAL SCHEDULED REMINDERS ── */}
-            <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-                <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.16em] text-indigo-300">
-                    🛌 Personal Scheduled Reminders ({scheduledImmediateTasks.length})
-                </h2>
-                <p className="mb-3 text-xs text-slate-400">
-                    UA: Immediate Queue → Scheduled · non-`agent-ready` items (personal handoff reminders)
-                </p>
-                {scheduledImmediateTasks.length === 0 ? (
-                    <p className="text-sm text-slate-500 italic">No scheduled personal reminders found.</p>
-                ) : (
-                    <div className="space-y-3">
-                        {scheduledImmediateTasks.map((task) => {
-                            const pInfo = getPriorityInfo(task.priority);
-                            const dueText = task.due_datetime || task.due_date || task.due?.datetime || task.due?.date || "";
-                            return (
-                                <article key={task.id} className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-3">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <h3 className="font-semibold text-slate-200">
-                                                <a href={task.url} target="_blank" rel="noreferrer" className="hover:underline hover:text-cyan-400">
-                                                    {task.content}
-                                                </a>
-                                            </h3>
-                                            {task.description && (
-                                                <p className="mt-1 text-xs text-slate-400 line-clamp-3">{task.description}</p>
-                                            )}
-                                        </div>
-                                        <span className={`shrink-0 rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${pInfo.color}`}>
-                                            {pInfo.label}
-                                        </span>
-                                    </div>
-                                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                                        {task.labels.map((label) => (
-                                            <span key={`${task.id}-${label}`} className="rounded bg-slate-800/50 px-1.5 py-0.5 text-[10px]">
-                                                @{label}
-                                            </span>
-                                        ))}
-                                        {dueText && (
-                                            <span className="text-indigo-300/90">Due: {dueText}</span>
-                                        )}
-                                        <span className="ml-auto text-[10px]">
-                                            Created: {formatDistanceToNow(parseISO(task.created_at), { addSuffix: true })}
-                                        </span>
-                                    </div>
-                                </article>
-                            );
-                        })}
                     </div>
                 )}
             </section>
