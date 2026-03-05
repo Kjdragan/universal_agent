@@ -66,6 +66,18 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _http_error_detail(resp: httpx.Response) -> str:
+    detail = (resp.text or "").strip().replace("\n", " ")
+    if len(detail) > 400:
+        detail = detail[:400]
+    trace = str(resp.headers.get("x-fb-trace-id") or resp.headers.get("x-request-id") or "").strip()
+    if trace and detail:
+        return f"{detail} trace_id={trace}"
+    if trace:
+        return f"trace_id={trace}"
+    return detail
+
+
 class ThreadsQuotaBudgetManager:
     """Local rolling-window quota accounting per endpoint."""
 
@@ -76,6 +88,7 @@ class ThreadsQuotaBudgetManager:
         "insights": ThreadsQuotaWindow(max_requests=1200, window_seconds=86_400),
         "keyword_search": ThreadsQuotaWindow(max_requests=2200, window_seconds=86_400),
         "profile_posts": ThreadsQuotaWindow(max_requests=1000, window_seconds=86_400),
+        "publishing": ThreadsQuotaWindow(max_requests=300, window_seconds=86_400),
     }
 
     def __init__(self, budgets: dict[str, ThreadsQuotaWindow], state: dict[str, Any] | None = None) -> None:
@@ -418,6 +431,81 @@ class ThreadsAPIClient:
         )
         return _extract_data_list(response)
 
+    async def create_media_container(
+        self,
+        *,
+        media_type: str,
+        text: str = "",
+        image_url: str = "",
+        video_url: str = "",
+        is_carousel_item: bool = False,
+        children: list[str] | None = None,
+        reply_to_id: str = "",
+        reply_control: str = "",
+        allowlisted_country_codes: list[str] | None = None,
+        alt_text: str = "",
+        link_attachment: str = "",
+        quote_post_id: str = "",
+    ) -> dict[str, Any]:
+        if not self.user_id:
+            raise ThreadsAPIError("threads_user_id_missing")
+
+        mt = str(media_type or "").strip().upper()
+        if mt not in {"TEXT", "IMAGE", "VIDEO", "CAROUSEL"}:
+            raise ThreadsAPIError(f"invalid_media_type:{mt or 'empty'}")
+        if mt == "TEXT" and not str(text or "").strip():
+            raise ThreadsAPIError("text_required_for_text_media")
+        if mt == "IMAGE" and not str(image_url or "").strip():
+            raise ThreadsAPIError("image_url_required_for_image_media")
+        if mt == "VIDEO" and not str(video_url or "").strip():
+            raise ThreadsAPIError("video_url_required_for_video_media")
+        if mt == "CAROUSEL":
+            child_items = [str(item or "").strip() for item in (children or []) if str(item or "").strip()]
+            if not child_items:
+                raise ThreadsAPIError("children_required_for_carousel_media")
+        else:
+            child_items = []
+
+        params: dict[str, Any] = {
+            "media_type": mt,
+            "text": str(text or "").strip(),
+            "image_url": str(image_url or "").strip(),
+            "video_url": str(video_url or "").strip(),
+            "is_carousel_item": "true" if bool(is_carousel_item) else "",
+            "children": ",".join(child_items),
+            "reply_to_id": str(reply_to_id or "").strip(),
+            "reply_control": str(reply_control or "").strip(),
+            "allowlisted_country_codes": ",".join(
+                str(code or "").strip().upper() for code in (allowlisted_country_codes or []) if str(code or "").strip()
+            ),
+            "alt_text": str(alt_text or "").strip(),
+            "link_attachment": str(link_attachment or "").strip(),
+            "quote_post_id": str(quote_post_id or "").strip(),
+        }
+        return await self._post(f"/{self.user_id}/threads", endpoint="publishing", params=params)
+
+    async def publish_media_container(self, *, creation_id: str) -> dict[str, Any]:
+        if not self.user_id:
+            raise ThreadsAPIError("threads_user_id_missing")
+        clean_creation_id = str(creation_id or "").strip()
+        if not clean_creation_id:
+            raise ThreadsAPIError("creation_id_required")
+        return await self._post(
+            f"/{self.user_id}/threads_publish",
+            endpoint="publishing",
+            params={"creation_id": clean_creation_id},
+        )
+
+    async def container_status(self, *, container_id: str) -> dict[str, Any]:
+        clean_id = str(container_id or "").strip()
+        if not clean_id:
+            raise ThreadsAPIError("threads_container_id_required")
+        return await self._get(
+            f"/{clean_id}",
+            endpoint="publishing",
+            params={"fields": "id,status,error_message"},
+        )
+
     async def _get(self, path: str, *, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
         await self.maybe_refresh_token()
         token = str(self.token_manager.access_token or "").strip()
@@ -446,15 +534,71 @@ class ThreadsAPIClient:
                     continue
 
                 if resp.status_code in {429, 500, 502, 503, 504}:
-                    last_error = f"http_{resp.status_code}"
+                    detail = _http_error_detail(resp)
+                    last_error = f"http_{resp.status_code}:{detail}" if detail else f"http_{resp.status_code}"
                     if attempt >= self.max_retries:
                         break
                     await asyncio.sleep(self.retry_backoff_seconds * float(attempt))
                     continue
 
                 if resp.status_code >= 400:
-                    detail = (resp.text or "")[:400]
-                    raise ThreadsAPIError(f"threads_http_{resp.status_code}:{detail}")
+                    detail = _http_error_detail(resp)
+                    raise ThreadsAPIError(
+                        f"threads_http_{resp.status_code}:{detail}" if detail else f"threads_http_{resp.status_code}"
+                    )
+
+                try:
+                    return resp.json() if resp.content else {}
+                except Exception as exc:
+                    last_error = f"json:{type(exc).__name__}:{exc}"
+                    if attempt >= self.max_retries:
+                        break
+                    await asyncio.sleep(self.retry_backoff_seconds * float(attempt))
+                    continue
+
+        raise ThreadsAPIError(last_error or f"threads_request_failed:{endpoint}")
+
+    async def _post(self, path: str, *, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+        await self.maybe_refresh_token()
+        token = str(self.token_manager.access_token or "").strip()
+        if not token:
+            raise ThreadsAPIError("threads_access_token_missing")
+        if not self.quota_manager.allow(endpoint, cost=1):
+            raise ThreadsRateLimitError(f"quota_exhausted:{endpoint}")
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": self.user_agent,
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        request_params = {k: v for k, v in params.items() if v is not None and str(v) != ""}
+        url = f"{self.base_url}{path}"
+        last_error = ""
+        async with httpx.AsyncClient(timeout=self.timeout_seconds, follow_redirects=True) as client:
+            for attempt in range(1, self.max_retries + 1):
+                try:
+                    resp = await client.post(url, data=request_params, headers=headers)
+                except Exception as exc:
+                    last_error = f"request:{type(exc).__name__}:{exc}"
+                    if attempt >= self.max_retries:
+                        break
+                    await asyncio.sleep(self.retry_backoff_seconds * float(attempt))
+                    continue
+
+                if resp.status_code in {429, 500, 502, 503, 504}:
+                    detail = _http_error_detail(resp)
+                    last_error = f"http_{resp.status_code}:{detail}" if detail else f"http_{resp.status_code}"
+                    if attempt >= self.max_retries:
+                        break
+                    await asyncio.sleep(self.retry_backoff_seconds * float(attempt))
+                    continue
+
+                if resp.status_code >= 400:
+                    detail = _http_error_detail(resp)
+                    raise ThreadsAPIError(
+                        f"threads_http_{resp.status_code}:{detail}" if detail else f"threads_http_{resp.status_code}"
+                    )
 
                 try:
                     return resp.json() if resp.content else {}

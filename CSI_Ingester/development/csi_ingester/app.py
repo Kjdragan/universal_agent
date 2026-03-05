@@ -18,6 +18,7 @@ from csi_ingester.store import analysis_tasks as analysis_task_store
 from csi_ingester.store.sqlite import connect, ensure_schema
 from csi_ingester.threads_webhooks import (
     ThreadsWebhookEnvelope,
+    ingest_threads_webhook_envelope,
     validate_signed_payload,
     validate_verification_request,
     webhook_settings_from_env,
@@ -125,21 +126,29 @@ async def threads_webhook_ingest(request: Request) -> dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"invalid_json:{exc}") from exc
     envelope = ThreadsWebhookEnvelope.model_validate(payload)
+    if _db_conn is None:
+        raise HTTPException(status_code=503, detail="db_not_ready")
+
+    emitter = _service.emitter if _service is not None else None
+    ingest_stats = await ingest_threads_webhook_envelope(
+        conn=_db_conn,
+        envelope=envelope,
+        emitter=emitter,
+    )
 
     entry_count = len(envelope.entry)
     change_count = sum(len(entry.changes) for entry in envelope.entry)
     logger.info(
-        "Threads webhook received object=%s entries=%d changes=%d",
+        "Threads webhook ingested object=%s entries=%d changes=%d normalized=%d stored=%d deduped=%d delivered=%d",
         envelope.object,
         entry_count,
         change_count,
+        int(ingest_stats.get("normalized") or 0),
+        int(ingest_stats.get("stored") or 0),
+        int(ingest_stats.get("deduped") or 0),
+        int(ingest_stats.get("delivered") or 0),
     )
-    return {
-        "status": "accepted",
-        "object": envelope.object,
-        "entries": entry_count,
-        "changes": change_count,
-    }
+    return ingest_stats
 
 
 @app.post("/analysis/tasks")

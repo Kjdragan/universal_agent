@@ -125,6 +125,7 @@ Timers installed:
 - `csi-daily-summary.timer` -> daily at `00:10 UTC` (writes summary artifacts under `/opt/universal_agent/artifacts/csi-reports/<day>/`)
 - `csi-hourly-token-report.timer` -> hourly at minute 05 (sends `hourly_token_usage_report` event to UA)
 - `csi-threads-token-refresh-sync.timer` -> daily at `03:15 UTC` with jitter (refreshes Threads token, syncs to Infisical, runs owned probe)
+- `csi-threads-rollout-verify.timer` -> daily at `03:35 UTC` (strict all-source Threads probe + DB/report evidence verification)
 
 Run hourly token report manually:
 
@@ -351,6 +352,18 @@ Optional control knobs:
 - `CSI_THREADS_PROBE_SOURCE` (`owned` default)
 - `CSI_THREADS_PROBE_LIMIT` (`3` default)
 
+Post-refresh verification timer (recommended for rollout hardening):
+
+- `deployment/systemd/csi-threads-rollout-verify.service`
+- `deployment/systemd/csi-threads-rollout-verify.timer`
+
+Check status:
+
+```bash
+systemctl status csi-threads-rollout-verify.timer
+journalctl -u csi-threads-rollout-verify.service -n 120 --no-pager
+```
+
 ### 2) Enable adapters in `config/config.yaml`
 
 Toggle `enabled: true` for one or more of:
@@ -375,10 +388,25 @@ Run live Threads probe before enabling adapters in production:
 scripts/csi_run.sh uv run python3 scripts/csi_threads_probe.py --config-path config/config.yaml --source all --limit 5 --max-terms 3
 ```
 
+Run strict all-source Threads probe (fails unless owned + seeded + broad all pass):
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_probe.py --config-path config/config.yaml --source all --limit 5 --max-terms 3 --require-all
+```
+
 Probe only seeded terms with override:
 
 ```bash
 scripts/csi_run.sh uv run python3 scripts/csi_threads_probe.py --source seeded --seed-term "ai agents"
+```
+
+Run post-rollout verification (live probe + DB evidence + report presence):
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_rollout_verify.py \
+  --config-path config/config.yaml \
+  --db-path /var/lib/universal-agent/csi/csi.db \
+  --lookback-hours 24
 ```
 
 ### 4) Delivery health thresholds
@@ -391,19 +419,77 @@ UA_CSI_DELIVERY_SOURCE_MIN_EVENTS=youtube_channel_rss=1,reddit_discovery=1,threa
 
 Set per-Threads minimums only when you want canary/SLO checks to enforce volume.
 
-### 5) Webhooks and publishing (scaffold only in phase 1)
+### 5) Webhooks and publishing (hybrid-ready)
 
-- Webhook contract endpoints exist but are disabled by default:
+- Webhook endpoints exist and are disabled by default:
   - `GET /webhooks/threads` (verification)
-  - `POST /webhooks/threads` (signed payload intake)
+  - `POST /webhooks/threads` (signed payload intake + CSI event ingest)
 - Enable with:
   - `CSI_THREADS_WEBHOOK_ENABLED=1`
   - `THREADS_WEBHOOK_VERIFY_TOKEN=<token>`
+- POST ingest behavior when enabled:
+  - validates `x-hub-signature-256` using `THREADS_APP_SECRET`
+  - normalizes webhook changes into `threads_owned` events
+  - dedupes against polling (`threads:{media_id}` dedupe key)
+  - stores + emits via normal CSI delivery path
+  - records webhook ingest telemetry in `source_state` key `threads_webhook:state`
+- Smoke test helper:
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_webhook_smoke.py \
+  --base-url "http://127.0.0.1:8091" \
+  --verify \
+  --ingest
+```
 - Publishing interface is implemented as a disabled contract:
   - `create_container`
   - `publish_container`
   - `reply_to_post`
   - Gate: `CSI_THREADS_PUBLISHING_ENABLED=1` (phase 2)
+  - Governance env knobs:
+    - `CSI_THREADS_PUBLISH_DRY_RUN` (default `1`)
+    - `CSI_THREADS_PUBLISH_APPROVAL_MODE` (`manual_confirm` or `autonomous`)
+    - `CSI_THREADS_PUBLISH_MAX_DAILY_POSTS` (default `5`)
+    - `CSI_THREADS_PUBLISH_MAX_DAILY_REPLIES` (default `10`)
+    - `CSI_THREADS_PUBLISH_STATE_PATH` (daily cap state file)
+    - `CSI_THREADS_PUBLISH_AUDIT_PATH` (JSONL audit trail)
+
+Phase-2 smoke helper (defaults to dry-run, requires approval id in manual mode):
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_publish_smoke.py \
+  --config-path config/config.yaml \
+  --operation create \
+  --media-type TEXT \
+  --text "CSI phase 2 dry-run canary post" \
+  --approval-id "threads-phase2-canary-001" \
+  --audit-actor "threads-rollout-bot" \
+  --audit-reason "phase2 dry-run canary"
+```
+
+Phase-2 preflight gate is enabled by default in the smoke script. Before any
+write call, it checks:
+
+1. Required env vars (`THREADS_APP_ID`, `THREADS_APP_SECRET`,
+   `THREADS_USER_ID`, `THREADS_ACCESS_TOKEN`)
+2. Token validity + scopes via `graph.facebook.com/debug_token`
+3. Threads `/me` identity match (`THREADS_USER_ID`)
+4. Fallback non-destructive write-capability probe when `debug_token` is unavailable
+5. Audit fields supported in smoke payload:
+   - `--audit-actor`
+   - `--audit-reason`
+
+Default required scopes for live canary:
+
+- `threads_basic`
+- `threads_content_publish`
+
+If scope verification is not possible in your environment, you can override:
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_publish_smoke.py \
+  --allow-unverified-scopes
+```
 
 ## UA ↔ CSI Analyst Task Protocol
 

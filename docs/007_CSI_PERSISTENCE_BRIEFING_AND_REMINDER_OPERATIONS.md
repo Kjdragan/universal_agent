@@ -112,6 +112,18 @@ sudo systemctl start csi-ingester
   - Labels: `personal-reminder`, `sleep-handoff`, `no-auto-exec`
   - Explicitly excludes `agent-ready`
 
+### Threads rollout verification (post-phase-1 hardening)
+
+- Script: `csi_threads_rollout_verify.py`
+- Service/Timer: `csi-threads-rollout-verify.service/.timer`
+- Schedule: daily `03:35 UTC`
+- Verifies:
+  - strict all-source Threads probe
+  - DB event evidence in lookback window
+  - semantic analysis row presence
+  - Threads trend report presence
+  - latest global brief Threads contribution
+
 ## Todoist Personal Upsert Contract
 
 The Todo service now supports personal-only task creation/upsert:

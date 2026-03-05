@@ -24,6 +24,7 @@ class ThreadsSeededTrendsAdapter(SourceAdapter):
         self._state_key = "threads_trends_seeded:state"
         self._max_seen_cache = max(300, int(config.get("max_seen_cache", 6000)))
         self._seen_ids: set[str] = set()
+        self._term_limit_overrides: dict[str, dict[str, Any]] = {}
 
     def set_state_backend(self, load_state_fn, save_state_fn) -> None:
         self._load_state_fn = load_state_fn
@@ -37,15 +38,33 @@ class ThreadsSeededTrendsAdapter(SourceAdapter):
         cleaned = [str(item).strip() for item in seen if str(item).strip()]
         if cleaned:
             self._seen_ids = set(cleaned[: self._max_seen_cache])
+        raw_overrides = raw.get("term_limit_overrides")
+        if isinstance(raw_overrides, dict):
+            cleaned_overrides: dict[str, dict[str, Any]] = {}
+            for term, payload in raw_overrides.items():
+                term_key = str(term or "").strip().lower()
+                if not term_key or not isinstance(payload, dict):
+                    continue
+                limit = int(payload.get("limit") or 0)
+                if limit <= 0:
+                    continue
+                cleaned_overrides[term_key] = {
+                    "limit": limit,
+                    "updated_at": str(payload.get("updated_at") or ""),
+                    "reduce_errors": int(payload.get("reduce_errors") or 0),
+                }
+            self._term_limit_overrides = cleaned_overrides
         return raw
 
-    def _persist_state(self, *, quota_state: dict[str, Any], last_poll_at: str) -> None:
+    def _persist_state(self, *, quota_state: dict[str, Any], last_poll_at: str, last_cycle: dict[str, Any] | None = None) -> None:
         self._save_state_fn(
             self._state_key,
             {
                 "seen_ids": sorted(self._seen_ids)[: self._max_seen_cache],
+                "term_limit_overrides": self._term_limit_overrides,
                 "quota_state": quota_state,
                 "last_poll_at": last_poll_at,
+                "last_cycle": last_cycle if isinstance(last_cycle, dict) else {},
             },
         )
 
@@ -77,6 +96,83 @@ class ThreadsSeededTrendsAdapter(SourceAdapter):
             deduped.append(term)
         return deduped
 
+    @staticmethod
+    def _is_reduce_data_error(exc: Exception) -> bool:
+        text = str(exc or "").strip().lower()
+        if not text:
+            return False
+        return (
+            "please reduce the amount of data" in text
+            or '"code":1' in text
+            or "code=1" in text
+            or " code:1" in text
+        )
+
+    @staticmethod
+    def _is_rate_limit_error(exc: Exception) -> bool:
+        text = str(exc or "").strip().lower()
+        if not text:
+            return False
+        return (
+            "rate limit" in text
+            or '"code":4' in text
+            or " code:4" in text
+            or "error_subcode\":1349210" in text
+        )
+
+    @staticmethod
+    def _is_timeout_error(exc: Exception) -> bool:
+        text = str(exc or "").strip().lower()
+        if not text:
+            return False
+        return "readtimeout" in text or "timeout" in text
+
+    def _configured_limit_for_term(self, *, term: str, default_limit: int, min_limit: int) -> int:
+        term_key = str(term or "").strip().lower()
+        override = self._term_limit_overrides.get(term_key) if term_key else None
+        if isinstance(override, dict):
+            override_limit = max(min_limit, int(override.get("limit") or default_limit))
+            return min(default_limit, override_limit)
+        return int(default_limit)
+
+    def _mark_term_reduce_error(self, *, term: str, attempted_limit: int, min_limit: int) -> None:
+        term_key = str(term or "").strip().lower()
+        if not term_key:
+            return
+        current = self._term_limit_overrides.get(term_key) if isinstance(self._term_limit_overrides.get(term_key), dict) else {}
+        fallback = max(min_limit, min(int(attempted_limit), max(min_limit, int(attempted_limit) // 2)))
+        reduce_errors = int(current.get("reduce_errors") or 0) + 1
+        self._term_limit_overrides[term_key] = {
+            "limit": int(fallback),
+            "updated_at": _iso_now(),
+            "reduce_errors": int(reduce_errors),
+        }
+
+    def _mark_term_success(self, *, term: str, success_limit: int, max_limit: int, recover_step: int) -> None:
+        term_key = str(term or "").strip().lower()
+        if not term_key:
+            return
+        existing = self._term_limit_overrides.get(term_key)
+        if not isinstance(existing, dict):
+            if int(success_limit) >= int(max_limit):
+                return
+            next_limit = min(int(max_limit), int(success_limit) + max(1, int(recover_step)))
+            self._term_limit_overrides[term_key] = {
+                "limit": int(next_limit),
+                "updated_at": _iso_now(),
+                "reduce_errors": 0,
+            }
+            return
+        next_limit = min(int(max_limit), max(int(success_limit), int(success_limit) + max(1, int(recover_step))))
+        if next_limit >= int(max_limit):
+            self._term_limit_overrides.pop(term_key, None)
+            return
+        self._term_limit_overrides[term_key] = {
+            "limit": int(next_limit),
+            "updated_at": _iso_now(),
+            "reduce_errors": int(existing.get("reduce_errors") or 0),
+        }
+
     async def fetch_events(self) -> list[RawEvent]:
         state = self._hydrate_state()
         quota_state = state.get("quota_state") if isinstance(state.get("quota_state"), dict) else {}
@@ -88,7 +184,11 @@ class ThreadsSeededTrendsAdapter(SourceAdapter):
         terms = self._seed_terms()
         if not terms:
             logger.warning("Threads seeded trends adapter has no seed_terms/query_packs configured")
-            self._persist_state(quota_state=client.quota_state(), last_poll_at=_iso_now())
+            self._persist_state(
+                quota_state=client.quota_state(),
+                last_poll_at=_iso_now(),
+                last_cycle={"reason": "no_seed_terms", "terms_count": 0},
+            )
             return []
 
         search_types = self.config.get("search_types") if isinstance(self.config.get("search_types"), list) else ["TOP", "RECENT"]
@@ -96,23 +196,89 @@ class ThreadsSeededTrendsAdapter(SourceAdapter):
         if not normalized_types:
             normalized_types = ["TOP", "RECENT"]
         per_query_limit = max(1, min(int(self.config.get("per_query_limit", 20)), 50))
+        min_query_limit = max(1, min(int(self.config.get("min_query_limit", 3)), per_query_limit))
+        reduce_retry_steps = max(0, int(self.config.get("reduce_retry_steps", 3)))
+        limit_recovery_step = max(1, int(self.config.get("limit_recovery_step", 1)))
         media_types = self.config.get("media_types") if isinstance(self.config.get("media_types"), list) else []
         trend_windows = self.config.get("trend_windows_minutes") if isinstance(self.config.get("trend_windows_minutes"), list) else [15, 60, 1440]
         trend_top_k = max(1, min(int(self.config.get("trend_top_k", 8)), 20))
 
         post_hits: list[dict[str, Any]] = []
         events: list[RawEvent] = []
+        query_attempts = 0
+        query_success = 0
+        query_degraded = 0
+        reduce_data_errors = 0
+        rate_limit_errors = 0
+        rate_limited_cycle = False
+        timeout_errors = 0
+        max_timeout_errors = max(1, int(self.config.get("max_timeout_errors_per_cycle", 2)))
+        timeout_aborted_cycle = False
+        total_hits = 0
+        new_media_hits = 0
         for term in terms:
+            if rate_limited_cycle or timeout_aborted_cycle:
+                break
             for search_type in normalized_types:
+                if rate_limited_cycle or timeout_aborted_cycle:
+                    break
+                query_attempts += 1
+                attempt_limit = self._configured_limit_for_term(
+                    term=term,
+                    default_limit=per_query_limit,
+                    min_limit=min_query_limit,
+                )
+                degraded_this_query = False
+                remaining_reduce_steps = int(reduce_retry_steps)
                 try:
-                    rows = await client.keyword_search(
-                        query=term,
-                        search_type=search_type,
-                        search_surface="KEYWORD",
-                        media_types=media_types,
-                        limit=per_query_limit,
-                    )
+                    while True:
+                        try:
+                            rows = await client.keyword_search(
+                                query=term,
+                                search_type=search_type,
+                                search_surface="KEYWORD",
+                                media_types=media_types,
+                                limit=attempt_limit,
+                            )
+                            break
+                        except Exception as inner_exc:
+                            if not self._is_reduce_data_error(inner_exc):
+                                raise
+                            reduce_data_errors += 1
+                            if attempt_limit <= min_query_limit or remaining_reduce_steps <= 0:
+                                raise
+                            if degraded_this_query and remaining_reduce_steps <= 1:
+                                raise
+                            next_limit = max(min_query_limit, int(attempt_limit) // 2)
+                            if next_limit >= attempt_limit:
+                                raise
+                            query_degraded += 1
+                            degraded_this_query = True
+                            remaining_reduce_steps -= 1
+                            attempt_limit = next_limit
                 except Exception as exc:
+                    if self._is_reduce_data_error(exc):
+                        self._mark_term_reduce_error(
+                            term=term,
+                            attempted_limit=attempt_limit,
+                            min_limit=min_query_limit,
+                        )
+                    if self._is_rate_limit_error(exc):
+                        rate_limit_errors += 1
+                        rate_limited_cycle = True
+                        logger.warning(
+                            "Threads seeded keyword search rate-limited term=%s search_type=%s; halting cycle early",
+                            term,
+                            search_type,
+                        )
+                    if self._is_timeout_error(exc):
+                        timeout_errors += 1
+                        if timeout_errors >= max_timeout_errors:
+                            timeout_aborted_cycle = True
+                            logger.warning(
+                                "Threads seeded keyword search timeout threshold reached (%s); halting cycle early",
+                                timeout_errors,
+                            )
                     logger.warning(
                         "Threads seeded keyword search failed term=%s search_type=%s error=%s",
                         term,
@@ -120,6 +286,13 @@ class ThreadsSeededTrendsAdapter(SourceAdapter):
                         exc,
                     )
                     continue
+                query_success += 1
+                self._mark_term_success(
+                    term=term,
+                    success_limit=attempt_limit,
+                    max_limit=per_query_limit,
+                    recover_step=limit_recovery_step,
+                )
 
                 for row in rows:
                     normalized = normalize_threads_item(
@@ -131,9 +304,11 @@ class ThreadsSeededTrendsAdapter(SourceAdapter):
                     media_id = str(normalized.get("media_id") or "").strip()
                     if not media_id:
                         continue
+                    total_hits += 1
                     post_hits.append(normalized)
                     if media_id in self._seen_ids:
                         continue
+                    new_media_hits += 1
                     events.append(
                         RawEvent(
                             source="threads_trends_seeded",
@@ -161,7 +336,26 @@ class ThreadsSeededTrendsAdapter(SourceAdapter):
             )
 
         self._seen_ids = set(sorted(self._seen_ids)[: self._max_seen_cache])
-        self._persist_state(quota_state=client.quota_state(), last_poll_at=_iso_now())
+        self._persist_state(
+            quota_state=client.quota_state(),
+            last_poll_at=_iso_now(),
+            last_cycle={
+                "terms_count": len(terms),
+                "search_types": normalized_types,
+                "query_attempts": int(query_attempts),
+                "query_success": int(query_success),
+                "query_degraded": int(query_degraded),
+                "reduce_data_errors": int(reduce_data_errors),
+                "rate_limit_errors": int(rate_limit_errors),
+                "rate_limited_cycle": bool(rate_limited_cycle),
+                "timeout_errors": int(timeout_errors),
+                "timeout_aborted_cycle": bool(timeout_aborted_cycle),
+                "total_hits": int(total_hits),
+                "new_media_hits": int(new_media_hits),
+                "events_emitted": int(len(events)),
+                "trend_snapshots": int(len(trend_rows)),
+            },
+        )
         return events
 
     def normalize(self, raw: RawEvent) -> CreatorSignalEvent:

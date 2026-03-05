@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from csi_ingester.adapters.threads_api import (
+    ThreadsAPIClient,
     ThreadsQuotaBudgetManager,
     ThreadsTokenManager,
 )
@@ -72,3 +73,53 @@ async def test_threads_token_refresh_updates_access_token(monkeypatch):
     assert token == "tok-refreshed"
     assert manager.access_token == "tok-refreshed"
     assert expires_at.endswith("Z")
+
+
+@pytest.mark.asyncio
+async def test_threads_client_create_and_publish_container(monkeypatch):
+    class _Resp:
+        status_code = 200
+        content = b"{}"
+        text = ""
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            self.calls = []
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, params=None, headers=None):
+            return _Resp({"data": []})
+
+        async def post(self, url, data=None, headers=None):
+            self.calls.append({"url": url, "data": data or {}})
+            if url.endswith("/threads_publish"):
+                return _Resp({"id": "17890000000000000"})
+            return _Resp({"id": "90123456789012345"})
+
+    monkeypatch.setattr("csi_ingester.adapters.threads_api.httpx.AsyncClient", _Client)
+
+    client = ThreadsAPIClient.from_config(
+        {
+            "user_id": "34355872584027913",
+            "access_token": "tok",
+            "timeout_seconds": 5,
+            "max_retries": 1,
+        },
+        quota_state={},
+    )
+    created = await client.create_media_container(media_type="TEXT", text="hello world")
+    assert str(created.get("id")) == "90123456789012345"
+
+    published = await client.publish_media_container(creation_id="90123456789012345")
+    assert str(published.get("id")) == "17890000000000000"

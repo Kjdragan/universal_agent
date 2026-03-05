@@ -55,7 +55,7 @@ sources:
     timeout_seconds: 20
     user_agent: "CSIIngester/threads-seeded-v1"
     per_query_limit: 15
-    search_types: ["TOP"]
+    search_types: ["TOP", "RECENT"]
     media_types: []
     trend_windows_minutes: [15, 60, 1440]
     trend_top_k: 6

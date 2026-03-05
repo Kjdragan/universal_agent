@@ -40,6 +40,30 @@ class _FakeThreadsClient:
         return {"hits": {}}
 
 
+class _LimitSensitiveThreadsClient(_FakeThreadsClient):
+    def __init__(self, payloads_by_query: dict[str, list[dict]], max_limit_by_query: dict[str, int]):
+        super().__init__(payloads_by_query)
+        self.max_limit_by_query = max_limit_by_query
+
+    async def keyword_search(self, *, query: str, search_type: str, search_surface: str, media_types, limit: int):
+        max_ok = int(self.max_limit_by_query.get(query, limit))
+        if int(limit) > max_ok:
+            raise RuntimeError(
+                'ThreadsAPIError:http_500:{"error":{"code":1,"message":"Please reduce the amount of data you\'re asking for, then retry your request"}}'
+            )
+        return [copy.deepcopy(item) for item in self.payloads_by_query.get(query, [])]
+
+
+class _AlwaysTimeoutThreadsClient(_FakeThreadsClient):
+    def __init__(self):
+        super().__init__({})
+        self.calls = 0
+
+    async def keyword_search(self, *, query: str, search_type: str, search_surface: str, media_types, limit: int):
+        self.calls += 1
+        raise RuntimeError("request:ReadTimeout:")
+
+
 async def test_threads_seeded_adapter_emits_hits_and_trends(monkeypatch):
     payloads = {
         "ai": [
@@ -78,6 +102,65 @@ async def test_threads_seeded_adapter_emits_hits_and_trends(monkeypatch):
     # second poll should not emit duplicate post hits for the same media IDs
     events_second = await adapter.fetch_events()
     assert all(row.event_type == "threads_trend_snapshot" for row in events_second)
+
+
+async def test_threads_seeded_adapter_auto_degrades_term_limits(monkeypatch):
+    payloads = {
+        "workflow automation": [
+            _fake_post("s-1", text="workflow automation for ai agents"),
+        ]
+    }
+    adapter = ThreadsSeededTrendsAdapter(
+        {
+            "query_packs": [{"name": "pack", "terms": ["workflow automation"]}],
+            "search_types": ["TOP"],
+            "trend_windows_minutes": [15],
+            "trend_top_k": 4,
+            "per_query_limit": 20,
+            "min_query_limit": 3,
+            "reduce_retry_steps": 4,
+        }
+    )
+
+    state: dict[str, dict] = {}
+    adapter.set_state_backend(lambda key: state.get(key), lambda key, payload: state.__setitem__(key, payload))
+    monkeypatch.setattr(
+        "csi_ingester.adapters.threads_trends_seeded.ThreadsAPIClient.from_config",
+        lambda config, quota_state=None: _LimitSensitiveThreadsClient(payloads, {"workflow automation": 5}),
+    )
+
+    events = await adapter.fetch_events()
+    assert any(row.event_type == "threads_keyword_hit" for row in events)
+    persisted = state.get("threads_trends_seeded:state") or {}
+    overrides = persisted.get("term_limit_overrides") if isinstance(persisted.get("term_limit_overrides"), dict) else {}
+    assert "workflow automation" in overrides
+    assert int(overrides["workflow automation"].get("limit") or 0) <= 20
+    cycle = persisted.get("last_cycle") if isinstance(persisted.get("last_cycle"), dict) else {}
+    assert int(cycle.get("query_degraded") or 0) >= 1
+
+
+async def test_threads_seeded_adapter_timeout_threshold_halts_cycle(monkeypatch):
+    adapter = ThreadsSeededTrendsAdapter(
+        {
+            "query_packs": [{"name": "pack", "terms": ["t1", "t2", "t3"]}],
+            "search_types": ["TOP", "RECENT"],
+            "per_query_limit": 10,
+            "max_timeout_errors_per_cycle": 1,
+        }
+    )
+    state: dict[str, dict] = {}
+    client = _AlwaysTimeoutThreadsClient()
+    adapter.set_state_backend(lambda key: state.get(key), lambda key, payload: state.__setitem__(key, payload))
+    monkeypatch.setattr(
+        "csi_ingester.adapters.threads_trends_seeded.ThreadsAPIClient.from_config",
+        lambda config, quota_state=None: client,
+    )
+    await adapter.fetch_events()
+    persisted = state.get("threads_trends_seeded:state") or {}
+    cycle = persisted.get("last_cycle") if isinstance(persisted.get("last_cycle"), dict) else {}
+    assert bool(cycle.get("timeout_aborted_cycle")) is True
+    assert int(cycle.get("timeout_errors") or 0) >= 1
+    assert client.calls == 1
 
 
 async def test_threads_broad_adapter_updates_adaptive_scores(monkeypatch):
