@@ -1,0 +1,10 @@
+[Unit]
+Description=Check CSI global brief reminder schedule every 15 minutes
+
+[Timer]
+OnCalendar=*:0/15
+Persistent=true
+Unit=csi-global-brief-reminder.service
+
+[Install]
+WantedBy=timers.target

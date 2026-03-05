@@ -258,7 +258,8 @@ class TestYouTubeMcpGuardrail:
                 "create a report, and email PDF."
             ),
         )
-        self._call_skill_youtube(hooks)
+        skill_result = self._call_skill_youtube(hooks)
+        assert skill_result.get("decision") != "block"
 
         non_task_result = _run(
             hooks.on_pre_tool_use_ledger(
@@ -278,6 +279,25 @@ class TestYouTubeMcpGuardrail:
 
         right_task_result = self._call_task(hooks, "research-specialist")
         assert right_task_result.get("decision") != "block"
+
+    def test_mixed_prompt_allows_youtube_expert_before_research_delegate(self):
+        hooks = self._make_hooks()
+        self._set_prompt(
+            hooks,
+            (
+                "Get transcript from https://youtu.be/SpReZZk_13w, then research latest info, "
+                "create a report, and email PDF."
+            ),
+        )
+
+        youtube_task_result = self._call_task(hooks, "youtube-expert")
+        assert youtube_task_result.get("decision") != "block"
+
+        report_task_result = self._call_task(hooks, "report-writer")
+        assert report_task_result.get("decision") == "block"
+
+        research_task_result = self._call_task(hooks, "research-specialist")
+        assert research_task_result.get("decision") != "block"
 
     def test_flag_not_set_for_non_youtube_prompt(self):
         hooks = self._make_hooks()

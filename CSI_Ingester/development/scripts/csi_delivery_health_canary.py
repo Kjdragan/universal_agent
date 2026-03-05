@@ -286,7 +286,7 @@ def _source_metrics(
                 "action": "Verify ingest auth/endpoint and replay DLQ after repair.",
                 "runbook_command": (
                     "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_replay_dlq.py "
-                    "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --limit 100 --max-attempts 3"
+                    "--db-path /var/lib/universal-agent/csi/csi.db --limit 100 --max-attempts 3"
                 ),
             }
         )
@@ -299,7 +299,7 @@ def _source_metrics(
                 "title": "DLQ backlog exceeds threshold",
                 "action": "Inspect newest DLQ errors and replay once root cause is fixed.",
                 "runbook_command": (
-                    "sqlite3 /opt/universal_agent/CSI_Ingester/development/var/csi.db "
+                    "sqlite3 /var/lib/universal-agent/csi/csi.db "
                     "\"select id,event_id,error_reason,created_at from dead_letter order by id desc limit 25;\""
                 ),
             }
@@ -516,7 +516,7 @@ def _build_canary_event(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Emit CSI delivery-health regression/recovery canary events.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--state-key", default="runtime_canary:delivery_health")
     parser.add_argument("--window-hours", type=int, default=6)
     parser.add_argument("--repeat-minutes", type=int, default=45)

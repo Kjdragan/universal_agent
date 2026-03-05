@@ -30,6 +30,9 @@ _HIGH_VALUE_CANDIDATE_KINDS = {
     "csi_opportunity_bundle_ready",
     "csi_rss_insight_daily",
     "csi_rss_insight_emerging",
+    "csi_threads_trend_report",
+    "csi_global_trend_brief_ready",
+    "csi_global_brief_review_due",
 }
 
 # Notification kinds that are recovery/operational status (digestible)

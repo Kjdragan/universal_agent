@@ -284,7 +284,7 @@ def _evaluate_slo(
                 ),
                 runbook_command=(
                     "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_replay_dlq.py "
-                    "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --limit 200 --max-attempts 3"
+                    "--db-path /var/lib/universal-agent/csi/csi.db --limit 200 --max-attempts 3"
                 ),
                 metric={"actual": delivery_ratio, "target": float(min_delivery_success_ratio)},
                 score=95.0 + min(4.0, delta * 100.0),
@@ -306,7 +306,7 @@ def _evaluate_slo(
                 severity="critical",
                 detail=f"DLQ backlog is {dlq_current} (max allowed {int(max_dlq_backlog)}).",
                 runbook_command=(
-                    "sqlite3 /opt/universal_agent/CSI_Ingester/development/var/csi.db "
+                    "sqlite3 /var/lib/universal-agent/csi/csi.db "
                     "\"select id,event_id,error_reason,created_at from dead_letter order by id desc limit 50;\""
                 ),
                 metric={"actual": int(dlq_current), "target": int(max_dlq_backlog)},
@@ -333,7 +333,7 @@ def _evaluate_slo(
                 ),
                 runbook_command=(
                     "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_delivery_health_auto_remediate.py "
-                    "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db"
+                    "--db-path /var/lib/universal-agent/csi/csi.db"
                 ),
                 metric={"actual": int(dlq_delta), "target": int(max_dlq_backlog_delta)},
                 score=78.0 + min(10.0, float(dlq_delta - int(max_dlq_backlog_delta))),
@@ -399,7 +399,7 @@ def _evaluate_slo(
                 ),
                 runbook_command=(
                     "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_delivery_health_canary.py "
-                    "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --force"
+                    "--db-path /var/lib/universal-agent/csi/csi.db --force"
                 ),
                 metric={"actual": regression_count, "target": int(max_canary_regressions)},
                 score=76.0 + min(12.0, float(regression_count - int(max_canary_regressions))),
@@ -749,7 +749,7 @@ def _run_once(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Compute daily CSI delivery reliability SLO status and emit alerts.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--state-key", default="runtime_canary:delivery_slo")
     parser.add_argument("--day", default="", help="UTC day YYYY-MM-DD. Defaults to yesterday.")
     parser.add_argument("--min-delivery-success-ratio", type=float, default=0.98)

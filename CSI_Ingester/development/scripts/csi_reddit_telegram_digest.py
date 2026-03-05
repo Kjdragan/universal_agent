@@ -536,7 +536,7 @@ def main() -> int:
     parser.add_argument("--db-path", required=True, help="Path to CSI sqlite db")
     parser.add_argument(
         "--state-path",
-        default="/opt/universal_agent/CSI_Ingester/development/var/reddit_telegram_digest_state.json",
+        default="/var/lib/universal-agent/csi/reddit_telegram_digest_state.json",
         help="Path to persisted digest cursor state",
     )
     parser.add_argument("--source", default="reddit_discovery", help="Event source to aggregate")

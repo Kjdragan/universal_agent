@@ -480,12 +480,12 @@ def _build_markdown(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Finalize hourly CSI report product and emit UA readiness event.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--window-hours", type=int, default=24)
     parser.add_argument("--output-root", default="/opt/universal_agent/artifacts/csi-reports")
     parser.add_argument(
         "--state-path",
-        default="/opt/universal_agent/CSI_Ingester/development/var/rss_report_product_state.json",
+        default="/var/lib/universal-agent/csi/rss_report_product_state.json",
     )
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()

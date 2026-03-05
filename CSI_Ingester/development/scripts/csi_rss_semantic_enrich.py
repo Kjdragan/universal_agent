@@ -112,7 +112,7 @@ def _fetch_transcript_failover(
 
 def _fallback_summary(title: str, transcript_text: str, category: str) -> tuple[str, list[str], float]:
     clean = re.sub(r"\s+", " ", transcript_text).strip()
-    base = clean[:300] if clean else ""
+    base = clean[:900] if clean else ""
     if base:
         summary = f"{title.strip()} :: {base}"
     else:
@@ -126,7 +126,30 @@ def _fallback_summary(title: str, transcript_text: str, category: str) -> tuple[
         themes.extend(["security", "geopolitics"])
     else:
         themes.extend(["general_interest"])
-    return summary[:1000], themes, 0.55
+    return summary[:2000], themes[:12], 0.55
+
+
+def _transcript_fusion_excerpt(transcript_text: str, max_chars: int = 12000) -> str:
+    clean = re.sub(r"\s+", " ", str(transcript_text or "")).strip()
+    if not clean:
+        return ""
+    if len(clean) <= max_chars:
+        return clean
+    slice_size = max(1200, max_chars // 3)
+    head = clean[:slice_size]
+    mid_start = max(0, (len(clean) // 2) - (slice_size // 2))
+    middle = clean[mid_start : mid_start + slice_size]
+    tail = clean[-slice_size:]
+    return "\n\n".join(
+        [
+            "HEAD EXCERPT:",
+            head,
+            "MIDDLE EXCERPT:",
+            middle,
+            "TAIL EXCERPT:",
+            tail,
+        ]
+    )[: max_chars + 1200]
 
 
 def _extract_json_object(text: str) -> dict[str, Any] | None:
@@ -161,12 +184,13 @@ def _analyze_with_claude(
     endpoint: str,
     api_key: str,
 ) -> tuple[dict[str, Any] | None, dict[str, int]]:
-    transcript_excerpt = transcript_text[:12000]
+    transcript_excerpt = _transcript_fusion_excerpt(transcript_text, max_chars=12000)
     prompt = (
         "Classify and summarize this YouTube upload for trend tracking.\n"
         "Return ONLY valid JSON with keys:\n"
         "category (ai|political|war|other_interest|or short snake_case category), "
-        "summary (string <= 700 chars), themes (array up to 6), confidence (0..1).\n\n"
+        "summary (string <= 2000 chars), themes (array 10-12 concise themes), "
+        "confidence (0..1), confidence_rationale (string <= 260 chars).\n\n"
         f"Channel Name: {channel_name}\n"
         f"Channel ID: {channel_id}\n"
         f"Title: {title}\n\n"
@@ -174,7 +198,7 @@ def _analyze_with_claude(
     )
     req_body = {
         "model": model,
-        "max_tokens": 500,
+        "max_tokens": 900,
         "temperature": 0.1,
         "messages": [{"role": "user", "content": prompt}],
     }
@@ -307,7 +331,7 @@ def _upsert_analysis(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="RSS semantic enrichment with transcript summaries.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--max-events", type=int, default=8)
     parser.add_argument("--env-file", default="/opt/universal_agent/.env")
     parser.add_argument(
@@ -483,19 +507,21 @@ def main() -> int:
                     suggested_category = parsed_category
                 summary_val = str(parsed.get("summary") or "").strip()
                 if summary_val:
-                    summary_text = summary_val[:1000]
+                    summary_text = summary_val[:2000]
                 parsed_themes = parsed.get("themes")
                 if isinstance(parsed_themes, list):
-                    themes = [str(item).strip() for item in parsed_themes if str(item).strip()][:8]
+                    themes = [str(item).strip() for item in parsed_themes if str(item).strip()][:12]
                 confidence_val = parsed.get("confidence")
                 try:
                     confidence = float(confidence_val)
                 except Exception:
                     confidence = confidence
+                confidence_rationale = str(parsed.get("confidence_rationale") or "").strip()[:260]
                 analysis_json = {
                     "category": suggested_category or "other_interest",
                     "themes": themes,
                     "confidence": max(0.0, min(1.0, confidence)),
+                    "confidence_rationale": confidence_rationale,
                     "transcript_status": transcript_status,
                     "transcript_ref": transcript_ref,
                     "transcript_endpoint": endpoint_used,

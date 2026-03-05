@@ -7,7 +7,7 @@ Wants=csi-ingester.service
 Type=oneshot
 WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
 EnvironmentFile=/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
-ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_delivery_health_auto_remediate.py --db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_delivery_health_auto_remediate.py --db-path /var/lib/universal-agent/csi/csi.db
 
 [Install]
 WantedBy=multi-user.target

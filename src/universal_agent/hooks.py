@@ -123,6 +123,11 @@ _YOUTUBE_INLINE_FETCH_MARKERS = (
     "youtube.com",
 )
 
+_YOUTUBE_SUBAGENT_ALIASES = {
+    "youtube-expert",
+    "youtube-explainer-expert",
+}
+
 
 def set_event_callback(callback: Optional[Callable[[AgentEvent], None]]) -> None:
     """Set the context-local callback for tool events."""
@@ -797,10 +802,16 @@ class AgentHookSet:
         tool_input = input_data.get("tool_input", {}) or {}
         if not isinstance(tool_input, dict):
             tool_input = {}
+        requested_skill = ""
+        delegated_subagent = ""
         try:
             normalized_tool_name = parse_tool_identity(tool_name).tool_name.lower()
         except Exception:
             normalized_tool_name = tool_name.lower()
+        if normalized_tool_name == "skill":
+            requested_skill = str(tool_input.get("skill", "") or "").strip().lower()
+        elif normalized_tool_name == "task":
+            delegated_subagent = str(tool_input.get("subagent_type", "") or "").strip().lower()
 
         # Track transcript paths to detect sub-agent context.
         # The first transcript_path seen is the primary agent's; subsequent
@@ -816,7 +827,6 @@ class AgentHookSet:
             self._vp_dispatch_seen_this_turn = True
 
         if normalized_tool_name == "skill":
-            requested_skill = str(tool_input.get("skill", "") or "").strip().lower()
             if requested_skill == "youtube-transcript-metadata":
                 self._youtube_skill_seen_this_turn = True
 
@@ -945,17 +955,39 @@ class AgentHookSet:
             and not self._is_vp_worker_lane
             and not self._is_cron_lane
         ):
+            # Mixed YouTube+research turns must allow ingestion to happen before
+            # the research-specialist handoff. Otherwise the turn deadlocks:
+            # research guard blocks YouTube skill/subagent, and YouTube guard
+            # blocks direct YouTube tool usage.
+            allows_youtube_ingestion_step = (
+                self._requires_youtube_skill_first
+                and (
+                    (normalized_tool_name == "skill" and requested_skill == "youtube-transcript-metadata")
+                    or (normalized_tool_name == "task" and delegated_subagent in _YOUTUBE_SUBAGENT_ALIASES)
+                )
+            )
+            if allows_youtube_ingestion_step:
+                return {}
+
             if normalized_tool_name == "task":
-                delegated = str(tool_input.get("subagent_type", "") or "").strip().lower()
-                if delegated == "research-specialist":
+                if delegated_subagent == "research-specialist":
                     self._research_delegate_seen_this_turn = True
                 else:
+                    ordering_hint = (
+                        "\nFor mixed YouTube + research turns, run YouTube ingestion first with either "
+                        "`Task(subagent_type='youtube-expert', ...)` or "
+                        "`Skill(skill='youtube-transcript-metadata', args='<url>')`, "
+                        "then delegate to `research-specialist`."
+                        if self._requires_youtube_skill_first
+                        else ""
+                    )
                     return {
                         "systemMessage": (
                             "⚠️ Report-style research workflow detected.\n\n"
                             "First tool call in this turn must be "
                             "`Task(subagent_type='research-specialist', ...)`.\n"
                             "Do not delegate to another specialist before the research handoff."
+                            + ordering_hint
                         ),
                         "decision": "block",
                         "hookSpecificOutput": {
@@ -967,12 +999,21 @@ class AgentHookSet:
                         },
                     }
             else:
+                ordering_hint = (
+                    "\nFor mixed YouTube + research turns, run YouTube ingestion first with either "
+                    "`Task(subagent_type='youtube-expert', ...)` or "
+                    "`Skill(skill='youtube-transcript-metadata', args='<url>')`, "
+                    "then delegate to `research-specialist`."
+                    if self._requires_youtube_skill_first
+                    else ""
+                )
                 return {
                     "systemMessage": (
                         "⚠️ Report-style research workflow detected.\n\n"
                         "First tool call in this turn must be "
                         "`Task(subagent_type='research-specialist', ...)`.\n"
                         "Direct search/tool execution is blocked until that delegation occurs."
+                        + ordering_hint
                     ),
                     "decision": "block",
                     "hookSpecificOutput": {

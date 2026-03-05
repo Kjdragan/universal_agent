@@ -183,6 +183,22 @@ def _analytics_message(event: CreatorSignalEvent) -> str:
         top_themes = subject.get("top_themes")
         if isinstance(top_themes, list) and top_themes:
             lines.append(f"top_themes_preview: {_safe_json_preview(top_themes[:6], max_chars=800)}")
+    elif event_type == "threads_trend_report":
+        lines.append(f"report_key: {str(subject.get('report_key') or '')}")
+        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
+        lines.append(f"items: {int(subject.get('total_items') or 0)}")
+        top_terms = subject.get("top_terms")
+        if isinstance(top_terms, list) and top_terms:
+            lines.append(f"top_terms_preview: {_safe_json_preview(top_terms[:8], max_chars=800)}")
+    elif event_type == "global_trend_brief_ready":
+        lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
+        lines.append(f"window: {str(subject.get('window_start_utc') or '')} -> {str(subject.get('window_end_utc') or '')}")
+        source_totals = subject.get("source_totals") if isinstance(subject.get("source_totals"), dict) else {}
+        lines.append(f"source_totals: {_safe_json_preview(source_totals, max_chars=300)}")
+    elif event_type == "csi_global_brief_review_due":
+        lines.append(f"brief_key: {str(subject.get('brief_key') or '')}")
+        lines.append(f"slot: {str(subject.get('slot_display') or subject.get('slot') or '')}")
+        lines.append(f"timezone: {str(subject.get('timezone') or '')}")
     elif event_type.startswith("rss_insight_"):
         lines.append(f"report_key: {str(subject.get('report_key') or '')}")
         lines.append(f"items: {int(subject.get('total_items') or 0)}")

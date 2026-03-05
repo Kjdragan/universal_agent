@@ -17,7 +17,7 @@ from universal_agent.utils.session_workspace import (
     write_json,
 )
 
-_DEFAULT_CSI_DB_PATH = "/opt/universal_agent/CSI_Ingester/development/var/csi.db"
+_DEFAULT_CSI_DB_PATH = "/var/lib/universal-agent/csi/csi.db"
 _DEFAULT_YT_WATCHLIST = "/opt/universal_agent/CSI_Ingester/development/channels_watchlist.json"
 _DEFAULT_REDDIT_WATCHLIST = "/opt/universal_agent/CSI_Ingester/development/reddit_watchlist.json"
 
@@ -262,6 +262,9 @@ async def csi_recent_reports_wrapper(args: Dict[str, Any]) -> Dict[str, Any]:
                 'opportunity_bundle_ready',
                 'rss_trend_report',
                 'reddit_trend_report',
+                'threads_trend_report',
+                'global_trend_brief_ready',
+                'csi_global_brief_review_due',
                 'rss_insight_daily',
                 'rss_insight_emerging'
             )

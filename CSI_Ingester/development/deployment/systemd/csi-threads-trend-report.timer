@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI Threads trend report hourly
+
+[Timer]
+OnCalendar=*:18
+Persistent=true
+Unit=csi-threads-trend-report.service
+
+[Install]
+WantedBy=timers.target

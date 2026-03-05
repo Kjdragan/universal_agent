@@ -346,6 +346,83 @@ class TodoService:
         )
         return self._task_to_dict(task)
 
+    def create_personal_task(
+        self,
+        content: str,
+        description: str = "",
+        *,
+        priority: str = "low",
+        section: str = "scheduled",
+        labels: list[str] | None = None,
+        due_string: str | None = None,
+        project_key: str = "immediate",
+        upsert_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Create/update a personal reminder task without forcing agent-ready."""
+
+        taxonomy = self._get_taxonomy_or_bootstrap()
+        project_name = PROJECT_KEY_MAP.get((project_key or "").strip().lower(), UA_PROJECT_IMMEDIATE)
+        project_id = taxonomy.project_ids.get(project_name, taxonomy.agent_project_id)
+        project_sections = taxonomy.section_ids.get(project_name, {})
+        section_id = project_sections.get(section.lower()) or project_sections.get("scheduled") or project_sections.get("background")
+        if not section_id:
+            raise RuntimeError(f"Unable to resolve Todoist section for project={project_name} section={section}")
+
+        normalized_labels = sorted(
+            {
+                str(label or "").strip()
+                for label in (labels or [])
+                if str(label or "").strip()
+            }
+        )
+        if "agent-ready" in normalized_labels:
+            normalized_labels = [label for label in normalized_labels if label != "agent-ready"]
+
+        clean_upsert_key = str(upsert_key or "").strip() or None
+        marker = f"ua_upsert_key:{clean_upsert_key}" if clean_upsert_key else ""
+        description_with_marker = str(description or "")
+        if marker and marker not in description_with_marker:
+            description_with_marker = (description_with_marker.rstrip() + f"\n\n{marker}").strip()
+
+        existing_id: str | None = None
+        if marker:
+            all_tasks = self.get_all_tasks(project_id=project_id)
+            for task in all_tasks:
+                if str(task.get("section_id") or "") != str(section_id):
+                    continue
+                task_description = str(task.get("description") or "")
+                if marker in task_description:
+                    existing_id = str(task.get("id") or "").strip() or None
+                    break
+
+        api_priority = PRIORITY_TO_API.get(priority.lower(), 1)
+        if existing_id:
+            payload: dict[str, Any] = {
+                "content": content,
+                "description": description_with_marker,
+                "section_id": section_id,
+                "labels": normalized_labels,
+                "priority": api_priority,
+            }
+            if due_string:
+                payload["due_string"] = due_string
+            self.api.update_task(task_id=existing_id, **payload)
+            refreshed = self.get_task_detail(existing_id)
+            if refreshed is not None:
+                return refreshed
+            return {"id": existing_id, "content": content, "description": description_with_marker}
+
+        task = self.api.add_task(
+            content=content,
+            description=description_with_marker,
+            project_id=project_id,
+            section_id=section_id,
+            labels=normalized_labels,
+            priority=api_priority,
+            due_string=due_string,
+        )
+        return self._task_to_dict(task)
+
     def update_task(self, task_id: str, **kwargs) -> bool:
         try:
             self.api.update_task(task_id=task_id, **kwargs)

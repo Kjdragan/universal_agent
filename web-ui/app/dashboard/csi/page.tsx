@@ -286,6 +286,7 @@ export default function CSIDashboard() {
     const [cleanupBusy, setCleanupBusy] = useState(false);
     const [loopsStatus, setLoopsStatus] = useState<string | null>(null);
     const [deliveryStatus, setDeliveryStatus] = useState<string | null>(null);
+    const [activeView, setActiveView] = useState<"trend" | "health">("trend");
 
     const openArtifactPreview = useCallback(async (path: string, label: string) => {
         const normalized = normalizeArtifactPath(path);
@@ -443,6 +444,7 @@ export default function CSIDashboard() {
     const totalReports = reports.length;
     const lastReportTime = reports.length > 0 ? formatDateTimeTz(reports[0].created_at, { placeholder: "N/A" }) : "N/A";
     const latestBundle = opportunityBundles.length > 0 ? opportunityBundles[0] : null;
+    const latestGlobalBrief = reports.find((report) => String(report.report_class || "").toLowerCase() === "brief") || null;
 
     async function purgeCsiSessions() {
         if (!confirm("Purge older CSI hook sessions and keep only the latest 2?")) return;
@@ -606,6 +608,31 @@ export default function CSIDashboard() {
                 </div>
             )}
 
+            <div className="flex items-center gap-2">
+                <button
+                    type="button"
+                    onClick={() => setActiveView("trend")}
+                    className={`rounded-md border px-3 py-1.5 text-xs font-semibold tracking-wide transition-colors ${
+                        activeView === "trend"
+                            ? "border-cyan-500/60 bg-cyan-600/20 text-cyan-200"
+                            : "border-slate-700 bg-slate-900/50 text-slate-400 hover:bg-slate-800/60"
+                    }`}
+                >
+                    Trend Briefing
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setActiveView("health")}
+                    className={`rounded-md border px-3 py-1.5 text-xs font-semibold tracking-wide transition-colors ${
+                        activeView === "health"
+                            ? "border-emerald-500/60 bg-emerald-600/20 text-emerald-200"
+                            : "border-slate-700 bg-slate-900/50 text-slate-400 hover:bg-slate-800/60"
+                    }`}
+                >
+                    CSI Health
+                </button>
+            </div>
+
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
                     <div className="text-sm font-medium text-slate-400">Total Reports (Recent)</div>
@@ -620,18 +647,36 @@ export default function CSIDashboard() {
                     </div>
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
-                    <div className="text-sm font-medium text-slate-400">CSI Pipeline Health</div>
-                    <div className="mt-2 flex items-center gap-2">
-                        <span className={`text-lg font-bold ${(health?.stale_pipelines?.length || 0) > 0 ? "text-amber-300" : "text-emerald-300"}`}>
-                            {loading ? "..." : `${health?.stale_pipelines?.length || 0} stale`}
-                        </span>
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                        DLQ 24h: {health?.dead_letter_last_24h ?? 0} | Undelivered 24h: {health?.undelivered_last_24h ?? 0}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                        Specialist loops: {health?.specialist_quality?.total_loops ?? 0} | Suppressed: {health?.specialist_quality?.suppressed_low_signal ?? 0}
-                    </div>
+                    {activeView === "trend" ? (
+                        <>
+                            <div className="text-sm font-medium text-slate-400">Latest Global Brief</div>
+                            <div className="mt-2 flex items-center gap-2">
+                                <span className="text-lg font-bold text-cyan-200">
+                                    {loading ? "..." : latestGlobalBrief ? "Ready" : "None"}
+                                </span>
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                                {latestGlobalBrief
+                                    ? `Created: ${formatDateTimeTz(latestGlobalBrief.created_at, { placeholder: "--" })}`
+                                    : "No global brief artifacts yet."}
+                            </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="text-sm font-medium text-slate-400">CSI Pipeline Health</div>
+                            <div className="mt-2 flex items-center gap-2">
+                                <span className={`text-lg font-bold ${(health?.stale_pipelines?.length || 0) > 0 ? "text-amber-300" : "text-emerald-300"}`}>
+                                    {loading ? "..." : `${health?.stale_pipelines?.length || 0} stale`}
+                                </span>
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                                DLQ 24h: {health?.dead_letter_last_24h ?? 0} | Undelivered 24h: {health?.undelivered_last_24h ?? 0}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                                Specialist loops: {health?.specialist_quality?.total_loops ?? 0} | Suppressed: {health?.specialist_quality?.suppressed_low_signal ?? 0}
+                            </div>
+                        </>
+                    )}
                 </div>
                 <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
                     <div className="text-sm font-medium text-slate-400">Latest Opportunity Bundle</div>
@@ -646,6 +691,8 @@ export default function CSIDashboard() {
                 </div>
             </div>
 
+            {activeView === "health" && (
+                <>
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold tracking-wide text-slate-300">Daily Reliability SLO</h2>
@@ -1026,6 +1073,11 @@ export default function CSIDashboard() {
                 </div>
             </div>
 
+                </>
+            )}
+
+            {activeView === "trend" && (
+                <>
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 shadow-sm backdrop-blur">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <h2 className="text-sm font-semibold tracking-wide text-slate-300">Latest Opportunity Bundle</h2>
@@ -1545,6 +1597,8 @@ export default function CSIDashboard() {
                     )}
                 </div>
             </div>
+                </>
+            )}
         </div>
     );
 }

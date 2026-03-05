@@ -45,7 +45,18 @@ You are the YouTube Specialist.
    2. Trigger metadata (`source`, `mode`, `learning_mode`, `allow_degraded_transcript_only`) when present.
 2. Build a run directory under:
    `UA_ARTIFACTS_DIR/youtube-tutorial-creation/{YYYY-MM-DD}/{video-slug}__{HHMMSS}/`
-3. Execute core ingestion script for transcript+metadata.
+3. Execute the core ingestion using the `youtube-transcript-metadata` skill:
+
+   ```bash
+   UV_CACHE_DIR=/tmp/uv_cache uv run .claude/skills/youtube-transcript-metadata/scripts/fetch_youtube_transcript_metadata.py \
+     --url "<video_url>" \
+     --json-out "<run_dir>/youtube_ingest.json" \
+     --transcript-out "<run_dir>/transcript.txt"
+   ```
+
+   Read `youtube_ingest.json` to access `transcript_text`, `metadata` (title, channel, duration, etc.), `ok`, and `failure_class`.
+   - If `ok=false` and `failure_class=request_blocked`: the IP may be blocked; retry once, then continue in degraded mode.
+   - If `ok=false` with other classes: continue with degraded mode using whatever metadata is available.
 4. Attempt visual evidence extraction with Gemini multimodal video understanding when feasible.
 5. Assess implementation relevance and set `implementation_required` in `manifest.json`.
 6. Produce required artifacts and validate generated implementation code when present.

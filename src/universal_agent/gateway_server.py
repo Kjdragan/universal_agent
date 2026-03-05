@@ -3304,8 +3304,11 @@ def _csi_is_high_value_event(event_type: str) -> bool:
     return lowered in {
         "rss_trend_report",
         "reddit_trend_report",
+        "threads_trend_report",
         "rss_insight_emerging",
         "rss_insight_daily",
+        "global_trend_brief_ready",
+        "csi_global_brief_review_due",
         "rss_quality_gate_alert",
         "report_product_ready",
         "opportunity_bundle_ready",
@@ -3376,6 +3379,7 @@ def _csi_event_notification_policy(event: Any) -> dict[str, Any]:
             "opportunity_bundle_ready",
             "rss_trend_report",
             "reddit_trend_report",
+            "threads_trend_report",
             "delivery_health_regression",
             "delivery_reliability_slo_breached",
         }
@@ -6406,8 +6410,11 @@ def _activity_digest_should_compact(
     if event_type in {
         "rss_trend_report",
         "reddit_trend_report",
+        "threads_trend_report",
         "rss_insight_daily",
         "rss_insight_emerging",
+        "global_trend_brief_ready",
+        "csi_global_brief_review_due",
         "report_product_ready",
         "opportunity_bundle_ready",
     }:
@@ -9603,6 +9610,13 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
             or 0
         )
         lowered = report_type.lower()
+        if "global_trend_brief" in lowered or lowered == "global_brief":
+            source_totals = report_data.get("source_totals")
+            if isinstance(source_totals, dict):
+                return {str(k): int(v or 0) for k, v in source_totals.items()}
+            return {"brief_items": total_items}
+        if "threads" in lowered:
+            return {"threads": total_items}
         if "reddit" in lowered:
             return {"reddit": total_items}
         if "rss" in lowered or lowered in {"daily", "emerging", "trend"}:
@@ -9652,6 +9666,8 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
 
     def _report_class(report_type: str) -> str:
         lowered = report_type.lower()
+        if "brief" in lowered:
+            return "brief"
         if "opportunity" in lowered:
             return "opportunity"
         if "daily" in lowered:
@@ -9771,7 +9787,7 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
 
     clamped_limit = max(1, min(int(limit), 50))
     db_detail: Optional[str] = None
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if db_path.exists():
         conn = None
         try:
@@ -9839,12 +9855,51 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                         }
                     )
 
+            if _table_exists(conn, "global_trend_briefs"):
+                for row in conn.execute(
+                    "SELECT * FROM global_trend_briefs ORDER BY created_at DESC LIMIT ?",
+                    (max(clamped_limit * 2, 20),),
+                ).fetchall():
+                    brief_json = _activity_json_loads_obj(row["brief_json"], default={})
+                    report_data = brief_json if isinstance(brief_json, dict) else {}
+                    report_data["markdown_content"] = str(row["brief_markdown"] or "")
+                    artifact_paths: dict[str, str] = {}
+                    md_path = str(row["artifact_markdown_path"] or "").strip()
+                    json_path = str(row["artifact_json_path"] or "").strip()
+                    if md_path:
+                        artifact_paths["markdown"] = md_path
+                    if json_path:
+                        artifact_paths["json"] = json_path
+                    if artifact_paths:
+                        report_data["artifact_paths"] = artifact_paths
+                    report_type = "global_trend_brief"
+                    reports.append(
+                        {
+                            "id": int(row["id"]),
+                            "report_type": report_type,
+                            "report_class": "brief",
+                            "window_hours": _window_hours(row["window_start_utc"], row["window_end_utc"]),
+                            "source_mix": _source_mix_for_report(report_type, report_data),
+                            "report_data": report_data,
+                            "usage": _parse_usage(
+                                prompt=row["prompt_tokens"],
+                                completion=row["completion_tokens"],
+                                total=row["total_tokens"],
+                            ),
+                            "created_at": _normalize_notification_timestamp(row["created_at"]),
+                            "window_start_utc": row["window_start_utc"],
+                            "window_end_utc": row["window_end_utc"],
+                            "model_name": row["model_name"],
+                            "metadata": {"report_key": row["brief_key"]},
+                        }
+                    )
+
             if _table_exists(conn, "events"):
                 for row in conn.execute(
                     """
-                    SELECT event_id, occurred_at, subject_json
+                    SELECT event_id, event_type, occurred_at, subject_json
                     FROM events
-                    WHERE event_type IN ('report_product_ready', 'opportunity_bundle_ready')
+                    WHERE event_type IN ('report_product_ready', 'opportunity_bundle_ready', 'global_trend_brief_ready')
                     ORDER BY occurred_at DESC
                     LIMIT ?
                     """,
@@ -9854,7 +9909,13 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                     if not isinstance(subject, dict):
                         subject = {}
                     artifact_paths = subject.get("artifact_paths") if isinstance(subject.get("artifact_paths"), dict) else {}
-                    report_type_value = str(subject.get("report_type") or "hourly_report_product")
+                    raw_event_type = str(row["event_type"] or "").strip().lower()
+                    report_type_value = str(subject.get("report_type") or "").strip().lower()
+                    if not report_type_value:
+                        if raw_event_type == "global_trend_brief_ready":
+                            report_type_value = "global_trend_brief"
+                        else:
+                            report_type_value = "hourly_report_product"
                     if report_type_value == "opportunity_bundle":
                         quality_summary = subject.get("quality_summary") if isinstance(subject.get("quality_summary"), dict) else {}
                         opportunities = subject.get("opportunities") if isinstance(subject.get("opportunities"), list) else []
@@ -9881,6 +9942,12 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
                             f"- has_trend_report: `{subject.get('has_trend_report')}`\n"
                             f"- insight_report_count: `{subject.get('insight_report_count')}`\n"
                         )
+                        if report_type_value == "global_trend_brief":
+                            markdown = (
+                                "## CSI Global Trend Brief\n\n"
+                                f"- brief_key: `{subject.get('brief_key')}`\n"
+                                f"- window: `{subject.get('window_start_utc')}` -> `{subject.get('window_end_utc')}`\n"
+                            )
                     if artifact_paths:
                         markdown += (
                             "\n### Artifacts\n"
@@ -9951,9 +10018,28 @@ async def dashboard_csi_reports(limit: int = 15, include_suppressed: bool = Fals
     return {"status": "ok", "source": "empty", "detail": db_detail, "reports": []}
 
 
+@app.get("/api/v1/dashboard/csi/briefings")
+async def dashboard_csi_briefings(limit: int = 12, include_suppressed: bool = False):
+    base = await dashboard_csi_reports(limit=max(1, min(int(limit), 50)), include_suppressed=include_suppressed)
+    reports = base.get("reports") if isinstance(base, dict) else []
+    if not isinstance(reports, list):
+        reports = []
+    allowed_classes = {"brief", "trend", "daily", "emerging", "product", "opportunity", "insight"}
+    filtered = [
+        item
+        for item in reports
+        if str(item.get("report_class") or "").strip().lower() in allowed_classes
+    ]
+    return {
+        "status": "ok",
+        "source": "csi_briefings",
+        "reports": filtered[: max(1, min(int(limit), 50))],
+    }
+
+
 @app.get("/api/v1/dashboard/csi/health")
 async def dashboard_csi_health():
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
     conn = None
@@ -10068,6 +10154,9 @@ async def dashboard_csi_health():
         tracked_types = {
             "rss_trend_report": 180,
             "reddit_trend_report": 180,
+            "threads_trend_report": 180,
+            "global_trend_brief_ready": 180,
+            "csi_global_brief_review_due": 720,
             "rss_insight_emerging": 180,
             "report_product_ready": 180,
             "opportunity_bundle_ready": 180,
@@ -10346,7 +10435,7 @@ async def dashboard_csi_delivery_health(
         1,
         int(os.getenv("UA_CSI_DELIVERY_ADAPTER_CONSECUTIVE_FAILURES", "3") or 3),
     )
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
     conn = None
@@ -10526,7 +10615,7 @@ async def dashboard_csi_delivery_health(
                         "action": "Verify UA ingest endpoint auth and replay DLQ after repair.",
                         "runbook_command": (
                             "python3 /opt/universal_agent/CSI_Ingester/development/scripts/csi_replay_dlq.py "
-                            "--db-path /opt/universal_agent/CSI_Ingester/development/var/csi.db --limit 100 --max-attempts 3"
+                            "--db-path /var/lib/universal-agent/csi/csi.db --limit 100 --max-attempts 3"
                         ),
                     }
                 )
@@ -10538,7 +10627,7 @@ async def dashboard_csi_delivery_health(
                         "title": "DLQ backlog exceeds threshold",
                         "action": "Inspect latest delivery errors and replay DLQ once root cause is fixed.",
                         "runbook_command": (
-                            "sqlite3 /opt/universal_agent/CSI_Ingester/development/var/csi.db "
+                            "sqlite3 /var/lib/universal-agent/csi/csi.db "
                             "\"select id,event_id,error_reason,created_at from dead_letter order by id desc limit 25;\""
                         ),
                     }
@@ -10629,7 +10718,7 @@ async def dashboard_csi_delivery_health(
 
 @app.get("/api/v1/dashboard/csi/reliability-slo")
 async def dashboard_csi_reliability_slo():
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}"}
     conn = None
@@ -10691,7 +10780,7 @@ async def dashboard_csi_reliability_slo():
 @app.get("/api/v1/dashboard/csi/opportunities")
 async def dashboard_csi_opportunities(limit: int = 8):
     clamped_limit = max(1, min(int(limit), 50))
-    db_path = Path(os.getenv("CSI_DB_PATH", "/opt/universal_agent/CSI_Ingester/development/var/csi.db"))
+    db_path = Path(os.getenv("CSI_DB_PATH", "/var/lib/universal-agent/csi/csi.db"))
     if not db_path.exists():
         return {"status": "unavailable", "detail": f"CSI database not found at {db_path}", "bundles": [], "latest": None}
     conn = None

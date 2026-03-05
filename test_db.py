@@ -2,7 +2,7 @@ import sqlite3
 import json
 
 def get_csi_data():
-    conn = sqlite3.connect('/opt/universal_agent/CSI_Ingester/development/var/csi.db')
+    conn = sqlite3.connect('/var/lib/universal-agent/csi/csi.db')
     conn.row_factory = sqlite3.Row
     try:
         cur = conn.cursor()

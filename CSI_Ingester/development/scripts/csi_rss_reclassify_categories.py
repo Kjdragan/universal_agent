@@ -80,7 +80,7 @@ def _extract_themes(payload: dict[str, Any]) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Reclassify existing RSS analysis rows with adaptive taxonomy.")
-    parser.add_argument("--db-path", default="/opt/universal_agent/CSI_Ingester/development/var/csi.db")
+    parser.add_argument("--db-path", default="/var/lib/universal-agent/csi/csi.db")
     parser.add_argument("--max-rows", type=int, default=1200)
     parser.add_argument("--since-hours", type=int, default=0, help="0 means all rows")
     parser.add_argument("--max-categories", type=int, default=10)

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run CSI Reddit semantic enrichment every 10 minutes
+
+[Timer]
+OnCalendar=*:07/10
+Persistent=true
+Unit=csi-reddit-semantic-enrich.service
+
+[Install]
+WantedBy=timers.target
