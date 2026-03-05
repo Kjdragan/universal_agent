@@ -60,6 +60,23 @@ def test_seeded_no_event_signal_hits_but_no_new_events_warning():
     assert is_failure is False
 
 
+def test_seeded_no_event_signal_suppresses_noisy_warning_when_analysis_present():
+    mod = _load_module()
+    signal, is_failure = mod._seeded_no_event_signal(
+        seeded_rows=12,
+        seeded_probe_ok=1,
+        seeded_probe_results=8,
+        seeded_polled_recently=True,
+        seeded_cycle_hits=8,
+        seeded_cycle_new_hits=0,
+        seeded_cycle_rate_limited=False,
+        seeded_cycle_timeout_aborted=False,
+        require_seeded_events=False,
+    )
+    assert signal == ""
+    assert is_failure is False
+
+
 def test_seeded_no_event_signal_can_fail_when_strict_required_and_idle():
     mod = _load_module()
     signal, is_failure = mod._seeded_no_event_signal(

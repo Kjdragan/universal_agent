@@ -228,6 +228,8 @@ def _seeded_no_event_signal(
     if seeded_cycle_rate_limited or seeded_cycle_timeout_aborted:
         return ("seeded_poll_constrained_recently", False)
     if seeded_probe_ok > 0 and seeded_probe_results > 0:
+        if seeded_rows > 0:
+            return ("", False)
         return ("seeded_live_but_no_new_events", False)
     if seeded_polled_recently and seeded_cycle_hits > 0 and seeded_cycle_new_hits <= 0:
         return ("seeded_polled_but_no_new_media_hits", False)
@@ -412,7 +414,7 @@ def main() -> int:
             )
             if seeded_is_failure:
                 failures.append(seeded_signal)
-            else:
+            elif seeded_signal:
                 warnings.append(seeded_signal)
         if broad_events <= 0:
             if broad_rows > 0:
