@@ -48,6 +48,13 @@ def _parse_iso(raw: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _truthy_env(key: str, default: bool = False) -> bool:
+    raw = str(os.getenv(key) or "").strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _run_probe(
     *,
     config_path: str,
@@ -186,6 +193,7 @@ def _adapter_state_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     keys = {
         "threads_trends_seeded": "threads_trends_seeded:state",
         "threads_trends_broad": "threads_trends_broad:state",
+        "threads_webhook": "threads_webhook:state",
     }
     out: dict[str, Any] = {}
     for source, key in keys.items():
@@ -198,6 +206,12 @@ def _adapter_state_stats(conn: sqlite3.Connection) -> dict[str, Any]:
             "last_poll_at": str(state.get("last_poll_at") or ""),
             "last_cycle": last_cycle,
         }
+        if source == "threads_webhook":
+            out[source] = {
+                "last_ingested_at": str(state.get("last_ingested_at") or ""),
+                "last_cycle": state.get("last_cycle") if isinstance(state.get("last_cycle"), dict) else {},
+                "totals": state.get("totals") if isinstance(state.get("totals"), dict) else {},
+            }
     return out
 
 
@@ -325,6 +339,12 @@ def main() -> int:
         default=False,
         help="Fail verify when seeded events are zero in lookback",
     )
+    parser.add_argument(
+        "--require-webhook-activity",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Fail verify when webhook is enabled but no webhook ingest occurred in lookback",
+    )
     parser.add_argument("--write-json", default="", help="Optional output JSON file path")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args()
@@ -427,6 +447,20 @@ def main() -> int:
             warnings.append("no_threads_trend_report_in_lookback")
         if int(report_stats.get("latest_global_brief_threads_total") or 0) <= 0:
             warnings.append("latest_global_brief_threads_total_zero")
+        webhook_enabled = _truthy_env("CSI_THREADS_WEBHOOK_ENABLED", False)
+        webhook_state = adapter_state.get("threads_webhook") if isinstance(adapter_state.get("threads_webhook"), dict) else {}
+        webhook_last_ingested = _parse_iso(webhook_state.get("last_ingested_at")) if webhook_state else None
+        webhook_recent = bool(
+            webhook_last_ingested is not None
+            and webhook_last_ingested >= (_utc_now() - timedelta(hours=max(1, int(args.lookback_hours))))
+        )
+        if webhook_enabled:
+            if webhook_recent:
+                pass
+            elif bool(args.require_webhook_activity):
+                failures.append("webhook_enabled_but_no_ingest_in_lookback")
+            else:
+                warnings.append("webhook_enabled_but_no_ingest_in_lookback")
 
     payload = {
         "verified_at_utc": _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -441,6 +475,7 @@ def main() -> int:
         "analysis": analysis_stats,
         "reports": report_stats,
         "adapter_state": adapter_state,
+        "webhook_enabled": _truthy_env("CSI_THREADS_WEBHOOK_ENABLED", False),
         "warnings": warnings,
         "failures": failures,
         "ok": len(failures) == 0,

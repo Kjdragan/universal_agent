@@ -52,6 +52,15 @@ def _sign(raw_body: bytes, app_secret: str) -> str:
     return f"sha256={digest}"
 
 
+def _resolve_media_id(*, explicit_media_id: str, fixed_media_id: bool) -> str:
+    clean = str(explicit_media_id or "").strip()
+    if clean:
+        return clean
+    if fixed_media_id:
+        return str(os.getenv("CSI_THREADS_WEBHOOK_CANARY_MEDIA_ID") or "threads-webhook-canary-fixed").strip()
+    return f"1800{_now_epoch()}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:8091")
@@ -62,8 +71,11 @@ def main() -> int:
     parser.add_argument("--user-id", default="", help="Override THREADS_USER_ID for payload entry id")
     parser.add_argument("--field", default="mentions", help="Webhook field name for sample change")
     parser.add_argument("--media-id", default="", help="Override sample media id")
+    parser.add_argument("--fixed-media-id", action="store_true", help="Use a stable media id so repeated canaries dedupe")
     parser.add_argument("--text", default="threads webhook smoke test")
     parser.add_argument("--timeout-seconds", type=int, default=20)
+    parser.add_argument("--write-json", default="", help="Optional path to write JSON result payload")
+    parser.add_argument("--json", action="store_true", dest="as_json", help="Print JSON result payload")
     args = parser.parse_args()
 
     run_verify = bool(args.verify) or (not args.verify and not args.ingest)
@@ -72,14 +84,27 @@ def main() -> int:
     verify_token = str(args.verify_token or os.getenv("THREADS_WEBHOOK_VERIFY_TOKEN") or "").strip()
     app_secret = str(args.app_secret or os.getenv("THREADS_APP_SECRET") or "").strip()
     user_id = str(args.user_id or os.getenv("THREADS_USER_ID") or "threads-smoke-user").strip()
-    media_id = str(args.media_id or f"1800{_now_epoch()}").strip()
+    media_id = _resolve_media_id(explicit_media_id=str(args.media_id or ""), fixed_media_id=bool(args.fixed_media_id))
     base_url = str(args.base_url or "").rstrip("/")
 
     timeout = max(5, int(args.timeout_seconds))
+    result: dict[str, Any] = {
+        "ok": False,
+        "verified_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "base_url": base_url,
+        "verify_enabled": bool(run_verify),
+        "ingest_enabled": bool(run_ingest),
+        "media_id": media_id,
+        "verify_status": None,
+        "ingest_status": None,
+        "error": "",
+    }
     with httpx.Client(timeout=timeout) as client:
         if run_verify:
             if not verify_token:
                 print("ERROR=missing_verify_token")
+                result["error"] = "missing_verify_token"
+                _emit_result(result=result, as_json=bool(args.as_json), write_json=str(args.write_json or ""))
                 return 2
             challenge = _rand_id("challenge")
             resp = client.get(
@@ -92,13 +117,18 @@ def main() -> int:
             )
             print(f"VERIFY_STATUS={resp.status_code}")
             print(f"VERIFY_BODY={resp.text[:400]}")
+            result["verify_status"] = int(resp.status_code)
             if resp.status_code != 200 or str(resp.text or "").strip() != challenge:
                 print("ERROR=verify_failed")
+                result["error"] = "verify_failed"
+                _emit_result(result=result, as_json=bool(args.as_json), write_json=str(args.write_json or ""))
                 return 1
 
         if run_ingest:
             if not app_secret:
                 print("ERROR=missing_app_secret")
+                result["error"] = "missing_app_secret"
+                _emit_result(result=result, as_json=bool(args.as_json), write_json=str(args.write_json or ""))
                 return 2
             payload = _build_payload(user_id=user_id, media_id=media_id, field=args.field, text=args.text)
             raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -110,12 +140,29 @@ def main() -> int:
             )
             print(f"INGEST_STATUS={resp.status_code}")
             print(f"INGEST_BODY={resp.text[:800]}")
+            result["ingest_status"] = int(resp.status_code)
             if resp.status_code >= 400:
                 print("ERROR=ingest_failed")
+                result["error"] = "ingest_failed"
+                _emit_result(result=result, as_json=bool(args.as_json), write_json=str(args.write_json or ""))
                 return 1
 
+    result["ok"] = True
     print("THREADS_WEBHOOK_SMOKE_OK=1")
+    _emit_result(result=result, as_json=bool(args.as_json), write_json=str(args.write_json or ""))
     return 0
+
+
+def _emit_result(*, result: dict[str, Any], as_json: bool, write_json: str) -> None:
+    if as_json:
+        print(json.dumps(result, sort_keys=True))
+    out_path = str(write_json or "").strip()
+    if out_path:
+        from pathlib import Path
+
+        target = Path(out_path).expanduser()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
 
 
 if __name__ == "__main__":

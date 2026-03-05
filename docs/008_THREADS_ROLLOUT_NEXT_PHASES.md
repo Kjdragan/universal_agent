@@ -157,6 +157,10 @@ Current status:
 3. Webhook ingest state telemetry persisted at `source_state` key `threads_webhook:state`.
 4. Public app route now forwards Meta webhook calls to CSI ingester:
    - `https://app.clearspringcg.com/webhooks/threads` -> `http://127.0.0.1:8091/webhooks/threads`
+5. Webhook canary automation added:
+   - `csi-threads-webhook-canary-verify.service`
+   - `csi-threads-webhook-canary-verify.timer` (every 2 hours)
+   - uses stable media id for dedupe-safe repeated signed ingest verification.
 
 ### Scope
 
@@ -179,7 +183,9 @@ cd /opt/universal_agent/CSI_Ingester/development
 scripts/csi_run.sh uv run python3 scripts/csi_threads_webhook_smoke.py \
   --base-url "https://app.clearspringcg.com" \
   --verify \
-  --ingest
+  --ingest \
+  --fixed-media-id \
+  --write-json /opt/universal_agent/artifacts/csi/threads_webhook_canary_verify/latest.json
 ```
 
 ## Operational Notes

@@ -441,6 +441,19 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_webhook_smoke.py \
   --verify \
   --ingest
 ```
+- Stage-3 webhook canary helper (stable media id for dedupe-safe repeated checks):
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_webhook_smoke.py \
+  --base-url "https://app.clearspringcg.com" \
+  --verify \
+  --ingest \
+  --fixed-media-id \
+  --write-json /opt/universal_agent/artifacts/csi/threads_webhook_canary_verify/latest.json
+```
+- Systemd units:
+  - `deployment/systemd/csi-threads-webhook-canary-verify.service`
+  - `deployment/systemd/csi-threads-webhook-canary-verify.timer`
 - Publishing interface is implemented as a disabled contract:
   - `create_container`
   - `publish_container`
