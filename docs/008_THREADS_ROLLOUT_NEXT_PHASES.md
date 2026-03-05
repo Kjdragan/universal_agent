@@ -28,6 +28,8 @@ Goal: prove stability and visibility before write-side activation.
    - Threads trend report presence
    - latest global brief Threads contribution
    - seeded adapter cycle diagnostics (`last_cycle` from `source_state`)
+   - webhook freshness gate (when webhook is enabled):
+     - `--require-webhook-activity` enforces recent webhook ingest in lookback.
    - seeded warning noise suppression for constrained polls:
      - rate-limited or timeout-aborted seeded cycles now emit
        `seeded_poll_constrained_recently` instead of a false-positive

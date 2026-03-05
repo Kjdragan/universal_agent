@@ -406,7 +406,8 @@ Run post-rollout verification (live probe + DB evidence + report presence):
 scripts/csi_run.sh uv run python3 scripts/csi_threads_rollout_verify.py \
   --config-path config/config.yaml \
   --db-path /var/lib/universal-agent/csi/csi.db \
-  --lookback-hours 24
+  --lookback-hours 24 \
+  --require-webhook-activity
 ```
 
 ### 4) Delivery health thresholds

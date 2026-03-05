@@ -256,6 +256,24 @@ def _seeded_no_event_signal(
     return ("no_seeded_events_in_lookback", False)
 
 
+def _webhook_activity_signal(
+    *,
+    webhook_enabled: bool,
+    webhook_last_ingested: datetime | None,
+    lookback_hours: int,
+    require_webhook_activity: bool,
+) -> tuple[str, bool]:
+    if not webhook_enabled:
+        return ("", False)
+    threshold = _utc_now() - timedelta(hours=max(1, int(lookback_hours)))
+    recent = bool(webhook_last_ingested is not None and webhook_last_ingested >= threshold)
+    if recent:
+        return ("", False)
+    if require_webhook_activity:
+        return ("webhook_enabled_but_no_ingest_in_lookback", True)
+    return ("webhook_enabled_but_no_ingest_in_lookback", False)
+
+
 def _analysis_stats(conn: sqlite3.Connection, *, lookback_hours: int) -> dict[str, Any]:
     lookback_expr = f"-{max(1, int(lookback_hours))} hours"
     row = conn.execute(
@@ -450,17 +468,16 @@ def main() -> int:
         webhook_enabled = _truthy_env("CSI_THREADS_WEBHOOK_ENABLED", False)
         webhook_state = adapter_state.get("threads_webhook") if isinstance(adapter_state.get("threads_webhook"), dict) else {}
         webhook_last_ingested = _parse_iso(webhook_state.get("last_ingested_at")) if webhook_state else None
-        webhook_recent = bool(
-            webhook_last_ingested is not None
-            and webhook_last_ingested >= (_utc_now() - timedelta(hours=max(1, int(args.lookback_hours))))
+        webhook_signal, webhook_is_failure = _webhook_activity_signal(
+            webhook_enabled=webhook_enabled,
+            webhook_last_ingested=webhook_last_ingested,
+            lookback_hours=int(args.lookback_hours),
+            require_webhook_activity=bool(args.require_webhook_activity),
         )
-        if webhook_enabled:
-            if webhook_recent:
-                pass
-            elif bool(args.require_webhook_activity):
-                failures.append("webhook_enabled_but_no_ingest_in_lookback")
-            else:
-                warnings.append("webhook_enabled_but_no_ingest_in_lookback")
+        if webhook_is_failure:
+            failures.append(webhook_signal)
+        elif webhook_signal:
+            warnings.append(webhook_signal)
 
     payload = {
         "verified_at_utc": _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ"),

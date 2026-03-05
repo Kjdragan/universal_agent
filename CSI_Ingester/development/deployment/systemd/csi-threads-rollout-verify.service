@@ -8,7 +8,6 @@ Type=oneshot
 User=ua
 WorkingDirectory=/opt/universal_agent/CSI_Ingester/development
 EnvironmentFile=-/opt/universal_agent/CSI_Ingester/development/deployment/systemd/csi-ingester.env
-ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_threads_rollout_verify.py --db-path /var/lib/universal-agent/csi/csi.db --config-path /opt/universal_agent/CSI_Ingester/development/config/config.yaml --lookback-hours 24 --probe-limit 4 --probe-max-terms 4 --write-json /opt/universal_agent/artifacts/csi/threads_rollout_verify/latest.json
+ExecStart=/opt/universal_agent/CSI_Ingester/development/scripts/csi_run.sh /opt/universal_agent/CSI_Ingester/development/.venv/bin/python /opt/universal_agent/CSI_Ingester/development/scripts/csi_threads_rollout_verify.py --db-path /var/lib/universal-agent/csi/csi.db --config-path /opt/universal_agent/CSI_Ingester/development/config/config.yaml --lookback-hours 24 --probe-limit 4 --probe-max-terms 4 --require-webhook-activity --write-json /opt/universal_agent/artifacts/csi/threads_rollout_verify/latest.json
 StandardOutput=journal
 StandardError=journal
-

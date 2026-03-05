@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from datetime import timedelta
 from pathlib import Path
 
 
@@ -91,4 +92,40 @@ def test_seeded_no_event_signal_can_fail_when_strict_required_and_idle():
         require_seeded_events=True,
     )
     assert signal == "no_seeded_events_in_lookback"
+    assert is_failure is True
+
+
+def test_webhook_activity_signal_ignored_when_disabled():
+    mod = _load_module()
+    signal, is_failure = mod._webhook_activity_signal(
+        webhook_enabled=False,
+        webhook_last_ingested=None,
+        lookback_hours=24,
+        require_webhook_activity=True,
+    )
+    assert signal == ""
+    assert is_failure is False
+
+
+def test_webhook_activity_signal_passes_when_recent():
+    mod = _load_module()
+    signal, is_failure = mod._webhook_activity_signal(
+        webhook_enabled=True,
+        webhook_last_ingested=mod._utc_now() - timedelta(hours=1),
+        lookback_hours=24,
+        require_webhook_activity=True,
+    )
+    assert signal == ""
+    assert is_failure is False
+
+
+def test_webhook_activity_signal_fails_when_required_and_stale():
+    mod = _load_module()
+    signal, is_failure = mod._webhook_activity_signal(
+        webhook_enabled=True,
+        webhook_last_ingested=mod._utc_now() - timedelta(hours=72),
+        lookback_hours=24,
+        require_webhook_activity=True,
+    )
+    assert signal == "webhook_enabled_but_no_ingest_in_lookback"
     assert is_failure is True
