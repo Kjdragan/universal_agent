@@ -491,6 +491,22 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_publish_smoke.py \
   --allow-unverified-scopes
 ```
 
+Phase-2 canary audit verification helper (reads JSONL audit trail):
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_publish_canary_verify.py \
+  --audit-path /var/lib/universal-agent/csi/threads_publishing_audit.jsonl \
+  --lookback-hours 48 \
+  --min-records 1 \
+  --max-error-rate 0.60 \
+  --write-json /opt/universal_agent/artifacts/csi/threads_publish_canary_verify/latest.json
+```
+
+Systemd units for ongoing canary health checks:
+
+- `deployment/systemd/csi-threads-publish-canary-verify.service`
+- `deployment/systemd/csi-threads-publish-canary-verify.timer`
+
 ## UA ↔ CSI Analyst Task Protocol
 
 CSI ingester API now exposes task endpoints for delegating analysis work into CSI:

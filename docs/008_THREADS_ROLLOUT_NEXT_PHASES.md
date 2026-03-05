@@ -28,6 +28,10 @@ Goal: prove stability and visibility before write-side activation.
    - Threads trend report presence
    - latest global brief Threads contribution
    - seeded adapter cycle diagnostics (`last_cycle` from `source_state`)
+   - seeded warning noise suppression for constrained polls:
+     - rate-limited or timeout-aborted seeded cycles now emit
+       `seeded_poll_constrained_recently` instead of a false-positive
+       “live but no new events” warning.
 3. Daily verification timer:
    - `csi-threads-rollout-verify.timer` at `03:35 UTC` (after token refresh window).
 4. Seeded-resilience controls:
@@ -109,6 +113,10 @@ Current implementation status:
 2. Expand audit trail detail:
    - actor, reason, payload hash, resulting media/reply IDs
    - optional approval record linkage in audit JSONL entries
+3. Add canary audit verifier:
+   - `scripts/csi_threads_publish_canary_verify.py`
+   - validates recent JSONL audit activity and error-rate thresholds
+   - optional strict gate to require at least one successful live write in lookback
 
 ### Activation prerequisites
 
@@ -123,6 +131,16 @@ Current implementation status:
 2. `dry_run=1` for 24-48h with audit JSONL review.
 3. Controlled `dry_run=0` with low caps.
 4. Keep `CSI_THREADS_PUBLISH_APPROVAL_MODE=manual_confirm` until stable.
+5. Run canary verifier in lookback windows to track stability:
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_publish_canary_verify.py \
+  --audit-path /var/lib/universal-agent/csi/threads_publishing_audit.jsonl \
+  --lookback-hours 48 \
+  --min-records 1 \
+  --max-error-rate 0.60 \
+  --write-json /opt/universal_agent/artifacts/csi/threads_publish_canary_verify/latest.json
+```
 
 Observed blocker signature for missing write permission:
 

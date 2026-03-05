@@ -201,6 +201,45 @@ def _adapter_state_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     return out
 
 
+def _seeded_probe_result_count(seeded_probe: dict[str, Any]) -> int:
+    total = 0
+    terms = seeded_probe.get("terms") if isinstance(seeded_probe.get("terms"), list) else []
+    for term_row in terms:
+        if not isinstance(term_row, dict):
+            continue
+        total += max(0, int(term_row.get("results") or 0))
+    return int(total)
+
+
+def _seeded_no_event_signal(
+    *,
+    seeded_rows: int,
+    seeded_probe_ok: int,
+    seeded_probe_results: int,
+    seeded_polled_recently: bool,
+    seeded_cycle_hits: int,
+    seeded_cycle_new_hits: int,
+    seeded_cycle_rate_limited: bool,
+    seeded_cycle_timeout_aborted: bool,
+    require_seeded_events: bool,
+) -> tuple[str, bool]:
+    # If seeded polling was constrained by rate limits/timeouts, keep this as
+    # a non-blocking signal and avoid implying the source is broken.
+    if seeded_cycle_rate_limited or seeded_cycle_timeout_aborted:
+        return ("seeded_poll_constrained_recently", False)
+    if seeded_probe_ok > 0 and seeded_probe_results > 0:
+        return ("seeded_live_but_no_new_events", False)
+    if seeded_polled_recently and seeded_cycle_hits > 0 and seeded_cycle_new_hits <= 0:
+        return ("seeded_polled_but_no_new_media_hits", False)
+    if seeded_rows > 0:
+        return ("no_seeded_events_in_lookback_but_seeded_analysis_present", False)
+    if seeded_polled_recently:
+        return ("seeded_polled_but_no_hits", False)
+    if require_seeded_events:
+        return ("no_seeded_events_in_lookback", True)
+    return ("no_seeded_events_in_lookback", False)
+
+
 def _analysis_stats(conn: sqlite3.Connection, *, lookback_hours: int) -> dict[str, Any]:
     lookback_expr = f"-{max(1, int(lookback_hours))} hours"
     row = conn.execute(
@@ -350,25 +389,31 @@ def main() -> int:
         seeded_cycle = seeded_state.get("last_cycle") if isinstance(seeded_state.get("last_cycle"), dict) else {}
         seeded_cycle_hits = int(seeded_cycle.get("total_hits") or 0)
         seeded_cycle_new_hits = int(seeded_cycle.get("new_media_hits") or 0)
+        seeded_cycle_rate_limited = bool(seeded_cycle.get("rate_limited_cycle"))
+        seeded_cycle_timeout_aborted = bool(seeded_cycle.get("timeout_aborted_cycle"))
         seeded_polled_recently = bool(seeded_last_poll is not None and seeded_last_poll >= (_utc_now() - timedelta(hours=max(1, int(args.lookback_hours)))))
         probe_source_results = probe_payload.get("source_results") if isinstance(probe_payload.get("source_results"), dict) else {}
         seeded_probe = probe_source_results.get("seeded") if isinstance(probe_source_results.get("seeded"), dict) else {}
         seeded_probe_ok = int(seeded_probe.get("ok") or 0)
+        seeded_probe_results = _seeded_probe_result_count(seeded_probe)
         if owned_events <= 0:
             failures.append("no_owned_events_in_lookback")
         if seeded_events <= 0:
-            if seeded_probe_ok > 0:
-                warnings.append("seeded_live_but_no_new_events")
-            elif seeded_polled_recently and seeded_cycle_hits > 0 and seeded_cycle_new_hits <= 0:
-                warnings.append("seeded_polled_but_no_new_media_hits")
-            elif seeded_rows > 0:
-                warnings.append("no_seeded_events_in_lookback_but_seeded_analysis_present")
-            elif seeded_polled_recently:
-                warnings.append("seeded_polled_but_no_hits")
-            elif bool(args.require_seeded_events):
-                failures.append("no_seeded_events_in_lookback")
+            seeded_signal, seeded_is_failure = _seeded_no_event_signal(
+                seeded_rows=seeded_rows,
+                seeded_probe_ok=seeded_probe_ok,
+                seeded_probe_results=seeded_probe_results,
+                seeded_polled_recently=seeded_polled_recently,
+                seeded_cycle_hits=seeded_cycle_hits,
+                seeded_cycle_new_hits=seeded_cycle_new_hits,
+                seeded_cycle_rate_limited=seeded_cycle_rate_limited,
+                seeded_cycle_timeout_aborted=seeded_cycle_timeout_aborted,
+                require_seeded_events=bool(args.require_seeded_events),
+            )
+            if seeded_is_failure:
+                failures.append(seeded_signal)
             else:
-                warnings.append("no_seeded_events_in_lookback")
+                warnings.append(seeded_signal)
         if broad_events <= 0:
             if broad_rows > 0:
                 warnings.append("no_broad_events_in_lookback_but_broad_analysis_present")

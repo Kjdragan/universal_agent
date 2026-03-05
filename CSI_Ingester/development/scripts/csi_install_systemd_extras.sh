@@ -51,6 +51,8 @@ install_unit "csi-threads-token-refresh-sync.service"
 install_unit "csi-threads-token-refresh-sync.timer"
 install_unit "csi-threads-rollout-verify.service"
 install_unit "csi-threads-rollout-verify.timer"
+install_unit "csi-threads-publish-canary-verify.service"
+install_unit "csi-threads-publish-canary-verify.timer"
 install_unit "csi-reddit-semantic-enrich.service"
 install_unit "csi-reddit-semantic-enrich.timer"
 install_unit "csi-threads-semantic-enrich.service"
@@ -86,6 +88,7 @@ systemctl enable --now csi-delivery-health-auto-remediate.timer
 systemctl enable --now csi-delivery-slo-gatekeeper.timer
 systemctl enable --now csi-threads-token-refresh-sync.timer
 systemctl enable --now csi-threads-rollout-verify.timer
+systemctl enable --now csi-threads-publish-canary-verify.timer
 systemctl enable --now csi-reddit-semantic-enrich.timer
 systemctl enable --now csi-threads-semantic-enrich.timer
 systemctl enable --now csi-threads-trend-report.timer
@@ -115,6 +118,7 @@ systemctl is-active csi-delivery-health-auto-remediate.timer
 systemctl is-active csi-delivery-slo-gatekeeper.timer
 systemctl is-active csi-threads-token-refresh-sync.timer
 systemctl is-active csi-threads-rollout-verify.timer
+systemctl is-active csi-threads-publish-canary-verify.timer
 systemctl is-active csi-reddit-semantic-enrich.timer
 systemctl is-active csi-threads-semantic-enrich.timer
 systemctl is-active csi-threads-trend-report.timer

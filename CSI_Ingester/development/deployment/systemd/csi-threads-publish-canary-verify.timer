@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Threads publish canary verification every 30 minutes
+
+[Timer]
+OnCalendar=*:0/30
+Persistent=true
+Unit=csi-threads-publish-canary-verify.service
+
+[Install]
+WantedBy=timers.target

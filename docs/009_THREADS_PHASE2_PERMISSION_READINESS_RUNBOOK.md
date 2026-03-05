@@ -141,6 +141,28 @@ Audit trail:
 - `/var/lib/universal-agent/csi/threads_publishing_audit.jsonl`
 - Includes `approval_ref`, `actor`, `reason`, `payload_hash`, `response_id`.
 
+### 6) Verify canary health from audit trail (24-48h window)
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_publish_canary_verify.py \
+  --audit-path /var/lib/universal-agent/csi/threads_publishing_audit.jsonl \
+  --lookback-hours 48 \
+  --min-records 1 \
+  --max-error-rate 0.60 \
+  --write-json /opt/universal_agent/artifacts/csi/threads_publish_canary_verify/latest.json
+```
+
+Optional strict gate for go/no-go:
+
+```bash
+scripts/csi_run.sh uv run python3 scripts/csi_threads_publish_canary_verify.py \
+  --audit-path /var/lib/universal-agent/csi/threads_publishing_audit.jsonl \
+  --lookback-hours 48 \
+  --min-records 1 \
+  --max-error-rate 0.35 \
+  --require-live-ok
+```
+
 ## Troubleshooting map
 
 1. `missing_write_permission`:
