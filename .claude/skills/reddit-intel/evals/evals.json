@@ -1,0 +1,43 @@
+{
+    "skill_name": "reddit-intel",
+    "evals": [
+        {
+            "id": 1,
+            "prompt": "What's trending this week on r/MachineLearning? Get the top 10 posts.",
+            "expected_output": "mcp__internal__reddit_top_posts called with subreddit='MachineLearning', t='week', limit=10. The result posts[] array is summarized to the user with title, score, and comment count.",
+            "files": [],
+            "expectations": [
+                "mcp__internal__reddit_top_posts is called (not a Bash curl to Reddit API directly)",
+                "The subreddit parameter is 'MachineLearning' without r/ prefix",
+                "The t parameter is 'week'",
+                "The result posts[] array is presented to the user with at least title and score",
+                "The tool is NOT called with save_to_workspace=false (default true should be used)"
+            ]
+        },
+        {
+            "id": 2,
+            "prompt": "Get the top 5 posts from r/LocalLLaMA from the past day and save them for later.",
+            "expected_output": "Tool called with subreddit='LocalLLaMA', t='day', limit=5, save_to_workspace=true. Session workspace path is reported.",
+            "files": [],
+            "expectations": [
+                "mcp__internal__reddit_top_posts is called with subreddit='LocalLLaMA'",
+                "t parameter is 'day'",
+                "limit is 5",
+                "save_to_workspace is true (or omitted, using default)",
+                "The result includes rank, title, score, and num_comments for each post"
+            ]
+        },
+        {
+            "id": 3,
+            "prompt": "Check r/programming for top posts this month. I don't need to save anything to disk.",
+            "expected_output": "Tool called with subreddit='programming', t='month', save_to_workspace=false. Results presented directly without file I/O.",
+            "files": [],
+            "expectations": [
+                "mcp__internal__reddit_top_posts is called with subreddit='programming'",
+                "t parameter is 'month'",
+                "save_to_workspace is set to false",
+                "Results are summarized to the user from the posts[] array"
+            ]
+        }
+    ]
+}

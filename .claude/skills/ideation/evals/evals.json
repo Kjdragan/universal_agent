@@ -1,0 +1,52 @@
+{
+    "skill_name": "ideation",
+    "evals": [
+        {
+            "id": 1,
+            "prompt": "I want to explore an idea around ambient computing in physical spaces — like, what if the environment itself could sense and respond to mood without any wearables. Help me think through this.",
+            "expected_output": "The skill triggers. The Arbiter checks for Agent Teams support, captures the inline concept seed in session/sources/request.md, creates the timestamped output directory, creates the team using TeamCreate, spawns Free Thinker + Grounder + Writer (no Explorer needed — self-contained seed), creates the 3 initial tasks, and enters delegate mode. Session begins with Free Thinker broadcasting opening reactions.",
+            "files": [],
+            "expectations": [
+                "The CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS env var is checked before any other step",
+                "A timestamped session directory is created: ideation-<slug>-<YYYYMMDD-HHMMSS>/",
+                "The concept seed is saved to session/sources/request.md",
+                "session/sources/manifest.md is created listing captured sources",
+                "TeamCreate is called with a descriptive team name",
+                "Task tool is called with team_name parameter for Free Thinker, Grounder, and Writer",
+                "TaskCreate is called for the 3 initial tasks",
+                "The Arbiter does NOT generate ideas itself",
+                "Shift+Tab delegate mode is entered after setup"
+            ]
+        },
+        {
+            "id": 2,
+            "prompt": "Let's continue the ambient computing session I was just working on.",
+            "expected_output": "Continue mode is detected. The Arbiter searches for a directory matching 'ideation-*ambient*' or similar. Existing session artifacts are read (manifest.md, VISION file if exists, briefs). Source capture is skipped. Team is spawned with continuation context in each teammate's prompt.",
+            "files": [],
+            "expectations": [
+                "Continue mode is detected from the 'continue' keyword in the argument",
+                "A search for ideation-*ambient* (or similar keyword) is performed",
+                "The resolved session directory's existing artifacts are read",
+                "Source capture step is skipped",
+                "Directory creation step (Step 2) is skipped",
+                "Each teammate's spawn prompt includes context like 'This is a continuation of a previous session. Build on the prior vision and briefs'",
+                "Research needs are still assessed (user may have new questions)"
+            ]
+        },
+        {
+            "id": 3,
+            "prompt": "Ideate on this article I found: https://example.com/ambient-computing-future",
+            "expected_output": "The URL is fetched via WebFetch and saved as session/sources/url_example-com_ambient-computing-future.md. The Arbiter assesses whether pre-session or parallel research is needed — with only a URL and no other context, pre-session research mode is chosen. The Explorer is spawned first, completes a research report, then the dialogue teammates are spawned with the report as additional context.",
+            "files": [],
+            "expectations": [
+                "The URL is fetched via WebFetch",
+                "The fetched content is saved to session/sources/ with a descriptive filename",
+                "The manifest is created listing the fetched URL",
+                "Research needs assessment determines Explorer should be spawned (URL-only input with no supplemental context suggests pre-session research)",
+                "Explorer is spawned before the dialogue agents (or a parallel spawn equivalent is used)",
+                "The Explorer's task is created with an appropriate research question",
+                "The Explorer broadcasts its research report before or alongside the ideation dialogue"
+            ]
+        }
+    ]
+}
