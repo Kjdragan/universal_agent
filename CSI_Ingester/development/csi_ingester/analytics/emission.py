@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from typing import Any
 
 from csi_ingester.config import CSIConfig
 from csi_ingester.contract import CreatorSignalEvent
-from csi_ingester.emitter.ua_client import UAEmitter
+from csi_ingester.emitter.ua_client import UAEmitter, classify_emission_failure, is_transient_failure
 from csi_ingester.store import delivery_attempts as delivery_attempt_store
 from csi_ingester.store import dlq as dlq_store
 from csi_ingester.store import events as event_store
+
+logger = logging.getLogger(__name__)
 
 
 def emit_and_track(
@@ -40,6 +43,7 @@ def emit_and_track(
             retry_count=retry_count,
         )
         return False, 503, payload
+    maint = config.ua_maintenance_mode
     emitter = UAEmitter(
         endpoint=config.ua_endpoint,
         shared_secret=config.ua_shared_secret,
@@ -47,12 +51,18 @@ def emit_and_track(
     )
     try:
         delivered, status_code, payload = asyncio.run(
-            emitter.emit_with_retries([event], max_attempts=retry_count)
+            emitter.emit_with_retries([event], max_attempts=retry_count, maintenance_mode=maint)
         )
     except Exception as exc:
         delivered = False
         status_code = 599
-        payload = {"error": f"emit_exception:{type(exc).__name__}", "detail": str(exc)[:400]}
+        fc = classify_emission_failure(exc=exc)
+        payload = {
+            "error": f"emit_exception:{type(exc).__name__}",
+            "detail": str(exc)[:400],
+            "failure_class": fc,
+        }
+    fc = str(payload.get("failure_class") or "") if isinstance(payload, dict) else ""
     delivery_attempt_store.record_attempt(
         conn,
         event_id=event.event_id,
@@ -64,11 +74,16 @@ def emit_and_track(
     if delivered:
         event_store.mark_delivered(conn, event.event_id)
         return True, status_code, payload
+    error_reason = fc if fc else f"ua_status_{status_code}"
     dlq_store.enqueue(
         conn,
         event_id=event.event_id,
         event=event.model_dump(),
-        error_reason=f"ua_status_{status_code}",
+        error_reason=error_reason,
         retry_count=retry_count,
     )
+    if is_transient_failure(fc):
+        logger.info("Emit deferred (transient: %s) event_id=%s", fc, event.event_id)
+    else:
+        logger.warning("Emit failed event_id=%s status=%s", event.event_id, status_code)
     return False, status_code, payload

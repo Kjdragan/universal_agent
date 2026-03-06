@@ -3897,6 +3897,8 @@ _seen_transcript_paths: set[str] = set()
 def _mark_run_waiting_for_human(
     reason: str, *, tool_name: str = "", tool_call_id: str = ""
 ) -> None:
+    run_id = None
+    runtime_db_conn = None
     _ctx = _get_ctx()
     if _ctx is not None:
         run_id = _ctx.run_id
@@ -3913,6 +3915,8 @@ def _mark_run_waiting_for_human(
 
 
 def _maybe_mark_run_succeeded() -> None:
+    run_id = None
+    runtime_db_conn = None
     _ctx = _get_ctx()
     if _ctx is not None:
         run_id = _ctx.run_id
@@ -4343,6 +4347,9 @@ def _should_inject_provider_idempotency(
 def _maybe_update_provider_session(
     session_id: Optional[str], forked_from: Optional[str] = None
 ) -> None:
+    run_id = None
+    runtime_db_conn = None
+    trace = None
     _ctx = _get_ctx()
     if _ctx is not None:
         run_id = _ctx.run_id
@@ -4379,6 +4386,9 @@ def _disable_provider_resume() -> None:
 
 
 def _invalidate_provider_session(error_msg: str) -> None:
+    run_id = None
+    runtime_db_conn = None
+    trace = None
     _ctx = _get_ctx()
     if _ctx is not None:
         run_id = _ctx.run_id
@@ -4458,6 +4468,8 @@ def _tool_input_slug_matches(
 
 
 def _get_current_step_phase() -> Optional[str]:
+    current_step_id = None
+    runtime_db_conn = None
     _ctx = _get_ctx()
     if _ctx is not None:
         current_step_id = _ctx.current_step_id
@@ -4621,6 +4633,7 @@ def _ensure_phase_checkpoint(
     tool_name: Optional[str] = None,
     note: Optional[str] = None,
 ) -> None:
+    runtime_db_conn = None
     _ctx = _get_ctx()
     if _ctx is not None:
         run_id = _ctx.run_id
@@ -4670,6 +4683,8 @@ def _ensure_phase_checkpoint(
 
 
 def _is_job_run() -> bool:
+    run_id = None
+    runtime_db_conn = None
     _ctx = _get_ctx()
     if _ctx is not None:
         run_id = _ctx.run_id
@@ -4689,6 +4704,8 @@ def _is_harness_mode() -> bool:
     Returns True if max_iterations is set in the run config.
     This is distinct from crash recovery (forced_tool_mode_active).
     """
+    run_id = None
+    runtime_db_conn = None
     _ctx = _get_ctx()
     if _ctx is not None:
         forced_tool_mode_active = _ctx.forced_tool_mode_active
@@ -5717,6 +5734,7 @@ async def continue_job_run(
     max_error_retries: int = 3,
     execution_session: Optional[ExecutionSession] = None,
 ) -> Optional[str]:
+    runtime_db_conn = None
     _ctx = _get_ctx()
     if _ctx is not None:
         run_id = _ctx.run_id

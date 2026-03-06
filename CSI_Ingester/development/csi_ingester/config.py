@@ -56,6 +56,13 @@ class CSIConfig:
         return (os.getenv("CSI_UA_SHARED_SECRET") or "").strip()
 
     @property
+    def ua_maintenance_mode(self) -> bool:
+        if os.getenv("CSI_UA_MAINTENANCE_MODE", "").strip().lower() in ("1", "true", "yes"):
+            return True
+        flag_path = Path(os.getenv("CSI_UA_MAINTENANCE_FLAG", "/tmp/ua_maintenance_mode"))
+        return flag_path.exists()
+
+    @property
     def threads_app_id(self) -> str:
         return (os.getenv("THREADS_APP_ID") or "").strip()
 

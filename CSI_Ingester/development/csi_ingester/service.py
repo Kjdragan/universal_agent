@@ -15,7 +15,7 @@ from csi_ingester.adapters.threads_trends_seeded import ThreadsSeededTrendsAdapt
 from csi_ingester.adapters.youtube_channel_rss import YouTubeChannelRSSAdapter
 from csi_ingester.adapters.youtube_playlist import YouTubePlaylistAdapter
 from csi_ingester.config import CSIConfig
-from csi_ingester.emitter.ua_client import UAEmitter
+from csi_ingester.emitter.ua_client import UAEmitter, is_transient_failure
 from csi_ingester.metrics import MetricsRegistry
 from csi_ingester.scheduler import PollingScheduler
 from csi_ingester.store import dedupe as dedupe_store
@@ -238,7 +238,11 @@ class CSIService:
                 self.metrics.inc("csi.events.dlq")
                 dlq_count += 1
                 continue
-            delivered, status_code, payload = await self.emitter.emit_with_retries([event])
+            maint = self.config.ua_maintenance_mode
+            delivered, status_code, payload = await self.emitter.emit_with_retries(
+                [event], maintenance_mode=maint,
+            )
+            fc = str(payload.get("failure_class") or "") if isinstance(payload, dict) else ""
             delivery_attempt_store.record_attempt(
                 self.conn,
                 event_id=event.event_id,
@@ -252,22 +256,29 @@ class CSIService:
                 self.metrics.inc("csi.events.delivered")
                 delivered_count += 1
             else:
+                error_reason = fc if fc else f"ua_status_{status_code}"
                 dlq_store.enqueue(
                     self.conn,
                     event_id=event.event_id,
                     event=event.model_dump(),
-                    error_reason=f"ua_status_{status_code}",
+                    error_reason=error_reason,
                     retry_count=3,
                 )
                 self.metrics.inc("csi.events.dlq")
                 dlq_count += 1
-                logger.warning(
-                    "CSI emit failed adapter=%s event_id=%s status=%s payload=%s",
-                    adapter_name,
-                    event.event_id,
-                    status_code,
-                    payload,
-                )
+                if is_transient_failure(fc):
+                    logger.info(
+                        "CSI emit deferred (transient: %s) adapter=%s event_id=%s",
+                        fc, adapter_name, event.event_id,
+                    )
+                else:
+                    logger.warning(
+                        "CSI emit failed adapter=%s event_id=%s status=%s payload=%s",
+                        adapter_name,
+                        event.event_id,
+                        status_code,
+                        payload,
+                    )
         self._record_adapter_health(
             adapter_name=adapter_name,
             ok=True,

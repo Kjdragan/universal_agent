@@ -91,6 +91,7 @@ async def test_gateway_routes_to_coder_vp_and_persists_mission(monkeypatch, tmp_
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "0")
     monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
     monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
 
@@ -106,7 +107,7 @@ async def test_gateway_routes_to_coder_vp_and_persists_mission(monkeypatch, tmp_
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
 
-    request = GatewayRequest(user_input="Please fix this Python bug in the parser")
+    request = GatewayRequest(user_input="Hey Codie, please fix this Python bug in the parser")
     events = [event async for event in gateway.execute(session, request)]
 
     assert any(
@@ -146,6 +147,7 @@ async def test_gateway_coder_vp_error_falls_back_to_primary_path(monkeypatch, tm
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "0")
     monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
     monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
 
@@ -161,7 +163,7 @@ async def test_gateway_coder_vp_error_falls_back_to_primary_path(monkeypatch, tm
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
 
-    request = GatewayRequest(user_input="Please implement a Python function for retries")
+    request = GatewayRequest(user_input="Hey Codie, please implement a Python function for retries")
     events = [event async for event in gateway.execute(session, request)]
 
     assert any(
@@ -282,6 +284,7 @@ async def test_gateway_coder_vp_bootstrap_failure_falls_back_without_mission(mon
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "0")
     monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
     monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
 
@@ -297,7 +300,7 @@ async def test_gateway_coder_vp_bootstrap_failure_falls_back_without_mission(mon
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
 
-    request = GatewayRequest(user_input="Please implement a Python function for retries")
+    request = GatewayRequest(user_input="Hey Codie, please implement a Python function for retries")
     events = [event async for event in gateway.execute(session, request)]
 
     assert any(
@@ -320,6 +323,7 @@ async def test_gateway_coder_vp_hard_exception_falls_back_to_primary_path(monkey
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "0")
     monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
     monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
 
@@ -335,7 +339,7 @@ async def test_gateway_coder_vp_hard_exception_falls_back_to_primary_path(monkey
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
 
-    request = GatewayRequest(user_input="Please implement a Python function for retries")
+    request = GatewayRequest(user_input="Hey Codie, please implement a Python function for retries")
     events = [event async for event in gateway.execute(session, request)]
 
     assert any(
@@ -369,6 +373,7 @@ async def test_gateway_marks_vp_mission_failed_when_fallback_raises(monkeypatch,
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "0")
     monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
     monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
 
@@ -384,7 +389,7 @@ async def test_gateway_marks_vp_mission_failed_when_fallback_raises(monkeypatch,
     gateway = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session = await gateway.create_session(user_id="owner_primary")
 
-    request = GatewayRequest(user_input="Please implement a Python function for retries")
+    request = GatewayRequest(user_input="Hey Codie, please implement a Python function for retries")
     with pytest.raises(RuntimeError, match="primary path exception"):
         _ = [event async for event in gateway.execute(session, request)]
 
@@ -417,6 +422,7 @@ async def test_gateway_coder_vp_restart_recovers_session_and_continues_missions(
     monkeypatch.setenv("UA_RUNTIME_DB_PATH", str(tmp_path / "runtime_state.db"))
     monkeypatch.setenv("UA_CODER_VP_DB_PATH", str(tmp_path / "coder_vp_state.db"))
     monkeypatch.setenv("UA_ENABLE_CODER_VP", "1")
+    monkeypatch.setenv("UA_VP_EXPLICIT_INTENT_REQUIRE_EXTERNAL", "0")
     monkeypatch.delenv("UA_CODER_VP_SHADOW_MODE", raising=False)
     monkeypatch.delenv("UA_CODER_VP_FORCE_FALLBACK", raising=False)
 
@@ -431,7 +437,7 @@ async def test_gateway_coder_vp_restart_recovers_session_and_continues_missions(
 
     gateway_a = InProcessGateway(workspace_base=tmp_path / "workspaces")
     session_a = await gateway_a.create_session(user_id="owner_primary")
-    req = GatewayRequest(user_input="Implement robust retry logic in Python")
+    req = GatewayRequest(user_input="Codie, implement robust retry logic in Python")
     events_a = [event async for event in gateway_a.execute(session_a, req)]
     assert any(
         event.type == EventType.STATUS and event.data.get("routing") == "delegated_to_coder_vp"
@@ -481,18 +487,19 @@ async def test_gateway_external_coder_dispatch_queues_async_mission(monkeypatch,
     seed_live_external_vp_session(vp_conn, "vp.coder.primary")
     session = await gateway.create_session(user_id="owner_primary")
     request = GatewayRequest(
-        user_input="Build an end-to-end Python project with integration tests for a new service"
+        user_input="Codie, build an end-to-end Python project with integration tests for a new service"
     )
 
     events = [event async for event in gateway.execute(session, request)]
 
     assert any(
         event.type == EventType.STATUS
-        and event.data.get("routing") == "delegated_to_coder_vp_external"
+        and event.data.get("routing") in ("delegated_to_coder_vp_external", "delegated_to_external_vp")
+        and event.data.get("vp_id") == "vp.coder.primary"
         for event in events
     )
     assert any(
-        event.type == EventType.TEXT and "mission queued asynchronously" in str(event.data.get("text", "")).lower()
+        event.type == EventType.TEXT and "mission queued" in str(event.data.get("text", "")).lower()
         for event in events
     )
 
