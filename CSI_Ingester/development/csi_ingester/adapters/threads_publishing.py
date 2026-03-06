@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -245,6 +246,35 @@ class ThreadsPublishingInterface:
             # Audit trail is best-effort; do not block governed publishing flow on local FS perms.
             return
 
+    async def _wait_for_container_ready(self, creation_id: str) -> dict[str, Any]:
+        """Poll container status until ready so publish does not race create propagation."""
+        client_status = getattr(self.client, "container_status", None)
+        if not callable(client_status):
+            return {}
+
+        max_polls = max(1, int(str(os.getenv("CSI_THREADS_REPLY_CONTAINER_MAX_POLLS") or "6").strip() or "6"))
+        poll_interval_seconds = max(
+            1.0,
+            float(str(os.getenv("CSI_THREADS_REPLY_CONTAINER_POLL_INTERVAL_SECONDS") or "2").strip() or "2"),
+        )
+        last_status: dict[str, Any] = {}
+        for _ in range(max_polls):
+            try:
+                last_status = await client_status(container_id=creation_id)
+            except Exception:
+                await asyncio.sleep(poll_interval_seconds)
+                continue
+            status_value = str(last_status.get("status") or "").strip().upper()
+            if status_value == "FINISHED":
+                return last_status
+            if status_value in {"ERROR", "EXPIRED", "FAILED"}:
+                error_message = str(last_status.get("error_message") or "").strip()
+                raise ThreadsPublishingGovernanceError(
+                    f"threads_publish_reply_container_not_ready:{status_value}:{error_message}"
+                )
+            await asyncio.sleep(poll_interval_seconds)
+        return last_status
+
     async def create_container(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._ensure_enabled()
         body = payload if isinstance(payload, dict) else {}
@@ -377,6 +407,7 @@ class ThreadsPublishingInterface:
             creation_id = str(container.get("id") or container.get("creation_id") or "").strip()
             if not creation_id:
                 raise ThreadsPublishingGovernanceError("threads_publish_create_missing_creation_id")
+            await self._wait_for_container_ready(creation_id)
             publish_resp = await self.client.publish_media_container(creation_id=creation_id)
         except ThreadsAPIError as exc:
             self._append_audit(
