@@ -5,11 +5,11 @@ description: "Simone's native email inbox via AgentMail. Use when Simone needs t
 
 # AgentMail — Simone's Native Email
 
-Simone has her own email inbox on a custom domain via AgentMail. This is her primary outbound communication channel for delivering work products, reports, and correspondence.
+Simone has her own email inbox via AgentMail: **Simone D** `<oddcity216@agentmail.to>`. This is her primary identity for all independent work — research, reports, digests, and communications with Kevin.
 
 ## Key Concepts
 
-- **Simone's inbox** is auto-provisioned at gateway startup. The address is set via `UA_AGENTMAIL_INBOX_ADDRESS` env var (custom domain).
+- **Simone's inbox**: `oddcity216@agentmail.to` (display name: Simone D)
 - **Draft-first policy**: By default (`UA_AGENTMAIL_AUTO_SEND=0`), outbound emails are created as drafts for Kevin's approval. Set `force_send=True` or `UA_AGENTMAIL_AUTO_SEND=1` to send directly.
 - **Gmail is separate**: Gmail (via gws MCP tools) is for reading/managing Kevin's personal email. AgentMail is for Simone's own outbound communications.
 - **Inbound emails** are received via WebSocket listener (when `UA_AGENTMAIL_WS_ENABLED=1`) and dispatched to the `email-handler` agent.
@@ -135,12 +135,12 @@ The gateway exposes AgentMail management endpoints:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `UA_AGENTMAIL_ENABLED` | `0` | Master toggle |
+| `UA_AGENTMAIL_ENABLED` | `1` | Master toggle |
 | `AGENTMAIL_API_KEY` | — | API key (Infisical) |
-| `UA_AGENTMAIL_INBOX_ADDRESS` | — | Pre-configured inbox address (custom domain) |
+| `UA_AGENTMAIL_INBOX_ADDRESS` | `oddcity216@agentmail.to` | Simone's inbox address |
 | `UA_AGENTMAIL_INBOX_USERNAME` | `simone` | Username if creating new inbox |
 | `UA_AGENTMAIL_AUTO_SEND` | `0` | `1` = send directly, `0` = create drafts |
-| `UA_AGENTMAIL_WS_ENABLED` | `0` | WebSocket listener for inbound email |
+| `UA_AGENTMAIL_WS_ENABLED` | `1` | WebSocket listener for inbound email |
 
 ## Real-Time Events (Reference)
 

@@ -239,3 +239,116 @@ def test_run_extract_uses_webshare_proxy_when_env_present(monkeypatch) -> None:
         "filter_ip_locations": ["us", "de"],
     }
     assert "proxy_config" in captured["init_kwargs"]
+
+
+def test_require_proxy_blocks_when_no_credentials(monkeypatch) -> None:
+    """require_proxy=True with no proxy creds → immediate hard failure."""
+    monkeypatch.delenv("PROXY_USERNAME", raising=False)
+    monkeypatch.delenv("PROXY_PASSWORD", raising=False)
+    monkeypatch.delenv("WEBSHARE_PROXY_USER", raising=False)
+    monkeypatch.delenv("WEBSHARE_PROXY_PASS", raising=False)
+
+    out = youtube_ingest.ingest_youtube_transcript(
+        video_url="https://www.youtube.com/watch?v=dxlyCPGCvy8",
+        video_id=None,
+        require_proxy=True,
+    )
+
+    assert out["ok"] is False
+    assert out["error"] == "proxy_not_configured"
+    assert out["failure_class"] == "proxy_not_configured"
+    assert out["proxy_mode"] == "disabled"
+    assert "PROXY NOT CONFIGURED" in out["detail"]
+    assert "PROXY_USERNAME" in out["detail"]
+    assert out["attempts"] == []
+
+
+def test_require_proxy_blocks_when_module_unavailable(monkeypatch) -> None:
+    """require_proxy=True with creds but missing proxies module → hard failure."""
+    monkeypatch.setenv("PROXY_USERNAME", "user")
+    monkeypatch.setenv("PROXY_PASSWORD", "pass")
+    monkeypatch.delitem(sys.modules, "youtube_transcript_api.proxies", raising=False)
+
+    # Force module import to fail
+    original_build = youtube_ingest._build_webshare_proxy_config
+
+    def _mock_build():
+        return None, "module_unavailable"
+
+    monkeypatch.setattr(youtube_ingest, "_build_webshare_proxy_config", _mock_build)
+
+    out = youtube_ingest.ingest_youtube_transcript(
+        video_url="https://www.youtube.com/watch?v=dxlyCPGCvy8",
+        video_id=None,
+        require_proxy=True,
+    )
+
+    assert out["ok"] is False
+    assert out["error"] == "proxy_not_configured"
+    assert out["failure_class"] == "proxy_not_configured"
+    assert out["proxy_mode"] == "module_unavailable"
+    assert "WebshareProxyConfig" in out["detail"]
+
+
+def test_require_proxy_false_allows_no_proxy(monkeypatch) -> None:
+    """require_proxy=False (default) proceeds even without proxy creds."""
+    monkeypatch.delenv("PROXY_USERNAME", raising=False)
+    monkeypatch.delenv("PROXY_PASSWORD", raising=False)
+    monkeypatch.delenv("WEBSHARE_PROXY_USER", raising=False)
+    monkeypatch.delenv("WEBSHARE_PROXY_PASS", raising=False)
+
+    monkeypatch.setattr(
+        youtube_ingest,
+        "_run_youtube_transcript_api_extract",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "source": "youtube_transcript_api",
+            "transcript_text": "line 1\nline 2\nline 3\nline 4\nline 5\nline 6",
+        },
+    )
+
+    out = youtube_ingest.ingest_youtube_transcript(
+        video_url="https://www.youtube.com/watch?v=dxlyCPGCvy8",
+        video_id=None,
+        require_proxy=False,
+        max_chars=1000,
+        min_chars=20,
+    )
+
+    assert out["ok"] is True
+    assert out["proxy_mode"] == "disabled"
+
+
+def test_require_proxy_true_proceeds_with_valid_proxy(monkeypatch) -> None:
+    """require_proxy=True with valid proxy creds → proceeds normally."""
+    class FakeProxyConfig:
+        def __init__(self, **kwargs):
+            self.url = "http://proxy.example"
+
+    monkeypatch.setenv("PROXY_USERNAME", "proxy-user")
+    monkeypatch.setenv("PROXY_PASSWORD", "proxy-pass")
+    monkeypatch.setitem(
+        sys.modules,
+        "youtube_transcript_api.proxies",
+        types.SimpleNamespace(WebshareProxyConfig=FakeProxyConfig),
+    )
+    monkeypatch.setattr(
+        youtube_ingest,
+        "_run_youtube_transcript_api_extract",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "source": "youtube_transcript_api",
+            "transcript_text": "line 1\nline 2\nline 3\nline 4\nline 5\nline 6",
+        },
+    )
+
+    out = youtube_ingest.ingest_youtube_transcript(
+        video_url="https://www.youtube.com/watch?v=dxlyCPGCvy8",
+        video_id=None,
+        require_proxy=True,
+        max_chars=1000,
+        min_chars=20,
+    )
+
+    assert out["ok"] is True
+    assert out["proxy_mode"] == "webshare"

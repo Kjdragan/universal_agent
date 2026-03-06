@@ -40,7 +40,7 @@ YOUTUBE_AGENT_LEGACY_ALIAS = "youtube-explainer-expert"
 YOUTUBE_AGENT_ROUTE_ALIASES = {YOUTUBE_AGENT_CANONICAL, YOUTUBE_AGENT_LEGACY_ALIAS}
 YOUTUBE_TUTORIAL_ARTIFACT_DIR_CANONICAL = "youtube-tutorial-creation"
 DEFAULT_TUTORIAL_BOOTSTRAP_REPO_ROOT = "/home/kjdragan/lrepos"
-YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_failed"}
+YOUTUBE_PROXY_ALERT_FAILURE_CLASSES = {"proxy_quota_or_billing", "proxy_auth_failed", "proxy_not_configured"}
 
 
 class HookReportedTimeout(RuntimeError):
@@ -798,6 +798,14 @@ class HooksService:
                 f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
                 f"(error={err}, failure_class={cls}). "
                 "PROXY ALERT: Webshare credentials appear invalid; verify PROXY_USERNAME/PROXY_PASSWORD secrets."
+            )
+        if cls == "proxy_not_configured":
+            return (
+                f"YouTube ingest BLOCKED — residential proxy is NOT CONFIGURED "
+                f"(error={err}, failure_class={cls}). "
+                "PROXY ALERT: PROXY_USERNAME and PROXY_PASSWORD env vars are missing. "
+                "Without a residential proxy, YouTube WILL ban this server's datacenter IP. "
+                "Add Webshare credentials to Infisical and redeploy."
             )
         return (
             f"local ingest failed after {int(attempts)}/{int(max_attempts)} attempts "
@@ -1984,13 +1992,21 @@ class HooksService:
                         },
                     )
                     if failure_class in YOUTUBE_PROXY_ALERT_FAILURE_CLASSES:
+                        if failure_class == "proxy_not_configured":
+                            _proxy_alert_msg = (
+                                "CRITICAL: YouTube ingest BLOCKED — residential proxy is NOT CONFIGURED. "
+                                "PROXY_USERNAME/PROXY_PASSWORD env vars are missing. "
+                                "All YouTube transcript requests will fail until proxy credentials are added."
+                            )
+                        else:
+                            _proxy_alert_msg = (
+                                "YouTube ingest failed due to proxy billing/quota or proxy credentials. "
+                                "Check Webshare account status and proxy secrets."
+                            )
                         self._emit_notification(
                             kind="youtube_ingest_proxy_alert",
                             title="YouTube Proxy Alert",
-                            message=(
-                                "YouTube ingest failed due to proxy billing/quota or proxy credentials. "
-                                "Check Webshare account status and proxy secrets."
-                            ),
+                            message=_proxy_alert_msg,
                             session_id=session_id,
                             severity="error",
                             requires_action=True,

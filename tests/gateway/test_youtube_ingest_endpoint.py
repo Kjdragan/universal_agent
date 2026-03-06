@@ -72,6 +72,7 @@ def test_youtube_ingest_endpoint_forwards_request_fields_and_returns_metadata(cl
         "timeout_seconds": 77,
         "max_chars": 123456,
         "min_chars": 321,
+        "require_proxy": True,
     }
     assert body["request_id"] == "req-123"
     assert body["worker_profile"] == "local_workstation"

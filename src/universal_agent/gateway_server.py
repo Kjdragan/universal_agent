@@ -9244,17 +9244,18 @@ async def signals_ingest_endpoint(request: Request):
 @app.post("/api/v1/youtube/ingest")
 async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestRequest):
     """
-    Local worker endpoint for transcript ingestion.
+    YouTube transcript ingestion endpoint.
 
-    Intended usage:
-    - VPS control-plane forwards ingestion requests over Tailscale/reverse tunnel.
-    - Local worker performs YouTube transcript extraction from a residential IP.
+    Uses Webshare residential proxy by default to avoid datacenter IP bans.
+    Set UA_YOUTUBE_INGEST_REQUIRE_PROXY=0 only for local workstation development.
     """
     _require_youtube_ingest_auth(request)
 
     video_url, video_id = normalize_video_target(payload.video_url, payload.video_id)
     if not video_url:
         raise HTTPException(status_code=400, detail="video_url or valid video_id is required")
+
+    _require_proxy = os.getenv("UA_YOUTUBE_INGEST_REQUIRE_PROXY", "1").strip().lower() not in {"0", "false", "no", "off"}
 
     result = await asyncio.to_thread(
         ingest_youtube_transcript,
@@ -9264,6 +9265,7 @@ async def youtube_ingest_endpoint(request: Request, payload: YouTubeIngestReques
         timeout_seconds=max(5, min(int(payload.timeout_seconds or 120), 600)),
         max_chars=max(5_000, min(int(payload.max_chars or 180_000), 800_000)),
         min_chars=max(20, min(int(payload.min_chars or 160), 5000)),
+        require_proxy=_require_proxy,
     )
     result["request_id"] = (payload.request_id or "").strip() or None
     result["worker_profile"] = _DEPLOYMENT_PROFILE

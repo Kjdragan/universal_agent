@@ -1,32 +1,55 @@
 # Email & Identity Resolution
 
-## Two Email Systems
+## Two Concepts — Two Identities
 
-Simone has access to **two** email systems with distinct roles:
+Simone has access to **two** email systems that represent **two different identities**:
 
-### 1. AgentMail — Simone's Own Inbox (PRIMARY for outbound)
-- **Purpose**: Simone's native email for sending work products, reports, and correspondence
-- **Sends FROM**: Simone's custom domain address (set via `UA_AGENTMAIL_INBOX_ADDRESS`)
-- **Use when**: Simone needs to deliver work to Kevin or anyone else
+### 1. AgentMail — Simone's Own Identity (DEFAULT)
+- **Purpose**: Simone's own email for ALL her independent work
+- **Sends FROM**: `Simone D <oddcity216@agentmail.to>`
+- **Use when**:
+  - Communicating with Kevin (digests, reports, status updates)
+  - Doing research, outreach, or any work on Simone's own behalf
+  - Sending emails where the recipient should know they're talking to the agent, not Kevin
+- **Why**: When Simone does research, sends reports, or communicates — it should leave **Simone's trail**, not Kevin's. Kevin should not appear to be the one doing the research.
+- **Replies**: Come back to Simone's inbox → automatically dispatched to email-handler agent
 - **Draft policy**: Creates drafts by default for Kevin's approval
 - **Skill**: Read `.claude/skills/agentmail/SKILL.md` for full API reference
 
-### 2. Gmail via gws MCP — Kevin's Personal Email
-- **Purpose**: Reading and managing Kevin's personal Gmail
+### 2. Gmail via gws MCP — Kevin's Identity (ON BEHALF OF KEVIN ONLY)
+- **Purpose**: Acting as Kevin when Simone needs to spoof/act on Kevin's behalf
 - **Sends FROM**: Kevin's Gmail (`kevinjdragan@gmail.com`)
-- **Use when**: Kevin asks to send something "from my email" or needs to read his Gmail
+- **Use ONLY when**:
+  - Kevin explicitly asks to send something "from my email"
+  - Kevin needs Simone to read or manage his Gmail inbox
+  - A process specifically requires Kevin's personal email identity
 - **Tools**: `mcp__gws__gmail.*` (gws MCP server)
-- **Identity aliases**: "me", "my email", "my gmail" → resolved automatically
+- **Identity aliases**: "me", "my email", "my gmail" → resolved to Kevin's accounts
 
 ## Routing Decision
 
-| Request | System | Reason |
+| Scenario | System | Why |
 |---|---|---|
-| "Send me the report" | **AgentMail** → `kevinjdragan@gmail.com` | Simone delivers from her own address |
-| "Email this to client@example.com" | **AgentMail** | Simone's outbound communication |
-| "Check my email" | **Gmail** (gws MCP) | Reading Kevin's inbox |
-| "Reply to that email from my Gmail" | **Gmail** (gws MCP) | Kevin wants to reply as himself |
-| "Forward that to my outlook" | **Gmail** (gws MCP) | Kevin's personal email management |
+| Simone sends Kevin a digest/report | **AgentMail** | Simone's own work, replies come back to her |
+| Simone does research and emails findings | **AgentMail** | Simone's trail, not Kevin's |
+| Simone contacts an external party | **AgentMail** | Simone's identity |
+| Kevin says "send from my email" | **Gmail** | Spoofing as Kevin, on his explicit request |
+| Kevin says "check my email" | **Gmail** | Reading Kevin's inbox |
+| Kevin says "reply to that email" | **Gmail** | Kevin acting as himself |
+| Kevin says "forward that from my Gmail" | **Gmail** | Kevin's personal email management |
+
+## Digest & Report Emails — ALWAYS AgentMail
+
+When sending periodic digests or reports to Kevin:
+- **ALWAYS use AgentMail** — NEVER Gmail
+- This ensures Kevin's replies come back to Simone's inbox for processing
+- Include both `text` and `html` for best deliverability
+- Use descriptive labels for filtering:
+  - `["digest", "youtube-rss"]` for YouTube RSS digests
+  - `["digest", "csi-report"]` for CSI reports
+  - `["report", "research"]` for research deliverables
+
+**Why this matters:** If Simone sends a digest via Gmail, it looks like Kevin emailed himself, and replies loop back to Kevin's inbox — Simone never sees them. When sent via AgentMail, Kevin can tell it's from the agent, and replies go to Simone for automatic processing.
 
 ## AgentMail — Sending Work to Kevin
 
@@ -51,6 +74,16 @@ async def send_to_kevin(subject, text, html=None):
 ```
 
 Or use the ops API: `POST /api/v1/ops/agentmail/send`
+
+## Inbound Emails — Automatic Processing
+
+When someone emails Simone's AgentMail address:
+1. The WebSocket listener receives the message in real-time
+2. It is automatically dispatched to the **email-handler** agent
+3. The email-handler classifies intent and takes action:
+   - **Kevin's replies to digests** → parse instructions, delegate to specialists
+   - **External inquiries** → draft a professional reply for Kevin's approval
+   - **Spam/automated** → label and ignore
 
 ## Gmail — "Me" Alias Resolution
 
