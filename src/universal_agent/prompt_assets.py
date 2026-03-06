@@ -441,7 +441,7 @@ def build_live_capabilities_snapshot(project_root: Optional[str] = None) -> str:
         "- **Report generation**: Use `mcp__internal__run_report_generation(task_name='<task>')` to delegate to the Report Writer sub-agent which handles outline → draft → cleanup → compile → PDF automatically.",
         "- **HTML → PDF conversion**: Use `mcp__internal__html_to_pdf(html_path='<path>', output_path='<path>.pdf')`. Do NOT use Bash with chrome/wkhtmltopdf/weasyprint — the MCP tool handles fallback automatically.",
         "- **Multiple reports**: Call `run_report_generation` once per topic, or write HTML via Write tool then convert each with `html_to_pdf`.",
-        "- **Email with attachments**: Upload PDF via `mcp__internal__upload_to_composio`, then send via `mcp__composio__COMPOSIO_MULTI_EXECUTE_TOOL` with `GMAIL_SEND_EMAIL`.",
+        "- **Email with attachments**: Use gws Gmail send tool with local file path as attachment (no upload step needed). For non-Gmail delivery, use `mcp__internal__upload_to_composio` first.",
         "",
         "### 🧭 External VP Control Plane (Live)",
         "- For user requests that explicitly mention General/Coder VP delegation, route directly through internal `vp_*` tools.",

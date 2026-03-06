@@ -467,7 +467,9 @@ class AgentSetup:
 
     def _build_mcp_servers(self) -> dict:
         """Build MCP servers configuration."""
-        return {
+        from universal_agent.services.gws_mcp_bridge import build_gws_mcp_server_config
+
+        servers = {
             "composio": {
                 "type": "http",
                 "url": self._session.mcp.url,
@@ -528,6 +530,13 @@ class AgentSetup:
                 },
             },
         }
+
+        # Google Workspace CLI MCP server (feature-gated)
+        gws_config = build_gws_mcp_server_config()
+        if gws_config is not None:
+            servers["gws"] = gws_config
+
+        return servers
 
     def _generate_capabilities_doc(self) -> None:
         """
@@ -700,7 +709,21 @@ class AgentSetup:
                 lines.append("- No skills discovered.")
             lines.append("")
 
-            # 3. TOOLKITS (By Domain)
+            # 3a. GWS MCP TOOLS (when enabled)
+            from universal_agent.feature_flags import gws_cli_enabled
+            if gws_cli_enabled():
+                lines.append("### 📧 Google Workspace (gws MCP — Primary Path)")
+                lines.append("Google Workspace operations use `mcp__gws__*` tools via the gws CLI MCP server.")
+                lines.append("- **Gmail**: Send, draft, triage, list, read (`mcp__gws__gmail.*`)")
+                lines.append("- **Calendar**: Events, agenda, scheduling (`mcp__gws__calendar.*`)")
+                lines.append("- **Drive**: Upload, download, manage files (`mcp__gws__drive.*`)")
+                lines.append("- **Sheets**: Read/write spreadsheet data (`mcp__gws__sheets.*`)")
+                lines.append("- **Docs**: Create/edit documents (`mcp__gws__docs.*`)")
+                lines.append("")
+                lines.append("**Important**: For Gmail attachments, pass local file paths directly — no `upload_to_composio` step needed.")
+                lines.append("")
+
+            # 3b. TOOLKITS (By Domain)
             lines.append("### 🛠 Toolkits & Capabilities")
             
             # Combine Core + Connected for sorting

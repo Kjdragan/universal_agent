@@ -11,7 +11,7 @@ Simone has her own email inbox on a custom domain via AgentMail. This is her pri
 
 - **Simone's inbox** is auto-provisioned at gateway startup. The address is set via `UA_AGENTMAIL_INBOX_ADDRESS` env var (custom domain).
 - **Draft-first policy**: By default (`UA_AGENTMAIL_AUTO_SEND=0`), outbound emails are created as drafts for Kevin's approval. Set `force_send=True` or `UA_AGENTMAIL_AUTO_SEND=1` to send directly.
-- **Gmail is separate**: Gmail (via Composio) is for reading/managing Kevin's personal email. AgentMail is for Simone's own outbound communications.
+- **Gmail is separate**: Gmail (via gws MCP tools) is for reading/managing Kevin's personal email. AgentMail is for Simone's own outbound communications.
 - **Inbound emails** are received via WebSocket listener (when `UA_AGENTMAIL_WS_ENABLED=1`) and dispatched to the `email-handler` agent.
 
 ## When to Use AgentMail vs Gmail
@@ -20,8 +20,8 @@ Simone has her own email inbox on a custom domain via AgentMail. This is her pri
 |---|---|
 | Simone sends a report to Kevin | **AgentMail** — `send_email(to="kevinjdragan@gmail.com", ...)` |
 | Simone sends work to an external contact | **AgentMail** — sends from Simone's custom domain |
-| Read Kevin's personal Gmail inbox | **Gmail** (Composio `GMAIL_GET_EMAILS`) |
-| Reply as Kevin from his Gmail | **Gmail** (Composio `GMAIL_SEND_EMAIL`) |
+| Read Kevin's personal Gmail inbox | **Gmail** (gws MCP `mcp__gws__gmail.*`) |
+| Reply as Kevin from his Gmail | **Gmail** (gws MCP `mcp__gws__gmail.+send`) |
 | Someone emails Simone directly | **AgentMail** inbound → email-handler agent |
 
 ## Sending Email (Python — via UA Service)

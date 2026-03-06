@@ -197,6 +197,15 @@ def memory_flush_max_chars(default: int = 4000) -> int:
     return _read_int("UA_MEMORY_FLUSH_MAX_CHARS", default, minimum=0)
 
 
+def gws_cli_enabled(default: bool = False) -> bool:
+    """Enable Google Workspace CLI (gws) as primary Google Workspace execution path."""
+    if _is_truthy(os.getenv("UA_DISABLE_GWS_CLI")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_GWS_CLI")):
+        return True
+    return default
+
+
 def coder_vp_enabled(default: bool = False) -> bool:
     """Enable CODER VP routing lane (Phase A)."""
     if _is_truthy(os.getenv("UA_DISABLE_CODER_VP")):

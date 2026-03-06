@@ -2597,6 +2597,23 @@ async def on_post_email_send_artifact(
                     "response": response,
                 }
             )
+    elif "gmail" in tool_name.lower() and ("send" in tool_name.lower() or "draft" in tool_name.lower()):
+        # gws MCP Gmail send/draft tool (e.g. gmail.users.messages.send, gmail.+send)
+        payload = _load_json_payload(tool_response)
+        response = None
+        if isinstance(payload, dict):
+            response = payload.get("data") or payload
+        if isinstance(tool_input, dict):
+            records.append(
+                {
+                    "tool": tool_name,
+                    "recipient_email": tool_input.get("to") or tool_input.get("recipient_email"),
+                    "subject": tool_input.get("subject"),
+                    "body_preview": (tool_input.get("body") or tool_input.get("message") or "")[:2000],
+                    "attachment": tool_input.get("attachment") or tool_input.get("attachments"),
+                    "response": response,
+                }
+            )
 
     _write_artifact(records)
     return {}
@@ -2747,8 +2764,8 @@ async def on_pre_bash_block_composio_sdk(
             "systemMessage": (
                 "🚫 BLOCKED: You cannot call Composio SDK directly via Python/Bash.\n\n"
                 "**USE MCP TOOLS INSTEAD:**\n"
-                "- For email: Use `GMAIL_SEND_EMAIL` tool directly.\n"
-                "- For file upload: `mcp__internal__upload_to_composio`\n"
+                "- For Gmail/Calendar/Drive/Sheets: Use `mcp__gws__*` tools (gws MCP server)\n"
+                "- For file upload (non-Gmail): `mcp__internal__upload_to_composio`\n"
                 "- For web/news search: Use `COMPOSIO_SEARCH_WEB` / `COMPOSIO_SEARCH_NEWS`.\n"
                 "- Use `COMPOSIO_SEARCH_TOOLS` only when the service/tool is unknown.\n"
                 "  For X/Twitter evidence, use `mcp__internal__x_trends_posts` (or `grok-x-trends` fallback).\n\n"
@@ -3006,7 +3023,7 @@ SUBAGENT_EXPECTED_SKILLS = {
     "video-remotion-expert": ["video-remotion"],
     "system-configuration-agent": [],
     "data-analyst": [],  # Uses Composio CodeInterpreter + local Python
-    "action-coordinator": ["gmail"],  # Uses Composio delivery tools
+    "action-coordinator": ["gmail"],  # Uses gws MCP + Composio delivery tools
     "banana-squad-expert": ["banana-squad", "image-generation"],
     "youtube-expert": ["youtube-transcript-metadata", "youtube-tutorial-creation"],
     "youtube-explainer-expert": ["youtube-transcript-metadata", "youtube-tutorial-creation"],  # legacy alias
@@ -3171,9 +3188,9 @@ async def on_post_task_guidance(
     elif subagent_type == "report-writer":
         next_step_hint = (
             "Report generation complete. Consider delivery:\n"
-            "- Email the report? → Use `upload_to_composio` then `GMAIL_SEND_EMAIL`\n"
+            "- Email the report? → Use gws Gmail send with local file attachment\n"
             "- Post summary to Slack? → Use `SLACK_SENDS_A_MESSAGE_TO_A_SLACK_CHANNEL`\n"
-            "- Schedule follow-up? → Use `GOOGLECALENDAR_CREATE_EVENT`\n"
+            "- Schedule follow-up? → Use gws Calendar tools\n"
             "- Or delegate all delivery to `action-coordinator`."
         )
     elif subagent_type == "data-analyst":
@@ -3193,7 +3210,7 @@ async def on_post_task_guidance(
         next_step_hint = (
             "Browser execution complete. Next steps:\n"
             "- Need structured findings? → Delegate to `data-analyst` for evidence synthesis\n"
-            "- Need stakeholder delivery? → Use `action-coordinator` or Composio Gmail/Slack tools\n"
+            "- Need stakeholder delivery? → Use `action-coordinator` or gws Gmail / Composio Slack tools\n"
             "- Need follow-up validation? → Launch additional Bowser lane tasks in parallel as needed\n"
             "- Do NOT default to report-writer unless a report was explicitly requested."
         )
@@ -3436,7 +3453,7 @@ async def on_subagent_stop(
                     "NEXT STEPS (REQUIRED):\n"
                     "1. Update TodoWrite to mark 'Delegate report creation' as completed\n"
                     f"2. Upload report using workbench_upload('{work_products}/{report_file}', '/home/user/{report_file}')\n"
-                    "3. Send email using GMAIL_SEND_EMAIL with the remote file path\n"
+                    "3. Send email using gws Gmail send tool with the report as attachment\n"
                     "4. Mark all tasks complete in TodoWrite"
                 )
             }
