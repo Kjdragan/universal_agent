@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-06
 **Author:** Cascade (AI Pair Programmer)
-**Status:** Draft — Awaiting Owner Approval
+**Status:** ✅ COMPLETE — All phases implemented (2026-03-05/06)
 **Audience:** AI coder implementing the integration
 **Companion doc:** [80_Google_Workspace_Integration_Retrospective_Memo_2026-03-06.md](./80_Google_Workspace_Integration_Retrospective_Memo_2026-03-06.md)
 
@@ -26,6 +26,23 @@
 14. [Testing Strategy](#14-testing-strategy)
 15. [Risk Register](#15-risk-register)
 16. [Acceptance Criteria](#16-acceptance-criteria)
+
+---
+
+## Implementation Status
+
+| Phase | Status | Commit | Notes |
+|-------|--------|--------|-------|
+| Phase 0 | ✅ Complete | e5ac5c7 | gws installed, OAuth auth (kevinjdragan@gmail.com, 7 scopes, AES-256-GCM) |
+| Phase 1 | ✅ Complete | e5ac5c7 | gws_mcp_bridge.py, registered in agent_setup.py, 18 unit tests |
+| Phase 2 | ✅ Complete | e5ac5c7 | gws_cli_enabled() flag, UA_ENABLE_GWS_CLI=1 in Infisical |
+| Phase 3 | ✅ Complete | e5ac5c7 | Full Composio Google cleanup, ~20 files, 6 categories A-F |
+| Phase 4 | ✅ Complete | e5ac5c7 | 195 MCP tools live, smoke tests passing |
+| Phase 5 | ✅ Complete | 4da5bed | GwsEventListener (Gmail polling, default OFF, parameterized) |
+| Phase 6 | ✅ Complete | e5ac5c7 | Error classification, Logfire spans |
+| Cleanup | ✅ Complete | e5ac5c7 | Prototype scaffold already absent; old flags removed |
+
+**Total tests:** 59 (32 unit bridge + 20 unit event listener + 7 integration smoke)
 
 ---
 
