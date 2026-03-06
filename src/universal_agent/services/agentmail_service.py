@@ -29,6 +29,28 @@ from typing import Any, Callable, Coroutine, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_reply_text(text_body: str) -> str:
+    """Extract only the new reply content, stripping quoted thread history.
+
+    Uses email-reply-parser to identify and remove quoted blocks so the
+    email-handler agent only sees the actionable new content.
+    Returns the original text if extraction fails or yields nothing.
+    """
+    if not text_body or not text_body.strip():
+        return text_body
+    try:
+        from email_reply_parser import EmailReplyParser
+
+        reply = EmailReplyParser.parse_reply(text_body)
+        # If extraction returned nothing useful, fall back to full body
+        if reply and reply.strip():
+            return reply.strip()
+        return text_body
+    except Exception:
+        logger.debug("Email reply extraction failed, using full body", exc_info=True)
+        return text_body
+
 # Type aliases matching the patterns in youtube_playlist_watcher.py
 DispatchFn = Callable[[dict[str, Any]], Coroutine[Any, Any, tuple[bool, str]]]
 NotifyFn = Callable[[dict[str, Any]], None]
@@ -478,10 +500,15 @@ class AgentMailService:
             thread_id = getattr(msg, "thread_id", "")
             message_id = getattr(msg, "message_id", "")
             text_body = getattr(msg, "text", "") or ""
+            html_body = getattr(msg, "html", "") or ""
+
+            # Extract clean reply content (strips quoted thread history)
+            reply_text = _extract_reply_text(text_body)
+            reply_is_extracted = reply_text != text_body
 
             logger.info(
-                "📧 Inbound email from=%s subject=%r thread=%s",
-                sender, subject, thread_id,
+                "📧 Inbound email from=%s subject=%r thread=%s reply_extracted=%s",
+                sender, subject, thread_id, reply_is_extracted,
             )
 
             # Emit notification
@@ -514,8 +541,15 @@ class AgentMailService:
                         f"thread_id: {thread_id}\n"
                         f"message_id: {message_id}\n"
                         f"inbox: {self._inbox_address}\n"
-                        f"\n--- Email Body ---\n"
-                        f"{text_body[:4000]}"
+                        f"reply_extracted: {reply_is_extracted}\n"
+                        f"\n--- Reply (new content) ---\n"
+                        f"{reply_text[:4000]}\n"
+                        + (
+                            f"\n--- Full Email Body (for reference) ---\n"
+                            f"{text_body[:4000]}"
+                            if reply_is_extracted
+                            else ""
+                        )
                     ),
                 }
                 try:

@@ -76,6 +76,7 @@ dependencies = [
     "infisical-python==2.3.5",
     "redis>=7.2.1",
     "agentmail>=0.2.22",
+    "email-reply-parser>=0.5.12",
 ]
 
 [tool.ruff]

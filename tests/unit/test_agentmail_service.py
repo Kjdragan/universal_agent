@@ -240,6 +240,132 @@ class TestNotifications:
         assert call_args["kind"] == "agentmail_draft_created"
 
 
+class TestReplyExtraction:
+    """Tests for _extract_reply_text — strips quoted thread history from replies."""
+
+    def test_extracts_gmail_reply(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        body = (
+            "Thanks, I'll look into the proxy issue on channel X.\n"
+            "\n"
+            "On Thu, Mar 6, 2026 at 10:30 AM, Simone D <oddcity216@agentmail.to> wrote:\n"
+            "> YouTube RSS Digest for March 6, 2026\n"
+            "> \n"
+            "> Channel: TechCrunch - 3 new videos\n"
+        )
+        result = _extract_reply_text(body)
+        assert "proxy issue" in result
+        assert "YouTube RSS Digest" not in result
+        assert "oddcity216@agentmail.to" not in result
+
+    def test_extracts_outlook_reply(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        body = (
+            "Investigate the Fireship transcript failure please.\n"
+            "\n"
+            "________________________________________\n"
+            "From: Simone D [oddcity216@agentmail.to]\n"
+            "Sent: Thursday, March 6, 2026 10:30 AM\n"
+            "To: Kevin Dragan\n"
+            "Subject: YouTube RSS Digest\n"
+            "\n"
+            "Here is your daily digest...\n"
+        )
+        result = _extract_reply_text(body)
+        assert "Investigate" in result
+        assert "daily digest" not in result
+
+    def test_preserves_body_when_no_quotes(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        body = "Please check the proxy configuration."
+        result = _extract_reply_text(body)
+        assert result == body
+
+    def test_returns_full_body_on_empty_extraction(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        # If the entire email is quoted (e.g. forwarded), return full body
+        body = "> This is all quoted\n> No new content"
+        result = _extract_reply_text(body)
+        # Should not be empty — falls back to full body
+        assert len(result) > 0
+
+    def test_handles_empty_body(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        assert _extract_reply_text("") == ""
+        assert _extract_reply_text("   ") == "   "
+
+    def test_strips_quote_markers(self):
+        from universal_agent.services.agentmail_service import _extract_reply_text
+
+        body = (
+            "Got it, will do.\n"
+            "\n"
+            "> On Mar 6, 2026, Simone wrote:\n"
+            "> Here is your digest\n"
+            "> Channel updates...\n"
+        )
+        result = _extract_reply_text(body)
+        assert "Got it" in result
+        assert "Channel updates" not in result
+
+
+class TestInboundReplyExtraction:
+    """Integration test: _handle_inbound_email uses reply extraction."""
+
+    @pytest.mark.asyncio
+    async def test_inbound_dispatch_contains_extracted_reply(self, service):
+        # Build a fake inbound event with quoted thread
+        mock_event = MagicMock()
+        mock_event.message.from_ = "kevinjdragan@gmail.com"
+        mock_event.message.subject = "Re: YouTube RSS Digest"
+        mock_event.message.thread_id = "thd_123"
+        mock_event.message.message_id = "msg_456"
+        mock_event.message.text = (
+            "Check the Fireship failure.\n"
+            "\n"
+            "On Thu, Mar 6, 2026 at 10:30 AM, Simone D <oddcity216@agentmail.to> wrote:\n"
+            "> YouTube RSS Digest for March 6, 2026\n"
+            "> Failures: 2 transcripts failed\n"
+        )
+        mock_event.message.html = ""
+
+        await service._handle_inbound_email(mock_event)
+
+        # Verify dispatch was called
+        service._dispatch_fn.assert_awaited_once()
+        payload = service._dispatch_fn.call_args[0][0]
+
+        # The message should contain the clean reply prominently
+        assert "--- Reply (new content) ---" in payload["message"]
+        assert "Check the Fireship failure" in payload["message"]
+        # Full body should be included as reference since extraction happened
+        assert "--- Full Email Body (for reference) ---" in payload["message"]
+        assert "reply_extracted: True" in payload["message"]
+
+    @pytest.mark.asyncio
+    async def test_inbound_no_quotes_skips_full_body_section(self, service):
+        mock_event = MagicMock()
+        mock_event.message.from_ = "kevinjdragan@gmail.com"
+        mock_event.message.subject = "Quick question"
+        mock_event.message.thread_id = "thd_789"
+        mock_event.message.message_id = "msg_012"
+        mock_event.message.text = "What is the status of the proxy?"
+        mock_event.message.html = ""
+
+        await service._handle_inbound_email(mock_event)
+
+        payload = service._dispatch_fn.call_args[0][0]
+        # No quotes → no extraction → no "Full Email Body" section
+        assert "--- Full Email Body (for reference) ---" not in payload["message"]
+        assert "reply_extracted: False" in payload["message"]
+        assert "status of the proxy" in payload["message"]
+
+
 class TestAssertReady:
     @pytest.mark.asyncio
     async def test_raises_when_disabled(self):
