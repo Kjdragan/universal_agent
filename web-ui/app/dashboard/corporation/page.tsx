@@ -55,6 +55,22 @@ type RegistrationsResponse = {
   headquarters_factory_id?: string;
 };
 
+type DelegationHistoryEntry = {
+  mission_id?: string;
+  mission_type?: string;
+  status?: string;
+  vp_id?: string;
+  source?: string;
+  created_at?: string;
+  updated_at?: string;
+  objective?: string;
+};
+
+type DelegationHistoryResponse = {
+  missions?: DelegationHistoryEntry[];
+  total?: number;
+};
+
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -72,6 +88,39 @@ function statusPill(status: string): string {
   return "border-amber-600/40 bg-amber-900/20 text-amber-200";
 }
 
+function freshnessColor(ageSeconds: number | null): string {
+  if (ageSeconds === null) return "text-slate-500";
+  if (ageSeconds < 120) return "text-emerald-400";
+  if (ageSeconds < 300) return "text-emerald-300/70";
+  if (ageSeconds < 900) return "text-amber-400";
+  return "text-rose-400";
+}
+
+function latencyColor(ms: number | null | undefined): string {
+  if (ms == null) return "text-slate-500";
+  if (ms < 100) return "text-emerald-400";
+  if (ms < 300) return "text-emerald-300/70";
+  if (ms < 1000) return "text-amber-400";
+  return "text-rose-400";
+}
+
+function freshnessLabel(ageSeconds: number | null): string {
+  if (ageSeconds === null) return "--";
+  if (ageSeconds < 60) return "just now";
+  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m ago`;
+  if (ageSeconds < 86400) return `${Math.floor(ageSeconds / 3600)}h ago`;
+  return `${Math.floor(ageSeconds / 86400)}d ago`;
+}
+
+function missionStatusPill(status: string): string {
+  const s = asText(status).toLowerCase();
+  if (s === "completed") return "border-emerald-600/40 bg-emerald-900/20 text-emerald-200";
+  if (s === "failed" || s === "error") return "border-rose-600/40 bg-rose-900/20 text-rose-200";
+  if (s === "running" || s === "claimed") return "border-sky-600/40 bg-sky-900/20 text-sky-200";
+  if (s === "queued") return "border-slate-600/40 bg-slate-800/20 text-slate-300";
+  return "border-amber-600/40 bg-amber-900/20 text-amber-200";
+}
+
 export default function DashboardCorporationPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -82,15 +131,18 @@ export default function DashboardCorporationPage() {
   const [headquartersFactoryId, setHeadquartersFactoryId] = useState("");
   const [registrationsForbidden, setRegistrationsForbidden] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string>("");
+  const [delegationHistory, setDelegationHistory] = useState<DelegationHistoryEntry[]>([]);
+  const [expandedFactory, setExpandedFactory] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
     else setLoading(true);
     setError("");
     try {
-      const [capsRes, regsRes] = await Promise.all([
+      const [capsRes, regsRes, histRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/factory/capabilities`, { cache: "no-store" }),
         fetch(`${API_BASE}/api/v1/factory/registrations?limit=500`, { cache: "no-store" }),
+        fetch(`${API_BASE}/api/v1/ops/delegation/history?limit=20`, { cache: "no-store" }).catch(() => null),
       ]);
 
       let nextCaps: FactoryCapabilities | null = null;
@@ -116,6 +168,11 @@ export default function DashboardCorporationPage() {
       } else {
         const detail = await regsRes.text().catch(() => "");
         throw new Error(`Failed to load registrations (${regsRes.status}) ${detail}`.trim());
+      }
+
+      if (histRes && histRes.ok) {
+        const payload = (await histRes.json()) as DelegationHistoryResponse;
+        setDelegationHistory(Array.isArray(payload.missions) ? payload.missions : []);
       }
 
       setCapabilities(nextCaps);
@@ -145,10 +202,14 @@ export default function DashboardCorporationPage() {
     () => registrations.filter((row) => asText(row.registration_status).toLowerCase() === "online").length,
     [registrations],
   );
+  const offlineCount = useMemo(
+    () => registrations.filter((row) => asText(row.registration_status).toLowerCase() === "offline").length,
+    [registrations],
+  );
   const staleCount = useMemo(
     () => registrations.filter((row) => {
-      const age = secondsSince(asText(row.last_seen_at));
-      return age !== null && age > 5 * 60;
+      const s = asText(row.registration_status).toLowerCase();
+      return s === "stale";
     }).length,
     [registrations],
   );
@@ -197,20 +258,32 @@ export default function DashboardCorporationPage() {
         <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
           <div className="text-xs uppercase tracking-wide text-slate-500">Fleet Size</div>
           <div className="mt-2 text-lg font-semibold text-slate-100">{registrations.length}</div>
-          <div className="mt-1 text-xs text-slate-400">Online: {onlineCount}</div>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-          <div className="text-xs uppercase tracking-wide text-slate-500">Stale Factories (&gt;5m)</div>
-          <div className="mt-2 text-lg font-semibold text-slate-100">{staleCount}</div>
-          <div className="mt-1 text-xs text-slate-400">Based on last_seen_at heartbeat</div>
+          <div className="mt-1 flex gap-3 text-xs">
+            <span className="text-emerald-400">{onlineCount} online</span>
+            {staleCount > 0 && <span className="text-amber-400">{staleCount} stale</span>}
+            {offlineCount > 0 && <span className="text-rose-400">{offlineCount} offline</span>}
+          </div>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
           <div className="text-xs uppercase tracking-wide text-slate-500">Delegation Bus</div>
           <div className="mt-2 text-lg font-semibold text-slate-100">
-            {delegation?.connected ? "Connected" : delegation?.redis_enabled ? "Disconnected" : "Disabled"}
+            {delegation?.connected ? (
+              <span className="text-emerald-400">Connected</span>
+            ) : delegation?.redis_enabled ? (
+              <span className="text-rose-400">Disconnected</span>
+            ) : (
+              <span className="text-slate-400">Disabled</span>
+            )}
           </div>
           <div className="mt-1 text-xs text-slate-400">
             Published: {Number.isFinite(delegation?.published_total) ? String(delegation?.published_total) : "0"}
+          </div>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+          <div className="text-xs uppercase tracking-wide text-slate-500">Delegation Activity</div>
+          <div className="mt-2 text-lg font-semibold text-slate-100">{delegationHistory.length}</div>
+          <div className="mt-1 text-xs text-slate-400">
+            Recent missions (last 24h)
           </div>
         </div>
       </section>
@@ -220,81 +293,158 @@ export default function DashboardCorporationPage() {
           This page is only available when FACTORY_ROLE is HEADQUARTERS.
         </section>
       ) : (
-        <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-lg font-semibold text-slate-100">Registered Factories</h2>
-            <div className="text-xs text-slate-400">Headquarters factory_id: {headquartersFactoryId || "--"}</div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-2 py-2">Factory</th>
-                  <th className="px-2 py-2">Role</th>
-                  <th className="px-2 py-2">Status</th>
-                  <th className="px-2 py-2">Profile</th>
-                  <th className="px-2 py-2">Heartbeat</th>
-                  <th className="px-2 py-2">Last Seen</th>
-                  <th className="px-2 py-2">Capabilities</th>
-                </tr>
-              </thead>
-              <tbody>
-                {registrations.length === 0 ? (
+        <>
+          <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold text-slate-100">Registered Factories</h2>
+              <div className="text-xs text-slate-400">HQ: {headquartersFactoryId || "--"}</div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-slate-400">
                   <tr>
-                    <td className="px-2 py-4 text-slate-400" colSpan={7}>
-                      No registrations available.
-                    </td>
+                    <th className="px-2 py-2">Factory</th>
+                    <th className="px-2 py-2">Role</th>
+                    <th className="px-2 py-2">Status</th>
+                    <th className="px-2 py-2">Latency</th>
+                    <th className="px-2 py-2">Freshness</th>
+                    <th className="px-2 py-2">Last Seen</th>
+                    <th className="px-2 py-2">Capabilities</th>
                   </tr>
-                ) : (
-                  registrations.map((row) => {
-                    const capabilityLabels = Array.isArray(row.capabilities) ? row.capabilities : [];
-                    return (
-                      <tr key={`${row.factory_id}-${row.last_seen_at || ""}`} className="border-t border-slate-800/80 align-top">
-                        <td className="px-2 py-2 text-slate-200">{asText(row.factory_id) || "--"}</td>
-                        <td className="px-2 py-2 text-slate-300">{asText(row.factory_role) || "--"}</td>
+                </thead>
+                <tbody>
+                  {registrations.length === 0 ? (
+                    <tr>
+                      <td className="px-2 py-4 text-slate-400" colSpan={7}>
+                        No registrations available.
+                      </td>
+                    </tr>
+                  ) : (
+                    registrations.map((row) => {
+                      const capabilityLabels = Array.isArray(row.capabilities) ? row.capabilities : [];
+                      const ageSeconds = secondsSince(asText(row.last_seen_at));
+                      const isExpanded = expandedFactory === row.factory_id;
+                      const meta = (row.metadata && typeof row.metadata === "object") ? row.metadata : {};
+
+                      return (
+                        <tr
+                          key={`${row.factory_id}-${row.last_seen_at || ""}`}
+                          className="border-t border-slate-800/80 align-top cursor-pointer hover:bg-slate-800/30 transition-colors"
+                          onClick={() => setExpandedFactory(isExpanded ? null : row.factory_id)}
+                        >
+                          <td className="px-2 py-2">
+                            <div className="text-slate-200 font-medium">{asText(row.factory_id) || "--"}</div>
+                            <div className="text-xs text-slate-500">{asText(row.deployment_profile) || "--"}</div>
+                            {isExpanded && (
+                              <div className="mt-2 space-y-1 text-xs text-slate-400">
+                                <div>Source: {asText(row.source) || "--"}</div>
+                                <div>First seen: {formatDateTimeTz(asText(row.first_seen_at) || undefined, { placeholder: "--" })}</div>
+                                {Object.keys(meta).length > 0 && (
+                                  <div className="mt-1">
+                                    <div className="text-slate-500 mb-1">Metadata:</div>
+                                    <pre className="rounded bg-slate-900 p-2 text-[10px] text-slate-400 overflow-x-auto max-w-xs">
+                                      {JSON.stringify(meta, null, 2).slice(0, 500)}
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-2 py-2 text-slate-300">{asText(row.factory_role) || "--"}</td>
+                          <td className="px-2 py-2">
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${statusPill(asText(row.registration_status))}`}>
+                              {asText(row.registration_status) || "--"}
+                            </span>
+                          </td>
+                          <td className="px-2 py-2">
+                            <span className={latencyColor(row.heartbeat_latency_ms)}>
+                              {row.heartbeat_latency_ms != null ? `${Number(row.heartbeat_latency_ms).toFixed(1)} ms` : "--"}
+                            </span>
+                          </td>
+                          <td className="px-2 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`inline-block h-2 w-2 rounded-full ${
+                                ageSeconds === null ? "bg-slate-600" :
+                                ageSeconds < 120 ? "bg-emerald-500" :
+                                ageSeconds < 300 ? "bg-emerald-500/60" :
+                                ageSeconds < 900 ? "bg-amber-500" :
+                                "bg-rose-500"
+                              }`} />
+                              <span className={`text-xs ${freshnessColor(ageSeconds)}`}>
+                                {freshnessLabel(ageSeconds)}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-2 py-2 text-slate-400 text-xs">
+                            {formatDateTimeTz(asText(row.last_seen_at) || undefined, { placeholder: "--" })}
+                          </td>
+                          <td className="px-2 py-2">
+                            <div className="flex max-w-xs flex-wrap gap-1">
+                              {capabilityLabels.length === 0 ? (
+                                <span className="text-xs text-slate-500">--</span>
+                              ) : (
+                                capabilityLabels.slice(0, 8).map((label) => (
+                                  <span key={label} className="rounded border border-slate-700 bg-slate-800/60 px-1.5 py-0.5 text-[10px] text-slate-300">
+                                    {label}
+                                  </span>
+                                ))
+                              )}
+                              {capabilityLabels.length > 8 && (
+                                <span className="text-[10px] text-slate-500">+{capabilityLabels.length - 8}</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {delegationHistory.length > 0 && (
+            <section className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+              <h2 className="mb-3 text-lg font-semibold text-slate-100">Delegation History</h2>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-left text-sm">
+                  <thead className="text-xs uppercase tracking-wide text-slate-400">
+                    <tr>
+                      <th className="px-2 py-2">Mission</th>
+                      <th className="px-2 py-2">Type</th>
+                      <th className="px-2 py-2">Status</th>
+                      <th className="px-2 py-2">VP</th>
+                      <th className="px-2 py-2">Source</th>
+                      <th className="px-2 py-2">Created</th>
+                      <th className="px-2 py-2">Objective</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {delegationHistory.map((m, idx) => (
+                      <tr key={m.mission_id || idx} className="border-t border-slate-800/80 align-top">
+                        <td className="px-2 py-2 text-slate-300 font-mono text-xs">{asText(m.mission_id).slice(0, 20) || "--"}</td>
+                        <td className="px-2 py-2 text-slate-300 text-xs">{asText(m.mission_type) || "--"}</td>
                         <td className="px-2 py-2">
-                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${statusPill(asText(row.registration_status))}`}>
-                            {asText(row.registration_status) || "--"}
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs ${missionStatusPill(asText(m.status))}`}>
+                            {asText(m.status) || "--"}
                           </span>
                         </td>
-                        <td className="px-2 py-2 text-slate-300">{asText(row.deployment_profile) || "--"}</td>
-                        <td className="px-2 py-2 text-slate-300">
-                          {row.heartbeat_latency_ms != null ? `${Number(row.heartbeat_latency_ms).toFixed(1)} ms` : "--"}
+                        <td className="px-2 py-2 text-slate-400 text-xs">{asText(m.vp_id) || "--"}</td>
+                        <td className="px-2 py-2 text-slate-400 text-xs">{asText(m.source) || "--"}</td>
+                        <td className="px-2 py-2 text-slate-400 text-xs">
+                          {formatDateTimeTz(asText(m.created_at) || undefined, { placeholder: "--" })}
                         </td>
-                        <td className="px-2 py-2 text-slate-300">
-                          <div>{formatDateTimeTz(asText(row.last_seen_at) || undefined, { placeholder: "--" })}</div>
-                          <div className="text-xs text-slate-500">
-                            {(() => {
-                              const age = secondsSince(asText(row.last_seen_at));
-                              if (age === null) return "--";
-                              if (age < 60) return "just now";
-                              if (age < 3600) return `${Math.floor(age / 60)}m ago`;
-                              if (age < 86400) return `${Math.floor(age / 3600)}h ago`;
-                              return `${Math.floor(age / 86400)}d ago`;
-                            })()}
-                          </div>
-                        </td>
-                        <td className="px-2 py-2">
-                          <div className="flex max-w-md flex-wrap gap-1">
-                            {capabilityLabels.length === 0 ? (
-                              <span className="text-xs text-slate-500">--</span>
-                            ) : (
-                              capabilityLabels.slice(0, 10).map((label) => (
-                                <span key={label} className="rounded border border-slate-700 bg-slate-800/60 px-2 py-0.5 text-xs text-slate-300">
-                                  {label}
-                                </span>
-                              ))
-                            )}
-                          </div>
+                        <td className="px-2 py-2 text-slate-400 text-xs max-w-xs truncate">
+                          {asText(m.objective).slice(0, 80) || "--"}
                         </td>
                       </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+        </>
       )}
     </div>
   );

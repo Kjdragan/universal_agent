@@ -49,6 +49,7 @@ from universal_agent.delegation.redis_bus import (
     MISSION_STREAM,
     RedisMissionBus,
 )
+from universal_agent.delegation.factory_registry import FactoryRegistry, connect_registry_db
 from universal_agent.delegation.schema import MissionEnvelope, MissionPayload
 
 from fastapi import BackgroundTasks, FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Response, status
@@ -853,18 +854,30 @@ def _factory_capability_labels() -> list[str]:
 
 
 def _upsert_factory_registration(payload: dict[str, Any], *, source: str) -> dict[str, Any]:
+    # Fill in defaults from gateway's own identity when fields are missing
+    enriched = dict(payload)
+    enriched.setdefault("factory_id", _FACTORY_ID)
+    if not str(enriched.get("factory_id") or "").strip():
+        enriched["factory_id"] = _FACTORY_ID
+    enriched.setdefault("factory_role", _FACTORY_POLICY.role)
+    enriched.setdefault("deployment_profile", _DEPLOYMENT_PROFILE)
+
+    # Use SQLite-backed registry if available, else fall back to in-memory dict
+    if _factory_registry is not None:
+        return _factory_registry.upsert(enriched, source=source)
+
+    # Legacy in-memory fallback (only before lifespan init)
     now_iso = datetime.now(timezone.utc).isoformat()
-    factory_id = str(payload.get("factory_id") or "").strip() or _FACTORY_ID
-    role = str(payload.get("factory_role") or payload.get("role") or _FACTORY_POLICY.role).strip() or _FACTORY_POLICY.role
+    factory_id = str(enriched["factory_id"]).strip()
     record = {
         "factory_id": factory_id,
-        "factory_role": role,
-        "deployment_profile": str(payload.get("deployment_profile") or _DEPLOYMENT_PROFILE).strip() or _DEPLOYMENT_PROFILE,
+        "factory_role": str(enriched.get("factory_role") or "UNKNOWN").strip(),
+        "deployment_profile": str(enriched.get("deployment_profile") or _DEPLOYMENT_PROFILE).strip(),
         "source": source,
-        "registration_status": str(payload.get("registration_status") or "online").strip() or "online",
-        "heartbeat_latency_ms": payload.get("heartbeat_latency_ms"),
-        "capabilities": payload.get("capabilities") if isinstance(payload.get("capabilities"), list) else [],
-        "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+        "registration_status": str(enriched.get("registration_status") or "online").strip() or "online",
+        "heartbeat_latency_ms": enriched.get("heartbeat_latency_ms"),
+        "capabilities": enriched.get("capabilities") if isinstance(enriched.get("capabilities"), list) else [],
+        "metadata": enriched.get("metadata") if isinstance(enriched.get("metadata"), dict) else {},
         "last_seen_at": now_iso,
         "updated_at": now_iso,
     }
@@ -1661,8 +1674,13 @@ _delegation_metrics: dict[str, Any] = {
     "last_publish_at": None,
     "published_total": 0,
 }
-_factory_registration_lock = threading.Lock()
-_factory_registrations: dict[str, dict[str, Any]] = {}
+_factory_registration_lock = threading.Lock()  # kept for backward compat; registry is thread-safe internally
+_factory_registrations: dict[str, dict[str, Any]] = {}  # legacy fallback if registry not yet initialized
+_factory_registry: Optional[FactoryRegistry] = None  # SQLite-backed; initialized in lifespan
+_factory_staleness_task: Optional[asyncio.Task] = None
+_factory_staleness_stop: Optional[asyncio.Event] = None
+_hq_self_heartbeat_task: Optional[asyncio.Task] = None
+_hq_self_heartbeat_stop: Optional[asyncio.Event] = None
 _continuity_active_alerts: set[str] = set()
 _continuity_metric_events: deque[dict[str, Any]] = deque(
     maxlen=max(1000, int(os.getenv("UA_CONTINUITY_EVENT_MAXLEN", "20000") or 20000))
@@ -4587,6 +4605,39 @@ async def _vp_event_bridge_loop() -> None:
             await asyncio.wait_for(stop_event.wait(), timeout=_vp_event_bridge_interval_seconds)
         except asyncio.TimeoutError:
             continue
+
+
+async def _factory_staleness_enforcement_loop(stop_event: asyncio.Event) -> None:
+    """Periodically mark stale/offline factory registrations."""
+    _staleness_interval = 60.0
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_staleness_interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        if _factory_registry is not None:
+            try:
+                _factory_registry.enforce_staleness()
+            except Exception as exc:
+                logger.warning("Factory staleness enforcement failed: %s", exc)
+
+
+async def _hq_self_heartbeat_loop(stop_event: asyncio.Event) -> None:
+    """Periodically refresh HQ's own factory registration so it stays 'online'."""
+    _hq_heartbeat_interval = 60.0
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_hq_heartbeat_interval)
+        except asyncio.TimeoutError:
+            pass
+        if stop_event.is_set():
+            break
+        try:
+            _register_local_factory_presence()
+        except Exception as exc:
+            logger.warning("HQ self-heartbeat failed: %s", exc)
 
 
 def _activity_json_dumps(value: Any, *, fallback: str = "{}") -> str:
@@ -8394,6 +8445,22 @@ async def lifespan(app: FastAPI):
             _delegation_metrics["last_error"] = str(exc)
             logger.warning("Delegation Redis bus unavailable; falling back to http queue: %s", exc)
 
+    # Initialize SQLite-backed factory registry (survives gateway restarts)
+    global _factory_registry, _factory_staleness_task, _factory_staleness_stop
+    global _hq_self_heartbeat_task, _hq_self_heartbeat_stop
+    try:
+        _registry_conn = connect_registry_db()
+        _factory_registry = FactoryRegistry(_registry_conn)
+        # Migrate any registrations that were inserted before lifespan (unlikely but safe)
+        with _factory_registration_lock:
+            for _fid, _frec in _factory_registrations.items():
+                _factory_registry.upsert(_frec, source=str(_frec.get("source", "migrated")))
+            _factory_registrations.clear()
+        logger.info("🗄️ Factory registry initialized (SQLite-backed, persistent)")
+    except Exception as exc:
+        logger.warning("Factory registry SQLite init failed, using in-memory fallback: %s", exc)
+        _factory_registry = None
+
     _register_local_factory_presence()
     WORKSPACES_DIR.mkdir(parents=True, exist_ok=True)
     
@@ -8573,6 +8640,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("⏸️ VP event bridge disabled (UA_VP_EVENT_BRIDGE_ENABLED)")
 
+    # --- Factory staleness enforcement (marks stale/offline registrations) ---
+    if _factory_registry is not None:
+        _factory_staleness_stop = asyncio.Event()
+        _factory_staleness_task = asyncio.create_task(
+            _factory_staleness_enforcement_loop(_factory_staleness_stop)
+        )
+        logger.info("🏭 Factory staleness enforcement enabled (interval=60s)")
+
+    # --- HQ self-heartbeat (keeps HQ's own registration fresh) ---
+    _hq_self_heartbeat_stop = asyncio.Event()
+    _hq_self_heartbeat_task = asyncio.create_task(
+        _hq_self_heartbeat_loop(_hq_self_heartbeat_stop)
+    )
+    logger.info("💓 HQ self-heartbeat enabled (interval=60s)")
+
     yield
     
     # Cleanup
@@ -8594,6 +8676,20 @@ async def lifespan(app: FastAPI):
             pass
         _todoist_chron_reconcile_task = None
     _todoist_chron_reconcile_stop_event = None
+    if _factory_staleness_stop is not None:
+        _factory_staleness_stop.set()
+    if _factory_staleness_task is not None:
+        try:
+            await _factory_staleness_task
+        except Exception:
+            pass
+    if _hq_self_heartbeat_stop is not None:
+        _hq_self_heartbeat_stop.set()
+    if _hq_self_heartbeat_task is not None:
+        try:
+            await _hq_self_heartbeat_task
+        except Exception:
+            pass
     if _yt_playlist_watcher:
         await _yt_playlist_watcher.stop()
     if _gws_event_listener:
@@ -9246,19 +9342,105 @@ async def list_factory_registrations(
     _require_headquarters_role_for_fleet()
     clamped_limit = max(1, min(int(limit), 1000))
     status_filter = str(registration_status or "").strip().lower()
-    with _factory_registration_lock:
-        rows = [dict(record) for record in _factory_registrations.values()]
-    if status_filter:
-        rows = [
-            row
-            for row in rows
-            if str(row.get("registration_status") or "").strip().lower() == status_filter
-        ]
-    rows.sort(key=lambda row: str(row.get("last_seen_at") or ""), reverse=True)
+
+    if _factory_registry is not None:
+        rows = _factory_registry.list_all(limit=clamped_limit, status_filter=status_filter)
+        total = _factory_registry.count()
+    else:
+        with _factory_registration_lock:
+            rows = [dict(record) for record in _factory_registrations.values()]
+        if status_filter:
+            rows = [
+                row
+                for row in rows
+                if str(row.get("registration_status") or "").strip().lower() == status_filter
+            ]
+        rows.sort(key=lambda row: str(row.get("last_seen_at") or ""), reverse=True)
+        total = len(rows)
+        rows = rows[:clamped_limit]
+
     return {
-        "registrations": rows[:clamped_limit],
-        "count": len(rows),
+        "registrations": rows,
+        "count": total,
         "headquarters_factory_id": _FACTORY_ID,
+    }
+
+
+@app.get("/api/v1/ops/delegation/history")
+async def delegation_history(request: Request, limit: int = 20):
+    """Return recent VP missions sourced from the Redis bridge (delegation history)."""
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+    import universal_agent.main as main_module
+    clamped = max(1, min(int(limit), 100))
+    missions: list[dict[str, Any]] = []
+    if main_module.runtime_db_conn:
+        try:
+            rows = main_module.runtime_db_conn.execute(
+                "SELECT mission_id, vp_id, mission_type, objective, status, source, "
+                "created_at, updated_at FROM vp_missions "
+                "ORDER BY created_at DESC LIMIT ?",
+                (clamped,),
+            ).fetchall()
+            for r in rows:
+                missions.append(dict(r))
+        except Exception as exc:
+            logger.warning("delegation_history query failed: %s", exc)
+    return {"missions": missions, "total": len(missions)}
+
+
+class FactoryUpdateRequest(BaseModel):
+    """Request to trigger a factory self-update via delegation bus."""
+    target_factory_id: Optional[str] = None  # None = broadcast to all workers
+    branch: str = "main"
+
+
+@app.post("/api/v1/ops/factory/update")
+async def trigger_factory_update(request: Request, payload: FactoryUpdateRequest):
+    """Publish a system:update_factory mission to the delegation bus.
+
+    HQ-only endpoint.  The target factory's bridge will execute the update
+    script, then exit for systemd to restart it with the new code.
+    """
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+
+    if _delegation_mission_bus is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Delegation Redis bus not connected; cannot publish update mission.",
+        )
+
+    job_id = f"update-{uuid.uuid4().hex[:12]}"
+    envelope = MissionEnvelope(
+        job_id=job_id,
+        idempotency_key=job_id,
+        priority=10,  # high priority
+        timeout_seconds=300,
+        max_retries=0,  # no retry for update missions
+        payload=MissionPayload(
+            task="Update factory to latest code",
+            context={
+                "mission_kind": "system:update_factory",
+                "branch": payload.branch or "main",
+                "target_factory_id": payload.target_factory_id or "",
+            },
+        ),
+    )
+    _delegation_mission_bus.publish_mission(envelope)
+    _delegation_metrics["published_total"] = int(_delegation_metrics.get("published_total", 0)) + 1
+    _delegation_metrics["last_publish_at"] = datetime.now(timezone.utc).isoformat()
+    logger.info(
+        "Factory update mission published job_id=%s branch=%s target=%s",
+        job_id,
+        payload.branch,
+        payload.target_factory_id or "(all)",
+    )
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "branch": payload.branch,
+        "target_factory_id": payload.target_factory_id,
     }
 
 

@@ -1,6 +1,6 @@
 # Phase 3d: Factory Template & Self-Update
 
-**Status:** Not Started
+**Status:** Done
 **Priority:** Medium — enables ongoing factory maintenance at scale
 **Depends on:** Phase 3a (consumer), Phase 3c (local factory deployed)
 
@@ -212,12 +212,12 @@ curl -X POST -H "x-ua-ops-token: <token>" \
 
 ## Acceptance Criteria
 
-- [ ] `scripts/update_factory.sh` pulls latest, syncs deps, optionally restarts
-- [ ] `SystemUpdateHandler` executes update script and signals restart
-- [ ] Consumer exits cleanly after update, systemd restarts it
-- [ ] Factory re-registers with HQ after restart (updated capabilities)
-- [ ] `POST /api/v1/ops/factory/update` endpoint publishes update mission
-- [ ] Unit tests pass
+- [x] `scripts/update_factory.sh` pulls latest, syncs deps, optionally restarts
+- [x] `system_handlers.py` executes update script and signals restart via `SystemMissionResult`
+- [x] Bridge exits cleanly after update (`restart_requested` flag), systemd restarts it
+- [x] Factory re-registers with HQ after restart (heartbeat resumes automatically)
+- [x] `POST /api/v1/ops/factory/update` endpoint publishes update mission to Redis bus
+- [x] Unit tests pass (13 tests in `test_system_handlers.py`)
 
 ## Safety Considerations
 

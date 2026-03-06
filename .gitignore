@@ -28,6 +28,7 @@ pip-delete-this-directory.txt
 # === Environments & IDs ===
 .env.local
 .env.*.local
+.env.bridge
 # Explicit local secret snapshot from VPS security sync.
 tmp/vps_security_env_keys_*.env
 identity_registry.json
