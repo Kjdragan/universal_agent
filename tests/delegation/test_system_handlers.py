@@ -11,6 +11,8 @@ import pytest
 from universal_agent.delegation.system_handlers import (
     SystemMissionResult,
     dispatch_system_mission,
+    handle_pause_factory,
+    handle_resume_factory,
     handle_update_factory,
     is_system_mission,
 )
@@ -19,6 +21,10 @@ from universal_agent.delegation.system_handlers import (
 class TestIsSystemMission:
     def test_known_system_mission(self):
         assert is_system_mission("system:update_factory") is True
+
+    def test_pause_resume_are_system_missions(self):
+        assert is_system_mission("system:pause_factory") is True
+        assert is_system_mission("system:resume_factory") is True
 
     def test_regular_mission(self):
         assert is_system_mission("coding_task") is False
@@ -143,11 +149,41 @@ class TestHandleUpdateFactory:
         assert result.status == "SUCCESS"
 
 
+class TestHandlePauseFactory:
+    def test_pause_returns_success(self):
+        result = handle_pause_factory({})
+        assert result.status == "SUCCESS"
+        assert result.pause_requested is True
+        assert result.resume_requested is False
+        assert result.restart_requested is False
+        assert result.result["action"] == "pause"
+
+    def test_resume_returns_success(self):
+        result = handle_resume_factory({})
+        assert result.status == "SUCCESS"
+        assert result.resume_requested is True
+        assert result.pause_requested is False
+        assert result.restart_requested is False
+        assert result.result["action"] == "resume"
+
+    def test_dispatch_pause(self):
+        result = dispatch_system_mission("system:pause_factory", {})
+        assert result.status == "SUCCESS"
+        assert result.pause_requested is True
+
+    def test_dispatch_resume(self):
+        result = dispatch_system_mission("system:resume_factory", {})
+        assert result.status == "SUCCESS"
+        assert result.resume_requested is True
+
+
 class TestSystemMissionResult:
     def test_default_values(self):
         r = SystemMissionResult(status="SUCCESS", result={"key": "val"})
         assert r.error == ""
         assert r.restart_requested is False
+        assert r.pause_requested is False
+        assert r.resume_requested is False
 
     def test_with_restart(self):
         r = SystemMissionResult(
@@ -156,3 +192,13 @@ class TestSystemMissionResult:
             restart_requested=True,
         )
         assert r.restart_requested is True
+
+    def test_with_pause(self):
+        r = SystemMissionResult(status="SUCCESS", result={}, pause_requested=True)
+        assert r.pause_requested is True
+        assert r.resume_requested is False
+
+    def test_with_resume(self):
+        r = SystemMissionResult(status="SUCCESS", result={}, resume_requested=True)
+        assert r.resume_requested is True
+        assert r.pause_requested is False

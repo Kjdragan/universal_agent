@@ -88,10 +88,12 @@ class RedisVpBridge:
         self._consumer_name = config.resolve_consumer_name()
         self._stopped = asyncio.Event()
         self._restart_requested = False
+        self._paused = False
         self._metrics: dict[str, Any] = {
             "consumed_total": 0,
             "inserted_total": 0,
             "skipped_total": 0,
+            "paused_skipped_total": 0,
             "system_handled_total": 0,
             "errors_total": 0,
             "last_error": None,
@@ -104,6 +106,20 @@ class RedisVpBridge:
     @property
     def restart_requested(self) -> bool:
         return self._restart_requested
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    def pause(self) -> None:
+        """Pause mission consumption.  System missions still processed."""
+        self._paused = True
+        logger.info("RedisVpBridge paused")
+
+    def resume(self) -> None:
+        """Resume mission consumption."""
+        self._paused = False
+        logger.info("RedisVpBridge resumed")
 
     def stop(self) -> None:
         self._stopped.set()
@@ -203,6 +219,20 @@ class RedisVpBridge:
                 logger.info("RedisVpBridge restart requested by system mission")
                 self._restart_requested = True
                 self.stop()
+            if result.pause_requested:
+                self.pause()
+            if result.resume_requested:
+                self.resume()
+            return False
+
+        # When paused, ack but do not insert work missions
+        if self._paused:
+            self._bus.ack(consumed.message_id)
+            self._metrics["paused_skipped_total"] = int(self._metrics.get("paused_skipped_total", 0)) + 1
+            logger.debug(
+                "RedisVpBridge paused — skipping mission job_id=%s",
+                envelope.job_id,
+            )
             return False
 
         # Route to VP ID

@@ -85,6 +85,7 @@ function statusPill(status: string): string {
   const normalized = asText(status).toLowerCase();
   if (normalized === "online") return "border-emerald-600/40 bg-emerald-900/20 text-emerald-200";
   if (normalized === "offline") return "border-rose-600/40 bg-rose-900/20 text-rose-200";
+  if (normalized === "paused") return "border-sky-600/40 bg-sky-900/20 text-sky-200";
   return "border-amber-600/40 bg-amber-900/20 text-amber-200";
 }
 
@@ -133,6 +134,7 @@ export default function DashboardCorporationPage() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string>("");
   const [delegationHistory, setDelegationHistory] = useState<DelegationHistoryEntry[]>([]);
   const [expandedFactory, setExpandedFactory] = useState<string | null>(null);
+  const [controllingFactory, setControllingFactory] = useState<string | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -213,6 +215,32 @@ export default function DashboardCorporationPage() {
     }).length,
     [registrations],
   );
+  const pausedCount = useMemo(
+    () => registrations.filter((row) => asText(row.registration_status).toLowerCase() === "paused").length,
+    [registrations],
+  );
+
+  const controlFactory = async (factoryId: string, action: "pause" | "resume") => {
+    setControllingFactory(factoryId);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/ops/factory/control`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_factory_id: factoryId, action }),
+      });
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        setError(`Factory control failed (${res.status}): ${detail}`);
+      } else {
+        // Refresh data to show new status
+        await load(true);
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to control factory.");
+    } finally {
+      setControllingFactory(null);
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -260,6 +288,7 @@ export default function DashboardCorporationPage() {
           <div className="mt-2 text-lg font-semibold text-slate-100">{registrations.length}</div>
           <div className="mt-1 flex gap-3 text-xs">
             <span className="text-emerald-400">{onlineCount} online</span>
+            {pausedCount > 0 && <span className="text-sky-400">{pausedCount} paused</span>}
             {staleCount > 0 && <span className="text-amber-400">{staleCount} stale</span>}
             {offlineCount > 0 && <span className="text-rose-400">{offlineCount} offline</span>}
           </div>
@@ -310,12 +339,13 @@ export default function DashboardCorporationPage() {
                     <th className="px-2 py-2">Freshness</th>
                     <th className="px-2 py-2">Last Seen</th>
                     <th className="px-2 py-2">Capabilities</th>
+                    <th className="px-2 py-2">Control</th>
                   </tr>
                 </thead>
                 <tbody>
                   {registrations.length === 0 ? (
                     <tr>
-                      <td className="px-2 py-4 text-slate-400" colSpan={7}>
+                      <td className="px-2 py-4 text-slate-400" colSpan={8}>
                         No registrations available.
                       </td>
                     </tr>
@@ -393,6 +423,34 @@ export default function DashboardCorporationPage() {
                                 <span className="text-[10px] text-slate-500">+{capabilityLabels.length - 8}</span>
                               )}
                             </div>
+                          </td>
+                          <td className="px-2 py-2">
+                            {asText(row.factory_role).toUpperCase() !== "HEADQUARTERS" && (
+                              (() => {
+                                const currentStatus = asText(row.registration_status).toLowerCase();
+                                const isPaused = currentStatus === "paused";
+                                const isControlling = controllingFactory === row.factory_id;
+                                return (
+                                  <button
+                                    type="button"
+                                    disabled={isControlling}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      void controlFactory(row.factory_id, isPaused ? "resume" : "pause");
+                                    }}
+                                    className={`rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                                      isControlling
+                                        ? "border-slate-700 bg-slate-800/50 text-slate-500 cursor-wait"
+                                        : isPaused
+                                          ? "border-emerald-700/50 bg-emerald-900/30 text-emerald-300 hover:bg-emerald-900/50"
+                                          : "border-amber-700/50 bg-amber-900/30 text-amber-300 hover:bg-amber-900/50"
+                                    }`}
+                                  >
+                                    {isControlling ? "..." : isPaused ? "Resume" : "Pause"}
+                                  </button>
+                                );
+                              })()
+                            )}
                           </td>
                         </tr>
                       );

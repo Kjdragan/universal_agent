@@ -9444,6 +9444,74 @@ async def trigger_factory_update(request: Request, payload: FactoryUpdateRequest
     }
 
 
+class FactoryControlRequest(BaseModel):
+    """Request to control a factory (pause/resume)."""
+    target_factory_id: str
+    action: str  # "pause" or "resume"
+
+
+@app.post("/api/v1/ops/factory/control")
+async def control_factory(request: Request, payload: FactoryControlRequest):
+    """Publish a system:pause_factory or system:resume_factory mission.
+
+    HQ-only endpoint.  The target factory's bridge will pause or resume
+    mission consumption while keeping the heartbeat alive.
+    """
+    _require_ops_auth(request)
+    _require_headquarters_role_for_fleet()
+
+    action = (payload.action or "").strip().lower()
+    if action not in ("pause", "resume"):
+        raise HTTPException(status_code=400, detail=f"Invalid action: {action}. Must be 'pause' or 'resume'.")
+
+    if _delegation_mission_bus is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Delegation Redis bus not connected; cannot publish control mission.",
+        )
+
+    mission_kind = f"system:{action}_factory"
+    job_id = f"{action}-{uuid.uuid4().hex[:12]}"
+    envelope = MissionEnvelope(
+        job_id=job_id,
+        idempotency_key=job_id,
+        priority=5,  # highest priority — control messages
+        timeout_seconds=30,
+        max_retries=0,
+        payload=MissionPayload(
+            task=f"{action.capitalize()} factory mission consumption",
+            context={
+                "mission_kind": mission_kind,
+                "target_factory_id": payload.target_factory_id,
+            },
+        ),
+    )
+    _delegation_mission_bus.publish_mission(envelope)
+    _delegation_metrics["published_total"] = int(_delegation_metrics.get("published_total", 0)) + 1
+    _delegation_metrics["last_publish_at"] = datetime.now(timezone.utc).isoformat()
+
+    # Optimistically update registry status so UI reflects immediately
+    if _factory_registry is not None:
+        try:
+            existing = _factory_registry.get(payload.target_factory_id)
+            if existing:
+                new_status = "paused" if action == "pause" else "online"
+                _factory_registry.upsert({**existing, "registration_status": new_status})
+        except Exception as exc:
+            logger.warning("Failed to update registry for %s: %s", payload.target_factory_id, exc)
+
+    logger.info(
+        "Factory control mission published job_id=%s action=%s target=%s",
+        job_id, action, payload.target_factory_id,
+    )
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "action": action,
+        "target_factory_id": payload.target_factory_id,
+    }
+
+
 @app.get("/api/artifacts")
 async def list_artifacts(path: str = ""):
     """List files under the persistent artifacts root."""

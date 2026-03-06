@@ -15,7 +15,7 @@ import platform
 import socket
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import httpx
 
@@ -79,8 +79,13 @@ class HeartbeatConfig:
 class FactoryHeartbeat:
     """Sends periodic registration heartbeats to HQ."""
 
-    def __init__(self, config: HeartbeatConfig) -> None:
+    def __init__(
+        self,
+        config: HeartbeatConfig,
+        paused_callback: Optional["Callable[[], bool]"] = None,
+    ) -> None:
         self._config = config
+        self._paused_callback = paused_callback
         self._last_sent_at: float = 0.0
         self._consecutive_failures: int = 0
         self._stopped = asyncio.Event()
@@ -109,10 +114,11 @@ class FactoryHeartbeat:
         return min(base * (2 ** self._consecutive_failures), 300.0)
 
     def _build_payload(self, latency_ms: Optional[float] = None) -> dict[str, Any]:
+        is_paused = self._paused_callback() if self._paused_callback else False
         return {
             "factory_id": self._config.factory_id,
             "factory_role": self._config.factory_role,
-            "registration_status": "online",
+            "registration_status": "paused" if is_paused else "online",
             "heartbeat_latency_ms": latency_ms,
             "capabilities": self._config.capabilities,
             "metadata": {

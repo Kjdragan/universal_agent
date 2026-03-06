@@ -101,7 +101,7 @@ async def _run(*, once: bool, poll_seconds: float) -> int:
     inbound = RedisVpBridge(bus, conn, config)
     outbound = RedisVpResultBridge(bus, conn, poll_seconds=poll_seconds)
     heartbeat_config = HeartbeatConfig.from_env()
-    heartbeat = FactoryHeartbeat(heartbeat_config)
+    heartbeat = FactoryHeartbeat(heartbeat_config, paused_callback=lambda: inbound.paused)
 
     # Graceful shutdown on signals
     loop = asyncio.get_running_loop()

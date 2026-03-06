@@ -24,6 +24,8 @@ class SystemMissionResult:
     result: dict[str, Any]  # payload data
     error: str = ""         # error message if FAILED
     restart_requested: bool = False  # signal bridge to exit for systemd restart
+    pause_requested: bool = False    # signal bridge to pause consumption
+    resume_requested: bool = False   # signal bridge to resume consumption
 
 
 # ---------------------------------------------------------------------------
@@ -120,11 +122,47 @@ def handle_update_factory(
 
 
 # ---------------------------------------------------------------------------
+# system:pause_factory / system:resume_factory
+# ---------------------------------------------------------------------------
+
+def handle_pause_factory(
+    context: dict[str, Any],
+    **kwargs: Any,
+) -> SystemMissionResult:
+    """Signal the bridge to pause mission consumption.
+
+    The bridge stays running (heartbeat continues) but stops pulling
+    new missions from Redis.  The heartbeat reports status as 'paused'.
+    """
+    logger.info("system:pause_factory requested")
+    return SystemMissionResult(
+        status="SUCCESS",
+        result={"action": "pause", "note": "Bridge will pause mission consumption"},
+        pause_requested=True,
+    )
+
+
+def handle_resume_factory(
+    context: dict[str, Any],
+    **kwargs: Any,
+) -> SystemMissionResult:
+    """Signal the bridge to resume mission consumption."""
+    logger.info("system:resume_factory requested")
+    return SystemMissionResult(
+        status="SUCCESS",
+        result={"action": "resume", "note": "Bridge will resume mission consumption"},
+        resume_requested=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Dispatch table
 # ---------------------------------------------------------------------------
 
 SYSTEM_HANDLERS: dict[str, Any] = {
     "system:update_factory": handle_update_factory,
+    "system:pause_factory": handle_pause_factory,
+    "system:resume_factory": handle_resume_factory,
 }
 
 
