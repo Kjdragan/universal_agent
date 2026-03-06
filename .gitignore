@@ -125,3 +125,4 @@ latest_export.md
 src/universal_agent/prompt_assets/capabilities.last_good.md
 .claude/skills/excalidraw-diagram/references/uv.lock
 docs/ag-ui-protocol-streaming.excalidraw
+client_secret_*.json

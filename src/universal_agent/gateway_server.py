@@ -105,6 +105,7 @@ from universal_agent.work_threads import (
 )
 from universal_agent.hooks_service import HooksService
 from universal_agent.services.youtube_playlist_watcher import YouTubePlaylistWatcher
+from universal_agent.services.gws_event_listener import GwsEventListener
 from universal_agent.services.agentmail_service import AgentMailService
 from universal_agent.services import tutorial_telegram_notifier
 from universal_agent import process_heartbeat
@@ -1532,6 +1533,7 @@ _cron_service: Optional[CronService] = None
 _ops_service: Optional[OpsService] = None
 _hooks_service: Optional[HooksService] = None
 _yt_playlist_watcher: Optional[YouTubePlaylistWatcher] = None
+_gws_event_listener: Optional[GwsEventListener] = None
 _agentmail_service: Optional[AgentMailService] = None
 _system_events: dict[str, list[dict]] = {}
 _system_presence: dict[str, dict] = {}
@@ -8416,7 +8418,7 @@ async def lifespan(app: FastAPI):
     main_module.budget_config = main_module.load_budget_config()
     
     # Initialize Heartbeat Service
-    global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher
+    global _heartbeat_service, _cron_service, _ops_service, _hooks_service, _yt_playlist_watcher, _gws_event_listener
     global _vp_event_bridge_task, _vp_event_bridge_stop_event
     global _todoist_chron_reconcile_task, _todoist_chron_reconcile_stop_event
     if HEARTBEAT_ENABLED:
@@ -8500,6 +8502,20 @@ async def lifespan(app: FastAPI):
     )
     await _yt_playlist_watcher.start()
 
+    # --- gws Workspace Event Listener (Phase 5 — Gmail polling) ---
+    async def _gws_event_dispatch_fn(subpath: str, payload: dict) -> tuple[bool, str]:
+        if _hooks_service is None:
+            return False, "hooks_service_not_ready"
+        return await _hooks_service.dispatch_internal_payload(
+            subpath=subpath, payload=payload, headers={"x-ua-source": "gws_event_listener"}
+        )
+
+    _gws_event_listener = GwsEventListener(
+        dispatch_fn=_gws_event_dispatch_fn,
+        notification_sink=_hook_notification_sink,
+    )
+    await _gws_event_listener.start()
+
     # --- AgentMail Service (Simone's native inbox) ---
     global _agentmail_service
 
@@ -8580,6 +8596,8 @@ async def lifespan(app: FastAPI):
     _todoist_chron_reconcile_stop_event = None
     if _yt_playlist_watcher:
         await _yt_playlist_watcher.stop()
+    if _gws_event_listener:
+        await _gws_event_listener.stop()
     if _agentmail_service:
         await _agentmail_service.shutdown()
     if _heartbeat_service:
@@ -12826,6 +12844,23 @@ async def ops_yt_playlist_watcher_poll_now(request: Request):
     if _yt_playlist_watcher is None:
         raise HTTPException(status_code=503, detail="YouTube playlist watcher not initialized")
     result = await _yt_playlist_watcher.poll_now()
+    return result
+
+
+@app.get("/api/v1/ops/gws-event-listener")
+async def ops_gws_event_listener_status(request: Request):
+    _require_ops_auth(request)
+    if _gws_event_listener is None:
+        return {"enabled": False, "reason": "not_initialized"}
+    return _gws_event_listener.status()
+
+
+@app.post("/api/v1/ops/gws-event-listener/poll")
+async def ops_gws_event_listener_poll_now(request: Request):
+    _require_ops_auth(request)
+    if _gws_event_listener is None:
+        raise HTTPException(status_code=503, detail="gws event listener not initialized")
+    result = await _gws_event_listener.poll_now()
     return result
 
 

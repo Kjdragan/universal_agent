@@ -206,6 +206,19 @@ def gws_cli_enabled(default: bool = False) -> bool:
     return default
 
 
+def gws_events_enabled(default: bool = False) -> bool:
+    """Enable the gws workspace event listener (Phase 5 — Gmail/Calendar polling).
+
+    Defaults OFF. Set UA_ENABLE_GOOGLE_WORKSPACE_EVENTS=1 to activate.
+    Set UA_DISABLE_GOOGLE_WORKSPACE_EVENTS=1 to hard-disable (overrides enable).
+    """
+    if _is_truthy(os.getenv("UA_DISABLE_GOOGLE_WORKSPACE_EVENTS")):
+        return False
+    if _is_truthy(os.getenv("UA_ENABLE_GOOGLE_WORKSPACE_EVENTS")):
+        return True
+    return default
+
+
 def coder_vp_enabled(default: bool = False) -> bool:
     """Enable CODER VP routing lane (Phase A)."""
     if _is_truthy(os.getenv("UA_DISABLE_CODER_VP")):
