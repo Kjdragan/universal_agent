@@ -17,6 +17,7 @@ class _FakeClient:
     def __init__(self):
         self.create_calls = []
         self.publish_calls = []
+        self.status_calls = []
 
     async def create_media_container(self, **kwargs):
         self.create_calls.append(kwargs)
@@ -25,6 +26,21 @@ class _FakeClient:
     async def publish_media_container(self, *, creation_id: str):
         self.publish_calls.append({"creation_id": creation_id})
         return {"id": "17890000000000000"}
+
+    async def container_status(self, *, container_id: str):
+        self.status_calls.append({"container_id": container_id})
+        return {"id": container_id, "status": "FINISHED"}
+
+
+class _PollingClient(_FakeClient):
+    def __init__(self):
+        super().__init__()
+        self._statuses = ["IN_PROGRESS", "IN_PROGRESS", "FINISHED"]
+
+    async def container_status(self, *, container_id: str):
+        self.status_calls.append({"container_id": container_id})
+        status = self._statuses.pop(0) if self._statuses else "FINISHED"
+        return {"id": container_id, "status": status}
 
 
 class _FailingClient(_FakeClient):
@@ -152,7 +168,28 @@ async def test_threads_publishing_live_reply_calls_client(tmp_path: Path):
     create_payload = fake.create_calls[-1]
     assert create_payload["media_type"] == "TEXT"
     assert create_payload["reply_to_id"] == "18001234000000000"
+    assert fake.status_calls
     assert audit_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_threads_publishing_live_reply_waits_until_container_finished(tmp_path: Path):
+    fake = _PollingClient()
+    iface = ThreadsPublishingInterface(
+        enabled=True,
+        dry_run=False,
+        approval_mode="manual_confirm",
+        max_daily_replies=3,
+        state_path=str(tmp_path / "state.json"),
+        client=fake,
+    )
+    out = await iface.reply_to_post(
+        "18001234000000000",
+        {"text": "poll until ready", "approval_id": "appr-22"},
+    )
+    assert out["status"] == "ok"
+    assert len(fake.status_calls) >= 3
+    assert fake.publish_calls
 
 
 @pytest.mark.asyncio
