@@ -86,7 +86,7 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_rollout_verify.py \
 
 Goal: safely enable posting/reply actions.
 
-Current implementation status:
+Current implementation status (2026-03-06):
 
 1. Core methods implemented in `threads_publishing.py` with real API calls:
    - create container
@@ -105,6 +105,9 @@ Current implementation status:
    - scope verification (`debug_token`)
    - `/me` identity match
    - fallback non-destructive write probe for permission denial (`code:10`)
+5. Reply-path readiness race fixed:
+   - `reply_to_post` now polls container status and waits for `FINISHED` before publish.
+   - this resolves earlier `code:24` media-not-found publish race.
 
 ### Scope
 
@@ -144,9 +147,18 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_publish_canary_verify.py \
   --write-json /opt/universal_agent/artifacts/csi/threads_publish_canary_verify/latest.json
 ```
 
-Observed blocker signature for missing write permission:
+Resolved blocker signatures:
 
-- `threads_publish_create_failed:http_500: ... "Application does not have permission for this action" ... code:10`
+1. Prior permission blocker (`code:10`) resolved after adding reply-management scope and re-auth.
+2. Prior reply publish race (`code:24`) resolved by readiness polling before publish.
+
+Phase 2 completion status:
+
+1. `create_container`: live `ok`
+2. `publish_container`: live `ok`
+3. `reply_to_post`: live `ok`
+4. Governance gates remain in `manual_confirm` with low caps (intended).
+5. Phase 2 is **complete**.
 
 ## Phase 3 (Webhook-First Hybrid)
 
@@ -163,6 +175,12 @@ Current status:
    - `csi-threads-webhook-canary-verify.service`
    - `csi-threads-webhook-canary-verify.timer` (every 2 hours)
    - uses stable media id for dedupe-safe repeated signed ingest verification.
+
+Phase 3 remaining work (only):
+
+1. Tune webhook event-type mapping from observed production payload mix.
+2. Keep mixed poll+webhook dedupe monitoring and tighten alert thresholds if needed.
+3. Optionally promote app mode/advanced access path as needed for non-test-account production webhook coverage.
 
 ### Scope
 

@@ -2,7 +2,7 @@
 
 ## Date
 
-- Generated: 2026-03-05 (America/Chicago)
+- Generated: 2026-03-06 (America/Chicago)
 - Runtime checks executed on VPS host `srv1360701`
 
 ## Scope
@@ -70,9 +70,13 @@ Executed on VPS with `CSI_THREADS_PUBLISHING_ENABLED=1`, `CSI_THREADS_PUBLISH_DR
 
 ### 3c) Reply to post (live)
 
-- Status: `error`
-- Error: `Application does not have permission for this action`
-- Threads code: `10`
+- Status: `ok`
+- Response ID: `18340923214246811`
+
+Note:
+
+1. Earlier runs in the same lookback window include historical `code:10` and `code:24` records.
+2. Latest live run is successful after scope refresh (`threads_manage_replies`) and reply publish readiness polling fix.
 
 Audit evidence written to:
 
@@ -120,23 +124,23 @@ Latest run evidence:
 
 ## CONDITIONAL / NO-GO
 
-1. `reply_to_post` live path is **NO-GO** currently due to permission denial (`code:10`).
+1. No active Phase 2 functional blocker remains.
 
 ## Interpretation
 
-- The implementation is stable and functioning for analytics + webhook + create/publish.
-- Reply operations are blocked by current Meta app permission readiness for this action.
+- The implementation is stable and functioning for analytics + webhook + create/publish/reply.
+- Remaining warnings in broad-window canary are historical and expected until old errors age out.
 
 ## Required Action to Fully Close Phase 2
 
-1. Complete Meta permission readiness for reply action (the app currently fails reply with `code:10` despite create/publish succeeding).
-2. Re-run one controlled reply canary after permissions are approved.
-3. Keep `manual_confirm` + low caps through first successful reply soak window.
+1. Keep `manual_confirm` + low caps through ongoing soak window.
+2. Continue monitoring `threads_publishing_audit.jsonl` and canary verifier.
+3. Promote caps/mode only after stable soak period per governance policy.
 
 ## Current Completion State
 
 - Phase 1: Complete.
-- Phase 2: **Mostly complete**, pending reply permission closure.
+- Phase 2: **Complete** (live create/publish/reply verified).
 - Stage 3: **Operationally complete** for webhook-first hybrid in current app mode.
 
 ## Artifacts

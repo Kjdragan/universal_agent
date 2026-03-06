@@ -10,6 +10,15 @@ with clear preflight checks and explicit failure signatures.
 Phase 2 canary is configured and write-path preflight now passes via fallback
 verification when Meta debug-token is unstable.
 
+As of 2026-03-06, Phase 2 write-path is closed and verified live:
+
+1. `create_container`: `ok`
+2. `publish_container`: `ok`
+3. `reply_to_post`: `ok`
+
+Reply path previously failed with `code:10` (permission) then `code:24` (container
+publish race). Both are now resolved in current rollout state.
+
 Current observed preflight signature:
 
 - `THREADS_PUBLISH_PREFLIGHT` includes `"ok": true`
@@ -55,13 +64,11 @@ Minimum:
 
 1. `threads_basic`
 2. `threads_content_publish`
-
-If reply automation is intended in Phase 2, include the reply-management scope
-required by the current Threads API policy.
+3. `threads_manage_replies` (required for reply POST operations)
 
 ## Step-by-step
 
-### 1) Generate write-scope auth URL
+### 1) Generate write-scope auth URL (VPS terminal)
 
 ```bash
 cd /opt/universal_agent/CSI_Ingester/development
@@ -69,10 +76,10 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_auth_bootstrap.py \
   --print-auth-url \
   --app-id "<THREADS_APP_ID>" \
   --redirect-uri "https://app.clearspringcg.com/threads-callback" \
-  --scopes "threads_basic,threads_content_publish,threads_read_replies,threads_manage_mentions,threads_manage_insights,threads_keyword_search,threads_profile_discovery"
+  --scopes "threads_basic,threads_content_publish,threads_manage_replies,threads_read_replies,threads_manage_mentions,threads_manage_insights,threads_keyword_search,threads_profile_discovery"
 ```
 
-### 2) Exchange returned code
+### 2) Exchange returned code (VPS terminal; browser open happens locally)
 
 ```bash
 scripts/csi_run.sh uv run python3 scripts/csi_threads_auth_bootstrap.py \
@@ -85,10 +92,11 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_auth_bootstrap.py \
   --infisical-json-file /tmp/threads-secrets.json
 ```
 
-### 3) Sync to Infisical
+### 3) Sync to Infisical (run from repo root to ensure dependency resolution)
 
 ```bash
-scripts/csi_run.sh uv run python3 scripts/csi_threads_infisical_sync.py \
+cd /opt/universal_agent
+uv run python3 CSI_Ingester/development/scripts/csi_threads_infisical_sync.py \
   --updates-file /tmp/threads-secrets.json
 ```
 
@@ -173,3 +181,12 @@ scripts/csi_run.sh uv run python3 scripts/csi_threads_publish_canary_verify.py \
    - reset/roll day in `CSI_THREADS_PUBLISH_STATE_PATH` for controlled canary.
 4. `threads_publish_approval_required`:
    - manual mode requires `--approval-id`.
+
+## Phase 2 Closeout Evidence (latest)
+
+1. Rollout verifier: `THREADS_ROLLOUT_VERIFY_OK=1` (webhook activity required mode).
+2. Webhook smoke: `THREADS_WEBHOOK_SMOKE_OK=1` (`VERIFY_STATUS=200`, `INGEST_STATUS=200`).
+3. Live reply audit record:
+   - operation: `reply_to_post`
+   - status: `ok`
+   - response_id: `18340923214246811`
