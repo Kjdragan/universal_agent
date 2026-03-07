@@ -10,12 +10,16 @@ the report as a printed/exported PDF document.
 
 - **PDF-first.** Every design decision is validated against Chrome `--print-to-pdf`.
   If it doesn't render well in PDF, it doesn't ship. HTML viewing is a bonus.
-- **Magazine, not academic paper.** Think long-form journalism (The Atlantic, Ars Technica)
-  not LaTeX. Wide images, pull-quotes, breathing room.
+- **Magazine-quality, not academic paper.** Think long-form journalism (The Atlantic,
+  Ars Technica) as the aspirational baseline — clean layout, breathing room, visual
+  hierarchy, modern feel. The specific component mix (images, pull-quotes, stat-cards,
+  diagrams) adapts to the material — a market analysis looks different from a policy
+  brief — but the magazine-quality presentation standard is constant.
 - **Content-first typography.** The text is the product. Typography choices serve
-  readability above all.
+  readability above all. University-level writing quality is the baseline.
 - **Purposeful visuals.** Every image, diagram, and stat-card earns its space by
-  conveying information the text alone cannot.
+  conveying information the text alone cannot. If a topic doesn't benefit from a
+  particular component, skip it — a section of well-structured prose is perfectly valid.
 - **No interactive effects by default.** Hover states, transitions, and animated
   elements are gated behind `ENABLE_INTERACTIONS` (off by default). PDF readers
   don't have hover. Design for static consumption first.

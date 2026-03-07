@@ -7,25 +7,30 @@ assets. The Director provides this file to the Judge at spawn time.
 
 ## Part 1: Text Critique Rubric
 
-### Dimension 1: Narrative Voice (Weight: HIGH)
+### Dimension 1: Writing Quality & Voice (Weight: HIGH)
 
-The #1 problem with automated reports is the "robotic enumeration" pattern — facts
-listed sequentially without narrative connective tissue. This dimension catches it.
+The baseline is **university-level writing**: clear, substantive, well-structured prose
+with logical flow and precise language. Beyond that, the voice should match the
+material — analytical reports need authority, narrative pieces need warmth, technical
+reviews need precision. The #1 anti-pattern is "robotic enumeration" — facts listed
+sequentially without connective tissue.
 
 | Score | Description |
 |-------|-------------|
-| 9-10 | Reads like quality journalism or analysis. Clear authorial voice, compelling hooks, natural rhythm. |
-| 7-8 | Professional and readable. Occasional flat passages but mostly engaging. |
-| 5-6 | Functional but dry. Facts are present but feel listed rather than narrated. Some "This section discusses..." openings. |
-| 3-4 | Robotic enumeration. Bullet points converted to paragraphs. No narrative flow. |
+| 9-10 | University-level or above. Clear authorial voice appropriate to the material. Compelling hooks, natural rhythm, precise language. |
+| 7-8 | Professional and readable. Voice matches the topic. Occasional flat passages but mostly engaging. |
+| 5-6 | Functional but generic. Facts present but listed rather than integrated. Voice doesn't match material type. |
+| 3-4 | Robotic enumeration. Bullet points converted to paragraphs. No narrative flow. Reads like a summary, not a report. |
 | 1-2 | Incoherent or reads like raw data dump. |
 
 **Red flags to catch:**
 - Sections opening with "This section discusses..." or "In this section, we will..."
 - Every paragraph starting with a statistic
-- No use of quotes, anecdotes, or scene-setting
+- No use of quotes, anecdotes, or scene-setting (when source voices exist)
 - Transitions that are just "Additionally," or "Furthermore,"
 - Uniform paragraph structure throughout (all same length, same pattern)
+- Tone mismatched to material (e.g., breathless magazine voice on a technical comparison)
+- Oversimplified language that doesn't respect the reader's intelligence
 
 ### Dimension 2: Coherence & Structure (Weight: HIGH)
 

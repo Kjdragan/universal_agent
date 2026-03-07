@@ -41,17 +41,41 @@ Read these files:
 - `{OVERVIEW_PATH}` — source index with URLs and quality notes (if not "NONE")
 - Skim 3-5 files in `{FILTERED_CORPUS_DIR}/` to understand the depth available (if not "NONE")
 
-**Step 2: Thematic Analysis**
+**Step 2: Material Assessment & Thematic Analysis**
 
-Before writing the outline, analyze:
-- What is the STORY here? Every report tells a story — identify the narrative arc.
+First, CLASSIFY what you're working with. Reports span wildly different domains —
+a market analysis, a scientific review, a policy briefing, a profile piece, a
+technology comparison, a historical survey. The structure, tone, and components
+must fit the material, not a one-size-fits-all template.
+
+**Assess the material:**
+- What DOMAIN is this? (tech, finance, health, policy, culture, science, biography, etc.)
+- What TYPE of report fits? (investigative, analytical, comparative, tutorial/explainer,
+  narrative profile, market landscape, state-of-the-art review, event recap, etc.)
+- What is the READER expecting? (A CEO wants implications. A researcher wants methods.
+  A general audience wants the story.)
+- How DATA-RICH is the corpus? (Heavy stats → more charts/stat-cards. Narrative-heavy
+  → more pull-quotes and fewer infographics. Mixed → balance both.)
+- How many DISTINCT VOICES are in the sources? (Many experts → quote-heavy. Single
+  author/report → analytical synthesis.)
+
+**Then, analyze the content:**
+- What is the STORY here? Not every report has dramatic tension — some are
+  informational surveys, some are comparative analyses, some are narratives.
+  Identify what structure serves THIS material.
 - Who are the KEY ACTORS (people, organizations, forces)?
-- What is the TENSION or CONFLICT driving events/findings?
+- What is the TENSION, QUESTION, or THESIS driving the report?
 - What DATA PATTERNS exist (trends, comparisons, surprising statistics)?
 - What NARRATIVE THREADS connect disparate facts into themes?
 
-For news/events: The story may be chronological. Identify the timeline.
-For analytical topics: The story is the argument — setup, evidence, findings, implications.
+**Structure should follow material, not a formula:**
+- News/events → chronological with turning points
+- Market analysis → landscape → segments → trends → implications
+- Technology review → problem → approaches → comparison → outlook
+- Policy briefing → context → current state → options → recommendation
+- Scientific review → background → methodology landscape → findings → gaps
+- Profile/case study → origin → development → impact → lessons
+- Comparative → framework → candidate analysis → synthesis → verdict
 
 **Step 3: Produce `{REPORT_DIR}/build/outline.json`**
 
@@ -60,8 +84,17 @@ Schema:
   "title": "Compelling Report Title (not generic)",
   "subtitle": "One-sentence framing of the story",
   "date": "YYYY-MM-DD",
-  "narrative_arc": "2-3 sentence description of the story this report tells",
-  "tone": "journalistic|analytical|narrative|investigative",
+  "material_type": "market_analysis|tech_review|policy_brief|investigative|profile|comparative|explainer|event_recap|scientific_review|other",
+  "narrative_arc": "2-3 sentence description of the story/structure this report uses",
+  "tone": "journalistic|analytical|narrative|investigative|explanatory|authoritative|conversational",
+  "component_guidance": {
+    "stat_cards": "heavy|moderate|light|none — based on data density",
+    "pull_quotes": "heavy|moderate|light|none — based on source voices",
+    "key_findings": "per_section|select_sections|summary_only",
+    "callouts": "frequent|selective|rare",
+    "diagrams": "essential|supplementary|none",
+    "images": "data_heavy|atmospheric|mixed|minimal"
+  },
   "sections": [
     {
       "id": "section-slug",
@@ -95,8 +128,15 @@ Schema:
 }
 
 Guidelines:
-- 4-8 main sections that follow a narrative arc, NOT just topic buckets
-- Each section has a `narrative_role` — the reader should feel momentum
+- 4-8 main sections. Structure follows the material — a narrative arc for
+  investigative pieces, a logical progression for analytical ones, a comparison
+  framework for comparative reviews. NOT just topic buckets dumped in order.
+- Use `component_guidance` to tell the Storyteller what fits THIS report.
+  A data-heavy market analysis needs stat-cards; a historical profile does not.
+  A policy brief needs callouts for recommendations; a tech explainer may not.
+- `narrative_role` is flexible: "setup|rising_action|climax|resolution" works for
+  narrative reports, but use "context|analysis|comparison|synthesis|implications"
+  for analytical/comparative ones. Pick what fits.
 - `visual_brief` must be SPECIFIC: "Infographic showing the 3 funding rounds totaling
   $2.1B, with timeline and investor names" NOT "infographic about funding"
 - Include source_keywords so the Deep Reader knows what to mine from originals
@@ -228,8 +268,22 @@ Use `SendMessage` for all teammate communication. Broadcast major updates.
 ### Your Job
 
 You write the report sections as polished HTML fragments. You write for a READER —
-someone who wants to understand a topic, not scan a database. Your writing should
-have narrative flow, thematic coherence, and editorial voice.
+someone who wants to understand a topic, not scan a database.
+
+**Writing quality**: University-level. Clear, substantive prose with proper structure,
+logical flow, and precise language. Avoid both dumbed-down summaries and
+unnecessarily dense jargon. The reader is intelligent and engaged — write accordingly.
+
+**Tone is material-dependent**: Read the `tone` and `material_type` fields in
+`outline.json` and adapt. A tech market analysis calls for an authoritative,
+data-informed voice. A policy briefing wants measured authority. A profile piece
+wants narrative warmth. A scientific review wants methodical precision. Do NOT
+default to "magazine journalism" for every topic — match the material.
+
+**Components are a toolkit, not a checklist**: Read `component_guidance` from the
+outline. If it says `stat_cards: "none"`, don't create stat-cards. If it says
+`pull_quotes: "light"`, use one or two, not one per section. The outline tells you
+what earned its place in THIS report. Use only what serves the material.
 
 **Phase 3 — Initial Draft:**
 
@@ -242,10 +296,14 @@ For each section (EXCEPT executive summary):
 
 **Writing principles:**
 
-- **Lead with the story.** Each section opens with the most compelling fact, quote,
-  or scene — not "This section discusses..."
-- **Use the `narrative_role`** from the outline. A "setup" section establishes context
-  deliberately. A "climax" section delivers the key revelation with impact.
+- **Lead with substance.** Each section opens with the most compelling fact, finding,
+  quote, or framing — not "This section discusses..." or "In this section, we..."
+  For narrative topics, this is the hook. For analytical topics, this is the key
+  finding or framing question.
+- **Follow the `narrative_role`** from the outline. These are flexible: "setup"
+  establishes context, "analysis" builds the argument, "comparison" weighs alternatives,
+  "synthesis" draws threads together, "implications" looks forward. Not every report
+  uses a dramatic arc — some are methodical progressions, and that's fine.
 - **Weave in quotes naturally.** Source packs provide direct quotes — integrate them
   into your prose, don't just block-quote everything. Use block-quotes for
   particularly powerful statements.
@@ -309,14 +367,23 @@ For each section (EXCEPT executive summary):
 </section>
 ```
 
-**Components to use:**
-- `<div class="key-finding">` — 1 per section maximum, for THE key takeaway
-- `<div class="stat-card">` inside `<div class="stats-row">` — for standout numbers
-- `<div class="callout">` / `<div class="callout warning">` / `<div class="callout success">` — for notes/caveats
-- `<blockquote>` with `<cite>` — for direct quotes
+**Component toolkit** (use per `component_guidance` from outline — NOT all in every report):
+- `<div class="key-finding">` — max 1 per section. Use when there's a concrete takeaway.
+  Skip for nuanced sections where the value is in the argument, not a headline.
+- `<div class="stat-card">` inside `<div class="stats-row">` — for standout numbers.
+  Only when `component_guidance.stat_cards` is "moderate" or "heavy". Skip entirely
+  for qualitative/narrative topics with no meaningful quantitative data.
+- `<div class="callout">` / `warning` / `success` — for caveats, definitions,
+  recommendations. Use selectively.
+- `<blockquote>` with `<cite>` — for direct quotes from sources. Use when
+  `component_guidance.pull_quotes` indicates moderate+ usage and source voices exist.
 - `<div class="image-slot">` — where the Visual Director's images will be injected
 - `<div class="diagram-slot">` — where diagrams will be injected
 - Standard semantic HTML: `<p>`, `<ul>`, `<ol>`, `<strong>`, `<em>`, `<table>`
+
+**A section with just well-written prose and clear structure is perfectly valid.**
+Not every section needs a stat-card, key-finding box, or blockquote. These components
+are tools — use them when they add value, not as decoration.
 
 **Image/diagram slot placement:**
 - Place `image-slot` divs at NARRATIVE BREAKPOINTS — between major ideas, not in the
