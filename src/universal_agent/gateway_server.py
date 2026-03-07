@@ -9588,6 +9588,99 @@ async def control_factory(request: Request, payload: FactoryControlRequest):
     }
 
 
+@app.get("/api/v1/ops/telegram")
+async def ops_telegram_status(request: Request):
+    """Aggregate Telegram integration status: bot, channels, notifications, sessions."""
+    _require_ops_auth(request)
+
+    # Tutorial notifier config
+    notifier_status = tutorial_telegram_notifier.configured_status()
+
+    # Bot process status via systemctl
+    bot_active = False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "systemctl", "is-active", "universal-agent-telegram",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+        bot_active = (stdout or b"").decode().strip() == "active"
+    except Exception:
+        pass
+
+    # Recent Telegram-related notifications from activity DB
+    recent_notifications: list[dict[str, Any]] = []
+    try:
+        if _activity_db_conn is not None:
+            rows = _activity_db_conn.execute(
+                """SELECT id, kind, title, summary, severity, status, created_at, metadata_json
+                   FROM activity_events
+                   WHERE (kind LIKE '%telegram%'
+                      OR kind LIKE '%tutorial%'
+                      OR kind LIKE '%youtube_playlist%'
+                      OR kind LIKE '%rss%digest%'
+                      OR kind LIKE '%reddit%digest%')
+                   ORDER BY created_at DESC LIMIT 30""",
+            ).fetchall()
+            for row in rows:
+                meta = {}
+                try:
+                    meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+                except Exception:
+                    pass
+                recent_notifications.append({
+                    "id": row["id"],
+                    "kind": row["kind"],
+                    "title": row["title"],
+                    "message": row["summary"][:200],
+                    "severity": row["severity"],
+                    "status": row["status"],
+                    "created_at": row["created_at"],
+                })
+    except Exception as exc:
+        logger.debug("Telegram ops: activity query failed: %s", exc)
+
+    # Recent Telegram sessions
+    tg_sessions: list[dict[str, Any]] = []
+    try:
+        gateway = get_gateway()
+        all_sessions = gateway.list_sessions()
+        for s in all_sessions:
+            sid = str(getattr(s, "session_id", "") or "")
+            if sid.startswith("tg_"):
+                tg_sessions.append({
+                    "session_id": sid,
+                    "user_id": str(getattr(s, "user_id", "") or ""),
+                    "status": str(getattr(s, "status", "") or ""),
+                    "last_activity": str(getattr(s, "last_activity", "") or ""),
+                })
+        tg_sessions = sorted(tg_sessions, key=lambda x: x.get("last_activity", ""), reverse=True)[:20]
+    except Exception:
+        pass
+
+    # Channel configuration
+    channels: list[dict[str, str]] = []
+    for name, env_key in [
+        ("UA Tutorial Feed", "YOUTUBE_TUTORIAL_TELEGRAM_CHAT_ID"),
+        ("UA RSS Feed", "CSI_RSS_TELEGRAM_CHAT_ID"),
+        ("UA Reddit Feed", "CSI_REDDIT_TELEGRAM_CHAT_ID"),
+    ]:
+        chat_id = os.getenv(env_key, "").strip()
+        channels.append({"name": name, "env_var": env_key, "configured": bool(chat_id)})
+
+    return {
+        "bot": {
+            "service_active": bot_active,
+            "polling_mode": "long_polling",
+            "allowed_user_ids": os.getenv("TELEGRAM_ALLOWED_USER_IDS", "").strip() or None,
+        },
+        "notifier": notifier_status,
+        "channels": channels,
+        "recent_notifications": recent_notifications,
+        "telegram_sessions": tg_sessions,
+    }
+
+
 @app.get("/api/v1/ops/timers")
 async def list_system_timers(request: Request):
     """Return structured systemd timer status for the ops dashboard.
