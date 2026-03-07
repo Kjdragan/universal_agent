@@ -392,16 +392,19 @@ Source pack format:
 # Source Pack: {Section Title}
 
 ## Key Quotes
-> "Direct quote here" — Speaker, Organization (Source: article_filename.md)
+> "Direct quote here" — Speaker, Organization
 
 ## Statistics & Data
-- Specific stat with context (Source: article_filename.md)
+- Specific stat with context
 
 ## Narrative Color
 - Vivid details, scene descriptions, human elements from sources
 
 ## Additional Context
 - Background information the refined corpus may have omitted
+
+## Sources Used (for end-of-report bibliography)
+- filename.md | Title: Article Title | URL: https://...
 ```
 
 **PARALLEL**: While Deep Reader mines sources, the Visual Director can begin
@@ -425,6 +428,13 @@ The **Storyteller** writes each section as a polished HTML fragment.
 - Write transitions that connect sections into a coherent narrative.
 - Leave `<div class="image-slot" data-section="{id}"></div>` placeholders
   where visuals should appear (guided by the visual blueprint).
+- **NO inline citations.** No footnote numbers, superscripts, or `(Source: ...)`
+  in body text. All sources are collected in an end-of-report bibliography.
+- **Conflicting data/perspectives**: When sources present different data, conclusions,
+  or viewpoints, discuss them in the report — don't silently pick one. Present the
+  prevailing view as the main thread and note dissenting perspectives. Do NOT ignore
+  prevailing opinion just because an alternative source exists; equally, do NOT suppress
+  minority viewpoints. The reader benefits from seeing the landscape.
 
 Output: `build/sections/{section-id}.html` per section.
 
@@ -439,7 +449,7 @@ rubric. The Judge produces `build/critiques/draft-critique.json`:
 
 ```json
 {
-  "overall_assessment": "narrative|factual|mixed — brief overall verdict",
+  "overall_assessment": "narrative|source-fidelity|mixed — brief overall verdict",
   "coherence_score": 7,
   "narrative_flow_score": 6,
   "sections": {
