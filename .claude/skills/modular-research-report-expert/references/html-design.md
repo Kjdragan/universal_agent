@@ -1,20 +1,47 @@
-# HTML Design System — Magazine-Quality Reports
+# HTML Design System — PDF-First Reports
 
-A modern, responsive design system for research reports. Prioritizes readability,
-visual hierarchy, and professional aesthetics over academic formality.
+A modern design system for research reports optimized for **PDF as the primary
+output format**. The HTML is an intermediate artifact; the reader experiences
+the report as a printed/exported PDF document.
 
 ---
 
 ## Design Philosophy
 
+- **PDF-first.** Every design decision is validated against Chrome `--print-to-pdf`.
+  If it doesn't render well in PDF, it doesn't ship. HTML viewing is a bonus.
 - **Magazine, not academic paper.** Think long-form journalism (The Atlantic, Ars Technica)
   not LaTeX. Wide images, pull-quotes, breathing room.
 - **Content-first typography.** The text is the product. Typography choices serve
   readability above all.
 - **Purposeful visuals.** Every image, diagram, and stat-card earns its space by
   conveying information the text alone cannot.
-- **Print-aware.** The HTML must export cleanly to PDF via Chrome headless without
-  broken layouts or cut-off elements.
+- **No interactive effects by default.** Hover states, transitions, and animated
+  elements are gated behind `ENABLE_INTERACTIONS` (off by default). PDF readers
+  don't have hover. Design for static consumption first.
+
+---
+
+## Parameter: `ENABLE_INTERACTIONS`
+
+```
+Default: off (0)
+```
+
+Set via environment variable:
+```bash
+export REPORT_ENABLE_INTERACTIONS=1
+```
+
+When enabled, the Storyteller adds `class="interactive"` to the `<html>` element
+during assembly. This activates:
+- Stat card hover lift effect
+- Table row highlight on hover
+- TOC link underline on hover
+- General link hover underlines
+
+When disabled (default), the report is purely static — identical experience
+whether viewed in a browser or printed to PDF.
 
 ---
 
@@ -104,7 +131,7 @@ Full-bleed header with gradient background and optional background image.
 ```css
 .report-hero {
   position: relative;
-  margin: 0 calc(-50vw + 50%) var(--space-3xl);
+  margin: 0 -2rem var(--space-3xl);
   padding: var(--space-4xl) var(--space-2xl);
   background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 50%, var(--color-primary-light) 100%);
   color: white;
@@ -182,7 +209,7 @@ Full-bleed header with gradient background and optional background image.
   font-weight: 500;
   transition: color 0.15s;
 }
-.toc a:hover { color: var(--color-primary); text-decoration: underline; }
+/* .toc a:hover — gated behind html.interactive */
 ```
 
 ### 3. Section Headers
@@ -262,12 +289,8 @@ Row of highlighted numbers. Maximum 4 per row for readability.
   min-width: 150px;
   flex: 1;
   max-width: 220px;
-  transition: box-shadow 0.15s, transform 0.15s;
 }
-.stat-card:hover {
-  box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
-}
+/* Hover only when html.interactive: see Interactive Effects section below */
 .stat-number {
   font-size: 2.25rem;
   font-weight: 800;
@@ -382,16 +405,14 @@ blockquote cite {
   line-height: 1.4;
 }
 
-/* Full-bleed image — breaks out of content column */
+/* Full-bleed image — extends to body padding edges (PDF-safe) */
 .report-image.full-bleed {
-  margin-left: calc(-50vw + 50%);
-  margin-right: calc(-50vw + 50%);
-  max-width: 100vw;
+  margin-left: -2rem;
+  margin-right: -2rem;
 }
 .report-image.full-bleed img {
   width: 100%;
   border-radius: 0;
-  box-shadow: none;
 }
 
 /* Side-by-side images */
@@ -453,7 +474,7 @@ td {
   border-bottom: 1px solid var(--color-border-light);
 }
 tbody tr:nth-child(even) { background: var(--color-bg-alt); }
-tbody tr:hover { background: var(--color-accent-light); }
+/* tbody tr:hover — gated behind html.interactive */
 ```
 
 ### 11. Section Divider
@@ -497,7 +518,35 @@ Visual separator between major report sections.
 
 ---
 
-## Print / PDF Styles
+## Interactive Effects (Gated — Off by Default)
+
+All hover/transition effects are gated behind `html.interactive`. The Storyteller
+adds this class during assembly only when `REPORT_ENABLE_INTERACTIONS=1`.
+
+```css
+/* Only active when html element has class="interactive" */
+html.interactive .stat-card {
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+html.interactive .stat-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+html.interactive .toc a:hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+html.interactive tbody tr:hover {
+  background: var(--color-accent-light);
+}
+```
+
+---
+
+## Print / PDF Styles (Primary Output)
+
+The PDF is the deliverable. These styles are not an afterthought — they are the
+primary design target. Test every layout change against Chrome `--print-to-pdf`.
 
 ```css
 @media print {
@@ -507,51 +556,60 @@ Visual separator between major report sections.
   }
   body {
     max-width: none;
-    padding: 0;
+    padding: 0 1cm;
     font-size: 11pt;
+    line-height: 1.6;
   }
+  /* Hero: cover page effect */
   .report-hero {
     break-after: page;
     margin: 0;
     min-height: auto;
-    padding: 3rem 2rem;
+    padding: 4cm 2cm 3cm;
   }
-  .report-hero .hero-bg { display: none; }  /* Save ink */
+  .report-hero .hero-bg { display: none; }
+  .report-hero h1 { font-size: 2.2rem; }
+  /* Sections: avoid orphaned headings */
   section { break-inside: avoid; }
-  .key-finding, .stat-card, .callout, .report-image, .diagram-container {
-    break-inside: avoid;
-  }
+  section h2 { break-after: avoid; }
+  section h3 { break-after: avoid; }
+  /* Components: never split across pages */
+  .key-finding, .callout, .report-image,
+  .diagram-container, .pull-quote, blockquote { break-inside: avoid; }
   .stats-row { break-inside: avoid; }
-  .pull-quote { break-inside: avoid; }
-  .report-image.full-bleed {
-    margin-left: 0;
-    margin-right: 0;
+  .stat-card { box-shadow: none; border: 1px solid #ccc; }
+  /* Images: respect page bounds */
+  .report-image img {
+    max-height: 45vh;
+    box-shadow: none;
+    border: 1px solid #e0e0e0;
   }
+  .report-image.full-bleed { margin-left: 0; margin-right: 0; }
+  /* Tables: repeat headers */
+  thead { display: table-header-group; }
+  /* Links: plain text in print */
   a { color: var(--color-text); text-decoration: none; }
-  @page {
-    margin: 1.5cm;
-    size: A4;
-  }
-  @page :first {
-    margin-top: 0;
-  }
+  /* TOC: own page */
+  .toc { break-after: page; }
+  /* Kill all interactive effects */
+  html.interactive .stat-card:hover,
+  html.interactive tbody tr:hover { all: unset; }
+  @page { margin: 1.5cm; size: A4; }
+  @page :first { margin-top: 0; }
 }
 ```
 
 ---
 
-## Responsive Behavior
+## Responsive Behavior (Secondary — Optional HTML Viewing)
 
 ```css
 @media (max-width: 768px) {
-  body { padding: 0 var(--space-md); }
-  .report-hero {
-    padding: var(--space-2xl) var(--space-md);
-    margin: 0 calc(-1 * var(--space-md)) var(--space-xl);
-  }
+  body { padding: 0 1rem; }
+  .report-hero { padding: 3rem 1rem; margin: 0 -1rem 2rem; }
   .stats-row { flex-direction: column; align-items: center; }
   .stat-card { max-width: 100%; min-width: auto; }
   .image-pair { grid-template-columns: 1fr; }
-  .pull-quote { margin: var(--space-xl) 0; }
+  .pull-quote { margin: 1.5rem 0; }
 }
 ```
